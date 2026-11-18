@@ -518,13 +518,15 @@ UcxpRootHubHandleUrb(
     DeviceHandle = Urb->UrbHeader.UsbdDeviceHandle;
     if (DeviceHandle != NULL && DeviceHandle != &RootHub->DeviceHandle)
     {
-        if (!UcxpFindDeviceHandle(Controller, DeviceHandle))
+        if (!UcxpAcquireDeviceHandle(Controller, DeviceHandle))
         {
             UcxpCompleteUrb(Request, Urb, USBD_STATUS_DEVICE_GONE);
             return;
         }
-        /* A downstream device: its default endpoint (step 2) */
+        /* A downstream device: its default endpoint and its pipes; the handle
+         * stays allocated until the URB was dealt with (forwarded or completed) */
         UcxpDeviceHandleUrb(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle, Request, Urb);
+        UcxpReleaseDeviceHandle((PUCX_DEVICE_HANDLE)DeviceHandle);
         return;
     }
 
@@ -800,14 +802,17 @@ UcxpHubInitializeUsbDevice(
     _Inout_ PUSB_DEVICE_HANDLE DeviceHandle)
 {
     PUCX_ROOTHUB_CTX RootHub = UcxpRootHubFromBusContext(BusContext);
+    NTSTATUS Status;
 
     if (RootHub == NULL)
         return STATUS_INVALID_PARAMETER;
     if (DeviceHandle == &RootHub->DeviceHandle)
         return STATUS_SUCCESS;              /* the root hub needs no address */
-    if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
+    if (!UcxpAcquireDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
         return STATUS_DEVICE_NOT_CONNECTED;
-    return UcxpDeviceInitialize(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle);
+    Status = UcxpDeviceInitialize(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle);
+    UcxpReleaseDeviceHandle((PUCX_DEVICE_HANDLE)DeviceHandle);
+    return Status;
 }
 
 static
@@ -828,11 +833,15 @@ UcxpHubGetUsbDescriptors(
         return STATUS_INVALID_PARAMETER;
     if (DeviceHandle != &RootHub->DeviceHandle)
     {
-        if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
+        NTSTATUS Status;
+
+        if (!UcxpAcquireDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
             return STATUS_DEVICE_NOT_CONNECTED;
-        return UcxpDeviceGetDescriptors(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle,
-                                        DeviceDescriptorBuffer, DeviceDescriptorBufferLength,
-                                        ConfigDescriptorBuffer, ConfigDescriptorBufferLength);
+        Status = UcxpDeviceGetDescriptors(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle,
+                                          DeviceDescriptorBuffer, DeviceDescriptorBufferLength,
+                                          ConfigDescriptorBuffer, ConfigDescriptorBufferLength);
+        UcxpReleaseDeviceHandle((PUCX_DEVICE_HANDLE)DeviceHandle);
+        return Status;
     }
 
     Length = min(*DeviceDescriptorBufferLength, sizeof(RootHub->DeviceDescriptor));
@@ -864,8 +873,10 @@ UcxpHubRemoveUsbDevice(
         return STATUS_INVALID_PARAMETER;
     if (DeviceHandle == &RootHub->DeviceHandle)
         return STATUS_INVALID_PARAMETER;    /* the root hub lives as long as its PDO */
-    if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
+    if (!UcxpAcquireDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
         return STATUS_DEVICE_NOT_CONNECTED;
+    /* Our own hold goes first; Remove unlists the handle and waits for the others */
+    UcxpReleaseDeviceHandle((PUCX_DEVICE_HANDLE)DeviceHandle);
     UcxpDeviceRemove(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle);
     return STATUS_SUCCESS;
 }
@@ -922,10 +933,14 @@ UcxpHubQueryDeviceInformation(
 
     if (DeviceHandle != &RootHub->DeviceHandle)
     {
-        if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
+        NTSTATUS Status;
+
+        if (!UcxpAcquireDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
             return STATUS_DEVICE_NOT_CONNECTED;
-        return UcxpDeviceQueryInformation((PUCX_DEVICE_HANDLE)DeviceHandle, DeviceInformationBuffer,
-                                          DeviceInformationBufferLength, LengthOfDataCopied);
+        Status = UcxpDeviceQueryInformation((PUCX_DEVICE_HANDLE)DeviceHandle, DeviceInformationBuffer,
+                                            DeviceInformationBufferLength, LengthOfDataCopied);
+        UcxpReleaseDeviceHandle((PUCX_DEVICE_HANDLE)DeviceHandle);
+        return Status;
     }
 
     Pipes = (RootHub->DeviceHandle.ConfigurationValue != 0) ? 1 : 0;
@@ -1140,9 +1155,10 @@ UcxpHubFlushTransfers(
      * device's pipes give their transfers back */
     if (RootHub == NULL || DeviceHandle == NULL || DeviceHandle == &RootHub->DeviceHandle)
         return;
-    if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
+    if (!UcxpAcquireDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
         return;
     UcxpDeviceFlushTransfers(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle);
+    UcxpReleaseDeviceHandle((PUCX_DEVICE_HANDLE)DeviceHandle);
 }
 
 static
@@ -1451,6 +1467,7 @@ UcxpRootHubCreatePdo(
     WdfPdoInitAllowForwardingRequestToParent(Init);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, UCX_PDO_CTX);
+    Attributes.ExecutionLevel = WdfExecutionLevelPassive;   /* its callbacks wait for the controller */
     Status = WdfDeviceCreate(&Init, &Attributes, &Pdo);
     if (!NT_SUCCESS(Status))
     {

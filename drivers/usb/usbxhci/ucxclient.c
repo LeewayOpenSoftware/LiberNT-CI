@@ -332,6 +332,7 @@ XhciUcxSlotDropEndpoints(
     _Inout_ PXHCI_UCX_DEVICE Dev,
     _Inout_ PXHCI_UCX_SLOT Slot,
     _In_ USBD_STATUS UsbdStatus);
+static EVT_WDF_IO_QUEUE_IO_CANCELED_ON_QUEUE XhciUcxEvtWaitingCanceled;
 static
 NTSTATUS
 NTAPI
@@ -392,6 +393,7 @@ typedef struct _XHCI_UCX_ENDPOINT_CLIENT {
     BOOLEAN Configured;           /* in the controller's device context (EndpointLock) */
     BOOLEAN Disabled;             /* never again: being torn down */
     BOOLEAN Halted;               /* the controller halted it; waits for a pipe reset */
+    BOOLEAN Aborting;             /* an abort/reset is stopping it: new transfers wait */
     ULONG MaxEsit;
     ULONG MaximumTransferSize;
     UCXENDPOINT Self;
@@ -3622,10 +3624,11 @@ XhciUcxEvtEndpointControlTransfer(
     PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Endpoint);
     PXHCI_UCX_DEVICE Dev = Ep->Dev;
     PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)Ep->UsbDevice);
-    PXHCI_UCX_SLOT Slot = Device->Slot;
+    PXHCI_UCX_SLOT Slot;
     PVOID Caller;
     PUCHAR Bounce;
     ULONG Transferred = 0;
+    UCHAR SlotId;
     NTSTATUS Status;
 
     Transfer->Transferred = 0;
@@ -3635,11 +3638,6 @@ XhciUcxEvtEndpointControlTransfer(
     {
         Transfer->UsbdStatus = USBD_STATUS_INVALID_PARAMETER;
         return STATUS_INVALID_PARAMETER;
-    }
-    if (Slot == NULL || !Slot->InUse || !Slot->Addressed)
-    {
-        Transfer->UsbdStatus = USBD_STATUS_DEVICE_GONE;
-        return STATUS_DEVICE_NOT_CONNECTED;
     }
     if (Transfer->Length > PAGE_SIZE)
     {
@@ -3653,9 +3651,20 @@ XhciUcxEvtEndpointControlTransfer(
         return STATUS_INVALID_PARAMETER;
     }
 
+    /* The slot belongs to this device only while the mutex says so: Disable
+     * takes the same mutex and clears Device->Slot under it */
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || !Slot->Addressed || Slot->UsbDevice != Ep->UsbDevice)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        Transfer->UsbdStatus = USBD_STATUS_DEVICE_GONE;
+        return STATUS_DEVICE_NOT_CONNECTED;
+    }
+    SlotId = Slot->SlotId;
+
     /* The data page of the slot is the bounce buffer; the caller's memory is
      * never handed to the controller */
-    ExAcquireFastMutex(&Dev->TransferMutex);
     Bounce = Dev->HcVa + Slot->DataOffset;
     if (Transfer->Length != 0)
     {
@@ -3698,7 +3707,7 @@ XhciUcxEvtEndpointControlTransfer(
 
     Transfer->Transferred = NT_SUCCESS(Status) ? Transferred : 0;
     XHCI_UCX_TRACE("slot %u EP0 %s bRequest %u wLength %u -> 0x%08lX / USBD 0x%08lX, %lu bytes",
-                   Slot->SlotId, Transfer->DataIn ? "IN" : "OUT", Transfer->SetupPacket.bRequest,
+                   SlotId, Transfer->DataIn ? "IN" : "OUT", Transfer->SetupPacket.bRequest,
                    Transfer->SetupPacket.wLength, (ULONG)Status, (ULONG)Transfer->UsbdStatus, Transfer->Transferred);
     return Status;
 }
@@ -3726,8 +3735,6 @@ XhciUcxEvtUsbDeviceEnable(
 
     if (Info->Size < sizeof(*Info) || PortId == 0 || PortId > Dev->NumberOfPorts || PortId > XHCI_MAX_PORTS)
         return STATUS_INVALID_PARAMETER;
-    if (Device->Slot != NULL)
-        return STATUS_INVALID_DEVICE_STATE;
     if (!Dev->ControllerRunning || Dev->FatalError)
         return STATUS_DEVICE_NOT_READY;
 
@@ -3741,6 +3748,11 @@ XhciUcxEvtUsbDeviceEnable(
     Speed = (PortSc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
 
     ExAcquireFastMutex(&Dev->TransferMutex);
+    if (Device->Slot != NULL)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
 
     Slot = XhciUcxAllocateSlot(Dev);
     if (Slot == NULL)
@@ -3805,17 +3817,20 @@ XhciUcxEvtUsbDeviceAddress(
 {
     PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
     PXHCI_UCX_DEVICE Dev = Device->Dev;
-    PXHCI_UCX_SLOT Slot = Device->Slot;
+    PXHCI_UCX_SLOT Slot;
     ULONG Code = 0;
     NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(Controller);
 
     *DeviceAddress = 0;
-    if (Slot == NULL || Slot->Addressed)
-        return STATUS_INVALID_DEVICE_STATE;
-
     ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || Slot->Addressed)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
     Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_ADDRESS_DEV,
                                 (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->InputContextOffset).QuadPart,
                                 XHCI_COMMAND_SLOT_FIELD(Slot->SlotId), &Code, NULL);
@@ -3883,22 +3898,29 @@ XhciUcxEvtUsbDeviceUpdateDefaultEndpoint(
 {
     PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
     PXHCI_UCX_DEVICE Dev = Device->Dev;
-    PXHCI_UCX_SLOT Slot = Device->Slot;
+    PXHCI_UCX_SLOT Slot;
     ULONGLONG Ep0RingPa, Dequeue;
     ULONG Code = 0;
     NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(Controller);
 
-    if (Slot == NULL || !Slot->Addressed)
-        return STATUS_INVALID_DEVICE_STATE;
     if (MaxPacketSize0 != 8 && MaxPacketSize0 != 16 && MaxPacketSize0 != 32 &&
         MaxPacketSize0 != 64 && MaxPacketSize0 != 512)
         return STATUS_INVALID_PARAMETER;
-    if (MaxPacketSize0 == Slot->Ep0MaxPacket)
-        return STATUS_SUCCESS;
 
     ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || !Slot->Addressed)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (MaxPacketSize0 == Slot->Ep0MaxPacket)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_SUCCESS;
+    }
     Ep0RingPa = (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->Ep0RingOffset).QuadPart;
     Dequeue = Ep0RingPa + (ULONGLONG)Slot->Ep0Enqueue * sizeof(XHCI_TRB);
     Slot->Ep0MaxPacket = MaxPacketSize0;
@@ -3923,14 +3945,17 @@ XhciUcxEvtUsbDeviceDisable(
 {
     PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
     PXHCI_UCX_DEVICE Dev = Device->Dev;
-    PXHCI_UCX_SLOT Slot = Device->Slot;
+    PXHCI_UCX_SLOT Slot;
 
     UNREFERENCED_PARAMETER(Controller);
 
-    if (Slot == NULL)
-        return;
-
     ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return;
+    }
     XHCI_UCX_LOG("slot %u (port %u): disabled for the hub driver", Slot->SlotId, Slot->PortId);
     XhciUcxSlotDropEndpoints(Dev, Slot, USBD_STATUS_DEVICE_GONE);
     Slot->UsbDevice = NULL;
@@ -4320,9 +4345,11 @@ XhciUcxEpCompleteRequest(
     WDFREQUEST Request = Td->Request;
     UCXENDPOINT Endpoint = Ep->Self;
 
+    if (Request == NULL)
+        Request = (WDFREQUEST)WdfObjectContextGetObject(Td);
     Td->Request = NULL;
     UcxEndpointCompleteTransfer(Endpoint, Request, UsbdStatus, Td->Transferred);
-    WdfObjectDereferenceWithTag((WDFOBJECT)Endpoint, (PVOID)'dTcU');
+    WdfObjectDereferenceWithTag((WDFOBJECT)Endpoint, (PVOID)'dTcU');   /* the reference the transfer held */
 }
 
 /* Starts transfers from the waiting queue while the ring has room; EndpointLock held on entry and exit */
@@ -4332,11 +4359,10 @@ XhciUcxEpKickLocked(
     _Inout_ PXHCI_UCX_ENDPOINT_CLIENT Ep,
     _Inout_ PLIST_ENTRY Failed)
 {
-    while (Ep->Configured && !Ep->Disabled && !Ep->Halted && Ep->Waiting != NULL)
+    while (Ep->Configured && !Ep->Disabled && !Ep->Halted && !Ep->Aborting && Ep->Waiting != NULL)
     {
         WDFREQUEST Request;
         PXHCI_UCX_TD_CTX Td;
-        PURB Urb;
         PMDL Mdl;
         ULONG Count;
 
@@ -4344,8 +4370,7 @@ XhciUcxEpKickLocked(
         if (!NT_SUCCESS(WdfIoQueueFindRequest(Ep->Waiting, NULL, NULL, NULL, &Request)))
             break;
         Td = XhciUcxGetTdCtx((WDFOBJECT)Request);
-        Urb = (PURB)UcxRequestGetUrb(Request);
-        Mdl = Urb->UrbBulkOrInterruptTransfer.TransferBufferMDL;
+        Mdl = (PMDL)UcxRequestGetTransferMdl(Request);
         Count = XhciUcxMdlTrbCount(Ep->Dev, Mdl, Td->Length);
         if (Count != 0 && Count > XhciUcxEpFreeTrbs(Ep))
         {
@@ -4503,8 +4528,8 @@ XhciUcxEpHandleTransferEvent(
         {
             ULONG TrbLen = Ep->Ring[Index].Status & XHCI_TRB_LEN_MASK;
 
-            Td->Transferred = 0;
-            if (CompletionCode == XHCI_COMPLETION_DATA_BUFFER_ERROR || CompletionCode == XHCI_COMPLETION_BABBLE_ERROR)
+            /* The bytes that did move before the error (a short packet seen earlier already counted them) */
+            if (!Td->ShortSeen)
                 Td->Transferred = min(XhciUcxEpTdOffsetAt(Ep, Td, Index) + TrbLen - min(Residual, TrbLen), Td->Length);
             Td->UsbdStatus = XhciUcxUsbdStatusFromCompletion(CompletionCode, STATUS_UNSUCCESSFUL);
             Finished = TRUE;
@@ -4585,7 +4610,7 @@ XhciUcxEvtEndpointIoctl(
     Td->Ep = Ep;
     Td->Length = Urb->UrbBulkOrInterruptTransfer.TransferBufferLength;
     Td->DataIn = (Urb->UrbBulkOrInterruptTransfer.TransferFlags & USBD_TRANSFER_DIRECTION_IN) != 0;
-    Mdl = Urb->UrbBulkOrInterruptTransfer.TransferBufferMDL;
+    Mdl = (PMDL)UcxRequestGetTransferMdl(Request);
 
     Count = XhciUcxMdlTrbCount(Ep->Dev, Mdl, Td->Length);
     if (Count == 0 || Td->Length > Ep->MaximumTransferSize)
@@ -4617,7 +4642,7 @@ XhciUcxEvtEndpointIoctl(
         XhciUcxEpCompleteRequest(Ep, Td, USBD_STATUS_DEVICE_GONE);
         return;
     }
-    if (WdfIoQueueGetState(Ep->Waiting, NULL, NULL) & WdfIoQueueNoRequests)
+    if (!Ep->Aborting && (WdfIoQueueGetState(Ep->Waiting, NULL, NULL) & WdfIoQueueNoRequests))
     {
         if (Count <= XhciUcxEpFreeTrbs(Ep))
         {
@@ -4626,7 +4651,7 @@ XhciUcxEvtEndpointIoctl(
             return;
         }
     }
-    /* No room, or others wait already: keep the order */
+    /* No room, others wait already, or an abort is stopping the endpoint: keep the order */
     Status = WdfRequestForwardToIoQueue(Request, Ep->Waiting);
     if (!NT_SUCCESS(Status))
     {
@@ -4639,12 +4664,18 @@ XhciUcxEvtEndpointIoctl(
     XhciUcxEpCompleteList(Ep, &Failed);
 }
 
-/* Stop Endpoint + Set TR Dequeue Pointer at the producer: the ring is empty from the controller's view */
+/*
+ * Take the endpoint off the controller's hands: Stop Endpoint (Reset Endpoint
+ * for a halted one), then Set TR Dequeue Pointer at the producer. Returns
+ * STATUS_SUCCESS only when the controller confirmed that it no longer
+ * executes this ring (a stopped or failed controller executes nothing); only
+ * then may the TDs on it be completed. TransferMutex held.
+ */
 static
 NTSTATUS
-XhciUcxEpStopAndFlush(
+XhciUcxEpQuiesce(
     _Inout_ PXHCI_UCX_ENDPOINT_CLIENT Ep,
-    _In_ BOOLEAN ResetFirst)
+    _In_ BOOLEAN Halted)
 {
     PXHCI_UCX_DEVICE Dev = Ep->Dev;
     ULONG Fields = XHCI_COMMAND_SLOT_FIELD(Ep->Slot->SlotId) | XHCI_UCX_COMMAND_EP_FIELD(Ep->Dci);
@@ -4653,94 +4684,125 @@ XhciUcxEpStopAndFlush(
     NTSTATUS Status;
 
     if (!Dev->ControllerRunning || Dev->FatalError)
-        return STATUS_DEVICE_NOT_READY;
+        return STATUS_SUCCESS;
 
-    if (ResetFirst)
+    Status = XhciUcxSendCommand(Dev, Halted ? XHCI_TRB_TYPE_RESET_EP : XHCI_TRB_TYPE_STOP_EP, 0, Fields, &Code, NULL);
+    XHCI_UCX_TRACE("slot %u ep 0x%02x: %s Endpoint rc=0x%08lX code=%lu", Ep->Slot->SlotId, Ep->Address,
+                   Halted ? "Reset" : "Stop", (ULONG)Status, Code);
+    if (!NT_SUCCESS(Status))
     {
-        Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_RESET_EP, 0, Fields, &Code, NULL);
-        XHCI_UCX_LOG("slot %u ep 0x%02x: Reset Endpoint rc=0x%08lX code=%lu", Ep->Slot->SlotId, Ep->Address, (ULONG)Status, Code);
+        /* Context State Error: already Stopped, Halted or Disabled, so nothing
+         * runs; a halted endpoint still needs the reset before the dequeue move */
+        if (Code != XHCI_COMPLETION_CONTEXT_STATE_ERROR)
+            return Status;
+        if (!Halted)
+        {
+            Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_RESET_EP, 0, Fields, &Code, NULL);
+            if (!NT_SUCCESS(Status) && Code != XHCI_COMPLETION_CONTEXT_STATE_ERROR)
+                return Status;
+        }
     }
-    else
-    {
-        Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_STOP_EP, 0, Fields, &Code, NULL);
-        XHCI_UCX_TRACE("slot %u ep 0x%02x: Stop Endpoint rc=0x%08lX code=%lu", Ep->Slot->SlotId, Ep->Address, (ULONG)Status, Code);
-    }
-    /* Context State Error: the endpoint was already stopped or halted; the dequeue move still applies */
-    if (!NT_SUCCESS(Status) && Code != XHCI_COMPLETION_CONTEXT_STATE_ERROR)
-        return Status;
 
     Dequeue = Ep->RingPa + (ULONGLONG)Ep->Enqueue * sizeof(XHCI_TRB);
     Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_SET_DEQ, Dequeue | (Ep->Cycle & XHCI_TRB_CYCLE), Fields, &Code, NULL);
     XHCI_UCX_TRACE("slot %u ep 0x%02x: Set TR Dequeue Pointer rc=0x%08lX code=%lu", Ep->Slot->SlotId, Ep->Address, (ULONG)Status, Code);
+    if (!NT_SUCCESS(Status) && Code == XHCI_COMPLETION_CONTEXT_STATE_ERROR)
+        return STATUS_SUCCESS;                /* not configured on the controller: nothing runs */
     return Status;
 }
 
-/* EvtEndpointAbort: everything the endpoint holds comes back canceled */
+/*
+ * EvtEndpointAbort / EvtEndpointResetHalted. New transfers are parked while the
+ * endpoint is being stopped (Aborting); the transfers it holds are completed
+ * only after the controller confirmed the stop, otherwise the error goes back
+ * to the class driver and nothing is touched.
+ */
+static
+NTSTATUS
+XhciUcxEpAbortCommon(
+    _In_ UCXENDPOINT Endpoint,
+    _In_ BOOLEAN OnlyIfHalted)
+{
+    PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Endpoint);
+    PXHCI_UCX_DEVICE Dev = Ep->Dev;
+    LIST_ENTRY Done;
+    KIRQL OldIrql;
+    NTSTATUS Status = STATUS_SUCCESS;
+    BOOLEAN Halted, Live;
+
+    if (Ep->Slot == NULL || Ep->Dci <= 1)
+        return STATUS_SUCCESS;
+    InitializeListHead(&Done);
+
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
+    Halted = Ep->Halted;
+    Live = Ep->Configured && !Ep->Disabled;
+    if (OnlyIfHalted && !Halted)
+    {
+        /* A reset of a running pipe has nothing to do on this controller */
+        KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_SUCCESS;
+    }
+    Ep->Aborting = TRUE;
+    KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+
+    if (Live)
+        Status = XhciUcxEpQuiesce(Ep, Halted);
+
+    KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
+    if (NT_SUCCESS(Status))
+    {
+        XhciUcxEpCollectAllLocked(Ep, USBD_STATUS_CANCELED, &Done);
+        Ep->Halted = FALSE;
+    }
+    Ep->Aborting = FALSE;
+    XhciUcxEpKickLocked(Ep, &Done);          /* whatever arrived meanwhile and was not collected */
+    KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+    ExReleaseFastMutex(&Dev->TransferMutex);
+
+    XHCI_UCX_LOG("slot %u ep 0x%02x: %s -> 0x%08lX", Ep->Slot->SlotId, Ep->Address,
+                 OnlyIfHalted ? "halted pipe reset" : "aborted", (ULONG)Status);
+    XhciUcxEpCompleteList(Ep, &Done);
+    return Status;
+}
+
 static
 NTSTATUS
 NTAPI
 XhciUcxEvtEndpointAbort(
     _In_ UCXENDPOINT Endpoint)
 {
-    PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Endpoint);
-    PXHCI_UCX_DEVICE Dev = Ep->Dev;
-    LIST_ENTRY Canceled;
-    KIRQL OldIrql;
-    NTSTATUS Status = STATUS_SUCCESS;
-    BOOLEAN Halted;
-
-    if (Ep->Slot == NULL)
-        return STATUS_SUCCESS;
-    InitializeListHead(&Canceled);
-
-    ExAcquireFastMutex(&Dev->TransferMutex);
-    KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
-    Halted = Ep->Halted;
-    if (Ep->Configured && !Ep->Disabled)
-    {
-        KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
-        Status = XhciUcxEpStopAndFlush(Ep, Halted);
-        KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
-    }
-    XhciUcxEpCollectAllLocked(Ep, USBD_STATUS_CANCELED, &Canceled);
-    Ep->Halted = FALSE;
-    KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
-    ExReleaseFastMutex(&Dev->TransferMutex);
-
-    XHCI_UCX_LOG("slot %u ep 0x%02x: aborted -> 0x%08lX", Ep->Slot->SlotId, Ep->Address, (ULONG)Status);
-    XhciUcxEpCompleteList(Ep, &Canceled);
-    return Status;
+    return XhciUcxEpAbortCommon(Endpoint, FALSE);
 }
 
-/* EvtEndpointResetHalted: Reset Endpoint + Set TR Dequeue Pointer */
 static
 NTSTATUS
 NTAPI
 XhciUcxEvtEndpointResetHalted(
     _In_ UCXENDPOINT Endpoint)
 {
-    PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Endpoint);
-    PXHCI_UCX_DEVICE Dev = Ep->Dev;
-    LIST_ENTRY Canceled;
-    KIRQL OldIrql;
-    NTSTATUS Status = STATUS_SUCCESS;
+    return XhciUcxEpAbortCommon(Endpoint, TRUE);
+}
 
-    if (Ep->Slot == NULL)
-        return STATUS_SUCCESS;
-    InitializeListHead(&Canceled);
+/* A transfer the class driver cancels while it waits for ring room */
+static
+VOID
+NTAPI
+XhciUcxEvtWaitingCanceled(
+    _In_ WDFQUEUE Queue,
+    _In_ WDFREQUEST Request)
+{
+    PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetQueueClient((WDFOBJECT)Queue)->Ep;
+    PXHCI_UCX_TD_CTX Td = XhciUcxGetTdCtx((WDFOBJECT)Request);
 
-    ExAcquireFastMutex(&Dev->TransferMutex);
-    if (Ep->Configured && !Ep->Disabled)
-        Status = XhciUcxEpStopAndFlush(Ep, TRUE);
-    KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
-    XhciUcxEpCollectAllLocked(Ep, USBD_STATUS_CANCELED, &Canceled);
-    Ep->Halted = FALSE;
-    KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
-    ExReleaseFastMutex(&Dev->TransferMutex);
-
-    XHCI_UCX_LOG("slot %u ep 0x%02x: halted pipe reset -> 0x%08lX", Ep->Slot->SlotId, Ep->Address, (ULONG)Status);
-    XhciUcxEpCompleteList(Ep, &Canceled);
-    return Status;
+    if (Td != NULL)
+    {
+        Td->Transferred = 0;
+        Td->Request = NULL;
+    }
+    XhciUcxEpCompleteRequest(Ep, Td, USBD_STATUS_CANCELED);
 }
 
 /* Object cleanup: the endpoint object goes (after it was disabled on the controller) */
@@ -4804,7 +4866,7 @@ XhciUcxEvtUsbDeviceEndpointAdd(
 {
     PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
     PXHCI_UCX_DEVICE Dev = Device->Dev;
-    PXHCI_UCX_SLOT Slot = Device->Slot;
+    PXHCI_UCX_SLOT Slot;
     const USB_ENDPOINT_DESCRIPTOR *Desc = &Info->Descriptor;
     UCX_ENDPOINT_EVENT_CALLBACKS Callbacks;
     WDF_OBJECT_ATTRIBUTES Attributes;
@@ -4819,20 +4881,32 @@ XhciUcxEvtUsbDeviceEndpointAdd(
 
     UNREFERENCED_PARAMETER(Controller);
 
-    if (Info->Size < sizeof(*Info) || Slot == NULL || !Slot->Addressed)
-        return STATUS_INVALID_DEVICE_STATE;
+    if (Info->Size < sizeof(*Info))
+        return STATUS_INVALID_PARAMETER;
     Number = Desc->bEndpointAddress & USB_ENDPOINT_ADDRESS_MASK;
     Type = Desc->bmAttributes & USB_ENDPOINT_TYPE_MASK;
     In = USB_ENDPOINT_DIRECTION_IN(Desc->bEndpointAddress) != 0;
     if (Number == 0 || Type == USB_ENDPOINT_TYPE_CONTROL || (Desc->wMaxPacketSize & 0x07FF) == 0)
         return STATUS_INVALID_PARAMETER;
-    if (Slot->Endpoints[2 * Number + (In ? 1 : 0)] != NULL)
-        return STATUS_OBJECT_NAME_COLLISION;          /* the library disables before it re-adds */
+
+    /* The slot is this device's only under the mutex. An endpoint object for a
+     * DCI that is configured today is allowed: the library builds the new
+     * alternate setting before it swaps the endpoints in one Configure. */
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || !Slot->Addressed)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
 
     /* The ring: one page of its own, physically contiguous by construction */
     Status = WdfCommonBufferCreate(Dev->DmaEnabler, PAGE_SIZE, WDF_NO_OBJECT_ATTRIBUTES, &RingBuffer);
     if (!NT_SUCCESS(Status))
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
         return Status;
+    }
 
     /* The queues: transfers arrive on Queue, wait on Waiting */
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, XHCI_UCX_QUEUE_CLIENT);
@@ -4844,6 +4918,7 @@ XhciUcxEvtUsbDeviceEndpointAdd(
     {
         WDF_IO_QUEUE_CONFIG_INIT(&QueueConfig, WdfIoQueueDispatchManual);
         QueueConfig.PowerManaged = WdfFalse;
+        QueueConfig.EvtIoCanceledOnQueue = XhciUcxEvtWaitingCanceled;   /* a parked transfer the class driver cancels */
         Status = WdfIoQueueCreate(Dev->Device, &QueueConfig, &Attributes, &Waiting);
     }
     if (!NT_SUCCESS(Status))
@@ -4885,6 +4960,8 @@ XhciUcxEvtUsbDeviceEndpointAdd(
         Ep->Mult = 0;
         Ep->MaxEsit = (ULONG)Ep->MaxPacket * (Ep->MaxBurst + 1);
     }
+    if (Type == USB_ENDPOINT_TYPE_BULK)
+        Ep->MaxEsit = 0;                              /* Max ESIT Payload is a periodic-endpoint field */
     Ep->MaximumTransferSize = Info->MaximumTransferSize ? Info->MaximumTransferSize : UCX_BULK_MAX_TRANSFER;
     Ep->RingBuffer = RingBuffer;
     Ep->Ring = WdfCommonBufferGetAlignedVirtualAddress(RingBuffer);
@@ -4899,9 +4976,11 @@ XhciUcxEvtUsbDeviceEndpointAdd(
 
     XHCI_UCX_LOG("slot %u: endpoint 0x%02x added (type %u, DCI %u, MPS %u, burst %u, interval field %u, max transfer %lu)",
                  Slot->SlotId, Ep->Address, Type, Ep->Dci, Ep->MaxPacket, Ep->MaxBurst, Ep->Interval, Ep->MaximumTransferSize);
+    ExReleaseFastMutex(&Dev->TransferMutex);
     return STATUS_SUCCESS;
 
 Fail:
+    ExReleaseFastMutex(&Dev->TransferMutex);
     if (Waiting != NULL)
         WdfObjectDelete((WDFOBJECT)Waiting);
     if (Queue != NULL)
@@ -4923,7 +5002,7 @@ XhciUcxEvtUsbDeviceEndpointsConfigure(
 {
     PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
     PXHCI_UCX_DEVICE Dev = Device->Dev;
-    PXHCI_UCX_SLOT Slot = Device->Slot;
+    PXHCI_UCX_SLOT Slot;
     PXHCI_INPUT_CONTROL_CONTEXT Icc;
     PXHCI_SLOT_CONTEXT InSlot, OutSlot;
     ULONG LastCtx = 1, Code = 0, Control, i, Dci;
@@ -4932,12 +5011,18 @@ XhciUcxEvtUsbDeviceEndpointsConfigure(
 
     UNREFERENCED_PARAMETER(Controller);
 
-    if (Cfg->Size < sizeof(*Cfg) || Slot == NULL || !Slot->Addressed)
-        return STATUS_INVALID_DEVICE_STATE;
+    if (Cfg->Size < sizeof(*Cfg))
+        return STATUS_INVALID_PARAMETER;
     if (!Dev->ControllerRunning || Dev->FatalError)
         return STATUS_DEVICE_NOT_READY;
 
     ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || !Slot->Addressed)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
 
     Icc = XhciUcxInputControlContext(Dev, Slot);
     InSlot = XhciUcxInputSlotContext(Dev, Slot);
@@ -5001,6 +5086,13 @@ XhciUcxEvtUsbDeviceEndpointsConfigure(
     XHCI_UCX_LOG("slot %u: Configure Endpoint (type %u, +%lu -%lu, context entries %lu) rc=0x%08lX code=%lu",
                  Slot->SlotId, Cfg->Type, Cfg->EnableCount, Cfg->DisableCount, LastCtx, (ULONG)Status, Code);
 
+    /* A failed command leaves the device context as it was: our tables stay as they were too */
+    if (!NT_SUCCESS(Status))
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return Status;
+    }
+
     KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
     if (Cfg->Type == UcxEndpointsConfigureDisableAll)
     {
@@ -5023,16 +5115,13 @@ XhciUcxEvtUsbDeviceEndpointsConfigure(
             if (Ep->Dci > 1 && Slot->Endpoints[Ep->Dci] == Ep)
                 Slot->Endpoints[Ep->Dci] = NULL;
         }
-        if (NT_SUCCESS(Status))
+        for (i = 0; i < Cfg->EnableCount; i++)
         {
-            for (i = 0; i < Cfg->EnableCount; i++)
-            {
-                PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Cfg->EndpointsToEnable[i]);
+            PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Cfg->EndpointsToEnable[i]);
 
-                Ep->Configured = TRUE;
-                Ep->Halted = FALSE;
-                Slot->Endpoints[Ep->Dci] = Ep;
-            }
+            Ep->Configured = TRUE;
+            Ep->Halted = FALSE;
+            Slot->Endpoints[Ep->Dci] = Ep;
         }
     }
     KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);

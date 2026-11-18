@@ -49,6 +49,7 @@ typedef enum _UCX_CLASS_FUNCTIONS {
     UcxEndpointNeedToCancelTransfersIndex,
     UcxIoDeviceControlIndex,
     UcxEndpointCompleteTransferIndex,          /* M3 step 3 */
+    UcxRequestGetTransferMdlIndex,             /* M3 step 3 */
     UcxFunctionsMax
 } UCX_CLASS_FUNCTIONS;
 
@@ -344,6 +345,13 @@ typedef VOID (NTAPI *PFN_UCXENDPOINTCOMPLETETRANSFER)(
     _In_ UCXENDPOINT, _In_ WDFREQUEST, _In_ USBD_STATUS, _In_ ULONG Transferred);
 #define UcxEndpointCompleteTransfer(e,r,s,n) \
     ((PFN_UCXENDPOINTCOMPLETETRANSFER)UcxClassFunctions[UcxEndpointCompleteTransferIndex])((e),(r),(s),(n))
+
+/* The MDL of a forwarded transfer: the caller's, or the one the library built
+ * for a plain buffer pointer (the URB itself is never edited). NULL for a
+ * zero-length transfer. */
+typedef PMDL (NTAPI *PFN_UCXREQUESTGETTRANSFERMDL)(_In_ WDFREQUEST);
+#define UcxRequestGetTransferMdl(r) \
+    ((PFN_UCXREQUESTGETTRANSFERMDL)UcxClassFunctions[UcxRequestGetTransferMdlIndex])((r))
 
 /* Largest bulk/interrupt transfer the library forwards in M3 (TRB count bound) */
 #define UCX_BULK_MAX_TRANSFER (256 * 1024)

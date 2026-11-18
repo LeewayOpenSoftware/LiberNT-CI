@@ -97,6 +97,9 @@ typedef struct _UCX_DEVICE_HANDLE {
     PUCX_INTERFACE Interfaces[UCX_MAX_INTERFACES];
     PUSB_CONFIGURATION_DESCRIPTOR ConfigDescriptor;   /* our copy of the selected one */
     ULONG ConfigDescriptorLength;
+    KSPIN_LOCK PipeLock;                   /* Interfaces[] and the pipes' Closing flags */
+    volatile LONG Busy;                    /* callers inside a hub-interface or URB path */
+    BOOLEAN InitializeFailed;              /* a failed Initialize is final for this handle */
 } UCX_DEVICE_HANDLE, *PUCX_DEVICE_HANDLE;
 
 /*
@@ -237,6 +240,15 @@ UcxpRemoveDeviceHandle(
     _Inout_ PUCX_DEVICE_HANDLE Handle);
 
 /* TRUE when Handle is a live handle of this controller; dereferences nothing otherwise */
+BOOLEAN
+UcxpAcquireDeviceHandle(
+    _In_ PUCX_CONTROLLER_CTX Controller,
+    _In_opt_ PVOID Handle);
+
+VOID
+UcxpReleaseDeviceHandle(
+    _In_ PUCX_DEVICE_HANDLE Handle);
+
 BOOLEAN
 UcxpFindDeviceHandle(
     _In_ PUCX_CONTROLLER_CTX Controller,

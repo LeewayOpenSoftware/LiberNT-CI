@@ -105,6 +105,45 @@ UcxpRemoveDeviceHandle(
     KeReleaseSpinLock(&Controller->DeviceHandleLock, OldIrql);
 }
 
+/*
+ * Find + hold: the handle stays allocated while Busy is non-zero
+ * (UcxpDeviceRemove waits for it after unlisting). Every hub-interface and
+ * URB path that reads through a downstream handle brackets its use with
+ * these two.
+ */
+BOOLEAN
+UcxpAcquireDeviceHandle(
+    _In_ PUCX_CONTROLLER_CTX Controller,
+    _In_opt_ PVOID Handle)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    BOOLEAN Found = FALSE;
+
+    if (Handle == NULL)
+        return FALSE;
+    KeAcquireSpinLock(&Controller->DeviceHandleLock, &OldIrql);
+    for (Entry = Controller->DeviceHandles.Flink; Entry != &Controller->DeviceHandles; Entry = Entry->Flink)
+    {
+        if (CONTAINING_RECORD(Entry, UCX_DEVICE_HANDLE, Link) == (PUCX_DEVICE_HANDLE)Handle)
+        {
+            Found = (((PUCX_DEVICE_HANDLE)Handle)->Signature == UCX_DEVICE_HANDLE_SIGNATURE);
+            if (Found)
+                InterlockedIncrement(&((PUCX_DEVICE_HANDLE)Handle)->Busy);
+            break;
+        }
+    }
+    KeReleaseSpinLock(&Controller->DeviceHandleLock, OldIrql);
+    return Found;
+}
+
+VOID
+UcxpReleaseDeviceHandle(
+    _In_ PUCX_DEVICE_HANDLE Handle)
+{
+    InterlockedDecrement(&Handle->Busy);
+}
+
 BOOLEAN
 UcxpFindDeviceHandle(
     _In_ PUCX_CONTROLLER_CTX Controller,
@@ -442,8 +481,6 @@ static VOID NTAPI UcxEndpointCompleteTransferInternal(
         if (Transferred > Req->TransferBufferLength)
             Transferred = Req->TransferBufferLength;        /* the client's count, never past the buffer */
         Req->TransferBufferLength = USBD_SUCCESS(UsbdStatus) ? Transferred : 0;
-        if (Ctx->OwnedMdl != NULL && Req->TransferBufferMDL == Ctx->OwnedMdl)
-            Req->TransferBufferMDL = NULL;
         Urb->UrbHeader.Status = UsbdStatus;
     }
     if (Ctx->OwnedMdl != NULL)
@@ -457,6 +494,22 @@ static VOID NTAPI UcxEndpointCompleteTransferInternal(
         Ctx->Endpoint = NULL;                   /* the context cleanup must not count it again */
     }
     WdfRequestComplete(Request, UcxpUsbdToNtStatus(UsbdStatus));
+}
+
+/* M3 step 3: the MDL a forwarded transfer's data lives in */
+static PMDL NTAPI UcxRequestGetTransferMdlInternal(_In_ WDFREQUEST Request)
+{
+    PUCX_REQUEST_CTX Ctx = (Request != NULL) ? UcxGetRequestCtx((WDFOBJECT)Request) : NULL;
+    PURB Urb;
+
+    if (Request == NULL)
+        return NULL;
+    if (Ctx != NULL && Ctx->OwnedMdl != NULL)
+        return Ctx->OwnedMdl;
+    Urb = (PURB)UcxRequestGetUrb(Request);
+    if (Urb == NULL || Urb->UrbHeader.Length < sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER))
+        return NULL;
+    return Urb->UrbBulkOrInterruptTransfer.TransferBufferMDL;
 }
 
 /* --------------------------------------------------------------------------
@@ -481,7 +534,8 @@ static PVOID UcxFunctions[UcxFunctionsMax] =
     UcxEndpointPurgeCompleteInternal,
     UcxEndpointNeedToCancelTransfersInternal,
     UcxIoDeviceControlInternal,
-    UcxEndpointCompleteTransferInternal
+    UcxEndpointCompleteTransferInternal,
+    UcxRequestGetTransferMdlInternal
 };
 
 static

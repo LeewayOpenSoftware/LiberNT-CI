@@ -22,6 +22,16 @@
 
 #include "ucxp.h"
 
+/* UcxpDeviceHandleUrb writes TransferBufferLength through the control-transfer
+ * view for every control URB function: the layouts must agree on its offset */
+#define UCX_SAME_LENGTH_OFFSET(_type) \
+    C_ASSERT(FIELD_OFFSET(struct _type, TransferBufferLength) == FIELD_OFFSET(struct _URB_CONTROL_TRANSFER, TransferBufferLength))
+UCX_SAME_LENGTH_OFFSET(_URB_CONTROL_DESCRIPTOR_REQUEST);
+UCX_SAME_LENGTH_OFFSET(_URB_CONTROL_GET_STATUS_REQUEST);
+UCX_SAME_LENGTH_OFFSET(_URB_CONTROL_VENDOR_OR_CLASS_REQUEST);
+UCX_SAME_LENGTH_OFFSET(_URB_CONTROL_GET_CONFIGURATION_REQUEST);
+UCX_SAME_LENGTH_OFFSET(_URB_CONTROL_GET_INTERFACE_REQUEST);
+
 /* --------------------------------------------------------------------------
  * Helpers
  * -------------------------------------------------------------------------- */
@@ -176,9 +186,36 @@ UcxpDeviceCreate(
     if (Controller->Config.EvtControllerUsbDeviceAdd == NULL)
         return STATUS_NOT_IMPLEMENTED;
 
+    /* One device per root port: a second create for the same port would mean a
+     * second slot and address for the same device */
+    {
+        KIRQL OldIrql;
+        PLIST_ENTRY Entry;
+        BOOLEAN Taken = FALSE;
+
+        KeAcquireSpinLock(&Controller->DeviceHandleLock, &OldIrql);
+        for (Entry = Controller->DeviceHandles.Flink; Entry != &Controller->DeviceHandles; Entry = Entry->Flink)
+        {
+            PUCX_DEVICE_HANDLE Other = CONTAINING_RECORD(Entry, UCX_DEVICE_HANDLE, Link);
+
+            if (!Other->IsRootHub && Other->PortNumber == PortNumber)
+            {
+                Taken = TRUE;
+                break;
+            }
+        }
+        KeReleaseSpinLock(&Controller->DeviceHandleLock, OldIrql);
+        if (Taken)
+        {
+            UcxLog("device: port %u already has a device handle", PortNumber);
+            return STATUS_DEVICE_ALREADY_ATTACHED;
+        }
+    }
+
     Handle = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*Handle), UCX_TAG);
     if (Handle == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
+    KeInitializeSpinLock(&Handle->PipeLock);
     Init = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*Init), UCX_TAG);
     if (Init == NULL)
     {
@@ -255,6 +292,8 @@ UcxpDeviceInitialize(
 
     if (Device == NULL || Handle->Initialized)
         return STATUS_INVALID_DEVICE_STATE;
+    if (Handle->InitializeFailed)
+        return STATUS_DEVICE_NOT_READY;    /* the hub driver removes the handle and starts over */
     if (Device->Callbacks.EvtUsbDeviceEnable == NULL || Device->Callbacks.EvtUsbDeviceAddress == NULL ||
         Device->Callbacks.EvtUsbDeviceDefaultEndpointAdd == NULL)
     {
@@ -372,6 +411,7 @@ UcxpDeviceInitialize(
 
 Fail:
     /* Leave the hub driver a handle it can remove; the slot goes back now */
+    Handle->InitializeFailed = TRUE;
     if (Device->Callbacks.EvtUsbDeviceDisable != NULL)
         Device->Callbacks.EvtUsbDeviceDisable(RootHub->Controller, Handle->UsbDevice);
     return Status;
@@ -404,8 +444,8 @@ UcxpDeviceGetDescriptors(
     if (!Handle->Initialized)
         return STATUS_INVALID_DEVICE_STATE;
 
-    Length = min(*DeviceLength, (ULONG)sizeof(USB_DEVICE_DESCRIPTOR));
-    if (Length != 0 && DeviceBuffer != NULL)
+    Length = (DeviceBuffer != NULL) ? min(*DeviceLength, (ULONG)sizeof(USB_DEVICE_DESCRIPTOR)) : 0;
+    if (Length != 0)
         RtlCopyMemory(DeviceBuffer, &Handle->DeviceDescriptor, Length);
     *DeviceLength = Length;
 
@@ -436,9 +476,16 @@ UcxpDeviceGetDescriptors(
         return NT_SUCCESS(Status) ? STATUS_DEVICE_DATA_ERROR : Status;
     }
 
-    /* Then as much as the caller can take, never more than one transfer's worth */
+    /* Then as much as the caller can take. A descriptor longer than one control
+     * transfer's worth is refused rather than cut short with success. */
     Length = min(*ConfigLength, (ULONG)Header.wTotalLength);
-    Length = min(Length, (ULONG)UCX_CONTROL_MAX_TRANSFER);
+    if (Length > UCX_CONTROL_MAX_TRANSFER)
+    {
+        UcxLog("device: port %u configuration descriptor of %u bytes exceeds the %u-byte transfer limit",
+               Handle->PortNumber, Header.wTotalLength, UCX_CONTROL_MAX_TRANSFER);
+        *ConfigLength = 0;
+        return STATUS_NOT_SUPPORTED;
+    }
     Setup.wLength = (USHORT)Length;
     RtlZeroMemory(ConfigBuffer, Length);
     Status = UcxpControlTransfer(Handle, &Setup, ConfigBuffer, NULL, Length, TRUE, &Transferred, &UsbdStatus);
@@ -447,6 +494,15 @@ UcxpDeviceGetDescriptors(
         UcxLog("device: port %u configuration read (%lu bytes) failed 0x%08lX", Handle->PortNumber, Length, (ULONG)Status);
         *ConfigLength = 0;
         return Status;
+    }
+    /* The body must still be the descriptor the header announced */
+    if (Transferred >= sizeof(USB_CONFIGURATION_DESCRIPTOR) &&
+        (((PUSB_CONFIGURATION_DESCRIPTOR)ConfigBuffer)->wTotalLength != Header.wTotalLength ||
+         ((PUSB_CONFIGURATION_DESCRIPTOR)ConfigBuffer)->bDescriptorType != USB_CONFIGURATION_DESCRIPTOR_TYPE))
+    {
+        UcxLog("device: port %u configuration descriptor changed between the two reads", Handle->PortNumber);
+        *ConfigLength = 0;
+        return STATUS_DEVICE_DATA_ERROR;
     }
     *ConfigLength = Transferred;
     return STATUS_SUCCESS;
@@ -461,8 +517,23 @@ UcxpDeviceRemove(
     PUCX_USBDEVICE_CTX Device = UcxpDeviceCtx(Handle);
     UCXUSBDEVICE UsbDevice = Handle->UsbDevice;
 
-    /* Out of the list first: no URB finds it from here on */
+    /* Out of the list first: no URB finds it from here on; then wait for the
+     * callers that already hold it (hub-interface and URB paths are short) */
     UcxpRemoveDeviceHandle(Controller, Handle);
+    {
+        LARGE_INTEGER Slice;
+        ULONG Waited = 0;
+
+        Slice.QuadPart = -10 * 1000 * 10;              /* 10 ms */
+        while (InterlockedCompareExchange(&Handle->Busy, 0, 0) != 0 && Waited < 500)
+        {
+            KeDelayExecutionThread(KernelMode, FALSE, &Slice);
+            Waited++;
+        }
+        if (Waited != 0)
+            UcxLog("device: port %u remove waited %lu x 10 ms for %ld caller(s)", Handle->PortNumber, Waited,
+                   InterlockedCompareExchange(&Handle->Busy, 0, 0));
+    }
 
     /* Its pipes give their transfers back and the endpoints leave the controller */
     UcxpDeviceUnconfigure(RootHub, Handle, FALSE);
@@ -488,11 +559,14 @@ UcxpDeviceQueryInformation(
     PUSB_DEVICE_INFORMATION_0 Info = Buffer;
     ULONG Pipes = 0, i, p, n = 0;
     ULONG ActualLength;
+    KIRQL OldIrql;
 
+    KeAcquireSpinLock(&Handle->PipeLock, &OldIrql);
     for (i = 0; i < Handle->InterfaceCount; i++)
         if (Handle->Interfaces[i] != NULL)
             Pipes += Handle->Interfaces[i]->PipeCount;
     ActualLength = FIELD_OFFSET(USB_DEVICE_INFORMATION_0, PipeList) + Pipes * sizeof(USB_PIPE_INFORMATION_0);
+    KeReleaseSpinLock(&Handle->PipeLock, OldIrql);
 
     *Returned = 0;
     if (BufferLength < sizeof(USB_LEVEL_INFORMATION))
@@ -517,7 +591,7 @@ UcxpDeviceQueryInformation(
     Info->DeviceSpeed = Handle->DeviceSpeed;
     Info->DeviceType = (Handle->DeviceSpeed == UsbLowSpeed || Handle->DeviceSpeed == UsbFullSpeed) ?
                        Usb11Device : Usb20Device;
-    Info->NumberOfOpenPipes = Pipes;
+    KeAcquireSpinLock(&Handle->PipeLock, &OldIrql);
     for (i = 0; i < Handle->InterfaceCount; i++)
     {
         PUCX_INTERFACE Iface = Handle->Interfaces[i];
@@ -530,6 +604,8 @@ UcxpDeviceQueryInformation(
             Info->PipeList[n].ScheduleOffset = 0;
         }
     }
+    KeReleaseSpinLock(&Handle->PipeLock, OldIrql);
+    Info->NumberOfOpenPipes = n;                        /* what was there when the list was copied */
     *Returned = ActualLength;
     return STATUS_SUCCESS;
 }
@@ -544,7 +620,7 @@ UcxpDeviceQueryInformation(
  * Returns FALSE for a function this step does not carry.
  */
 static
-BOOLEAN
+USBD_STATUS
 UcxpUrbToSetup(
     _In_ PURB Urb,
     _Out_ PUSB_DEFAULT_PIPE_SETUP_PACKET Setup,
@@ -576,7 +652,7 @@ UcxpUrbToSetup(
                            Function == URB_FUNCTION_GET_DESCRIPTOR_FROM_ENDPOINT);
 
             if (Urb->UrbHeader.Length < sizeof(*Req))
-                return FALSE;
+                return USBD_STATUS_INVALID_PARAMETER;
             Setup->bmRequestType.Dir = Get ? BMREQUEST_DEVICE_TO_HOST : BMREQUEST_HOST_TO_DEVICE;
             Setup->bmRequestType.Type = BMREQUEST_STANDARD;
             Setup->bmRequestType.Recipient =
@@ -602,7 +678,7 @@ UcxpUrbToSetup(
             struct _URB_CONTROL_GET_STATUS_REQUEST *Req = &Urb->UrbControlGetStatusRequest;
 
             if (Urb->UrbHeader.Length < sizeof(*Req) || Req->TransferBufferLength != sizeof(USHORT))
-                return FALSE;
+                return USBD_STATUS_INVALID_PARAMETER;
             Setup->bmRequestType.Dir = BMREQUEST_DEVICE_TO_HOST;
             Setup->bmRequestType.Type = BMREQUEST_STANDARD;
             Setup->bmRequestType.Recipient =
@@ -632,7 +708,7 @@ UcxpUrbToSetup(
                              Function == URB_FUNCTION_CLASS_ENDPOINT || Function == URB_FUNCTION_CLASS_OTHER);
 
             if (Urb->UrbHeader.Length < sizeof(*Req))
-                return FALSE;
+                return USBD_STATUS_INVALID_PARAMETER;
             /* The reserved bits are the caller's; direction, type and recipient are the function's */
             Setup->bmRequestType.B = Req->RequestTypeReservedBits;
             Setup->bmRequestType.Dir = (Req->TransferFlags & USBD_TRANSFER_DIRECTION_IN) ? BMREQUEST_DEVICE_TO_HOST
@@ -667,7 +743,7 @@ UcxpUrbToSetup(
                            Function == URB_FUNCTION_SET_FEATURE_TO_ENDPOINT || Function == URB_FUNCTION_SET_FEATURE_TO_OTHER);
 
             if (Urb->UrbHeader.Length < sizeof(*Req))
-                return FALSE;
+                return USBD_STATUS_INVALID_PARAMETER;
             Setup->bmRequestType.Dir = BMREQUEST_HOST_TO_DEVICE;
             Setup->bmRequestType.Type = BMREQUEST_STANDARD;
             Setup->bmRequestType.Recipient =
@@ -686,7 +762,7 @@ UcxpUrbToSetup(
             struct _URB_CONTROL_GET_CONFIGURATION_REQUEST *Req = &Urb->UrbControlGetConfigurationRequest;
 
             if (Urb->UrbHeader.Length < sizeof(*Req) || Req->TransferBufferLength != 1)
-                return FALSE;
+                return USBD_STATUS_INVALID_PARAMETER;
             Setup->bmRequestType.Dir = BMREQUEST_DEVICE_TO_HOST;
             Setup->bRequest = USB_REQUEST_GET_CONFIGURATION;
             *DataIn = TRUE;
@@ -701,7 +777,7 @@ UcxpUrbToSetup(
             struct _URB_CONTROL_GET_INTERFACE_REQUEST *Req = &Urb->UrbControlGetInterfaceRequest;
 
             if (Urb->UrbHeader.Length < sizeof(*Req) || Req->TransferBufferLength != 1)
-                return FALSE;
+                return USBD_STATUS_INVALID_PARAMETER;
             Setup->bmRequestType.Dir = BMREQUEST_DEVICE_TO_HOST;
             Setup->bmRequestType.Recipient = BMREQUEST_TO_INTERFACE;
             Setup->bRequest = USB_REQUEST_GET_INTERFACE;
@@ -718,21 +794,25 @@ UcxpUrbToSetup(
             struct _URB_CONTROL_TRANSFER *Req = &Urb->UrbControlTransfer;
 
             if (Urb->UrbHeader.Length < sizeof(*Req))
-                return FALSE;
+                return USBD_STATUS_INVALID_PARAMETER;
+            /* The caller's setup packet is the request: its direction and its
+             * wLength stand; the buffer only has to hold what the device may send */
             RtlCopyMemory(Setup, Req->SetupPacket, sizeof(*Setup));
-            *DataIn = (Req->TransferFlags & USBD_TRANSFER_DIRECTION_IN) != 0;
+            *DataIn = (Setup->bmRequestType.Dir == BMREQUEST_DEVICE_TO_HOST);
             *Buffer = Req->TransferBuffer;
             *Mdl = Req->TransferBufferMDL;
-            *Length = Req->TransferBufferLength;
-            break;
+            if (Setup->wLength > Req->TransferBufferLength)
+                return USBD_STATUS_INVALID_PARAMETER;
+            *Length = Setup->wLength;
+            return USBD_STATUS_SUCCESS;
         }
 
         default:
-            return FALSE;
+            return USBD_STATUS_INVALID_URB_FUNCTION;
     }
 
     Setup->wLength = (USHORT)min(*Length, (ULONG)MAXUSHORT);
-    return TRUE;
+    return USBD_STATUS_SUCCESS;
 }
 
 /* --------------------------------------------------------------------------
@@ -747,9 +827,10 @@ UcxpUrbToSetup(
  * the bounds it states (wTotalLength) and each descriptor's own bLength.
  * -------------------------------------------------------------------------- */
 
+/* Caller holds Handle->PipeLock */
 static
 PUCX_PIPE_HANDLE
-UcxpFindPipe(
+UcxpFindPipeLocked(
     _In_ PUCX_DEVICE_HANDLE Handle,
     _In_opt_ USBD_PIPE_HANDLE PipeHandle)
 {
@@ -772,6 +853,73 @@ UcxpFindPipe(
         }
     }
     return NULL;
+}
+
+/*
+ * Resolve a pipe handle from an URB to a referenced endpoint object and a copy
+ * of the pipe's descriptor, or fail. The record itself may be freed the moment
+ * the lock is dropped; only the copy and the referenced object are used after.
+ */
+static
+USBD_STATUS
+UcxpPipeOpen(
+    _In_ PUCX_DEVICE_HANDLE Handle,
+    _In_opt_ USBD_PIPE_HANDLE PipeHandle,
+    _Out_ UCXENDPOINT *Endpoint,
+    _Out_ PUSB_ENDPOINT_DESCRIPTOR Descriptor,
+    _Out_opt_ PBOOLEAN IsDefault)
+{
+    PUCX_PIPE_HANDLE Pipe;
+    KIRQL OldIrql;
+    USBD_STATUS UsbdStatus = USBD_STATUS_SUCCESS;
+
+    *Endpoint = NULL;
+    RtlZeroMemory(Descriptor, sizeof(*Descriptor));
+    if (IsDefault != NULL)
+        *IsDefault = FALSE;
+
+    KeAcquireSpinLock(&Handle->PipeLock, &OldIrql);
+    Pipe = UcxpFindPipeLocked(Handle, PipeHandle);
+    if (Pipe == NULL)
+        UsbdStatus = USBD_STATUS_INVALID_PIPE_HANDLE;
+    else if (Pipe == &Handle->DefaultPipe)
+    {
+        if (IsDefault != NULL)
+            *IsDefault = TRUE;
+        *Descriptor = Pipe->Descriptor;
+    }
+    else if (InterlockedCompareExchange(&Pipe->Closing, 0, 0) != 0 || Pipe->Endpoint == NULL)
+        UsbdStatus = USBD_STATUS_DEVICE_GONE;
+    else
+    {
+        *Descriptor = Pipe->Descriptor;
+        *Endpoint = Pipe->Endpoint;
+        WdfObjectReferenceWithTag((WDFOBJECT)*Endpoint, (PVOID)'pPcU');
+    }
+    KeReleaseSpinLock(&Handle->PipeLock, OldIrql);
+    return UsbdStatus;
+}
+
+static
+VOID
+UcxpPipeClose(
+    _In_opt_ UCXENDPOINT Endpoint)
+{
+    if (Endpoint != NULL)
+        WdfObjectDereferenceWithTag((WDFOBJECT)Endpoint, (PVOID)'pPcU');
+}
+
+/* Marks an interface's pipes closing (no new transfers); caller holds PipeLock */
+static
+VOID
+UcxpInterfaceSetClosingLocked(
+    _In_ PUCX_INTERFACE Iface,
+    _In_ LONG Closing)
+{
+    ULONG p;
+
+    for (p = 0; p < Iface->PipeCount; p++)
+        InterlockedExchange(&Iface->Pipes[p].Closing, Closing);
 }
 
 static
@@ -892,8 +1040,8 @@ UcxpPipeTypeFromAttributes(
     }
 }
 
-/* Abort the transfers of every pipe of an interface (client callback), then
- * refuse new ones */
+/* Abort the transfers of every pipe of an interface (client callback); the
+ * pipes were marked closing under the lock before */
 static
 VOID
 UcxpInterfaceAbortPipes(
@@ -906,7 +1054,6 @@ UcxpInterfaceAbortPipes(
         PUCX_PIPE_HANDLE Pipe = &Iface->Pipes[p];
         PUCX_ENDPOINT_CTX Ep;
 
-        InterlockedExchange(&Pipe->Closing, 1);
         if (Pipe->Endpoint == NULL)
             continue;
         Ep = UcxGetEndpointCtx((WDFOBJECT)Pipe->Endpoint);
@@ -915,12 +1062,17 @@ UcxpInterfaceAbortPipes(
     }
 }
 
-/* Delete the endpoint objects of an interface and free it (after they were
- * disabled on the controller) */
+/*
+ * Free an interface record. Its endpoint objects are deleted when the
+ * controller no longer references their rings (DeleteEndpoints); otherwise
+ * they stay children of the device object and go with it at Remove, after the
+ * slot was disabled.
+ */
 static
 VOID
 UcxpInterfaceDestroy(
-    _Inout_ PUCX_INTERFACE Iface)
+    _Inout_ PUCX_INTERFACE Iface,
+    _In_ BOOLEAN DeleteEndpoints)
 {
     ULONG p;
 
@@ -930,7 +1082,7 @@ UcxpInterfaceDestroy(
 
         Iface->Pipes[p].Endpoint = NULL;
         Iface->Pipes[p].Signature = 0;
-        if (Endpoint != NULL)
+        if (Endpoint != NULL && DeleteEndpoints)
             WdfObjectDelete((WDFOBJECT)Endpoint);
     }
     Iface->Signature = 0;
@@ -1009,7 +1161,7 @@ UcxpInterfaceBuild(
         {
             UcxLog("device: port %u interface %u: endpoint %lu missing or unusable", Handle->PortNumber,
                    Info->InterfaceNumber, p);
-            UcxpInterfaceDestroy(Iface);
+            UcxpInterfaceDestroy(Iface, TRUE);
             return USBD_STATUS_INVALID_CONFIGURATION_DESCRIPTOR;
         }
 
@@ -1022,7 +1174,7 @@ UcxpInterfaceBuild(
         Init = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*Init), UCX_TAG);
         if (Init == NULL)
         {
-            UcxpInterfaceDestroy(Iface);
+            UcxpInterfaceDestroy(Iface, TRUE);
             return USBD_STATUS_INSUFFICIENT_RESOURCES;
         }
         Init->Signature = UCX_ENDPOINT_INIT_SIGNATURE;
@@ -1051,7 +1203,7 @@ UcxpInterfaceBuild(
             if (Init->Created != NULL)
                 WdfObjectDelete((WDFOBJECT)Init->Created);
             ExFreePoolWithTag(Init, UCX_TAG);
-            UcxpInterfaceDestroy(Iface);
+            UcxpInterfaceDestroy(Iface, TRUE);
             return USBD_STATUS_INSUFFICIENT_RESOURCES;
         }
         Pipe->Endpoint = Init->Created;
@@ -1166,33 +1318,44 @@ UcxpDeviceUnconfigure(
     _In_ BOOLEAN TellDevice)
 {
     PUCX_INTERFACE Ifaces[UCX_MAX_INTERFACES];
+    PUSB_CONFIGURATION_DESCRIPTOR Config;
     ULONG Count = 0, i;
+    UCHAR OldValue = Handle->ConfigurationValue;
+    KIRQL OldIrql;
+    NTSTATUS Status = STATUS_SUCCESS;
 
+    /* Out of the table first: no URB finds a pipe from here on */
+    KeAcquireSpinLock(&Handle->PipeLock, &OldIrql);
     for (i = 0; i < Handle->InterfaceCount; i++)
     {
         if (Handle->Interfaces[i] != NULL)
         {
-            UcxpInterfaceAbortPipes(Handle->Interfaces[i]);
+            UcxpInterfaceSetClosingLocked(Handle->Interfaces[i], 1);
             Ifaces[Count++] = Handle->Interfaces[i];
         }
     }
-    if (Count != 0 || Handle->ConfigurationValue != 0)
-        (VOID)UcxpConfigureEndpoints(RootHub, Handle, UcxEndpointsConfigureDisableAll, 0, 0, 0,
-                                     NULL, 0, Ifaces, Count);
-    if (TellDevice && Handle->ConfigurationValue != 0)
-        (VOID)UcxpDeviceSetConfigurationOrInterface(Handle, FALSE, 0, 0);
-
-    for (i = 0; i < Count; i++)
-        UcxpInterfaceDestroy(Ifaces[i]);
     RtlZeroMemory(Handle->Interfaces, sizeof(Handle->Interfaces));
     Handle->InterfaceCount = 0;
     Handle->ConfigurationValue = 0;
-    if (Handle->ConfigDescriptor != NULL)
-    {
-        ExFreePoolWithTag(Handle->ConfigDescriptor, UCX_TAG);
-        Handle->ConfigDescriptor = NULL;
-        Handle->ConfigDescriptorLength = 0;
-    }
+    Config = Handle->ConfigDescriptor;
+    Handle->ConfigDescriptor = NULL;
+    Handle->ConfigDescriptorLength = 0;
+    KeReleaseSpinLock(&Handle->PipeLock, OldIrql);
+
+    for (i = 0; i < Count; i++)
+        UcxpInterfaceAbortPipes(Ifaces[i]);
+    if (Count != 0 || OldValue != 0)
+        Status = UcxpConfigureEndpoints(RootHub, Handle, UcxEndpointsConfigureDisableAll, 0, 0, 0,
+                                        NULL, 0, Ifaces, Count);
+    if (TellDevice && OldValue != 0)
+        (VOID)UcxpDeviceSetConfigurationOrInterface(Handle, FALSE, 0, 0);
+
+    /* Rings the controller may still reference (a failed Deconfigure) are not
+     * freed now: those endpoint objects go with the device at Remove */
+    for (i = 0; i < Count; i++)
+        UcxpInterfaceDestroy(Ifaces[i], NT_SUCCESS(Status));
+    if (Config != NULL)
+        ExFreePoolWithTag(Config, UCX_TAG);
 }
 
 static
@@ -1206,9 +1369,11 @@ UcxpDeviceSelectConfiguration(
     PUSB_CONFIGURATION_DESCRIPTOR Config = Req->ConfigurationDescriptor;
     PUSBD_INTERFACE_INFORMATION Info;
     PUCX_INTERFACE Built[UCX_MAX_INTERFACES];
-    ULONG BuiltCount = 0, Remaining, TotalLength, Pipes = 0, i;
+    ULONG BuiltCount = 0, Remaining, TotalLength, Pipes = 0, i, p;
+    ULONG SeenInterfaces = 0, SeenEndpoints = 0;      /* bit per interface number / per endpoint address */
     USBD_STATUS UsbdStatus;
     NTSTATUS Status;
+    KIRQL OldIrql;
 
     if (Urb->UrbHeader.Length < FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface))
         return USBD_STATUS_INVALID_PARAMETER;
@@ -1254,8 +1419,31 @@ UcxpDeviceSelectConfiguration(
         UsbdStatus = UcxpInterfaceBuild(RootHub, Handle, Config, TotalLength, Info, Remaining, &Built[BuiltCount]);
         if (!USBD_SUCCESS(UsbdStatus))
             goto Fail;
-        Pipes += Built[BuiltCount]->PipeCount;
         BuiltCount++;
+        /* Each interface number once, each endpoint address once */
+        {
+            PUCX_INTERFACE B = Built[BuiltCount - 1];
+
+            if (B->InterfaceNumber >= 32 || (SeenInterfaces & (1u << B->InterfaceNumber)))
+                UsbdStatus = USBD_STATUS_INVALID_CONFIGURATION_DESCRIPTOR;
+            SeenInterfaces |= (B->InterfaceNumber < 32) ? (1u << B->InterfaceNumber) : 0;
+            for (p = 0; p < B->PipeCount && USBD_SUCCESS(UsbdStatus); p++)
+            {
+                UCHAR Address = B->Pipes[p].Descriptor.bEndpointAddress;
+                ULONG Bit = 1u << ((Address & USB_ENDPOINT_ADDRESS_MASK) | ((Address & USB_ENDPOINT_DIRECTION_MASK) ? 16 : 0));
+
+                if (SeenEndpoints & Bit)
+                    UsbdStatus = USBD_STATUS_INVALID_CONFIGURATION_DESCRIPTOR;
+                SeenEndpoints |= Bit;
+            }
+            if (!USBD_SUCCESS(UsbdStatus))
+            {
+                UcxLog("device: port %u SELECT_CONFIGURATION repeats interface %u or one of its endpoints",
+                       Handle->PortNumber, B->InterfaceNumber);
+                goto Fail;
+            }
+            Pipes += B->PipeCount;
+        }
         Remaining -= Info->Length;
         Info = (PUSBD_INTERFACE_INFORMATION)((PUCHAR)Info + Info->Length);
     }
@@ -1264,24 +1452,25 @@ UcxpDeviceSelectConfiguration(
                                     Config->bConfigurationValue, 0, 0, Built, BuiltCount, NULL, 0);
     if (!NT_SUCCESS(Status))
     {
-        UsbdStatus = USBD_STATUS_INSUFFICIENT_RESOURCES;
+        UsbdStatus = USBD_STATUS_INSUFFICIENT_RESOURCES;   /* a failed Configure Endpoint changes nothing on the controller */
         goto Fail;
     }
+    KeAcquireSpinLock(&Handle->PipeLock, &OldIrql);
     for (i = 0; i < BuiltCount; i++)
         Handle->Interfaces[i] = Built[i];
     Handle->InterfaceCount = BuiltCount;
+    Handle->ConfigurationValue = Config->bConfigurationValue;
+    KeReleaseSpinLock(&Handle->PipeLock, OldIrql);
 
     UsbdStatus = UcxpDeviceSetConfigurationOrInterface(Handle, FALSE, Config->bConfigurationValue, 0);
     if (!USBD_SUCCESS(UsbdStatus))
     {
         UcxLog("device: port %u SET_CONFIGURATION(%u) failed, USBD 0x%08lX", Handle->PortNumber,
                Config->bConfigurationValue, (ULONG)UsbdStatus);
-        Handle->ConfigurationValue = Config->bConfigurationValue;   /* so the unconfigure drops the contexts */
         UcxpDeviceUnconfigure(RootHub, Handle, FALSE);
         return UsbdStatus;
     }
 
-    Handle->ConfigurationValue = Config->bConfigurationValue;
     Req->ConfigurationHandle = (USBD_CONFIGURATION_HANDLE)&Handle->ConfigurationCookie;
     UcxLog("device: port %u configured %u: %lu interface(s), %lu pipe(s)", Handle->PortNumber,
            Handle->ConfigurationValue, BuiltCount, Pipes);
@@ -1289,7 +1478,7 @@ UcxpDeviceSelectConfiguration(
 
 Fail:
     for (i = 0; i < BuiltCount; i++)
-        UcxpInterfaceDestroy(Built[i]);
+        UcxpInterfaceDestroy(Built[i], TRUE);              /* never reached the controller */
     if (Handle->ConfigDescriptor != NULL)
     {
         ExFreePoolWithTag(Handle->ConfigDescriptor, UCX_TAG);
@@ -1310,6 +1499,7 @@ UcxpDeviceSelectInterface(
     PUSBD_INTERFACE_INFORMATION Info = &Req->Interface;
     PUCX_INTERFACE Old, New = NULL;
     ULONG Index, Remaining;
+    KIRQL OldIrql;
     USBD_STATUS UsbdStatus;
     NTSTATUS Status;
 
@@ -1328,6 +1518,7 @@ UcxpDeviceSelectInterface(
         return USBD_STATUS_INVALID_PARAMETER;
     Old = Handle->Interfaces[Index];
 
+    /* The new setting's endpoint objects first (the controller does not see them yet) */
     Remaining = Urb->UrbHeader.Length - FIELD_OFFSET(struct _URB_SELECT_INTERFACE, Interface);
     UsbdStatus = UcxpInterfaceBuild(RootHub, Handle, Handle->ConfigDescriptor, Handle->ConfigDescriptorLength,
                                     Info, Remaining, &New);
@@ -1335,25 +1526,55 @@ UcxpDeviceSelectInterface(
         return UsbdStatus;
 
     /* The old setting's pipes are done; the controller swaps the endpoints in one command */
+    KeAcquireSpinLock(&Handle->PipeLock, &OldIrql);
+    UcxpInterfaceSetClosingLocked(Old, 1);
+    KeReleaseSpinLock(&Handle->PipeLock, OldIrql);
     UcxpInterfaceAbortPipes(Old);
+
     Status = UcxpConfigureEndpoints(RootHub, Handle, UcxEndpointsConfigureInterface, Handle->ConfigurationValue,
                                     New->InterfaceNumber, New->AlternateSetting, &New, 1, &Old, 1);
     if (!NT_SUCCESS(Status))
     {
-        /* The old endpoints are gone from the controller either way; the
-         * interface keeps no usable pipes until the class driver selects again */
-        UcxpInterfaceDestroy(New);
-        UcxpInterfaceDestroy(Old);
-        Handle->Interfaces[Index] = NULL;
+        /* Nothing changed on the controller: the old setting stays in force */
+        KeAcquireSpinLock(&Handle->PipeLock, &OldIrql);
+        UcxpInterfaceSetClosingLocked(Old, 0);
+        KeReleaseSpinLock(&Handle->PipeLock, OldIrql);
+        UcxpInterfaceDestroy(New, TRUE);
         return USBD_STATUS_INSUFFICIENT_RESOURCES;
     }
+    KeAcquireSpinLock(&Handle->PipeLock, &OldIrql);
     Handle->Interfaces[Index] = New;
-    UcxpInterfaceDestroy(Old);
+    KeReleaseSpinLock(&Handle->PipeLock, OldIrql);
 
     UsbdStatus = UcxpDeviceSetConfigurationOrInterface(Handle, TRUE, New->AlternateSetting, New->InterfaceNumber);
-    UcxLog("device: port %u interface %u -> alternate setting %u, %u pipe(s), USBD 0x%08lX", Handle->PortNumber,
-           New->InterfaceNumber, New->AlternateSetting, New->PipeCount, (ULONG)UsbdStatus);
-    return UsbdStatus;
+    if (!USBD_SUCCESS(UsbdStatus))
+    {
+        /* The device kept the old setting: put the controller back to it too */
+        Status = UcxpConfigureEndpoints(RootHub, Handle, UcxEndpointsConfigureInterface, Handle->ConfigurationValue,
+                                        Old->InterfaceNumber, Old->AlternateSetting, &Old, 1, &New, 1);
+        UcxLog("device: port %u SET_INTERFACE(%u, alt %u) failed USBD 0x%08lX; controller rolled back -> 0x%08lX",
+               Handle->PortNumber, New->InterfaceNumber, New->AlternateSetting, (ULONG)UsbdStatus, (ULONG)Status);
+        if (NT_SUCCESS(Status))
+        {
+            KeAcquireSpinLock(&Handle->PipeLock, &OldIrql);
+            Handle->Interfaces[Index] = Old;
+            UcxpInterfaceSetClosingLocked(Old, 0);
+            KeReleaseSpinLock(&Handle->PipeLock, OldIrql);
+            UcxpInterfaceDestroy(New, TRUE);
+        }
+        else
+        {
+            /* The controller has the new endpoints and could not be told otherwise:
+             * the old objects stay (with the device) and the new setting stands host-side */
+            UcxpInterfaceDestroy(Old, FALSE);
+        }
+        return UsbdStatus;
+    }
+
+    UcxpInterfaceDestroy(Old, TRUE);
+    UcxLog("device: port %u interface %u -> alternate setting %u, %u pipe(s)", Handle->PortNumber,
+           New->InterfaceNumber, New->AlternateSetting, New->PipeCount);
+    return USBD_STATUS_SUCCESS;
 }
 
 /* Context cleanup on a forwarded request that was never completed through us */
@@ -1380,7 +1601,7 @@ UcxpRequestCtxCleanup(
 /*
  * BULK_OR_INTERRUPT_TRANSFER: checked here, carried out by the client. The
  * request leaves this routine either forwarded to the endpoint's queue or
- * completed with an error.
+ * completed with an error. The URB is read, never written, until completion.
  */
 static
 VOID
@@ -1390,12 +1611,15 @@ UcxpDeviceBulkTransfer(
     _Inout_ PURB Urb)
 {
     struct _URB_BULK_OR_INTERRUPT_TRANSFER *Req = &Urb->UrbBulkOrInterruptTransfer;
-    PUCX_PIPE_HANDLE Pipe;
+    USB_ENDPOINT_DESCRIPTOR Descriptor;
+    UCXENDPOINT Endpoint = NULL;
     PUCX_ENDPOINT_CTX Ep;
     WDF_OBJECT_ATTRIBUTES Attributes;
     WDF_REQUEST_FORWARD_OPTIONS Options;
     PUCX_REQUEST_CTX Ctx = NULL;
     PMDL OwnedMdl = NULL;
+    USBD_STATUS UsbdStatus;
+    BOOLEAN IsDefault;
     UCHAR Type;
     NTSTATUS Status;
 
@@ -1404,46 +1628,34 @@ UcxpDeviceBulkTransfer(
         UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PARAMETER);
         return;
     }
-    Pipe = UcxpFindPipe(Handle, Req->PipeHandle);
-    if (Pipe == NULL || Pipe == &Handle->DefaultPipe || Pipe->Endpoint == NULL)
+    UsbdStatus = UcxpPipeOpen(Handle, Req->PipeHandle, &Endpoint, &Descriptor, &IsDefault);
+    if (USBD_SUCCESS(UsbdStatus) && (IsDefault || Endpoint == NULL))
+        UsbdStatus = USBD_STATUS_INVALID_PIPE_HANDLE;
+    Type = Descriptor.bmAttributes & USB_ENDPOINT_TYPE_MASK;
+    if (USBD_SUCCESS(UsbdStatus) && Type != USB_ENDPOINT_TYPE_BULK && Type != USB_ENDPOINT_TYPE_INTERRUPT)
+        UsbdStatus = USBD_STATUS_INVALID_PIPE_HANDLE;
+    if (USBD_SUCCESS(UsbdStatus))
     {
-        Req->TransferBufferLength = 0;
-        UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PIPE_HANDLE);
-        return;
+        Ep = UcxGetEndpointCtx((WDFOBJECT)Endpoint);
+        if (Ep->Queue == NULL)
+            UsbdStatus = USBD_STATUS_NOT_SUPPORTED;
     }
-    Type = Pipe->Descriptor.bmAttributes & USB_ENDPOINT_TYPE_MASK;
-    if (Type != USB_ENDPOINT_TYPE_BULK && Type != USB_ENDPOINT_TYPE_INTERRUPT)
+    if (USBD_SUCCESS(UsbdStatus) && Req->TransferBufferLength > UCX_BULK_MAX_TRANSFER)
+        UsbdStatus = USBD_STATUS_INVALID_PARAMETER;
+    if (!USBD_SUCCESS(UsbdStatus))
     {
+        UcxpPipeClose(Endpoint);
         Req->TransferBufferLength = 0;
-        UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PIPE_HANDLE);
-        return;
-    }
-    if (InterlockedCompareExchange(&Pipe->Closing, 0, 0) != 0)
-    {
-        Req->TransferBufferLength = 0;
-        UcxpCompleteUrb(Request, Urb, USBD_STATUS_DEVICE_GONE);
-        return;
-    }
-    Ep = UcxGetEndpointCtx((WDFOBJECT)Pipe->Endpoint);
-    if (Ep->Queue == NULL)
-    {
-        Req->TransferBufferLength = 0;
-        UcxpCompleteUrb(Request, Urb, USBD_STATUS_NOT_SUPPORTED);
+        UcxpCompleteUrb(Request, Urb, UsbdStatus);
         return;
     }
 
     /* The endpoint's direction is the transfer's (usbport does the same) */
-    if (USB_ENDPOINT_DIRECTION_IN(Pipe->Descriptor.bEndpointAddress))
+    if (USB_ENDPOINT_DIRECTION_IN(Descriptor.bEndpointAddress))
         Req->TransferFlags |= USBD_TRANSFER_DIRECTION_IN;
     else
         Req->TransferFlags &= ~USBD_TRANSFER_DIRECTION_IN;
 
-    if (Req->TransferBufferLength > UCX_BULK_MAX_TRANSFER)
-    {
-        Req->TransferBufferLength = 0;
-        UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PARAMETER);
-        return;
-    }
     if (Req->TransferBufferLength != 0)
     {
         if (Req->TransferBufferMDL != NULL)
@@ -1453,6 +1665,7 @@ UcxpDeviceBulkTransfer(
             if (MmGetMdlByteCount(Mdl) < Req->TransferBufferLength ||
                 (Mdl->MdlFlags & (MDL_PAGES_LOCKED | MDL_SOURCE_IS_NONPAGED_POOL)) == 0)
             {
+                UcxpPipeClose(Endpoint);
                 Req->TransferBufferLength = 0;
                 UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PARAMETER);
                 return;
@@ -1460,18 +1673,21 @@ UcxpDeviceBulkTransfer(
         }
         else if (Req->TransferBuffer != NULL)
         {
+            /* Ours, kept in the request context; the client asks for it with
+             * UcxRequestGetTransferMdl and the URB keeps its NULL */
             OwnedMdl = IoAllocateMdl(Req->TransferBuffer, Req->TransferBufferLength, FALSE, FALSE, NULL);
             if (OwnedMdl == NULL)
             {
+                UcxpPipeClose(Endpoint);
                 Req->TransferBufferLength = 0;
                 UcxpCompleteUrb(Request, Urb, USBD_STATUS_INSUFFICIENT_RESOURCES);
                 return;
             }
             MmBuildMdlForNonPagedPool(OwnedMdl);
-            Req->TransferBufferMDL = OwnedMdl;
         }
         else
         {
+            UcxpPipeClose(Endpoint);
             Req->TransferBufferLength = 0;
             UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PARAMETER);
             return;
@@ -1489,16 +1705,14 @@ UcxpDeviceBulkTransfer(
     if (!NT_SUCCESS(Status) || Ctx == NULL)
     {
         if (OwnedMdl != NULL)
-        {
-            Req->TransferBufferMDL = NULL;
             IoFreeMdl(OwnedMdl);
-        }
+        UcxpPipeClose(Endpoint);
         Req->TransferBufferLength = 0;
         UcxpCompleteUrb(Request, Urb, USBD_STATUS_INSUFFICIENT_RESOURCES);
         return;
     }
-    Ctx->Endpoint = Pipe->Endpoint;
-    Ctx->Pipe = Pipe;
+    Ctx->Endpoint = Endpoint;
+    Ctx->Pipe = NULL;                                 /* the record may go; the object is referenced below */
     Ctx->OwnedMdl = OwnedMdl;
     InterlockedIncrement(&Ep->Transfers);
 
@@ -1509,18 +1723,20 @@ UcxpDeviceBulkTransfer(
     if (!NT_SUCCESS(Status))
     {
         UcxLog("device: port %u forward to endpoint 0x%02x queue failed 0x%08lX", Handle->PortNumber,
-               Pipe->Descriptor.bEndpointAddress, (ULONG)Status);
+               Descriptor.bEndpointAddress, (ULONG)Status);
         InterlockedDecrement(&Ep->Transfers);
         Ctx->Endpoint = NULL;
         if (OwnedMdl != NULL)
         {
-            Req->TransferBufferMDL = NULL;
             IoFreeMdl(OwnedMdl);
             Ctx->OwnedMdl = NULL;
         }
+        UcxpPipeClose(Endpoint);
         Req->TransferBufferLength = 0;
         UcxpCompleteUrb(Request, Urb, USBD_STATUS_INSUFFICIENT_RESOURCES);
+        return;
     }
+    UcxpPipeClose(Endpoint);
 }
 
 /* ABORT_PIPE, SYNC_RESET_PIPE_AND_CLEAR_STALL, SYNC_RESET_PIPE, SYNC_CLEAR_STALL */
@@ -1532,28 +1748,31 @@ UcxpDevicePipeRequest(
 {
     struct _URB_PIPE_REQUEST *Req = &Urb->UrbPipeRequest;
     USHORT Function = Urb->UrbHeader.Function;
-    PUCX_PIPE_HANDLE Pipe;
+    USB_ENDPOINT_DESCRIPTOR Descriptor;
+    UCXENDPOINT Endpoint = NULL;
     PUCX_ENDPOINT_CTX Ep;
-    USBD_STATUS UsbdStatus = USBD_STATUS_SUCCESS;
+    USBD_STATUS UsbdStatus;
+    BOOLEAN IsDefault;
     NTSTATUS Status;
 
     if (Urb->UrbHeader.Length < sizeof(*Req))
         return USBD_STATUS_INVALID_PARAMETER;
-    Pipe = UcxpFindPipe(Handle, Req->PipeHandle);
-    if (Pipe == NULL)
-        return USBD_STATUS_INVALID_PIPE_HANDLE;
-    if (Pipe == &Handle->DefaultPipe || Pipe->Endpoint == NULL)
+    UsbdStatus = UcxpPipeOpen(Handle, Req->PipeHandle, &Endpoint, &Descriptor, &IsDefault);
+    if (!USBD_SUCCESS(UsbdStatus))
+        return (UsbdStatus == USBD_STATUS_DEVICE_GONE) ? USBD_STATUS_SUCCESS : UsbdStatus;   /* a closing pipe has nothing left */
+    if (IsDefault || Endpoint == NULL)
         return USBD_STATUS_SUCCESS;        /* control transfers are synchronous: nothing to abort or reset */
 
-    Ep = UcxGetEndpointCtx((WDFOBJECT)Pipe->Endpoint);
+    Ep = UcxGetEndpointCtx((WDFOBJECT)Endpoint);
     if (Function == URB_FUNCTION_ABORT_PIPE)
     {
         if (Ep->Callbacks.EvtEndpointAbort != NULL)
         {
-            Status = Ep->Callbacks.EvtEndpointAbort(Pipe->Endpoint);
+            Status = Ep->Callbacks.EvtEndpointAbort(Endpoint);
             UcxLog("device: port %u pipe 0x%02x aborted -> 0x%08lX", Handle->PortNumber,
-                   Pipe->Descriptor.bEndpointAddress, (ULONG)Status);
+                   Descriptor.bEndpointAddress, (ULONG)Status);
         }
+        UcxpPipeClose(Endpoint);
         return USBD_STATUS_SUCCESS;
     }
 
@@ -1561,7 +1780,7 @@ UcxpDevicePipeRequest(
     {
         if (Ep->Callbacks.EvtEndpointResetHalted != NULL)
         {
-            Status = Ep->Callbacks.EvtEndpointResetHalted(Pipe->Endpoint);
+            Status = Ep->Callbacks.EvtEndpointResetHalted(Endpoint);
             if (!NT_SUCCESS(Status))
                 UsbdStatus = USBD_STATUS_REQUEST_FAILED;
         }
@@ -1578,14 +1797,15 @@ UcxpDevicePipeRequest(
         Setup.bmRequestType.Recipient = BMREQUEST_TO_ENDPOINT;
         Setup.bRequest = USB_REQUEST_CLEAR_FEATURE;
         Setup.wValue.W = USB_FEATURE_ENDPOINT_STALL;
-        Setup.wIndex.W = Pipe->Descriptor.bEndpointAddress;
+        Setup.wIndex.W = Descriptor.bEndpointAddress;
         Setup.wLength = 0;
         (VOID)UcxpControlTransfer(Handle, &Setup, NULL, NULL, 0, FALSE, &Transferred, &ClearStatus);
         if (!USBD_SUCCESS(ClearStatus))
             UsbdStatus = ClearStatus;
     }
+    UcxpPipeClose(Endpoint);
     UcxLog("device: port %u pipe 0x%02x reset (function 0x%04X) -> USBD 0x%08lX", Handle->PortNumber,
-           Pipe->Descriptor.bEndpointAddress, Function, (ULONG)UsbdStatus);
+           Descriptor.bEndpointAddress, Function, (ULONG)UsbdStatus);
     return UsbdStatus;
 }
 
@@ -1595,26 +1815,41 @@ UcxpDeviceFlushTransfers(
     _In_ PUCX_ROOTHUB_CTX RootHub,
     _In_ PUCX_DEVICE_HANDLE Handle)
 {
-    ULONG i;
+    UCXENDPOINT Endpoints[UCX_MAX_PIPES];
+    ULONG i, p, n;
+    KIRQL OldIrql;
 
     UNREFERENCED_PARAMETER(RootHub);
-    for (i = 0; i < Handle->InterfaceCount; i++)
+    for (i = 0; i < UCX_MAX_INTERFACES; i++)
     {
-        PUCX_INTERFACE Iface = Handle->Interfaces[i];
-        ULONG p;
+        PUCX_INTERFACE Iface;
 
-        if (Iface == NULL)
-            continue;
-        for (p = 0; p < Iface->PipeCount; p++)
+        /* Reference this interface's endpoints under the lock, abort them outside it */
+        n = 0;
+        KeAcquireSpinLock(&Handle->PipeLock, &OldIrql);
+        Iface = (i < Handle->InterfaceCount) ? Handle->Interfaces[i] : NULL;
+        if (Iface != NULL)
         {
-            PUCX_PIPE_HANDLE Pipe = &Iface->Pipes[p];
-            PUCX_ENDPOINT_CTX Ep;
+            for (p = 0; p < Iface->PipeCount && n < UCX_MAX_PIPES; p++)
+            {
+                if (Iface->Pipes[p].Endpoint != NULL)
+                {
+                    Endpoints[n] = Iface->Pipes[p].Endpoint;
+                    WdfObjectReferenceWithTag((WDFOBJECT)Endpoints[n], (PVOID)'pPcU');
+                    n++;
+                }
+            }
+        }
+        KeReleaseSpinLock(&Handle->PipeLock, OldIrql);
+        if (Iface == NULL && i >= Handle->InterfaceCount)
+            break;
+        for (p = 0; p < n; p++)
+        {
+            PUCX_ENDPOINT_CTX Ep = UcxGetEndpointCtx((WDFOBJECT)Endpoints[p]);
 
-            if (Pipe->Endpoint == NULL)
-                continue;
-            Ep = UcxGetEndpointCtx((WDFOBJECT)Pipe->Endpoint);
             if (Ep->Callbacks.EvtEndpointAbort != NULL)
-                (VOID)Ep->Callbacks.EvtEndpointAbort(Pipe->Endpoint);
+                (VOID)Ep->Callbacks.EvtEndpointAbort(Endpoints[p]);
+            UcxpPipeClose(Endpoints[p]);
         }
     }
 }
@@ -1666,10 +1901,12 @@ UcxpDeviceHandleUrb(
             break;
     }
 
-    if (!UcxpUrbToSetup(Urb, &Setup, &DataIn, &Buffer, &Mdl, &Length))
+    UsbdStatus = UcxpUrbToSetup(Urb, &Setup, &DataIn, &Buffer, &Mdl, &Length);
+    if (!USBD_SUCCESS(UsbdStatus))
     {
-        UcxLog("device: port %u URB function 0x%04X rejected", Handle->PortNumber, Urb->UrbHeader.Function);
-        UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_URB_FUNCTION);
+        UcxLog("device: port %u URB function 0x%04X rejected (USBD 0x%08lX)", Handle->PortNumber,
+               Urb->UrbHeader.Function, (ULONG)UsbdStatus);
+        UcxpCompleteUrb(Request, Urb, UsbdStatus);
         return;
     }
 
