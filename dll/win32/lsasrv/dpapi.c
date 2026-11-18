@@ -46,6 +46,153 @@ static NTSTATUS DpapiGetCallerLogonId(_Out_ PLUID LogonId);
 
 static
 NTSTATUS
+DpapiCreateMachineKeySd(
+    _Outptr_ PSECURITY_DESCRIPTOR *Sd,
+    _Out_ PULONG SdSize)
+{
+    SECURITY_DESCRIPTOR AbsoluteSd;
+    PSECURITY_DESCRIPTOR RelativeSd = NULL;
+    ULONG RelativeSdSize = 0;
+    PSID SystemSid = NULL;
+    PACL Dacl = NULL;
+    ULONG DaclSize;
+    NTSTATUS Status;
+
+    *Sd = NULL;
+    *SdSize = 0;
+
+    Status = RtlCreateSecurityDescriptor(&AbsoluteSd, SECURITY_DESCRIPTOR_REVISION);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = RtlAllocateAndInitializeSid(&NtAuthority, 1, SECURITY_LOCAL_SYSTEM_RID,
+                                         0, 0, 0, 0, 0, 0, 0, &SystemSid);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    DaclSize = sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) - sizeof(ULONG) + RtlLengthSid(SystemSid);
+    Dacl = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, DaclSize);
+    if (Dacl == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto done;
+    }
+
+    Status = RtlCreateAcl(Dacl, DaclSize, ACL_REVISION);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, SECRET_ALL_ACCESS, SystemSid);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    Status = RtlSetDaclSecurityDescriptor(&AbsoluteSd, TRUE, Dacl, FALSE);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    Status = RtlSetGroupSecurityDescriptor(&AbsoluteSd, SystemSid, FALSE);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    Status = RtlSetOwnerSecurityDescriptor(&AbsoluteSd, SystemSid, FALSE);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    Status = RtlAbsoluteToSelfRelativeSD(&AbsoluteSd, RelativeSd, &RelativeSdSize);
+    if (Status != STATUS_BUFFER_TOO_SMALL)
+        goto done;
+
+    RelativeSd = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, RelativeSdSize);
+    if (RelativeSd == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto done;
+    }
+
+    Status = RtlAbsoluteToSelfRelativeSD(&AbsoluteSd, RelativeSd, &RelativeSdSize);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    *Sd = RelativeSd;
+    *SdSize = RelativeSdSize;
+
+done:
+    if (Dacl != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Dacl);
+    if (SystemSid != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, SystemSid);
+    if (!NT_SUCCESS(Status) && RelativeSd != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, RelativeSd);
+    return Status;
+}
+
+static
+NTSTATUS
+DpapiCheckLocalCaller(VOID)
+{
+    HANDLE Token = NULL;
+    PTOKEN_GROUPS Groups = NULL;
+    PSID NetworkSid = NULL;
+    PSID AnonymousSid = NULL;
+    ULONG Length = 0;
+    ULONG Index;
+    BOOLEAN Denied = FALSE;
+    NTSTATUS Status;
+
+    if (RpcImpersonateClient(NULL) != RPC_S_OK)
+        return STATUS_CANNOT_IMPERSONATE;
+
+    Status = NtOpenThreadToken(NtCurrentThread(), TOKEN_QUERY, TRUE, &Token);
+    if (!NT_SUCCESS(Status))
+    {
+        RpcRevertToSelf();
+        return Status;
+    }
+
+    NtQueryInformationToken(Token, TokenGroups, NULL, 0, &Length);
+    if (Length != 0)
+        Groups = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length);
+    if (Groups == NULL)
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+    else
+        Status = NtQueryInformationToken(Token, TokenGroups, Groups, Length, &Length);
+
+    if (NT_SUCCESS(Status))
+        Status = RtlAllocateAndInitializeSid(&NtAuthority, 1, SECURITY_NETWORK_RID,
+                                             0, 0, 0, 0, 0, 0, 0, &NetworkSid);
+    if (NT_SUCCESS(Status))
+        Status = RtlAllocateAndInitializeSid(&NtAuthority, 1, SECURITY_ANONYMOUS_LOGON_RID,
+                                             0, 0, 0, 0, 0, 0, 0, &AnonymousSid);
+
+    if (NT_SUCCESS(Status))
+    {
+        for (Index = 0; Index < Groups->GroupCount; Index++)
+        {
+            if (RtlEqualSid(Groups->Groups[Index].Sid, NetworkSid) ||
+                RtlEqualSid(Groups->Groups[Index].Sid, AnonymousSid))
+            {
+                Denied = TRUE;
+                break;
+            }
+        }
+    }
+
+    if (NetworkSid != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, NetworkSid);
+    if (AnonymousSid != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, AnonymousSid);
+    if (Groups != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Groups);
+    NtClose(Token);
+    RpcRevertToSelf();
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return Denied ? STATUS_ACCESS_DENIED : STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 DpapiReadMachineSecret(
     _In_ PLSA_DB_OBJECT PolicyObject,
     _Out_writes_bytes_(DPAPI_MACHINE_KEY_SIZE) PBYTE Key)
@@ -97,7 +244,7 @@ DpapiCreateMachineSecret(
     LARGE_INTEGER Time;
     NTSTATUS Status;
 
-    Status = LsapCreateSecretSd(&SecretSd, &SecretSdSize);
+    Status = DpapiCreateMachineKeySd(&SecretSd, &SecretSdSize);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -217,6 +364,12 @@ DpapiAcquireKey(
     if (Flags & CRYPTPROTECT_LOCAL_MACHINE)
     {
         BYTE MachineKey[DPAPI_MACHINE_KEY_SIZE];
+
+        /* LOCAL_MACHINE means any LOCAL user, not anyone who can reach the pipe: reject anonymous and
+         * network callers so a machine blob copied off this disk cannot be decrypted from elsewhere. */
+        Status = DpapiCheckLocalCaller();
+        if (!NT_SUCCESS(Status))
+            return Status;
 
         Status = DpapiLoadMachineKey(MachineKey);
         if (!NT_SUCCESS(Status))
