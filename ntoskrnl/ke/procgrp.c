@@ -69,7 +69,7 @@ KeGetProcessorIndexFromNumber(
     }
 
     Index = KiProcessorIndexFromNumber(ProcessorNumber->Group, ProcessorNumber->Number);
-    if (Index >= (ULONG)KeNumberProcessors)
+    if (Index >= KiNumberProcessors)
         return INVALID_PROCESSOR_INDEX;
 
     return Index;
@@ -84,7 +84,7 @@ KeGetProcessorNumberFromIndex(
     _In_ ULONG ProcessorIndex,
     _Out_ PPROCESSOR_NUMBER ProcessorNumber)
 {
-    if (ProcessorIndex >= (ULONG)KeNumberProcessors)
+    if (ProcessorIndex >= KiNumberProcessors)
         return STATUS_INVALID_PARAMETER;
 
     KiProcessorNumberFromIndex(ProcessorIndex, ProcessorNumber);
@@ -1376,7 +1376,7 @@ NTAPI
 KeQueryPrcbAddress(
     _In_ ULONG Number)
 {
-    if (Number >= (ULONG)KeNumberProcessors)
+    if (Number >= KiNumberProcessors)
         return NULL;
 
     return KiProcessorBlock[Number];

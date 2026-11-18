@@ -145,6 +145,14 @@ int main(VOID)
     for (Cpu = 0; Cpu < TEST_CPUS; Cpu++)
         CHECK(Cpus[Cpu].Flushes == (IsActive(Cpu) ? 1u : 0u) && Cpus[Cpu].PageFlushes == 0);
 
+    /* All processors from group 0 */
+    Reset(7);
+    MiArchInvalidateTlbAll(MiTlbAllProcessors);
+    CHECK(Ipis[0] == (Active[0] & ~(1ULL << 7)));
+    CHECK(Ipis[1] == Active[1]);
+    for (Cpu = 0; Cpu < TEST_CPUS; Cpu++)
+        CHECK(Cpus[Cpu].Flushes == (IsActive(Cpu) ? 1u : 0u) && Cpus[Cpu].PageFlushes == 0);
+
     /* A range for all processors from the last active one */
     Reset(103);
     MiArchInvalidateTlbRange((PVOID)0x5000, 2 * PAGE_SIZE, MiTlbAllProcessors);

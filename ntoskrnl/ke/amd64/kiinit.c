@@ -562,10 +562,14 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Get Pcr from loader block */
     Pcr = CONTAINING_RECORD(LoaderBlock->Prcb, KIPCR, Prcb);
 
-    /* Publish the PRCB before counting: [0, KeNumberProcessors) must be valid */
+    /* Publish the PRCB before counting: [0, KiNumberProcessors) must be valid */
     KiProcessorBlock[Cpu] = &Pcr->Prcb;
     KeMemoryBarrier();
-    if ((CCHAR)(Cpu + 1) > KeNumberProcessors)
+    if (Cpu + 1 > KiNumberProcessors)
+        KiNumberProcessors = Cpu + 1;
+
+    /* The exported count is the group 0 view */
+    if ((Cpu < KI_PROCESSORS_PER_GROUP) && ((CCHAR)(Cpu + 1) > KeNumberProcessors))
         KeNumberProcessors = (CCHAR)(Cpu + 1);
 
     /* Save the initial thread */

@@ -203,7 +203,7 @@ KiIpiSendProcessor(
     KAFFINITY_EX TargetSet;
     USHORT Group;
 
-    ASSERT(Index < (ULONG)KeNumberProcessors);
+    ASSERT(Index < KiNumberProcessors);
     if (IpiRequest == IPI_APC)
     {
         HalSendSoftwareInterrupt(Index, APC_LEVEL);

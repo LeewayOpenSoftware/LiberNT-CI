@@ -15,7 +15,8 @@ void __cdecl _invpcid(unsigned int Type, void *Descriptor);
 #pragma intrinsic(_invpcid)
 #endif
 
-FORCEINLINE ULONG MiAmd64TlbCpu(VOID) { return KeGetCurrentProcessorNumber(); }
+/* The processor index: KeGetCurrentProcessorNumber returns only its low byte */
+FORCEINLINE ULONG MiAmd64TlbCpu(VOID) { return KeGetCurrentPrcb()->Number; }
 FORCEINLINE ULONG64 MiAmd64TlbActiveCpus(VOID) { return (ULONG64)KeActiveProcessors; }
 #define MI_AMD64_TLB_MAXIMUM_PROCESSORS KI_MAXIMUM_PROCESSORS
 FORCEINLINE ULONG MiAmd64TlbGroupCount(VOID) { return KiActiveProcessorsEx.Count; }

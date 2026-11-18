@@ -215,6 +215,16 @@ C_ASSERT(KI_MAXIMUM_GROUPS <= KAFFINITY_EX_STATIC_GROUPS);
  */
 extern KAFFINITY_EX KiActiveProcessorsEx;
 
+/*
+ * Processors started in all groups: processor indexes [0, KiNumberProcessors)
+ * have a PRCB. The exported CCHAR KeNumberProcessors is the group 0 view.
+ */
+#if defined(_M_AMD64)
+extern volatile ULONG KiNumberProcessors;
+#else
+#define KiNumberProcessors ((ULONG)KeNumberProcessors)
+#endif
+
 FORCEINLINE
 VOID
 KiProcessorNumberFromIndex(

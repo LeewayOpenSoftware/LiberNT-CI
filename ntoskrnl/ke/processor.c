@@ -259,6 +259,9 @@ volatile CCHAR KeNumberProcessors = 0;
 #else
 CCHAR KeNumberProcessors = 0;
 #endif
+#if defined(_M_AMD64)
+volatile ULONG KiNumberProcessors = 0;
+#endif
 
 #ifdef CONFIG_SMP
 
@@ -313,11 +316,11 @@ ULONG
 NTAPI
 KeQueryActiveProcessorCountEx(IN USHORT GroupNumber)
 {
-    if ((GroupNumber == ALL_PROCESSOR_GROUPS) ||
-        ((GroupNumber == 0) && (KiActiveProcessorsEx.Count <= 1)))
-    {
+    if (GroupNumber == ALL_PROCESSOR_GROUPS)
+        return KiNumberProcessors;
+
+    if ((GroupNumber == 0) && (KiActiveProcessorsEx.Count <= 1))
         return (ULONG)KeNumberProcessors;
-    }
 
     if (GroupNumber >= KI_MAXIMUM_GROUPS)
         return 0;
@@ -344,7 +347,7 @@ KeQueryMaximumProcessorCountEx(
 #ifdef CONFIG_SMP
     Total = KeMaximumProcessors;
 #else
-    Total = (ULONG)KeNumberProcessors;
+    Total = KiNumberProcessors;
 #endif
 
     if (GroupNumber == ALL_PROCESSOR_GROUPS)

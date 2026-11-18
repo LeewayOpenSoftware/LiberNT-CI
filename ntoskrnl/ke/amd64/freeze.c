@@ -228,7 +228,7 @@ KiFreezeWaitForThaw(
             }
         }
 
-        for (ULONG Source = 0; Source < KeNumberProcessors; Source++)
+        for (ULONG Source = 0; Source < KiNumberProcessors; Source++)
         {
             MiAmd64ProcessTlbRequest(Source);
         }
@@ -586,7 +586,7 @@ KxSwitchKdProcessor(
         return ContinueSuccess;
 
     /* Make sure that the processor index is valid */
-    ASSERT(ProcessorIndex < KeNumberProcessors);
+    ASSERT(ProcessorIndex < KiNumberProcessors);
 
     /* We are no longer active */
     ASSERT(CurrentPrcb->IpiFrozen & IPI_FROZEN_FLAG_ACTIVE);
