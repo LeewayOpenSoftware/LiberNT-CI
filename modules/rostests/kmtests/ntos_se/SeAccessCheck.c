@@ -11,6 +11,33 @@
 
 #define TAG_TEST 'cAmK'
 
+/* The kernel headers have no ACCESS_ALLOWED_CALLBACK_ACE and no RtlAddAccessDeniedAce */
+typedef struct _KMT_CALLBACK_ACE
+{
+    ACE_HEADER Header;
+    ACCESS_MASK Mask;
+    ULONG SidStart;
+} KMT_CALLBACK_ACE, *PKMT_CALLBACK_ACE;
+
+static
+NTSTATUS
+AddDeniedAce(
+    _In_ PACL Acl,
+    _In_ ACCESS_MASK Mask,
+    _In_ PSID Sid)
+{
+    UCHAR Buffer[FIELD_OFFSET(ACCESS_DENIED_ACE, SidStart) + SECURITY_MAX_SID_SIZE];
+    PACCESS_DENIED_ACE Ace = (PACCESS_DENIED_ACE)Buffer;
+    ULONG SidLength = RtlLengthSid(Sid);
+
+    Ace->Header.AceType = ACCESS_DENIED_ACE_TYPE;
+    Ace->Header.AceFlags = 0;
+    Ace->Header.AceSize = (USHORT)(FIELD_OFFSET(ACCESS_DENIED_ACE, SidStart) + SidLength);
+    Ace->Mask = Mask;
+    RtlCopySid(SidLength, (PSID)&Ace->SidStart, Sid);
+    return RtlAddAce(Acl, ACL_REVISION, MAXULONG, Ace, Ace->Header.AceSize);
+}
+
 static
 VOID
 TestAccessCheck(VOID)
@@ -154,7 +181,7 @@ TestAccessCheckFromState(VOID)
     ok_eq_hex(Status, STATUS_SUCCESS);
     Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, FILE_GENERIC_READ, WorldSid);
     ok_eq_hex(Status, STATUS_SUCCESS);
-    Status = RtlAddAccessDeniedAce(Dacl, ACL_REVISION, FILE_GENERIC_WRITE, WorldSid);
+    Status = AddDeniedAce(Dacl, FILE_GENERIC_WRITE, WorldSid);
     ok_eq_hex(Status, STATUS_SUCCESS);
     Status = RtlSetDaclSecurityDescriptor(&Sd, TRUE, Dacl, FALSE);
     ok_eq_hex(Status, STATUS_SUCCESS);
@@ -178,7 +205,7 @@ TestAccessCheckFromState(VOID)
     AccessInfo.AuthenticationId.HighPart = 0;
     AccessInfo.TokenType = TokenPrimary;
     AccessInfo.ImpersonationLevel = SecurityIdentification;
-    AccessInfo.MandatoryPolicy = TOKEN_MANDATORY_POLICY_OFF;
+    AccessInfo.MandatoryPolicy.Policy = TOKEN_MANDATORY_POLICY_OFF;
 
     GrantedAccess = 0;
     AccessStatus = STATUS_PENDING;
@@ -214,7 +241,7 @@ TestAccessCheckFromState(VOID)
         {
             Status = RtlCreateAcl(MaxDacl, DaclSize, ACL_REVISION);
             ok_eq_hex(Status, STATUS_SUCCESS);
-            Status = RtlAddAccessDeniedAce(MaxDacl, ACL_REVISION, FILE_GENERIC_WRITE, WorldSid);
+            Status = AddDeniedAce(MaxDacl, FILE_GENERIC_WRITE, WorldSid);
             ok_eq_hex(Status, STATUS_SUCCESS);
             Status = RtlAddAccessAllowedAce(MaxDacl, ACL_REVISION, FILE_ALL_ACCESS, WorldSid);
             ok_eq_hex(Status, STATUS_SUCCESS);
@@ -262,13 +289,13 @@ TestAccessCheckFromState(VOID)
     }
 
     {
-        UCHAR CallbackBuffer[FIELD_OFFSET(ACCESS_ALLOWED_CALLBACK_ACE, SidStart) + SECURITY_MAX_SID_SIZE];
-        PACCESS_ALLOWED_CALLBACK_ACE CallbackAce = (PACCESS_ALLOWED_CALLBACK_ACE)CallbackBuffer;
+        UCHAR CallbackBuffer[FIELD_OFFSET(KMT_CALLBACK_ACE, SidStart) + SECURITY_MAX_SID_SIZE];
+        PKMT_CALLBACK_ACE CallbackAce = (PKMT_CALLBACK_ACE)CallbackBuffer;
         ULONG WorldSidLength = RtlLengthSid(WorldSid);
 
         CallbackAce->Header.AceType = ACCESS_ALLOWED_CALLBACK_ACE_TYPE;
         CallbackAce->Header.AceFlags = 0;
-        CallbackAce->Header.AceSize = (USHORT)(FIELD_OFFSET(ACCESS_ALLOWED_CALLBACK_ACE, SidStart) + WorldSidLength);
+        CallbackAce->Header.AceSize = (USHORT)(FIELD_OFFSET(KMT_CALLBACK_ACE, SidStart) + WorldSidLength);
         CallbackAce->Mask = FILE_ALL_ACCESS;
         RtlCopySid(WorldSidLength, (PSID)&CallbackAce->SidStart, WorldSid);
 
@@ -276,7 +303,7 @@ TestAccessCheckFromState(VOID)
         ok_eq_hex(Status, STATUS_SUCCESS);
         Status = RtlAddAce(Dacl, ACL_REVISION, MAXULONG, CallbackAce, CallbackAce->Header.AceSize);
         ok_eq_hex(Status, STATUS_SUCCESS);
-        Status = RtlAddAccessDeniedAce(Dacl, ACL_REVISION, FILE_GENERIC_WRITE, WorldSid);
+        Status = AddDeniedAce(Dacl, FILE_GENERIC_WRITE, WorldSid);
         ok_eq_hex(Status, STATUS_SUCCESS);
         Status = RtlSetDaclSecurityDescriptor(&Sd, TRUE, Dacl, FALSE);
         ok_eq_hex(Status, STATUS_SUCCESS);

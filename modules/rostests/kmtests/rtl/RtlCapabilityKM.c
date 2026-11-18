@@ -10,34 +10,29 @@
 #define NDEBUG
 #include <debug.h>
 
-NTSTATUS NTAPI RtlDeriveCapabilitySidsFromName(PUNICODE_STRING UnicodeString,
-                                               PSID CapabilityGroupSid,
-                                               PSID CapabilitySid);
-NTSTATUS NTAPI RtlCheckTokenCapability(HANDLE TokenHandle,
-                                       PSID CapabilitySidToCheck,
-                                       PBOOLEAN HasCapability);
-NTSTATUS NTAPI RtlGetPersistedStateLocation(PCWSTR SourceID,
-                                            PCWSTR CustomValue,
-                                            PCWSTR DefaultPath,
-                                            ULONG StateLocationType,
-                                            PWCHAR TargetPath,
-                                            ULONG BufferLengthIn,
-                                            PULONG BufferLengthOut);
-PVOID NTAPI RtlFindAceByType(PACL Acl, UCHAR AceType, PULONG Index);
-NTSTATUS NTAPI RtlDecompressBufferEx2(USHORT CompressionFormat,
-                                      PUCHAR UncompressedBuffer,
-                                      ULONG UncompressedBufferSize,
-                                      PUCHAR CompressedBuffer,
-                                      ULONG CompressedBufferSize,
-                                      ULONG UncompressedChunkSize,
-                                      PULONG FinalUncompressedSize,
-                                      PVOID WorkSpace);
+static
+NTSTATUS
+AddDeniedAce(
+    _In_ PACL Acl,
+    _In_ ACCESS_MASK Mask,
+    _In_ PSID Sid)
+{
+    UCHAR Buffer[FIELD_OFFSET(ACCESS_DENIED_ACE, SidStart) + SECURITY_MAX_SID_SIZE];
+    PACCESS_DENIED_ACE Ace = (PACCESS_DENIED_ACE)Buffer;
+    ULONG SidLength = RtlLengthSid(Sid);
+
+    Ace->Header.AceType = ACCESS_DENIED_ACE_TYPE;
+    Ace->Header.AceFlags = 0;
+    Ace->Header.AceSize = (USHORT)(FIELD_OFFSET(ACCESS_DENIED_ACE, SidStart) + SidLength);
+    Ace->Mask = Mask;
+    RtlCopySid(SidLength, (PSID)&Ace->SidStart, Sid);
+    return RtlAddAce(Acl, ACL_REVISION, MAXULONG, Ace, Ace->Header.AceSize);
+}
 
 static
 VOID
 TestDeriveCapabilitySids(VOID)
 {
-    SID_IDENTIFIER_AUTHORITY AppPackageAuthority = SECURITY_APP_PACKAGE_AUTHORITY;
     UCHAR GroupSidBuffer[SECURITY_MAX_SID_SIZE];
     UCHAR CapSidBuffer[SECURITY_MAX_SID_SIZE];
     UCHAR GroupSidBuffer2[SECURITY_MAX_SID_SIZE];
@@ -144,7 +139,7 @@ TestFindAceByType(VOID)
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status)) return;
 
-    Status = RtlAddAccessDeniedAce(Acl, ACL_REVISION, GENERIC_ALL, Sid);
+    Status = AddDeniedAce(Acl, GENERIC_ALL, Sid);
     ok_eq_hex(Status, STATUS_SUCCESS);
     Status = RtlAddAccessAllowedAce(Acl, ACL_REVISION, GENERIC_READ, Sid);
     ok_eq_hex(Status, STATUS_SUCCESS);
