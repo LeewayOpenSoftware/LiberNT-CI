@@ -5178,10 +5178,10 @@ DWORD WINAPI DECLSPEC_HOTPATCH EnumDynamicTimeZoneInformation( DWORD index,
         if (!ret)
         {
             ret = RegLoadMUIStringW( key, L"MUI_Std", info->StandardName,
-                                     sizeof(info->StandardName), NULL, 0, system_dir );
+                                     sizeof(info->StandardName), &size, 0, system_dir );
             if (!ret)
                 ret = RegLoadMUIStringW( key, L"MUI_Dlt", info->DaylightName,
-                                         sizeof(info->DaylightName), NULL, 0, system_dir );
+                                         sizeof(info->DaylightName), &size, 0, system_dir );
             RegCloseKey( key );
         }
         if (ret)

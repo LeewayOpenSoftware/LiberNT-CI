@@ -10,11 +10,17 @@
 
 extern void func_DsRoleGetPrimaryDomainInformation(void);
 extern void func_NetUserDelete(void);
+extern void func_NetLocalGroupAddMembers(void);
+extern void func_NetUserEnum(void);
+extern void func_NetUserGetLocalGroups(void);
 
 const struct test winetest_testlist[] =
 {
     { "DsRoleGetPrimaryDomainInformation", func_DsRoleGetPrimaryDomainInformation },
     { "NetUserDelete", func_NetUserDelete },
+    { "NetLocalGroupAddMembers", func_NetLocalGroupAddMembers },
+    { "NetUserEnum", func_NetUserEnum },
+    { "NetUserGetLocalGroups", func_NetUserGetLocalGroups },
 
     { 0, 0 }
 };
