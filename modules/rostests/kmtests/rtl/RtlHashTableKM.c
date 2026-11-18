@@ -206,7 +206,7 @@ TestHashTableExStrong(VOID)
     for (i = 0; i < 16; i++)
     {
         Entries[i].Value = i;
-        Ok = RtlInsertEntryHashTable(HashTable, &Entries[i].HashEntry, (ULONG_PTR)(i * 5 + 1), NULL);
+        Ok = RtlInsertEntryHashTable(HashTable, &Entries[i].HashEntry, (ULONG_PTR)(i * 17 + 130), NULL);
         ok_bool_true(Ok, "insert");
     }
 
@@ -221,6 +221,7 @@ TestHashTableExStrong(VOID)
     ok_eq_ulong(Seen, 16UL);
     ok_eq_ulong(HashTable->NumEnumerators, 0UL);
     RtlEndStrongEnumerationHashTable(HashTable, &Enumerator);
+    RtlDeleteHashTable(HashTable);
 
     HashTable = NULL;
     Ok = RtlCreateHashTableEx(&HashTable, 0, 0, 0);
@@ -231,6 +232,8 @@ TestHashTableExStrong(VOID)
     ok_bool_false(Ok, "non power of two initial size");
     Ok = RtlCreateHashTableEx(&HashTable, 8388608, 0, 0);
     ok_bool_false(Ok, "oversized initial size");
+    Ok = RtlCreateHashTableEx(&HashTable, 4194304, 0, 0);
+    ok_bool_false(Ok, "above directory capacity");
     Ok = RtlCreateHashTableEx(&HashTable, 256, 1, 0);
     ok_bool_false(Ok, "nonzero shift");
     Ok = RtlCreateHashTableEx(&HashTable, 256, 0, 1);
@@ -243,8 +246,8 @@ TestHashTableExStrong(VOID)
     }
 
     HashTable = NULL;
-    Ok = RtlCreateHashTableEx(&HashTable, 4194304, 0, 0);
-    ok_bool_true(Ok, "largest power of two");
+    Ok = RtlCreateHashTableEx(&HashTable, 131072, 0, 0);
+    ok_bool_true(Ok, "directory capacity initial size");
     if (Ok && HashTable != NULL)
         RtlDeleteHashTable(HashTable);
 }
