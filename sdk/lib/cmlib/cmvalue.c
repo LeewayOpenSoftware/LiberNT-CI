@@ -28,8 +28,35 @@ CmpMarkValueDataDirty(IN PHHIVE Hive,
         /* If this is a small key, there's no need to have it dirty */
         if (CmpIsKeyValueSmall(&KeySize, Value->DataLength)) return TRUE;
 
-        /* Check if this is a big key */
-        ASSERT_VALUE_BIG(Hive, KeySize);
+        /* A big value is written back through its whole record */
+        if (CmpIsKeyValueBig(Hive, KeySize))
+        {
+            PCM_BIG_DATA BigData;
+            PHCELL_INDEX SegmentList;
+            ULONG Needed, i;
+
+            Needed = (KeySize + CM_KEY_VALUE_BIG - 1) / CM_KEY_VALUE_BIG;
+            BigData = (PCM_BIG_DATA)HvGetCell(Hive, Value->Data);
+            if (!BigData) return FALSE;
+            if (HvGetCellSize(Hive, BigData) >= (LONG)sizeof(CM_BIG_DATA) &&
+                BigData->Signature == CM_BIG_DATA_SIGNATURE &&
+                BigData->Count >= Needed &&
+                BigData->List != HCELL_NIL)
+            {
+                SegmentList = (PHCELL_INDEX)HvGetCell(Hive, BigData->List);
+                if (SegmentList)
+                {
+                    if (HvGetCellSize(Hive, SegmentList) >= (LONG)(Needed * sizeof(HCELL_INDEX)))
+                    {
+                        for (i = 0; i < Needed; i++)
+                            HvMarkCellDirty(Hive, SegmentList[i], FALSE);
+                    }
+                    HvReleaseCell(Hive, BigData->List);
+                }
+                HvMarkCellDirty(Hive, BigData->List, FALSE);
+            }
+            HvReleaseCell(Hive, Value->Data);
+        }
 
         /* Normal value, just mark it dirty */
         HvMarkCellDirty(Hive, Value->Data, FALSE);
@@ -54,11 +81,41 @@ CmpFreeValueData(IN PHHIVE Hive,
         /* If there's no data cell, there's nothing to do */
         if (DataCell == HCELL_NIL) return TRUE;
 
-        /* Make sure the data cell is allocated */
-        //ASSERT(HvIsCellAllocated(Hive, DataCell));
+        /* A big value frees its whole record */
+        if (CmpIsKeyValueBig(Hive, KeySize))
+        {
+            PCM_BIG_DATA BigData;
+            PHCELL_INDEX SegmentList;
+            ULONG Needed, i;
 
-        /* Unsupported value type */
-        ASSERT_VALUE_BIG(Hive, KeySize);
+            Needed = (KeySize + CM_KEY_VALUE_BIG - 1) / CM_KEY_VALUE_BIG;
+            BigData = (PCM_BIG_DATA)HvGetCell(Hive, DataCell);
+            if (BigData)
+            {
+                if (HvGetCellSize(Hive, BigData) >= (LONG)sizeof(CM_BIG_DATA) &&
+                    BigData->Signature == CM_BIG_DATA_SIGNATURE &&
+                    BigData->Count >= Needed &&
+                    BigData->List != HCELL_NIL)
+                {
+                    SegmentList = (PHCELL_INDEX)HvGetCell(Hive, BigData->List);
+                    if (SegmentList)
+                    {
+                        if (HvGetCellSize(Hive, SegmentList) >= (LONG)(Needed * sizeof(HCELL_INDEX)))
+                        {
+                            for (i = 0; i < Needed; i++)
+                                HvFreeCell(Hive, SegmentList[i]);
+                        }
+                        HvReleaseCell(Hive, BigData->List);
+                    }
+                    HvFreeCell(Hive, BigData->List);
+                }
+                HvReleaseCell(Hive, DataCell);
+            }
+
+            /* The record (or the plain cell) itself */
+            HvFreeCell(Hive, DataCell);
+            return TRUE;
+        }
 
         /* Normal value, just free the data cell */
         HvFreeCell(Hive, DataCell);
@@ -584,9 +641,14 @@ CmpCopyValue(IN PHHIVE SourceHive,
     }
     else
     {
-        /* Big keys are currently unsupported */
-        ASSERT_VALUE_BIG(SourceHive, DataSize);
-        // Should use CmpGetValueData and CmpSetValueDataNew for big values!
+        /* Big values cannot be represented on the destination until a
+           1.4 writer exists; fail the copy cleanly */
+        if (CmpIsKeyValueBig(SourceHive, DataSize))
+        {
+            HvFreeCell(DestinationHive, NewValueCell);
+            NewValueCell = HCELL_NIL;
+            goto Quit;
+        }
 
         /* Regular value */
 
