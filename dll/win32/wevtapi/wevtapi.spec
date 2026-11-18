@@ -1,6 +1,6 @@
 @ stub EvtArchiveExportedLog
-@ stub EvtCancel
-@ stub EvtClearLog
+@ stdcall EvtCancel(ptr)
+@ stdcall EvtClearLog(ptr wstr wstr long)
 @ stdcall EvtClose(ptr)
 @ stdcall EvtCreateBookmark(wstr)
 @ stdcall EvtCreateRenderContext(long ptr long)
@@ -9,8 +9,8 @@
 @ stdcall EvtGetChannelConfigProperty(ptr long long long ptr ptr)
 @ stub EvtGetEventInfo
 @ stub EvtGetEventMetadataProperty
-@ stub EvtGetExtendedStatus
-@ stub EvtGetLogInfo
+@ stdcall EvtGetExtendedStatus(long ptr ptr)
+@ stdcall EvtGetLogInfo(ptr long long ptr ptr)
 @ stub EvtGetObjectArrayProperty
 @ stub EvtGetObjectArraySize
 @ stub EvtGetPublisherMetadataProperty
@@ -39,8 +39,8 @@
 @ stdcall EvtQuery(ptr wstr wstr long)
 @ stdcall EvtRender(ptr ptr long long ptr ptr ptr)
 @ stdcall EvtSaveChannelConfig(ptr long)
-@ stub EvtSeek
+@ stdcall EvtSeek(ptr int64 ptr long long)
 @ stdcall EvtSetChannelConfigProperty(ptr long long ptr)
 @ stub EvtSetObjectArrayProperty
 @ stdcall EvtSubscribe(ptr ptr wstr wstr ptr ptr ptr long)
-@ stub EvtUpdateBookmark
+@ stdcall EvtUpdateBookmark(ptr ptr)

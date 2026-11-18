@@ -567,6 +567,10 @@ Quit:
     /* Unlock the log file */
     RtlReleaseResource(&LogFile->Lock);
 
+    /* Wake the clients waiting for changes (NotifyChangeEventLog) */
+    if (NT_SUCCESS(Status))
+        ElfNotifyLogChange(LogFile);
+
     return Status;
 }
 
