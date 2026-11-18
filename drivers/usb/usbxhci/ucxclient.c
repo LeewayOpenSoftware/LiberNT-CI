@@ -2087,8 +2087,23 @@ XhciUcxReleaseSlot(
     }
 
     if (Slot->UsbDevice != NULL)
-        WdfObjectDelete((WDFOBJECT)Slot->UsbDevice);   /* its EP0 child goes with it */
+    {
+        if (Dev->SelfEnumerate)
+        {
+            /* M2 demo: the client created the object; its EP0 child goes with it */
+            WdfObjectDelete((WDFOBJECT)Slot->UsbDevice);
+        }
+        else
+        {
+            /* Hub-driven: the class library owns the object and deletes it with
+             * the device handle; the slot only stops being that device's */
+            PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)Slot->UsbDevice);
 
+            XhciUcxSlotDropEndpoints(Dev, Slot, USBD_STATUS_DEVICE_GONE);
+            if (Device != NULL && Device->Slot == Slot)
+                Device->Slot = NULL;
+        }
+    }
     RtlZeroMemory(Slot, sizeof(*Slot));
 }
 
@@ -2100,12 +2115,16 @@ XhciUcxForgetAllSlots(
 {
     ULONG Index;
 
+    /* The device callbacks read Device->Slot under TransferMutex: no slot
+     * may go away under them (the callers run at PASSIVE_LEVEL, hold nothing) */
+    ExAcquireFastMutex(&Dev->TransferMutex);
     for (Index = 0; Index < XHCI_UCX_MAX_ENUM_SLOTS; Index++)
     {
         if (Dev->Slots[Index].InUse)
             XhciUcxReleaseSlot(Dev, &Dev->Slots[Index], IssueDisable);
     }
     RtlZeroMemory(Dev->PortEnumState, sizeof(Dev->PortEnumState));
+    ExReleaseFastMutex(&Dev->TransferMutex);
 }
 
 /* SEC-1 subset: is bMaxPacketSize0 legal for the negotiated speed? Returns the byte size or 0. */
