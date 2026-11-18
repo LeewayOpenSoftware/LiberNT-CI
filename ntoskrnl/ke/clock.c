@@ -577,4 +577,72 @@ KeSetTimeIncrement(IN ULONG MaxIncrement,
 #endif
 }
 
+#if defined(_M_IX86) || defined(_M_AMD64)
+
+/*
+ * The clock is the timer of processor 0, so a deadline for it is given to the
+ * HAL there: at once when already on it, from a DPC sent to it otherwise.
+ */
+static KSPIN_LOCK KiClockDeadlineLock;
+static ULONGLONG KiClockDeadline;
+static KDPC KiClockDeadlineDpc;
+static BOOLEAN KiClockDeadlineDpcReady;
+
+static
+VOID
+NTAPI
+KiClockDeadlineDpcRoutine(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(DeferredContext);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    /* Whatever deadline stands now is the one to set, not the one that sent us */
+    KeAcquireSpinLockAtDpcLevel(&KiClockDeadlineLock);
+    HalSetClockDeadline(KiClockDeadline);
+    KeReleaseSpinLockFromDpcLevel(&KiClockDeadlineLock);
+}
+
+/*
+ * Asks for a clock tick at the given interrupt time, zero for none. FALSE means
+ * the clock cannot be given a deadline and has to run at a finer period instead.
+ */
+BOOLEAN
+NTAPI
+KiSetClockDeadline(
+    _In_ ULONGLONG InterruptTime)
+{
+    KIRQL OldIrql;
+    BOOLEAN Taken;
+
+    KeAcquireSpinLock(&KiClockDeadlineLock, &OldIrql);
+    KiClockDeadline = InterruptTime;
+
+    /* Off processor 0 this only tells whether the clock takes a deadline */
+    Taken = HalSetClockDeadline(InterruptTime);
+    if (Taken && KeGetCurrentProcessorNumber() != 0)
+    {
+        if (!KiClockDeadlineDpcReady)
+        {
+            KeInitializeDpc(&KiClockDeadlineDpc, KiClockDeadlineDpcRoutine, NULL);
+            KeSetTargetProcessorDpc(&KiClockDeadlineDpc, 0);
+            KeSetImportanceDpc(&KiClockDeadlineDpc, HighImportance);
+            KiClockDeadlineDpcReady = TRUE;
+        }
+
+        /* Already queued means it has not run yet, and will see this deadline */
+        KeInsertQueueDpc(&KiClockDeadlineDpc, NULL, NULL);
+    }
+
+    KeReleaseSpinLock(&KiClockDeadlineLock, OldIrql);
+    return Taken;
+}
+
+#endif
+
 /* EOF */
