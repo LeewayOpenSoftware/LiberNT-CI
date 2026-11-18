@@ -360,6 +360,7 @@ base/services/rpcss                 # Synced to Wine-11.14
 base/shell/cmd                      # Synced to Wine-11.14
 base/services/schedsvc              # Synced to Wine-11.14
 base/system/conhost                 # Synced to Wine-11.14
+base/system/dllhost                 # Synced to Wine-11.14
 base/system/expand                  # Synced to Wine-11.14
 base/system/msiexec                 # Synced to Wine-11.14
 
