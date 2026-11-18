@@ -51,7 +51,7 @@ DpapiReadMachineSecret(
     _Out_writes_bytes_(DPAPI_MACHINE_KEY_SIZE) PBYTE Key)
 {
     PLSA_DB_OBJECT SecretObject = NULL;
-    ULONG Size = DPAPI_MACHINE_KEY_SIZE;
+    ULONG Size = 0;
     NTSTATUS Status;
 
     Status = LsapOpenDbObject(PolicyObject,
@@ -64,9 +64,22 @@ DpapiReadMachineSecret(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Status = LsapGetObjectAttribute(SecretObject, L"CurrentValue", Key, &Size);
-    if (NT_SUCCESS(Status) && Size != DPAPI_MACHINE_KEY_SIZE)
-        Status = STATUS_UNSUCCESSFUL;
+    /* Query the size first so an absent CurrentValue is reported as NOT_FOUND (regenerate), while a
+     * present but wrong-sized value is a hard error (never regenerate -- that would overwrite a key
+     * in use). The output buffer is written only on a fully successful read. */
+    Status = LsapGetObjectAttribute(SecretObject, L"CurrentValue", NULL, &Size);
+    if (NT_SUCCESS(Status))
+    {
+        if (Size != DPAPI_MACHINE_KEY_SIZE)
+        {
+            Status = STATUS_UNSUCCESSFUL;
+        }
+        else
+        {
+            Size = DPAPI_MACHINE_KEY_SIZE;
+            Status = LsapGetObjectAttribute(SecretObject, L"CurrentValue", Key, &Size);
+        }
+    }
 
     LsapCloseDbObject(SecretObject);
     return Status;
@@ -99,10 +112,20 @@ DpapiCreateMachineSecret(
         goto done;
 
     NtQuerySystemTime(&Time);
-    LsapSetObjectAttribute(SecretObject, L"CurrentTime", &Time, sizeof(LARGE_INTEGER));
-    LsapSetObjectAttribute(SecretObject, L"OldTime", &Time, sizeof(LARGE_INTEGER));
-    LsapSetObjectAttribute(SecretObject, L"SecDesc", SecretSd, SecretSdSize);
-    Status = LsapSetObjectAttribute(SecretObject, L"CurrentValue", Key, DPAPI_MACHINE_KEY_SIZE);
+    Status = LsapSetObjectAttribute(SecretObject, L"CurrentTime", &Time, sizeof(LARGE_INTEGER));
+    if (NT_SUCCESS(Status))
+        Status = LsapSetObjectAttribute(SecretObject, L"OldTime", &Time, sizeof(LARGE_INTEGER));
+    if (NT_SUCCESS(Status))
+        Status = LsapSetObjectAttribute(SecretObject, L"SecDesc", SecretSd, SecretSdSize);
+    if (NT_SUCCESS(Status))
+        Status = LsapSetObjectAttribute(SecretObject, L"CurrentValue", Key, DPAPI_MACHINE_KEY_SIZE);
+
+    if (!NT_SUCCESS(Status))
+    {
+        /* Do not leave a half-made secret (e.g. without an SD) behind. */
+        LsapDeleteDbObject(SecretObject);
+        SecretObject = NULL;
+    }
 
 done:
     if (SecretObject != NULL)
@@ -140,19 +163,26 @@ DpapiLoadMachineKey(
         goto done;
 
     Status = DpapiReadMachineSecret(PolicyObject, DpapiMachineKey);
-    if (!NT_SUCCESS(Status))
+    if (Status == STATUS_OBJECT_NAME_NOT_FOUND || Status == STATUS_OBJECT_PATH_NOT_FOUND)
     {
+        /* Genuinely absent: generate and store. A read that failed for any other reason (including a
+         * present value of the wrong size) must NOT regenerate -- that would overwrite a key still in
+         * use and make every machine blob undecryptable. */
         Status = BCryptGenRandom(NULL, DpapiMachineKey, DPAPI_MACHINE_KEY_SIZE,
                                  BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-        if (!NT_SUCCESS(Status))
-            goto done;
+        if (NT_SUCCESS(Status))
+            Status = DpapiCreateMachineSecret(PolicyObject, DpapiMachineKey);
 
-        Status = DpapiCreateMachineSecret(PolicyObject, DpapiMachineKey);
         if (!NT_SUCCESS(Status))
         {
             RtlSecureZeroMemory(DpapiMachineKey, DPAPI_MACHINE_KEY_SIZE);
             goto done;
         }
+    }
+    else if (!NT_SUCCESS(Status))
+    {
+        RtlSecureZeroMemory(DpapiMachineKey, DPAPI_MACHINE_KEY_SIZE);
+        goto done;
     }
 
     DpapiMachineKeyLoaded = TRUE;
@@ -244,6 +274,7 @@ DpapiGetCallerLogonId(
 static
 NTSTATUS
 DpapiDeriveKeys(
+    _In_ ULONG Scope,
     _In_ PLSA_STRING Prekey,
     _In_reads_bytes_(EntropyLength) PBYTE Entropy,
     _In_ ULONG EntropyLength,
@@ -255,17 +286,18 @@ DpapiDeriveKeys(
     ULONG PasswordLength;
     NTSTATUS Status;
 
-    PasswordLength = Prekey->Length + EntropyLength;
-    if (PasswordLength == 0)
-        return STATUS_INVALID_PARAMETER;
+    /* Prefix a scope tag so the user and machine scopes never derive the same key from the same key
+     * material: PBKDF2 password = Scope(4 bytes) || Prekey || Entropy. */
+    PasswordLength = sizeof(ULONG) + Prekey->Length + EntropyLength;
 
     Password = RtlAllocateHeap(RtlGetProcessHeap(), 0, PasswordLength);
     if (Password == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    RtlCopyMemory(Password, Prekey->Buffer, Prekey->Length);
+    RtlCopyMemory(Password, &Scope, sizeof(ULONG));
+    RtlCopyMemory(Password + sizeof(ULONG), Prekey->Buffer, Prekey->Length);
     if (EntropyLength != 0)
-        RtlCopyMemory(Password + Prekey->Length, Entropy, EntropyLength);
+        RtlCopyMemory(Password + sizeof(ULONG) + Prekey->Length, Entropy, EntropyLength);
 
     Status = BCryptOpenAlgorithmProvider(&Algorithm, BCRYPT_SHA512_ALGORITHM, NULL,
                                          BCRYPT_ALG_HANDLE_HMAC_FLAG);
@@ -457,7 +489,8 @@ s_DpapiProtect(
     if (!NT_SUCCESS(Status))
         goto done;
 
-    Status = DpapiDeriveKeys(&Prekey, Entropy.pbData, Entropy.cbData, Salt, Derived);
+    Status = DpapiDeriveKeys((Flags & CRYPTPROTECT_LOCAL_MACHINE) ? 1 : 0,
+                             &Prekey, Entropy.pbData, Entropy.cbData, Salt, Derived);
     if (!NT_SUCCESS(Status))
         goto done;
 
@@ -558,7 +591,8 @@ s_DpapiUnprotect(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Status = DpapiDeriveKeys(&Prekey, Entropy.pbData, Entropy.cbData, Blob + 8, Derived);
+    Status = DpapiDeriveKeys((StoredFlags & CRYPTPROTECT_LOCAL_MACHINE) ? 1 : 0,
+                             &Prekey, Entropy.pbData, Entropy.cbData, Blob + 8, Derived);
     if (!NT_SUCCESS(Status))
         goto done;
 
