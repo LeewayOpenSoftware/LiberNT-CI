@@ -287,6 +287,11 @@ enum operations {
     REG_EXPORT,
     REG_IMPORT,
     REG_QUERY,
+    REG_SAVE,
+    REG_RESTORE,
+    REG_LOAD,
+    REG_UNLOAD,
+    REG_COMPARE,
     REG_INVALID
 };
 
@@ -302,6 +307,11 @@ static enum operations get_operation(const WCHAR *str, int *op_help)
         { L"export",  REG_EXPORT,  STRING_EXPORT_USAGE },
         { L"import",  REG_IMPORT,  STRING_IMPORT_USAGE },
         { L"query",   REG_QUERY,   STRING_QUERY_USAGE },
+        { L"save",    REG_SAVE,    STRING_SAVE_USAGE },
+        { L"restore", REG_RESTORE, STRING_RESTORE_USAGE },
+        { L"load",    REG_LOAD,    STRING_LOAD_USAGE },
+        { L"unload",  REG_UNLOAD,  STRING_UNLOAD_USAGE },
+        { L"compare", REG_COMPARE, STRING_COMPARE_USAGE },
         { NULL,    -1,          0 }
     };
 
@@ -370,6 +380,21 @@ int __cdecl wmain(int argc, WCHAR *argvW[])
 
     if (op == REG_IMPORT)
         return reg_import(argc, argvW);
+
+    if (op == REG_SAVE)
+        return reg_save(argc, argvW);
+
+    if (op == REG_RESTORE)
+        return reg_restore(argc, argvW);
+
+    if (op == REG_LOAD)
+        return reg_load(argc, argvW);
+
+    if (op == REG_UNLOAD)
+        return reg_unload(argc, argvW);
+
+    if (op == REG_COMPARE)
+        return reg_compare(argc, argvW);
 
     return reg_query(argc, argvW);
 

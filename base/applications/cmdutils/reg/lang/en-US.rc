@@ -5,7 +5,8 @@ STRINGTABLE
     STRING_USAGE, "Usage:\n\
   REG [operation] [parameters]\n\n\
 Supported operations:\n\
-  ADD | COPY | DELETE | EXPORT | IMPORT | QUERY\n\n\
+  ADD | COPY | DELETE | EXPORT | IMPORT | QUERY |\n\
+  SAVE | RESTORE | LOAD | UNLOAD | COMPARE\n\n\
 For help on a specific operation, type:\n\
   REG [operation] /?\n\n"
 
@@ -178,4 +179,85 @@ For help on a specific operation, type:\n\
 
     STRING_COPY_SRC_DEST_SAME, "reg: The source and destination keys cannot be the same\n"
     STRING_COPY_CONFIRM, "The value '%1\\%2' already exists in the destination key. Do you want to overwrite it?"
+}
+
+STRINGTABLE
+{
+    STRING_REG_NOT_FOUND, "ERROR: The system was unable to find the specified registry key or value.\n"
+    STRING_HIVE_ROOT, "ERROR: The root key must be HKLM or HKU for LOAD/UNLOAD.\n"
+    STRING_COMPARE_SELF, "ERROR: The registry entry is being compared with itself.\n"
+    STRING_COMPARE_VALUE, "%1 Value: %2  %3 %4 %5\n"
+    STRING_COMPARE_KEY, "%1 Key: %2\n"
+    STRING_COMPARE_IDENTICAL, "\nResult Compared: Identical\n"
+    STRING_COMPARE_DIFFERENT, "\nResult Compared: Different\n"
+}
+
+STRINGTABLE
+{
+    STRING_SAVE_USAGE, "REG SAVE <key> <file> [/y] [/reg:32 | /reg:64]\n\n\
+  Saves a registry key, its subkeys and values to a hive file.\n\n\
+  <key>\n\
+     The registry key to save. Format: ROOT\\Subkey\n\
+     ROOT: HKLM | HKCU | HKCR | HKU | HKCC\n\n\
+  <file>\n\
+     The hive file to write. Without a path it is created in the current\n\
+     directory.\n\n\
+  /y\n\
+     Overwrite an existing file without prompting.\n\n\
+Example:\n\
+  REG SAVE HKLM\\Software\\MyCo\\MyApp AppBkUp.hiv\n\
+     Saves the MyApp key to the file AppBkUp.hiv in the current directory.\n\n"
+
+    STRING_RESTORE_USAGE, "REG RESTORE <key> <file> [/reg:32 | /reg:64]\n\n\
+  Writes a hive file created by REG SAVE over a registry key. The values\n\
+  and subkeys of the key are replaced.\n\n\
+  <key>\n\
+     The registry key to restore into. Format: ROOT\\Subkey\n\
+     ROOT: HKLM | HKCU | HKCR | HKU | HKCC\n\n\
+  <file>\n\
+     The hive file to restore.\n\n\
+Example:\n\
+  REG RESTORE HKLM\\Software\\Microsoft\\ResKit NTRKBkUp.hiv\n\
+     Restores NTRKBkUp.hiv over the ResKit key.\n\n"
+
+    STRING_LOAD_USAGE, "REG LOAD <key> <file> [/reg:32 | /reg:64]\n\n\
+  Loads a hive file as a new key (local computer only).\n\n\
+  <key>\n\
+     The key to create for the hive. Format: ROOT\\Subkey\n\
+     ROOT: HKLM | HKU\n\n\
+  <file>\n\
+     The hive file to load. It must have been created with REG SAVE.\n\n\
+Example:\n\
+  REG LOAD HKLM\\TempHive TempHive.hiv\n\
+     Loads TempHive.hiv into the key HKLM\\TempHive.\n\n"
+
+    STRING_UNLOAD_USAGE, "REG UNLOAD <key>\n\n\
+  Unloads a hive that was loaded with REG LOAD (local computer only).\n\n\
+  <key>\n\
+     The key of the hive to unload. Format: ROOT\\Subkey\n\
+     ROOT: HKLM | HKU\n\n\
+Example:\n\
+  REG UNLOAD HKLM\\TempHive\n\
+     Unloads the hive TempHive from HKLM.\n\n"
+
+    STRING_COMPARE_USAGE, "REG COMPARE <key1> <key2> [/v value_name | /ve] [/oa | /od | /os | /on] [/s]\n\
+            [/reg:32 | /reg:64]\n\n\
+  Compares the values, and with /s the subkeys, of two registry keys.\n\n\
+  <key1>, <key2>\n\
+     Format: ROOT\\Subkey. ROOT: HKLM | HKCU | HKCR | HKU | HKCC\n\
+     <key2> may be \\\\. to name <key1> on this computer.\n\n\
+  /v <value_name>  Compare only this value.\n\
+  /ve              Compare only the empty value name (Default).\n\
+  /s               Compare all subkeys and values.\n\n\
+  /oa  Show all differences and matches.\n\
+  /od  Show only differences (default).\n\
+  /os  Show only matches.\n\
+  /on  Show nothing.\n\n\
+Return codes:\n\
+  0 - success, the compared keys are identical\n\
+  1 - failure\n\
+  2 - success, the compared keys are different\n\n\
+  = the data of key1 equals the data of key2\n\
+  < the data of key1 differs from the data of key2\n\
+  > the data of key2 differs from the data of key1\n\n"
 }

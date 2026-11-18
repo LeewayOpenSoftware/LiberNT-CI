@@ -7,6 +7,7 @@ extern void func_add(void);
 extern void func_copy(void);
 extern void func_delete(void);
 extern void func_export(void);
+extern void func_hive(void);
 extern void func_import(void);
 extern void func_query(void);
 
@@ -16,6 +17,7 @@ const struct test winetest_testlist[] =
     { "copy", func_copy },
     { "delete", func_delete },
     { "export", func_export },
+    { "hive", func_hive },
     { "import", func_import },
     { "query", func_query },
     { 0, 0 }

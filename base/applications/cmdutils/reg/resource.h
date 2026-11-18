@@ -82,3 +82,17 @@
 /* query.c */
 #define STRING_VALUE_NOT_SET          450
 #define STRING_MATCHES_FOUND          451
+
+/* hive.c, compare.c: own string blocks, so a translation without them falls back as a whole */
+#define STRING_REG_NOT_FOUND          500
+#define STRING_HIVE_ROOT              501
+#define STRING_COMPARE_SELF           502
+#define STRING_COMPARE_VALUE          503
+#define STRING_COMPARE_KEY            504
+#define STRING_COMPARE_IDENTICAL      505
+#define STRING_COMPARE_DIFFERENT      506
+#define STRING_SAVE_USAGE             512
+#define STRING_RESTORE_USAGE          513
+#define STRING_LOAD_USAGE             514
+#define STRING_UNLOAD_USAGE           515
+#define STRING_COMPARE_USAGE          516
