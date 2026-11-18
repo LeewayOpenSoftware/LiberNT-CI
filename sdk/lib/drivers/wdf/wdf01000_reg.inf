@@ -6,6 +6,16 @@ HKLM,"SYSTEM\CurrentControlSet\Services\Wdf01000","DisplayName",0x00000000,"Kern
 HKLM,"SYSTEM\CurrentControlSet\Services\Wdf01000","ImagePath",0x00020000,"system32\drivers\wdf01000.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\Wdf01000","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\Wdf01000","Type",0x00010001,0x00000001
+; Boot-start order inside WdfLoadGroup: the framework (tag 1) initializes before any
+; boot-start class library (tag 2, e.g. Ucx01000 when a lab makes it boot-start). Without
+; the list, drivers of one group initialize in registry order and a class library named
+; before "Wdf01000" fails its own framework bind (loading the framework image through
+; \SystemRoot is impossible during boot-driver initialization).
+HKLM,"SYSTEM\CurrentControlSet\Services\Wdf01000","Tag",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Control\GroupOrderList","WdfLoadGroup",0x00000001, \
+  0x02, 0x00, 0x00, 0x00, \
+  0x01, 0x00, 0x00, 0x00, \
+  0x02, 0x00, 0x00, 0x00
 HKLM,"SYSTEM\CurrentControlSet\Services\Wdf01000\Parameters","BuildNumber",0x00010001,0x00001db0
 HKLM,"SYSTEM\CurrentControlSet\Services\Wdf01000\Parameters","MajorVersion",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\Wdf01000\Parameters","MinorVersion",0x00010001,0x00000011
