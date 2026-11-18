@@ -510,6 +510,41 @@ jobs:
       run: |
         ctest --test-dir build/cmlib-host --output-on-failure -R "cmlib_mark_dirty|cmlib_dirty_arith"
 
+  ke-host-tests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
+    # Host tests of the kernel and executive: the amd64 xstate layout, and
+    # fixtures that compile code taken from ntoskrnl/ and hal/ (freeze
+    # timeout, publication and bugcheck interaction, SMP start and IPI send,
+    # interrupt dispatch, work queue start-up).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - name: Source checkout
+      uses: actions/checkout@v6
+      with:
+        sparse-checkout: |
+          ntoskrnl
+          hal
+          sdk/include
+          submodules/host-tests
+
+    - name: Install host build tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc cmake ninja-build python3
+
+    - name: Configure
+      run: |
+        cmake -S submodules/host-tests -B build/ke-host -G Ninja -DCMAKE_BUILD_TYPE=Debug -DHOST_TEST_MMCC=OFF -DHOST_TEST_NTDLL=OFF -DHOST_TEST_RTL=OFF -DHOST_TEST_I8042=OFF -DHOST_TEST_ACPI=OFF -DHOST_TEST_NDIS=OFF -DHOST_TEST_DHCPCSVC=OFF
+
+    - name: Build
+      run: |
+        cmake --build build/ke-host
+
+    - name: Run the host tests
+      run: |
+        ctest --test-dir build/ke-host --output-on-failure -R "^(ke|ex|io|kd|ps)\."
+
   mmcc-host-tests:
     if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
     # Host tests of the NVS memory manager core on a simulated machine: page
