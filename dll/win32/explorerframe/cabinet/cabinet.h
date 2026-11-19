@@ -130,7 +130,8 @@ private:
     void UpdateSelectionSize();
     void UpdateCommands();
     IShellView *CurrentView();
-    BOOL CommandEnabled(CabinetCommand command);
+    BOOL CommandEnabled(CabinetCommand command, int selected = -1);
+    int SelectionCount();
     void ExecuteCommand(CabinetCommand command);
     void InvokeSelectionVerb(LPCSTR verb);
     void InvokeBackgroundVerb(LPCSTR verb);

@@ -2414,8 +2414,6 @@ CCabinetWindow::OnNavigationComplete(IExplorerBrowser *browser, PCIDLIST_ABSOLUT
         if (!m_SearchActive)
             SetWindowTextW(m_SearchEdit, L"");
         UpdateAddress();
-        UpdateStatus();
-        UpdateCommands();
         SyncNavigationPane();
         WatchFolder();
         PostMessageW(m_hwnd, WM_CABINET_STATUS, 0, 0);
@@ -2931,20 +2929,38 @@ CCabinetWindow::UpdateCommands()
         CabinetCommand::Copy, CabinetCommand::Paste, CabinetCommand::Rename, CabinetCommand::Delete
     };
 
+    int selected = SelectionCount();
+
     for (UINT i = 0; i < _countof(Commands); i++)
     {
         HWND bar = Commands[i] <= CabinetCommand::Up ? m_NavBar : m_CommandBar;
-        SendMessageW(bar, TB_ENABLEBUTTON, IDC_COMMAND(Commands[i]), MAKELONG(CommandEnabled(Commands[i]), 0));
+        SendMessageW(bar, TB_ENABLEBUTTON, IDC_COMMAND(Commands[i]),
+                     MAKELONG(CommandEnabled(Commands[i], selected), 0));
     }
 }
 
-BOOL
-CCabinetWindow::CommandEnabled(CabinetCommand command)
+int
+CCabinetWindow::SelectionCount()
 {
-    CabinetTab *tab = ActiveTab();
-    IShellView *view;
+    IShellView *view = CurrentView();
     IFolderView *folderView;
     int selected = 0;
+
+    if (view && SUCCEEDED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))))
+    {
+        folderView->ItemCount(SVGIO_SELECTION, &selected);
+        folderView->Release();
+    }
+    if (view)
+        view->Release();
+    return selected;
+}
+
+BOOL
+CCabinetWindow::CommandEnabled(CabinetCommand command, int selected)
+{
+    static UINT s_ShellIdListFormat;
+    CabinetTab *tab = ActiveTab();
 
     switch (command)
     {
@@ -2958,18 +2974,13 @@ CCabinetWindow::CommandEnabled(CabinetCommand command)
         case CabinetCommand::Copy:
         case CabinetCommand::Rename:
         case CabinetCommand::Delete:
-            view = CurrentView();
-            if (view && SUCCEEDED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))))
-            {
-                folderView->ItemCount(SVGIO_SELECTION, &selected);
-                folderView->Release();
-            }
-            if (view)
-                view->Release();
+            if (selected < 0)
+                selected = SelectionCount();
             return command == CabinetCommand::Rename ? selected == 1 : selected > 0;
         case CabinetCommand::Paste:
-            return IsClipboardFormatAvailable(CF_HDROP) ||
-                   IsClipboardFormatAvailable(RegisterClipboardFormatW(CFSTR_SHELLIDLIST));
+            if (!s_ShellIdListFormat)
+                s_ShellIdListFormat = RegisterClipboardFormatW(CFSTR_SHELLIDLIST);
+            return IsClipboardFormatAvailable(CF_HDROP) || IsClipboardFormatAvailable(s_ShellIdListFormat);
         default:
             return TRUE;
     }
