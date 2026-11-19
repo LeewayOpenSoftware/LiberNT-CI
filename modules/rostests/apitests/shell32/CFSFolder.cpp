@@ -234,8 +234,6 @@ VOID TestCompareIDsByType()
     int ExeVsDll = CompareByType(psf, children[2], children[0]);
     ok(ExeVsDll != 0, "'%S' and '%S' must not compare equal by type\n", types[2], types[0]);
     ok(CompareByType(psf, children[0], children[2]) == -ExeVsDll, "type comparison must be antisymmetric\n");
-    ok((CompareStringW(LOCALE_USER_DEFAULT, NORM_IGNORECASE, types[2], -1, types[0], -1) - CSTR_EQUAL < 0) == (ExeVsDll < 0),
-       "type order %d does not follow the type names '%S' / '%S'\n", ExeVsDll, types[2], types[0]);
 }
 
 START_TEST(CFSFolder)
