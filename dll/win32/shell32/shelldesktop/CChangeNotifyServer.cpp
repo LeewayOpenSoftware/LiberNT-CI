@@ -358,7 +358,7 @@ LRESULT CChangeNotifyServer::OnRegister(UINT uMsg, WPARAM wParam, LPARAM lParam,
     SHUnlockShared(pRegEntry);
 
     // add an item
-    CWatchItem *pItem = new CWatchItem { m_nNextRegID, dwUserPID, pNewEntry, hwndBroker, pDirWatch };
+    CWatchItem *pItem = new CWatchItem { pNewEntry->nRegID, dwUserPID, pNewEntry, hwndBroker, pDirWatch };
     return AddItem(pItem);
 }
 
