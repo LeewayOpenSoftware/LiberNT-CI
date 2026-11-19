@@ -204,7 +204,7 @@ static BOOL GetTypeName(PCIDLIST_ABSOLUTE pidl, LPWSTR pszType, UINT cchType)
 
 VOID TestCompareIDsByType()
 {
-    static const LPCWSTR names[] = { L"kernel32.dll", L"user32.dll", L"notepad.exe" };
+    static const LPCWSTR names[] = { L"kernel32.dll", L"user32.dll", L"notepad.exe", L"drivers", L"config" };
     CComHeapPtr<ITEMIDLIST> pidls[_countof(names)];
     PCUITEMID_CHILD children[_countof(names)];
     WCHAR types[_countof(names)][80];
@@ -232,8 +232,10 @@ VOID TestCompareIDsByType()
     ok(CompareByType(psf, children[0], children[0]) == 0, "an item must compare equal to itself by type\n");
     ok(CompareByType(psf, children[0], children[1]) == 0, "'%S' and '%S' must compare equal by type\n", types[0], types[1]);
     int ExeVsDll = CompareByType(psf, children[2], children[0]);
-    ok(ExeVsDll != 0, "'%S' and '%S' must not compare equal by type\n", types[2], types[0]);
+    ok(ExeVsDll > 0, "'%S' (.exe) must sort after '%S' (.dll) by type, got %d\n", types[2], types[0], ExeVsDll);
     ok(CompareByType(psf, children[0], children[2]) == -ExeVsDll, "type comparison must be antisymmetric\n");
+    ok(CompareByType(psf, children[3], children[4]) == 0, "two folders must compare equal by type\n");
+    ok(CompareByType(psf, children[3], children[0]) < 0, "a folder must sort before a file by type\n");
 }
 
 START_TEST(CFSFolder)

@@ -1381,13 +1381,9 @@ HRESULT WINAPI CFSFolder::CompareIDs(LPARAM lParam,
                 result = 0;
             break;
         case SHFSF_COL_TYPE:
-        {
-            WCHAR szType1[MAX_PATH], szType2[MAX_PATH];
-            GetItemDescription(pidl1, szType1, _countof(szType1));
-            GetItemDescription(pidl2, szType2, _countof(szType2));
-            result = CompareUiStrings(szType1, szType2, lParam);
+            if (!(ItemIsFolder(pidl1) && ItemIsFolder(pidl2)))
+                result = CompareUiStrings(PathFindExtensionW(pszName1), PathFindExtensionW(pszName2), lParam);
             break;
-        }
         case SHFSF_COL_MDATE:
             result = pData1->u.file.uFileDate - pData2->u.file.uFileDate;
             if (result == 0)
