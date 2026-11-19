@@ -390,7 +390,8 @@ private:
     BOOL  m_Destroyed;
     BOOL  m_FillListIsRefresh;
     ULONG m_FillListGeneration;
-    BOOL m_ChangeAddedDuringFill;
+    BOOL m_FillListRedrawOff;
+    CSimpleArray<PITEMID_CHILD> m_AddedDuringFill;
     DWORD m_dwPositionCookie;
     struct ITEM_POSITION
     {
@@ -429,6 +430,9 @@ private:
     HRESULT SaveItemPositions(IStream *pStream);
     void FireFolderViewEvent(DISPID dispid);
     void CancelFillList();
+    void RecordAddedDuringFill(PCUITEMID_CHILD pidl);
+    BOOL IsAddedDuringFill(PCUITEMID_CHILD pidl);
+    void ClearAddedDuringFill();
     bool IsComputerTileView() const;
     UINT ComputerViewDpi() const;
     HIMAGELIST CreateSizedViewImageList(INT cx);
@@ -833,7 +837,7 @@ CDefView::CDefView() :
     m_Destroyed(FALSE),
     m_FillListIsRefresh(FALSE),
     m_FillListGeneration(0),
-    m_ChangeAddedDuringFill(FALSE),
+    m_FillListRedrawOff(FALSE),
     m_dwPositionCookie(0),
     m_hMyComputerIcon(NULL),
     m_IconSize(0),
@@ -865,6 +869,7 @@ CDefView::~CDefView()
     TRACE(" destroying IShellView(%p)\n", this);
 
     ClearSavedItemPositions();
+    ClearAddedDuringFill();
 
     _DoFolderViewCB(SFVM_VIEWRELEASE, 0, 0);
 
@@ -2342,11 +2347,45 @@ void CDefView::LV_RefreshItems()
 // - gets the objectlist from the shellfolder
 // - sorts the list
 // - fills the list into the view
+void CDefView::RecordAddedDuringFill(PCUITEMID_CHILD pidl)
+{
+    if (!m_pEnumIDList)
+        return;
+    PITEMID_CHILD copy = ILClone(pidl);
+    if (copy && !m_AddedDuringFill.Add(copy))
+        ILFree(copy);
+}
+
+BOOL CDefView::IsAddedDuringFill(PCUITEMID_CHILD pidl)
+{
+    LPARAM lParam = m_pSF2Parent ? SHCIDS_CANONICALONLY : 0;
+    for (int i = 0; i < m_AddedDuringFill.GetSize(); ++i)
+    {
+        if (m_pSFParent->CompareIDs(lParam, pidl, m_AddedDuringFill[i]) == S_EQUAL)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+void CDefView::ClearAddedDuringFill()
+{
+    for (int i = 0; i < m_AddedDuringFill.GetSize(); ++i)
+        ILFree(m_AddedDuringFill[i]);
+    m_AddedDuringFill.RemoveAll();
+}
+
 void CDefView::CancelFillList()
 {
     if (++m_FillListGeneration == 0)
         ++m_FillListGeneration;
     m_pEnumIDList.Release();
+    ClearAddedDuringFill();
+    if (m_FillListRedrawOff)
+    {
+        m_FillListRedrawOff = FALSE;
+        if (m_ListView)
+            m_ListView.SetRedraw(TRUE);
+    }
 }
 
 void CDefView::FinishFillList()
@@ -2610,7 +2649,11 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
     }
 
     Enumerator = m_pEnumIDList;
-    m_ListView.SetRedraw(FALSE);
+    if (!m_FillListRedrawOff)
+    {
+        m_ListView.SetRedraw(FALSE);
+        m_FillListRedrawOff = TRUE;
+    }
     BatchStart = GetTickCount();
     do
     {
@@ -2624,7 +2667,7 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
         }
 
         if (IncludeObject(pidl) == S_OK && m_ListView &&
-            !(m_ChangeAddedDuringFill && LV_FindItemByPidl(pidl) >= 0))
+            !(IsAddedDuringFill(pidl) && LV_FindItemByPidl(pidl) >= 0))
         {
             LV_AddItem(pidl);
         }
@@ -2638,12 +2681,21 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
 
     if (m_ListView)
     {
-        m_ListView.SetRedraw(TRUE);
-        m_ListView.InvalidateRect(NULL, FALSE);
         /* Posted continuation messages run before WM_PAINT. Make the first
            batch visible instead of leaving an empty view until enumeration. */
-        if ((ULONG)m_ListView.GetItemCount() <= BatchCount)
+        BOOL FirstBatch = (ULONG)m_ListView.GetItemCount() <= BatchCount;
+        if (FirstBatch || Complete)
+        {
+            m_ListView.SetRedraw(TRUE);
+            m_FillListRedrawOff = FALSE;
+            m_ListView.InvalidateRect(NULL, FALSE);
+        }
+        if (FirstBatch && !Complete)
+        {
             m_ListView.UpdateWindow();
+            m_ListView.SetRedraw(FALSE);
+            m_FillListRedrawOff = TRUE;
+        }
     }
 
     if (Generation != m_FillListGeneration || m_Destroyed || !m_ListView)
@@ -2652,6 +2704,7 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
     if (Complete)
     {
         m_pEnumIDList.Release();
+        ClearAddedDuringFill();
         FinishFillList();
         return hr == S_FALSE ? S_OK : hr;
     }
@@ -2710,7 +2763,6 @@ HRESULT CDefView::FillList(BOOL IsRefreshCommand)
         return E_UNEXPECTED;
 
     m_pEnumIDList = Enumerator;
-    m_ChangeAddedDuringFill = FALSE;
     if (!PostMessage(SHV_FILL_LIST, 0, m_FillListGeneration))
         return ContinueFillList(m_FillListGeneration);
     return S_OK;
@@ -4225,8 +4277,7 @@ LRESULT CDefView::OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &
                 break;
             if (LV_FindItemByPidl(child0) < 0)
             {
-                if (m_pEnumIDList)
-                    m_ChangeAddedDuringFill = TRUE;
+                RecordAddedDuringFill(child0);
                 MoveItemToFreeSlot(LV_AddItem(child0));
             }
             else
@@ -4248,8 +4299,7 @@ LRESULT CDefView::OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &
                 LV_DeleteItem(child0);
             else if (child1)
             {
-                if (m_pEnumIDList)
-                    m_ChangeAddedDuringFill = TRUE;
+                RecordAddedDuringFill(child1);
                 MoveItemToFreeSlot(LV_AddItem(child1));
             }
             break;
