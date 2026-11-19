@@ -31,6 +31,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(ntlm);
 #define NTLM_AV_DNS_DOMAIN_NAME 4
 #define NTLM_AV_FLAGS 6
 #define NTLM_AV_TIMESTAMP 7
+#define NTLM_AV_TARGET_NAME 9
 #define NTLM_AV_FLAG_MIC_PRESENT 0x00000002
 
 #define NTLM_CLIENT_FLAGS (NTLMSSP_NEGOTIATE_UNICODE | NTLMSSP_NEGOTIATE_OEM | NTLMSSP_REQUEST_TARGET | \
@@ -384,7 +385,7 @@ SECURITY_STATUS NtlmBuildAuthenticate(PNegoHelper Context, const BYTE *Challenge
     BYTE *NtResponse = NULL, *Blob, *Payload;
     const BYTE *Pairs, *Timestamp;
     ULONG ComputerLength, ServerFlags, Flags, PairsLength = 0, TimestampLength = 0, BlobLength;
-    ULONG NtLength = 0, LmLength, KeyLength = 0, Offset, Written;
+    ULONG NtLength = 0, LmLength, KeyLength = 0, Offset, Written, TargetNameLength = 0;
     NTLM_FIELD TargetInfo;
     HMAC_MD5_CTX Hmac;
     FILETIME Time;
@@ -439,7 +440,9 @@ SECURITY_STATUS NtlmBuildAuthenticate(PNegoHelper Context, const BYTE *Challenge
         }
         UseMic = (Timestamp && TimestampLength == sizeof(Time));
 
-        BlobLength = NTLM_V2_BLOB_HEADER_SIZE + PairsLength + (UseMic ? 8 : 0) + 4 + 4;
+        TargetNameLength = Context->target_name ? min(lstrlenW(Context->target_name), 256) : 0;
+        BlobLength = NTLM_V2_BLOB_HEADER_SIZE + PairsLength + (UseMic ? 8 : 0) +
+                     (TargetNameLength ? 4 + TargetNameLength * sizeof(WCHAR) : 0) + 4 + 4;
         NtLength = NTLM_KEY_SIZE + BlobLength;
         NtResponse = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, NtLength);
         if (!NtResponse)
@@ -477,6 +480,17 @@ SECURITY_STATUS NtlmBuildAuthenticate(PNegoHelper Context, const BYTE *Challenge
             NtlmPutUshort(Payload + 2, 4);
             NtlmPutUlong(Payload + 4, NTLM_AV_FLAG_MIC_PRESENT);
             Payload += 8;
+        }
+        if (TargetNameLength)
+        {
+            ULONG i;
+
+            /* lets the server see which machine the client meant to authenticate to */
+            NtlmPutUshort(Payload, NTLM_AV_TARGET_NAME);
+            NtlmPutUshort(Payload + 2, (USHORT)(TargetNameLength * sizeof(WCHAR)));
+            for (i = 0; i < TargetNameLength; i++)
+                NtlmPutUshort(Payload + 4 + i * sizeof(WCHAR), Context->target_name[i]);
+            Payload += 4 + TargetNameLength * sizeof(WCHAR);
         }
 
         NtlmOwfV2(Context->password, Context->password_len, Context->user, Context->user_len,
@@ -683,6 +697,37 @@ Done:
     return SEC_E_LOGON_DENIED;
 }
 
+/* Whether the host of a "service/host[:port]" target is this machine; other forms are not checked */
+static BOOL NtlmTargetIsLocal(const BYTE *Data, ULONG Length)
+{
+    static const COMPUTER_NAME_FORMAT Formats[] =
+        { ComputerNameNetBIOS, ComputerNameDnsHostname, ComputerNameDnsFullyQualified };
+    WCHAR Target[257], Name[256];
+    WCHAR *Host, *End;
+    ULONG i, Count = min(Length / sizeof(WCHAR), ARRAY_SIZE(Target) - 1);
+    DWORD Size;
+
+    for (i = 0; i < Count; i++)
+        Target[i] = NtlmGetUshort(Data + i * sizeof(WCHAR));
+    Target[Count] = 0;
+
+    if (!(Host = wcschr(Target, L'/')))
+        return TRUE;
+    Host++;
+    if ((End = wcspbrk(Host, L":/")))
+        *End = 0;
+
+    if (!_wcsicmp(Host, L"localhost") || !wcsncmp(Host, L"127.", 4) || !_wcsicmp(Host, L"[::1]"))
+        return TRUE;
+    for (i = 0; i < ARRAY_SIZE(Formats); i++)
+    {
+        Size = ARRAY_SIZE(Name);
+        if (GetComputerNameExW(Formats[i], Name, &Size) && Size && !_wcsicmp(Host, Name))
+            return TRUE;
+    }
+    return FALSE;
+}
+
 SECURITY_STATUS NtlmAcceptAuthenticate(PNegoHelper Context, const BYTE *Authenticate, ULONG AuthenticateLength)
 {
     WCHAR Domain[NTLM_MAX_NAME], User[NTLM_MAX_NAME], Workstation[NTLM_MAX_NAME];
@@ -727,6 +772,24 @@ SECURITY_STATUS NtlmAcceptAuthenticate(PNegoHelper Context, const BYTE *Authenti
                                &NtResponse, &LmResponse, BaseKey);
         if (Status != SEC_E_OK)
             return Status;
+
+        /* The response is verified, so its target is the client's own: one naming another machine was
+           relayed here (reflection) */
+        if (NtResponse.Length > NTLM_KEY_SIZE + NTLM_V2_BLOB_HEADER_SIZE)
+        {
+            const BYTE *TargetName;
+            ULONG TargetNameSize = 0;
+
+            TargetName = NtlmFindAvPair(NtResponse.Data + NTLM_KEY_SIZE + NTLM_V2_BLOB_HEADER_SIZE,
+                                        NtResponse.Length - NTLM_KEY_SIZE - NTLM_V2_BLOB_HEADER_SIZE,
+                                        NTLM_AV_TARGET_NAME, &TargetNameSize);
+            if (TargetName && TargetNameSize && !NtlmTargetIsLocal(TargetName, TargetNameSize))
+            {
+                WARN("refusing a response meant for another machine\n");
+                RtlSecureZeroMemory(BaseKey, sizeof(BaseKey));
+                return SEC_E_LOGON_DENIED;
+            }
+        }
     }
 
     if ((Flags & NTLMSSP_NEGOTIATE_KEY_EXCHANGE) && KeyField.Length == NTLM_KEY_SIZE)
@@ -799,5 +862,8 @@ void NtlmFreeContext(PNegoHelper Context)
     HeapFree(GetProcessHeap(), 0, Context->negotiate_msg);
     HeapFree(GetProcessHeap(), 0, Context->challenge_msg);
     HeapFree(GetProcessHeap(), 0, Context->session_key);
+#ifdef __REACTOS__
+    HeapFree(GetProcessHeap(), 0, Context->target_name);
+#endif
     HeapFree(GetProcessHeap(), 0, Context);
 }
