@@ -637,6 +637,24 @@ ThemePreWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR 
             pwndData->DirtyThemeRegion = TRUE;
             break;
         }
+        case WM_DWMCOMPOSITIONCHANGED:
+        {
+            PWND_DATA pwndData = ThemeGetWndData(hWnd);
+
+            if (pwndData == NULL)
+                return 0;
+
+            /* Reopening the window theme re-evaluates the composition gate and the Liquid properties. */
+            if (pwndData->hthemeWindow)
+            {
+                CloseThemeData(pwndData->hthemeWindow);
+                pwndData->hthemeWindow = NULL;
+            }
+
+            ThemeDwmUpdateThemedFrame(hWnd);
+            pwndData->DirtyThemeRegion = TRUE;
+            break;
+        }
         case WM_NCCREATE:
         {
             PWND_DATA pwndData = ThemeGetWndData(hWnd);
@@ -668,6 +686,15 @@ ThemePostWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR
             }
             else if (style & (WS_HSCROLL | WS_VSCROLL))
             {
+                RedrawWindow(hWnd, NULL, NULL, RDW_FRAME | RDW_INVALIDATE);
+            }
+            return 0;
+        }
+        case WM_DWMCOMPOSITIONCHANGED:
+        {
+            if ((GetWindowLongW(hWnd, GWL_STYLE) & WS_CAPTION) == WS_CAPTION)
+            {
+                SetWindowPos(hWnd, NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
                 RedrawWindow(hWnd, NULL, NULL, RDW_FRAME | RDW_INVALIDATE);
             }
             return 0;
@@ -1069,6 +1096,7 @@ ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)
     UAH_HOOK_MESSAGE(puah->WndProcArray, WM_MENUCHAR);
     UAH_HOOK_MESSAGE(puah->WndProcArray, WM_MDISETMENU);
     UAH_HOOK_MESSAGE(puah->WndProcArray, WM_THEMECHANGED);
+    UAH_HOOK_MESSAGE(puah->WndProcArray, WM_DWMCOMPOSITIONCHANGED);
     UAH_HOOK_MESSAGE(puah->WndProcArray, WM_UAHINIT);
 
     puah->DlgProcArray.MsgBitArray = gabDLGPmessages;

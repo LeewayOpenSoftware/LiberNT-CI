@@ -210,6 +210,8 @@ ThemeHasCompositedFrame(void)
     PTHEME_CLASS liquid;
     BOOL composited = FALSE;
 
+    if (!UXTHEME_CompositionAvailable())
+        return FALSE;
     liquid = MSSTYLES_OpenThemeClass(L"NonClient", L"Liquid", 96);
     if (!liquid)
         return FALSE;
@@ -716,7 +718,7 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
         else if (i == MINBUTTON && (style & WS_MINIMIZE))
             iPartId = WP_RESTOREBUTTON;
 
-        if (FAILED(GetThemePartSize(htheme, NULL, iPartId, 0, NULL, TS_MIN, &ButtonSize)) ||
+        if (FAILED(GetThemePartSize(htheme, NULL, iPartId, 0, NULL, TS_TRUE, &ButtonSize)) ||
             ButtonSize.cy <= 0)
             ButtonSize.cx = ButtonSize.cy = captionBtnHeight;
 
@@ -999,7 +1001,7 @@ ThemeDrawCaptionGroupStart(PDRAW_CONTEXT pcontext, INT iPartId, INT iStateId, co
     HDC hdcMem;
     SIZE size;
 
-    if (FAILED(GetThemePartSize(pcontext->theme, NULL, iPartId, 0, NULL, TS_MIN, &size)) || size.cx <= 0)
+    if (FAILED(GetThemePartSize(pcontext->theme, NULL, iPartId, 0, NULL, TS_TRUE, &size)) || size.cx <= 0)
         goto plain;
     edge = MulDiv(CAPTION_BUTTON_EDGE_UNITS, cx, size.cx);
     if (edge <= 0 || edge * 2 > cx)
