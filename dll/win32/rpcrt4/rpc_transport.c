@@ -530,16 +530,21 @@ static RPC_STATUS rpcrt4_ncalrpc_open(RpcConnection* Connection)
 }
 
 #ifdef __REACTOS__
-/* Only the mandatory label of the endpoint descriptor is used: the pipe keeps its own DACL,
- * which stops other processes from creating instances of it */
+/* Only the mandatory label of an endpoint descriptor without a DACL is used: the pipe keeps its
+ * own DACL, which stops other processes from creating instances of it */
 static RPC_STATUS rpcrt4_np_set_label(RpcConnection_np *npc, PSECURITY_DESCRIPTOR sd)
 {
     BOOL present, defaulted;
-    PACL sacl;
+    PACL dacl, sacl;
     ACE_HEADER *ace;
     DWORD i, size;
 
     if (!sd)
+        return RPC_S_OK;
+    /* a caller DACL is not applied, so its label must not admit clients that DACL denies */
+    if (!GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted))
+        return RPC_S_INVALID_SECURITY_DESC;
+    if (present)
         return RPC_S_OK;
     if (!GetSecurityDescriptorSacl(sd, &present, &sacl, &defaulted))
         return RPC_S_INVALID_SECURITY_DESC;
