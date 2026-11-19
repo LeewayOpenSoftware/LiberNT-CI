@@ -4126,10 +4126,10 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             if (SUCCEEDED(hr) && pidlNew)
             {
                 int iNew = LV_FindItemByPidl(pidlNew);
-                if (iNew != lpdi->item.iItem && iNew >= 0)
-                    ILFree(pidlNew);// A SHCNE has updated the item already
-                else if (!LV_UpdateItem(lpdi->item.iItem, pidlNew))
-                    ILFree(pidlNew);
+                // Otherwise a SHCNE has updated the item already
+                if (iNew == lpdi->item.iItem || iNew < 0)
+                    LV_UpdateItem(lpdi->item.iItem, pidlNew); // stores its own copy
+                ILFree(pidlNew);
                 OnStateChange(CDBOSC_RENAME);
             }
             else
