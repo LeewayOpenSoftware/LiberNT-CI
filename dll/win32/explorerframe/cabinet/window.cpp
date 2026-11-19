@@ -1687,12 +1687,15 @@ CCabinetWindow::StartSearch()
     if (!m_SearchPathCount)
         return;
     StringCchCopyW(m_SearchQuery, _countof(m_SearchQuery), query);
-    m_SearchBrowser = tab->Browser;
-    if (m_SearchActive)
+    if (m_SearchActive && tab->Browser == m_SearchBrowser)
     {
         RunPendingSearch(tab);
         return;
     }
+    // A search running in another tab keeps its results; this tab gets its own
+    m_SearchActive = FALSE;
+    KillTimer(m_hwnd, IDT_CABINET_SEARCH);
+    m_SearchBrowser = tab->Browser;
     if (SUCCEEDED(SHParseDisplayName(FindFolder, NULL, &find, 0, NULL)))
     {
         Navigate(find);
@@ -2007,6 +2010,14 @@ CCabinetWindow::CloseTab(int index)
     if (index == m_ActiveTab)
         CancelSelectionSize();
     tab = &m_Tabs[index];
+    if (tab->Browser && tab->Browser == m_SearchBrowser)
+    {
+        // The browser is released below; do not keep searching on it
+        m_SearchActive = FALSE;
+        m_SearchBrowser = NULL;
+        m_SearchQuery[0] = UNICODE_NULL;
+        KillTimer(m_hwnd, IDT_CABINET_SEARCH);
+    }
     if (tab->ViewEvents)
     {
         tab->ViewEvents->Unadvise(tab->ViewEventsCookie);
