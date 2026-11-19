@@ -2454,11 +2454,15 @@ HRESULT CFSFolder::_GetFileExtractIcon(LPCITEMIDLIST pidl, REFIID riid, LPVOID *
     LONG generation;
     HRESULT hr;
 
-    if (!pExtension || wcslen(pExtension) >= _countof(entry.Ext))
+    if (!pExtension)
         return S_FALSE;
 
     generation = SHELL_AssocGenerationGet();
-    if (!LookupAssocIcon(pExtension, generation, &entry))
+    if (wcslen(pExtension) >= _countof(entry.Ext))
+    {
+        ResolveAssocIcon(pExtension, generation, &entry);
+    }
+    else if (!LookupAssocIcon(pExtension, generation, &entry))
     {
         ResolveAssocIcon(pExtension, generation, &entry);
         StoreAssocIcon(&entry);
@@ -2493,7 +2497,8 @@ HRESULT CFSFolder::_GetFileExtractIcon(LPCITEMIDLIST pidl, REFIID riid, LPVOID *
             if (entry.SicIndex < 0)
             {
                 entry.SicIndex = SIC_GetIconIndex(entry.File, entry.Index, 0);
-                StoreAssocIcon(&entry);
+                if (wcslen(pExtension) < _countof(entry.Ext))
+                    StoreAssocIcon(&entry);
             }
             initIcon->SetNormalIcon(L"*", entry.SicIndex);
             initIcon->SetFlags(GIL_NOTFILENAME | GIL_PERCLASS);

@@ -12,17 +12,17 @@
 #define TEST_CLASS_KEY L"Software\\Classes\\.lnticontest"
 #define TEST_FILE_NAME L"sample.lnticontest"
 
-static BOOL SetTestDefaultIcon(LPCWSTR value)
+static LONG SetTestDefaultIcon(LPCWSTR value)
 {
     HKEY key;
     LONG error;
 
     error = RegCreateKeyExW(HKEY_CURRENT_USER, TEST_CLASS_KEY L"\\DefaultIcon", 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL);
     if (error != ERROR_SUCCESS)
-        return FALSE;
+        return error;
     error = RegSetValueExW(key, NULL, 0, REG_SZ, (const BYTE *)value, (DWORD)((lstrlenW(value) + 1) * sizeof(WCHAR)));
     RegCloseKey(key);
-    return error == ERROR_SUCCESS;
+    return error;
 }
 
 static int QueryTestIconIndex(void)
@@ -39,9 +39,11 @@ static int QueryTestIconIndex(void)
 START_TEST(AssocIconChange)
 {
     int first, again, changed;
+    LONG error;
 
     RegDeleteTreeW(HKEY_CURRENT_USER, TEST_CLASS_KEY);
-    ok(SetTestDefaultIcon(L"shell32.dll,3"), "cannot register the test file type: %lu\n", GetLastError());
+    error = SetTestDefaultIcon(L"shell32.dll,3");
+    ok(error == ERROR_SUCCESS, "cannot register the test file type: %ld\n", error);
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSH, NULL, NULL);
 
     first = QueryTestIconIndex();
@@ -49,7 +51,8 @@ START_TEST(AssocIconChange)
     again = QueryTestIconIndex();
     ok(again == first, "icon index changed without an association change: %d then %d\n", first, again);
 
-    ok(SetTestDefaultIcon(L"shell32.dll,4"), "cannot change the test file type: %lu\n", GetLastError());
+    error = SetTestDefaultIcon(L"shell32.dll,4");
+    ok(error == ERROR_SUCCESS, "cannot change the test file type: %ld\n", error);
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSH, NULL, NULL);
     changed = QueryTestIconIndex();
     ok(changed >= 0, "no icon for the changed test file type\n");
