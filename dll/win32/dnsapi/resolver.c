@@ -1108,12 +1108,18 @@ ResolverMulticastQuery(PCWSTR Name, WORD Type, BOOL Mdns, PDNS_RECORDW *Result)
             for (s = 0; s < 2; s++)
             {
                 RESOLVER_REPLY Reply;
-                INT Received;
+                SOCKADDR_STORAGE From;
+                INT Received, FromLength = sizeof(From);
+                USHORT FromPort;
 
                 if (Sockets[s] == INVALID_SOCKET || !FD_ISSET(Sockets[s], &Read))
                     continue;
-                Received = recvfrom(Sockets[s], (PCHAR)Packet, sizeof(Packet), 0, NULL, NULL);
+                Received = recvfrom(Sockets[s], (PCHAR)Packet, sizeof(Packet), 0, (PSOCKADDR)&From, &FromLength);
                 if (Received <= 0)
+                    continue;
+                /* Responders answer from the service port; anything else is not a reply to this query */
+                FromPort = From.ss_family == AF_INET6 ? ((PSOCKADDR_IN6)&From)->sin6_port : ((PSOCKADDR_IN)&From)->sin_port;
+                if (FromPort != htons(Mdns ? MDNS_PORT : LLMNR_PORT))
                     continue;
                 ResolverParseReply(Packet, Received, Id, Name, Type, &Reply);
                 if (Reply.Final && Reply.Status == ERROR_SUCCESS && Reply.Records)
