@@ -1899,7 +1899,7 @@ GetPrimaryRect:
            saved as a thickness; fall back to the default instead of a half-screen bar */
         if (sz.cx >= (rcScreen.right - rcScreen.left) / 2)
             sz.cx = GetMinimumVerticalWidth();
-        if (sz.cy > (rcScreen.bottom - rcScreen.top) / 2)
+        if (sz.cy >= (rcScreen.bottom - rcScreen.top) / 2)
             sz.cy = GetDefaultTrayHeight();
 
         if (Position == ABE_LEFT || Position == ABE_RIGHT)
