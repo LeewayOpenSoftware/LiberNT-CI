@@ -366,9 +366,10 @@ CreateNotificationParamAndSend(LONG wEventId, UINT uFlags, LPCITEMIDLIST pidl1, 
     }
     else
     {
-        SendNotifyMessageW(hwndServer, CN_DELIVER_NOTIFICATION, (WPARAM)hTicket, pid);
-        if (hTicket2)
-            SendNotifyMessageW(hwndServer, CN_DELIVER_NOTIFICATION, (WPARAM)hTicket2, pid);
+        if (!SendNotifyMessageW(hwndServer, CN_DELIVER_NOTIFICATION, (WPARAM)hTicket, pid))
+            SHFreeShared(hTicket, pid);
+        if (hTicket2 && !SendNotifyMessageW(hwndServer, CN_DELIVER_NOTIFICATION, (WPARAM)hTicket2, pid))
+            SHFreeShared(hTicket2, pid);
     }
 }
 
