@@ -1,19 +1,11 @@
-The three `reactos-start-*.svg` files are the supplied Start button artwork:
-`color` for normal, `hover` for hot, and `pressed` while clicked or the menu is open.
+# Logo Inicio Orosi neón
 
-`render.js` produces the transparent PNG resources consumed by Explorer's WIC
-renderer. All states use the same `-4 -4 40 40` canvas, including the normal SVG,
-so the logo keeps its position and scale while leaving room for the glow.
-Explorer retains its existing 36-pixel image size, DPI scaling, and button margins.
-Disabled and keyboard-focused buttons reuse the normal artwork.
+`default.png`, `hover.png` y `pressed.png` son imágenes RGBA de 640 × 640 generadas con imagegen desde el tablero Orosi aportado por el usuario.
 
-The PNGs were generated with `@resvg/resvg-js` 2.6.2. To regenerate them from the
-repository root using a temporary dependency directory:
+Los tres `reactos-start-*.svg` conservan sus nombres por compatibilidad y contienen el PNG correspondiente incrustado. No son maestros vectoriales. Usan `viewBox="-4 -4 40 40"`; la imagen ocupa ese mismo rectángulo. El `render.js` existente puede volver a exportarlos con `@resvg/resvg-js`.
 
-```sh
-orb_tools_dir=$(mktemp -d)
-npm install --prefix "$orb_tools_dir" --no-audit --no-fund @resvg/resvg-js@2.6.2
-NODE_PATH="$orb_tools_dir/node_modules" node media/graphics/start-button/render.js
-```
+El ICO de reserva incluye nueve tamaños: 16, 20, 24, 28, 32, 36, 40, 48 y 64 px, codificados como DIB BGRA con máscaras AND. Las vistas usan un lienzo de logo de 36 px dentro del botón de 48 px.
 
-Normal ReactOS builds use the checked-in PNGs and do not require Node.js or resvg.
+Los estados se generaron individualmente y pueden presentar pequeñas diferencias de contorno. Deshabilitado y foco reutilizan el recurso normal según el código descrito en la extracción original.
+
+Consultar `../../LEEME.md` para integración y procedencia.
