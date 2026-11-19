@@ -138,8 +138,8 @@ static void CheckHotkey(HWND hwndA, HWND hwndB)
         skip("Left Alt+Shift does not switch the input language here\n");
         return;
     }
-    ok(GetPropW(hwndA, s_szRequests) == NULL, "the window got %Iu WM_INPUTLANGCHANGEREQUEST\n",
-       (ULONG_PTR)GetPropW(hwndA, s_szRequests));
+    ok(GetPropW(hwndA, s_szRequests) == NULL, "the window got %lu WM_INPUTLANGCHANGEREQUEST\n",
+       (ULONG)(ULONG_PTR)GetPropW(hwndA, s_szRequests));
     ok(MakeForeground(hwndB), "the child window is not in the foreground\n");
     ok(GetKeyboardLayout(tidB) == hklAfter, "the child window has layout %p, expected %p\n", GetKeyboardLayout(tidB),
        hklAfter);
