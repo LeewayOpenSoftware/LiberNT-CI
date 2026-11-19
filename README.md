@@ -2,11 +2,11 @@
 > **English** | [中文](translations/zh-CN/README.md) | [Français](translations/fr-FR/README.md) | [Español](translations/es-ES/README.md) | [日本語](translations/ja-JP/README.md) | [العربية](translations/ar-MA/README.md)
 
 <p align="center">
-  <img src="media/graphics/branding/orosi-banner.png" width="480" alt="LiberNT">
+  <img src="media/graphics/branding/orosi-banner.png" width="500" alt="LiberNT">
 </p>
 
 > [!IMPORTANT]
-> LiberNT is in active development. The builds on the [Releases](https://github.com/LiberNT/LiberNT/releases) page are Debug pre-releases for testing: run them in a virtual machine or on spare hardware, not on a computer you depend on.
+> Orosi is in active development. The builds on the [Releases](https://github.com/LiberNT/LiberNT/releases) page are Debug pre-releases for testing: run them in a virtual machine or on spare hardware, not on a computer you depend on.
 
 <div align="center">
 
