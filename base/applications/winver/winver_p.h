@@ -20,6 +20,7 @@
 #include <strsafe.h>
 
 #include "resource.h"
+#include "brand.h"
 
 typedef struct _WINVER_OS_INFO
 {
