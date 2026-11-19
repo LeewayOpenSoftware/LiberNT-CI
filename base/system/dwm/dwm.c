@@ -50,6 +50,118 @@ typedef struct _DWM_SURFACE
 static DWM_SURFACE g_views[DWM_VIEW_CACHE_SIZE];
 static ULONG g_frameSeq;
 
+/* DWM-local LayerFlags bit: DwmApplyFrameInsets already ran on this entry. */
+#define DWM_WINDOW_INSETS_APPLIED 0x00000004u
+
+static void
+DwmOffsetRect(RECTL *Rect, LONG Dx, LONG Dy)
+{
+    if (Rect->right <= Rect->left || Rect->bottom <= Rect->top)
+        return;
+    Rect->left -= Dx;
+    Rect->right -= Dx;
+    Rect->top -= Dy;
+    Rect->bottom -= Dy;
+}
+
+static LONG
+DwmScaleInset(LONG Inset, LONG Size, LONG Target)
+{
+    return Size > 0 ? (LONG)((LONGLONG)Inset * Target / Size) : 0;
+}
+
+/*
+ * A themed frame may leave the outer part of its resize band transparent
+ * (DWM_WIN.FrameInsets). From here on the compositor sees only the visible
+ * rect: the origin and size shrink to it, and everything measured in backing
+ * coordinates moves with it, so corners, shadow, occlusion, frame fill and
+ * blits all follow the visible edge. FrameInsets stays as the position of the
+ * visible rect inside the backing (DwmVisiblePixels and the GPU imports).
+ */
+static void
+DwmApplyFrameInsets(DWM_WIN *w, RECTL *BlurRects, ULONG BlurRectCount)
+{
+    LONG L = w->FrameInsets.left, T = w->FrameInsets.top;
+    LONG R = w->FrameInsets.right, B = w->FrameInsets.bottom;
+    LONG OldCx = w->cx, OldCy = w->cy;
+    ULONG Index;
+
+    if (w->LayerFlags & DWM_WINDOW_INSETS_APPLIED)
+        return;
+    if ((L | T | R | B) == 0)
+        return;
+    if (L < 0 || T < 0 || R < 0 || B < 0 ||
+        L + R >= w->cx || T + B >= w->cy ||
+        L > w->ClientX || T > w->ClientY ||
+        R > w->cx - w->ClientX - w->ClientWidth ||
+        B > w->cy - w->ClientY - w->ClientHeight ||
+        DwmGpuComposeBandsUnsupported())
+    {
+        RtlZeroMemory(&w->FrameInsets, sizeof(w->FrameInsets));
+        return;
+    }
+
+    w->LayerFlags |= DWM_WINDOW_INSETS_APPLIED;
+    w->x += L;
+    w->y += T;
+    w->cx -= L + R;
+    w->cy -= T + B;
+    w->ClientX -= L;
+    w->ClientY -= T;
+    w->DxClientX -= L;
+    w->DxClientY -= T;
+    DwmOffsetRect(&w->DxClip, L, T);
+    DwmOffsetRect(&w->BaseDirtyRect, L, T);
+    if (w->BaseDirtyRect.right > w->BaseDirtyRect.left)
+    {
+        w->BaseDirtyRect.left = max(w->BaseDirtyRect.left, 0);
+        w->BaseDirtyRect.top = max(w->BaseDirtyRect.top, 0);
+        w->BaseDirtyRect.right = min(w->BaseDirtyRect.right, w->cx);
+        w->BaseDirtyRect.bottom = min(w->BaseDirtyRect.bottom, w->cy);
+        if (w->BaseDirtyRect.right <= w->BaseDirtyRect.left ||
+            w->BaseDirtyRect.bottom <= w->BaseDirtyRect.top)
+        {
+            /* Only the band changed: refresh the visible rect as a whole. */
+            w->BaseDirtyRect.left = w->BaseDirtyRect.top = 0;
+            w->BaseDirtyRect.right = w->cx;
+            w->BaseDirtyRect.bottom = w->cy;
+        }
+    }
+    for (Index = 0; Index < DWM_CAPTION_BUTTONS; ++Index)
+        DwmOffsetRect(&w->CaptionButtons[Index], L, T);
+    if (BlurRects != NULL && w->BlurRectBase <= BlurRectCount &&
+        w->BlurRectCount <= BlurRectCount - w->BlurRectBase)
+    {
+        for (Index = 0; Index < w->BlurRectCount; ++Index)
+            DwmOffsetRect(&BlurRects[w->BlurRectBase + Index], L, T);
+    }
+    if (w->AnimFlags != 0 && w->AnimCx > 0 && w->AnimCy > 0)
+    {
+        LONG AnimL = DwmScaleInset(L, OldCx, w->AnimCx);
+        LONG AnimT = DwmScaleInset(T, OldCy, w->AnimCy);
+        LONG AnimR = DwmScaleInset(R, OldCx, w->AnimCx);
+        LONG AnimB = DwmScaleInset(B, OldCy, w->AnimCy);
+
+        if (AnimL + AnimR < w->AnimCx && AnimT + AnimB < w->AnimCy)
+        {
+            w->AnimX += AnimL;
+            w->AnimY += AnimT;
+            w->AnimCx -= AnimL + AnimR;
+            w->AnimCy -= AnimT + AnimB;
+        }
+    }
+}
+
+/* The visible rect's first pixel inside a window's backing. */
+static const BYTE *
+DwmVisiblePixels(const DWM_WIN *w, const BYTE *Backing)
+{
+    if (Backing == NULL)
+        return NULL;
+    return Backing + (SIZE_T)w->FrameInsets.top * w->Stride +
+           (SIZE_T)w->FrameInsets.left * sizeof(ULONG);
+}
+
 static void
 DwmDropView(DWM_SURFACE *v)
 {
@@ -68,7 +180,7 @@ DwmGetSurfaceView(const DWM_WIN *w)
     ULONG i;
 
     if (w->BaseGlobalShare != 0)
-        return DwmDxGetRedirectionSnapshot(w);
+        return DwmVisiblePixels(w, DwmDxGetRedirectionSnapshot(w));
 
     for (i = 0; i < DWM_VIEW_CACHE_SIZE; i++)
     {
@@ -92,7 +204,7 @@ DwmGetSurfaceView(const DWM_WIN *w)
     {
         slot->LastSeenFrame = g_frameSeq;
         slot->Window = *w;
-        return slot->View;
+        return DwmVisiblePixels(w, slot->View);
     }
 
     if (slot == NULL)
@@ -125,7 +237,7 @@ DwmGetSurfaceView(const DWM_WIN *w)
     slot->Window = *w;
     if (replaced != NULL && w->AnimFlags == DWM_ANIM_MAXIMIZE && w->Generation != 0)
         replaced->ReplacedBy = w->Generation;
-    return slot->View;
+    return DwmVisiblePixels(w, slot->View);
 }
 
 static void
@@ -3818,7 +3930,8 @@ DwmBlitReplaced(ULONG *comp, LONG scrW,
     if (clipL >= clipR || clipT >= clipB)
         return;
     DwmBlitScaled(comp, scrW, clipL, clipT, clipR, clipB,
-                  source->View, source->Window.cx, source->Window.cy, source->Window.Stride,
+                  DwmVisiblePixels(&source->Window, source->View),
+                  source->Window.cx, source->Window.cy, source->Window.Stride,
                   dstX, dstY, source->Window.cx, source->Window.cy, alpha, &source->Window,
                   NULL, source->Window.CornerRadius);
 }
@@ -4438,6 +4551,9 @@ DwmComposeLoop(HANDLE hStopEvent)
         wins = (PDWM_WIN)(g_buf + hdr->WinArrayBase);
         DwmDxHoldFrames(wins, hdr->Count);
         DwmDxSweepSurfaces(wins, hdr->Count);
+        for (i = 0; i < hdr->Count; ++i)
+            DwmApplyFrameInsets(&wins[i], (PRECTL)(g_buf + hdr->BlurRectArrayBase),
+                                hdr->BlurRectCount);
 
         if ((LONG)hdr->ScreenW != primW || (LONG)hdr->ScreenH != primH)
         {

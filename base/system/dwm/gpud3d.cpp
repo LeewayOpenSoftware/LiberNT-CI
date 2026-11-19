@@ -1031,7 +1031,8 @@ Texture *UploadGdi(const DWM_WIN *Window, const BYTE *Pixels)
 {
     if (Window->Generation == 0 || Window->BaseUpdateId == 0 ||
         Window->cx <= 0 || Window->cy <= 0 ||
-        Window->BaseWidth != (ULONG)Window->cx || Window->BaseHeight != (ULONG)Window->cy ||
+        Window->BaseWidth != (ULONG)DWM_BACKING_CX(Window) ||
+        Window->BaseHeight != (ULONG)DWM_BACKING_CY(Window) ||
         Window->BaseFormat != DWM_DX_FORMAT_B8G8R8A8_UNORM ||
         Window->Stride != Window->BasePitch || Window->Stride > MAXLONG ||
         (ULONGLONG)Window->cx * sizeof(ULONG) > Window->Stride ||
@@ -1249,7 +1250,7 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
          (!Client || (Format != DWM_DX_FORMAT_R8G8B8A8_UNORM && Format != DWM_DX_FORMAT_R10G10B10A2_UNORM &&
                       Format != DWM_DX_FORMAT_R16G16B16A16_FLOAT))))
         return NULL;
-    if (!Client && (Width != (ULONG)Window->cx || Height != (ULONG)Window->cy))
+    if (!Client && (Width != (ULONG)DWM_BACKING_CX(Window) || Height != (ULONG)DWM_BACKING_CY(Window)))
         return NULL;
     if (Client && ForeignAdapter(Window))
         return ImportForeign(Window, (DXGI_FORMAT)Format);
@@ -1288,8 +1289,9 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
     }
     if (Window->BaseUpdateId == 0)
         return NULL;
+    /* The snapshot holds only the visible rect of a frame with a transparent band. */
     if (Slot->SharedSource == NULL || Slot->Share != Share || Slot->Generation != Generation ||
-        Slot->Image.Width != (LONG)Width || Slot->Image.Height != (LONG)Height)
+        Slot->Image.Width != Window->cx || Slot->Image.Height != Window->cy)
     {
         RetainReplacedSurface(Slot, Window);
         Slot->Reset();
@@ -1305,7 +1307,7 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
             Slot->Reset();
             return NULL;
         }
-        if (!CreateTexture(Slot->Image, Width, Height, FALSE, NULL, 0, Desc.Format))
+        if (!CreateTexture(Slot->Image, Window->cx, Window->cy, FALSE, NULL, 0, Desc.Format))
         {
             Slot->Reset();
             return NULL;
@@ -1320,7 +1322,18 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
     {
         /* Keep unchanged GDI publications in a GPU-owned texture. */
         UnbindTextures();
-        State.Context->CopyResource(Slot->Image.Resource, Slot->SharedSource);
+        if (DWM_HAS_FRAME_INSETS(Window))
+        {
+            D3D11_BOX Box = {(UINT)Window->FrameInsets.left, (UINT)Window->FrameInsets.top, 0,
+                             (UINT)(Window->FrameInsets.left + Window->cx),
+                             (UINT)(Window->FrameInsets.top + Window->cy), 1};
+            State.Context->CopySubresourceRegion(Slot->Image.Resource, 0, 0, 0, 0,
+                                                 Slot->SharedSource, 0, &Box);
+        }
+        else
+        {
+            State.Context->CopyResource(Slot->Image.Resource, Slot->SharedSource);
+        }
         State.WorkPending = TRUE;
         if (!Result(State.Device->GetDeviceRemovedReason(), "GDI texture snapshot"))
             return NULL;

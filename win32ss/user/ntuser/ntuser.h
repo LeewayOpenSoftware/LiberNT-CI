@@ -55,6 +55,7 @@ extern ATOM AtomDwmBackdropNcExtendLeft;
 extern ATOM AtomDwmBackdropNcExtendRight;
 extern ATOM AtomDwmBackdropNcExtendBottom;
 extern ATOM AtomDwmFrameAlpha;
+extern ATOM AtomDwmFrameInsets;
 extern ATOM AtomDwmCaptionClose;
 extern ATOM AtomDwmCaptionMaximize;
 extern ATOM AtomDwmCaptionMinimize;

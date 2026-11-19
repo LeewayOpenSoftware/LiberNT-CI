@@ -73,6 +73,7 @@ typedef struct _WND_DATA
     RECT rcCaptionButtons[4];
     BOOL CaptionButtonLeft[4];
     ULONG DwmCaption[DWM_CAPTION_BUTTONS + 2];
+    ULONG DwmFrameInsets;
     UINT lastHitTest;
     BOOL HasAppDefinedRgn;
     BOOL HasThemeRgn;
@@ -104,6 +105,7 @@ typedef struct _DRAW_CONTEXT
     BOOL DarkMode;
     HRGN hRgn;
     int CaptionHeight;
+    RECT FrameInsets; /* transparent outer band of the NC area: nothing is painted there */
 
     /* for double buffering */
     HDC hDCScreen;
@@ -169,6 +171,7 @@ LRESULT CALLBACK ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam,
 void ThemeCalculateCaptionButtonsPos(HWND hWnd, HTHEME htheme);
 void ThemeDwmRepaintCaptionButtons(HWND hWnd);
 void ThemeDwmUpdateCaptionButtons(HWND hWnd);
+void ThemeDwmUpdateFrameInsets(HWND hWnd);
 LONG SCROLL_getObjectId(INT nBar);
 void ThemeDrawScrollBarEx(PDRAW_CONTEXT pcontext, INT nBar, PSCROLLBARINFO psbi, POINT* pt);
 void ThemeDrawScrollBar(PDRAW_CONTEXT pcontext, INT Bar, POINT* pt);
