@@ -3,6 +3,7 @@ list(APPEND SOURCE
     CaptionGlyphs.c
     CloseThemeData.c
     ColorPreference.c
+    ScrollGlyphKey.c
     DrawThemeParentBackground.c
     GetThemeParseErrorInfo.c
     MenuTheme.c
