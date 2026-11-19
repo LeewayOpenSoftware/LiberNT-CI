@@ -1070,6 +1070,12 @@ NtSetSecurityObject(IN HANDLE Handle,
         {
             Status = STATUS_INVALID_LABEL;
         }
+        else if ((SecurityInformation & OWNER_SECURITY_INFORMATION) &&
+                 (PreviousMode != KernelMode) &&
+                 !SepCallerCanAssignOwner(SepGetOwnerFromDescriptor(CapturedDescriptor)))
+        {
+            Status = STATUS_INVALID_OWNER;
+        }
         else
         {
             /* Set security */
