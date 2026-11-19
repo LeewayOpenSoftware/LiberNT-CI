@@ -11,7 +11,11 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(shcn);
 
-// How long a SHCNF_FLUSH delivery waits for the windows it notified
+// How long a SHCNF_FLUSH delivery waits for the windows it notified. SHCNF_FLUSH
+// promises the notification was delivered when SHChangeNotify returns; a window
+// that does not answer within this bound (hung, or busy for long) is given up on
+// for the wait only: it still gets the notification when it pumps again, and the
+// ticket stays alive until then. Non-flush deliveries never wait.
 #define FLUSH_DELIVERY_TIMEOUT 3000
 
 // A delivery ticket kept alive until every window it was sent to has handled it
@@ -135,6 +139,11 @@ CChangeNotifyServer::CChangeNotifyServer()
     : m_nNextRegID(INVALID_REG_ID)
     , m_nNextDeliveryID(0)
 {
+    // Delivery callbacks reach the server only through s_pServer, and delivery IDs
+    // are per instance, so there must be one server per process (the desktop's)
+    assert(s_pServer == NULL);
+    if (s_pServer)
+        ERR("Second change notification server in this process\n");
     s_pServer = this;
 }
 
@@ -589,6 +598,14 @@ void CChangeNotifyServer::SweepPendingDeliveries()
 
 // Let the windows notified with this ticket handle it, for at most dwTimeout ms.
 // Only sent messages are processed meanwhile, which is what the callbacks are.
+//
+// Sent messages handled here can re-enter the server (CN_REGISTER, CN_UNREGISTER,
+// another CN_DELIVER_NOTIFICATION), which is fine: the m_items loop has finished and
+// pTicket is kept alive by the caller's reference. The server window cannot be
+// destroyed from inside this wait today: no client sends it WM_DESTROY or
+// WM_CLOSE, and it is destroyed only when the desktop thread ends. If that ever
+// changes, this wait (and DeliverNotification after it) would return into a
+// destroyed server, so the window must then be kept alive across the wait.
 void CChangeNotifyServer::WaitForDeliveries(CPendingTicket *pTicket, DWORD dwTimeout)
 {
     DWORD dwStart = GetTickCount();
