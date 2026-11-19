@@ -583,6 +583,9 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Initialize the CPU features */
     KiInitializeCpu(Pcr);
 
+    /* The boot processor applies it once the policy is read */
+    if (Cpu != 0) KiApplySpeculationControlProcessor();
+
     /* Initial setup for the boot CPU */
     if (Cpu == 0)
     {

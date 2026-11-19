@@ -473,6 +473,11 @@ KiInitializeKernel(IN PKPROCESS InitProcess,
         KeFeatureBits = Prcb->FeatureBits | (ULONG64)Prcb->FeatureBitsHigh << 32;
         KiDetectSpeculationFeatures();
     }
+    else
+    {
+        /* The boot processor applies it once the policy is read */
+        KiApplySpeculationControlProcessor();
+    }
 
     /* Set the default NX policy (opt-in) */
     SharedUserData->NXSupportPolicy = NX_SUPPORT_POLICY_OPTIN;

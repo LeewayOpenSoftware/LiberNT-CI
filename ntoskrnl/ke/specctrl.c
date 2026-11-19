@@ -20,6 +20,9 @@ ULONG KiFeatureSettingsOverride;
 ULONG KiFeatureSettingsOverrideMask;
 
 ULONG KiSpeculationHardening;
+ULONG KiSpeculationBtiMode;
+ULONG64 KiSpecCtrlValue;
+BOOLEAN KiSpeculationIbpbOnSwitch;
 ULONG_PTR KiSpeculationIndexMaskOff = (ULONG_PTR)-1;
 #ifdef _M_IX86
 BOOLEAN KiSpeculationFenceEnabled;
@@ -43,6 +46,7 @@ KiDetectSpeculationFeatures(VOID)
 {
     PKPRCB Prcb = KeGetCurrentPrcb();
     ULONG Features = 0;
+    ULONG MaxExtended;
     INT Regs[4];
 
     __cpuid(Regs, 0);
@@ -62,7 +66,8 @@ KiDetectSpeculationFeatures(VOID)
 
     /* AMD reports the same controls in the extended leaf */
     __cpuid(Regs, 0x80000000);
-    if ((ULONG)Regs[0] >= 0x80000008)
+    MaxExtended = (ULONG)Regs[0];
+    if (MaxExtended >= 0x80000008 && MaxExtended < 0x80010000)
     {
         ULONG Ebx;
 
@@ -75,12 +80,18 @@ KiDetectSpeculationFeatures(VOID)
         if (Ebx & CPUID80000008_EBX_VIRT_SSBD) Features |= KSPEC_VIRT_SSBD;
         if (Ebx & CPUID80000008_EBX_SSB_NO) Features |= KSPEC_SSB_NO;
     }
+    if (MaxExtended >= 0x80000021 && MaxExtended < 0x80010000)
+    {
+        __cpuid(Regs, 0x80000021);
+        if ((ULONG)Regs[0] & CPUID80000021_EAX_AUTO_IBRS) Features |= KSPEC_AUTO_IBRS;
+    }
 
     if (Features & KSPEC_ARCH_CAPABILITIES)
     {
         KiArchCapabilities = __readmsr(MSR_IA32_ARCH_CAPABILITIES);
         if (KiArchCapabilities & ARCH_CAP_SSB_NO) Features |= KSPEC_SSB_NO;
         if (KiArchCapabilities & ARCH_CAP_MDS_NO) Features |= KSPEC_MDS_NO;
+        if (KiArchCapabilities & ARCH_CAP_IBRS_ALL) Features |= KSPEC_EIBRS;
     }
 
     /* AMD documents its processors as not affected by MDS */
@@ -112,7 +123,9 @@ KeQuerySpeculationControlInformation(
     RtlZeroMemory(&Info, sizeof(Info));
 
     /* No mitigation is active yet: report what the hardware offers */
-    if (Features & (KSPEC_IBRS | KSPEC_PRED_CMD))
+    if (KiSpeculationBtiMode != KSPEC_BTI_NONE)
+        Info.Flags |= SPECCTRL_BPB_ENABLED | SPECCTRL_ENHANCED_IBRS;
+    else if (Features & (KSPEC_IBRS | KSPEC_PRED_CMD))
         Info.Flags |= SPECCTRL_BPB_DISABLED_SYSTEM_POLICY;
     else
         Info.Flags |= SPECCTRL_BPB_DISABLED_NO_HARDWARE;
@@ -123,7 +136,7 @@ KeQuerySpeculationControlInformation(
     if (KeFeatureBits & KF_SMEP) Info.Flags |= SPECCTRL_SMEP_PRESENT;
     if (Features & (KSPEC_SSBD | KSPEC_VIRT_SSBD)) Info.Flags |= SPECCTRL_SSBD_SUPPORTED;
     if (!(Features & KSPEC_SSB_NO)) Info.Flags |= SPECCTRL_SSBD_REQUIRED;
-    if (KiArchCapabilities & ARCH_CAP_IBRS_ALL) Info.Flags |= SPECCTRL_ENHANCED_IBRS_REPORTED;
+    if (Features & (KSPEC_EIBRS | KSPEC_AUTO_IBRS)) Info.Flags |= SPECCTRL_ENHANCED_IBRS_REPORTED;
     if (Features & KSPEC_MDS_NO) Info.Flags |= SPECCTRL_MDS_HARDWARE_PROTECTED;
     if (Features & KSPEC_MD_CLEAR) Info.Flags |= SPECCTRL_MB_CLEAR_REPORTED;
 
@@ -259,12 +272,51 @@ KiApplySpeculationPolicy(
         Kinds |= KSPEC_HARDEN_MDS;
     }
 
+    /* Branch target injection: FeatureSettingsOverride bit 0 always wins */
+    if ((KiSpeculationHardening & KSPEC_HARDEN_BTI) &&
+        !(KiFeatureSettingsOverride & KiFeatureSettingsOverrideMask & FSO_DISABLE_BTI))
+    {
+        if (KiSpeculationFeatures & KSPEC_EIBRS)
+        {
+            KiSpeculationBtiMode = KSPEC_BTI_EIBRS;
+            KiSpecCtrlValue |= SPEC_CTRL_IBRS;
+        }
+#ifdef _M_AMD64
+        /* AMD user-to-kernel protection is opt-in on Windows client */
+        else if ((KiSpeculationFeatures & KSPEC_AUTO_IBRS) &&
+                 (KiFeatureSettingsOverride & FSO_AMD_USER_TO_KERNEL))
+        {
+            KiSpeculationBtiMode = KSPEC_BTI_AUTO_IBRS;
+        }
+#endif
+    }
+    if ((KiSpeculationHardening & KSPEC_HARDEN_STIBP) && (KiSpeculationFeatures & KSPEC_STIBP))
+        KiSpecCtrlValue |= SPEC_CTRL_STIBP;
+    if ((KiSpeculationHardening & KSPEC_HARDEN_IBPB) && (KiSpeculationFeatures & KSPEC_PRED_CMD))
+        KiSpeculationIbpbOnSwitch = TRUE;
+
+    /* The other processors apply it when they start */
+    KiApplySpeculationControlProcessor();
+
 #ifdef _M_AMD64
     if (Kinds)
         Sites = KiPatchBootImages(LoaderBlock, Kinds);
 #else
     UNREFERENCED_PARAMETER(LoaderBlock);
 #endif
-    DPRINT1("Speculation hardening 0x%lx: active 0x%lx, %lu sites patched\n",
-            KiSpeculationHardening, Kinds, Sites);
+    DPRINT1("Speculation hardening 0x%lx: active 0x%lx, %lu sites, BTI mode %lu, SPEC_CTRL 0x%I64x, IBPB %u\n",
+            KiSpeculationHardening, Kinds, Sites, KiSpeculationBtiMode, KiSpecCtrlValue, KiSpeculationIbpbOnSwitch);
+}
+
+VOID
+NTAPI
+KiApplySpeculationControlProcessor(VOID)
+{
+    /* Leave the MSRs alone unless a policy asks for something */
+    if (KiSpecCtrlValue != 0)
+        __writemsr(MSR_IA32_SPEC_CTRL, KiSpecCtrlValue);
+#ifdef _M_AMD64
+    if (KiSpeculationBtiMode == KSPEC_BTI_AUTO_IBRS)
+        __writemsr(MSR_EFER, __readmsr(MSR_EFER) | EFER_AUTOIBRS);
+#endif
 }

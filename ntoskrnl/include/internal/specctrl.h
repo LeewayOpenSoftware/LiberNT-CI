@@ -40,6 +40,19 @@
 #define ARCH_CAP_MDS_NO                 (1ULL << 5)
 #define ARCH_CAP_TAA_NO                 (1ULL << 8)
 
+/* IA32_SPEC_CTRL */
+#define SPEC_CTRL_IBRS                  (1ULL << 0)
+#define SPEC_CTRL_STIBP                 (1ULL << 1)
+#define SPEC_CTRL_SSBD                  (1ULL << 2)
+
+/* CPUID.80000021h:EAX (AMD) and EFER.AIBRSE */
+#define CPUID80000021_EAX_AUTO_IBRS     (1UL << 8)
+#define EFER_AUTOIBRS                   (1ULL << 21)
+
+/* FeatureSettingsOverride bits documented in KB4073119 */
+#define FSO_DISABLE_BTI                 0x00000001
+#define FSO_AMD_USER_TO_KERNEL          0x00000040
+
 /* What the processor offers, collected once on the boot processor */
 #define KSPEC_SPEC_CTRL                 0x00000001  /* IA32_SPEC_CTRL exists */
 #define KSPEC_PRED_CMD                  0x00000002  /* IA32_PRED_CMD (IBPB) exists */
@@ -52,6 +65,8 @@
 #define KSPEC_ARCH_CAPABILITIES         0x00000100
 #define KSPEC_SSB_NO                    0x00000200  /* Not affected by speculative store bypass */
 #define KSPEC_MDS_NO                    0x00000400  /* Not affected by MDS */
+#define KSPEC_EIBRS                     0x00000800  /* IBRS_ALL: IBRS may stay set */
+#define KSPEC_AUTO_IBRS                 0x00001000  /* AMD automatic IBRS */
 
 extern ULONG KiSpeculationFeatures;
 extern ULONG64 KiArchCapabilities;
@@ -63,6 +78,31 @@ extern ULONG KiFeatureSettingsOverrideMask;
 /* Session Manager\Kernel SpeculationHardening, our own switch until each class has a default */
 #define KSPEC_HARDEN_BOUNDS             0x00000001  /* Index masking and fences after bound checks */
 #define KSPEC_HARDEN_MDS                0x00000002  /* Clear CPU buffers on return to user mode */
+#define KSPEC_HARDEN_BTI                0x00000004  /* Kernel protection against branch target injection */
+#define KSPEC_HARDEN_IBPB               0x00000008  /* Barrier on process switch (opt-in) */
+#define KSPEC_HARDEN_STIBP              0x00000010  /* Single-thread indirect branch predictors (opt-in) */
+
+/* How branch target injection is mitigated */
+#define KSPEC_BTI_NONE                  0
+#define KSPEC_BTI_EIBRS                 1
+#define KSPEC_BTI_AUTO_IBRS             2
+
+extern ULONG KiSpeculationBtiMode;
+extern ULONG64 KiSpecCtrlValue;
+extern BOOLEAN KiSpeculationIbpbOnSwitch;
+
+/* Barrier between the predictor state of two processes */
+FORCEINLINE
+VOID
+KiSpeculationProcessSwitch(VOID)
+{
+    if (KiSpeculationIbpbOnSwitch)
+        __writemsr(MSR_IA32_PRED_CMD, 1);
+}
+
+VOID
+NTAPI
+KiApplySpeculationControlProcessor(VOID);
 
 extern ULONG KiSpeculationHardening;
 extern ULONG_PTR KiSpeculationIndexMaskOff;
