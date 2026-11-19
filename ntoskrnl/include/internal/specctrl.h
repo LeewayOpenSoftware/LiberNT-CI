@@ -164,5 +164,6 @@ KeQuerySpeculationControlInformation(
 #else
 
 #define KiSpeculationBarrier() ((void)0)
+#define KiSpeculationIndexMask(Index, Size) ((ULONG_PTR)-1)
 
 #endif /* _M_IX86 || _M_AMD64 */

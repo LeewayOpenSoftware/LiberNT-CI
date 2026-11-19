@@ -4228,6 +4228,10 @@ NtQuerySystemInformation(
         }
 #endif
 
+        /* A mispredicted class check must not index the dispatch table */
+        SystemInformationClass = (SYSTEM_INFORMATION_CLASS)((ULONG_PTR)SystemInformationClass &
+            KiSpeculationIndexMask(SystemInformationClass, MAX_SYSTEM_INFO_CLASS));
+
         if (SystemInformationClass == SystemProcessIdInformation)
         {
             Status = ExpQueryProcessIdInformation(SystemInformation,
@@ -4744,6 +4748,8 @@ NtSetSystemInformation(
         if ((SystemInformationClass >= MIN_SYSTEM_INFO_CLASS) &&
             (SystemInformationClass < MAX_SYSTEM_INFO_CLASS))
         {
+            SystemInformationClass = (SYSTEM_INFORMATION_CLASS)((ULONG_PTR)SystemInformationClass &
+                KiSpeculationIndexMask(SystemInformationClass, MAX_SYSTEM_INFO_CLASS));
             if (CallQS[SystemInformationClass].Set != NULL)
             {
                 /* Hand the request to a subhandler */
