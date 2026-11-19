@@ -1530,7 +1530,7 @@ ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent, DWORD htHot, DWORD ht
     /* Add a padding around the objects of the caption */
     InflateRect(&rcPart, -(int)pcontext->wi.cyWindowBorders-BUTTON_GAP_SIZE + pcontext->FrameInsets.left,
                          -(int)pcontext->wi.cyWindowBorders-BUTTON_GAP_SIZE);
-    rcPart.right += pcontext->FrameInsets.left - pcontext->FrameInsets.right;
+    rcPart.right += pcontext->FrameInsets.right - pcontext->FrameInsets.left;
 
     /* Draw the caption buttons */
     if (pcontext->wi.dwStyle & WS_SYSMENU)
