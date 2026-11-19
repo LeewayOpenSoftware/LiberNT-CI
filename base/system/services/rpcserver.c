@@ -2651,6 +2651,16 @@ RCreateServiceW(
         return ERROR_ACCESS_DENIED;
     }
 
+    /* ACCESS_SYSTEM_SECURITY on the new handle needs SeSecurityPrivilege: fail before anything is created */
+    if (dwDesiredAccess & ACCESS_SYSTEM_SECURITY)
+    {
+        DWORD dwGranted;
+
+        dwError = ScmAccessCheckCaller(pDefaultSD, ACCESS_SYSTEM_SECURITY, &ScmServiceMapping, &dwGranted);
+        if (dwError != ERROR_SUCCESS)
+            return dwError;
+    }
+
     if (*lpServiceName == 0)
         return ERROR_INVALID_NAME;
 

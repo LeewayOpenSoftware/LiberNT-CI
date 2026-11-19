@@ -455,7 +455,8 @@ ScmAccessCheckCaller(
         !bAccessStatus)
     {
         *pdwGrantedAccess = 0;
-        dwError = ERROR_ACCESS_DENIED;
+        /* A right that needs a privilege the caller lacks (ACCESS_SYSTEM_SECURITY) is reported as such */
+        dwError = (GetLastError() == ERROR_PRIVILEGE_NOT_HELD) ? ERROR_PRIVILEGE_NOT_HELD : ERROR_ACCESS_DENIED;
     }
 
     CloseHandle(hToken);
