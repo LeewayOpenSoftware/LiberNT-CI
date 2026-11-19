@@ -171,6 +171,7 @@ LRESULT CALLBACK ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam,
 void ThemeCalculateCaptionButtonsPos(HWND hWnd, HTHEME htheme);
 void ThemeDwmRepaintCaptionButtons(HWND hWnd);
 void ThemeDwmUpdateCaptionButtons(HWND hWnd);
+void ThemeDwmUpdateFrameInsets(HWND hWnd);
 LONG SCROLL_getObjectId(INT nBar);
 void ThemeDrawScrollBarEx(PDRAW_CONTEXT pcontext, INT nBar, PSCROLLBARINFO psbi, POINT* pt);
 void ThemeDrawScrollBar(PDRAW_CONTEXT pcontext, INT Bar, POINT* pt);

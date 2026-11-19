@@ -527,6 +527,7 @@ ThemeDwmUpdateThemedFrame(HWND hWnd)
         SetPropW(hWnd, DWM_PROP_THEMED_FRAME, (HANDLE)1);
     else
         RemovePropW(hWnd, DWM_PROP_THEMED_FRAME);
+    ThemeDwmUpdateFrameInsets(hWnd);
 }
 
 static BOOL CALLBACK

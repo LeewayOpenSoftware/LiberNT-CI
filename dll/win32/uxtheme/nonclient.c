@@ -445,8 +445,7 @@ static BOOL
 ThemeGetFrameInsets(HWND hWnd, const WINDOWINFO *wi, HTHEME theme, RECT *Insets)
 {
     PWND_DATA pwndData;
-    INT visible, visibleBottom, side, bottom;
-    UINT dpi;
+    INT visible, visibleRight, visibleBottom, left, right, bottom;
 
     SetRectEmpty(Insets);
     if (!g_bThemeHooksActive || (wi->dwStyle & (WS_CHILD | WS_MINIMIZE | WS_MAXIMIZE)) ||
@@ -460,16 +459,18 @@ ThemeGetFrameInsets(HWND hWnd, const WINDOWINFO *wi, HTHEME theme, RECT *Insets)
         theme = GetNCCaptionTheme(hWnd, wi->dwStyle);
     if (!theme || FAILED(GetThemeInt(theme, WP_FRAMELEFT, 0, TMT_BORDERSIZE, &visible)) || visible <= 0)
         return FALSE;
+    if (FAILED(GetThemeInt(theme, WP_FRAMERIGHT, 0, TMT_BORDERSIZE, &visibleRight)) || visibleRight <= 0)
+        visibleRight = visible;
     if (FAILED(GetThemeInt(theme, WP_FRAMEBOTTOM, 0, TMT_BORDERSIZE, &visibleBottom)) || visibleBottom <= 0)
         visibleBottom = visible;
-    dpi = MSSTYLES_GetThemeDPI((PTHEME_CLASS)theme);
-    if (!dpi)
-        dpi = 96;
-    side = min(max(0, (INT)wi->cxWindowBorders - MulDiv(visible, dpi, 96)), 255);
-    bottom = min(max(0, (INT)wi->cyWindowBorders - MulDiv(visibleBottom, dpi, 96)), 255);
-    if (!side && !bottom)
+    /* BorderSize is the visible width in device pixels, not scaled: the frame line stays 1 px at any DPI.
+     * The small frame parts share these values. */
+    left = min(max(0, (INT)wi->cxWindowBorders - visible), 255);
+    right = min(max(0, (INT)wi->cxWindowBorders - visibleRight), 255);
+    bottom = min(max(0, (INT)wi->cyWindowBorders - visibleBottom), 255);
+    if (!left && !right && !bottom)
         return FALSE;
-    SetRect(Insets, side, 0, side, bottom);
+    SetRect(Insets, left, 0, right, bottom);
     return TRUE;
 }
 
@@ -821,6 +822,7 @@ void ThemeCalculateCaptionButtonsPos(HWND hWnd, HTHEME htheme)
     btnHeight = GetSystemMetrics(wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMCAPTION : SM_CYCAPTION);
 
     ThemeCalculateCaptionButtonsPosEx(&wi, hWnd, htheme, btnHeight);
+    ThemeDwmUpdateFrameInsets(hWnd);
 }
 
 static COLORREF
@@ -1295,6 +1297,16 @@ ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWOR
 }
 
 void
+ThemeDwmUpdateFrameInsets(HWND hWnd)
+{
+    WINDOWINFO wi = { sizeof(wi) };
+    PWND_DATA pwndData = ThemeGetWndData(hWnd);
+
+    if (pwndData && GetWindowInfo(hWnd, &wi))
+        ThemeDwmPublishFrameInsets(hWnd, &wi, pwndData);
+}
+
+void
 ThemeDwmUpdateCaptionButtons(HWND hWnd)
 {
     WINDOWINFO wi = { sizeof(wi) };
@@ -1518,6 +1530,7 @@ ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent, DWORD htHot, DWORD ht
     /* Add a padding around the objects of the caption */
     InflateRect(&rcPart, -(int)pcontext->wi.cyWindowBorders-BUTTON_GAP_SIZE + pcontext->FrameInsets.left,
                          -(int)pcontext->wi.cyWindowBorders-BUTTON_GAP_SIZE);
+    rcPart.right += pcontext->FrameInsets.left - pcontext->FrameInsets.right;
 
     /* Draw the caption buttons */
     if (pcontext->wi.dwStyle & WS_SYSMENU)
@@ -1790,6 +1803,7 @@ ThemeHandleNCPaint(HWND hWnd, HRGN hRgn, const BOOL *pActive)
 
     ThemePaintWindow(&context, &rcCurrent, TRUE);
     ThemeCleanupDrawContext(&context);
+    ThemeDwmUpdateFrameInsets(hWnd);
 
     return 0;
 }
