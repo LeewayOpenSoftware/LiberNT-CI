@@ -601,6 +601,8 @@ static char *ncacn_pipe_name(const char *endpoint)
   return pipe_name;
 }
 
+/* The RPC_SECURITY_QOS_V3 Sid is not checked here: only ncalrpc names a local server (see
+ * rpcrt4_ncalrpc_check_server); Windows could not be compared on ncacn_np. */
 static RPC_STATUS rpcrt4_ncacn_np_open(RpcConnection* Connection)
 {
   RpcConnection_np *npc = (RpcConnection_np *) Connection;

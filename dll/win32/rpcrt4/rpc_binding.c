@@ -1239,6 +1239,12 @@ BOOL RpcAuthInfo_IsEqual(const RpcAuthInfo *AuthInfo1, const RpcAuthInfo *AuthIn
         (AuthInfo1->AuthnSvc != AuthInfo2->AuthnSvc))
         return FALSE;
 
+    /* A pooled connection whose server was checked against one principal must not serve another */
+    if (!AuthInfo1->server_principal_name != !AuthInfo2->server_principal_name ||
+        (AuthInfo1->server_principal_name &&
+         wcscmp(AuthInfo1->server_principal_name, AuthInfo2->server_principal_name)))
+        return FALSE;
+
     if (AuthInfo1->identity == AuthInfo2->identity)
         return TRUE;
 
