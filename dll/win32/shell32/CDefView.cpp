@@ -406,6 +406,17 @@ private:
     INT                       m_himlViewSize;
     HIMAGELIST                m_himlView;
     BOOL                      m_himlViewOwned;
+    struct SIZED_VIEW_LIST
+    {
+        INT Size;
+        HIMAGELIST List;
+        BYTE *Scaled;
+        INT ScaledCount;
+    };
+    SIZED_VIEW_LIST           m_SizedLists[4];
+    SIZED_VIEW_LIST          *m_SizedCurrent;
+    INT                       m_SizedListCount;
+    INT                       m_SizedListNext;
     WNDPROC                   m_ListViewOrigProc;
     INT                       m_GestureZoomDistance;
 
@@ -435,8 +446,10 @@ private:
     void ClearAddedDuringFill();
     bool IsComputerTileView() const;
     UINT ComputerViewDpi() const;
-    HIMAGELIST CreateSizedViewImageList(INT cx);
-    void SyncViewImageList();
+    SIZED_VIEW_LIST *GetSizedViewImageList(INT cx);
+    BOOL EnsureViewIcon(INT index);
+    void EnsureViewIconsForItems();
+    void DestroySizedViewImageLists();
     void ApplyViewIconSize();
     INT GetZoomStep() const;
     void ZoomView(INT iDelta);
@@ -844,9 +857,13 @@ CDefView::CDefView() :
     m_himlViewSize(0),
     m_himlView(NULL),
     m_himlViewOwned(FALSE),
+    m_SizedCurrent(NULL),
+    m_SizedListCount(0),
+    m_SizedListNext(0),
     m_ListViewOrigProc(NULL),
     m_GestureZoomDistance(0)
 {
+    ZeroMemory(m_SizedLists, sizeof(m_SizedLists));
     ZeroMemory(&m_FolderSettings, sizeof(m_FolderSettings));
     m_FolderSettings.ViewMode = FVM_TILE;
     m_FolderSettings.fFlags = FWF_USESEARCHFOLDER;
@@ -884,9 +901,7 @@ CDefView::~CDefView()
         DestroyViewWindow();
     }
 
-    if (m_himlView && m_himlViewOwned)
-        ImageList_Destroy(m_himlView);
-    m_himlView = NULL;
+    DestroySizedViewImageLists();
 
     SHFree(m_apidl);
     DPA_Destroy(m_LoadColumnsList);
@@ -2211,7 +2226,7 @@ int CDefView::LV_AddItem(PCUITEMID_CHILD pidl)
     /* Image lookup can enter the shell namespace. Keep that work out of the
        first visible paint and inside the bounded enumeration batches. */
     lvItem.iImage = SHMapPIDLToSystemImageListIndex(m_pSFParent, pidl, 0);
-    SyncViewImageList();
+    EnsureViewIcon(lvItem.iImage);
     lvItem.stateMask = LVIS_CUT;
     if (m_HasCutItems)
     {
@@ -2266,7 +2281,7 @@ BOOLEAN CDefView::LV_RenameItem(PCUITEMID_CHILD pidlOld, PCUITEMID_CHILD pidlNew
         lvItem.lParam = reinterpret_cast<LPARAM>(ILClone(pidlNew)); // set item's data
         lvItem.pszText = LPSTR_TEXTCALLBACKW;
         lvItem.iImage = SHMapPIDLToSystemImageListIndex(m_pSFParent, pidlNew, 0);
-        SyncViewImageList();
+        EnsureViewIcon(lvItem.iImage);
         m_ListView.SetItem(&lvItem);
         m_ListView.Update(nItem);
 
@@ -2297,7 +2312,7 @@ BOOL CDefView::LV_UpdateItem(INT nItem, PCUITEMID_CHILD pidl)
             lvItem.mask |= LVIF_STATE;
             lvItem.state = GetItemAttributes(pidl, SFGAO_HIDDEN | SFGAO_GHOSTED) ? LVIS_CUT : 0;
         }
-        SyncViewImageList();
+        EnsureViewIcon(lvItem.iImage);
         PCUITEMID_CHILD pidlOld = _PidlByItem(nItem);
         if (pidlOld && (lvItem.lParam = reinterpret_cast<LPARAM>(ILClone(pidl))) != NULL)
             lvItem.mask |= LVIF_PARAM;
@@ -2427,7 +2442,6 @@ void CDefView::FinishFillList()
 
     _DoFolderViewCB(SFVM_LISTREFRESHED, 0, 0);
 
-    SyncViewImageList();
     ApplySavedItemPositions();
     ArrangeComputerView();
     if (m_ListView.GetItemCount() > 0 && m_ListView.GetNextItem(-1, LVNI_FOCUSED) < 0)
@@ -2803,10 +2817,7 @@ LRESULT CDefView::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHand
             RemovePropW(m_ListView.m_hWnd, L"CDefViewHost");
             m_ListViewOrigProc = NULL;
         }
-        if (m_himlView && m_himlViewOwned)
-            ImageList_Destroy(m_himlView);
-        m_himlView = NULL;
-        m_himlViewOwned = FALSE;
+        DestroySizedViewImageLists();
         ClearExplorerContentBackdrop(true);
         CancelFillList();
         ClearComputerTiles();
@@ -4035,6 +4046,7 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             if (lpdi->item.mask & LVIF_IMAGE)
             {
                 lpdi->item.iImage = SHMapPIDLToSystemImageListIndex(m_pSFParent, pidl, 0);
+                EnsureViewIcon(lpdi->item.iImage);
             }
             if (lpdi->item.mask & LVIF_STATE)
             {
@@ -5680,14 +5692,14 @@ StretchIconBitmap(HBITMAP bitmap, INT srcCx, INT srcCy, INT dstCx, INT dstCy, BO
     return result;
 }
 
-static INT
-AddIconScaled(HIMAGELIST dest, HIMAGELIST srcList, HIMAGELIST fallback, INT index, INT cx)
+static BOOL
+ReplaceIconScaled(HIMAGELIST dest, INT index, HIMAGELIST srcList, HIMAGELIST fallback, INT cx)
 {
     INT srcCx = 0, srcCy = 0;
     HICON icon;
     ICONINFO info;
     HBITMAP colorBitmap, maskBitmap;
-    INT result = -1;
+    BOOL result = FALSE;
 
     ImageList_GetIconSize(srcList, &srcCx, &srcCy);
     icon = ImageList_GetIcon(srcList, index, ILD_TRANSPARENT);
@@ -5697,13 +5709,13 @@ AddIconScaled(HIMAGELIST dest, HIMAGELIST srcList, HIMAGELIST fallback, INT inde
         ImageList_GetIconSize(fallback, &srcCx, &srcCy);
     }
     if (!icon)
-        return -1;
+        return FALSE;
     if (GetIconInfo(icon, &info))
     {
         colorBitmap = StretchIconBitmap(info.hbmColor, srcCx, srcCy, cx, cx, FALSE);
         maskBitmap = StretchIconBitmap(info.hbmMask, srcCx, srcCy, cx, cx, TRUE);
         if (colorBitmap && maskBitmap)
-            result = ImageList_Add(dest, colorBitmap, maskBitmap);
+            result = ImageList_Replace(dest, index, colorBitmap, maskBitmap);
         if (colorBitmap)
             DeleteObject(colorBitmap);
         if (maskBitmap)
@@ -5715,69 +5727,119 @@ AddIconScaled(HIMAGELIST dest, HIMAGELIST srcList, HIMAGELIST fallback, INT inde
     return result;
 }
 
-HIMAGELIST CDefView::CreateSizedViewImageList(INT cx)
+static HIMAGELIST
+GetScaleSourceList(HIMAGELIST bigList)
 {
-    HIMAGELIST bigList, smallList, srcList, newList;
-    INT srcCx = 0, srcCy = 0, count, i;
+    HIMAGELIST srcList;
+    INT srcCx = 0, srcCy = 0;
 
-    Shell_GetImageLists(&bigList, &smallList);
     srcList = SIC_GetImageList(SHIL_JUMBO);
-    if (srcList && (!ImageList_GetIconSize(srcList, &srcCx, &srcCy) || srcCx < 256))
-    {
-        srcList = NULL;
-        srcCx = 0;
-    }
-    if (!srcList)
-    {
-        srcList = SIC_GetImageList(SHIL_EXTRALARGE);
-        srcCx = 0;
-        if (!srcList || !ImageList_GetIconSize(srcList, &srcCx, &srcCy))
-            srcList = NULL;
-    }
-    if (!srcList)
-    {
-        srcList = bigList;
-        srcCx = 0;
-        ImageList_GetIconSize(bigList, &srcCx, &srcCy);
-    }
-    count = ImageList_GetImageCount(smallList);
-    newList = ImageList_Create(cx, cx, ILC_COLOR32 | ILC_MASK, max(count, 1), 0x20);
-    if (!newList)
-        return NULL;
-    for (i = 0; i < count; i++)
-    {
-        INT index = AddIconScaled(newList, srcList, bigList, i, cx);
-
-        if (index != i)
-        {
-            ImageList_Destroy(newList);
-            return NULL;
-        }
-    }
-    return newList;
+    if (srcList && ImageList_GetIconSize(srcList, &srcCx, &srcCy) && srcCx >= 256)
+        return srcList;
+    srcList = SIC_GetImageList(SHIL_EXTRALARGE);
+    if (srcList && ImageList_GetIconSize(srcList, &srcCx, &srcCy))
+        return srcList;
+    return bigList;
 }
 
-void CDefView::SyncViewImageList()
+CDefView::SIZED_VIEW_LIST *CDefView::GetSizedViewImageList(INT cx)
 {
-    HIMAGELIST smallList, bigList, srcList;
-    INT srcCx = 0, srcCy = 0;
-    INT have, need, i;
+    const INT capacity = (INT)_countof(m_SizedLists);
+    SIZED_VIEW_LIST *entry;
+    BOOL appended = FALSE;
+    INT i;
 
-    if (!m_himlView || !m_himlViewOwned)
-        return;
-    Shell_GetImageLists(&bigList, &smallList);
-    srcList = SIC_GetImageList(SHIL_JUMBO);
-    if (!srcList || !ImageList_GetIconSize(srcList, &srcCx, &srcCy) || srcCx < 256)
-        srcList = bigList;
-    need = ImageList_GetImageCount(smallList);
-    have = ImageList_GetImageCount(m_himlView);
-    for (i = have; i < need; i++)
+    for (i = 0; i < m_SizedListCount; i++)
     {
-        INT index = AddIconScaled(m_himlView, srcList, bigList, i, m_himlViewSize);
-
-        if (index == -1)
-            break;
+        if (m_SizedLists[i].Size == cx && m_SizedLists[i].List)
+            return &m_SizedLists[i];
     }
+    if (m_SizedListCount < capacity)
+    {
+        entry = &m_SizedLists[m_SizedListCount];
+        appended = TRUE;
+    }
+    else
+    {
+        if (m_SizedLists[m_SizedListNext].List == m_himlView)
+            m_SizedListNext = (m_SizedListNext + 1) % capacity;
+        entry = &m_SizedLists[m_SizedListNext];
+        m_SizedListNext = (m_SizedListNext + 1) % capacity;
+        if (entry->List)
+            ImageList_Destroy(entry->List);
+        if (entry->Scaled)
+            HeapFree(GetProcessHeap(), 0, entry->Scaled);
+    }
+    ZeroMemory(entry, sizeof(*entry));
+    entry->List = ImageList_Create(cx, cx, ILC_COLOR32 | ILC_MASK, 1, 0x20);
+    if (!entry->List)
+        return NULL;
+    entry->Size = cx;
+    if (appended)
+        m_SizedListCount++;
+    return entry;
+}
+
+BOOL CDefView::EnsureViewIcon(INT index)
+{
+    SIZED_VIEW_LIST *entry = m_SizedCurrent;
+    HIMAGELIST bigList, smallList;
+
+    if (!entry || index < 0)
+        return FALSE;
+    Shell_GetImageLists(&bigList, &smallList);
+    if (index >= entry->ScaledCount)
+    {
+        INT count = ImageList_GetImageCount(smallList);
+        BYTE *scaled;
+
+        if (index >= count || !ImageList_SetImageCount(entry->List, count))
+            return FALSE;
+        if (entry->Scaled)
+            scaled = (BYTE *)HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, entry->Scaled, count);
+        else
+            scaled = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, count);
+        if (!scaled)
+            return FALSE;
+        entry->Scaled = scaled;
+        entry->ScaledCount = count;
+    }
+    if (entry->Scaled[index])
+        return TRUE;
+    if (!ReplaceIconScaled(entry->List, index, GetScaleSourceList(bigList), bigList, entry->Size))
+        return FALSE;
+    entry->Scaled[index] = TRUE;
+    return TRUE;
+}
+
+void CDefView::EnsureViewIconsForItems()
+{
+    LVITEMW item;
+
+    if (!m_SizedCurrent || !m_ListView)
+        return;
+    item.mask = LVIF_IMAGE;
+    item.iSubItem = 0;
+    for (item.iItem = 0; m_ListView.GetItem(&item); item.iItem++)
+        EnsureViewIcon(item.iImage);
+}
+
+void CDefView::DestroySizedViewImageLists()
+{
+    for (INT i = 0; i < m_SizedListCount; i++)
+    {
+        if (m_SizedLists[i].List)
+            ImageList_Destroy(m_SizedLists[i].List);
+        if (m_SizedLists[i].Scaled)
+            HeapFree(GetProcessHeap(), 0, m_SizedLists[i].Scaled);
+    }
+    ZeroMemory(m_SizedLists, sizeof(m_SizedLists));
+    m_SizedListCount = 0;
+    m_SizedListNext = 0;
+    m_SizedCurrent = NULL;
+    m_himlView = NULL;
+    m_himlViewOwned = FALSE;
+    m_himlViewSize = 0;
 }
 
 void CDefView::ApplyViewIconSize()
@@ -5798,28 +5860,40 @@ void CDefView::ApplyViewIconSize()
     {
         if (!m_himlView || m_himlViewSize != m_IconSize)
         {
-            if (m_himlView && m_himlViewOwned)
-                ImageList_Destroy(m_himlView);
-            m_himlView = NULL;
-            m_himlViewOwned = FALSE;
-            m_himlViewSize = 0;
+            HIMAGELIST shared = NULL;
+            INT cx = 0, cy = 0;
+
             if (m_IconSize == bigSize * 3 / 2)
+                shared = SIC_GetImageList(SHIL_EXTRALARGE);
+            else if (m_IconSize == 256)
+                shared = SIC_GetImageList(SHIL_JUMBO);
+            if (shared && (!ImageList_GetIconSize(shared, &cx, &cy) || cx != m_IconSize))
+                shared = NULL;
+            m_himlView = shared;
+            m_himlViewOwned = FALSE;
+            m_SizedCurrent = NULL;
+            if (!shared)
             {
-                m_himlView = SIC_GetImageList(SHIL_EXTRALARGE);
-                m_himlViewOwned = FALSE;
-            }
-            else
-            {
-                m_himlView = CreateSizedViewImageList(m_IconSize);
-                m_himlViewOwned = m_himlView != NULL;
+                SIZED_VIEW_LIST *entry = GetSizedViewImageList(m_IconSize);
+
+                if (entry)
+                {
+                    m_himlView = entry->List;
+                    m_himlViewOwned = TRUE;
+                    m_SizedCurrent = entry;
+                    EnsureViewIconsForItems();
+                }
             }
             m_himlViewSize = m_IconSize;
         }
-        SyncViewImageList();
         m_ListView.SetImageList(m_himlView ? m_himlView : bigList, LVSIL_NORMAL);
     }
     else
     {
+        m_himlView = NULL;
+        m_himlViewOwned = FALSE;
+        m_himlViewSize = 0;
+        m_SizedCurrent = NULL;
         m_ListView.SetImageList(bigList, LVSIL_NORMAL);
     }
     if (mode == FVM_CONTENT)
