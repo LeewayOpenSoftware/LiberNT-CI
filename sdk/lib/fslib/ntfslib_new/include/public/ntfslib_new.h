@@ -648,6 +648,13 @@ NtfsFileRecordSetUpdateSequenceNumber(
     _In_ NtfsFileRecord *FileRecord,
     _In_ LONGLONG Usn);
 
+/* The USN and security id in $STANDARD_INFORMATION (0 for an NTFS 1.x value) */
+NTSTATUS
+NtfsFileRecordGetUsnInformation(
+    _In_ NtfsFileRecord *FileRecord,
+    _Out_ LONGLONG* Usn,
+    _Out_ ULONG* SecurityId);
+
 NTSTATUS
 NtfsFileRecordDeleteNamedDataStream(
     _In_ NtfsFileRecord *FileRecord,

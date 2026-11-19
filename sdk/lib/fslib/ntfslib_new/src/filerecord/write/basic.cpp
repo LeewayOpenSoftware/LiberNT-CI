@@ -290,6 +290,30 @@ FileRecord::TouchDirectory()
 }
 
 NTSTATUS
+FileRecord::GetUsnInformation(
+    _Out_ LONGLONG* Usn,
+    _Out_ ULONG* SecurityId)
+{
+    PAttribute Attribute;
+    PStandardInformationEx Standard;
+    NTSTATUS Status;
+
+    *Usn = 0;
+    *SecurityId = 0;
+    Status = GetStandardInformationForUpdate(&Attribute, &Standard);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* An NTFS 1.x value has neither field */
+    if (Attribute->Resident.DataLength >= sizeof(StandardInformationEx))
+    {
+        *Usn = (LONGLONG)Standard->UpdateSequenceNumber;
+        *SecurityId = Standard->SecurityId;
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
 FileRecord::SetUpdateSequenceNumber(
     _In_ LONGLONG Usn)
 {

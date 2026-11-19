@@ -1320,6 +1320,9 @@ public:
     SetUpdateSequenceNumber(_In_ LONGLONG Usn);
 
     NTSTATUS
+    GetUsnInformation(_Out_ LONGLONG* Usn, _Out_ ULONG* SecurityId);
+
+    NTSTATUS
     StampChangeTime();
 
     // ./write.cpp
