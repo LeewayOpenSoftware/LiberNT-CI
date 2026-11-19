@@ -1257,7 +1257,7 @@ ExpInitializeExecutive(IN ULONG Cpu,
     /* Setup initial system settings */
     CmGetSystemControlValues(LoaderBlock->RegistryBase, CmControlVector);
 #if defined(_M_IX86) || defined(_M_AMD64)
-    KiApplySpeculationPolicy();
+    KiApplySpeculationPolicy(LoaderBlock);
 #endif
 
     /* Set the Service Pack Number and add it to the CSD Version number if needed */

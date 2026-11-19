@@ -109,7 +109,8 @@ KiDetectSpeculationFeatures(VOID);
 CODE_SEG("INIT")
 VOID
 NTAPI
-KiApplySpeculationPolicy(VOID);
+KiApplySpeculationPolicy(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock);
 
 NTSTATUS
 NTAPI

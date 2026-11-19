@@ -26,7 +26,6 @@ BOOLEAN KiSpeculationFenceEnabled;
 #endif
 
 #ifdef _M_AMD64
-extern IMAGE_DOS_HEADER __ImageBase;
 static const UCHAR KiFenceSiteMarker[7] = { KSPEC_FENCE_SITE_BYTES };
 /* lfence followed by a 4-byte nop */
 static const UCHAR KiFenceSiteLfence[7] = { 0x0F, 0xAE, 0xE8, 0x0F, 0x1F, 0x40, 0x00 };
@@ -135,22 +134,16 @@ KeQuerySpeculationControlInformation(
 CODE_SEG("INIT")
 static
 ULONG
-KiPatchFenceSites(VOID)
+KiPatchImageSites(
+    _In_ PVOID ImageBase)
 {
-    PIMAGE_NT_HEADERS NtHeaders = RtlImageNtHeader(&__ImageBase);
+    PIMAGE_NT_HEADERS NtHeaders = RtlImageNtHeader(ImageBase);
     PIMAGE_SECTION_HEADER Section;
     ULONG i, Sites = 0;
-    ULONG_PTR Cr0, Flags;
     PUCHAR Code, End;
 
     if (!NtHeaders)
         return 0;
-
-    /* Boot processor only, before the other processors start; the image may still be write-protected */
-    Flags = __readeflags();
-    _disable();
-    Cr0 = __readcr0();
-    __writecr0(Cr0 & ~CR0_WP);
 
     Section = IMAGE_FIRST_SECTION(NtHeaders);
     for (i = 0; i < NtHeaders->FileHeader.NumberOfSections; i++, Section++)
@@ -158,7 +151,7 @@ KiPatchFenceSites(VOID)
         if (!(Section->Characteristics & IMAGE_SCN_MEM_EXECUTE))
             continue;
 
-        Code = (PUCHAR)&__ImageBase + Section->VirtualAddress;
+        Code = (PUCHAR)ImageBase + Section->VirtualAddress;
         End = Code + min(Section->Misc.VirtualSize, Section->SizeOfRawData);
         for (; Code + sizeof(KiFenceSiteMarker) <= End; Code++)
         {
@@ -169,6 +162,36 @@ KiPatchFenceSites(VOID)
                 Sites++;
             }
         }
+    }
+    return Sites;
+}
+
+/* The kernel and the HAL carry the trap entry and exit code; they are the first two boot images */
+CODE_SEG("INIT")
+static
+ULONG
+KiPatchBootImages(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PLIST_ENTRY Entry = LoaderBlock->LoadOrderListHead.Flink;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    ULONG_PTR Cr0, Flags;
+    ULONG i, Sites = 0;
+
+    /* Boot processor only, before the other processors start; the images may be write-protected */
+    Flags = __readeflags();
+    _disable();
+    Cr0 = __readcr0();
+    __writecr0(Cr0 & ~CR0_WP);
+
+    for (i = 0; i < 2 && Entry != &LoaderBlock->LoadOrderListHead; i++, Entry = Entry->Flink)
+    {
+        ULONG ImageSites;
+
+        LdrEntry = CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+        ImageSites = KiPatchImageSites(LdrEntry->DllBase);
+        DPRINT1("Speculation sites patched in %wZ: %lu\n", &LdrEntry->BaseDllName, ImageSites);
+        Sites += ImageSites;
     }
 
     __writecr0(Cr0);
@@ -186,7 +209,8 @@ KiPatchFenceSites(VOID)
 CODE_SEG("INIT")
 VOID
 NTAPI
-KiApplySpeculationPolicy(VOID)
+KiApplySpeculationPolicy(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     ULONG Sites = 0;
 
@@ -198,7 +222,7 @@ KiApplySpeculationPolicy(VOID)
 
     KiSpeculationIndexMaskOff = 0;
 #ifdef _M_AMD64
-    Sites = KiPatchFenceSites();
+    Sites = KiPatchBootImages(LoaderBlock);
 #else
     /* lfence needs SSE2 */
     if (KeFeatureBits & KF_XMMI64)
