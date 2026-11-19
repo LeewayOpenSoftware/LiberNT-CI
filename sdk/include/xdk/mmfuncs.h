@@ -276,6 +276,16 @@ NTAPI
 MmFreePagesFromMdl(
   _Inout_ PMDL MemoryDescriptorList);
 
+#define MM_FREE_MDL_PAGES_ZERO 0x1
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+MmFreePagesFromMdlEx(
+  _Inout_ PMDL MemoryDescriptorList,
+  _In_ ULONG Flags);
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTKERNELAPI
 PVOID
@@ -688,6 +698,18 @@ NTAPI
 MmForceSectionClosed(
   _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer,
   _In_ BOOLEAN DelayClose);
+
+#define MM_FORCE_CLOSED_DATA     0x1
+#define MM_FORCE_CLOSED_IMAGE    0x2
+#define MM_FORCE_CLOSED_LATER_OK 0x4
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+MmForceSectionClosedEx(
+  _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer,
+  _In_ ULONG ForceCloseFlags);
 
 _IRQL_requires_max_ (APC_LEVEL)
 NTKERNELAPI

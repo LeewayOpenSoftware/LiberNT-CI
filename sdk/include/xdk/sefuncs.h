@@ -292,6 +292,20 @@ SeUnregisterLogonSessionTerminatedRoutine(
 NTKERNELAPI
 NTSTATUS
 NTAPI
+SeRegisterLogonSessionTerminatedRoutineEx(
+  _In_ PSE_LOGON_SESSION_TERMINATED_ROUTINE_EX CallbackRoutine,
+  _In_ PVOID Context);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+SeUnregisterLogonSessionTerminatedRoutineEx(
+  _In_ PSE_LOGON_SESSION_TERMINATED_ROUTINE_EX CallbackRoutine,
+  _In_ PVOID Context);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
 SeMarkLogonSessionForTerminationNotification(
   _In_ PLUID LogonId);
 

@@ -2099,7 +2099,7 @@
 @ stub -arch=win64 CcIsThereDirtyLoggedPages
 @ stub -arch=win64 CcRegisterExternalCache
 @ stub -arch=win64 CcScheduleReadAheadEx
-@ stub -arch=win64 CcSetFileSizesEx
+@ stdcall -arch=win64 CcSetFileSizesEx(ptr ptr)
 @ stub -arch=win64 CcSetLogHandleForFileEx
 @ stub -arch=win64 CcSetLoggedDataThreshold
 @ stub -arch=win64 CcSetParallelFlushFile
@@ -2327,7 +2327,7 @@
 @ stub -arch=win64 FsRtlHeatUninit
 @ stdcall -arch=win64 FsRtlIncrementCcFastMdlReadWait()
 @ stdcall FsRtlInitExtraCreateParameterLookasideList(ptr long ptr long)
-@ stub -arch=win64 FsRtlInitializeBaseMcbEx
+@ stdcall -arch=win64 FsRtlInitializeBaseMcbEx(ptr long long)
 @ stub -arch=win64 FsRtlInitializeEofLock
 @ stdcall FsRtlInitializeExtraCreateParameter(ptr long ptr long ptr ptr)
 @ stdcall FsRtlInitializeExtraCreateParameterList(ptr)
@@ -2421,7 +2421,7 @@
 @ stdcall InbvQueryBootScreen(ptr long ptr ptr)
 @ stdcall InbvDiscardBootScreen()
 @ stdcall InbvCopyBootScreen(ptr long long long)
-@ stub -arch=win64 InterlockedPushListSList
+@ stdcall -arch=win64 InterlockedPushListSList(ptr ptr ptr long) RtlInterlockedPushListSList
 @ stub -arch=win64 IoAcquireKsrPersistentMemory
 @ stub -arch=win64 IoAcquireKsrPersistentMemoryEx
 @ stub -arch=win64 IoAddBugcheckTriageThread
@@ -2723,9 +2723,9 @@
 @ stub -arch=win64 MmConfigureGraphicsPtes
 @ stdcall -arch=win32 MmCopyMemory(ptr int64 long long ptr)
 @ stdcall -arch=win64 MmCopyMemory(ptr int64 int64 long ptr)
-@ stub -arch=win64 MmForceSectionClosedEx
+@ stdcall -arch=win64 MmForceSectionClosedEx(ptr long)
 @ stub -arch=win64 MmFreeMemoryRanges
-@ stub -arch=win64 MmFreePagesFromMdlEx
+@ stdcall -arch=win64 MmFreePagesFromMdlEx(ptr long)
 @ stub -arch=win64 MmGetCacheAttribute
 @ stub -arch=win64 MmGetCacheAttributeEx
 @ stub -arch=win64 MmGetMaximumFileSectionSize
@@ -2899,8 +2899,8 @@
 @ stdcall -arch=win64 PsGetEffectiveServerSilo(ptr)
 @ stdcall PsGetHostSilo()
 @ stdcall PsGetJobProperty(ptr ptr)
-@ stub -arch=win64 PsGetJobServerSilo
-@ stub -arch=win64 PsGetJobSilo
+@ stdcall -arch=win64 PsGetJobServerSilo(ptr ptr)
+@ stdcall -arch=win64 PsGetJobSilo(ptr ptr)
 @ stdcall -arch=win64 PsGetParentSilo(ptr)
 @ stdcall -arch=win64 PsGetPermanentSiloContext(ptr long ptr)
 @ stub -arch=win64 PsGetProcessActiveThreadCount
@@ -2914,11 +2914,11 @@
 @ stub -arch=win64 PsGetProcessSilo
 @ stdcall -version=0xA00+ PsGetProcessStartKey(ptr)
 @ stdcall PsGetServerSiloServiceSessionId(ptr)
-@ stub -arch=win64 PsGetSiloContainerId
+@ stdcall -arch=win64 PsGetSiloContainerId(ptr)
 @ stdcall -arch=win64 PsGetSiloContext(ptr long ptr)
 @ stub -arch=win64 PsGetSiloIdentifier
 @ stdcall -arch=win64 PsGetSiloMonitorContextSlot(ptr)
-@ stub -arch=win64 PsGetThreadCreateTime
+@ stdcall -arch=win64 PsGetThreadCreateTime(ptr)
 @ stub -arch=win64 PsGetThreadExitStatus
 @ stdcall PsGetThreadProperty(ptr ptr long)
 @ stdcall -arch=win64 PsGetThreadServerSilo(ptr)
@@ -2972,7 +2972,7 @@
 @ stub -arch=win64 PsReplaceSiloContext
 @ stub -arch=win64 PsRevertToUserMultipleGroupAffinityThread
 @ stdcall -version=0xA00+ PsSetCreateProcessNotifyRoutineEx2(long ptr long)
-@ stub -arch=win64 PsSetCreateThreadNotifyRoutineEx
+@ stdcall -arch=win64 PsSetCreateThreadNotifyRoutineEx(long ptr)
 @ stub -arch=win64 PsSetCurrentThreadPrefetching
 @ stdcall PsSetJobProperty(ptr ptr ptr)
 @ stub -arch=win64 PsSetLoadImageNotifyRoutineEx
@@ -3046,7 +3046,7 @@
 @ stdcall RtlEthernetStringToAddressA(str ptr ptr)
 @ stdcall RtlEthernetStringToAddressW(wstr ptr ptr)
 @ stub -arch=win64 RtlExtendCorrelationVector
-@ stub -arch=win64 RtlExtractBitMap
+@ stdcall -arch=win64 RtlExtractBitMap(ptr ptr long long)
 @ stub -arch=win64 RtlExtractBitMapEx
 @ stub -arch=win64 RtlFillMemoryNonTemporal
 @ stub -arch=win64 RtlFillNonVolatileMemory
@@ -3139,7 +3139,7 @@
 @ stub -arch=win64 RtlNormalizeString
 @ stdcall RtlNotifyFeatureUsage(ptr)
 @ stub -arch=win64 RtlNumberOfClearBitsEx
-@ stub -arch=win64 RtlNumberOfClearBitsInRange
+@ stdcall -arch=win64 RtlNumberOfClearBitsInRange(ptr long long)
 @ stub -arch=win64 RtlNumberOfSetBitsEx
 @ stdcall RtlNumberOfSetBitsInRange(ptr long long)
 @ stdcall -arch=win64 RtlNumberOfSetBitsInRangeEx(ptr int64 int64) RtlNumberOfSetBitsInRange64
@@ -3204,7 +3204,7 @@
 @ stdcall -arch=win64 RtlTestBitEx(ptr int64) RtlTestBit64
 @ stdcall RtlUTF8StringToUnicodeString(ptr ptr long)
 @ stub -arch=arm64 RtlUdiv128
-@ stub -arch=win64 RtlUnicodeStringToInt64
+@ stdcall -arch=win64 RtlUnicodeStringToInt64(ptr long ptr ptr)
 @ stub -arch=win64 RtlUnicodeStringToUTF8String
 @ stdcall RtlUnregisterFeatureConfigurationChangeNotification(ptr)
 @ stdcall RtlUnregisterFeatureUsageProvider(ptr)
@@ -3256,7 +3256,7 @@
 @ stub -arch=win64 SeQueryServerSiloToken
 @ stub -arch=win64 SeQuerySessionIdTokenEx
 @ stub -arch=win64 SeRegisterImageVerificationCallback
-@ stub -arch=win64 SeRegisterLogonSessionTerminatedRoutineEx
+@ stdcall -arch=win64 SeRegisterLogonSessionTerminatedRoutineEx(ptr ptr)
 @ stub -arch=win64 SeReportSecurityEventWithSubCategory
 @ stdcall SeSecurityAttributePresent(ptr ptr)
 @ stub -arch=win64 SeSetSecurityAttributesToken
@@ -3267,7 +3267,7 @@
 @ stub -arch=win64 SeTokenFromAccessInformation
 @ stub -arch=win64 SeUnRegisterAndFreeAccessCheckDebugContext
 @ stub -arch=win64 SeUnregisterImageVerificationCallback
-@ stub -arch=win64 SeUnregisterLogonSessionTerminatedRoutineEx
+@ stdcall -arch=win64 SeUnregisterLogonSessionTerminatedRoutineEx(ptr ptr)
 @ stub -arch=win64 SkAcquirePushLockExclusive
 @ stub -arch=win64 SkAllocatePool
 @ stub -arch=win64 SkFreePool

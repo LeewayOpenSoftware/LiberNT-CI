@@ -325,6 +325,17 @@ CcSetFileSizes(
     CcNtDereferenceMap(NtMap);
 }
 
+NTSTATUS
+NTAPI
+CcSetFileSizesEx(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ PCC_FILE_SIZES FileSizes)
+{
+    /* A failed section extension raises, as documented; a shrink zeroes what it cannot purge, so it cannot fail */
+    CcSetFileSizes(FileObject, FileSizes);
+    return STATUS_SUCCESS;
+}
+
 PFILE_OBJECT
 NTAPI
 CcGetFileObjectFromSectionPtrs(

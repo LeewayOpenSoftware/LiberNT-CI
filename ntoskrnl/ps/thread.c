@@ -78,6 +78,9 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     /* Make sure we're not already dead */
     if (!DeadThread)
     {
+        /* PsCreateThreadNotifyNonSystem routines run on the new thread */
+        PspRunNonSystemThreadNotifyRoutines(Thread, TRUE);
+
         /* Check if the Prefetcher is enabled */
         if (CcPfEnablePrefetcher)
         {
@@ -747,6 +750,16 @@ NTAPI
 PsGetThreadHardErrorsAreDisabled(IN PETHREAD Thread)
 {
     return Thread->HardErrorsAreDisabled ? TRUE : FALSE;
+}
+
+/*
+ * @implemented
+ */
+LONGLONG
+NTAPI
+PsGetThreadCreateTime(IN PETHREAD Thread)
+{
+    return Thread->CreateTime.QuadPart;
 }
 
 /*

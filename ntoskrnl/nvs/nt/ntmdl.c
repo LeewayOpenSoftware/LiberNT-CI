@@ -694,10 +694,11 @@ MmAllocateNodePagesForMdlEx(
     return MmAllocatePagesForMdlEx(LowAddress, HighAddress, SkipBytes, TotalBytes, CacheType, Flags);
 }
 
+static
 VOID
-NTAPI
-MmFreePagesFromMdl(
-    _Inout_ PMDL Mdl)
+MiFreePagesFromMdl(
+    _Inout_ PMDL Mdl,
+    _In_ BOOLEAN ZeroPages)
 {
     PPFN_NUMBER Pages = MmGetMdlPfnArray(Mdl);
     ULONG Count = MiMdlPages(Mdl);
@@ -711,6 +712,15 @@ MmFreePagesFromMdl(
     Count = i;
     MiPfnSetCacheFrames(&MiSystem.Pfn, (const MI_FRAME_NUMBER *)Pages, Count, 0);
 
+    /* Zeroed once the frames are cached again, so the zeroes are not written through an alias */
+    for (i = 0; ZeroPages && i < Count; i++)
+    {
+        PVOID Mapping = MiPfnMapFrame(&MiSystem.Pfn, (ULONG)Pages[i]);
+
+        RtlZeroMemory(Mapping, PAGE_SIZE);
+        MiPfnUnmapFrame(&MiSystem.Pfn, Mapping);
+    }
+
     for (i = 0; i < Count; i++)
     {
         MiPfnShareDecrement(&MiSystem.Pfn, (ULONG)Pages[i], TRUE);
@@ -719,6 +729,23 @@ MmFreePagesFromMdl(
     }
 
     Mdl->MdlFlags &= ~MDL_PAGES_LOCKED;
+}
+
+VOID
+NTAPI
+MmFreePagesFromMdl(
+    _Inout_ PMDL Mdl)
+{
+    MiFreePagesFromMdl(Mdl, FALSE);
+}
+
+VOID
+NTAPI
+MmFreePagesFromMdlEx(
+    _Inout_ PMDL Mdl,
+    _In_ ULONG Flags)
+{
+    MiFreePagesFromMdl(Mdl, (Flags & MM_FREE_MDL_PAGES_ZERO) != 0);
 }
 
 NTSTATUS

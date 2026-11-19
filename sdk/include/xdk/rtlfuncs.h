@@ -785,6 +785,23 @@ RtlNumberOfSetBitsInRange(
   _In_ ULONG Length);
 
 NTSYSAPI
+ULONG
+NTAPI
+RtlNumberOfClearBitsInRange(
+  _In_ PRTL_BITMAP BitMapHeader,
+  _In_ ULONG StartingIndex,
+  _In_ ULONG Length);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlExtractBitMap(
+  _In_ PRTL_BITMAP Source,
+  _In_ PRTL_BITMAP Destination,
+  _In_range_(0, Source->SizeOfBitMap - 1) ULONG TargetBit,
+  _In_range_(0, Source->SizeOfBitMap) ULONG NumberOfBits);
+
+NTSYSAPI
 VOID
 NTAPI
 RtlCopyBitMap(
@@ -1057,6 +1074,15 @@ RtlUnicodeStringToInteger(
   _In_ PCUNICODE_STRING String,
   _In_opt_ ULONG Base,
   _Out_ PULONG Value);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlUnicodeStringToInt64(
+  _In_ PCUNICODE_STRING String,
+  _In_opt_ ULONG Base,
+  _Out_ PLONG64 Number,
+  _Out_opt_ PWSTR *EndPointer);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSYSAPI
