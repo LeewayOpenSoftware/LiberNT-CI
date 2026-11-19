@@ -826,6 +826,8 @@ typedef struct _DWM_GPU_TEXTURE
 } DWM_GPU_TEXTURE;
 
 static GLuint g_cropFramebuffer;
+/* The driver cannot copy out of an imported texture: draw bands whole. */
+static BOOL g_cropUnsupported;
 
 static void
 DwmGpuDeleteSlotTextures(DWM_GPU_TEXTURE *Slot)
@@ -1259,7 +1261,15 @@ DwmGpuComposeCropFrame(DWM_GPU_TEXTURE *Slot, const DWM_WIN *Window)
     pglFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
     pglBindFramebuffer(GL_FRAMEBUFFER, (GLuint)Previous);
     if (!Ok)
+    {
+        /* Fail this frame once; from the next one the compositor stops
+         * cutting bands (DwmGpuComposeBandsUnsupported) instead of failing
+         * every frame that has a band window. */
+        if (!g_cropUnsupported)
+            OutputDebugStringA("DWMGPU: cannot crop an imported frame; transparent frame bands are drawn whole\n");
+        g_cropUnsupported = TRUE;
         return FALSE;
+    }
     Slot->CroppedUpdateId = Window->BaseUpdateId;
     glBindTexture(GL_TEXTURE_2D, Slot->Cropped);
     return TRUE;
@@ -1574,6 +1584,12 @@ DwmGpuComposeWindowMeasured(const DWM_WIN *Window, const BYTE *Pixels,
     if (Client.BackdropRegion == DWM_BACKDROP_REGION_NONCLIENT)
         Client.BackdropType = 0;
     return DwmGpuComposeLayer(&Client, NULL, OriginX, OriginY, TRUE);
+}
+
+BOOL
+DwmGpuComposeBandsUnsupported(void)
+{
+    return g_composeActive && !DwmD3dIsActive() && g_cropUnsupported;
 }
 
 BOOL

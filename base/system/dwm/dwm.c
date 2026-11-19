@@ -92,7 +92,10 @@ DwmApplyFrameInsets(DWM_WIN *w, RECTL *BlurRects, ULONG BlurRectCount)
         return;
     if (L < 0 || T < 0 || R < 0 || B < 0 ||
         L + R >= w->cx || T + B >= w->cy ||
-        L > w->ClientX || T > w->ClientY)
+        L > w->ClientX || T > w->ClientY ||
+        R > w->cx - w->ClientX - w->ClientWidth ||
+        B > w->cy - w->ClientY - w->ClientHeight ||
+        DwmGpuComposeBandsUnsupported())
     {
         RtlZeroMemory(&w->FrameInsets, sizeof(w->FrameInsets));
         return;

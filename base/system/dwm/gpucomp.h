@@ -83,6 +83,7 @@ void DwmGpuComposeScene(const struct _DWM_WIN *Windows, ULONG Count,
                         LONG OriginX, LONG OriginY, BOOL RefreshBackdrop,
                         ULONG BlurRadius, const RECT *ShadowMargins);
 void DwmGpuComposePrepareWindow(const struct _DWM_WIN *Window, ULONG Index);
+BOOL DwmGpuComposeBandsUnsupported(void);
 void DwmGpuComposeBlurStats(ULONGLONG *Filtered, ULONGLONG *Reused);
 BOOL DwmGpuComposeNeedsSurfacePixels(const struct _DWM_WIN *Window);
 
