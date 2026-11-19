@@ -441,6 +441,22 @@ ScmGrantCreatorAccess(SC_HANDLE Handle,
         dwDesiredAccess = (dwDesiredAccess & ~MAXIMUM_ALLOWED) | SERVICE_ALL_ACCESS;
 
     RtlMapGenericMask(&dwDesiredAccess, &ScmServiceMapping);
+
+    /* ACCESS_SYSTEM_SECURITY still needs SeSecurityPrivilege, as for any object */
+    if (dwDesiredAccess & ACCESS_SYSTEM_SECURITY)
+    {
+        PSECURITY_DESCRIPTOR pSD = hSvc->ServiceEntry->pSecurityDescriptor;
+        DWORD dwGranted;
+
+        if (ScmAccessCheckCaller(pSD ? pSD : pDefaultSD,
+                                 ACCESS_SYSTEM_SECURITY,
+                                 &ScmServiceMapping,
+                                 &dwGranted) != ERROR_SUCCESS)
+        {
+            dwDesiredAccess &= ~ACCESS_SYSTEM_SECURITY;
+        }
+    }
+
     hSvc->Handle.DesiredAccess = dwDesiredAccess & (SERVICE_ALL_ACCESS | ACCESS_SYSTEM_SECURITY);
 }
 
