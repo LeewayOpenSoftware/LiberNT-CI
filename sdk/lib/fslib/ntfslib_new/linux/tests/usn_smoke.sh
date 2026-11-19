@@ -164,6 +164,12 @@ then
     fail "enum beyond the MFT succeeded"
 fi
 grep -q 'c0000011' "$workdir/enum3.txt" || fail "enum beyond the MFT: $(cat "$workdir/enum3.txt")"
+# Above 2^32 the record number no longer fits the ULONG GetFileRecord takes: it must not wrap.
+if "$driver" --usn-enum "$image" 4294967301 0 9223372036854775807 >"$workdir/enum5.txt" 2>&1
+then
+    fail "enum above 2^32 succeeded: $(cat "$workdir/enum5.txt")"
+fi
+grep -q 'c0000011' "$workdir/enum5.txt" || fail "enum above 2^32: $(cat "$workdir/enum5.txt")"
 
 "$ntfsfix" -n "$image" >/dev/null || fail "ntfsfix found a problem"
 "$driver" --check "$image" >"$workdir/check.txt" 2>&1 || fail "ntfslib check: $(tail -n 3 "$workdir/check.txt")"
