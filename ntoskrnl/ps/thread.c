@@ -935,6 +935,19 @@ PsIsThreadTerminating(IN PETHREAD Thread)
     return Thread->Terminated ? TRUE : FALSE;
 }
 
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+PsGetThreadExitStatus(
+    _In_ PETHREAD Thread)
+{
+    /* STATUS_PENDING from creation until PspExitThread stores the real status */
+    return Thread->ExitStatus;
+}
+
 /*
  * @implemented
  */

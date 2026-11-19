@@ -482,6 +482,8 @@ if(NOT ARCH STREQUAL "i386")
         ntos_io/IoIrpExtensionKM.c
         ntos_po/PoKernelPowerRequest.c
         ntos_ps/NtosStubExports2.c
+        ntos_ps/NtosStubExports3.c
+        ntos_ps/NtosStubExports4.c
         ntos_ps/PsJobCommit.c
         ntos_ps/PsSilo.c
         ntos_se/SePrimaryTokenRelease.c
