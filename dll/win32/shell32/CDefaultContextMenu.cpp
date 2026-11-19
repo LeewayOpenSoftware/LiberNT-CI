@@ -1283,10 +1283,10 @@ CDefaultContextMenu::DoCreateNewFolder(
     WCHAR wszNewFolder[25];
     HRESULT hr;
 
-    /* Get folder path */
-    hr = SHGetPathFromIDListW(m_pidlFolder, wszPath);
-    if (FAILED_UNEXPECTEDLY(hr))
-        return hr;
+    /* Get folder path; SHGetPathFromIDListW returns a BOOL, and FALSE (a folder
+       with no file system path) would read as S_OK */
+    if (!SHGetPathFromIDListW(m_pidlFolder, wszPath))
+        return E_FAIL;
 
     if (!LoadStringW(shell32_hInstance, IDS_NEWFOLDER, wszNewFolder, _countof(wszNewFolder)))
         return E_FAIL;
@@ -1324,10 +1324,9 @@ CDefaultContextMenu::DoCreateNewFolder(
 
     hr = psv->SelectItem(pidlNewItem, SVSI_DESELECTOTHERS | SVSI_EDIT | SVSI_ENSUREVISIBLE |
                           SVSI_FOCUSED | SVSI_SELECT);
+    SHFree(pidl);
     if (FAILED_UNEXPECTEDLY(hr))
         return hr;
-
-    SHFree(pidl);
 
     return S_OK;
 }
