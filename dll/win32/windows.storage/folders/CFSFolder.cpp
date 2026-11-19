@@ -1742,11 +1742,80 @@ HRESULT WINAPI CFSFolder::GetUIObjectOf(HWND hwndOwner,
  *  TRUE, if the filename's extension should be hidden
  *  FALSE, otherwise.
  */
-BOOL SHELL_FS_HideExtension(LPCWSTR szPath)
+#define NEVER_SHOW_EXT_CACHE_SIZE 32
+
+struct NEVER_SHOW_EXT
+{
+    WCHAR Ext[32];
+    LONG Generation;
+    BOOL Hide;
+};
+
+static NEVER_SHOW_EXT s_NeverShowExts[NEVER_SHOW_EXT_CACHE_SIZE];
+static UINT s_NeverShowExtCount, s_NeverShowExtNext;
+static SRWLOCK s_NeverShowExtLock = SRWLOCK_INIT;
+
+static BOOL
+SHELL_FS_NeverShowExt(LPCWSTR DotExt)
 {
     HKEY hKey;
+    WCHAR classname[MAX_PATH];
+    LONG classlen = sizeof(classname);
+    LONG generation = SHELL_AssocGenerationGet();
+    BOOL doHide = FALSE;
+    UINT i;
+
+    AcquireSRWLockShared(&s_NeverShowExtLock);
+    for (i = 0; i < s_NeverShowExtCount; i++)
+    {
+        if (s_NeverShowExts[i].Generation == generation && _wcsicmp(s_NeverShowExts[i].Ext, DotExt) == 0)
+        {
+            doHide = s_NeverShowExts[i].Hide;
+            ReleaseSRWLockShared(&s_NeverShowExtLock);
+            return doHide;
+        }
+    }
+    ReleaseSRWLockShared(&s_NeverShowExtLock);
+
+    if (RegQueryValueW(HKEY_CLASSES_ROOT, DotExt, classname, &classlen) == ERROR_SUCCESS &&
+        RegOpenKeyW(HKEY_CLASSES_ROOT, classname, &hKey) == ERROR_SUCCESS)
+    {
+        if (RegQueryValueExW(hKey, L"NeverShowExt", NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
+            doHide = TRUE;
+        RegCloseKey(hKey);
+    }
+
+    if (wcslen(DotExt) < _countof(s_NeverShowExts[0].Ext))
+    {
+        AcquireSRWLockExclusive(&s_NeverShowExtLock);
+        for (i = 0; i < s_NeverShowExtCount; i++)
+        {
+            if (_wcsicmp(s_NeverShowExts[i].Ext, DotExt) == 0)
+                break;
+        }
+        if (i == s_NeverShowExtCount)
+        {
+            if (s_NeverShowExtCount < NEVER_SHOW_EXT_CACHE_SIZE)
+            {
+                i = s_NeverShowExtCount++;
+            }
+            else
+            {
+                i = s_NeverShowExtNext;
+                s_NeverShowExtNext = (s_NeverShowExtNext + 1) % NEVER_SHOW_EXT_CACHE_SIZE;
+            }
+        }
+        StringCchCopyW(s_NeverShowExts[i].Ext, _countof(s_NeverShowExts[i].Ext), DotExt);
+        s_NeverShowExts[i].Generation = generation;
+        s_NeverShowExts[i].Hide = doHide;
+        ReleaseSRWLockExclusive(&s_NeverShowExtLock);
+    }
+    return doHide;
+}
+
+BOOL SHELL_FS_HideExtension(LPCWSTR szPath)
+{
     BOOL doHide = FALSE; /* The default value is FALSE (win98 at least) */
-    LONG lError;
 
     doHide = !SHELL_GetSetting(SSF_SHOWEXTENSIONS, fShowExtensions);
 
@@ -1754,23 +1823,7 @@ BOOL SHELL_FS_HideExtension(LPCWSTR szPath)
     {
         LPCWSTR DotExt = PathFindExtensionW(szPath);
         if (*DotExt != 0)
-        {
-            WCHAR classname[MAX_PATH];
-            LONG classlen = sizeof(classname);
-            lError = RegQueryValueW(HKEY_CLASSES_ROOT, DotExt, classname, &classlen);
-            if (lError == ERROR_SUCCESS)
-            {
-                lError = RegOpenKeyW(HKEY_CLASSES_ROOT, classname, &hKey);
-                if (lError == ERROR_SUCCESS)
-                {
-                    lError = RegQueryValueExW(hKey, L"NeverShowExt", NULL, NULL, NULL, NULL);
-                    if (lError == ERROR_SUCCESS)
-                        doHide = TRUE;
-
-                    RegCloseKey(hKey);
-                }
-            }
-        }
+            doHide = SHELL_FS_NeverShowExt(DotExt);
     }
     // TODO: else if "AlwaysShowExt"
 
