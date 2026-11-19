@@ -12,6 +12,7 @@ add_custom_command(
 
 list(APPEND SOURCE
     apartment.c
+    callctl.c
     comaccess.c
     combase.c
     comcat.c
@@ -20,6 +21,7 @@ list(APPEND SOURCE
     launchid.c
     malloc.c
     marshal.c
+    neutral.c
     roapi.c
     rpc.c
     string.c

@@ -83,9 +83,7 @@ dll/win32/explorerframe       # Synced to Wine-11.14 browseui (ReactOS shell ext
 dll/win32/cabinet             # Synced to Wine-11.14
 dll/win32/cfgmgr32            # Synced to Wine-11.14
 dll/win32/clusapi             # Synced to Wine-11.14
-dll/win32/combase             # Synced to Wine-11.14
-                              # Local: launchid.c (DCOM step 6); __REACTOS__ hooks in rpc.c (server start),
-                              # combase.c (activation context), combase_private.h
+dll/win32/combase             # Synced to Wine-11.14 (LiberNT neutral apartment in neutral.c, call control in callctl.c, launch identity in launchid.c (DCOM step 6); hooks under __REACTOS__ in apartment.c, combase.c (activation context), combase_private.h, combase.spec, rpc.c (server start), stubmanager.c)
   dll/win32/combase/comaccess.c # LiberNT, not from Wine (DCOM step 5); hooks: combase.c CoInitializeSecurity, rpc.c dispatch_rpc and rpc_get_local_class_object, CMakeLists.txt
 dll/win32/comcat              # Synced to Wine-11.14
 dll/win32/comdlg32            # Synced to Wine-11.14
@@ -203,7 +201,7 @@ dll/win32/ntdsapi             # Synced to Wine-11.14
 dll/win32/objsel              # Synced to Wine-11.14
 dll/win32/odbc32              # Synced to Wine-11.14
 dll/win32/odbccp32            # Synced to Wine-11.14
-dll/win32/ole32               # Synced to Wine-11.14
+dll/win32/ole32               # Synced to Wine-11.14 (LiberNT forwards CoDisconnectContext to combase)
 dll/win32/oleacc              # Synced to Wine-11.14
 dll/win32/oleaut32            # Synced to Wine-11.14
 dll/win32/olecli32            # Synced to Wine-11.14
