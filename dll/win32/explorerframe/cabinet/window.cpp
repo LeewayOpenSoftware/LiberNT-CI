@@ -3750,6 +3750,15 @@ CCabinetWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
             CloseTab(0);
             return 0;
         case WM_DESTROY:
+        {
+            // The stock folder icons set in OnCreate are owned by this window
+            HICON hIcon = (HICON)SendMessageW(m_hwnd, WM_SETICON, ICON_SMALL, 0);
+            if (hIcon)
+                DestroyIcon(hIcon);
+            hIcon = (HICON)SendMessageW(m_hwnd, WM_SETICON, ICON_BIG, 0);
+            if (hIcon)
+                DestroyIcon(hIcon);
+        }
             CancelSelectionSize();
             ClearPreview();
             if (m_ChangeNotify)
