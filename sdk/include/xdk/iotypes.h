@@ -7131,6 +7131,16 @@ typedef struct _MFT_ENUM_DATA {
   USN HighUsn;
 } MFT_ENUM_DATA, *PMFT_ENUM_DATA;
 
+typedef MFT_ENUM_DATA MFT_ENUM_DATA_V0, *PMFT_ENUM_DATA_V0;
+
+typedef struct _MFT_ENUM_DATA_V1 {
+  ULONGLONG StartFileReferenceNumber;
+  USN LowUsn;
+  USN HighUsn;
+  USHORT MinMajorVersion;
+  USHORT MaxMajorVersion;
+} MFT_ENUM_DATA_V1, *PMFT_ENUM_DATA_V1;
+
 typedef struct _CREATE_USN_JOURNAL_DATA {
   ULONGLONG MaximumSize;
   ULONGLONG AllocationDelta;
@@ -7144,6 +7154,24 @@ typedef struct _READ_USN_JOURNAL_DATA {
   ULONGLONG BytesToWaitFor;
   ULONGLONG UsnJournalID;
 } READ_USN_JOURNAL_DATA, *PREAD_USN_JOURNAL_DATA;
+
+typedef READ_USN_JOURNAL_DATA READ_USN_JOURNAL_DATA_V0, *PREAD_USN_JOURNAL_DATA_V0;
+
+typedef struct _READ_USN_JOURNAL_DATA_V1 {
+  USN StartUsn;
+  ULONG ReasonMask;
+  ULONG ReturnOnlyOnClose;
+  ULONGLONG Timeout;
+  ULONGLONG BytesToWaitFor;
+  ULONGLONG UsnJournalID;
+  USHORT MinMajorVersion;
+  USHORT MaxMajorVersion;
+} READ_USN_JOURNAL_DATA_V1, *PREAD_USN_JOURNAL_DATA_V1;
+
+typedef struct _READ_FILE_USN_DATA {
+  USHORT MinMajorVersion;
+  USHORT MaxMajorVersion;
+} READ_FILE_USN_DATA, *PREAD_FILE_USN_DATA;
 
 typedef struct _USN_RECORD {
   ULONG RecordLength;
@@ -7161,6 +7189,14 @@ typedef struct _USN_RECORD {
   USHORT FileNameOffset;
   WCHAR FileName[1];
 } USN_RECORD, *PUSN_RECORD;
+
+typedef USN_RECORD USN_RECORD_V2, *PUSN_RECORD_V2;
+
+typedef struct _USN_RECORD_COMMON_HEADER {
+  ULONG RecordLength;
+  USHORT MajorVersion;
+  USHORT MinorVersion;
+} USN_RECORD_COMMON_HEADER, *PUSN_RECORD_COMMON_HEADER;
 
 #define USN_PAGE_SIZE                    (0x1000)
 
@@ -7185,6 +7221,8 @@ typedef struct _USN_RECORD {
 #define USN_REASON_REPARSE_POINT_CHANGE  (0x00100000)
 #define USN_REASON_STREAM_CHANGE         (0x00200000)
 #define USN_REASON_TRANSACTED_CHANGE     (0x00400000)
+#define USN_REASON_INTEGRITY_CHANGE      (0x00800000)
+#define USN_REASON_DESIRED_STORAGE_CLASS_CHANGE (0x01000000)
 #define USN_REASON_CLOSE                 (0x80000000)
 
 typedef struct _USN_JOURNAL_DATA {
@@ -7196,6 +7234,35 @@ typedef struct _USN_JOURNAL_DATA {
   ULONGLONG MaximumSize;
   ULONGLONG AllocationDelta;
 } USN_JOURNAL_DATA, *PUSN_JOURNAL_DATA;
+
+typedef USN_JOURNAL_DATA USN_JOURNAL_DATA_V0, *PUSN_JOURNAL_DATA_V0;
+
+typedef struct _USN_JOURNAL_DATA_V1 {
+  ULONGLONG UsnJournalID;
+  USN FirstUsn;
+  USN NextUsn;
+  USN LowestValidUsn;
+  USN MaxUsn;
+  ULONGLONG MaximumSize;
+  ULONGLONG AllocationDelta;
+  USHORT MinSupportedMajorVersion;
+  USHORT MaxSupportedMajorVersion;
+} USN_JOURNAL_DATA_V1, *PUSN_JOURNAL_DATA_V1;
+
+typedef struct _USN_JOURNAL_DATA_V2 {
+  ULONGLONG UsnJournalID;
+  USN FirstUsn;
+  USN NextUsn;
+  USN LowestValidUsn;
+  USN MaxUsn;
+  ULONGLONG MaximumSize;
+  ULONGLONG AllocationDelta;
+  USHORT MinSupportedMajorVersion;
+  USHORT MaxSupportedMajorVersion;
+  ULONG Flags;
+  ULONGLONG RangeTrackChunkSize;
+  LONGLONG RangeTrackFileSizeThreshold;
+} USN_JOURNAL_DATA_V2, *PUSN_JOURNAL_DATA_V2;
 
 typedef struct _DELETE_USN_JOURNAL_DATA {
   ULONGLONG UsnJournalID;
@@ -7223,6 +7290,7 @@ typedef struct _MARK_HANDLE_INFO32 {
 #define USN_SOURCE_DATA_MANAGEMENT          (0x00000001)
 #define USN_SOURCE_AUXILIARY_DATA           (0x00000002)
 #define USN_SOURCE_REPLICATION_MANAGEMENT   (0x00000004)
+#define USN_SOURCE_CLIENT_REPLICATION_MANAGEMENT (0x00000008)
 
 #define MARK_HANDLE_PROTECT_CLUSTERS        (0x00000001)
 #define MARK_HANDLE_TXF_SYSTEM_LOG          (0x00000004)

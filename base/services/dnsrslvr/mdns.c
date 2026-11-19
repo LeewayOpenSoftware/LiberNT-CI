@@ -15,6 +15,7 @@
 #define NDEBUG
 #include <debug.h>
 
+BOOL LlmnrSourceOnLink(const SOCKADDR_INET *From, ULONG *Index, BOOL *LinkLocal);
 BOOL LlmnrInterfaceAddress(ULONG Index, ADDRESS_FAMILY Family, BOOL LinkLocal, SOCKADDR_INET *Result);
 
 #define MDNS_PORT 5353
@@ -33,6 +34,7 @@ typedef struct _MDNS_STATE
     SOCKET Socket4;
     SOCKET Socket6;
     ULONG Joined4[MDNS_MAX_JOINS];
+    ULONG Joined4Address[MDNS_MAX_JOINS];
     ULONG Joined4Count;
     ULONG Joined6[MDNS_MAX_JOINS];
     ULONG Joined6Count;
@@ -79,13 +81,33 @@ static VOID MdnsJoinInterfaces(PMDNS_STATE State)
                 else if (Unicast->Address.lpSockaddr->sa_family == AF_INET && Address == INADDR_ANY)
                     Address = ((SOCKADDR_IN *)Unicast->Address.lpSockaddr)->sin_addr.s_addr;
             }
-            if (Address != INADDR_ANY && State->Socket4 != INVALID_SOCKET &&
-                State->Joined4Count < MDNS_MAX_JOINS && !MdnsKnown(State->Joined4, State->Joined4Count, Adapter->IfIndex))
+            if (Address != INADDR_ANY && State->Socket4 != INVALID_SOCKET)
             {
-                Request4.imr_multiaddr.s_addr = htonl(MDNS_GROUP4);
-                Request4.imr_interface.s_addr = Address;
-                if (!setsockopt(State->Socket4, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char *)&Request4, sizeof(Request4)))
-                    State->Joined4[State->Joined4Count++] = Adapter->IfIndex;
+                ULONG Slot;
+
+                for (Slot = 0; Slot < State->Joined4Count && State->Joined4[Slot] != Adapter->IfIndex; Slot++)
+                    ;
+                /* The membership is tied to the interface address, so a changed address needs a new join */
+                if (Slot < State->Joined4Count && State->Joined4Address[Slot] != Address)
+                {
+                    Request4.imr_multiaddr.s_addr = htonl(MDNS_GROUP4);
+                    Request4.imr_interface.s_addr = State->Joined4Address[Slot];
+                    setsockopt(State->Socket4, IPPROTO_IP, IP_DROP_MEMBERSHIP, (const char *)&Request4, sizeof(Request4));
+                    Request4.imr_interface.s_addr = Address;
+                    if (!setsockopt(State->Socket4, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char *)&Request4, sizeof(Request4)))
+                        State->Joined4Address[Slot] = Address;
+                }
+                else if (Slot == State->Joined4Count && Slot < MDNS_MAX_JOINS)
+                {
+                    Request4.imr_multiaddr.s_addr = htonl(MDNS_GROUP4);
+                    Request4.imr_interface.s_addr = Address;
+                    if (!setsockopt(State->Socket4, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char *)&Request4, sizeof(Request4)))
+                    {
+                        State->Joined4[Slot] = Adapter->IfIndex;
+                        State->Joined4Address[Slot] = Address;
+                        State->Joined4Count++;
+                    }
+                }
             }
             if (!HasIpv6 || !Adapter->Ipv6IfIndex || State->Socket6 == INVALID_SOCKET ||
                 State->Joined6Count >= MDNS_MAX_JOINS || MdnsKnown(State->Joined6, State->Joined6Count, Adapter->Ipv6IfIndex))
@@ -141,8 +163,8 @@ static int MdnsPutRecord(UCHAR *Reply, int Size, BOOL Legacy, const char *Host, 
     }
     Reply[Size++] = 0;
     Reply[Size++] = (UCHAR)Type;
-    /* Unique record: the cache-flush bit goes in the class of multicast answers, not of legacy unicast ones */
-    Reply[Size++] = Legacy ? 0x00 : 0x80;
+    /* Names are not probed, so the records are not claimed unique: no cache-flush bit (RFC 6762 10.2) */
+    Reply[Size++] = 0x00;
     Reply[Size++] = 1;
     Reply[Size++] = 0;
     Reply[Size++] = 0;
@@ -190,18 +212,8 @@ static VOID MdnsRespond(PMDNS_STATE State, SOCKET Socket, const UCHAR *Query, in
     if (Class != 1 && Class != 255)
         return;
 
-    if (From->si_family == AF_INET6)
-    {
-        LinkLocal = IN6_IS_ADDR_LINKLOCAL(&From->Ipv6.sin6_addr);
-        if (LinkLocal)
-            Index = From->Ipv6.sin6_scope_id;
-        else if (GetBestInterfaceEx((struct sockaddr *)&From->Ipv6, &Index))
-            return;
-    }
-    else if (GetBestInterface(From->Ipv4.sin_addr.s_addr, &Index))
-    {
+    if (!LlmnrSourceOnLink(From, &Index, &LinkLocal))
         return;
-    }
 
     if (Type == 1 || Type == 255)
         Have4 = LlmnrInterfaceAddress(Index, AF_INET, FALSE, &Address4);
@@ -261,6 +273,9 @@ static VOID MdnsRespond(PMDNS_STATE State, SOCKET Socket, const UCHAR *Query, in
                 setsockopt(Socket, IPPROTO_IP, IP_MULTICAST_IF, (const char *)&Address4.Ipv4.sin_addr, sizeof(Address4.Ipv4.sin_addr));
         }
     }
+    /* Shared-record multicast answers wait 20-120 ms so simultaneous responders do not collide (RFC 6762 6.2) */
+    if (!Legacy)
+        Sleep(20 + GetTickCount() % 101);
     sendto(Socket, (const char *)Reply, Size, 0, (const struct sockaddr *)&To, ToLength);
 }
 

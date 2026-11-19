@@ -92,6 +92,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/zone.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/dbcsname.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/fastio.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/kfsctl.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/faulttol.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/bytelock.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/cancelwait.c
@@ -280,6 +281,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/time.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/unicode.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/wddm.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/modern.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/access.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/accesschk.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/acl.c

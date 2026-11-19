@@ -289,6 +289,78 @@ FileRecord::TouchDirectory()
     return Status;
 }
 
+NTSTATUS
+FileRecord::GetUsnInformation(
+    _Out_ LONGLONG* Usn,
+    _Out_ ULONG* SecurityId)
+{
+    PAttribute Attribute;
+    PStandardInformationEx Standard;
+    NTSTATUS Status;
+
+    *Usn = 0;
+    *SecurityId = 0;
+    Status = GetStandardInformationForUpdate(&Attribute, &Standard);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* An NTFS 1.x value has neither field */
+    if (Attribute->Resident.DataLength >= sizeof(StandardInformationEx))
+    {
+        *Usn = (LONGLONG)Standard->UpdateSequenceNumber;
+        *SecurityId = Standard->SecurityId;
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+FileRecord::SetUpdateSequenceNumber(
+    _In_ LONGLONG Usn)
+{
+    PAttribute Attribute;
+    PStandardInformationEx Standard;
+    PUCHAR RecordBackup;
+    NTSTATUS Status;
+
+    if (!DiskVolume || !Header || Usn < 0)
+        return STATUS_INVALID_PARAMETER;
+    if (DiskVolume->IsReadOnly)
+        return STATUS_ACCESS_DENIED;
+
+    Status = GetStandardInformationForUpdate(&Attribute, &Standard);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (GetAttributeOwner(Attribute) != this)
+        return STATUS_FILE_CORRUPT_ERROR;
+
+    RecordBackup = new(PagedPool, TAG_FILE_RECORD) UCHAR[RecordBufferSize];
+    if (!RecordBackup)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlCopyMemory(RecordBackup, Data, RecordBufferSize);
+
+    /* The USN field exists only in the 0x48-byte NTFS 3.x value */
+    if (Attribute->Resident.DataLength < sizeof(StandardInformationEx))
+    {
+        Status = ResizeResidentData(Attribute, sizeof(StandardInformationEx));
+        if (NT_SUCCESS(Status))
+            Status = GetStandardInformationForUpdate(&Attribute, &Standard);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        Standard->UpdateSequenceNumber = (UINT64)Usn;
+        Status = DiskVolume->MFT->WriteFileRecordToMFT(this);
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        RtlCopyMemory(Data, RecordBackup, RecordBufferSize);
+        Header = reinterpret_cast<PFileRecordHeader>(Data);
+        ClearDataRunCache();
+    }
+
+    delete[] RecordBackup;
+    return Status;
+}
+
 /*
  * Stamps $STANDARD_INFORMATION's change time in memory. The caller commits
  * the record; this only refreshes the timestamp inside a larger mutation.

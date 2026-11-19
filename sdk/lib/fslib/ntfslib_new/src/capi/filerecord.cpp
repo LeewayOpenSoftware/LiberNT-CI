@@ -448,6 +448,29 @@ NtfsFileRecordCreateNamedDataStream(
 }
 
 NTSTATUS
+NtfsFileRecordGetUsnInformation(
+    _In_ NtfsFileRecord *Fr,
+    _Out_ LONGLONG* Usn,
+    _Out_ ULONG* SecurityId)
+{
+    if (!Fr || !Usn || !SecurityId)
+        return STATUS_INVALID_PARAMETER;
+    return reinterpret_cast<PFileRecord>(Fr)->GetUsnInformation(Usn, SecurityId);
+}
+
+NTSTATUS
+NtfsFileRecordSetUpdateSequenceNumber(
+    _In_ NtfsFileRecord *Fr,
+    _In_ LONGLONG Usn)
+{
+    if (!Fr)
+        return STATUS_INVALID_PARAMETER;
+    NTSTATUS MutationStatus = reinterpret_cast<PFileRecord>(Fr)->SetUpdateSequenceNumber(Usn);
+    reinterpret_cast<PFileRecord>(Fr)->VerifyShapeAfterMutation(MutationStatus);
+    return MutationStatus;
+}
+
+NTSTATUS
 NtfsFileRecordDeleteNamedDataStream(
     _In_ PNtfsFileRecord Fr,
     _In_ PWSTR StreamName)

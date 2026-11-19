@@ -85,6 +85,7 @@ NtfsMarkVolumeRemoved(
     ExAcquireFastMutex(&VolCB->VolumeStateMutex);
     VolCB->Dismounted = TRUE;
     ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+    NtfsUsnWakeWaiters(VolCB);
 
     KeEnterCriticalRegion();
     NtfsAcquireMetadata(VolCB);
@@ -133,6 +134,7 @@ NtfsDeleteDismountedVolume(
     if (Blocker == NULL && InUse != 0)
         Blocker = "cached records in use";
 
+    NtfsUsnShutdownVolume(VolCB);
     InitializeListHead(&IdleBlocks);
     ExAcquireFastMutex(&VolCB->IdleFcbMutex);
     while (!IsListEmpty(&VolCB->IdleFcbList))

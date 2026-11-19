@@ -5137,6 +5137,288 @@ ShrinkImageVolume(const char* Path, ULONGLONG NewVolumeSectors)
 }
 
 static void
+PrintUsage(const char* Program);
+
+/* USN change journal probes (the journal lives in $Extend\$UsnJrnl) */
+static void
+PrintUsnStatus(const char* What, NTSTATUS Status)
+{
+    fprintf(stderr,
+            "%s: ntfslib status 0x%08" PRIx32 " (%s)\n",
+            What,
+            (uint32_t)Status,
+            strerror(NtStatusToErrno(Status)));
+}
+
+static int
+UsnCommand(const char* Program, int Count, char** Args)
+{
+    const char* Command = Args[0];
+    NtfsFuseState State = {};
+    bool Writes;
+    int Expected;
+    int Result = 1;
+    NTSTATUS Status;
+
+    if (strcmp(Command, "--usn-create") == 0)
+        Expected = 4;
+    else if (strcmp(Command, "--usn-query") == 0)
+        Expected = 2;
+    else if (strcmp(Command, "--usn-append") == 0)
+        Expected = 6;
+    else if (strcmp(Command, "--usn-read") == 0)
+        Expected = 3;
+    else if (strcmp(Command, "--set-usn") == 0)
+        Expected = 4;
+    else if (strcmp(Command, "--usn-enum") == 0)
+        Expected = 5;
+    else
+        Expected = -1;
+    if (Expected < 0 || Count != Expected)
+    {
+        PrintUsage(Program);
+        return 2;
+    }
+
+    Writes = strcmp(Command, "--usn-query") != 0 && strcmp(Command, "--usn-read") != 0 &&
+             strcmp(Command, "--usn-enum") != 0;
+    Status = Writes ? OpenImageWritable(Args[1], &State) : OpenImage(Args[1], false, &State);
+    if (!NT_SUCCESS(Status))
+    {
+        PrintUsnStatus(Args[1], Status);
+        return 1;
+    }
+
+    if (strcmp(Command, "--usn-create") == 0)
+    {
+        ULONGLONG MaximumSize, AllocationDelta;
+
+        if (!ParseUnsigned(Args[2], ~0ULL, &MaximumSize) ||
+            !ParseUnsigned(Args[3], ~0ULL, &AllocationDelta))
+        {
+            PrintUsage(Program);
+            Result = 2;
+            goto Done;
+        }
+        /* FILETIME of now: 100 ns units since 1601 */
+        Status = NtfsUsnJournalCreate(State.Volume, MaximumSize, AllocationDelta,
+                                      ((ULONGLONG)time(NULL) + 11644473600ULL) * 10000000ULL);
+        if (!NT_SUCCESS(Status))
+            PrintUsnStatus(Args[1], Status);
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+    else if (strcmp(Command, "--usn-query") == 0)
+    {
+        NtfsUsnJournalData Data;
+
+        Status = NtfsUsnJournalQuery(State.Volume, &Data);
+        if (NT_SUCCESS(Status))
+        {
+            printf("id=0x%016" PRIx64 " first=%" PRId64 " next=%" PRId64 " lowest=%" PRId64
+                   " max=0x%016" PRIx64 " maxsize=%" PRIu64 " delta=%" PRIu64 "\n",
+                   (uint64_t)Data.UsnJournalId, (int64_t)Data.FirstUsn, (int64_t)Data.NextUsn,
+                   (int64_t)Data.LowestValidUsn, (uint64_t)Data.MaxUsn,
+                   (uint64_t)Data.MaximumSize, (uint64_t)Data.AllocationDelta);
+        }
+        else
+        {
+            PrintUsnStatus(Args[1], Status);
+        }
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+    else if (strcmp(Command, "--usn-append") == 0)
+    {
+        NtfsUsnRecordInput Input = {};
+        std::vector<WCHAR> Name;
+        ULONGLONG Frn, Parent, Reason;
+        LONGLONG Usn;
+
+        if (!ParseUnsigned(Args[2], ~0ULL, &Frn) ||
+            !ParseUnsigned(Args[3], ~0ULL, &Parent) ||
+            !ParseUnsigned(Args[4], 0xFFFFFFFFULL, &Reason) ||
+            !Utf8ToNtfsString(Args[5], false, false, Name))
+        {
+            PrintUsage(Program);
+            Result = 2;
+            goto Done;
+        }
+        Input.FileReferenceNumber = Frn;
+        Input.ParentFileReferenceNumber = Parent;
+        Input.TimeStamp = ((ULONGLONG)time(NULL) + 11644473600ULL) * 10000000ULL;
+        Input.Reason = (UINT32)Reason;
+        Input.FileAttributes = 0x20;
+        Input.FileName = Name.data();
+        {
+            size_t Chars = 0;
+
+            while (Chars < Name.size() && Name[Chars] != 0)
+                Chars++;
+            Input.FileNameLength = (UINT16)(Chars * sizeof(WCHAR));
+        }
+        Status = NtfsUsnJournalAppend(State.Volume, &Input, &Usn);
+        if (NT_SUCCESS(Status))
+            printf("usn=%" PRId64 "\n", (int64_t)Usn);
+        else
+            PrintUsnStatus(Args[1], Status);
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+    else if (strcmp(Command, "--usn-read") == 0)
+    {
+        std::vector<UCHAR> Buffer(65536);
+        ULONGLONG Start;
+        LONGLONG Next;
+        ULONG Returned;
+
+        if (!ParseUnsigned(Args[2], 0x7FFFFFFFFFFFFFFFULL, &Start))
+        {
+            PrintUsage(Program);
+            Result = 2;
+            goto Done;
+        }
+        Status = NtfsUsnJournalRead(State.Volume, (LONGLONG)Start, Buffer.data(), (ULONG)Buffer.size(), &Returned, &Next);
+        if (NT_SUCCESS(Status))
+        {
+            ULONG Offset = 0;
+
+            while (Offset + 8 <= Returned)
+            {
+                const UCHAR* R = Buffer.data() + Offset;
+                UINT32 Length, Reason = 0;
+                UINT16 Major, NameLength = 0, NameOffset = 0;
+                UINT64 Frn = 0, Parent = 0;
+                int64_t Usn = 0;
+                std::string Utf8;
+
+                memcpy(&Length, R, 4);
+                memcpy(&Major, R + 4, 2);
+                if (Length < 8 || Offset + Length > Returned)
+                    break;
+                if (Major == 2 && Length >= 0x3C)
+                {
+                    memcpy(&Frn, R + 0x08, 8);
+                    memcpy(&Parent, R + 0x10, 8);
+                    memcpy(&Usn, R + 0x18, 8);
+                    memcpy(&Reason, R + 0x28, 4);
+                    memcpy(&NameLength, R + 0x38, 2);
+                    memcpy(&NameOffset, R + 0x3A, 2);
+                }
+                else if (Major == 3 && Length >= 0x4C)
+                {
+                    /* 128-bit references: print the low 64 bits */
+                    memcpy(&Frn, R + 0x08, 8);
+                    memcpy(&Parent, R + 0x18, 8);
+                    memcpy(&Usn, R + 0x28, 8);
+                    memcpy(&Reason, R + 0x38, 4);
+                    memcpy(&NameLength, R + 0x48, 2);
+                    memcpy(&NameOffset, R + 0x4A, 2);
+                }
+                else if (Length >= 0x30)
+                {
+                    memcpy(&Usn, R + 0x28, 8);
+                }
+                if ((ULONG)NameOffset + NameLength > Length)
+                    NameLength = 0;
+                for (UINT16 i = 0; i + 1 < NameLength; i += 2)
+                {
+                    UINT16 Ch;
+                    memcpy(&Ch, R + NameOffset + i, 2);
+                    Utf8.push_back(Ch < 0x80 ? (char)Ch : '?');
+                }
+                printf("usn=%" PRId64 " len=%" PRIu32 " reason=0x%08" PRIx32 " frn=0x%016" PRIx64
+                       " parent=0x%016" PRIx64 " name=%s ver=%u\n",
+                       (int64_t)Usn, Length, Reason, (uint64_t)Frn, (uint64_t)Parent, Utf8.c_str(), (unsigned)Major);
+                Offset += Length;
+            }
+            printf("next=%" PRId64 "\n", (int64_t)Next);
+        }
+        else
+        {
+            PrintUsnStatus(Args[1], Status);
+        }
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+    else if (strcmp(Command, "--usn-enum") == 0)
+    {
+        std::vector<UCHAR> Buffer(65536);
+        ULONGLONG Start, Low, High, Next;
+        ULONG Returned;
+
+        if (!ParseUnsigned(Args[2], ~0ULL, &Start) ||
+            !ParseUnsigned(Args[3], 0x7FFFFFFFFFFFFFFFULL, &Low) ||
+            !ParseUnsigned(Args[4], 0x7FFFFFFFFFFFFFFFULL, &High))
+        {
+            PrintUsage(Program);
+            Result = 2;
+            goto Done;
+        }
+        Status = NtfsUsnJournalEnumerate(State.Volume, Start, (LONGLONG)Low, (LONGLONG)High,
+                                         Buffer.data(), (ULONG)Buffer.size(), &Returned, &Next);
+        if (NT_SUCCESS(Status))
+        {
+            ULONG Offset = 0;
+
+            while (Offset + 0x3C <= Returned)
+            {
+                const UCHAR* R = Buffer.data() + Offset;
+                UINT32 Length, Attributes;
+                UINT16 NameLength, NameOffset;
+                UINT64 Frn, Parent;
+                int64_t Usn;
+                std::string Utf8;
+
+                memcpy(&Length, R, 4);
+                memcpy(&Frn, R + 0x08, 8);
+                memcpy(&Parent, R + 0x10, 8);
+                memcpy(&Usn, R + 0x18, 8);
+                memcpy(&Attributes, R + 0x34, 4);
+                memcpy(&NameLength, R + 0x38, 2);
+                memcpy(&NameOffset, R + 0x3A, 2);
+                if (Length < 0x3C || Offset + Length > Returned)
+                    break;
+                for (UINT16 i = 0; i + 1 < NameLength; i += 2)
+                {
+                    UINT16 Ch;
+                    memcpy(&Ch, R + NameOffset + i, 2);
+                    Utf8.push_back(Ch < 0x80 ? (char)Ch : '?');
+                }
+                printf("frn=0x%016" PRIx64 " parent=0x%016" PRIx64 " usn=%" PRId64 " attrs=0x%08" PRIx32 " name=%s\n",
+                       (uint64_t)Frn, (uint64_t)Parent, (int64_t)Usn, Attributes, Utf8.c_str());
+                Offset += Length;
+            }
+            printf("next=%" PRIu64 "\n", (uint64_t)Next);
+        }
+        else
+        {
+            PrintUsnStatus(Args[1], Status);
+        }
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+    else
+    {
+        PNtfsFileRecord File = NULL;
+        ULONGLONG Usn;
+
+        if (!ParseUnsigned(Args[3], 0x7FFFFFFFFFFFFFFFULL, &Usn))
+        {
+            PrintUsage(Program);
+            Result = 2;
+            goto Done;
+        }
+        Status = Lookup(State.Volume, Args[2], &File);
+        if (NT_SUCCESS(Status))
+            Status = NtfsFileRecordSetUpdateSequenceNumber(File, (LONGLONG)Usn);
+        if (!NT_SUCCESS(Status))
+            PrintUsnStatus(Args[2], Status);
+        NtfsFileRecordDestroy(File);
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+
+Done:
+    CloseImage(&State);
+    return Result;
+}
+
+static void
 PrintUsage(const char* Program)
 {
     fprintf(stderr,
@@ -5232,6 +5514,19 @@ PrintUsage(const char* Program)
             Program,
             Program,
             Program,
+            Program,
+            Program,
+            Program,
+            Program,
+            Program,
+            Program);
+    fprintf(stderr,
+            "  %s --usn-create IMAGE MAXIMUM_SIZE ALLOCATION_DELTA\n"
+            "  %s --usn-query IMAGE\n"
+            "  %s --usn-append IMAGE FRN PARENT_FRN REASON NAME\n"
+            "  %s --usn-read IMAGE START_USN\n"
+            "  %s --set-usn IMAGE PATH USN\n"
+            "  %s --usn-enum IMAGE START_FRN LOW_USN HIGH_USN\n",
             Program,
             Program,
             Program,
@@ -6256,6 +6551,9 @@ main(int Argc, char** Argv)
         }
         return 0;
     }
+
+    if (strncmp(Argv[First], "--usn-", 6) == 0 || strcmp(Argv[First], "--set-usn") == 0)
+        return UsnCommand(Argv[0], Argc - First, Argv + First);
 
     if (strcmp(Argv[First], "--set-sparse") == 0)
     {

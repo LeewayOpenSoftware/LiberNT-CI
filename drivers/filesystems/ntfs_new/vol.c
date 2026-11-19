@@ -524,6 +524,7 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     VolCB->DirGeneration = 0;
     ExInitializeFastMutex(&VolCB->IdleFcbMutex);
     InitializeListHead(&VolCB->IdleFcbList);
+    NtfsUsnInitializeVolume(VolCB, FSDeviceObject);
     VolCB->IdleFcbCount = 0;
     InitializeListHead(&VolCB->StreamList);
     for (Index = 0; Index < NTFS_STREAM_HASH_BUCKETS; Index++)

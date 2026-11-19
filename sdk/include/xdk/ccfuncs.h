@@ -24,6 +24,16 @@ CcCopyReadEx(
   _Out_ PIO_STATUS_BLOCK IoStatus,
   _In_ PETHREAD IoIssuerThread);
 
+
+NTKERNELAPI
+VOID
+NTAPI
+CcScheduleReadAheadEx(
+  _In_ PFILE_OBJECT FileObject,
+  _In_ PLARGE_INTEGER FileOffset,
+  _In_ ULONG Length,
+  _In_ PETHREAD IoIssuerThread);
+
 NTKERNELAPI
 BOOLEAN
 NTAPI
@@ -405,6 +415,7 @@ CcSetParallelFlushFile(
 
 NTKERNELAPI
 BOOLEAN
+NTAPI
 CcIsThereDirtyDataEx(
   _In_ PVPB Vpb,
   _In_opt_ PULONG NumberOfDirtyPages);

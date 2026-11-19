@@ -1804,6 +1804,26 @@ typedef struct _FILE_ID_128 {
     UCHAR Identifier[16];
 } FILE_ID_128, *PFILE_ID_128;
 
+#ifndef _USN_RECORD_V3_DEFINED
+#define _USN_RECORD_V3_DEFINED
+typedef struct _USN_RECORD_V3 {
+  ULONG RecordLength;
+  USHORT MajorVersion;
+  USHORT MinorVersion;
+  FILE_ID_128 FileReferenceNumber;
+  FILE_ID_128 ParentFileReferenceNumber;
+  USN Usn;
+  LARGE_INTEGER TimeStamp;
+  ULONG Reason;
+  ULONG SourceInfo;
+  ULONG SecurityId;
+  ULONG FileAttributes;
+  USHORT FileNameLength;
+  USHORT FileNameOffset;
+  WCHAR FileName[1];
+} USN_RECORD_V3, *PUSN_RECORD_V3;
+#endif
+
 typedef struct _FILE_ID_INFORMATION {
     ULONGLONG VolumeSerialNumber;
     FILE_ID_128 FileId;
