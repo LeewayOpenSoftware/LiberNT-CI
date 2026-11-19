@@ -639,12 +639,21 @@ NtfsUsnMarkHandle(
                                        NULL);
     if (!NT_SUCCESS(Status))
         return Status;
-    VolumeFileCB = NtfsGetFileContext(VolumeFileObject);
-    if (!VolumeFileCB || !VolumeFileCB->IsVolumeOpen ||
+    /* The context of a file object is read only for a file object of this mounted volume */
+    if (!VolumeFileObject->Vpb ||
         VolumeFileObject->Vpb != IrpSp->FileObject->Vpb ||
-        !(VolumeFileCB->DesiredAccess & (FILE_READ_DATA | FILE_WRITE_DATA)))
+        VolumeFileObject->DeviceObject != IrpSp->FileObject->DeviceObject)
     {
         Status = STATUS_ACCESS_DENIED;
+    }
+    else
+    {
+        VolumeFileCB = NtfsGetFileContext(VolumeFileObject);
+        if (!VolumeFileCB || !VolumeFileCB->IsVolumeOpen ||
+            !(VolumeFileCB->DesiredAccess & (FILE_READ_DATA | FILE_WRITE_DATA)))
+        {
+            Status = STATUS_ACCESS_DENIED;
+        }
     }
     ObDereferenceObject(VolumeFileObject);
     if (!NT_SUCCESS(Status))
