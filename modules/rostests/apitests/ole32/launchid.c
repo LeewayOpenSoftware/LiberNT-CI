@@ -199,8 +199,20 @@ static void RemoveRegistration(REGSAM View)
     RegDeleteKeyExW(HKEY_LOCAL_MACHINE, AppIdKey, View, 0);
 }
 
-/* The test class in this process's own registry view; RunAs and bitness preference optional */
-static BOOL AddRegistration(const WCHAR *RunAs, DWORD PreferredBitness)
+/* Removes the test class from one registry view (0: this process's own) */
+static void RemoveRegistrationView(REGSAM View)
+{
+    HKEY Classes;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Classes", 0, KEY_ALL_ACCESS | View, &Classes))
+        return;
+    RegDeleteTreeW(Classes, ClassKey + 17);
+    RegDeleteTreeW(Classes, AppIdKey + 17);
+    RegCloseKey(Classes);
+}
+
+/* The test class in one registry view (0: this process's own); RunAs and bitness preference optional */
+static BOOL AddRegistrationView(const WCHAR *RunAs, DWORD PreferredBitness, REGSAM View)
 {
     WCHAR Exe[MAX_PATH], Command[MAX_PATH + 32];
     HKEY Class, Server, AppId;
@@ -208,7 +220,7 @@ static BOOL AddRegistration(const WCHAR *RunAs, DWORD PreferredBitness)
 
     GetModuleFileNameW(NULL, Exe, ARRAYSIZE(Exe));
     _snwprintf(Command, ARRAYSIZE(Command), L"\"%ls\" launchid server", Exe);
-    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, ClassKey, 0, NULL, 0, KEY_WRITE, NULL, &Class, NULL))
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, ClassKey, 0, NULL, 0, KEY_WRITE | View, NULL, &Class, NULL))
         return FALSE;
     RegSetValueExW(Class, L"AppID", 0, REG_SZ, (const BYTE *)AppIdString, sizeof(AppIdString));
     if (!RegCreateKeyExW(Class, L"LocalServer32", 0, NULL, 0, KEY_WRITE, NULL, &Server, NULL))
@@ -217,7 +229,7 @@ static BOOL AddRegistration(const WCHAR *RunAs, DWORD PreferredBitness)
         RegCloseKey(Server);
     }
     RegCloseKey(Class);
-    if (!Done || RegCreateKeyExW(HKEY_LOCAL_MACHINE, AppIdKey, 0, NULL, 0, KEY_WRITE, NULL, &AppId, NULL))
+    if (!Done || RegCreateKeyExW(HKEY_LOCAL_MACHINE, AppIdKey, 0, NULL, 0, KEY_WRITE | View, NULL, &AppId, NULL))
         return FALSE;
     if (RunAs)
         RegSetValueExW(AppId, L"RunAs", 0, REG_SZ, (const BYTE *)RunAs, (DWORD)(wcslen(RunAs) + 1) * sizeof(WCHAR));
@@ -225,6 +237,11 @@ static BOOL AddRegistration(const WCHAR *RunAs, DWORD PreferredBitness)
         RegSetValueExW(AppId, L"PreferredServerBitness", 0, REG_DWORD, (const BYTE *)&PreferredBitness, sizeof(PreferredBitness));
     RegCloseKey(AppId);
     return TRUE;
+}
+
+static BOOL AddRegistration(const WCHAR *RunAs, DWORD PreferredBitness)
+{
+    return AddRegistrationView(RunAs, PreferredBitness, 0);
 }
 
 static HRESULT Activate(DWORD Context, SERVER_IDENTITY *Identity)
@@ -365,6 +382,8 @@ static void TestInteractiveUser(DWORD MySession)
     RemoveRegistration(0);
 }
 
+static BOOL ViewsAreSeparate(void);
+
 /* A named account: a local test user whose password the configuration stores as SCM:{AppID} */
 static void TestNamedUser(void)
 {
@@ -422,6 +441,25 @@ static void TestNamedUser(void)
             ok(!wcscmp(Identity.Sid, Expected), "the server runs as %ls, the account is %ls\n", Identity.Sid, Expected);
     }
     RemoveRegistration(0);
+
+    /* Registered with RunAs only in the 32-bit view: a 64-bit client still gets the account, never itself */
+    if (sizeof(void *) == 8 && AddRegistration(NULL, 0))
+    {
+        BOOL Separate = ViewsAreSeparate();
+
+        RemoveRegistration(0);
+        if (Separate && AddRegistrationView(Account, 0, KEY_WOW64_32KEY))
+        {
+            hr = Activate(CLSCTX_LOCAL_SERVER, &Identity);
+            ok(hr == S_OK, "activation of a 32-bit-view RunAs class failed, hr %#lx\n", hr);
+            if (hr == S_OK)
+                ok(!wcscmp(Identity.Sid, Expected), "a 32-bit-view RunAs class ran as %ls, the account is %ls\n",
+                   Identity.Sid, Expected);
+        }
+        else if (!Separate)
+            skip("the 32-bit registry view shows the 64-bit classes\n");
+        RemoveRegistrationView(KEY_WOW64_32KEY);
+    }
 
     /* A wrong password is a logon failure, and the server is not started as the caller instead */
     Data.Buffer = L"wrong";
