@@ -154,6 +154,11 @@ then
 else
     grep -q 'c0000011' "$workdir/enum2.txt" || fail "enum past the end: $(cat "$workdir/enum2.txt")"
 fi
+if "$driver" --usn-enum "$image" 5000 0 9223372036854775807 >"$workdir/enum4.txt" 2>&1
+then
+    fail "enum from past the end of a small MFT succeeded"
+fi
+grep -q 'c0000011' "$workdir/enum4.txt" || fail "enum from 5000: $(cat "$workdir/enum4.txt")"
 if "$driver" --usn-enum "$image" 4294967296 0 9223372036854775807 >"$workdir/enum3.txt" 2>&1
 then
     fail "enum beyond the MFT succeeded"

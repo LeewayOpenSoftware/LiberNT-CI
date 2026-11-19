@@ -8,6 +8,8 @@
 
 /* Records are staged in pool and copied to the caller after the metadata lock is dropped */
 #define NTFS_USN_STAGING_MAX    (64 * 1024)
+/* Journal bytes one read looks at, so a filter that matches little holds no lock for long */
+#define NTFS_USN_READ_SCAN_MAX  (1024 * 1024)
 /* USN_RECORD_V4 keeps its reason right after the 128-bit references and the USN */
 #define NTFS_USN_V4_REASON      0x30
 
@@ -181,6 +183,7 @@ NtfsUsnRead(
     ULONG CopyLength, Capacity, Filled = 0, RawLength, Offset;
     BOOLEAN IsV1;
     LONGLONG Cursor, Next;
+    ULONGLONG Scanned = 0;
     NTSTATUS Status;
 
     Status = NtfsUsnGetVolume(VolumeDeviceObject, IrpSp, &VolCB, &FileCB);
@@ -245,9 +248,12 @@ NtfsUsnRead(
     if (NT_SUCCESS(Status) && Data.UsnJournalId != Input.UsnJournalID)
         Status = STATUS_INVALID_PARAMETER;
 
-    /* Filtered-out records still advance the USN returned for the next read */
+    /*
+     * Filtered-out records still advance the USN returned for the next read. A call that
+     * reaches the scan bound returns what it has, possibly nothing, and the USN to go on from.
+     */
     Cursor = Input.StartUsn;
-    while (NT_SUCCESS(Status) && Filled < Capacity)
+    while (NT_SUCCESS(Status) && Filled < Capacity && Scanned < NTFS_USN_READ_SCAN_MAX)
     {
         Status = NtfsUsnJournalRead(VolCB->DiskVolume, Cursor, Raw, Capacity - Filled, &RawLength, &Next);
         if (Status == STATUS_BUFFER_TOO_SMALL)
@@ -270,6 +276,8 @@ NtfsUsnRead(
             }
             Offset += Header->RecordLength;
         }
+        if (Next > Cursor)
+            Scanned += (ULONGLONG)(Next - Cursor);
         Cursor = Next;
         if (RawLength == 0)
             break;

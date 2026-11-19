@@ -21,7 +21,7 @@
 #define NTFS_USN_MAX_USN            0x7FFFFFFFFFFF0000LL
 #define NTFS_USN_ALIGN(x)           (((x) + 7) & ~7ULL)
 /* Records an enumeration call looks at before it returns, so one call holds no lock for long */
-#define NTFS_USN_ENUM_SCAN_LIMIT    65536
+#define NTFS_USN_ENUM_SCAN_LIMIT    4096
 
 static WCHAR UsnJournalPath[] = L"\\$Extend\\$UsnJrnl";
 static WCHAR UsnJournalDataStream[] = L"$J";
@@ -563,7 +563,10 @@ NtfsUsnJournalEnumerate(
     if (Count > (ULONGLONG)MAXULONG + 1)
         Count = (ULONGLONG)MAXULONG + 1;
 
-    Limit = (Count - Number > NTFS_USN_ENUM_SCAN_LIMIT) ? Number + NTFS_USN_ENUM_SCAN_LIMIT : Count;
+    /* A start at or past the end of the MFT scans nothing and reports the end */
+    Limit = Count;
+    if (Number < Count && Count - Number > NTFS_USN_ENUM_SCAN_LIMIT)
+        Limit = Number + NTFS_USN_ENUM_SCAN_LIMIT;
     for (; Number < Limit; Number++)
     {
         PFileRecord Record = NULL;
