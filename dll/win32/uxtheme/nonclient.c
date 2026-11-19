@@ -1781,26 +1781,35 @@ ThemePaintWindow(PDRAW_CONTEXT pcontext, RECT* prcCurrent, BOOL bDoDoubleBufferi
  * Message handlers
  */
 
+/* The fill of a frame part: its own FillColorHint, the caption's when the style has none */
+static COLORREF
+ThemeFrameFillColor(PDRAW_CONTEXT pcontext, INT iPartId)
+{
+    INT iState = pcontext->Active ? FS_ACTIVE : FS_INACTIVE;
+    COLORREF color;
+
+    if (pcontext->DarkMode)
+        return ThemeDarkCaptionColor(pcontext);
+    if (SUCCEEDED(GetThemeColor(pcontext->theme, iPartId, iState, TMT_FILLCOLORHINT, &color)) ||
+        SUCCEEDED(GetThemeColor(pcontext->theme, WP_CAPTION, iState, TMT_FILLCOLORHINT, &color)))
+        return color;
+    return GetSysColor(pcontext->Active ? COLOR_ACTIVECAPTION : COLOR_INACTIVECAPTION);
+}
+
 /* Whatever a compositor shows of the transparent band (GL fallback, or no DWM consumer) is the frame fill, not stale pixels */
 static void
 ThemeFillFrameBand(PDRAW_CONTEXT pcontext, const RECT *Window)
 {
-    COLORREF color;
     RECT rc;
 
     if (IsRectEmpty(&pcontext->FrameInsets))
         return;
-    if (pcontext->DarkMode)
-        color = ThemeDarkCaptionColor(pcontext);
-    else if (FAILED(GetThemeColor(pcontext->theme, WP_CAPTION, pcontext->Active ? FS_ACTIVE : FS_INACTIVE,
-                                  TMT_FILLCOLORHINT, &color)))
-        color = GetSysColor(pcontext->Active ? COLOR_ACTIVECAPTION : COLOR_INACTIVECAPTION);
     SetRect(&rc, Window->left, Window->top, Window->left + pcontext->FrameInsets.left, Window->bottom);
-    ThemeFillSolidRect(pcontext->hDC, &rc, color);
+    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeFrameFillColor(pcontext, WP_FRAMELEFT));
     SetRect(&rc, Window->right - pcontext->FrameInsets.right, Window->top, Window->right, Window->bottom);
-    ThemeFillSolidRect(pcontext->hDC, &rc, color);
+    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeFrameFillColor(pcontext, WP_FRAMERIGHT));
     SetRect(&rc, Window->left, Window->bottom - pcontext->FrameInsets.bottom, Window->right, Window->bottom);
-    ThemeFillSolidRect(pcontext->hDC, &rc, color);
+    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeFrameFillColor(pcontext, WP_FRAMEBOTTOM));
 }
 
 static LRESULT
