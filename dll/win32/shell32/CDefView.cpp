@@ -2651,11 +2651,8 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
     }
 
     Enumerator = m_pEnumIDList;
-    if (!m_FillListRedrawOff)
-    {
-        m_ListView.SetRedraw(FALSE);
-        m_FillListRedrawOff = TRUE;
-    }
+    m_ListView.SetRedraw(FALSE);
+    m_FillListRedrawOff = TRUE;
     BatchStart = GetTickCount();
     do
     {
@@ -2713,8 +2710,9 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
 
     if (!PostMessage(SHV_FILL_LIST, 0, Generation))
     {
-        m_pEnumIDList.Release();
-        return HRESULT_FROM_WIN32(GetLastError());
+        DWORD Error = GetLastError();
+        CancelFillList();
+        return HRESULT_FROM_WIN32(Error);
     }
     return S_OK;
 }
