@@ -750,6 +750,51 @@ MmFreePagesFromMdlEx(
 
 NTSTATUS
 NTAPI
+MmMapMdl(
+    _Inout_ PMDL Mdl,
+    _In_ ULONG Protection,
+    _In_ PMM_MDL_ROUTINE DriverRoutine,
+    _In_opt_ PVOID DriverContext)
+{
+    BOOLEAN Created = FALSE;
+    NTSTATUS Status;
+    PVOID Va;
+
+    if (Mdl == NULL || DriverRoutine == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* An existing mapping is used as it is; a new one is made, protected and released here */
+    if (Mdl->MdlFlags & (MDL_MAPPED_TO_SYSTEM_VA | MDL_SOURCE_IS_NONPAGED_POOL))
+    {
+        Va = Mdl->MappedSystemVa;
+    }
+    else
+    {
+        if (!(Mdl->MdlFlags & MDL_PAGES_LOCKED))
+            return STATUS_INVALID_PARAMETER;
+
+        Va = MmMapLockedPagesSpecifyCache(Mdl, KernelMode, MmCached, NULL, FALSE, NormalPagePriority);
+        if (Va == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        Created = TRUE;
+
+        Status = MmProtectMdlSystemAddress(Mdl, Protection);
+        if (!NT_SUCCESS(Status))
+        {
+            MmUnmapLockedPages(Va, Mdl);
+            return Status;
+        }
+    }
+
+    DriverRoutine(DriverContext, Va);
+
+    if (Created)
+        MmUnmapLockedPages(Va, Mdl);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
 MmProtectMdlSystemAddress(
     _In_ PMDL Mdl,
     _In_ ULONG NewProtect)

@@ -419,4 +419,23 @@ PsSetCreateThreadNotifyRoutineEx(
     return STATUS_INSUFFICIENT_RESOURCES;
 }
 
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+PsSetLoadImageNotifyRoutineEx(
+    _In_ PLOAD_IMAGE_NOTIFY_ROUTINE NotifyRoutine,
+    _In_ ULONG_PTR Flags)
+{
+    PAGED_CODE();
+
+    if (Flags & ~PS_IMAGE_NOTIFY_CONFLICTING_ARCHITECTURE)
+        return STATUS_INVALID_PARAMETER_2;
+
+    /* Image notifications carry no architecture filter here, so every
+       routine already sees what PS_IMAGE_NOTIFY_CONFLICTING_ARCHITECTURE asks for */
+    return PsSetLoadImageNotifyRoutine(NotifyRoutine);
+}
+
 /* EOF */

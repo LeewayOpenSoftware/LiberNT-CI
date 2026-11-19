@@ -615,6 +615,19 @@ RtlInitAnsiStringEx(IN OUT PANSI_STRING DestinationString,
     return STATUS_SUCCESS;
 
 }
+
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+RtlInitStringEx(
+    _Out_ PSTRING DestinationString,
+    _In_opt_z_ __drv_aliasesMem PCSZ SourceString)
+{
+    return RtlInitAnsiStringEx(DestinationString, SourceString);
+}
 /*
  * @implemented
  *

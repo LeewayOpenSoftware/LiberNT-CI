@@ -3321,6 +3321,24 @@ ObOpenObjectByPointer(IN PVOID Object,
     return Status;
 }
 
+
+NTSTATUS
+NTAPI
+ObOpenObjectByPointerWithTag(
+    _In_ PVOID Object,
+    _In_ ULONG HandleAttributes,
+    _In_opt_ PACCESS_STATE PassedAccessState,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_TYPE ObjectType,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_ ULONG Tag,
+    _Out_ PHANDLE Handle)
+{
+    UNREFERENCED_PARAMETER(Tag);
+    return ObOpenObjectByPointer(Object, HandleAttributes, PassedAccessState,
+                                 DesiredAccess, ObjectType, AccessMode, Handle);
+}
+
 /*++
 * @name ObFindHandleForObject
 * @implemented NT4

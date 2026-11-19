@@ -3687,6 +3687,95 @@ IoCreateStreamFileObject(IN PFILE_OBJECT FileObject,
     return IoCreateStreamFileObjectEx(FileObject, DeviceObject, NULL);
 }
 
+/* A stream file gets DeviceObject's VPB, so its requests start at the mounted volume, if any */
+static
+PDEVICE_OBJECT
+IopStreamFileBaseDevice(
+    _In_ PDEVICE_OBJECT DeviceObject)
+{
+    PVPB Vpb = DeviceObject->Vpb;
+
+    return (Vpb != NULL && Vpb->DeviceObject != NULL) ? Vpb->DeviceObject : DeviceObject;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoCreateStreamFileObjectEx2(
+    _In_ PIO_CREATE_STREAM_FILE_OPTIONS CreateOptions,
+    _In_opt_ PFILE_OBJECT FileObject,
+    _In_opt_ PDEVICE_OBJECT DeviceObject,
+    _Out_ PFILE_OBJECT *StreamFileObject,
+    _Out_opt_ PHANDLE FileHandle)
+{
+    PFILE_OBJECT CreatedFileObject = NULL;
+    PDEVICE_OBJECT Target;
+    HANDLE Handle = NULL;
+    BOOLEAN Raise, Lite;
+    NTSTATUS Status = STATUS_SUCCESS;
+    PAGED_CODE();
+
+    if (CreateOptions == NULL || CreateOptions->Size < sizeof(IO_CREATE_STREAM_FILE_OPTIONS))
+        return STATUS_INVALID_PARAMETER;
+
+    Raise = BooleanFlagOn(CreateOptions->Flags, IO_CREATE_STREAM_FILE_RAISE_ON_ERROR);
+    Lite = BooleanFlagOn(CreateOptions->Flags, IO_CREATE_STREAM_FILE_LITE);
+    Target = CreateOptions->TargetDeviceObject;
+    if (FileObject != NULL)
+        DeviceObject = FileObject->DeviceObject;
+
+    /* A lite stream file has no handle; a target must sit on the stack IoGetRelatedDeviceObject uses.
+       It is checked before creation, so a rejected target leaves no file object to close. */
+    if ((CreateOptions->Flags & ~(IO_CREATE_STREAM_FILE_RAISE_ON_ERROR | IO_CREATE_STREAM_FILE_LITE)) ||
+        DeviceObject == NULL || StreamFileObject == NULL || (Lite && FileHandle != NULL) ||
+        (Target != NULL && !IopVerifyDeviceObjectOnStack(IopStreamFileBaseDevice(DeviceObject), Target)))
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Done;
+    }
+
+    _SEH2_TRY
+    {
+        if (Lite)
+            CreatedFileObject = IoCreateStreamFileObjectLite(NULL, DeviceObject);
+        else
+            CreatedFileObject = IoCreateStreamFileObjectEx(NULL, DeviceObject, FileHandle ? &Handle : NULL);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        goto Done;
+
+    /* IoGetRelatedDeviceObject sends the stream's requests to the target from now on */
+    if (Target != NULL)
+    {
+        Status = IopAllocateFileObjectExtension(CreatedFileObject);
+        if (!NT_SUCCESS(Status))
+        {
+            if (Handle != NULL)
+                ObCloseHandle(Handle, KernelMode);
+            else
+                ObDereferenceObject(CreatedFileObject);
+            goto Done;
+        }
+        ((PFILE_OBJECT_EXTENSION)CreatedFileObject->FileObjectExtension)->TopDeviceObjectHint = Target;
+    }
+
+    *StreamFileObject = CreatedFileObject;
+    if (FileHandle != NULL)
+        *FileHandle = Handle;
+
+Done:
+    if (!NT_SUCCESS(Status) && Raise)
+        ExRaiseStatus(Status);
+    return Status;
+}
+
 /*
  * @implemented
  */
