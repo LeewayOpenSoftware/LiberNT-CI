@@ -49,6 +49,7 @@ class CFSFolder :
         HRESULT _CreateExtensionUIObject(LPCITEMIDLIST pidl, REFIID riid, LPVOID *ppvOut);
         HRESULT _GetDropTarget(LPCITEMIDLIST pidl, LPVOID *ppvOut);
         HRESULT _GetIconHandler(LPCITEMIDLIST pidl, REFIID riid, LPVOID *ppvOut);
+        HRESULT _GetFileExtractIcon(LPCITEMIDLIST pidl, REFIID riid, LPVOID *ppvOut);
 
         HRESULT _ParseSimple(
             _In_ LPOLESTR lpszDisplayName,
