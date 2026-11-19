@@ -5786,9 +5786,11 @@ void CDefView::ApplyViewIconSize()
     FOLDERVIEWMODE mode;
     INT bigSize;
     HWND hHeader;
+    LARGE_INTEGER Start, End, Frequency;
 
     if (!m_ListView.m_hWnd)
         return;
+    QueryPerformanceCounter(&Start);
     Shell_GetImageLists(&bigList, &smallList);
     mode = (FOLDERVIEWMODE)m_FolderSettings.ViewMode;
     bigSize = GetSystemMetrics(SM_CXICON);
@@ -5833,6 +5835,11 @@ void CDefView::ApplyViewIconSize()
         m_ListView.Arrange(LVA_DEFAULT);
     }
     m_ListView.InvalidateRect(NULL, TRUE);
+    QueryPerformanceCounter(&End);
+    QueryPerformanceFrequency(&Frequency);
+    TRACE("ApplyViewIconSize: mode %d, %d px, %d items, %d system images, %I64d us\n",
+          mode, m_IconSize, m_ListView.GetItemCount(), ImageList_GetImageCount(smallList),
+          (End.QuadPart - Start.QuadPart) * 1000000 / Frequency.QuadPart);
 }
 
 INT CDefView::GetZoomStep() const
