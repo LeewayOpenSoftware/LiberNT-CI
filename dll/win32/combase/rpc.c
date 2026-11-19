@@ -120,8 +120,73 @@ struct dispatch_params
     HRESULT            hr; /* hresult (out) */
 #ifdef __REACTOS__
     DWORD              imp_level;
+    struct call_flight *flight; /* abandonable copy this call runs on, if any */
 #endif
 };
+
+#ifdef __REACTOS__
+/* A cancelable outgoing call runs on its own copy of the message, so that the caller can
+   abandon it; whoever finishes last frees it */
+struct call_flight
+{
+    LONG refs;
+    BOOL abandoned;
+    RPCOLEMESSAGE msg;
+    struct dispatch_params params;
+    IRpcChannelBuffer *chan; /* keeps the binding alive */
+};
+
+static struct call_flight *call_flight_create(IRpcChannelBuffer *chan, struct dispatch_params *params,
+        const RPCOLEMESSAGE *msg)
+{
+    struct call_flight *flight;
+
+    if (!(flight = calloc(1, sizeof(*flight))))
+        return NULL;
+    if (!(flight->params.handle = CreateEventW(NULL, FALSE, FALSE, NULL)))
+    {
+        free(flight);
+        return NULL;
+    }
+    flight->refs = 2; /* caller and executor */
+    flight->msg = *msg;
+    flight->params.msg = &flight->msg;
+    flight->params.stub = params->stub;
+    flight->params.chan = params->chan;
+    flight->params.iid = params->iid;
+    flight->params.iface = params->iface;
+    flight->params.bypass_rpcrt = params->bypass_rpcrt;
+    flight->params.imp_level = params->imp_level;
+    flight->params.flight = flight;
+    /* the stub and its channel now belong to the flight */
+    params->stub = NULL;
+    params->chan = NULL;
+    flight->chan = chan;
+    IRpcChannelBuffer_AddRef(chan);
+    return flight;
+}
+
+static void call_flight_release(struct call_flight *flight)
+{
+    if (InterlockedDecrement(&flight->refs))
+        return;
+    if (flight->abandoned)
+    {
+        if (flight->params.bypass_rpcrt)
+            free(flight->msg.Buffer);
+        else
+            I_RpcFreeBuffer((RPC_MESSAGE *)&flight->msg);
+        free(((RPC_MESSAGE *)&flight->msg)->RpcInterfaceInformation);
+    }
+    if (flight->params.stub)
+        IRpcStubBuffer_Release(flight->params.stub);
+    if (flight->params.chan)
+        IRpcChannelBuffer_Release(flight->params.chan);
+    CloseHandle(flight->params.handle);
+    IRpcChannelBuffer_Release(flight->chan);
+    free(flight);
+}
+#endif
 
 struct message_state
 {
@@ -135,6 +200,7 @@ struct message_state
     DWORD target_tid;
 #ifdef __REACTOS__
     OXID target_oxid;
+    BOOL neutral;
 #endif
     struct dispatch_params params;
 };
@@ -1351,6 +1417,7 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
     message_state->target_tid = 0;
 #ifdef __REACTOS__
     message_state->target_oxid = 0;
+    message_state->neutral = FALSE;
 #endif
     memset(&message_state->params, 0, sizeof(message_state->params));
 
@@ -1372,6 +1439,17 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
                                   &message_state->params.iface);
     if (hr == S_OK)
     {
+#ifdef __REACTOS__
+        /* a call into the neutral apartment runs on the calling thread */
+        if (apt->neutral)
+        {
+            message_state->params.bypass_rpcrt = TRUE;
+            message_state->params.imp_level = This->imp_level != RPC_C_IMP_LEVEL_DEFAULT ? This->imp_level : com_default_imp_level;
+            message_state->target_oxid = apartment_getoxid(apt);
+            message_state->neutral = TRUE;
+        }
+        else
+#endif
         /* stub, chan, iface and iid are unneeded in multi-threaded case as we go
          * via the RPC runtime */
         if (apt->multi_threaded)
@@ -1405,7 +1483,11 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
      * ClientRpcChannelBuffer_SendReceive */
 
     /* shortcut the RPC runtime */
+#ifdef __REACTOS__
+    if (message_state->target_hwnd || message_state->neutral)
+#else
     if (message_state->target_hwnd)
+#endif
     {
         msg->Buffer = malloc(msg->BufferLength);
         if (msg->Buffer)
@@ -1504,9 +1586,37 @@ static DWORD WINAPI rpc_sendreceive_thread(LPVOID param)
     TRACE("completed with status %#lx\n", data->status);
 
     SetEvent(data->handle);
+#ifdef __REACTOS__
+    if (data->flight)
+        call_flight_release(data->flight);
+#endif
 
     return 0;
 }
+
+#ifdef __REACTOS__
+/* Waits for the call; a canceled call gets the caller's timeout before it is abandoned */
+static HRESULT client_wait_for_call(struct tlsdata *tlsdata, HANDLE done, struct call_cancel *cancel)
+{
+    HANDLE handles[2] = { done, callctl_client_event(cancel) };
+    DWORD index;
+    HRESULT hr;
+
+    if (!WaitForSingleObject(done, 0))
+        return S_OK;
+
+    tlsdata->pending_call_count_client++;
+    hr = CoWaitForMultipleHandles(0, INFINITE, handles[1] ? 2 : 1, handles, &index);
+    if (hr == S_OK && index == 1)
+    {
+        hr = CoWaitForMultipleHandles(0, callctl_client_timeout(cancel), 1, &done, &index);
+        if (hr == RPC_S_CALLPENDING)
+            hr = RPC_E_CALL_CANCELED;
+    }
+    tlsdata->pending_call_count_client--;
+    return hr;
+}
+#endif
 
 static inline HRESULT ClientRpcChannelBuffer_IsCorrectApartment(ClientRpcChannelBuffer *This, const struct apartment *apt)
 {
@@ -1523,7 +1633,9 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
     HRESULT hr;
     RPC_MESSAGE *msg = (RPC_MESSAGE *)olemsg;
     RPC_STATUS status;
+#ifndef __REACTOS__
     DWORD index;
+#endif
     struct message_state *message_state;
     ORPCTHAT orpcthat;
     ORPC_EXTENT_ARRAY orpc_ext_array;
@@ -1531,6 +1643,11 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
     HRESULT hrFault = S_OK;
     struct apartment *apt = apartment_get_current_or_mta();
     struct tlsdata *tlsdata;
+#ifdef __REACTOS__
+    struct dispatch_params *params;
+    struct call_cancel *cancel;
+    struct call_flight *flight = NULL;
+#endif
 
     TRACE("%p, iMethod %ld\n", olemsg, olemsg->iMethod);
 
@@ -1578,6 +1695,18 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
      * from DllMain */
 
     message_state->params.msg = olemsg;
+#ifdef __REACTOS__
+    params = &message_state->params;
+    cancel = callctl_client_begin(tlsdata);
+    if (callctl_client_event(cancel))
+    {
+        if (params->bypass_rpcrt)
+            msg->ProcNum &= ~RPC_FLAGS_VALID_BIT;
+        /* without a copy the call stays cancelable for the server, but is waited for */
+        if ((flight = call_flight_create(iface, params, olemsg)))
+            params = &flight->params;
+    }
+#endif
     if (message_state->params.bypass_rpcrt)
     {
 #ifdef __REACTOS__
@@ -1589,17 +1718,40 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
         msg->ProcNum &= ~RPC_FLAGS_VALID_BIT;
 
 #ifdef __REACTOS__
-        target_apt = apartment_findfromoxid(message_state->target_oxid);
-        if (target_apt)
+        if (message_state->neutral)
+        {
+            struct neutral_frame frame;
+
+            if (SUCCEEDED(hr = neutral_enter(&frame)))
+            {
+                rpc_execute_call(params);
+                neutral_leave(&frame);
+            }
+            posted = SUCCEEDED(hr);
+        }
+        else if (message_state->target_tid == GetCurrentThreadId() && neutral_is_outer(message_state->target_oxid))
+        {
+            struct neutral_frame saved;
+
+            neutral_suspend(&saved);
+            rpc_execute_call(params);
+            neutral_resume(&saved);
+            posted = TRUE;
+        }
+        else if ((target_apt = apartment_findfromoxid(message_state->target_oxid)))
         {
             EnterCriticalSection(&target_apt->cs);
             posted = !target_apt->leaving &&
-                     PostMessageW(message_state->target_hwnd, DM_EXECUTERPC, 0, (LPARAM)&message_state->params);
+                     PostMessageW(message_state->target_hwnd, DM_EXECUTERPC, 0, (LPARAM)params);
             LeaveCriticalSection(&target_apt->cs);
             apartment_release(target_apt);
         }
         if (!posted)
+        {
             hr = RPC_E_DISCONNECTED;
+            if (flight)
+                call_flight_release(flight);
+        }
 #else
         if (!PostMessageW(message_state->target_hwnd, DM_EXECUTERPC, 0,
                           (LPARAM)&message_state->params))
@@ -1621,10 +1773,18 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
          * and re-enter this STA from an incoming server thread will
          * deadlock. InstallShield is an example of that.
          */
+#ifdef __REACTOS__
+        if (!QueueUserWorkItem(rpc_sendreceive_thread, params, WT_EXECUTEDEFAULT))
+#else
         if (!QueueUserWorkItem(rpc_sendreceive_thread, &message_state->params, WT_EXECUTEDEFAULT))
+#endif
         {
             ERR("QueueUserWorkItem failed with error %lu\n", GetLastError());
             hr = E_UNEXPECTED;
+#ifdef __REACTOS__
+            if (flight)
+                call_flight_release(flight);
+#endif
         }
         else
             hr = S_OK;
@@ -1632,14 +1792,39 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
 
     if (hr == S_OK)
     {
+#ifdef __REACTOS__
+        hr = client_wait_for_call(tlsdata, params->handle, flight ? cancel : NULL);
+#else
         if (WaitForSingleObject(message_state->params.handle, 0))
         {
             tlsdata->pending_call_count_client++;
             hr = CoWaitForMultipleHandles(0, INFINITE, 1, &message_state->params.handle, &index);
             tlsdata->pending_call_count_client--;
         }
+#endif
     }
     ClientRpcChannelBuffer_ReleaseEventHandle(This, message_state->params.handle);
+#ifdef __REACTOS__
+    if (flight)
+    {
+        if (hr == S_OK)
+        {
+            *olemsg = flight->msg;
+            message_state->params.hr = flight->params.hr;
+            message_state->params.status = flight->params.status;
+        }
+        else
+        {
+            /* abandoned or never sent: the buffers and interface information go with the flight */
+            flight->abandoned = TRUE;
+            msg->Buffer = NULL;
+            msg->BufferLength = 0;
+            msg->RpcInterfaceInformation = NULL;
+        }
+        call_flight_release(flight);
+    }
+    callctl_client_end(cancel);
+#endif
 
     /* for WM shortcut, faults are returned in params->hr */
     if (hr == S_OK)
@@ -1749,6 +1934,11 @@ static HRESULT WINAPI ClientRpcChannelBuffer_FreeBuffer(LPRPCCHANNELBUFFER iface
     msg->Buffer = (char *)msg->Buffer - message_state->prefix_data_len;
     msg->BufferLength += message_state->prefix_data_len;
 
+#ifdef __REACTOS__
+    if (!msg->Buffer)
+        status = RPC_S_OK;
+    else
+#endif
     if (message_state->params.bypass_rpcrt)
     {
         free(msg->Buffer);
@@ -2321,6 +2511,8 @@ void rpc_execute_call(struct dispatch_params *params)
 #ifdef __REACTOS__
     struct server_security *security;
     IUnknown *old_context = NULL;
+    struct callctl_server_call call;
+    struct call_flight *flight = params->flight;
 #endif
 
     if (FAILED(com_get_tlsdata(&tlsdata)))
@@ -2356,6 +2548,9 @@ void rpc_execute_call(struct dispatch_params *params)
     message_state->channel_hook_info.iMethod = msg->ProcNum;
     message_state->channel_hook_info.pObject = params->iface;
 
+#ifdef __REACTOS__
+    callctl_server_prepare(tlsdata);
+#endif
     if (orpcthis.extensions && first_wire_orpc_extent &&
         orpcthis.extensions->size)
         ChannelHooks_ServerNotify(&message_state->channel_hook_info, msg->DataRepresentation, first_wire_orpc_extent, orpcthis.extensions->size);
@@ -2416,6 +2611,7 @@ void rpc_execute_call(struct dispatch_params *params)
     tlsdata->causality_id = orpcthis.cid;
     tlsdata->pending_call_count_server++;
 #ifdef __REACTOS__
+    callctl_server_begin(tlsdata, &call, &orpcthis.cid);
     security = com_call_security_enabled() ? server_security_begin(message_state->bypass_rpcrt ? NULL : message_state->binding_handle,
             params->imp_level, &old_context) : NULL;
     __TRY
@@ -2428,6 +2624,7 @@ void rpc_execute_call(struct dispatch_params *params)
     }
     __ENDTRY
     server_security_end(security, old_context);
+    callctl_server_end(tlsdata, &call);
 #else
     params->hr = IRpcStubBuffer_Invoke(params->stub, params->msg, params->chan);
 #endif
@@ -2447,6 +2644,10 @@ exit_reset_state:
 exit:
     free(message_state);
     if (params->handle) SetEvent(params->handle);
+#ifdef __REACTOS__
+    if (flight)
+        call_flight_release(flight);
+#endif
 }
 
 static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
@@ -2467,6 +2668,9 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
         RpcRaiseException(E_OUTOFMEMORY);
         return;
     }
+#ifdef __REACTOS__
+    params->flight = NULL;
+#endif
 
     hr = ipid_get_dispatch_params(&ipid, &apt, &stub_manager, &params->stub, &params->chan,
                                   &params->iid, &params->iface);
@@ -2526,6 +2730,22 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
 
         com_get_tlsdata(&tlsdata);
 
+#ifdef __REACTOS__
+        if (apt->neutral)
+        {
+            struct neutral_frame frame;
+
+            if (SUCCEEDED(neutral_enter(&frame)))
+            {
+                rpc_execute_call(params);
+                neutral_leave(&frame);
+            }
+            else
+                params->hr = E_OUTOFMEMORY;
+        }
+        else
+        {
+#endif
         if (!tlsdata->apt)
         {
             enter_apartment(tlsdata, COINIT_MULTITHREADED);
@@ -2536,6 +2756,9 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
         {
             leave_apartment(tlsdata);
         }
+#ifdef __REACTOS__
+        }
+#endif
     }
 
     hr = params->hr;

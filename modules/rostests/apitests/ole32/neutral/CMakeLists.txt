@@ -1,0 +1,6 @@
+spec2def(ole32_neutral.dll ole32_neutral.spec)
+add_library(ole32_neutral MODULE neutralsrv.c ${CMAKE_CURRENT_BINARY_DIR}/ole32_neutral.def)
+set_module_type(ole32_neutral win32dll ENTRYPOINT 0)
+target_link_libraries(ole32_neutral uuid)
+add_importlibs(ole32_neutral oleaut32 ole32 msvcrt kernel32)
+add_rostests_file(TARGET ole32_neutral)
