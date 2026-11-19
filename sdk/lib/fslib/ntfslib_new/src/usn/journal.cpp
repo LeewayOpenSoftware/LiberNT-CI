@@ -16,6 +16,8 @@
 
 #define NTFS_USN_PAGE_SIZE          0x1000
 #define NTFS_USN_RECORD_HEADER      FIELD_OFFSET(UsnJrnlEntry, FileName)
+#define NTFS_USN_COMMON_HEADER      8       /* RecordLength, MajorVersion, MinorVersion */
+#define NTFS_USN_V3_USN_OFFSET      0x28    /* V3 and V4 carry 128-bit file references */
 #define NTFS_USN_MAX_USN            0x7FFFFFFFFFFF0000LL
 #define NTFS_USN_ALIGN(x)           (((x) + 7) & ~7ULL)
 
@@ -95,7 +97,7 @@ UsnGetDataSize(
         Status = STATUS_FILE_CORRUPT_ERROR;
     if (NT_SUCCESS(Status))
     {
-        Status = STATUS_FILE_CORRUPT_ERROR;
+        Status = STATUS_NOT_FOUND;
         for (Index = 0; Index < Count; Index++)
         {
             if (Streams[Index].NameLength == 2 && Streams[Index].Name[0] == L'$' && Streams[Index].Name[1] == L'J')
@@ -110,22 +112,41 @@ UsnGetDataSize(
     return Status;
 }
 
-/* A record header that a reader may walk past: version 2, aligned, inside its page */
+/*
+ * A record a reader may walk past: a known version (Windows also writes V3 and, with range
+ * tracking, V4 records), aligned, inside its page and the bytes read, at its own USN.
+ */
 static
 BOOLEAN
 UsnRecordLooksValid(
-    _In_ const UsnJrnlEntry* Record,
+    _In_ const UCHAR* Record,
+    _In_ ULONG Available,
     _In_ ULONGLONG Usn)
 {
+    const UsnJrnlEntry* V2 = reinterpret_cast<const UsnJrnlEntry*>(Record);
     ULONG PageLeft = NTFS_USN_PAGE_SIZE - (ULONG)(Usn % NTFS_USN_PAGE_SIZE);
+    ULONG Length = V2->EntrySize;
+    LONGLONG RecordUsn;
 
-    return Record->EntrySize >= NTFS_USN_RECORD_HEADER &&
-           (Record->EntrySize & 7) == 0 &&
-           Record->EntrySize <= PageLeft &&
-           Record->MajorVersion == 2 &&
-           Record->EntryOffset == Usn &&
-           Record->FileNameOffset == NTFS_USN_RECORD_HEADER &&
-           (ULONG)Record->FileNameOffset + Record->FileNameSize <= Record->EntrySize;
+    if (Length < NTFS_USN_COMMON_HEADER || (Length & 7) || Length > PageLeft || Length > Available)
+        return FALSE;
+
+    switch (V2->MajorVersion)
+    {
+        case 2:
+            return Length >= NTFS_USN_RECORD_HEADER &&
+                   V2->EntryOffset == Usn &&
+                   V2->FileNameOffset == NTFS_USN_RECORD_HEADER &&
+                   (ULONG)V2->FileNameOffset + V2->FileNameSize <= Length;
+        case 3:
+        case 4:
+            if (Length < NTFS_USN_V3_USN_OFFSET + sizeof(RecordUsn))
+                return FALSE;
+            RtlCopyMemory(&RecordUsn, Record + NTFS_USN_V3_USN_OFFSET, sizeof(RecordUsn));
+            return (ULONGLONG)RecordUsn == Usn;
+        default:
+            return FALSE;
+    }
 }
 
 /*
@@ -166,13 +187,14 @@ UsnComputeNextUsn(
     Length = Requested - Length;
 
     Cursor = PageStart;
-    while (Cursor + NTFS_USN_RECORD_HEADER <= PageStart + Length)
+    while (Cursor + NTFS_USN_COMMON_HEADER <= PageStart + Length)
     {
-        const UsnJrnlEntry* Record = reinterpret_cast<const UsnJrnlEntry*>(Page + (Cursor - PageStart));
+        const UCHAR* Record = Page + (Cursor - PageStart);
+        ULONG RecordLength = reinterpret_cast<const UsnJrnlEntry*>(Record)->EntrySize;
 
-        if (Record->EntrySize == 0 || !UsnRecordLooksValid(Record, Cursor))
+        if (RecordLength == 0 || !UsnRecordLooksValid(Record, (ULONG)(PageStart + Length - Cursor), Cursor))
             break;
-        Cursor += Record->EntrySize;
+        Cursor += RecordLength;
     }
     *NextUsn = (Cursor < Floor) ? Floor : Cursor;
     delete[] Page;
@@ -198,8 +220,29 @@ NtfsUsnJournalCreate(
     Status = UsnOpenJournal(Volume, &Journal);
     if (NT_SUCCESS(Status))
     {
-        /* An existing journal keeps its identity; only the size targets change */
-        Status = UsnReadMax(Journal, &Max);
+        ULONGLONG DataSize;
+
+        /*
+         * An existing journal keeps its identity; only the size targets change. A creation
+         * that failed half way (no $J or no $Max) is completed here instead of failing forever.
+         */
+        Status = UsnGetDataSize(Journal, &DataSize);
+        if (Status == STATUS_NOT_FOUND)
+        {
+            Status = NtfsFileRecordCreateNamedDataStream(Journal, UsnJournalDataStream);
+            if (NT_SUCCESS(Status))
+                Status = NtfsFileRecordSetSparse(Journal, TypeData, UsnJournalDataStream, TRUE);
+        }
+        if (NT_SUCCESS(Status))
+        {
+            Status = UsnReadMax(Journal, &Max);
+            if (Status == STATUS_JOURNAL_NOT_ACTIVE)
+            {
+                Status = NtfsFileRecordCreateNamedDataStream(Journal, UsnJournalMaxStream);
+                Max.USN_ID = NewJournalId;
+                Max.LowestValidUSN = 0;
+            }
+        }
         if (NT_SUCCESS(Status))
         {
             Max.MaxSize = MaximumSize;
@@ -259,6 +302,8 @@ NtfsUsnJournalQuery(
     Status = UsnReadMax(Journal, &Max);
     if (NT_SUCCESS(Status))
         Status = UsnGetDataSize(Journal, &DataSize);
+    if (Status == STATUS_NOT_FOUND)
+        Status = STATUS_JOURNAL_NOT_ACTIVE;
     if (NT_SUCCESS(Status))
         Status = UsnComputeNextUsn(Journal, DataSize, Max.LowestValidUSN, &NextUsn);
     if (NT_SUCCESS(Status))
@@ -304,6 +349,8 @@ NtfsUsnJournalAppend(
     Status = UsnReadMax(Journal, &Max);
     if (NT_SUCCESS(Status))
         Status = UsnGetDataSize(Journal, &DataSize);
+    if (Status == STATUS_NOT_FOUND)
+        Status = STATUS_JOURNAL_NOT_ACTIVE;
     if (NT_SUCCESS(Status))
         Status = UsnComputeNextUsn(Journal, DataSize, Max.LowestValidUSN, &NextUsn);
     if (!NT_SUCCESS(Status))
@@ -393,6 +440,8 @@ NtfsUsnJournalRead(
     Status = UsnReadMax(Journal, &Max);
     if (NT_SUCCESS(Status))
         Status = UsnGetDataSize(Journal, &DataSize);
+    if (Status == STATUS_NOT_FOUND)
+        Status = STATUS_JOURNAL_NOT_ACTIVE;
     if (NT_SUCCESS(Status))
         Status = UsnComputeNextUsn(Journal, DataSize, Max.LowestValidUSN, &End);
     if (!NT_SUCCESS(Status))
@@ -429,27 +478,29 @@ NtfsUsnJournalRead(
 
         while (Cursor < PageStart + Length)
         {
-            const UsnJrnlEntry* Record = reinterpret_cast<const UsnJrnlEntry*>(Page + (Cursor - PageStart));
+            const UCHAR* Record = Page + (Cursor - PageStart);
+            ULONG RecordLength;
 
-            if (Cursor + NTFS_USN_RECORD_HEADER > PageStart + Length || Record->EntrySize == 0)
+            if (Cursor + NTFS_USN_COMMON_HEADER > PageStart + Length ||
+                (RecordLength = reinterpret_cast<const UsnJrnlEntry*>(Record)->EntrySize) == 0)
             {
                 /* Zero fill to the end of the page */
                 Cursor = PageStart + NTFS_USN_PAGE_SIZE;
                 break;
             }
-            if (!UsnRecordLooksValid(Record, Cursor))
+            if (!UsnRecordLooksValid(Record, (ULONG)(PageStart + Length - Cursor), Cursor))
             {
                 Status = STATUS_FILE_CORRUPT_ERROR;
                 goto Done;
             }
-            if (Copied + Record->EntrySize > BufferLength)
+            if (Copied + RecordLength > BufferLength)
             {
                 Full = TRUE;
                 break;
             }
-            RtlCopyMemory(Buffer + Copied, Record, Record->EntrySize);
-            Copied += Record->EntrySize;
-            Cursor += Record->EntrySize;
+            RtlCopyMemory(Buffer + Copied, Record, RecordLength);
+            Copied += RecordLength;
+            Cursor += RecordLength;
         }
         if (Full)
             break;

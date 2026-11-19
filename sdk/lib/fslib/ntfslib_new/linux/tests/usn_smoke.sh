@@ -1,6 +1,7 @@
 #!/bin/sh
-# USN change journal: create, query, append, read, page-boundary padding and the
-# $STANDARD_INFORMATION USN, checked against the independent ntfs-3g tools.
+# USN change journal: create, query, append, read, page-boundary padding, records of other
+# versions written by Windows, a half-created journal, and the $STANDARD_INFORMATION USN,
+# checked against the independent ntfs-3g tools and ntfslib's own checker.
 set -eu
 
 driver=$1
@@ -25,8 +26,14 @@ fail()
     exit 1
 }
 
-truncate -s 64M "$image"
-"$mkntfs" -F -Q -q -L USN_TEST "$image" >/dev/null 2>&1
+new_image()
+{
+    rm -f "$1"
+    truncate -s 64M "$1"
+    "$mkntfs" -F -Q -q -L USN_TEST "$1" >/dev/null 2>&1
+}
+
+new_image "$image"
 
 # No journal yet: STATUS_JOURNAL_NOT_ACTIVE.
 if "$driver" --usn-query "$image" >"$workdir/err.txt" 2>&1
@@ -49,7 +56,7 @@ grep -q "Attribute name:.*'\$J'" "$workdir/info.txt" || fail "no \$J stream"
 grep -q "Attribute name:.*'\$Max'" "$workdir/info.txt" || fail "no \$Max stream"
 "$ntfscat" -a 0x80 -n '$Max' "$image" '/$Extend/$UsnJrnl' >"$workdir/max.bin"
 test "$(wc -c <"$workdir/max.bin")" -eq 32 || fail "\$Max is not 32 bytes"
-set -- $(od -An -tx8 -N16 "$workdir/max.bin")
+set -- $(od -v -An -tx8 -N16 "$workdir/max.bin")
 test "$1 $2" = "0000000002000000 0000000000400000" || fail "\$Max sizes: $1 $2"
 
 # 40 records of 264 bytes: 15 fit in a 4 KB page, so the 16th must start the next page.
@@ -84,6 +91,24 @@ test "$(grep -c '^usn=' "$workdir/read2.txt")" -eq 25 || fail "partial read coun
 test "$(wc -c <"$workdir/j.bin")" -eq "$next" || fail "\$J size $(wc -c <"$workdir/j.bin"), expected $next"
 test "$(od -v -An -tx1 -j 3960 -N 136 "$workdir/j.bin" | tr -d ' \n' | tr -d 0)" = "" || fail "page 0 tail is not zero"
 
+# A V3 record (128-bit references, as Windows writes) must be walked past, not taken for a
+# torn tail: write one at the next USN, append after it, and read both back.
+perl -e 'print pack("VvvQ<Q<Q<Q<Q<Q<VVVVvva8x4", 0x58, 3, 0, 0x2000A, 0, 5, 0, $ARGV[0], 0, 0x100, 0, 0, 0x20, 8, 0x4C, "v\0003\0.\0x\0")' "$next" >"$workdir/v3.bin"
+test "$(wc -c <"$workdir/v3.bin")" -eq 88 || fail "V3 fixture is not 88 bytes"
+"$driver" --write "$image" '/$Extend/$UsnJrnl:$J' "$next" "$workdir/v3.bin"
+query=$("$driver" --usn-query "$image")
+case "$query" in
+    *" next=$((next + 88)) "*) ;;
+    *) fail "V3 record not counted: $query" ;;
+esac
+out=$("$driver" --usn-append "$image" 0x2000B 5 0x100 after_v3)
+test "${out#usn=}" -eq $((next + 88)) || fail "append after V3 at ${out#usn=}"
+"$driver" --usn-read "$image" "$next" >"$workdir/read3.txt"
+grep -q "^usn=$next len=88 reason=0x00000100 frn=0x000000000002000a .* name=v3.x ver=3" "$workdir/read3.txt" ||
+    fail "V3 record lost: $(cat "$workdir/read3.txt")"
+grep -q "^usn=$((next + 88)) .* name=after_v3 ver=2" "$workdir/read3.txt" || fail "record after V3 missing"
+next=$((next + 88 + 80))
+
 query=$("$driver" --usn-query "$image")
 case "$query" in
     *" next=$next "*) ;;
@@ -106,4 +131,27 @@ printf 'hello' >"$workdir/h.txt"
 "$ntfsinfo" -F /h.txt "$image" | grep -q 'Update Sequence Number:.*4242' || fail "SI USN not visible to ntfsinfo"
 
 "$ntfsfix" -n "$image" >/dev/null || fail "ntfsfix found a problem"
+"$driver" --check "$image" >"$workdir/check.txt" 2>&1 || fail "ntfslib check: $(tail -n 3 "$workdir/check.txt")"
+"$driver" --verify-shape "$image" >"$workdir/shape.txt" 2>&1 || fail "ntfslib verify-shape: $(tail -n 3 "$workdir/shape.txt")"
+
+# A half-created journal (the file exists without $J and $Max) is not active, and
+# creating the journal completes it instead of failing.
+half="$workdir/half.ntfs"
+new_image "$half"
+: >"$workdir/empty.bin"
+printf '/$Extend/$UsnJrnl=%s\n' "$workdir/empty.bin" >"$workdir/half.list"
+"$driver" --addfiles "$half" "$workdir/half.list" >/dev/null
+if "$driver" --usn-query "$half" >"$workdir/err2.txt" 2>&1
+then
+    fail "query succeeded on a half-created journal"
+fi
+grep -q 'c00002b8' "$workdir/err2.txt" || fail "half-created: $(cat "$workdir/err2.txt")"
+"$driver" --usn-create "$half" 33554432 4194304
+query=$("$driver" --usn-query "$half")
+case "$query" in
+    *" first=0 next=0 lowest=0 "*) ;;
+    *) fail "half-created journal not repaired: $query" ;;
+esac
+"$ntfscat" -a 0x80 -n '$Max' "$half" '/$Extend/$UsnJrnl' | wc -c | grep -qx 32 || fail "repaired \$Max missing"
+
 printf 'usn_smoke: ok\n'

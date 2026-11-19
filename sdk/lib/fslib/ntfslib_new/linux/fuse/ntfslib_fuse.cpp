@@ -5277,24 +5277,44 @@ UsnCommand(const char* Program, int Count, char** Args)
         {
             ULONG Offset = 0;
 
-            while (Offset + 0x3C <= Returned)
+            while (Offset + 8 <= Returned)
             {
                 const UCHAR* R = Buffer.data() + Offset;
-                UINT32 Length, Reason;
-                UINT16 NameLength, NameOffset;
-                UINT64 Frn, Parent;
-                int64_t Usn;
+                UINT32 Length, Reason = 0;
+                UINT16 Major, NameLength = 0, NameOffset = 0;
+                UINT64 Frn = 0, Parent = 0;
+                int64_t Usn = 0;
                 std::string Utf8;
 
                 memcpy(&Length, R, 4);
-                memcpy(&Frn, R + 0x08, 8);
-                memcpy(&Parent, R + 0x10, 8);
-                memcpy(&Usn, R + 0x18, 8);
-                memcpy(&Reason, R + 0x28, 4);
-                memcpy(&NameLength, R + 0x38, 2);
-                memcpy(&NameOffset, R + 0x3A, 2);
-                if (Length < 0x3C || Offset + Length > Returned)
+                memcpy(&Major, R + 4, 2);
+                if (Length < 8 || Offset + Length > Returned)
                     break;
+                if (Major == 2 && Length >= 0x3C)
+                {
+                    memcpy(&Frn, R + 0x08, 8);
+                    memcpy(&Parent, R + 0x10, 8);
+                    memcpy(&Usn, R + 0x18, 8);
+                    memcpy(&Reason, R + 0x28, 4);
+                    memcpy(&NameLength, R + 0x38, 2);
+                    memcpy(&NameOffset, R + 0x3A, 2);
+                }
+                else if (Major == 3 && Length >= 0x4C)
+                {
+                    /* 128-bit references: print the low 64 bits */
+                    memcpy(&Frn, R + 0x08, 8);
+                    memcpy(&Parent, R + 0x18, 8);
+                    memcpy(&Usn, R + 0x28, 8);
+                    memcpy(&Reason, R + 0x38, 4);
+                    memcpy(&NameLength, R + 0x48, 2);
+                    memcpy(&NameOffset, R + 0x4A, 2);
+                }
+                else if (Length >= 0x30)
+                {
+                    memcpy(&Usn, R + 0x28, 8);
+                }
+                if ((ULONG)NameOffset + NameLength > Length)
+                    NameLength = 0;
                 for (UINT16 i = 0; i + 1 < NameLength; i += 2)
                 {
                     UINT16 Ch;
@@ -5302,8 +5322,8 @@ UsnCommand(const char* Program, int Count, char** Args)
                     Utf8.push_back(Ch < 0x80 ? (char)Ch : '?');
                 }
                 printf("usn=%" PRId64 " len=%" PRIu32 " reason=0x%08" PRIx32 " frn=0x%016" PRIx64
-                       " parent=0x%016" PRIx64 " name=%s\n",
-                       (int64_t)Usn, Length, Reason, (uint64_t)Frn, (uint64_t)Parent, Utf8.c_str());
+                       " parent=0x%016" PRIx64 " name=%s ver=%u\n",
+                       (int64_t)Usn, Length, Reason, (uint64_t)Frn, (uint64_t)Parent, Utf8.c_str(), (unsigned)Major);
                 Offset += Length;
             }
             printf("next=%" PRId64 "\n", (int64_t)Next);
