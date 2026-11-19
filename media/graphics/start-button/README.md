@@ -1,11 +1,12 @@
-# Logo Inicio Orosi neón
+# Start button logo
 
-`default.png`, `hover.png` y `pressed.png` son imágenes RGBA de 640 × 640 generadas con imagegen desde el tablero Orosi aportado por el usuario.
+default.png, hover.png and pressed.png are 640x640 RGBA images of the Orosi neon arch (cyan left, violet right, transparent
+background, no text) in its normal, brighter and darker states. They were AI-generated for LiberNT with the owner brand board
+as the reference and delivered by the owner on 2026-11-18; they are original LiberNT art, GPL-3.0-or-later, subject to the
+terms that apply to the generation tool.
 
-Los tres `reactos-start-*.svg` conservan sus nombres por compatibilidad y contienen el PNG correspondiente incrustado. No son maestros vectoriales. Usan `viewBox="-4 -4 40 40"`; la imagen ocupa ese mismo rectángulo. El `render.js` existente puede volver a exportarlos con `@resvg/resvg-js`.
-
-El ICO de reserva incluye nueve tamaños: 16, 20, 24, 28, 32, 36, 40, 48 y 64 px, codificados como DIB BGRA con máscaras AND. Las vistas usan un lienzo de logo de 36 px dentro del botón de 48 px.
-
-Los estados se generaron individualmente y pueden presentar pequeñas diferencias de contorno. Deshabilitado y foco reutilizan el recurso normal según el código descrito en la extracción original.
-
-Consultar `../../LEEME.md` para integración y procedencia.
+The three reactos-start-*.svg files keep their old names for compatibility. Each embeds the matching PNG (viewBox
+"-4 -4 40 40"); they are not vector traces. render.js re-exports them with @resvg/resvg-js. base/shell/explorer/res/ico/258.ico
+is the fallback icon (16, 20, 24, 28, 32, 36, 40, 48 and 64 px DIB images with AND masks), used when the PNG decoder is
+unavailable. The logo is drawn at 36x36 at 96 DPI centred in the 48x48 Start button; disabled and focused states reuse the
+normal image.
