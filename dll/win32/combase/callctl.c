@@ -531,6 +531,9 @@ static HRESULT wait_dispatching_calls(struct apartment *apt, DWORD timeout, ULON
         DWORD *index)
 {
     DWORD start = GetTickCount(), elapsed, res;
+    BOOL quit = FALSE;
+    UINT quit_code = 0;
+    HRESULT hr;
     HWND win;
     MSG msg;
 
@@ -547,18 +550,34 @@ static HRESULT wait_dispatching_calls(struct apartment *apt, DWORD timeout, ULON
         if (res == WAIT_OBJECT_0 + count)
         {
             while (win && PeekMessageW(&msg, win, 0, 0, PM_REMOVE | PM_NOYIELD))
+            {
+                /* WM_QUIT passes every filter; it goes back to the thread when the wait ends */
+                if (msg.message == WM_QUIT)
+                {
+                    quit = TRUE;
+                    quit_code = (UINT)msg.wParam;
+                    break;
+                }
                 DispatchMessageW(&msg);
+            }
             /* Marks the rest as seen, so that only new messages wake the wait */
             PeekMessageW(&msg, NULL, 0, 0, PM_NOREMOVE | PM_NOYIELD);
             continue;
         }
         if (res == WAIT_TIMEOUT)
-            return RPC_S_CALLPENDING;
-        if (res == WAIT_FAILED)
-            return HRESULT_FROM_WIN32(GetLastError());
-        *index = res;
-        return S_OK;
+            hr = RPC_S_CALLPENDING;
+        else if (res == WAIT_FAILED)
+            hr = HRESULT_FROM_WIN32(GetLastError());
+        else
+        {
+            *index = res;
+            hr = S_OK;
+        }
+        break;
     }
+    if (quit)
+        PostQuitMessage(quit_code);
+    return hr;
 }
 
 /***********************************************************************
@@ -575,8 +594,13 @@ HRESULT WINAPI CoWaitForMultipleObjects(DWORD flags, DWORD timeout, ULONG count,
 
     if (flags & ~(CWMO_DISPATCH_CALLS | CWMO_DISPATCH_WINDOW_MESSAGES))
         return E_INVALIDARG;
-    if (count > CWMO_MAX_HANDLES)
+    if (count > CWMO_MAX_HANDLES || !index)
         return E_INVALIDARG;
+    *index = 0;
+    if (!handles)
+        return E_INVALIDARG;
+    if (!count)
+        return RPC_E_NO_SYNC;
     if (FAILED(hr = com_get_tlsdata(&tlsdata)))
         return hr;
 
@@ -584,14 +608,6 @@ HRESULT WINAPI CoWaitForMultipleObjects(DWORD flags, DWORD timeout, ULONG count,
     apt = tlsdata->apt;
     if (!apt || apt->multi_threaded || (flags & CWMO_DISPATCH_WINDOW_MESSAGES))
         return CoWaitForMultipleHandles(0, timeout, count, (HANDLE *)handles, index);
-
-    if (!index)
-        return E_INVALIDARG;
-    *index = 0;
-    if (!handles)
-        return E_INVALIDARG;
-    if (!count)
-        return RPC_E_NO_SYNC;
 
     return wait_dispatching_calls(apt, timeout, count, handles, index);
 }

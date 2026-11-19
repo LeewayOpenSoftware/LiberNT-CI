@@ -421,6 +421,8 @@ static void ChildWait(void)
     ok(hr == E_INVALIDARG, "unknown flag returned 0x%lx\n", hr);
     hr = CoWaitForMultipleObjects(CWMO_DEFAULT, 0, CWMO_MAX_HANDLES + 1, Events, &Index);
     ok(hr == E_INVALIDARG, "too many handles returned 0x%lx\n", hr);
+    hr = CoWaitForMultipleObjects(CWMO_DEFAULT, 0, 1, Events, NULL);
+    ok(hr == E_INVALIDARG, "no index without COM returned 0x%lx\n", hr);
 
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     hr = CoWaitForMultipleObjects(CWMO_DEFAULT, 0, 1, Events, NULL);
@@ -449,11 +451,19 @@ static void ChildWait(void)
     hr = CoWaitForMultipleObjects(CWMO_DISPATCH_WINDOW_MESSAGES, 100, 1, Events, &Index);
     ok(hr == RPC_S_CALLPENDING, "dispatching wait returned 0x%lx\n", hr);
     ok(WindowMessages == 1, "dispatching wait dispatched %ld messages\n", WindowMessages);
+
+    /* A wait does not consume WM_QUIT */
+    PostQuitMessage(3);
+    hr = CoWaitForMultipleObjects(CWMO_DEFAULT, 50, 1, Events, &Index);
+    ok(hr == RPC_S_CALLPENDING, "wait with WM_QUIT returned 0x%lx\n", hr);
+    ok(PeekMessageW(&Msg, NULL, WM_QUIT, WM_QUIT, PM_REMOVE) && Msg.wParam == 3, "WM_QUIT was lost\n");
     DestroyWindow(Window);
     CoUninitialize();
 
     /* An MTA ignores the flags */
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    hr = CoWaitForMultipleObjects(CWMO_DEFAULT, 0, 1, Events, NULL);
+    ok(hr == E_INVALIDARG, "MTA no index returned 0x%lx\n", hr);
     hr = CoWaitForMultipleObjects(CWMO_DISPATCH_CALLS | CWMO_DISPATCH_WINDOW_MESSAGES, 1000, 2, Events, &Index);
     ok(hr == S_OK && Index == 1, "MTA wait returned 0x%lx, %lu\n", hr, Index);
     hr = CoWaitForMultipleObjects(CWMO_DEFAULT, 50, 1, Events, &Index);

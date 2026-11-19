@@ -1793,7 +1793,7 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
     if (hr == S_OK)
     {
 #ifdef __REACTOS__
-        hr = client_wait_for_call(tlsdata, params->handle, cancel);
+        hr = client_wait_for_call(tlsdata, params->handle, flight ? cancel : NULL);
 #else
         if (WaitForSingleObject(message_state->params.handle, 0))
         {
