@@ -253,6 +253,10 @@ PIE_THREAD_PARAM_BLOCK ParseSharedPacket(HANDLE hData)
     if (hnfData->cbSize < sizeof(HNFBlock))
         goto cleanup2;
 
+    if ((ULONGLONG)sizeof(HNFBlock) + hnfData->directoryPidlLength + hnfData->pidlSize7C +
+        hnfData->pidlSize80 + hnfData->pathLength > hnfData->cbSize)
+        goto cleanup2;
+
     params = SHCreateIETHREADPARAM(0, hnfData->offset8, 0, 0);
     if (!params)
         goto cleanup2;
@@ -288,22 +292,17 @@ PIE_THREAD_PARAM_BLOCK ParseSharedPacket(HANDLE hData)
             pidl = ILClone((LPITEMIDLIST) block);
         params->offset7C = pidl;
 
-        block += hnfData->pidlSize80;
+        block += hnfData->pidlSize7C;
     }
 
     if (hnfData->pidlSize80)
     {
-        if (!(params->offset84 & 0x8000))
-        {
-            params->offset80 = *(LPITEMIDLIST *) block;
-        }
-        else
-        {
-            LPITEMIDLIST pidl = NULL;
-            if (*block)
-                pidl = ILClone((LPITEMIDLIST) block);
-            params->offset80 = pidl;
-        }
+        /* MakeSharedPacket sends this pidl by contents unless 0x8000 is set; a pointer
+         * sent by value belongs to the sender's address space and is not usable here */
+        LPITEMIDLIST pidl = NULL;
+        if (!(params->offset84 & 0x8000) && *block)
+            pidl = ILClone((LPITEMIDLIST) block);
+        params->offset80 = pidl;
 
         block += hnfData->pidlSize80;
     }
