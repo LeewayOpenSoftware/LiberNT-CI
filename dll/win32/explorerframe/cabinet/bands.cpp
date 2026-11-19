@@ -74,7 +74,7 @@ CabinetFillRound(HDC dc, const RECT &rc, int radius, COLORREF color)
 
     if (radius > 0 && width > 4 * radius && height > 4 * radius)
     {
-        HBRUSH solid = CreateSolidBrush(color);
+        HBRUSH solid = (HBRUSH)GetStockObject(DC_BRUSH);
         RECT middle = { rc.left + radius, rc.top, rc.right - radius, rc.bottom };
         RECT side = { rc.left, rc.top + radius, rc.left + radius, rc.bottom - radius };
         int box = 2 * radius + 2;
@@ -84,11 +84,11 @@ CabinetFillRound(HDC dc, const RECT &rc, int radius, COLORREF color)
                                   { rc.left, rc.bottom - radius }, { rc.right - radius, rc.bottom - radius } };
         BOOL visible[4], any = FALSE;
 
+        SetDCBrushColor(dc, color);
         FillRect(dc, &middle, solid);
         FillRect(dc, &side, solid);
         OffsetRect(&side, width - radius, 0);
         FillRect(dc, &side, solid);
-        DeleteObject(solid);
         for (int i = 0; i < 4; i++)
         {
             RECT test = { square[i].x, square[i].y, square[i].x + radius, square[i].y + radius };
@@ -366,6 +366,7 @@ CCabinetAddressBand::CCabinetAddressBand() :
     m_DismissTick(0)
 {
     ZeroMemory(m_Crumbs, sizeof(m_Crumbs));
+    ZeroMemory(m_CrumbNames, sizeof(m_CrumbNames));
 }
 
 CCabinetAddressBand::~CCabinetAddressBand()
@@ -446,6 +447,8 @@ CCabinetAddressBand::FreeCrumbs()
         if (m_Crumbs[i])
             ILFree(m_Crumbs[i]);
         m_Crumbs[i] = NULL;
+        CoTaskMemFree(m_CrumbNames[i]);
+        m_CrumbNames[i] = NULL;
     }
     m_CrumbCount = 0;
 }
@@ -474,6 +477,11 @@ CCabinetAddressBand::SetLocation(PCIDLIST_ABSOLUTE pidl)
         for (int i = count - 1; i >= 0; i--)
             m_Crumbs[m_CrumbCount++] = chain[i];
     }
+    for (int i = 0; i < m_CrumbCount; i++)
+    {
+        if (FAILED(SHGetNameFromIDList(m_Crumbs[i], SIGDN_NORMALDISPLAY, &m_CrumbNames[i])))
+            m_CrumbNames[i] = NULL;
+    }
     if (m_Editing)
         EndEdit();
     else
@@ -487,7 +495,9 @@ CCabinetAddressBand::Layout()
     int count, available, padding = Scale(4), width;
     TBBUTTON button;
     HICON root;
-    WCHAR names[CABINET_MAX_CRUMBS][MAX_PATH];
+    HDC dc;
+    HGDIOBJ old;
+    int widths[CABINET_MAX_CRUMBS];
 
     if (!m_Toolbar)
         return;
@@ -511,78 +521,83 @@ CCabinetAddressBand::Layout()
         ImageList_ReplaceIcon(m_Images, 1, root);
     if (root)
         DestroyIcon(root);
+    dc = GetDC(m_Toolbar);
+    old = dc ? SelectObject(dc, m_Font) : NULL;
     for (int i = 0; i < m_CrumbCount; i++)
     {
-        PWSTR name = NULL;
-        if (FAILED(SHGetNameFromIDList(m_Crumbs[i], SIGDN_NORMALDISPLAY, &name)))
-            name = NULL;
-        StringCchCopyW(names[i], MAX_PATH, name ? name : L"");
-        CoTaskMemFree(name);
+        SIZE extent = { 0, 0 };
+        PCWSTR name = m_CrumbNames[i] ? m_CrumbNames[i] : L"";
+
+        if (dc)
+            GetTextExtentPoint32W(dc, name, lstrlenW(name), &extent);
+        widths[i] = extent.cx + Scale(16);
+    }
+    if (dc)
+    {
+        SelectObject(dc, old);
+        ReleaseDC(m_Toolbar, dc);
     }
     available = client.right - padding * 2;
-    for (m_FirstVisible = 0; m_FirstVisible < m_CrumbCount; m_FirstVisible++)
+    ZeroMemory(&button, sizeof(button));
+    button.iBitmap = 1;
+    button.idCommand = IDC_CRUMB_ROOT;
+    button.fsState = TBSTATE_ENABLED;
+    button.fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
+    SendMessageW(m_Toolbar, TB_ADDBUTTONSW, 1, (LPARAM)&button);
+    button.iBitmap = 0;
+    button.idCommand = IDC_CRUMB_ROOT_CHEVRON;
+    SendMessageW(m_Toolbar, TB_ADDBUTTONSW, 1, (LPARAM)&button);
+    for (int i = 0; i < m_CrumbCount; i++)
     {
-        count = (int)SendMessageW(m_Toolbar, TB_BUTTONCOUNT, 0, 0);
-        while (count-- > 0)
-            SendMessageW(m_Toolbar, TB_DELETEBUTTON, 0, 0);
-        ZeroMemory(&button, sizeof(button));
-        button.iBitmap = 1;
-        button.idCommand = IDC_CRUMB_ROOT;
-        button.fsState = TBSTATE_ENABLED;
-        button.fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-        SendMessageW(m_Toolbar, TB_ADDBUTTONSW, 1, (LPARAM)&button);
+        TBBUTTONINFOW info = { sizeof(info), TBIF_SIZE };
+
         button.iBitmap = 0;
-        button.idCommand = IDC_CRUMB_ROOT_CHEVRON;
+        button.idCommand = IDC_CRUMB_CHEVRON(i ? i - 1 : 0);
+        button.fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
+        button.iString = 0;
+        if (i)
+            SendMessageW(m_Toolbar, TB_ADDBUTTONSW, 1, (LPARAM)&button);
+        button.iBitmap = I_IMAGENONE;
+        button.idCommand = IDC_CRUMB(i);
+        button.fsStyle = BTNS_BUTTON | BTNS_SHOWTEXT | BTNS_NOPREFIX;
+        button.iString = (INT_PTR)(m_CrumbNames[i] ? m_CrumbNames[i] : L"");
         SendMessageW(m_Toolbar, TB_ADDBUTTONSW, 1, (LPARAM)&button);
-        if (m_FirstVisible)
+        info.cx = (WORD)widths[i];
+        SendMessageW(m_Toolbar, TB_SETBUTTONINFOW, IDC_CRUMB(i), (LPARAM)&info);
+    }
+    if (m_CrumbCount)
+    {
+        button.iBitmap = 0;
+        button.idCommand = IDC_CRUMB_CHEVRON(m_CrumbCount - 1);
+        button.fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
+        button.iString = 0;
+        SendMessageW(m_Toolbar, TB_ADDBUTTONSW, 1, (LPARAM)&button);
+    }
+    m_FirstVisible = 0;
+    for (;;)
+    {
+        SIZE size = { 0, 0 };
+
+        SendMessageW(m_Toolbar, TB_AUTOSIZE, 0, 0);
+        SendMessageW(m_Toolbar, TB_GETMAXSIZE, 0, (LPARAM)&size);
+        width = size.cx;
+        if (width <= available || m_FirstVisible + 1 >= m_CrumbCount)
+            break;
+        if (m_FirstVisible == 0)
         {
+            SendMessageW(m_Toolbar, TB_DELETEBUTTON, 2, 0);
             button.iBitmap = 5;
             button.idCommand = IDC_CRUMB_OVERFLOW;
             button.fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
             button.iString = 0;
-            SendMessageW(m_Toolbar, TB_ADDBUTTONSW, 1, (LPARAM)&button);
+            SendMessageW(m_Toolbar, TB_INSERTBUTTONW, 2, (LPARAM)&button);
         }
-        for (int i = m_FirstVisible; i < m_CrumbCount; i++)
+        else
         {
-            button.iBitmap = 0;
-            button.idCommand = IDC_CRUMB_CHEVRON(i ? i - 1 : 0);
-            button.fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-            button.iString = 0;
-            if (i)
-                SendMessageW(m_Toolbar, TB_ADDBUTTONSW, 1, (LPARAM)&button);
-            button.iBitmap = I_IMAGENONE;
-            button.idCommand = IDC_CRUMB(i);
-            button.fsStyle = BTNS_BUTTON | BTNS_SHOWTEXT | BTNS_NOPREFIX;
-            button.iString = (INT_PTR)names[i];
-            SendMessageW(m_Toolbar, TB_ADDBUTTONSW, 1, (LPARAM)&button);
-            {
-                TBBUTTONINFOW info = { sizeof(info), TBIF_SIZE };
-                SIZE extent = { 0, 0 };
-                HDC dc = GetDC(m_Toolbar);
-                HGDIOBJ old = SelectObject(dc, m_Font);
-                GetTextExtentPoint32W(dc, names[i], lstrlenW(names[i]), &extent);
-                SelectObject(dc, old);
-                ReleaseDC(m_Toolbar, dc);
-                info.cx = (WORD)(extent.cx + Scale(16));
-                SendMessageW(m_Toolbar, TB_SETBUTTONINFOW, IDC_CRUMB(i), (LPARAM)&info);
-            }
+            SendMessageW(m_Toolbar, TB_DELETEBUTTON, 3, 0);
+            SendMessageW(m_Toolbar, TB_DELETEBUTTON, 3, 0);
         }
-        if (m_CrumbCount)
-        {
-            button.iBitmap = 0;
-            button.idCommand = IDC_CRUMB_CHEVRON(m_CrumbCount - 1);
-            button.fsStyle = BTNS_BUTTON | BTNS_AUTOSIZE;
-            button.iString = 0;
-            SendMessageW(m_Toolbar, TB_ADDBUTTONSW, 1, (LPARAM)&button);
-        }
-        SendMessageW(m_Toolbar, TB_AUTOSIZE, 0, 0);
-        {
-            SIZE size = { 0, 0 };
-            SendMessageW(m_Toolbar, TB_GETMAXSIZE, 0, (LPARAM)&size);
-            width = size.cx;
-        }
-        if (width <= available || m_FirstVisible + 1 >= m_CrumbCount)
-            break;
+        m_FirstVisible++;
     }
     {
         SIZE size = { 0, 0 };
@@ -766,12 +781,8 @@ CCabinetAddressBand::ShowOverflow()
 
     for (int i = m_FirstVisible - 1; i >= 0; i--)
     {
-        PWSTR name = NULL;
-        if (SUCCEEDED(SHGetNameFromIDList(m_Crumbs[i], SIGDN_NORMALDISPLAY, &name)))
-        {
-            AppendMenuW(popup, MF_STRING, 1 + i, name);
-            CoTaskMemFree(name);
-        }
+        if (m_CrumbNames[i])
+            AppendMenuW(popup, MF_STRING, 1 + i, m_CrumbNames[i]);
     }
     command = TrackPopupMenuEx(popup, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, anchor.left, anchor.bottom,
                                m_hwnd, NULL);
@@ -839,13 +850,11 @@ CCabinetAddressBand::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         {
             CabinetPalette palette;
             RECT client;
-            HBRUSH brush;
             HDC dc = (HDC)wParam;
             CabinetGetPalette(&palette);
             GetClientRect(m_hwnd, &client);
-            brush = CreateSolidBrush(palette.Band);
-            FillRect(dc, &client, brush);
-            DeleteObject(brush);
+            SetDCBrushColor(dc, palette.Band);
+            FillRect(dc, &client, (HBRUSH)GetStockObject(DC_BRUSH));
             CabinetFillRound(dc, client, Scale(4), m_Editing ? palette.Window : palette.Box);
             if (m_Editing)
             {
@@ -991,14 +1000,12 @@ CCabinetSearchBox::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         {
             CabinetPalette palette;
             RECT client;
-            HBRUSH brush;
             HDC dc = (HDC)wParam;
             BOOL focus = GetFocus() == m_Edit;
             CabinetGetPalette(&palette);
             GetClientRect(m_hwnd, &client);
-            brush = CreateSolidBrush(palette.Band);
-            FillRect(dc, &client, brush);
-            DeleteObject(brush);
+            SetDCBrushColor(dc, palette.Band);
+            FillRect(dc, &client, (HBRUSH)GetStockObject(DC_BRUSH));
             CabinetFillRound(dc, client, Scale(4), focus ? palette.Window : palette.Box);
             if (focus)
             {

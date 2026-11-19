@@ -272,6 +272,8 @@
 @ cdecl SHELL_FS_HideExtension(wstr)
 @ cdecl SHELL_FS_ProcessDisplayFilename(ptr long)
 @ cdecl SHELL_GetCachedGlobalCounter(ptr ptr)
+@ cdecl SHELL_AssocGenerationGet()
+@ cdecl SHELL_AssocGenerationIncrement()
 @ cdecl SHELL_RegisterShellFolders()
 @ stdcall SHELL_StrCmpLogical(wstr wstr)
 @ stub SHFileOperationWithAdditionalFlags

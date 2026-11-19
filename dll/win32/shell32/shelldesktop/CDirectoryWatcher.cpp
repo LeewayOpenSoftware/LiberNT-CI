@@ -15,7 +15,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(shcn);
 static inline void
 NotifyFileSystemChange(LONG wEventId, LPCWSTR path1, LPCWSTR path2)
 {
-    SHChangeNotify(wEventId | SHCNE_INTERRUPT, SHCNF_PATHW | SHCNF_FLUSH, path1, path2);
+    SHChangeNotify(wEventId | SHCNE_INTERRUPT, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, path1, path2);
 }
 
 // The handle of the APC thread
@@ -23,10 +23,6 @@ static HANDLE s_hThreadAPC = NULL;
 
 // Terminate now?
 static BOOL s_fTerminateAllWatchers = FALSE;
-
-// the buffer for ReadDirectoryChangesW
-#define BUFFER_SIZE 0x1000
-static BYTE s_buffer[BUFFER_SIZE];
 
 // The APC thread function for directory watch
 static unsigned __stdcall DirectoryWatcherThreadFuncAPC(void *)
@@ -133,13 +129,13 @@ ConvertActionToEvent(DWORD Action, BOOL fDir)
 // Notify a filesystem notification using pDirectoryWatcher.
 void CDirectoryWatcher::ProcessNotification()
 {
-    PFILE_NOTIFY_INFORMATION pInfo = (PFILE_NOTIFY_INFORMATION)s_buffer;
+    PFILE_NOTIFY_INFORMATION pInfo = (PFILE_NOTIFY_INFORMATION)m_Buffer;
     WCHAR szName[MAX_PATH], szPath[MAX_PATH], szTempPath[MAX_PATH];
     DWORD dwEvent, cbName;
     BOOL fDir;
     TRACE("CDirectoryWatcher::ProcessNotification: enter\n");
 
-    // for each entry in s_buffer
+    // for each entry in m_Buffer
     szPath[0] = szTempPath[0] = 0;
     for (;;)
     {
@@ -325,13 +321,13 @@ BOOL CDirectoryWatcher::RestartWatching()
     }
 
     // initialize the buffer and the overlapped
-    ZeroMemory(s_buffer, sizeof(s_buffer));
+    ZeroMemory(m_Buffer, sizeof(m_Buffer));
     ZeroMemory(&m_overlapped, sizeof(m_overlapped));
     m_overlapped.hEvent = (HANDLE)this;
 
     // start the directory watch
     DWORD dwFilter = GetFilterFromEvents(SHCNE_ALLEVENTS);
-    if (!ReadDirectoryChangesW(m_hDirectory, s_buffer, sizeof(s_buffer),
+    if (!ReadDirectoryChangesW(m_hDirectory, m_Buffer, sizeof(m_Buffer),
                                m_fRecursive, dwFilter, NULL,
                                &m_overlapped, _NotificationCompletion))
     {
