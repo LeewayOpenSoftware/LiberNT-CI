@@ -2447,6 +2447,8 @@ void CDefView::CaptureItemPositions()
     ClearSavedItemPositions();
     if (!m_ListView || GetAutoArrange() == S_OK || IsComputerTileView())
         return;
+    if (m_FolderSettings.ViewMode != FVM_ICON && m_FolderSettings.ViewMode != FVM_SMALLICON)
+        return;
 
     for (int i = 0; i < m_ListView.GetItemCount(); ++i)
     {
