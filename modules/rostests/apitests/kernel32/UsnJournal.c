@@ -167,6 +167,89 @@ Done:
         FreeSid(Disable.Sid);
 }
 
+/* The wait edges: Timeout with nothing, handle close and dismount with a read still waiting */
+static void TestWaitEdges(void)
+{
+    USN_JOURNAL_DATA_V1 Data;
+    READ_USN_JOURNAL_DATA_V0 Read = { 0 };
+    OVERLAPPED Ov = { 0 };
+    UCHAR Buffer[512];
+    TIMED_READ *Timed;
+    HANDLE Volume, Async, Thread;
+    DWORD Returned;
+    BOOL Result;
+
+    Volume = OpenVolume(GENERIC_READ | GENERIC_WRITE, 0);
+    if (Volume == INVALID_HANDLE_VALUE ||
+        !DeviceIoControl(Volume, FSCTL_QUERY_USN_JOURNAL, NULL, 0, &Data, sizeof(Data), &Returned, NULL))
+    {
+        skip("No journal for the wait edges (%lu)\n", GetLastError());
+        if (Volume != INVALID_HANDLE_VALUE)
+            CloseHandle(Volume);
+        return;
+    }
+    Read.ReasonMask = 0xFFFFFFFF;
+    Read.UsnJournalID = Data.UsnJournalID;
+    Read.StartUsn = Data.NextUsn;
+
+    /* Timeout with no record: returns after the timeout with just the next USN */
+    Timed = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Timed));
+    ok(Timed != NULL, "HeapAlloc failed\n");
+    if (Timed)
+    {
+        Timed->Volume = Volume;
+        Timed->Input = Read;
+        Timed->Input.BytesToWaitFor = 1024 * 1024;
+        Timed->Input.Timeout = 2;
+        Thread = CreateThread(NULL, 0, TimedReadThread, Timed, 0, NULL);
+        if (WaitForSingleObject(Thread, 15000) == WAIT_OBJECT_0)
+        {
+            ok(Timed->Result && Timed->Returned == sizeof(USN) && *(USN *)Timed->Buffer >= Read.StartUsn,
+               "no-record timed read: %d (%lu), %lu bytes\n", Timed->Result, Timed->Error, Timed->Returned);
+            ok(Timed->Elapsed >= 1500, "no-record timed read returned after %lu ms\n", Timed->Elapsed);
+            HeapFree(GetProcessHeap(), 0, Timed);
+        }
+        else
+        {
+            /* Still blocked: leave its buffer alone */
+            ok(FALSE, "no-record timed read never returned\n");
+        }
+        CloseHandle(Thread);
+    }
+
+    /* Closing the handle of a waiting read cancels it (the cleanup path) */
+    Ov.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    Read.BytesToWaitFor = 1;
+    Async = OpenVolume(GENERIC_READ | GENERIC_WRITE, FILE_FLAG_OVERLAPPED);
+    Result = DeviceIoControl(Async, FSCTL_READ_USN_JOURNAL, &Read, sizeof(Read), Buffer, sizeof(Buffer), NULL, &Ov);
+    ok(!Result && GetLastError() == ERROR_IO_PENDING, "wait before close: %d, %lu\n", Result, GetLastError());
+    CloseHandle(Async);
+    if (!Result)
+    {
+        ok(WaitForSingleObject(Ov.hEvent, 10000) == WAIT_OBJECT_0, "close did not end the waiting read\n");
+        /* STATUS_CANCELLED */
+        ok(Ov.Internal == 0xC0000120, "read ended by close: 0x%lx\n", (ULONG)Ov.Internal);
+    }
+
+    /* Dismount with a read waiting: it completes with an error and the system stays up. Last. */
+    ResetEvent(Ov.hEvent);
+    Async = OpenVolume(GENERIC_READ | GENERIC_WRITE, FILE_FLAG_OVERLAPPED);
+    Result = DeviceIoControl(Async, FSCTL_READ_USN_JOURNAL, &Read, sizeof(Read), Buffer, sizeof(Buffer), NULL, &Ov);
+    ok(!Result && GetLastError() == ERROR_IO_PENDING, "wait before dismount: %d, %lu\n", Result, GetLastError());
+    DeviceIoControl(Volume, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &Returned, NULL);
+    ok(DeviceIoControl(Volume, FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0, &Returned, NULL),
+       "FSCTL_DISMOUNT_VOLUME: %lu\n", GetLastError());
+    if (!Result)
+    {
+        ok(WaitForSingleObject(Ov.hEvent, 10000) == WAIT_OBJECT_0, "dismount did not end the waiting read\n");
+        trace("read ended by dismount: 0x%lx\n", (ULONG)Ov.Internal);
+        ok(Ov.Internal != STATUS_PENDING && Ov.Internal != 0, "dismounted read status 0x%lx\n", (ULONG)Ov.Internal);
+    }
+    CloseHandle(Async);
+    CloseHandle(Ov.hEvent);
+    CloseHandle(Volume);
+}
+
 START_TEST(UsnJournal)
 {
     LPCWSTR Child = wcsstr(GetCommandLineW(), USN_CHILD_MARKER);
@@ -324,6 +407,9 @@ START_TEST(UsnJournal)
         HANDLE Thread;
         USN TimedUsn;
 
+        ok(Timed != NULL, "HeapAlloc failed\n");
+        if (!Timed)
+            goto TimedDone;
         DeviceIoControl(Volume, FSCTL_QUERY_USN_JOURNAL, NULL, 0, &Data, sizeof(Data), &Returned, NULL);
         Timed->Volume = Volume;
         Timed->Input = Read;
@@ -341,9 +427,11 @@ START_TEST(UsnJournal)
         HeapFree(GetProcessHeap(), 0, Timed);
     }
 
+TimedDone:
     CloseHandle(File);
     DeleteFileW(FilePath);
     CloseHandle(Volume);
 
     TestUnprivilegedOpen(Letter);
+    TestWaitEdges();
 }
