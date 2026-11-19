@@ -11,6 +11,7 @@ list(APPEND SOURCE
     LocalAuth.c
     ServerRestart.c
     ServerIdentity.c
+    TcpListen.c
     testlist.c
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_c.c
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_s.c)
@@ -18,5 +19,5 @@ list(APPEND SOURCE
 add_executable(rpcrt4_apitest ${SOURCE})
 target_link_libraries(rpcrt4_apitest wine ${PSEH_LIB})
 set_module_type(rpcrt4_apitest win32cui)
-add_importlibs(rpcrt4_apitest rpcrt4 advapi32 msvcrt kernel32 ntdll)
+add_importlibs(rpcrt4_apitest rpcrt4 advapi32 ws2_32 msvcrt kernel32 ntdll)
 add_rostests_file(TARGET rpcrt4_apitest)
