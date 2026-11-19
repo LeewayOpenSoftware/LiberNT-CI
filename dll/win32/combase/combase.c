@@ -1544,6 +1544,7 @@ HRESULT WINAPI CoGetObjectContext(REFIID riid, void **ppv)
     return IObjContext_QueryInterface(context, riid, ppv);
 }
 
+#ifndef __REACTOS__
 /***********************************************************************
  *           CoGetDefaultContext    (combase.@)
  */
@@ -1553,6 +1554,7 @@ HRESULT WINAPI CoGetDefaultContext(APTTYPE type, REFIID riid, void **obj)
 
     return E_NOINTERFACE;
 }
+#endif
 
 /***********************************************************************
  *          CoGetCallState        (combase.@)
@@ -2648,6 +2650,9 @@ HRESULT WINAPI CoWaitForMultipleHandles(DWORD flags, DWORD timeout, ULONG handle
         return hr;
 
     apt = com_get_current_apt();
+#ifdef __REACTOS__
+    apt = neutral_wait_apartment(apt);
+#endif
     message_loop = apt && !apt->multi_threaded;
 
     if (message_loop)
@@ -3207,7 +3212,13 @@ static HRESULT WINAPI thread_context_callback_ContextCallback(IContextCallback *
     }
 
 #ifdef __REACTOS__
-    if (!apt->multi_threaded && context == mta_context)
+    if (neutral_is_context(&context->IObjContext_iface))
+    {
+        apartment_release(apt);
+        return neutral_context_callback(&context->IComThreadingInfo_iface, callback, param, riid);
+    }
+
+    if ((!apt->multi_threaded || apt->neutral) && context == mta_context)
     {
         IComThreadingInfo *cti = NULL;
         IObjContext *saved_token;
@@ -3428,6 +3439,15 @@ HRESULT WINAPI CoGetContextToken(ULONG_PTR *token)
         return CO_E_NOTINITIALIZED;
     }
 
+#ifdef __REACTOS__
+    if (apt->neutral)
+    {
+        *token = (ULONG_PTR)neutral_context_token();
+        apartment_release(apt);
+        return *token ? S_OK : E_OUTOFMEMORY;
+    }
+#endif
+
     if (tlsdata->context_token)
     {
         struct thread_context *context = impl_from_IObjContext(tlsdata->context_token);
@@ -3491,6 +3511,59 @@ HRESULT WINAPI CoGetContextToken(ULONG_PTR *token)
     apartment_release(apt);
     return S_OK;
 }
+
+#ifdef __REACTOS__
+IObjContext *context_create_token(OXID oxid)
+{
+    struct thread_context *context;
+
+    if (!(context = calloc(1, sizeof(*context))))
+        return NULL;
+
+    context->IComThreadingInfo_iface.lpVtbl = &thread_context_info_vtbl;
+    context->IContextCallback_iface.lpVtbl = &thread_context_callback_vtbl;
+    context->IObjContext_iface.lpVtbl = &thread_object_context_vtbl;
+    context->ref = 1;
+    context->reported_ref = 0;
+    context->oxid = oxid;
+    return &context->IObjContext_iface;
+}
+
+IObjContext *context_get_mta_token(OXID oxid)
+{
+    struct thread_context *context;
+    IObjContext *token;
+
+    EnterCriticalSection(&context_cs);
+    if ((context = mta_context))
+        InterlockedIncrement(&context->ref);
+    LeaveCriticalSection(&context_cs);
+    if (context)
+        return &context->IObjContext_iface;
+
+    if (!(token = context_create_token(oxid)))
+        return NULL;
+
+    EnterCriticalSection(&context_cs);
+    if (!mta_context)
+    {
+        mta_context = impl_from_IObjContext(token);
+        LeaveCriticalSection(&context_cs);
+        return token;
+    }
+    context = mta_context;
+    InterlockedIncrement(&context->ref);
+    LeaveCriticalSection(&context_cs);
+
+    context_token_release(token);
+    return &context->IObjContext_iface;
+}
+
+void context_release_token(IObjContext *token)
+{
+    context_token_release(token);
+}
+#endif
 
 /***********************************************************************
  *              CoGetCurrentLogicalThreadId    (combase.@)
@@ -3725,6 +3798,11 @@ HRESULT WINAPI CoGetApartmentType(APTTYPE *type, APTTYPEQUALIFIER *qualifier)
 
     if (FAILED(hr = com_get_tlsdata(&tlsdata)))
         return hr;
+
+#ifdef __REACTOS__
+    if (neutral_get_apartment_type(type, qualifier))
+        return S_OK;
+#endif
 
     if (!tlsdata->apt)
         *type = APTTYPE_CURRENT;

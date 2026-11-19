@@ -135,6 +135,7 @@ struct message_state
     DWORD target_tid;
 #ifdef __REACTOS__
     OXID target_oxid;
+    BOOL neutral;
 #endif
     struct dispatch_params params;
 };
@@ -1351,6 +1352,7 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
     message_state->target_tid = 0;
 #ifdef __REACTOS__
     message_state->target_oxid = 0;
+    message_state->neutral = FALSE;
 #endif
     memset(&message_state->params, 0, sizeof(message_state->params));
 
@@ -1372,6 +1374,17 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
                                   &message_state->params.iface);
     if (hr == S_OK)
     {
+#ifdef __REACTOS__
+        /* a call into the neutral apartment runs on the calling thread */
+        if (apt->neutral)
+        {
+            message_state->params.bypass_rpcrt = TRUE;
+            message_state->params.imp_level = This->imp_level != RPC_C_IMP_LEVEL_DEFAULT ? This->imp_level : com_default_imp_level;
+            message_state->target_oxid = apartment_getoxid(apt);
+            message_state->neutral = TRUE;
+        }
+        else
+#endif
         /* stub, chan, iface and iid are unneeded in multi-threaded case as we go
          * via the RPC runtime */
         if (apt->multi_threaded)
@@ -1405,7 +1418,11 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
      * ClientRpcChannelBuffer_SendReceive */
 
     /* shortcut the RPC runtime */
+#ifdef __REACTOS__
+    if (message_state->target_hwnd || message_state->neutral)
+#else
     if (message_state->target_hwnd)
+#endif
     {
         msg->Buffer = malloc(msg->BufferLength);
         if (msg->Buffer)
@@ -1589,8 +1606,27 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
         msg->ProcNum &= ~RPC_FLAGS_VALID_BIT;
 
 #ifdef __REACTOS__
-        target_apt = apartment_findfromoxid(message_state->target_oxid);
-        if (target_apt)
+        if (message_state->neutral)
+        {
+            struct neutral_frame frame;
+
+            if (SUCCEEDED(hr = neutral_enter(&frame)))
+            {
+                rpc_execute_call(&message_state->params);
+                neutral_leave(&frame);
+            }
+            posted = SUCCEEDED(hr);
+        }
+        else if (message_state->target_tid == GetCurrentThreadId() && neutral_is_outer(message_state->target_oxid))
+        {
+            struct neutral_frame saved;
+
+            neutral_suspend(&saved);
+            rpc_execute_call(&message_state->params);
+            neutral_resume(&saved);
+            posted = TRUE;
+        }
+        else if ((target_apt = apartment_findfromoxid(message_state->target_oxid)))
         {
             EnterCriticalSection(&target_apt->cs);
             posted = !target_apt->leaving &&
@@ -2526,6 +2562,22 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
 
         com_get_tlsdata(&tlsdata);
 
+#ifdef __REACTOS__
+        if (apt->neutral)
+        {
+            struct neutral_frame frame;
+
+            if (SUCCEEDED(neutral_enter(&frame)))
+            {
+                rpc_execute_call(params);
+                neutral_leave(&frame);
+            }
+            else
+                params->hr = E_OUTOFMEMORY;
+        }
+        else
+        {
+#endif
         if (!tlsdata->apt)
         {
             enter_apartment(tlsdata, COINIT_MULTITHREADED);
@@ -2536,6 +2588,9 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
         {
             leave_apartment(tlsdata);
         }
+#ifdef __REACTOS__
+        }
+#endif
     }
 
     hr = params->hr;

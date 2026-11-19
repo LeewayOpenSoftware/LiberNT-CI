@@ -688,6 +688,19 @@ CoGetObjectContext(
 _Check_return_
 HRESULT
 WINAPI
+CoGetDefaultContext(
+  _In_ APTTYPE aptType,
+  _In_ REFIID riid,
+  _Outptr_ LPVOID *ppv);
+
+HRESULT
+WINAPI
+CoDisconnectContext(
+  _In_ DWORD dwTimeout);
+
+_Check_return_
+HRESULT
+WINAPI
 CoRegisterInitializeSpy(
   _In_ IInitializeSpy *spy,
   _Out_ ULARGE_INTEGER *cookie);

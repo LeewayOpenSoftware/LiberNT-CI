@@ -88,7 +88,7 @@
 @ stdcall CoDecodeProxy(long int64 ptr)
 @ stdcall CoDecrementMTAUsage(ptr)
 @ stdcall CoDisableCallCancellation(ptr)
-@ stub CoDisconnectContext
+@ stdcall CoDisconnectContext(long)
 @ stdcall CoDisconnectObject(ptr long)
 @ stdcall CoEnableCallCancellation(ptr)
 @ stdcall CoFileTimeNow(ptr)

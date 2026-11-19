@@ -18,6 +18,7 @@ list(APPEND SOURCE
     hglobalstream.c
     malloc.c
     marshal.c
+    neutral.c
     roapi.c
     rpc.c
     string.c

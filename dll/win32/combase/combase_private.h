@@ -42,6 +42,7 @@ struct apartment
     BOOL being_destroyed;    /* is currently being destroyed */
 #ifdef __REACTOS__
     BOOL leaving;
+    BOOL neutral;            /* the neutral apartment (RO) */
 #endif
 
     /* FIXME: OIDs should be given out by RPCSS */
@@ -99,6 +100,9 @@ struct tlsdata
     DWORD             spies_lock;
     DWORD             cancelcount;
     CO_MTA_USAGE_COOKIE implicit_mta_cookie; /* mta referenced by roapi from sta thread */
+#ifdef __REACTOS__
+    struct neutral_frame *neutral_frame; /* innermost switch into the neutral apartment */
+#endif
 };
 
 extern HRESULT WINAPI InternalTlsAllocData(struct tlsdata **data);
@@ -181,6 +185,42 @@ HRESULT apartment_increment_mta_usage(CO_MTA_USAGE_COOKIE *cookie);
 void apartment_decrement_mta_usage(CO_MTA_USAGE_COOKIE cookie);
 HRESULT ensure_mta(void);
 struct apartment * apartment_get_mta(void);
+#ifdef __REACTOS__
+/* Data2 of the IPIDs of neutral apartment stubs; thread ids are multiples of 4, 0xffff marks IRemUnknown */
+#define NEUTRAL_IPID_MARKER 0xfffe
+
+struct neutral_frame
+{
+    struct neutral_frame *prev;
+    struct apartment *apt;
+    IObjContext *token;
+    struct apartment *neutral;
+    BOOL entered;
+};
+
+struct apartment *apartment_get_na(void);
+struct apartment *apartment_get_main_sta(void);
+HRESULT apartment_load_class_object(struct apartment *apt, const struct class_reg_data *regdata,
+        REFCLSID rclsid, REFIID riid, void **ppv);
+IObjContext *context_create_token(OXID oxid);
+IObjContext *context_get_mta_token(OXID oxid);
+void context_release_token(IObjContext *token);
+struct apartment *neutral_get_apartment(void);
+BOOL neutral_is_context(IObjContext *token);
+IObjContext *neutral_context_token(void);
+HRESULT neutral_enter(struct neutral_frame *frame);
+void neutral_leave(struct neutral_frame *frame);
+BOOL neutral_suspend(struct neutral_frame *saved);
+void neutral_resume(struct neutral_frame *saved);
+BOOL neutral_is_outer(OXID oxid);
+struct apartment *neutral_wait_apartment(struct apartment *apt);
+BOOL neutral_get_apartment_type(APTTYPE *type, APTTYPEQUALIFIER *qualifier);
+HRESULT neutral_get_class_object(struct apartment *apt, const struct class_reg_data *regdata,
+        REFCLSID rclsid, REFIID riid, void **ppv);
+struct tagComCallData;
+HRESULT neutral_context_callback(IComThreadingInfo *info, HRESULT (__stdcall *callback)(struct tagComCallData *),
+        struct tagComCallData *param, REFIID riid);
+#endif
 HRESULT apartment_get_inproc_class_object(struct apartment *apt, const struct class_reg_data *regdata,
         REFCLSID rclsid, REFIID riid, DWORD class_context, void **ppv);
 HRESULT apartment_get_local_server_stream(struct apartment *apt, IStream **ret);

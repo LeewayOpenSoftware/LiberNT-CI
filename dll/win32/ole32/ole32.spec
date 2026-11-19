@@ -25,7 +25,7 @@
 @ stub CoDeactivateObject
 @ stdcall CoDecrementMTAUsage(ptr) combase.CoDecrementMTAUsage
 @ stdcall CoDisableCallCancellation(ptr) combase.CoDisableCallCancellation
-@ stdcall -stub CoDisconnectContext(long) combase.CoDisconnectContext
+@ stdcall CoDisconnectContext(long) combase.CoDisconnectContext
 @ stdcall CoDisconnectObject(ptr long) combase.CoDisconnectObject
 @ stdcall CoDosDateTimeToFileTime(long long ptr) kernel32.DosDateTimeToFileTime
 @ stdcall CoEnableCallCancellation(ptr) combase.CoEnableCallCancellation
