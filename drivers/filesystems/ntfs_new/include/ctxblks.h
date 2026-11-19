@@ -445,6 +445,8 @@ typedef struct _FCB
     ULONG AutomaticTimestampMask;
     /* USN_SOURCE_* flags set by FSCTL_MARK_HANDLE, stamped on this handle's journal records */
     ULONG UsnSourceInfo;
+    /* Set by cleanup before it cancels this handle's waiting journal reads */
+    BOOLEAN UsnCleanedUp;
 
     // Used for file name information;
     UNICODE_STRING FileName;

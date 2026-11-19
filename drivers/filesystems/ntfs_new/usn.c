@@ -461,7 +461,8 @@ NtfsUsnWakeWorker(
             continue;
         }
         /* The handle was cleaned up while this request was out of the queue */
-        if (IoGetCurrentIrpStackLocation(Irp)->FileObject->Flags & FO_CLEANUP_COMPLETE)
+        if ((IoGetCurrentIrpStackLocation(Irp)->FileObject->Flags & FO_CLEANUP_COMPLETE) ||
+            NtfsGetFileContext(IoGetCurrentIrpStackLocation(Irp)->FileObject)->UsnCleanedUp)
         {
             NtfsUsnCompleteWait(Irp, STATUS_CANCELLED, 0);
             continue;
@@ -598,6 +599,9 @@ NtfsUsnCancelFileWaiters(
 
     if (!VolCB || !VolCB->UsnDeviceObject || !FileObject)
         return;
+    /* Mark the handle first: a worker holding one of its reads then sees it, or the new sequence */
+    if (NtfsGetFileContext(FileObject))
+        NtfsGetFileContext(FileObject)->UsnCleanedUp = TRUE;
     InterlockedIncrement(&VolCB->UsnCleanupSeq);
     while ((Irp = IoCsqRemoveNextIrp(&VolCB->UsnWaitCsq, FileObject)) != NULL)
         NtfsUsnCompleteWait(Irp, STATUS_CANCELLED, 0);
