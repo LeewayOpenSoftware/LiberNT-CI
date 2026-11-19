@@ -13,6 +13,7 @@
 #include "winbase.h"
 #include "winuser.h"
 #include "objbase.h"
+#include "dde.h"
 
 #include "wine/debug.h"
 #include "wine/list.h"
@@ -526,13 +527,25 @@ HRESULT WINAPI CoGetCallerTID(DWORD *tid)
     return call->caller_pid == GetCurrentProcessId() ? S_OK : S_FALSE;
 }
 
-/* An STA waits for its handles and runs incoming COM calls, but leaves other messages queued */
-static HRESULT wait_dispatching_calls(struct apartment *apt, DWORD timeout, ULONG count, const HANDLE *handles,
+/* The messages an STA wait dispatches without CWMO_DISPATCH_WINDOW_MESSAGES: the same set as
+   CoWaitForMultipleHandles (incoming COM calls, DDE, paint and sent messages) */
+static BOOL peek_wait_message(HWND win, BOOL all, MSG *msg)
+{
+    if (all)
+        return PeekMessageW(msg, NULL, 0, 0, PM_REMOVE | PM_NOYIELD);
+    return (win && PeekMessageW(msg, win, 0, 0, PM_REMOVE | PM_NOYIELD)) ||
+           PeekMessageW(msg, NULL, WM_DDE_FIRST, WM_DDE_LAST, PM_REMOVE | PM_NOYIELD) ||
+           PeekMessageW(msg, NULL, 0, 0, PM_QS_PAINT | PM_QS_SENDMESSAGE | PM_REMOVE | PM_NOYIELD);
+}
+
+/* An STA waits for its handles and runs incoming COM calls; other window messages only if asked */
+static HRESULT wait_dispatching(struct apartment *apt, BOOL all, DWORD timeout, ULONG count, const HANDLE *handles,
         DWORD *index)
 {
     DWORD start = GetTickCount(), elapsed, res;
     BOOL quit = FALSE;
     UINT quit_code = 0;
+    int msg_count;
     HRESULT hr;
     HWND win;
     MSG msg;
@@ -545,11 +558,13 @@ static HRESULT wait_dispatching_calls(struct apartment *apt, DWORD timeout, ULON
         elapsed = GetTickCount() - start;
         res = MsgWaitForMultipleObjectsEx(count, handles,
                 timeout == INFINITE ? INFINITE : (elapsed >= timeout ? 0 : timeout - elapsed),
-                QS_SENDMESSAGE | QS_POSTMESSAGE, 0);
+                all ? QS_ALLINPUT : QS_SENDMESSAGE | QS_POSTMESSAGE | QS_PAINT, 0);
 
         if (res == WAIT_OBJECT_0 + count)
         {
-            while (win && PeekMessageW(&msg, win, 0, 0, PM_REMOVE | PM_NOYIELD))
+            /* Back to the handles after 100 messages, as CoWaitForMultipleHandles does */
+            msg_count = 0;
+            while (!quit && msg_count++ < 100 && peek_wait_message(win, all, &msg))
             {
                 /* WM_QUIT passes every filter; it goes back to the thread when the wait ends */
                 if (msg.message == WM_QUIT)
@@ -558,6 +573,7 @@ static HRESULT wait_dispatching_calls(struct apartment *apt, DWORD timeout, ULON
                     quit_code = (UINT)msg.wParam;
                     break;
                 }
+                TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
             /* Marks the rest as seen, so that only new messages wake the wait */
@@ -606,8 +622,8 @@ HRESULT WINAPI CoWaitForMultipleObjects(DWORD flags, DWORD timeout, ULONG count,
 
     /* No ASTA here: an MTA ignores both flags, and an STA always runs incoming calls */
     apt = tlsdata->apt;
-    if (!apt || apt->multi_threaded || (flags & CWMO_DISPATCH_WINDOW_MESSAGES))
+    if (!apt || apt->multi_threaded)
         return CoWaitForMultipleHandles(0, timeout, count, (HANDLE *)handles, index);
 
-    return wait_dispatching_calls(apt, timeout, count, handles, index);
+    return wait_dispatching(apt, !!(flags & CWMO_DISPATCH_WINDOW_MESSAGES), timeout, count, handles, index);
 }
