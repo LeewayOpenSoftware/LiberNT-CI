@@ -1037,6 +1037,15 @@ static void *rpcrt4_protseq_np_get_wait_array(RpcServerProtseq *protseq, void *p
                 continue;
 
             status = NtFsControlFile(conn->pipe, event, NULL, NULL, &conn->io_status, FSCTL_PIPE_LISTEN, NULL, 0, NULL, 0);
+#ifdef __REACTOS__
+            if (status == STATUS_PIPE_CLOSING || status == STATUS_PIPE_BROKEN)
+            {
+                /* The client of this instance has already gone: free the instance and listen again,
+                 * otherwise nobody listens on the pipe any more */
+                DisconnectNamedPipe(conn->pipe);
+                status = NtFsControlFile(conn->pipe, event, NULL, NULL, &conn->io_status, FSCTL_PIPE_LISTEN, NULL, 0, NULL, 0);
+            }
+#endif
             switch (status)
             {
             case STATUS_SUCCESS:
@@ -1088,6 +1097,9 @@ static int rpcrt4_protseq_np_wait_for_new_connection(RpcServerProtseq *protseq, 
     DWORD res;
     RpcConnection *cconn = NULL;
     RpcConnection_np *conn;
+#ifdef __REACTOS__
+    BOOL listen_failed = FALSE;
+#endif
 
     if (!objs)
         return -1;
@@ -1122,11 +1134,22 @@ static int rpcrt4_protseq_np_wait_for_new_connection(RpcServerProtseq *protseq, 
                 if (conn->io_status.Status == STATUS_SUCCESS || conn->io_status.Status == STATUS_PIPE_CONNECTED)
                     cconn = rpcrt4_spawn_connection(&conn->common);
                 else
+                {
                     ERR("listen failed %lx\n", conn->io_status.Status);
+#ifdef __REACTOS__
+                    /* Keep serving: free the instance, the next wait listens on it again */
+                    DisconnectNamedPipe(conn->pipe);
+                    listen_failed = TRUE;
+#endif
+                }
                 break;
             }
         }
         LeaveCriticalSection(&protseq->cs);
+#ifdef __REACTOS__
+        if (listen_failed)
+            return 1;
+#endif
         if (!cconn)
         {
             ERR("failed to locate connection for handle %p\n", b_handle);
