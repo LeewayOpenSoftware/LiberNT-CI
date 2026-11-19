@@ -1164,6 +1164,50 @@ ThemeDwmSetCaptionProperty(HWND hWnd, PWND_DATA pwndData, UINT Slot, LPCWSTR Nam
         RemovePropW(hWnd, Name);
 }
 
+/* The width of the visible frame comes from BorderSize on the frame parts; the rest of the NC band is transparent */
+static ULONG
+ThemeDwmFrameInsets(HWND hWnd, const WINDOWINFO *wi, PWND_DATA pwndData)
+{
+    HTHEME theme;
+    INT visible, visibleBottom, left, bottom;
+    UINT dpi;
+
+    if (!g_bThemeHooksActive || (wi->dwStyle & (WS_CHILD | WS_MINIMIZE | WS_MAXIMIZE)) ||
+        (wi->dwStyle & WS_CAPTION) != WS_CAPTION || pwndData->HasAppDefinedRgn || pwndData->HasThemeRgn)
+        return 0;
+    if (!GetPropW(hWnd, DWM_PROP_THEMED_FRAME) && !GetPropW(hWnd, DWM_PROP_FRAME_ALPHA))
+        return 0;
+    theme = GetNCCaptionTheme(hWnd, wi->dwStyle);
+    if (!theme || FAILED(GetThemeInt(theme, WP_FRAMELEFT, 0, TMT_BORDERSIZE, &visible)) || visible <= 0)
+        return 0;
+    if (FAILED(GetThemeInt(theme, WP_FRAMEBOTTOM, 0, TMT_BORDERSIZE, &visibleBottom)) || visibleBottom <= 0)
+        visibleBottom = visible;
+    dpi = MSSTYLES_GetThemeDPI((PTHEME_CLASS)theme);
+    if (!dpi)
+        dpi = 96;
+    visible = MulDiv(visible, dpi, 96);
+    visibleBottom = MulDiv(visibleBottom, dpi, 96);
+    left = max(0, (INT)wi->cxWindowBorders - visible);
+    bottom = max(0, (INT)wi->cyWindowBorders - visibleBottom);
+    left = min(left, 255);
+    bottom = min(bottom, 255);
+    return left || bottom ? DWM_FRAME_INSETS_PACK(left, 0, left, bottom) : 0;
+}
+
+static VOID
+ThemeDwmPublishFrameInsets(HWND hWnd, const WINDOWINFO *wi, PWND_DATA pwndData)
+{
+    ULONG Value = ThemeDwmFrameInsets(hWnd, wi, pwndData);
+
+    if (pwndData->DwmFrameInsets == Value)
+        return;
+    pwndData->DwmFrameInsets = Value;
+    if (Value)
+        SetPropW(hWnd, DWM_PROP_FRAME_INSETS, (HANDLE)(ULONG_PTR)Value);
+    else
+        RemovePropW(hWnd, DWM_PROP_FRAME_INSETS);
+}
+
 static VOID
 ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWORD htDown)
 {
@@ -1231,6 +1275,7 @@ ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWOR
         ThemeDwmSetCaptionProperty(hWnd, pwndData, i, Names[i], Spans[i]);
     ThemeDwmSetCaptionProperty(hWnd, pwndData, DWM_CAPTION_BUTTONS, DWM_PROP_CAPTION_ROW, Row);
     ThemeDwmSetCaptionProperty(hWnd, pwndData, DWM_CAPTION_BUTTONS + 1, DWM_PROP_CAPTION_STATE, State);
+    ThemeDwmPublishFrameInsets(hWnd, wi, pwndData);
 }
 
 void

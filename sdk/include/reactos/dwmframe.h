@@ -270,6 +270,9 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_PROP_BACKDROP_NC_EXTEND_RIGHT L"ReactOS.Dwm.BackdropNcExtendRight"
 #define DWM_PROP_BACKDROP_NC_EXTEND_BOTTOM L"ReactOS.Dwm.BackdropNcExtendBottom"
 #define DWM_PROP_FRAME_ALPHA          L"ReactOS.Dwm.FrameAlpha"
+#define DWM_PROP_FRAME_INSETS         L"ReactOS.Dwm.FrameInsets"
+#define DWM_FRAME_INSETS_PACK(L, T, R, B) \
+    ((ULONG)(L) | ((ULONG)(T) << 8) | ((ULONG)(R) << 16) | ((ULONG)(B) << 24))
 #define DWM_PROP_CAPTION_CLOSE        L"ReactOS.Dwm.CaptionClose"
 #define DWM_PROP_CAPTION_MAXIMIZE     L"ReactOS.Dwm.CaptionMaximize"
 #define DWM_PROP_CAPTION_MINIMIZE     L"ReactOS.Dwm.CaptionMinimize"
