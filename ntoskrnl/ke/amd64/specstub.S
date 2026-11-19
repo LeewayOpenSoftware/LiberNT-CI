@@ -22,7 +22,7 @@ KiSpecCtrlEnterKernel:
     push rdx
     mov ecx, HEX(48)
     mov eax, dword ptr KiSpecCtrlKernel[rip]
-    xor edx, edx
+    mov edx, 0
     wrmsr
     pop rdx
     pop rcx
@@ -36,7 +36,7 @@ KiSpecCtrlExitKernel:
     push rdx
     mov ecx, HEX(48)
     mov eax, dword ptr KiSpecCtrlUser[rip]
-    xor edx, edx
+    mov edx, 0
     wrmsr
     pop rdx
     pop rcx

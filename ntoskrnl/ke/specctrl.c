@@ -39,8 +39,9 @@ static const UCHAR KiSiteMarker[6] = { 0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54 };
 #define KSPEC_SITE_EXIT                 0x58
 #define KSPEC_SITE_RSB                  0x52
 
-/* Internal kind: IBRS written on kernel entry and exit */
+/* Internal kinds: IBRS written on kernel entry and exit; return stack refill on context switch */
 #define KSPEC_PATCH_IBRS                0x80000000
+#define KSPEC_PATCH_RSB                 0x40000000
 
 /* lfence followed by a 4-byte nop */
 static const UCHAR KiFenceSiteLfence[7] = { 0x0F, 0xAE, 0xE8, 0x0F, 0x1F, 0x40, 0x00 };
@@ -239,7 +240,7 @@ KiPatchImageSites(
                     break;
 
                 case KSPEC_SITE_RSB:
-                    if (!(Kinds & KSPEC_PATCH_IBRS)) continue;
+                    if (!(Kinds & KSPEC_PATCH_RSB)) continue;
                     KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecFillReturnStack);
                     break;
 
@@ -282,7 +283,7 @@ KiPatchBootImages(
         if (High - Low >= 0x7FFF0000)
         {
             DPRINT1("Speculation hardening: kernel and HAL too far apart, rel32 sites not patched\n");
-            *Kinds &= ~(KSPEC_HARDEN_MDS | KSPEC_PATCH_IBRS);
+            *Kinds &= ~(KSPEC_HARDEN_MDS | KSPEC_PATCH_IBRS | KSPEC_PATCH_RSB);
         }
     }
     if (!*Kinds)
@@ -373,11 +374,14 @@ KiApplySpeculationPolicy(
     }
 
 #ifdef _M_AMD64
+    /* Refill the return stack on context switch in every mode, as other kernels do */
+    if (KiSpeculationBtiMode != KSPEC_BTI_NONE)
+        Kinds |= KSPEC_PATCH_RSB;
     if (Kinds)
         Sites = KiPatchBootImages(LoaderBlock, &Kinds);
     if ((KiSpeculationBtiMode == KSPEC_BTI_LEGACY_IBRS) && !(Kinds & KSPEC_PATCH_IBRS))
         KiSpeculationBtiMode = KSPEC_BTI_NONE;
-    Kinds &= ~KSPEC_PATCH_IBRS;
+    Kinds &= ~(KSPEC_PATCH_IBRS | KSPEC_PATCH_RSB);
 #else
     UNREFERENCED_PARAMETER(LoaderBlock);
     /* No buffer clearing sites on this architecture yet */
