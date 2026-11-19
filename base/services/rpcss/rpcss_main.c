@@ -300,7 +300,14 @@ static RPC_STATUS RPCSS_Initialize(void)
 
     for (i = 0, j = 0; i < ARRAY_SIZE(ifspecs); ++i, j = i)
     {
+#ifdef __REACTOS__
+        /* The endpoint mapper must stay reachable from other machines; the private interfaces must not */
+        status = RpcServerRegisterIf3(ifspecs[i], NULL, NULL,
+                ifspecs[i] == epm_v3_0_s_ifspec ? 0 : RPC_IF_ALLOW_LOCAL_ONLY,
+                RPC_C_LISTEN_MAX_CALLS_DEFAULT, (UINT)-1, NULL, NULL);
+#else
         status = RpcServerRegisterIf(ifspecs[i], NULL, NULL);
+#endif
         if (status != RPC_S_OK)
             goto fail;
     }
