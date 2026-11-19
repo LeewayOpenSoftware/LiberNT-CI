@@ -22,6 +22,9 @@ void __RPC_USER midl_user_free(void __RPC_FAR * ptr)
     HeapFree(GetProcessHeap(), 0, ptr);
 }
 
+/* The server runs as LocalSystem. Naming it makes rpcrt4 refuse a process that took the endpoint first. */
+static const SID LocalSystemSid = { SID_REVISION, 1, {SECURITY_NT_AUTHORITY}, { SECURITY_LOCAL_SYSTEM_RID } };
+
 /* ERROR_ELEVATION_REQUIRED: no broker path for this caller (standard user, credential
  * policy, LUA off); ERROR_CANCELLED: the user said no; ERROR_SERVICE_NOT_ACTIVE: no broker. */
 DWORD
@@ -36,6 +39,8 @@ SHELL_ElevateProcess(
 {
     SECL_ELEVATE_REQUEST Request = { 0 };
     SECL_RESPONSE Response = { 0 };
+    RPC_SECURITY_QOS_V3_W Qos = { RPC_C_SECURITY_QOS_VERSION_3, RPC_C_QOS_CAPABILITIES_DEFAULT, RPC_C_QOS_IDENTITY_DYNAMIC,
+                                  RPC_C_IMP_LEVEL_IMPERSONATE, 0, { NULL }, (PSID)&LocalSystemSid };
     RPC_WSTR StringBinding = NULL;
     handle_t hBinding = NULL;
     DWORD dwError;
@@ -64,6 +69,14 @@ SHELL_ElevateProcess(
         return ERROR_SERVICE_NOT_ACTIVE;
     }
     RpcStringFreeW(&StringBinding);
+
+    dwError = RpcBindingSetAuthInfoExW(hBinding, NULL, RPC_C_AUTHN_LEVEL_NONE, RPC_C_AUTHN_WINNT,
+                                       NULL, 0, (RPC_SECURITY_QOS *)&Qos);
+    if (dwError != RPC_S_OK)
+    {
+        RpcBindingFree(&hBinding);
+        return dwError;
+    }
 
     RpcTryExcept
     {

@@ -82,11 +82,14 @@ static DWORD cred_dpapi_status_to_error(LONG status)
 
 /* Bind to the LSA DPAPI server over local RPC, authenticated and sealed; fail closed so a
  * credential secret is never sent over an unauthenticated channel. */
+/* The server runs as LocalSystem. Naming it makes rpcrt4 refuse a process that took the endpoint first. */
+static const SID LocalSystemSid = { SID_REVISION, 1, {SECURITY_NT_AUTHORITY}, { SECURITY_LOCAL_SYSTEM_RID } };
+
 static handle_t cred_dpapi_bind(void)
 {
     RPC_WSTR string_binding = NULL;
     handle_t binding = NULL;
-    RPC_SECURITY_QOS qos;
+    RPC_SECURITY_QOS_V3_W qos;
     RPC_STATUS status;
 
     if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncalrpc", NULL,
@@ -97,12 +100,15 @@ static handle_t cred_dpapi_bind(void)
     if (status != RPC_S_OK)
         return NULL;
 
-    qos.Version = RPC_C_SECURITY_QOS_VERSION;
+    qos.Version = RPC_C_SECURITY_QOS_VERSION_3;
     qos.Capabilities = RPC_C_QOS_CAPABILITIES_DEFAULT;
     qos.IdentityTracking = RPC_C_QOS_IDENTITY_STATIC;
     qos.ImpersonationType = RPC_C_IMP_LEVEL_IDENTIFY;
+    qos.AdditionalSecurityInfoType = 0;
+    qos.u.HttpCredentials = NULL;
+    qos.Sid = (PSID)&LocalSystemSid;
     if (RpcBindingSetAuthInfoExW(binding, NULL, RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
-                                 RPC_C_AUTHN_WINNT, NULL, 0, &qos) != RPC_S_OK)
+                                 RPC_C_AUTHN_WINNT, NULL, 0, (RPC_SECURITY_QOS *)&qos) != RPC_S_OK)
     {
         RpcBindingFree(&binding);
         return NULL;

@@ -10,6 +10,7 @@ list(APPEND SOURCE
     EmbeddedPointers.c
     LocalAuth.c
     ServerRestart.c
+    ServerIdentity.c
     testlist.c
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_c.c
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_s.c)

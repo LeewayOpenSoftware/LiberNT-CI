@@ -16,10 +16,15 @@ typedef BOOL (WINAPI *PGET_USER_OBJECT_INFORMATION)(HANDLE, int, PVOID, DWORD, L
 /* UOI_NAME, winuser.h */
 #define SECL_UOI_NAME 2
 
+/* The server runs as LocalSystem. Naming it makes rpcrt4 refuse a process that took the endpoint first. */
+static const SID LocalSystemSid = { SID_REVISION, 1, {SECURITY_NT_AUTHORITY}, { SECURITY_LOCAL_SYSTEM_RID } };
+
 static
 handle_t
 SeclBind(VOID)
 {
+    RPC_SECURITY_QOS_V3_W Qos = { RPC_C_SECURITY_QOS_VERSION_3, RPC_C_QOS_CAPABILITIES_DEFAULT, RPC_C_QOS_IDENTITY_DYNAMIC,
+                                     RPC_C_IMP_LEVEL_IMPERSONATE, 0, { NULL }, (PSID)&LocalSystemSid };
     RPC_WSTR StringBinding = NULL;
     handle_t hBinding = NULL;
 
@@ -37,6 +42,14 @@ SeclBind(VOID)
         hBinding = NULL;
 
     RpcStringFreeW(&StringBinding);
+
+    if (hBinding &&
+        RpcBindingSetAuthInfoExW(hBinding, NULL, RPC_C_AUTHN_LEVEL_NONE, RPC_C_AUTHN_WINNT,
+                                 NULL, 0, (RPC_SECURITY_QOS *)&Qos) != RPC_S_OK)
+    {
+        RpcBindingFree(&hBinding);
+        hBinding = NULL;
+    }
     return hBinding;
 }
 
