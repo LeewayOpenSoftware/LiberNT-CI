@@ -155,9 +155,11 @@ class CNamespaceTreeControl :
     public CComCoClass<CNamespaceTreeControl, &CLSID_NamespaceTreeControl>,
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
     public INameSpaceTreeControl2,
-    public IOleWindow
+    public IOleWindow,
+    public IObjectWithSite
 {
 private:
+    CComPtr<IUnknown> m_Site; // the host; also the site of the item context menus
     struct RootEntry
     {
         CComPtr<IShellItem> Item;
@@ -452,6 +454,10 @@ private:
         if (FAILED(hr))
             return hr;
 
+        // Through the host the menu finds its window, which shows verbs such as
+        // "Open in new tab" (OnlyInBrowserWindow) and carries them out
+        IUnknown_SetSite(Menu, m_Site);
+
         // keep the item: the tree may change while the menu is up
         CComPtr<IShellItem> Item = Data->Item;
         BOOL IsRoot = Data->IsRoot;
@@ -516,6 +522,7 @@ private:
         }
 
         DestroyMenu(Popup);
+        IUnknown_SetSite(Menu, NULL);
         return hr;
     }
 
@@ -1276,7 +1283,23 @@ public:
         COM_INTERFACE_ENTRY_IID(IID_INameSpaceTreeControl2, INameSpaceTreeControl2)
         COM_INTERFACE_ENTRY2_IID(IID_INameSpaceTreeControl, INameSpaceTreeControl, INameSpaceTreeControl2)
         COM_INTERFACE_ENTRY_IID(IID_IOleWindow, IOleWindow)
+        COM_INTERFACE_ENTRY_IID(IID_IObjectWithSite, IObjectWithSite)
     END_COM_MAP()
+
+    // IObjectWithSite
+    STDMETHODIMP SetSite(IUnknown *pUnkSite) override
+    {
+        m_Site = pUnkSite;
+        return S_OK;
+    }
+
+    STDMETHODIMP GetSite(REFIID riid, void **ppvSite) override
+    {
+        if (!ppvSite)
+            return E_POINTER;
+        *ppvSite = NULL;
+        return m_Site ? m_Site->QueryInterface(riid, ppvSite) : E_FAIL;
+    }
 
     BEGIN_MSG_MAP(CNamespaceTreeControl)
         MESSAGE_HANDLER(WM_CREATE, OnCreate)

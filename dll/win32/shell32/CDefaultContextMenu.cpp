@@ -831,6 +831,15 @@ CDefaultContextMenu::AddStaticContextMenusToMenu(
             if (!hide)
                 hide = RegValueExists(hkVerb, L"ProgrammaticAccessOnly");
 
+            // Verbs such as "Open in new tab" only make sense inside an Explorer
+            // file window, which offers SID_SCabinetFrame
+            if (!hide && RegValueExists(hkVerb, L"OnlyInBrowserWindow"))
+            {
+                CComPtr<IOleCommandTarget> pFrame;
+                hide = FAILED(IUnknown_QueryService(m_site, SID_SCabinetFrame,
+                                                    IID_PPV_ARG(IOleCommandTarget, &pFrame)));
+            }
+
             if (!hide && !(uFlags & CMF_DISABLEDVERBS))
                 hide = RegValueExists(hkVerb, L"LegacyDisable");
 

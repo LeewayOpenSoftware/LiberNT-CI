@@ -1919,6 +1919,8 @@ CCabinetWindow::CreateNavigationPane()
     if (SUCCEEDED(CabinetNavigation_Create(this, &events)))
     {
         m_Navigation->TreeAdvise(events, &cookie);
+        // The pane's context menus reach this window through it (SID_SCabinetFrame)
+        IUnknown_SetSite(m_Navigation, events);
         events->Release();
     }
     if (SUCCEEDED(m_Navigation->QueryInterface(IID_PPV_ARG(IOleWindow, &window))))
@@ -3768,6 +3770,7 @@ CCabinetWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
             m_ChangeNotify = 0;
             if (m_Navigation)
             {
+                IUnknown_SetSite(m_Navigation, NULL);
                 m_Navigation->Release();
                 m_Navigation = NULL;
             }

@@ -10,4 +10,32 @@ HKCR
 			}
 		}
 	}
+	NoRemove Folder
+	{
+		NoRemove shell
+		{
+			ForceRemove opennewtab
+			{
+				val MUIVerb = s '@%MODULE%,-12035'
+				val MultiSelectModel = s 'Document'
+				val OnlyInBrowserWindow = s ''
+				val LaunchExplorerFlags = d '96'
+				command
+				{
+					val DelegateExecute = s '{11DBB47C-A525-400B-9E80-A54615A090C0}'
+				}
+			}
+			ForceRemove opennewwindow
+			{
+				val MUIVerb = s '@%MODULE%,-12036'
+				val MultiSelectModel = s 'Document'
+				val OnlyInBrowserWindow = s ''
+				val LaunchExplorerFlags = d '1'
+				command
+				{
+					val DelegateExecute = s '{11DBB47C-A525-400B-9E80-A54615A090C0}'
+				}
+			}
+		}
+	}
 }
