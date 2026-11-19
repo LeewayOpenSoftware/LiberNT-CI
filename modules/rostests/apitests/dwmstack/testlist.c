@@ -13,6 +13,7 @@ extern void func_dwmstack(void);
 extern void func_caption_cache(void);
 extern void func_client_format(void);
 extern void func_event_poll(void);
+extern void func_frame_bounds(void);
 extern void func_gpu_retry(void);
 extern void func_idle_cost(void);
 extern void func_idle_update(void);
@@ -27,6 +28,7 @@ const struct test winetest_testlist[] =
     { "caption_cache", func_caption_cache },
     { "client_format", func_client_format },
     { "event_poll", func_event_poll },
+    { "frame_bounds", func_frame_bounds },
     { "gpu_retry", func_gpu_retry },
     { "idle_cost", func_idle_cost },
     { "idle_update", func_idle_update },

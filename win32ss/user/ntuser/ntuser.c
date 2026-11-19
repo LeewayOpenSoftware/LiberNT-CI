@@ -41,6 +41,7 @@ ATOM AtomDwmBackdropNcExtendLeft;
 ATOM AtomDwmBackdropNcExtendRight;
 ATOM AtomDwmBackdropNcExtendBottom;
 ATOM AtomDwmFrameAlpha;
+ATOM AtomDwmFrameInsets;
 ATOM AtomDwmCaptionClose;
 ATOM AtomDwmCaptionMaximize;
 ATOM AtomDwmCaptionMinimize;
@@ -140,6 +141,7 @@ static const PCWSTR PrivatePropertyNames[] =
     DWM_PROP_BACKDROP_NC_EXTEND_RIGHT,
     DWM_PROP_BACKDROP_NC_EXTEND_BOTTOM,
     DWM_PROP_FRAME_ALPHA,
+    DWM_PROP_FRAME_INSETS,
     DWM_PROP_CAPTION_CLOSE,
     DWM_PROP_CAPTION_MAXIMIZE,
     DWM_PROP_CAPTION_MINIMIZE,
@@ -229,6 +231,7 @@ InitUserAtoms(VOID)
     AtomDwmBackdropNcExtendRight = IntAddUserPropertyAtom(DWM_PROP_BACKDROP_NC_EXTEND_RIGHT);
     AtomDwmBackdropNcExtendBottom = IntAddUserPropertyAtom(DWM_PROP_BACKDROP_NC_EXTEND_BOTTOM);
     AtomDwmFrameAlpha = IntAddUserPropertyAtom(DWM_PROP_FRAME_ALPHA);
+    AtomDwmFrameInsets = IntAddUserPropertyAtom(DWM_PROP_FRAME_INSETS);
     AtomDwmCaptionClose = IntAddUserPropertyAtom(DWM_PROP_CAPTION_CLOSE);
     AtomDwmCaptionMaximize = IntAddUserPropertyAtom(DWM_PROP_CAPTION_MAXIMIZE);
     AtomDwmCaptionMinimize = IntAddUserPropertyAtom(DWM_PROP_CAPTION_MINIMIZE);
