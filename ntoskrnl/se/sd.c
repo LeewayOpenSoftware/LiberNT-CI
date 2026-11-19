@@ -593,6 +593,92 @@ SeSetWorldSecurityDescriptor(
     return STATUS_SUCCESS;
 }
 
+/**
+ * @brief
+ * Tells whether a token may make a SID the owner of an object: the token's user, a
+ * group of the token that carries SE_GROUP_OWNER (and is not deny-only), or any SID
+ * when SeRestorePrivilege is enabled. The caller holds the token's lock.
+ */
+BOOLEAN
+NTAPI
+SepCanAssignOwner(
+    _In_ PTOKEN Token,
+    _In_ PSID Owner)
+{
+    ULONG i;
+
+    PAGED_CODE();
+
+    if (RtlEqualSid(Token->UserAndGroups[0].Sid, Owner))
+        return TRUE;
+    for (i = 1; i < Token->UserAndGroupCount; i++)
+    {
+        if ((Token->UserAndGroups[i].Attributes & SE_GROUP_OWNER) &&
+            !(Token->UserAndGroups[i].Attributes & SE_GROUP_USE_FOR_DENY_ONLY) &&
+            RtlEqualSid(Token->UserAndGroups[i].Sid, Owner))
+        {
+            return TRUE;
+        }
+    }
+    return SepSinglePrivilegeCheck(SeRestorePrivilege, Token, UserMode);
+}
+
+/**
+ * @brief
+ * Writes one debug line for an owner the subject may not name, so a component that
+ * relies on naming such an owner shows up in the log. At most 256 lines per boot.
+ */
+static
+VOID
+SepReportRefusedOwner(
+    _In_ PTOKEN Token,
+    _In_ PSID Owner)
+{
+    static LONG Reported;
+    UNICODE_STRING OwnerString, UserString;
+
+    if (Reported >= 256 || InterlockedIncrement(&Reported) > 256)
+        return;
+    if (!NT_SUCCESS(RtlConvertSidToUnicodeString(&OwnerString, Owner, TRUE)))
+        return;
+    if (NT_SUCCESS(RtlConvertSidToUnicodeString(&UserString, Token->UserAndGroups[0].Sid, TRUE)))
+    {
+        DPRINT1("SE: owner %wZ refused for %wZ, process %s (%p)\n",
+                &OwnerString, &UserString, PsGetCurrentProcess()->ImageFileName, PsGetCurrentProcessId());
+        RtlFreeUnicodeString(&UserString);
+    }
+    RtlFreeUnicodeString(&OwnerString);
+}
+
+/**
+ * @brief
+ * SepCanAssignOwner for the calling thread (its impersonation token, else its
+ * process's primary token).
+ */
+BOOLEAN
+NTAPI
+SepCallerCanAssignOwner(
+    _In_ PSID Owner)
+{
+    SECURITY_SUBJECT_CONTEXT SubjectContext;
+    PTOKEN Token;
+    BOOLEAN Result;
+
+    PAGED_CODE();
+
+    if (!Owner)
+        return TRUE;
+    SeCaptureSubjectContext(&SubjectContext);
+    SeLockSubjectContext(&SubjectContext);
+    Token = SubjectContext.ClientToken ? SubjectContext.ClientToken : SubjectContext.PrimaryToken;
+    Result = SepCanAssignOwner(Token, Owner);
+    if (!Result)
+        SepReportRefusedOwner(Token, Owner);
+    SeUnlockSubjectContext(&SubjectContext);
+    SeReleaseSubjectContext(&SubjectContext);
+    return Result;
+}
+
 /* PUBLIC FUNCTIONS ***********************************************************/
 
 /**
@@ -1759,6 +1845,14 @@ SeAssignSecurityEx(
     {
         DPRINT("Use explicit owner sid!\n");
         Owner = SepGetOwnerFromDescriptor(ExplicitDescriptor);
+
+        /* The subject may only name an owner it could be */
+        if (Owner && !(AutoInheritFlags & SEF_AVOID_OWNER_CHECK) && !SepCanAssignOwner(Token, Owner))
+        {
+            SepReportRefusedOwner(Token, Owner);
+            SeUnlockSubjectContext(SubjectContext);
+            return STATUS_INVALID_OWNER;
+        }
     }
     if (!Owner)
     {

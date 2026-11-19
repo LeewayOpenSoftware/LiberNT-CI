@@ -102,9 +102,10 @@ static void release_np_event(RpcConnection_np *connection, HANDLE event)
  * otherwise a Win32 error code is returned.
  *
  * @remarks
- * Everyone (aka World SID) and anonynous users
- * are given a subset of rights to access the pipe,
- * whereas admins are given full power.
+ * Everyone (aka World SID) and anonynous users may open, read and write the
+ * pipe but not create instances of it (FILE_CREATE_PIPE_INSTANCE), so that no
+ * other process can serve the endpoint's clients. The server's own user and
+ * admins are given full power; the server's user owns the pipe.
  */
 static DWORD
 rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
@@ -112,10 +113,30 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
     DWORD ErrCode;
     PACL Dacl = NULL;
     ULONG DaclSize, RelSDSize = 0;
-    PSID EveryoneSid = NULL, AnonymousSid = NULL, AdminsSid = NULL;
+    PSID EveryoneSid = NULL, AnonymousSid = NULL, AdminsSid = NULL, ServerSid;
     PSECURITY_DESCRIPTOR AbsSD = NULL, RelSD = NULL;
+    BYTE ServerUser[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    HANDLE Token;
+    DWORD Length;
+    const ACCESS_MASK ClientAccess = (FILE_GENERIC_READ | FILE_GENERIC_WRITE) & ~FILE_CREATE_PIPE_INSTANCE;
     static SID_IDENTIFIER_AUTHORITY WorldAuthority = {SECURITY_WORLD_SID_AUTHORITY};
     static SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &Token))
+    {
+        ErrCode = GetLastError();
+        ERR("rpcrt4_create_pipe_security(): Failed to open the process token (error %lu)\n", ErrCode);
+        return ErrCode;
+    }
+    if (!GetTokenInformation(Token, TokenUser, ServerUser, sizeof(ServerUser), &Length))
+    {
+        ErrCode = GetLastError();
+        CloseHandle(Token);
+        ERR("rpcrt4_create_pipe_security(): Failed to query the process user (error %lu)\n", ErrCode);
+        return ErrCode;
+    }
+    CloseHandle(Token);
+    ServerSid = ((PTOKEN_USER)ServerUser)->User.Sid;
 
     if (!AllocateAndInitializeSid(&WorldAuthority,
                                   1,
@@ -169,7 +190,8 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
     DaclSize = sizeof(ACL) +
                sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(EveryoneSid) +
                sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(AnonymousSid) +
-               sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(AdminsSid);
+               sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(AdminsSid) +
+               sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(ServerSid);
 
     Dacl = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, DaclSize);
     if (Dacl == NULL)
@@ -188,7 +210,7 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
 
     if (!AddAccessAllowedAce(Dacl,
                              ACL_REVISION,
-                             GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE | READ_CONTROL,
+                             ClientAccess,
                              EveryoneSid))
     {
         ErrCode = GetLastError();
@@ -198,7 +220,7 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
 
     if (!AddAccessAllowedAce(Dacl,
                              ACL_REVISION,
-                             GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE | READ_CONTROL,
+                             ClientAccess,
                              AnonymousSid))
     {
         ErrCode = GetLastError();
@@ -216,6 +238,17 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
         goto Quit;
     }
 
+    /* The server creates the further instances of its own pipe */
+    if (!AddAccessAllowedAce(Dacl,
+                             ACL_REVISION,
+                             GENERIC_ALL,
+                             ServerSid))
+    {
+        ErrCode = GetLastError();
+        ERR("rpcrt4_create_pipe_security(): Failed to set up ACE for the server SID (error %lu)\n", ErrCode);
+        goto Quit;
+    }
+
     if (!SetSecurityDescriptorDacl(AbsSD, TRUE, Dacl, FALSE))
     {
         ErrCode = GetLastError();
@@ -223,14 +256,14 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
         goto Quit;
     }
 
-    if (!SetSecurityDescriptorOwner(AbsSD, AdminsSid, FALSE))
+    if (!SetSecurityDescriptorOwner(AbsSD, ServerSid, FALSE))
     {
         ErrCode = GetLastError();
         ERR("rpcrt4_create_pipe_security(): Failed to set SD owner (error %lu)\n", ErrCode);
         goto Quit;
     }
 
-    if (!SetSecurityDescriptorGroup(AbsSD, AdminsSid, FALSE))
+    if (!SetSecurityDescriptorGroup(AbsSD, ServerSid, FALSE))
     {
         ErrCode = GetLastError();
         ERR("rpcrt4_create_pipe_security(): Failed to set SD group (error %lu)\n", ErrCode);
@@ -413,6 +446,52 @@ static char *ncalrpc_pipe_name(const char *endpoint)
   return pipe_name;
 }
 
+/*
+ * The client named the server it expects: the RPC_SECURITY_QOS_V3 Sid, and with
+ * RPC_C_QOS_CAPABILITIES_MUTUAL_AUTH the server principal name. Either must be the
+ * user the server runs as. rpcrt4 servers create their pipes owned by their process
+ * user, and nobody may name an owner it could not be, so the owner stands for the
+ * server. Like Windows, a mismatch is ERROR_ACCESS_DENIED when connecting.
+ */
+static RPC_STATUS rpcrt4_ncalrpc_check_server(RpcConnection *Connection, HANDLE pipe)
+{
+  const RpcQualityOfService *qos = Connection->QOS;
+  const WCHAR *principal = NULL;
+  PSECURITY_DESCRIPTOR sd = NULL;
+  BYTE named[SECURITY_MAX_SID_SIZE];
+  WCHAR domain[256];
+  DWORD size = 0, named_size = sizeof(named), domain_size = sizeof(domain) / sizeof(domain[0]);
+  SID_NAME_USE use;
+  PSID owner = NULL;
+  BOOL defaulted, ok = FALSE;
+
+  if (qos && (qos->qos->Capabilities & RPC_C_QOS_CAPABILITIES_MUTUAL_AUTH) &&
+      Connection->AuthInfo && Connection->AuthInfo->server_principal_name)
+    principal = Connection->AuthInfo->server_principal_name;
+  if (!(qos && qos->sid) && !principal)
+    return RPC_S_OK;
+
+  GetKernelObjectSecurity(pipe, OWNER_SECURITY_INFORMATION, NULL, 0, &size);
+  if (size && (sd = malloc(size)) &&
+      GetKernelObjectSecurity(pipe, OWNER_SECURITY_INFORMATION, sd, size, &size) &&
+      GetSecurityDescriptorOwner(sd, &owner, &defaulted) && owner)
+  {
+    ok = TRUE;
+    if (qos && qos->sid && !EqualSid(owner, qos->sid))
+      ok = FALSE;
+    /* the principal may be DOMAIN\user or a bare user name, in any case */
+    if (ok && principal &&
+        (!LookupAccountNameW(NULL, principal, named, &named_size, domain, &domain_size, &use) ||
+         !EqualSid(owner, named)))
+      ok = FALSE;
+  }
+  free(sd);
+
+  if (!ok)
+    WARN("the server is not the one the client named\n");
+  return ok ? RPC_S_OK : RPC_S_ACCESS_DENIED;
+}
+
 static RPC_STATUS rpcrt4_ncalrpc_open(RpcConnection* Connection)
 {
   RpcConnection_np *npc = (RpcConnection_np *) Connection;
@@ -426,6 +505,16 @@ static RPC_STATUS rpcrt4_ncalrpc_open(RpcConnection* Connection)
   pname = ncalrpc_pipe_name(Connection->Endpoint);
   r = rpcrt4_conn_open_pipe(Connection, pname, TRUE);
   I_RpcFree(pname);
+
+  if (r == RPC_S_OK)
+  {
+    r = rpcrt4_ncalrpc_check_server(Connection, npc->pipe);
+    if (r != RPC_S_OK)
+    {
+      CloseHandle(npc->pipe);
+      npc->pipe = NULL;
+    }
+  }
 
   return r;
 }
@@ -512,6 +601,8 @@ static char *ncacn_pipe_name(const char *endpoint)
   return pipe_name;
 }
 
+/* The RPC_SECURITY_QOS_V3 Sid is not checked here: only ncalrpc names a local server (see
+ * rpcrt4_ncalrpc_check_server); Windows could not be compared on ncacn_np. */
 static RPC_STATUS rpcrt4_ncacn_np_open(RpcConnection* Connection)
 {
   RpcConnection_np *npc = (RpcConnection_np *) Connection;

@@ -190,6 +190,7 @@ typedef I_RPC_HANDLE *RPC_EP_INQ_HANDLE;
 #define RPC_C_SECURITY_QOS_VERSION      1
 #define RPC_C_SECURITY_QOS_VERSION_1    1
 #define RPC_C_SECURITY_QOS_VERSION_2    2
+#define RPC_C_SECURITY_QOS_VERSION_3    3
 
 /* flags for RPC_SECURITY_QOS_V2::AdditionalSecurityInfoType */
 #define RPC_C_AUTHN_INFO_TYPE_HTTP  1
@@ -296,6 +297,34 @@ typedef struct _RPC_SECURITY_QOS_V2_A
     } u;
 } RPC_SECURITY_QOS_V2_A, *PRPC_SECURITY_QOS_V2_A;
 
+typedef struct _RPC_SECURITY_QOS_V3_W
+{
+    ULONG Version;
+    ULONG Capabilities;
+    ULONG IdentityTracking;
+    ULONG ImpersonationType;
+    ULONG AdditionalSecurityInfoType;
+    union
+    {
+        RPC_HTTP_TRANSPORT_CREDENTIALS_W *HttpCredentials;
+    } u;
+    void *Sid;
+} RPC_SECURITY_QOS_V3_W, *PRPC_SECURITY_QOS_V3_W;
+
+typedef struct _RPC_SECURITY_QOS_V3_A
+{
+    ULONG Version;
+    ULONG Capabilities;
+    ULONG IdentityTracking;
+    ULONG ImpersonationType;
+    ULONG AdditionalSecurityInfoType;
+    union
+    {
+        RPC_HTTP_TRANSPORT_CREDENTIALS_A *HttpCredentials;
+    } u;
+    void *Sid;
+} RPC_SECURITY_QOS_V3_A, *PRPC_SECURITY_QOS_V3_A;
+
 #ifndef SEC_WINNT_AUTH_IDENTITY
 #define _SEC_WINNT_AUTH_IDENTITY WINELIB_NAME_AW(_SEC_WINNT_AUTH_IDENTITY_)
 #define  SEC_WINNT_AUTH_IDENTITY WINELIB_NAME_AW(SEC_WINNT_AUTH_IDENTITY_)
@@ -309,6 +338,10 @@ typedef struct _RPC_SECURITY_QOS_V2_A
 #define RPC_SECURITY_QOS_V2  WINELIB_NAME_AW(RPC_SECURITY_QOS_V2_)
 #define PRPC_SECURITY_QOS_V2 WINELIB_NAME_AW(PRPC_SECURITY_QOS_V2_)
 #define _RPC_SECURITY_QOS_V2 WINELIB_NAME_AW(_RPC_SECURITY_QOS_V2_)
+
+#define RPC_SECURITY_QOS_V3  WINELIB_NAME_AW(RPC_SECURITY_QOS_V3_)
+#define PRPC_SECURITY_QOS_V3 WINELIB_NAME_AW(PRPC_SECURITY_QOS_V3_)
+#define _RPC_SECURITY_QOS_V3 WINELIB_NAME_AW(_RPC_SECURITY_QOS_V3_)
 
 /* SEC_WINNT_AUTH Flags */
 #define SEC_WINNT_AUTH_IDENTITY_ANSI    0x1

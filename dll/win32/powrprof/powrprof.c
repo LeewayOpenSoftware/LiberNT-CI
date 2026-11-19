@@ -852,11 +852,8 @@ CreatePwrProfSemaphoreSecurity(
     if (!SetSecurityDescriptorDacl(&AbsSd, TRUE, Dacl, FALSE))
         goto Quit;
 
-    if (!SetSecurityDescriptorOwner(&AbsSd, AdminsSid, FALSE))
-        goto Quit;
-
-    if (!SetSecurityDescriptorGroup(&AbsSd, SystemSid, FALSE))
-        goto Quit;
+    /* Owner and group come from the creating process's token: any process may create
+     * the semaphore, and a process can only name an owner it could be */
 
     /* Retrieve the size needed for the relative SD */
     if (MakeSelfRelativeSD(&AbsSd, NULL, &RelSDSize) ||

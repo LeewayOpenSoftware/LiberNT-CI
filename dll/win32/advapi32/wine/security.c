@@ -2812,9 +2812,14 @@ StartSecondaryLogonService(void)
     return running;
 }
 
+/* The server runs as LocalSystem. Naming it makes rpcrt4 refuse a process that took the endpoint first. */
+static const SID LocalSystemSid = { SID_REVISION, 1, {SECURITY_NT_AUTHORITY}, { SECURITY_LOCAL_SYSTEM_RID } };
+
 static DWORD
 CallSecondaryLogon(SECL_REQUEST *request, SECL_RESPONSE *response)
 {
+    RPC_SECURITY_QOS_V3_W qos = { RPC_C_SECURITY_QOS_VERSION_3, RPC_C_QOS_CAPABILITIES_DEFAULT, RPC_C_QOS_IDENTITY_DYNAMIC,
+                                     RPC_C_IMP_LEVEL_IMPERSONATE, 0, { NULL }, (PSID)&LocalSystemSid };
     LPWSTR string_binding = NULL;
     handle_t binding = NULL;
     RPC_STATUS status;
@@ -2825,6 +2830,13 @@ CallSecondaryLogon(SECL_REQUEST *request, SECL_RESPONSE *response)
     {
         status = RpcBindingFromStringBindingW((RPC_WSTR)string_binding, &binding);
         RpcStringFreeW((RPC_WSTR *)&string_binding);
+    }
+    if (status == RPC_S_OK)
+    {
+        status = RpcBindingSetAuthInfoExW(binding, NULL, RPC_C_AUTHN_LEVEL_NONE, RPC_C_AUTHN_WINNT,
+                                          NULL, 0, (RPC_SECURITY_QOS *)&qos);
+        if (status != RPC_S_OK)
+            RpcBindingFree(&binding);
     }
     if (status != RPC_S_OK)
     {

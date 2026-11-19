@@ -976,6 +976,10 @@ RPC_STATUS RPCRT4_default_authorize(RpcConnection *conn, BOOL first_time,
       }
       conn->signature_auth_len = secctx_sizes.cbMaxSignature;
       conn->encryption_auth_len = secctx_sizes.cbSecurityTrailer;
+#ifdef __REACTOS__
+      if (conn->server)
+          conn->auth_complete = TRUE;
+#endif
   }
 
   *out_size = out.cbBuffer;
@@ -1035,6 +1039,9 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
 
     if (start)
     {
+#ifdef __REACTOS__
+        conn->auth_complete = FALSE;
+#endif
         /* remove any existing authentication information */
         if (conn->AuthInfo)
         {
@@ -1471,6 +1478,22 @@ RPC_STATUS RPCRT4_ReceiveWithAuth(RpcConnection *Connection, RpcPktHdr **Header,
     }
 
     memcpy((unsigned char *)pMsg->Buffer + buffer_length, payload, data_length);
+
+#ifdef __REACTOS__
+    /* A connection bound at integrity or privacy takes requests only with that protection, and only
+       after its handshake finished; the level a packet claims is not enough */
+    if (Connection->server && CurrentHeader->common.ptype == PKT_REQUEST &&
+        rpcrt4_conn_is_authorized(Connection) &&
+        Connection->AuthInfo->AuthnLevel >= RPC_C_AUTHN_LEVEL_PKT_INTEGRITY &&
+        (!Connection->auth_complete || header_auth_len < sizeof(RpcAuthVerifier) ||
+         ((const RpcAuthVerifier *)((unsigned char *)payload + data_length))->auth_level !=
+             Connection->AuthInfo->AuthnLevel))
+    {
+      WARN("request without the protection level of its connection\n");
+      status = RPC_S_ACCESS_DENIED;
+      goto fail;
+    }
+#endif
 
     if (header_auth_len) {
       if (header_auth_len < sizeof(RpcAuthVerifier) ||
