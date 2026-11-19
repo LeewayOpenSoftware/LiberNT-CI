@@ -3760,16 +3760,17 @@ ObInsertObject(IN PVOID Object,
         /* Check if anything until now failed */
         if (!NT_SUCCESS(Status))
         {
-            /* Check if the directory was added */
-            if (Context.DirectoryLocked)
-            {
-                /* Weird case where we need to do a manual delete */
-                DPRINT1("Unhandled path\n");
-                ASSERT(FALSE);
-            }
+            /* The security of the new object could not be set, e.g. the caller named an
+             * owner it may not name (STATUS_INVALID_OWNER) */
+            DPRINT1("OB: new %wZ object not inserted, security status 0x%lx (process %s)\n",
+                    &ObjectType->Name, Status, PsGetCurrentProcess()->ImageFileName);
 
             /* Cleanup the lookup */
             ObpReleaseLookupContext(&Context);
+
+            /* A named object is already in its directory, without a handle: take it out */
+            if ((ObjectNameInfo) && (ObjectNameInfo->Directory))
+                ObpDeleteNameCheck(Object);
 
             /* Remove query reference that we added */
             ObpDereferenceNameInfo(ObjectNameInfo);
@@ -3783,7 +3784,6 @@ ObInsertObject(IN PVOID Object,
             }
 
             /* Return failure code */
-            ASSERT(FALSE);
             return Status;
         }
     }

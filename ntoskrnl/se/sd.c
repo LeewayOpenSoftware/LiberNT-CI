@@ -625,6 +625,33 @@ SepCanAssignOwner(
 
 /**
  * @brief
+ * Writes one debug line for an owner the subject may not name, so a component that
+ * relies on naming such an owner shows up in the log. At most 256 lines per boot.
+ */
+static
+VOID
+SepReportRefusedOwner(
+    _In_ PTOKEN Token,
+    _In_ PSID Owner)
+{
+    static LONG Reported;
+    UNICODE_STRING OwnerString, UserString;
+
+    if (InterlockedIncrement(&Reported) > 256)
+        return;
+    if (!NT_SUCCESS(RtlConvertSidToUnicodeString(&OwnerString, Owner, TRUE)))
+        return;
+    if (NT_SUCCESS(RtlConvertSidToUnicodeString(&UserString, Token->UserAndGroups[0].Sid, TRUE)))
+    {
+        DPRINT1("SE: owner %wZ refused for %wZ, process %s (%p)\n",
+                &OwnerString, &UserString, PsGetCurrentProcess()->ImageFileName, PsGetCurrentProcessId());
+        RtlFreeUnicodeString(&UserString);
+    }
+    RtlFreeUnicodeString(&OwnerString);
+}
+
+/**
+ * @brief
  * SepCanAssignOwner for the calling thread (its impersonation token, else its
  * process's primary token).
  */
@@ -645,6 +672,8 @@ SepCallerCanAssignOwner(
     SeLockSubjectContext(&SubjectContext);
     Token = SubjectContext.ClientToken ? SubjectContext.ClientToken : SubjectContext.PrimaryToken;
     Result = SepCanAssignOwner(Token, Owner);
+    if (!Result)
+        SepReportRefusedOwner(Token, Owner);
     SeUnlockSubjectContext(&SubjectContext);
     SeReleaseSubjectContext(&SubjectContext);
     return Result;
@@ -1820,6 +1849,7 @@ SeAssignSecurityEx(
         /* The subject may only name an owner it could be */
         if (Owner && !(AutoInheritFlags & SEF_AVOID_OWNER_CHECK) && !SepCanAssignOwner(Token, Owner))
         {
+            SepReportRefusedOwner(Token, Owner);
             SeUnlockSubjectContext(SubjectContext);
             return STATUS_INVALID_OWNER;
         }
