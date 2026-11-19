@@ -11,8 +11,11 @@ DWORD rpcss_caller_integrity(handle_t h);
 ULONG rpcss_caller_pid(handle_t h);
 
 /* A registration made at system integrity (services) is visible to every caller; any other only to
-   callers at the same level, as Windows separates low, medium and elevated processes */
+   callers at the same level, as Windows separates low, medium and elevated processes. A level that
+   could not be read (0) matches nothing */
 static inline BOOL rpcss_integrity_visible(DWORD registrant, DWORD caller)
 {
-    return registrant == caller || registrant >= SECURITY_MANDATORY_SYSTEM_RID;
+    if (registrant >= SECURITY_MANDATORY_SYSTEM_RID)
+        return TRUE;
+    return registrant && registrant == caller;
 }

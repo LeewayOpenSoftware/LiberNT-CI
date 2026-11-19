@@ -966,11 +966,17 @@ static RPC_STATUS rpcrt4_conn_np_impersonate_client(RpcConnection *conn)
     {
         DWORD error = GetLastError();
         WARN("ImpersonateNamedPipeClient failed with error %lu\n", error);
+#ifdef __REACTOS__
+        /* The server thread did not take the client's identity: a success here would let the
+           caller act with the server's own rights */
+        return error && error != ERROR_CANNOT_IMPERSONATE ? error : RPC_S_NO_CONTEXT_AVAILABLE;
+#else
         switch (error)
         {
         case ERROR_CANNOT_IMPERSONATE:
             return RPC_S_NO_CONTEXT_AVAILABLE;
         }
+#endif
     }
     return RPC_S_OK;
 }
