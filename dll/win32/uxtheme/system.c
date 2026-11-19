@@ -810,6 +810,35 @@ BOOL UXTHEME_CompositionAvailable(void)
     return SUCCEEDED(pfn(&enabled)) && enabled;
 }
 
+/* The Aero look needs the compositor, and an administrator can switch it off for the machine. Any doubt about the
+ * switch (a value that cannot be read) means the Basic look. */
+BOOL UXTHEME_MicaCapable(void)
+{
+    HKEY key;
+    DWORD value = 0, size = sizeof(value), type;
+    LONG status;
+
+    if (!UXTHEME_CompositionAvailable())
+        return FALSE;
+    status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, szThemeManager,
+                           0, KEY_QUERY_VALUE, &key);
+    if (status == ERROR_FILE_NOT_FOUND)
+        return TRUE;
+    if (status != ERROR_SUCCESS)
+        return FALSE;
+    status = RegQueryValueExW(key, L"DisableMica", NULL, &type, (LPBYTE)&value, &size);
+    RegCloseKey(key);
+    if (status == ERROR_FILE_NOT_FOUND)
+        return TRUE;
+    return status == ERROR_SUCCESS && type == REG_DWORD && value == 0;
+}
+
+/* Store names of the two LiberNT version-4 styles: Aero with composited materials, Basic without */
+LPCWSTR UXTHEME_SelectDefaultStyleName(void)
+{
+    return UXTHEME_MicaCapable() ? L"LiberNTAero" : L"LiberNT";
+}
+
 static void UXTHEME_ClearLiquidProperties(HWND hwnd, ULONG region)
 {
     ULONG_PTR currentRegion = (ULONG_PTR)GetPropW(hwnd, DWM_PROP_BACKDROP_REGION);
