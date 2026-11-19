@@ -2395,6 +2395,9 @@ ChangePos:
         SetWindowPos(NULL, 0, 0, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE);
         ResizeWorkArea();
         ApplyClipping(TRUE);
+        /* Lay the children out even when the size did not change (no WM_SIZE then):
+           the notification area re-decides its modern or classic layout here */
+        AlignControls(NULL);
         RedrawWindow(NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_INVALIDATE | RDW_ALLCHILDREN);
 
         {
@@ -3823,6 +3826,8 @@ ChangePos:
             /* Apply clipping */
             PostMessage(WM_SIZE, SIZE_RESTORED, 0);
         }
+        /* Nothing painted for the edges the taskbar passed over may stay behind */
+        RedrawWindow(NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
         return TRUE;
     }
 
