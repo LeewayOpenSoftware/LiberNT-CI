@@ -302,20 +302,12 @@ int wmain(int argc, WCHAR **argv)
                 return fail(L"storeinst: cannot write HKCU ThemeManager (error %lu)", GetLastError());
             }
 
-            /* Apply it live (the same call the Personalization page makes). */
-            {
-                PFN_SETSYSTEMVISUALSTYLE ssvs =
-                    (PFN_SETSYSTEMVISUALSTYLE)(ux ? GetProcAddress(ux, (LPCSTR)(ULONG_PTR)65) : NULL);
-                HRESULT hr = ssvs ? ssvs(styleDst, color, size, 0) : E_NOINTERFACE;
-                wprintf(L"Active theme set: %ls (%ls/%ls), live apply hr=0x%08lx\n",
-                        styleDst, color, size, (unsigned long)hr);
-                if (FAILED(hr))
-                {
-                    fail(L"storeinst: the live apply failed (0x%08lx); the HKCU selection is written, it loads at the "
-                         L"next logon of this user", (unsigned long)hr);
-                    rc = 1;
-                }
-            }
+            /* Apply it live. SetSystemVisualStyle (uxtheme ordinal 65) needs the theme hooks active in the
+             * calling process, which a console tool does not have (it returns E_FAIL), so broadcast
+             * WM_THEMECHANGED instead: the themed processes reload the HKCU DllName/ColorName/SizeName just
+             * written and switch to the style now. */
+            SendNotifyMessageW(HWND_BROADCAST, WM_THEMECHANGED, 0, 0);
+            wprintf(L"Active theme set: %ls (%ls/%ls); broadcast WM_THEMECHANGED\n", styleDst, color, size);
         }
     }
 
