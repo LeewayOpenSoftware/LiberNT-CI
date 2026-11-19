@@ -1317,6 +1317,9 @@ public:
     TouchDirectory();
 
     NTSTATUS
+    SetUpdateSequenceNumber(_In_ LONGLONG Usn);
+
+    NTSTATUS
     StampChangeTime();
 
     // ./write.cpp

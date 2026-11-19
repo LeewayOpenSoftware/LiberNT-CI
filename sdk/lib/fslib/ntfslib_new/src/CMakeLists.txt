@@ -44,6 +44,7 @@ target_sources(ntfslib_new PRIVATE
     volume/metadata/volume.cpp
     volume/disk.cpp
     volume/volume.cpp
+    usn/journal.cpp
     util.cpp
     verify/shape.cpp
 )

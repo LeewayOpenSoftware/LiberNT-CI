@@ -249,6 +249,32 @@ typedef struct NtfsDataStreamInformation
     WCHAR Name[NTFS_MAX_FILE_NAME_LENGTH + 1];
 } NtfsDataStreamInformation, *PNtfsDataStreamInformation;
 
+/* USN change journal state, as reported by FSCTL_QUERY_USN_JOURNAL */
+typedef struct NtfsUsnJournalData
+{
+    UINT64 UsnJournalId;
+    LONGLONG FirstUsn;
+    LONGLONG NextUsn;
+    LONGLONG LowestValidUsn;
+    LONGLONG MaxUsn;
+    UINT64 MaximumSize;
+    UINT64 AllocationDelta;
+} NtfsUsnJournalData, *PNtfsUsnJournalData;
+
+/* Fields of one USN_RECORD_V2 to append; FileNameLength is in bytes */
+typedef struct NtfsUsnRecordInput
+{
+    UINT64 FileReferenceNumber;
+    UINT64 ParentFileReferenceNumber;
+    UINT64 TimeStamp;
+    UINT32 Reason;
+    UINT32 SourceInfo;
+    UINT32 SecurityId;
+    UINT32 FileAttributes;
+    const WCHAR* FileName;
+    UINT16 FileNameLength;
+} NtfsUsnRecordInput, *PNtfsUsnRecordInput;
+
 /*
  * Platform-neutral projection of $STANDARD_INFORMATION. Fields is a mask of
  * NTFS_BASIC_INFO_* values, allowing callers to update an explicit subset
@@ -615,6 +641,12 @@ NTSTATUS
 NtfsFileRecordCreateNamedDataStream(
     _In_ NtfsFileRecord *FileRecord,
     _In_ PWSTR StreamName);
+
+/* Stores the USN of the file's latest journal record in $STANDARD_INFORMATION (NTFS 3.x layout) */
+NTSTATUS
+NtfsFileRecordSetUpdateSequenceNumber(
+    _In_ NtfsFileRecord *FileRecord,
+    _In_ LONGLONG Usn);
 
 NTSTATUS
 NtfsFileRecordDeleteNamedDataStream(
@@ -1109,6 +1141,40 @@ NtfsVolumeGetLFS(
 PNtfsMasterFileTable
 NtfsVolumeGetMft(
     _In_ PNtfsVolume DiskVolume);
+
+/*
+ * USN change journal ($Extend\$UsnJrnl). Create also modifies the size targets of an
+ * existing journal; the identifier is used only for a new one. Appends are not logged
+ * through LFS: a torn tail record is dropped on the next query or append. Calls for one
+ * volume must be serialized by the caller.
+ */
+NTSTATUS
+NtfsUsnJournalCreate(
+    _In_ PNtfsVolume Volume,
+    _In_ UINT64 MaximumSize,
+    _In_ UINT64 AllocationDelta,
+    _In_ UINT64 NewJournalId);
+
+NTSTATUS
+NtfsUsnJournalQuery(
+    _In_ PNtfsVolume Volume,
+    _Out_ PNtfsUsnJournalData Data);
+
+NTSTATUS
+NtfsUsnJournalAppend(
+    _In_ PNtfsVolume Volume,
+    _In_ const NtfsUsnRecordInput* Input,
+    _Out_ LONGLONG* Usn);
+
+/* Copies whole records from StartUsn (0 = first record) and returns the USN to read next */
+NTSTATUS
+NtfsUsnJournalRead(
+    _In_ PNtfsVolume Volume,
+    _In_ LONGLONG StartUsn,
+    _Out_writes_bytes_(BufferLength) PUCHAR Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PULONG BytesReturned,
+    _Out_ LONGLONG* NextUsn);
 
 USHORT
 NtfsVolumeGetMajorVersion(
