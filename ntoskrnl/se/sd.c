@@ -637,7 +637,7 @@ SepReportRefusedOwner(
     static LONG Reported;
     UNICODE_STRING OwnerString, UserString;
 
-    if (InterlockedIncrement(&Reported) > 256)
+    if (Reported >= 256 || InterlockedIncrement(&Reported) > 256)
         return;
     if (!NT_SUCCESS(RtlConvertSidToUnicodeString(&OwnerString, Owner, TRUE)))
         return;

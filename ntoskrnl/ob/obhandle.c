@@ -3517,7 +3517,7 @@ ObInsertObject(IN PVOID Object,
     OB_OPEN_REASON OpenReason;
     KPROCESSOR_MODE PreviousMode;
     NTSTATUS Status = STATUS_SUCCESS, RealStatus;
-    BOOLEAN IsNewObject;
+    BOOLEAN IsNewObject, Unlinked;
     PAGED_CODE();
 
     /* Get the Header */
@@ -3765,12 +3765,28 @@ ObInsertObject(IN PVOID Object,
             DPRINT1("OB: new %wZ object not inserted, security status 0x%lx (process %s)\n",
                     &ObjectType->Name, Status, PsGetCurrentProcess()->ImageFileName);
 
+            /*
+             * A new named object is already in its directory, with no security yet:
+             * take it out while the directory is still locked, so nobody can open it.
+             */
+            Unlinked = FALSE;
+            if ((ObjectNameInfo) && (ObjectNameInfo->Directory) && (Context.DirectoryLocked))
+            {
+                ObpDeleteEntryDirectory(&Context);
+                if (ObjectType == ObpSymbolicLinkObjectType)
+                    ObpDeleteSymbolicLinkName(Object);
+                Unlinked = TRUE;
+            }
+
             /* Cleanup the lookup */
             ObpReleaseLookupContext(&Context);
 
-            /* A named object is already in its directory, without a handle: take it out */
-            if ((ObjectNameInfo) && (ObjectNameInfo->Directory))
-                ObpDeleteNameCheck(Object);
+            if (Unlinked)
+            {
+                /* Drop what the directory entry held: the name (with the directory reference) and the object */
+                ObpDereferenceNameInfo(ObjectNameInfo);
+                ObDereferenceObject(Object);
+            }
 
             /* Remove query reference that we added */
             ObpDereferenceNameInfo(ObjectNameInfo);
