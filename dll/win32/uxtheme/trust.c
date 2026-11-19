@@ -650,10 +650,27 @@ UXTHEME_TrustMachineDefault(LPWSTR name, DWORD cchName)
 {
     WCHAR v[UXT_NAME_MAX + 1];
 
+    LPCWSTR sel;
+    WCHAR path[MAX_PATH];
+
     ZeroMemory(v, sizeof(v));
     if (TrustReadMachineValue(NULL, L"MachineDefault", REG_SZ, v, sizeof(v) - sizeof(WCHAR)) &&
         TrustNameValid(v, TrustWcsnlen(v, ARRAY_SIZE(v))))
+    {
+        /* An administrator's explicit, protected machine default wins. */
         StringCchCopyW(name, cchName, v);
+        return;
+    }
+
+    /* No explicit default: pick the default style by compositor capability (LiberNTAero when Mica is capable, else
+     * LiberNT), but only when that style is actually installed in the store. Until the version-4 styles ship, the
+     * selected name is not present, so fall back to the shipped v3 default (UXT_DEFAULT_STYLE) rather than let a
+     * privileged process drop to Classic on an open that cannot resolve. This activates automatically once the
+     * version-4 styles are installed. */
+    sel = UXTHEME_SelectDefaultStyleName();
+    if (sel && UXTHEME_TrustBuildV3Path(sel, path, ARRAY_SIZE(path)) &&
+        GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
+        StringCchCopyW(name, cchName, sel);
     else
         StringCchCopyW(name, cchName, UXT_DEFAULT_STYLE);
 }
