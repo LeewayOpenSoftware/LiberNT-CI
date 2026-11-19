@@ -233,15 +233,30 @@ static RPC_STATUS rpcrt4_check_interface_access(RpcConnection *conn, RpcServerIn
 
   /* local RPC always carries the caller's identity */
   if ((sif->Flags & RPC_IF_ALLOW_SECURE_ONLY) && strcmp(conn->ops->name, "ncalrpc") &&
-      (!conn->AuthInfo || conn->AuthInfo->AuthnLevel == RPC_C_AUTHN_LEVEL_NONE))
+      (!conn->AuthInfo || !conn->auth_complete || conn->AuthInfo->AuthnLevel == RPC_C_AUTHN_LEVEL_NONE))
     return RPC_S_ACCESS_DENIED;
 
   if (sif->SecurityDescriptor && !rpcrt4_label_allows(conn, sif->SecurityDescriptor))
     return RPC_S_ACCESS_DENIED;
 
   /* called on every call, which is the RPC_IF_SEC_NO_CACHE behaviour */
-  if (sif->IfCallbackFn && sif->IfCallbackFn(sif->If, binding) != RPC_S_OK)
-    return RPC_S_ACCESS_DENIED;
+  if (sif->IfCallbackFn)
+  {
+    RPC_STATUS status;
+
+    __TRY
+    {
+      status = sif->IfCallbackFn(sif->If, binding);
+    }
+    __EXCEPT_ALL
+    {
+      WARN("interface callback raised 0x%08lx\n", GetExceptionCode());
+      status = RPC_S_ACCESS_DENIED;
+    }
+    __ENDTRY
+    if (status != RPC_S_OK)
+      return RPC_S_ACCESS_DENIED;
+  }
 
   return RPC_S_OK;
 }

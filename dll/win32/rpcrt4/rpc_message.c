@@ -976,6 +976,10 @@ RPC_STATUS RPCRT4_default_authorize(RpcConnection *conn, BOOL first_time,
       }
       conn->signature_auth_len = secctx_sizes.cbMaxSignature;
       conn->encryption_auth_len = secctx_sizes.cbSecurityTrailer;
+#ifdef __REACTOS__
+      if (conn->server)
+          conn->auth_complete = TRUE;
+#endif
   }
 
   *out_size = out.cbBuffer;
@@ -1035,6 +1039,9 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
 
     if (start)
     {
+#ifdef __REACTOS__
+        conn->auth_complete = FALSE;
+#endif
         /* remove any existing authentication information */
         if (conn->AuthInfo)
         {
