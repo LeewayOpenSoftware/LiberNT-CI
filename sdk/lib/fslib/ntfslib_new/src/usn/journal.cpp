@@ -522,4 +522,110 @@ Done:
     return Status;
 }
 
+/*
+ * FSCTL_ENUM_USN_DATA: one version 2 record per in-use base file record from
+ * StartFileReference on, for files whose $STANDARD_INFORMATION USN is in [LowUsn, HighUsn]
+ * and that have a long name. The walk is by record number, ignoring sequence numbers.
+ * Returns STATUS_END_OF_FILE once no record is left at or after the start.
+ */
+NTSTATUS
+NtfsUsnJournalEnumerate(
+    _In_ PNtfsVolume Volume,
+    _In_ ULONGLONG StartFileReference,
+    _In_ LONGLONG LowUsn,
+    _In_ LONGLONG HighUsn,
+    _Out_writes_bytes_(BufferLength) PUCHAR Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PULONG BytesReturned,
+    _Out_ ULONGLONG* NextFileReference)
+{
+    PVolume DiskVolume = reinterpret_cast<PVolume>(Volume);
+    NtfsVolumeInformation Info;
+    ULONGLONG Number, Count;
+    ULONG Copied = 0;
+    BOOLEAN Full = FALSE;
+    NTSTATUS Status;
+
+    if (!Volume || !Buffer || !BytesReturned || !NextFileReference || LowUsn > HighUsn)
+        return STATUS_INVALID_PARAMETER;
+    *BytesReturned = 0;
+    Number = StartFileReference & 0x0000FFFFFFFFFFFFULL;
+    *NextFileReference = Number;
+
+    Status = NtfsVolumeQueryInformation(Volume, &Info);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Info.BytesPerFileRecordSegment == 0)
+        return STATUS_FILE_CORRUPT_ERROR;
+    Count = Info.MftValidDataLength / Info.BytesPerFileRecordSegment;
+    if (Count > (ULONGLONG)MAXULONG + 1)
+        Count = (ULONGLONG)MAXULONG + 1;
+
+    for (; Number < Count; Number++)
+    {
+        PFileRecord Record = NULL;
+        NtfsFileBasicInformation Basic;
+        UNICODE_STRING Name;
+        ULONGLONG Parent;
+        LONGLONG Usn;
+        ULONG SecurityId, LinkContext = 0, Needed;
+        UsnJrnlEntry* Entry;
+
+        Status = DiskVolume->MFT->GetFileRecord((ULONG)Number, &Record);
+        if (Status == STATUS_NOT_FOUND || Status == STATUS_FILE_CORRUPT_ERROR)
+        {
+            /* A free record, or one that cannot be read: nothing to report for it */
+            delete Record;
+            Status = STATUS_SUCCESS;
+            continue;
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            delete Record;
+            break;
+        }
+        if (!(Record->Header->Flags & FR_IN_USE) || Record->Header->BaseFileRecord != 0 ||
+            !NT_SUCCESS(Record->GetUsnInformation(&Usn, &SecurityId)) ||
+            Usn < LowUsn || Usn > HighUsn ||
+            !NT_SUCCESS(DiskVolume->MFT->EnumerateLinks(Record, &LinkContext, &Parent, &Name)) ||
+            !NT_SUCCESS(Record->GetBasicInformation(&Basic)))
+        {
+            delete Record;
+            continue;
+        }
+
+        Needed = (ULONG)NTFS_USN_ALIGN(NTFS_USN_RECORD_HEADER + Name.Length);
+        if (Copied + Needed > BufferLength)
+        {
+            delete Record;
+            Full = TRUE;
+            break;
+        }
+        Entry = reinterpret_cast<UsnJrnlEntry*>(Buffer + Copied);
+        RtlZeroMemory(Entry, Needed);
+        Entry->EntrySize = Needed;
+        Entry->MajorVersion = 2;
+        Entry->MFTReference = ((ULONGLONG)Record->Header->SequenceNumber << 48) | Number;
+        Entry->ParentMFTReference = Parent;
+        Entry->EntryOffset = (UINT64)Usn;
+        Entry->Timestamp = Basic.ChangeTime;
+        Entry->SecurityID = SecurityId;
+        Entry->FileAttributes = Basic.FileAttributes;
+        Entry->FileNameSize = (UINT16)Name.Length;
+        Entry->FileNameOffset = (UINT16)NTFS_USN_RECORD_HEADER;
+        /* The name points into the record: copy it before the record goes */
+        RtlCopyMemory(Buffer + Copied + NTFS_USN_RECORD_HEADER, Name.Buffer, Name.Length);
+        Copied += Needed;
+        delete Record;
+    }
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    *BytesReturned = Copied;
+    *NextFileReference = Number;
+    if (Copied == 0)
+        return Full ? STATUS_BUFFER_TOO_SMALL : STATUS_END_OF_FILE;
+    return STATUS_SUCCESS;
+}
+
 } /* extern "C" */

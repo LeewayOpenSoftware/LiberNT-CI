@@ -137,6 +137,29 @@ printf 'hello' >"$workdir/h.txt"
 "$driver" --set-usn "$image" /h.txt 4242
 "$ntfsinfo" -F /h.txt "$image" | grep -q 'Update Sequence Number:.*4242' || fail "SI USN not visible to ntfsinfo"
 
+# FSCTL_ENUM_USN_DATA: files by their $STANDARD_INFORMATION USN.
+"$driver" --usn-enum "$image" 0 4242 4242 >"$workdir/enum1.txt"
+test "$(grep -c '^frn=' "$workdir/enum1.txt")" -eq 1 || fail "enum 4242: $(cat "$workdir/enum1.txt")"
+grep -q ' usn=4242 attrs=.* name=h.txt$' "$workdir/enum1.txt" || fail "enum did not find h.txt: $(cat "$workdir/enum1.txt")"
+"$driver" --usn-enum "$image" 0 0 0 >"$workdir/enum0.txt"
+grep -q 'name=h.txt$' "$workdir/enum0.txt" && fail "enum 0..0 returned h.txt"
+grep -q 'name=\.$' "$workdir/enum0.txt" || fail "enum 0..0 is missing the root"
+h_frn=$(sed -n 's/^frn=0x\([0-9a-f]*\) .*name=h.txt$/\1/p' "$workdir/enum1.txt")
+h_num=$(( 0x$h_frn & 0xFFFFFFFFFFFF ))
+next_after=$(grep '^next=' "$workdir/enum1.txt" | cut -d= -f2)
+test "$next_after" -gt "$h_num" || fail "enum next $next_after not past h.txt ($h_num)"
+if "$driver" --usn-enum "$image" "$next_after" 0 9223372036854775807 >"$workdir/enum2.txt" 2>&1
+then
+    grep -q 'name=h.txt$' "$workdir/enum2.txt" && fail "enum resumed before h.txt"
+else
+    grep -q 'c0000011' "$workdir/enum2.txt" || fail "enum past the end: $(cat "$workdir/enum2.txt")"
+fi
+if "$driver" --usn-enum "$image" 4294967296 0 9223372036854775807 >"$workdir/enum3.txt" 2>&1
+then
+    fail "enum beyond the MFT succeeded"
+fi
+grep -q 'c0000011' "$workdir/enum3.txt" || fail "enum beyond the MFT: $(cat "$workdir/enum3.txt")"
+
 "$ntfsfix" -n "$image" >/dev/null || fail "ntfsfix found a problem"
 "$driver" --check "$image" >"$workdir/check.txt" 2>&1 || fail "ntfslib check: $(tail -n 3 "$workdir/check.txt")"
 "$driver" --verify-shape "$image" >"$workdir/shape.txt" 2>&1 || fail "ntfslib verify-shape: $(tail -n 3 "$workdir/shape.txt")"

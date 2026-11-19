@@ -5170,6 +5170,8 @@ UsnCommand(const char* Program, int Count, char** Args)
         Expected = 3;
     else if (strcmp(Command, "--set-usn") == 0)
         Expected = 4;
+    else if (strcmp(Command, "--usn-enum") == 0)
+        Expected = 5;
     else
         Expected = -1;
     if (Expected < 0 || Count != Expected)
@@ -5178,7 +5180,8 @@ UsnCommand(const char* Program, int Count, char** Args)
         return 2;
     }
 
-    Writes = strcmp(Command, "--usn-query") != 0 && strcmp(Command, "--usn-read") != 0;
+    Writes = strcmp(Command, "--usn-query") != 0 && strcmp(Command, "--usn-read") != 0 &&
+             strcmp(Command, "--usn-enum") != 0;
     Status = Writes ? OpenImageWritable(Args[1], &State) : OpenImage(Args[1], false, &State);
     if (!NT_SUCCESS(Status))
     {
@@ -5334,6 +5337,62 @@ UsnCommand(const char* Program, int Count, char** Args)
         }
         Result = NT_SUCCESS(Status) ? 0 : 1;
     }
+    else if (strcmp(Command, "--usn-enum") == 0)
+    {
+        std::vector<UCHAR> Buffer(65536);
+        ULONGLONG Start, Low, High, Next;
+        ULONG Returned;
+
+        if (!ParseUnsigned(Args[2], ~0ULL, &Start) ||
+            !ParseUnsigned(Args[3], 0x7FFFFFFFFFFFFFFFULL, &Low) ||
+            !ParseUnsigned(Args[4], 0x7FFFFFFFFFFFFFFFULL, &High))
+        {
+            PrintUsage(Program);
+            Result = 2;
+            goto Done;
+        }
+        Status = NtfsUsnJournalEnumerate(State.Volume, Start, (LONGLONG)Low, (LONGLONG)High,
+                                         Buffer.data(), (ULONG)Buffer.size(), &Returned, &Next);
+        if (NT_SUCCESS(Status))
+        {
+            ULONG Offset = 0;
+
+            while (Offset + 0x3C <= Returned)
+            {
+                const UCHAR* R = Buffer.data() + Offset;
+                UINT32 Length, Attributes;
+                UINT16 NameLength, NameOffset;
+                UINT64 Frn, Parent;
+                int64_t Usn;
+                std::string Utf8;
+
+                memcpy(&Length, R, 4);
+                memcpy(&Frn, R + 0x08, 8);
+                memcpy(&Parent, R + 0x10, 8);
+                memcpy(&Usn, R + 0x18, 8);
+                memcpy(&Attributes, R + 0x34, 4);
+                memcpy(&NameLength, R + 0x38, 2);
+                memcpy(&NameOffset, R + 0x3A, 2);
+                if (Length < 0x3C || Offset + Length > Returned)
+                    break;
+                for (UINT16 i = 0; i + 1 < NameLength; i += 2)
+                {
+                    UINT16 Ch;
+                    memcpy(&Ch, R + NameOffset + i, 2);
+                    Utf8.push_back(Ch < 0x80 ? (char)Ch : '?');
+                }
+                printf("frn=0x%016" PRIx64 " parent=0x%016" PRIx64 " usn=%" PRId64 " attrs=0x%08" PRIx32 " name=%s\n",
+                       (uint64_t)Frn, (uint64_t)Parent, (int64_t)Usn, Attributes, Utf8.c_str());
+                Offset += Length;
+            }
+            printf("next=%" PRIu64 "\n", (uint64_t)Next);
+        }
+        else
+        {
+            PrintUsnStatus(Args[1], Status);
+        }
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
     else
     {
         PNtfsFileRecord File = NULL;
@@ -5466,7 +5525,9 @@ PrintUsage(const char* Program)
             "  %s --usn-query IMAGE\n"
             "  %s --usn-append IMAGE FRN PARENT_FRN REASON NAME\n"
             "  %s --usn-read IMAGE START_USN\n"
-            "  %s --set-usn IMAGE PATH USN\n",
+            "  %s --set-usn IMAGE PATH USN\n"
+            "  %s --usn-enum IMAGE START_FRN LOW_USN HIGH_USN\n",
+            Program,
             Program,
             Program,
             Program,
