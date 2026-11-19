@@ -5496,6 +5496,9 @@ IntCompositionSetEnabled(_In_ BOOL bEnable)
     gbCompositionEnabled = bEnable;
     UserDpiUpdateVirtualization();
 
+    /* Windows themed before this flip hold the wrong frame and materials until told (uxtheme re-probes on it) */
+    UserPostMessage(HWND_BROADCAST, WM_DWMCOMPOSITIONCHANGED, 0, 0);
+
     if (bEnable)
     {
         g_CompositionPositionDamageValid = FALSE;

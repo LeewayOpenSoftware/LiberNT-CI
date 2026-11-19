@@ -789,6 +789,56 @@ static BOOL UXTHEME_ClassListContains(LPCWSTR classList, LPCWSTR wanted)
     return FALSE;
 }
 
+/* A style may ask for composited materials, but they only exist while the compositor runs; without it the plain
+ * (Basic) look applies. The probe is asked each time: composition can start or stop after the process did. */
+BOOL UXTHEME_CompositionAvailable(void)
+{
+    typedef HRESULT (WINAPI *PFN_DWMISCOMPOSITIONENABLED)(BOOL *);
+    static PFN_DWMISCOMPOSITIONENABLED pfn;
+    BOOL enabled = FALSE;
+
+    if (!pfn)
+    {
+        HMODULE module = LoadLibraryW(L"dwmapi.dll");
+
+        if (!module)
+            return FALSE;
+        pfn = (PFN_DWMISCOMPOSITIONENABLED)GetProcAddress(module, "DwmIsCompositionEnabled");
+        if (!pfn)
+            return FALSE;
+    }
+    return SUCCEEDED(pfn(&enabled)) && enabled;
+}
+
+/* The Aero look needs the compositor, and an administrator can switch it off for the machine. Any doubt about the
+ * switch (a value that cannot be read) means the Basic look. */
+BOOL UXTHEME_MicaCapable(void)
+{
+    HKEY key;
+    DWORD value = 0, size = sizeof(value), type;
+    LONG status;
+
+    if (!UXTHEME_CompositionAvailable())
+        return FALSE;
+    status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, szThemeManager,
+                           0, KEY_QUERY_VALUE, &key);
+    if (status == ERROR_FILE_NOT_FOUND)
+        return TRUE;
+    if (status != ERROR_SUCCESS)
+        return FALSE;
+    status = RegQueryValueExW(key, L"DisableMica", NULL, &type, (LPBYTE)&value, &size);
+    RegCloseKey(key);
+    if (status == ERROR_FILE_NOT_FOUND)
+        return TRUE;
+    return status == ERROR_SUCCESS && type == REG_DWORD && value == 0;
+}
+
+/* Store names of the two LiberNT version-4 styles: Aero with composited materials, Basic without */
+LPCWSTR UXTHEME_SelectDefaultStyleName(void)
+{
+    return UXTHEME_MicaCapable() ? L"LiberNTAero" : L"LiberNT";
+}
+
 static void UXTHEME_ClearLiquidProperties(HWND hwnd, ULONG region)
 {
     ULONG_PTR currentRegion = (ULONG_PTR)GetPropW(hwnd, DWM_PROP_BACKDROP_REGION);
@@ -883,6 +933,12 @@ static void UXTHEME_ApplyLiquidProperties(HWND hwnd, LPCWSTR classList,
     }
     if (!role)
         return;
+
+    if (!UXTHEME_CompositionAvailable())
+    {
+        UXTHEME_ClearLiquidProperties(hwnd, region);
+        return;
+    }
 
     liquid = NULL;
     if (bThemeActive && !shell && DwmSettingsReadColorScheme() == DWM_COLOR_SCHEME_LIGHT)
