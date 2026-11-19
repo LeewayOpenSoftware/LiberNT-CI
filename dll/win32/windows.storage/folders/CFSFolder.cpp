@@ -1088,7 +1088,11 @@ HRESULT WINAPI CFSFolder::ParseDisplayName(HWND hwndOwner,
     }
     else
     {
-        INT cchElement = lstrlenW(lpszDisplayName) + 1;
+        // Size the buffer for this element only: each nested ParseDisplayName below
+        // allocates again, and the whole remaining string at every level could
+        // overflow the stack for a deep path with a long tail
+        LPCWSTR pchSep = wcschr(lpszDisplayName, L'\\');
+        INT cchElement = (pchSep ? (INT)(pchSep - lpszDisplayName) : lstrlenW(lpszDisplayName)) + 1;
         LPWSTR pszElement = (LPWSTR)_alloca(cchElement * sizeof(WCHAR));
         LPWSTR pchNext = lpszDisplayName;
         hr = Shell_NextElement(&pchNext, pszElement, cchElement, TRUE);
