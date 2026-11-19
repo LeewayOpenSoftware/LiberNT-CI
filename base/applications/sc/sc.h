@@ -32,6 +32,8 @@ typedef struct
     LPCTSTR lpPassword;
 
     BOOL bTagId;
+    BOOL bStartTypeSet;
+    BOOL bDelayedAutoStart;
 } SERVICE_CREATE_INFO, *LPSERVICE_CREATE_INFO;
 
 
@@ -71,6 +73,11 @@ ParseCreateConfigArguments(
     INT ArgCount,
     BOOL bChangeService,
     OUT LPSERVICE_CREATE_INFO lpServiceInfo);
+
+BOOL
+ApplyDelayedAutoStart(
+    SC_HANDLE hService,
+    BOOL bDelayedAutoStart);
 
 BOOL
 ParseFailureArguments(
