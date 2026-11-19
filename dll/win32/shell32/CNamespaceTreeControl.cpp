@@ -482,7 +482,9 @@ private:
 
                 if (!_wcsicmp(Verb, L"rename") && !IsRoot)
                 {
-                    // The menu has no shell view to rename in: edit the tree label
+                    // The menu has no shell view to rename in: edit the tree label.
+                    // TreeItem may have gone while the menu was up; EditLabel then
+                    // fails and the flag is cleared, so a later slow click is vetoed.
                     m_RenamePending = TRUE;
                     if (!TreeView_EditLabel(m_Tree, TreeItem))
                         m_RenamePending = FALSE;
@@ -701,7 +703,9 @@ private:
         return FAILED(hr) ? hr : S_OK;
     }
 
-    // Rename the item of a tree label edit; TRUE keeps the new label
+    // Rename the item of a tree label edit. On success the label is set from the
+    // renamed item's display name (which may differ from what was typed, such as a
+    // hidden extension), so the edit control's text is never kept: always FALSE.
     BOOL RenameTreeItem(HTREEITEM TreeItem, PCWSTR NewName)
     {
         TreeItemData *Data = GetTreeItemData(TreeItem);
@@ -736,10 +740,21 @@ private:
             ILFree(NewChild);
         }
 
+        // Show the name the folder now reports, as the label was made on insert
+        CComHeapPtr<WCHAR> DisplayName;
+        if (Data->Item && SUCCEEDED(Data->Item->GetDisplayName(SIGDN_NORMALDISPLAY, &DisplayName)))
+        {
+            TVITEMW TreeItemInfo = {};
+            TreeItemInfo.mask = TVIF_TEXT;
+            TreeItemInfo.hItem = TreeItem;
+            TreeItemInfo.pszText = DisplayName;
+            TreeView_SetItem(m_Tree, &TreeItemInfo);
+        }
+
         // The children were built from the old path: enumerate them again on expand
         TreeView_Expand(m_Tree, TreeItem, TVE_COLLAPSE | TVE_COLLAPSERESET);
         Data->Enumerated = FALSE;
-        return TRUE;
+        return FALSE;
     }
 
     HRESULT PopulateTreeItem(HTREEITEM TreeItem)
