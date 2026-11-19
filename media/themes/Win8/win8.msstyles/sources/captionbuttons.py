@@ -2,6 +2,8 @@ import io
 import os
 import struct
 import sys
+if os.environ.get("LIBERNT_REGEN_ART") != "1":
+    sys.exit("refusing to run: the bitmaps were replaced by the 2026-11-18 owner redraw; set LIBERNT_REGEN_ART=1 to overwrite them on purpose")
 from PIL import Image
 
 RES = os.environ.get("WIN81_AERO_RES", "/Users/mac/working_dir/win81-fs/aero_res/IMAGE")
