@@ -4217,6 +4217,7 @@ HRESULT WINAPI CoEnableCallCancellation(void *reserved)
     return S_OK;
 }
 
+#ifndef __REACTOS__ /* see callctl.c */
 /***********************************************************************
  *           CoGetCallerTID    (combase.@)
  */
@@ -4225,6 +4226,7 @@ HRESULT WINAPI CoGetCallerTID(DWORD *tid)
     FIXME("stub!\n");
     return E_NOTIMPL;
 }
+#endif
 
 /***********************************************************************
  *           CoIsHandlerConnected    (combase.@)
@@ -4361,6 +4363,9 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD reason, LPVOID reserved)
     {
     case DLL_PROCESS_ATTACH:
         hProxyDll = hinstDLL;
+#ifdef __REACTOS__
+        callctl_register_hook();
+#endif
         break;
     case DLL_PROCESS_DETACH:
         com_revoke_local_servers();
@@ -4371,6 +4376,9 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD reason, LPVOID reserved)
         break;
     case DLL_THREAD_DETACH:
         com_cleanup_tlsdata();
+#ifdef __REACTOS__
+        callctl_thread_detach();
+#endif
         break;
     }
 

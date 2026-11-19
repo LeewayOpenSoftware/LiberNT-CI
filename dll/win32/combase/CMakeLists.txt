@@ -12,6 +12,7 @@ add_custom_command(
 
 list(APPEND SOURCE
     apartment.c
+    callctl.c
     combase.c
     comcat.c
     errorinfo.c

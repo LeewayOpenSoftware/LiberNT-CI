@@ -571,6 +571,19 @@ CoEnableCallCancellation(
   _In_opt_ void *reserved
 );
 
+HRESULT WINAPI CoSetCancelObject(_In_opt_ IUnknown *pUnk);
+
+HRESULT
+WINAPI
+CoGetCancelObject(
+  _In_ DWORD dwThreadId,
+  _In_ REFIID iid,
+  _Outptr_ void **ppUnk);
+
+HRESULT WINAPI CoTestCancel(void);
+
+HRESULT WINAPI CoGetCallerTID(_Out_ LPDWORD lpdwTID);
+
 /* security */
 
 _Check_return_
@@ -748,8 +761,19 @@ typedef enum tagCOWAIT_FLAGS
     COWAIT_DEFAULT        = 0x00000000,
     COWAIT_WAITALL        = 0x00000001,
     COWAIT_ALERTABLE      = 0x00000002,
-    COWAIT_INPUTAVAILABLE = 0x00000004
+    COWAIT_INPUTAVAILABLE = 0x00000004,
+    COWAIT_DISPATCH_CALLS = 0x00000008,
+    COWAIT_DISPATCH_WINDOW_MESSAGES = 0x00000010
 } COWAIT_FLAGS;
+
+typedef enum CWMO_FLAGS
+{
+    CWMO_DEFAULT = 0,
+    CWMO_DISPATCH_CALLS = 1,
+    CWMO_DISPATCH_WINDOW_MESSAGES = 2
+} CWMO_FLAGS;
+
+#define CWMO_MAX_HANDLES 56
 
 _Check_return_
 HRESULT
@@ -759,6 +783,16 @@ CoWaitForMultipleHandles(
   _In_ DWORD dwTimeout,
   _In_ ULONG cHandles,
   _In_reads_(cHandles) LPHANDLE pHandles,
+  _Out_ LPDWORD lpdwindex);
+
+_Check_return_
+HRESULT
+WINAPI
+CoWaitForMultipleObjects(
+  _In_ DWORD dwFlags,
+  _In_ DWORD dwTimeout,
+  _In_ ULONG cHandles,
+  _In_reads_(cHandles) const HANDLE *pHandles,
   _Out_ LPDWORD lpdwindex);
 
 /*****************************************************************************

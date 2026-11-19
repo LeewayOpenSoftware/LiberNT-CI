@@ -102,6 +102,10 @@ struct tlsdata
     CO_MTA_USAGE_COOKIE implicit_mta_cookie; /* mta referenced by roapi from sta thread */
 #ifdef __REACTOS__
     struct neutral_frame *neutral_frame; /* innermost switch into the neutral apartment */
+    struct callctl_server_call *server_call; /* innermost incoming call (callctl.c) */
+    DWORD             caller_pid;    /* caller of the call being dispatched, from its ORPC extension */
+    DWORD             caller_apt;
+    BOOL              caller_valid;
 #endif
 };
 
@@ -155,6 +159,28 @@ void rpc_unregister_channel_hooks(void);
 
 struct dispatch_params;
 void rpc_execute_call(struct dispatch_params *params);
+
+#ifdef __REACTOS__
+/* callctl.c */
+struct call_cancel;
+struct callctl_server_call
+{
+    struct callctl_server_call *prev;
+    struct call_cancel *cancel;  /* the caller's cancel object, if the caller is in this process */
+    BOOL caller_known;
+    DWORD caller_pid;
+    DWORD caller_apt;
+};
+struct call_cancel *callctl_client_begin(struct tlsdata *tlsdata);
+HANDLE callctl_client_event(struct call_cancel *cancel);
+DWORD callctl_client_timeout(struct call_cancel *cancel);
+void callctl_client_end(struct call_cancel *cancel);
+void callctl_server_prepare(struct tlsdata *tlsdata);
+void callctl_server_begin(struct tlsdata *tlsdata, struct callctl_server_call *call, const GUID *cid);
+void callctl_server_end(struct tlsdata *tlsdata, struct callctl_server_call *call);
+void callctl_register_hook(void);
+void callctl_thread_detach(void);
+#endif
 
 enum class_reg_data_origin
 {

@@ -83,7 +83,7 @@ dll/win32/explorerframe       # Synced to Wine-11.14 browseui (ReactOS shell ext
 dll/win32/cabinet             # Synced to Wine-11.14
 dll/win32/cfgmgr32            # Synced to Wine-11.14
 dll/win32/clusapi             # Synced to Wine-11.14
-dll/win32/combase             # Synced to Wine-11.14 (LiberNT neutral apartment in neutral.c, hooks under __REACTOS__ in apartment.c, combase.c, rpc.c, stubmanager.c)
+dll/win32/combase             # Synced to Wine-11.14 (LiberNT neutral apartment in neutral.c, call control in callctl.c; hooks under __REACTOS__ in apartment.c, combase.c, combase_private.h, combase.spec, rpc.c, stubmanager.c)
 dll/win32/comcat              # Synced to Wine-11.14
 dll/win32/comdlg32            # Synced to Wine-11.14
 dll/win32/coml2               # Synced to Wine-11.14
