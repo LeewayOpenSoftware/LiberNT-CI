@@ -127,6 +127,16 @@ HRESULT apartment_disconnectproxies(struct apartment *apt);
 /* RpcSs interface */
 HRESULT rpcss_get_next_seqid(DWORD *id);
 HRESULT rpc_get_local_class_object(REFCLSID rclsid, REFIID riid, void **obj);
+#ifdef __REACTOS__
+HRESULT rpc_get_local_class_object_ctx(REFCLSID rclsid, REFIID riid, DWORD clsctx, void **obj);
+
+/* Launch identity (launchid.c) */
+BOOL com_launch_identity_enabled(void);
+DWORD launch_required_bitness(REFCLSID clsid, DWORD clsctx);
+HRESULT launch_bitness_view(DWORD bitness, REGSAM *view, BOOL *opposite);
+HRESULT launch_runas_server(REFCLSID clsid, DWORD bitness, HANDLE *process);
+HRESULT rpcss_launch_server(REFCLSID clsid, DWORD bitness, DWORD *pid);
+#endif
 HRESULT rpc_register_local_server(REFCLSID clsid, IStream *stream, DWORD flags, unsigned int *cookie);
 HRESULT rpc_revoke_local_server(unsigned int cookie);
 HRESULT rpc_create_clientchannel(const OXID *oxid, const IPID *ipid, const OXID_INFO *oxid_info, const IID *iid,

@@ -16,6 +16,7 @@ list(APPEND SOURCE
     comcat.c
     errorinfo.c
     hglobalstream.c
+    launchid.c
     malloc.c
     marshal.c
     roapi.c

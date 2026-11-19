@@ -2400,7 +2400,11 @@ static HRESULT com_get_class_object(REFCLSID rclsid, DWORD clscontext,
     /* Next try out of process */
     if (clscontext & CLSCTX_LOCAL_SERVER)
     {
+#ifdef __REACTOS__
+        hr = rpc_get_local_class_object_ctx(rclsid, riid, clscontext, obj);
+#else
         hr = rpc_get_local_class_object(rclsid, riid, obj);
+#endif
         if (SUCCEEDED(hr))
             return hr;
 #ifdef __REACTOS__

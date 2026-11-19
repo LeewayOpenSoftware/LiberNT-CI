@@ -8,6 +8,7 @@ add_rpc_files(server
 list(APPEND SOURCE
     epmp.c
     irotp.c
+    launchid.c
     rpcss_main.c
     setup.c
     precomp.h
@@ -20,6 +21,6 @@ add_executable(rpcss ${SOURCE} rpcss.rc)
 
 target_link_libraries(rpcss ${PSEH_LIB} wine)
 set_module_type(rpcss win32cui UNICODE)
-add_importlibs(rpcss advapi32 rpcrt4 msvcrt kernel32 ntdll)
+add_importlibs(rpcss advapi32 rpcrt4 userenv wtsapi32 msvcrt kernel32 ntdll)
 add_pch(rpcss precomp.h SOURCE)
 add_cd_file(TARGET rpcss DESTINATION reactos/system32 FOR all)

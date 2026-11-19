@@ -52,5 +52,12 @@ interface Irpcss
     HRESULT irpcss_start_local_service(
         [in] handle_t handle,
         [in] const GUID *clsid);
+
+    /* Launch identity (DCOM step 6): start the class's server as its AppID's RunAs account */
+    HRESULT irpcss_launch_server(
+        [in] handle_t handle,
+        [in] const GUID *clsid,
+        [in] DWORD bitness,
+        [out] DWORD *pid);
 #endif
 }

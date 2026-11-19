@@ -84,6 +84,8 @@ dll/win32/cabinet             # Synced to Wine-11.14
 dll/win32/cfgmgr32            # Synced to Wine-11.14
 dll/win32/clusapi             # Synced to Wine-11.14
 dll/win32/combase             # Synced to Wine-11.14
+                              # Local: launchid.c (DCOM step 6); __REACTOS__ hooks in rpc.c (server start),
+                              # combase.c (activation context), combase_private.h
 dll/win32/comcat              # Synced to Wine-11.14
 dll/win32/comdlg32            # Synced to Wine-11.14
 dll/win32/coml2               # Synced to Wine-11.14
@@ -357,6 +359,8 @@ base/applications/winhlp32          # Synced to Wine-11.14
 base/applications/wordpad           # Synced to Wine-11.14
 base/applications/write             # Synced to Wine-11.14
 base/services/rpcss                 # Synced to Wine-11.14
+                                    # Local: launchid.c (DCOM step 6); irpcss_launch_server under __REACTOS__ in
+                                    # sdk/include/wine/irpcss.idl
 base/shell/cmd                      # Synced to Wine-11.14
 base/services/schedsvc              # Synced to Wine-11.14
 base/system/conhost                 # Synced to Wine-11.14

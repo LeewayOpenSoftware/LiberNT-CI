@@ -406,6 +406,15 @@ static LONG CALLBACK server_invoke_filter(EXCEPTION_POINTERS *eptr)
 }
 
 #endif
+#ifdef __REACTOS__
+HRESULT rpcss_launch_server(REFCLSID clsid, DWORD bitness, DWORD *pid)
+{
+    RPCSS_CALL_START
+    hr = irpcss_launch_server(get_irpcss_handle(), clsid, bitness, pid);
+    RPCSS_CALL_END
+}
+#endif
+
 static HRESULT rpcss_get_class_object(REFCLSID rclsid, PMInterfacePointer *objref)
 {
     RPCSS_CALL_START
@@ -515,7 +524,11 @@ static HRESULT create_local_service(REFCLSID rclsid)
 }
 #endif
 
+#ifdef __REACTOS__
+static HRESULT create_server(REFCLSID rclsid, DWORD bitness, HANDLE *process)
+#else
 static HRESULT create_server(REFCLSID rclsid, HANDLE *process)
+#endif
 {
     static const WCHAR  embeddingW[] = L" -Embedding";
     HKEY                key;
@@ -531,11 +544,25 @@ static HRESULT create_server(REFCLSID rclsid, HANDLE *process)
 
     TRACE("Attempting to start server for %s\n", debugstr_guid(rclsid));
 
+#ifdef __REACTOS__
+    /* A required bitness takes only that view: no fallback to the other one */
+    if (bitness)
+    {
+        REGSAM view;
+
+        if (FAILED(hr = launch_bitness_view(bitness, &view, &is_opposite)))
+            return hr;
+        hr = open_key_for_clsid(rclsid, L"LocalServer32", view | KEY_READ, &key);
+    }
+    else
+#endif
+    {
     hr = open_key_for_clsid(rclsid, L"LocalServer32", KEY_READ, &key);
     if (FAILED(hr) && (arch == 64 || (IsWow64Process(GetCurrentProcess(), &is_wow64) && is_wow64)))
     {
         hr = open_key_for_clsid(rclsid, L"LocalServer32", opposite | KEY_READ, &key);
         is_opposite = TRUE;
+    }
     }
     if (FAILED(hr))
     {
@@ -585,7 +612,11 @@ static HRESULT create_server(REFCLSID rclsid, HANDLE *process)
     return S_OK;
 }
 
+#ifdef __REACTOS__
+static HRESULT create_surrogate_server(REFCLSID rclsid, DWORD bitness, HANDLE *process)
+#else
 static HRESULT create_surrogate_server(REFCLSID rclsid, HANDLE *process)
+#endif
 {
     static const WCHAR processidW[] = L" /PROCESSID:";
     HKEY key;
@@ -601,6 +632,24 @@ static HRESULT create_surrogate_server(REFCLSID rclsid, HANDLE *process)
 
     TRACE("Attempting to start surrogate server for %s\n", debugstr_guid(rclsid));
 
+#ifdef __REACTOS__
+    if (bitness)
+    {
+        REGSAM view;
+
+        if (FAILED(hr = launch_bitness_view(bitness, &view, &is_opposite)))
+            return hr;
+        IsWow64Process(GetCurrentProcess(), &is_wow64);
+        hr = open_key_for_clsid(rclsid, NULL, view | KEY_READ, &key);
+        if (FAILED(hr)) return hr;
+        RegCloseKey(key);
+        hr = open_appidkey_from_clsid(rclsid, view | KEY_READ, &key);
+        if (FAILED(hr)) return hr;
+        /* the 32-bit dllhost on a 64-bit system, else the native one */
+        opposite = (bitness == 32 && (sizeof(void *) == 8 || is_wow64)) ? KEY_WOW64_32KEY : KEY_WOW64_64KEY;
+        goto surrogate_key_open;
+    }
+#endif
     hr = open_key_for_clsid(rclsid, NULL, KEY_READ, &key);
     if (FAILED(hr) && (arch == 64 || (IsWow64Process(GetCurrentProcess(), &is_wow64) && is_wow64)))
         hr = open_key_for_clsid(rclsid, NULL, opposite | KEY_READ, &key);
@@ -615,6 +664,9 @@ static HRESULT create_surrogate_server(REFCLSID rclsid, HANDLE *process)
         is_opposite = TRUE;
     }
 
+#ifdef __REACTOS__
+surrogate_key_open:
+#endif
     size = (MAX_PATH + 1) * sizeof(WCHAR);
     ret = RegQueryValueExW(key, L"DllSurrogate", NULL, NULL, (LPBYTE)command, &size);
     RegCloseKey(key);
@@ -664,7 +716,16 @@ static HRESULT create_surrogate_server(REFCLSID rclsid, HANDLE *process)
     return S_OK;
 }
 
+#ifdef __REACTOS__
 HRESULT rpc_get_local_class_object(REFCLSID rclsid, REFIID riid, void **obj)
+{
+    return rpc_get_local_class_object_ctx(rclsid, riid, 0, obj);
+}
+
+HRESULT rpc_get_local_class_object_ctx(REFCLSID rclsid, REFIID riid, DWORD clsctx, void **obj)
+#else
+HRESULT rpc_get_local_class_object(REFCLSID rclsid, REFIID riid, void **obj)
+#endif
 {
     PMInterfacePointer objref = NULL;
     IServiceProvider *local_server;
@@ -688,9 +749,24 @@ HRESULT rpc_get_local_class_object(REFCLSID rclsid, REFIID riid, void **obj)
 
         if (tries == 1)
         {
+#ifdef __REACTOS__
+            DWORD bitness = launch_required_bitness(rclsid, clsctx);
+
+            if ((hr = create_local_service(rclsid)))
+            {
+                /* A server with RunAs is started by rpcss, never as the caller */
+                hr = launch_runas_server(rclsid, bitness, &process);
+                if (FAILED(hr))
+                    return hr;
+                if (hr == S_FALSE && (hr = create_server(rclsid, bitness, &process)) &&
+                    (hr = create_surrogate_server(rclsid, bitness, &process)))
+                    return hr;
+            }
+#else
             if ((hr = create_local_service(rclsid)) && (hr = create_server(rclsid, &process)) &&
                 (hr = create_surrogate_server(rclsid, &process)) )
                 return hr;
+#endif
         }
 
 #ifdef __REACTOS__
