@@ -10,6 +10,7 @@ list(APPEND SOURCE
     irotp.c
     launchid.c
     rpcss_main.c
+    scmsec.c
     setup.c
     precomp.h
     ${CMAKE_CURRENT_BINARY_DIR}/epm_s.c
@@ -19,7 +20,7 @@ list(APPEND SOURCE
 include_directories(${REACTOS_BINARY_DIR}/sdk/include/wine)
 add_executable(rpcss ${SOURCE} rpcss.rc)
 
-target_link_libraries(rpcss ${PSEH_LIB} wine)
+target_link_libraries(rpcss ${PSEH_LIB} wine comsec)
 set_module_type(rpcss win32cui UNICODE)
 add_importlibs(rpcss advapi32 rpcrt4 userenv wtsapi32 msvcrt kernel32 ntdll)
 add_pch(rpcss precomp.h SOURCE)

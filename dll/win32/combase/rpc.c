@@ -746,13 +746,20 @@ HRESULT rpc_get_local_class_object(REFCLSID rclsid, REFIID riid, void **obj)
 
         if (SUCCEEDED(hr = rpcss_get_class_object(rclsid, &objref)))
             break;
+#ifdef __REACTOS__
+        /* RpcSs refused the activation (DCOM step 5): starting a server would not change that */
+        if (hr == E_ACCESSDENIED && com_access_mode() != COMSEC_OFF)
+            return hr;
+#endif
 
         if (tries == 1)
         {
 #ifdef __REACTOS__
             DWORD bitness = launch_required_bitness(rclsid, clsctx);
 
-            if ((hr = create_local_service(rclsid)))
+            if ((hr = create_local_service(rclsid)) == E_ACCESSDENIED && com_access_mode() != COMSEC_OFF)
+                return hr;
+            if (hr)
             {
                 /* A server with RunAs is started by rpcss, never as the caller */
                 hr = launch_runas_server(rclsid, bitness, &process);
@@ -2536,6 +2543,15 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
     RpcBindingInqObject(msg->Handle, &ipid);
 
     TRACE("ipid = %s, iMethod = %d\n", debugstr_guid(&ipid), msg->ProcNum);
+
+#ifdef __REACTOS__
+    /* DCOM step 5: the access check of the server process */
+    if (FAILED(hr = com_access_check_call(msg->Handle)))
+    {
+        RpcRaiseException(hr);
+        return;
+    }
+#endif
 
     params = malloc(sizeof(*params));
     if (!params)

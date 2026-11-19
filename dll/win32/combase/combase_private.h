@@ -150,6 +150,10 @@ void com_security_init_default(void);
 void com_security_reset(void);
 WCHAR *com_security_token_user(HANDLE token);
 BOOL com_call_security_enabled(void);
+#define COMSEC_OFF 0 /* comsec.h */
+DWORD com_access_mode(void);
+void com_access_store(PSECURITY_DESCRIPTOR sd, DWORD capabilities);
+HRESULT com_access_check_call(RPC_BINDING_HANDLE binding);
 HRESULT rpc_channel_set_imp_level(IRpcChannelBuffer *chan, DWORD imp_level);
 #endif
 HRESULT rpc_register_interface(REFIID riid);

@@ -2,6 +2,7 @@
 #define STANDALONE
 #include <wine/test.h>
 
+extern void func_enforce(void);
 extern void func_globaloptions(void);
 extern void func_initializespy(void);
 extern void func_launchid(void);
@@ -13,6 +14,7 @@ extern void func_uninitquit(void);
 
 const struct test winetest_testlist[] =
 {
+    { "enforce", func_enforce },
     { "globaloptions", func_globaloptions },
     { "initializespy", func_initializespy },
     { "launchid", func_launchid },

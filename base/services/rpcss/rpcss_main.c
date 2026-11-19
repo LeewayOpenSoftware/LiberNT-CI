@@ -52,8 +52,20 @@ struct registered_class
     unsigned int single_use : 1;
 #ifdef __REACTOS__
     HANDLE process;
+    struct scm_owner *owner;
 #endif
 };
+
+#ifdef __REACTOS__
+/* scmsec.c, DCOM step 5 */
+struct scm_client;
+HRESULT scm_check_launch(handle_t h, const GUID *clsid, DWORD rights, const WCHAR *what);
+struct scm_owner *scm_owner_capture(handle_t h, const GUID *clsid);
+void scm_owner_free(struct scm_owner *owner);
+void scm_client_begin(handle_t h, struct scm_client **client);
+void scm_client_end(struct scm_client *client);
+BOOL scm_owner_serves(handle_t h, const struct scm_owner *owner, const struct scm_client *client, const GUID *clsid);
+#endif
 
 static CRITICAL_SECTION registered_classes_cs = { NULL, -1, 0, 0, 0, 0 };
 static struct list registered_classes = LIST_INIT(registered_classes);
@@ -87,6 +99,7 @@ HRESULT __cdecl irpcss_server_register(handle_t h, const GUID *clsid, unsigned i
             entry->process = OpenProcess(SYNCHRONIZE, FALSE, pid);
             RpcRevertToSelf();
         }
+        entry->owner = scm_owner_capture(h, clsid);
     }
 #endif
 
@@ -102,6 +115,7 @@ static void scm_revoke_class(struct registered_class *_class)
     list_remove(&_class->entry);
 #ifdef __REACTOS__
     if (_class->process) CloseHandle(_class->process);
+    scm_owner_free(_class->owner);
 #endif
     free(_class->object);
     free(_class);
@@ -133,9 +147,17 @@ HRESULT __cdecl irpcss_get_class_object(handle_t h, const GUID *clsid,
     struct registered_class *cur;
 #ifdef __REACTOS__
     struct registered_class *next;
+    struct scm_client *client;
+    HRESULT hr;
 #endif
 
     *object = NULL;
+
+#ifdef __REACTOS__
+    if (FAILED(hr = scm_check_launch(h, clsid, COM_RIGHTS_ACTIVATE_LOCAL, L"activation")))
+        return hr;
+    scm_client_begin(h, &client);
+#endif
 
     EnterCriticalSection(&registered_classes_cs);
 
@@ -150,7 +172,11 @@ HRESULT __cdecl irpcss_get_class_object(handle_t h, const GUID *clsid,
 
     LIST_FOR_EACH_ENTRY(cur, &registered_classes, struct registered_class, entry)
     {
-        if (!memcmp(clsid, &cur->clsid, sizeof(*clsid)))
+        if (!memcmp(clsid, &cur->clsid, sizeof(*clsid))
+#ifdef __REACTOS__
+            && scm_owner_serves(h, cur->owner, client, clsid)
+#endif
+           )
         {
             *object = MIDL_user_allocate(FIELD_OFFSET(MInterfacePointer, abData[cur->object->ulCntData]));
             if (*object)
@@ -167,6 +193,9 @@ HRESULT __cdecl irpcss_get_class_object(handle_t h, const GUID *clsid,
     }
 
     LeaveCriticalSection(&registered_classes_cs);
+#ifdef __REACTOS__
+    scm_client_end(client);
+#endif
 
     return *object ? S_OK : E_NOINTERFACE;
 }
@@ -179,7 +208,7 @@ HRESULT __cdecl irpcss_get_thread_seq_id(handle_t h, DWORD *id)
 }
 
 #ifdef __REACTOS__
-static HKEY open_appid_key(const GUID *clsid, REGSAM view)
+HKEY scm_open_appid_key(const GUID *clsid, REGSAM view)
 {
     WCHAR appid[39], path[MAX_PATH];
     DWORD type, size = sizeof(appid);
@@ -212,7 +241,7 @@ HRESULT __cdecl irpcss_start_local_service(handle_t h, const GUID *clsid)
 
     for (i = 0; i < ARRAY_SIZE(views) && !key; i++)
     {
-        if (!(key = open_appid_key(clsid, views[i])))
+        if (!(key = scm_open_appid_key(clsid, views[i])))
             continue;
         size = sizeof(service) - sizeof(WCHAR);
         if (RegQueryValueExW(key, L"LocalService", NULL, &type, (BYTE *)service, &size) || type != REG_SZ)
@@ -224,6 +253,11 @@ HRESULT __cdecl irpcss_start_local_service(handle_t h, const GUID *clsid)
     if (!key)
         return REGDB_E_CLASSNOTREG;
     service[size / sizeof(WCHAR)] = 0;
+    if (FAILED(scm_check_launch(h, clsid, COM_RIGHTS_EXECUTE_LOCAL, L"launch")))
+    {
+        RegCloseKey(key);
+        return E_ACCESSDENIED;
+    }
 
     if (!RegQueryValueExW(key, L"ServiceParameters", NULL, &type, NULL, &size) && type == REG_SZ && size &&
         (params = calloc(1, size + sizeof(WCHAR))))

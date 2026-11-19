@@ -86,6 +86,7 @@ dll/win32/clusapi             # Synced to Wine-11.14
 dll/win32/combase             # Synced to Wine-11.14
                               # Local: launchid.c (DCOM step 6); __REACTOS__ hooks in rpc.c (server start),
                               # combase.c (activation context), combase_private.h
+  dll/win32/combase/comaccess.c # LiberNT, not from Wine (DCOM step 5); hooks: combase.c CoInitializeSecurity, rpc.c dispatch_rpc and rpc_get_local_class_object, CMakeLists.txt
 dll/win32/comcat              # Synced to Wine-11.14
 dll/win32/comdlg32            # Synced to Wine-11.14
 dll/win32/coml2               # Synced to Wine-11.14
@@ -361,6 +362,7 @@ base/applications/write             # Synced to Wine-11.14
 base/services/rpcss                 # Synced to Wine-11.14
                                     # Local: launchid.c (DCOM step 6); irpcss_launch_server under __REACTOS__ in
                                     # sdk/include/wine/irpcss.idl
+  base/services/rpcss/scmsec.c      # LiberNT, not from Wine (DCOM step 5); hooks: rpcss_main.c irpcss_server_register, irpcss_get_class_object, irpcss_start_local_service, CMakeLists.txt
 base/shell/cmd                      # Synced to Wine-11.14
 base/services/schedsvc              # Synced to Wine-11.14
 base/system/conhost                 # Synced to Wine-11.14
