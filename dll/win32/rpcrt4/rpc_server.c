@@ -496,6 +496,9 @@ static RPC_STATUS process_request_packet(RpcConnection *conn, RpcPktRequestHdr *
 
       RPCRT4_Send(conn, response, NULL, 0);
       free(response);
+#ifdef __REACTOS__
+      goto done;
+#endif
     }
     func = sif->If->DispatchTable->DispatchTable[msg->ProcNum];
   }
@@ -549,6 +552,9 @@ static RPC_STATUS process_request_packet(RpcConnection *conn, RpcPktRequestHdr *
   } else
     ERR("out of memory\n");
 
+#ifdef __REACTOS__
+done:
+#endif
   msg->RpcInterfaceInformation = NULL;
   RPCRT4_release_server_interface(sif);
 
