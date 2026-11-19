@@ -3447,6 +3447,9 @@ ChangePos:
 
     LRESULT OnThemeChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        /* Sizes fitted under the previous theme no longer hold for any edge */
+        m_FittedEdges = 0;
+
         if (m_Theme)
             CloseThemeData(m_Theme);
 
@@ -3503,6 +3506,8 @@ ChangePos:
             SendMessage(m_TrayNotify, uMsg, wParam, lParam);
             SendMessage(m_TaskSwitch, uMsg, wParam, lParam);
             UpdateFonts();
+            /* New fonts change the row height on every edge */
+            m_FittedEdges = 0;
             CheckTrayWndPosition();
         }
 
