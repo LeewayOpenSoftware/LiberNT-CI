@@ -41,6 +41,7 @@ list(APPEND SOURCE
     PathResolve.cpp
     PreviewHandler.cpp
     AboutBanner.c
+    WinverBrand.c
     ProgramFilesDir.cpp
     SHGetFolderPathToken.cpp
     RealShellExecuteEx.cpp
