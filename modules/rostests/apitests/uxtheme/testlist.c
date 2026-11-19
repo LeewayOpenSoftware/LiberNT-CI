@@ -3,6 +3,7 @@
 #include <apitest.h>
 
 extern void func_CaptionGlyphs(void);
+extern void func_ScrollGlyphKey(void);
 extern void func_CloseThemeData(void);
 extern void func_ColorPreference(void);
 extern void func_DrawThemeParentBackground(void);
@@ -30,6 +31,7 @@ extern void func_TrustGate(void);
 const struct test winetest_testlist[] =
 {
     { "CaptionGlyphs", func_CaptionGlyphs },
+    { "ScrollGlyphKey", func_ScrollGlyphKey },
     { "CloseThemeData", func_CloseThemeData },
     { "ColorPreference", func_ColorPreference },
     { "DrawThemeParentBackground", func_DrawThemeParentBackground },

@@ -732,11 +732,8 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
         {
             offset.x = MulDiv(offset.x, dpi, 96);
             offset.y = MulDiv(offset.y, dpi, 96);
-            if (composited)
-            {
-                captionBtnHeight = MulDiv(ButtonSize.cy, dpi, 96);
-                captionBtnWidth = MulDiv(ButtonSize.cx, dpi, 96);
-            }
+            captionBtnHeight = MulDiv(ButtonSize.cy, dpi, 96);
+            captionBtnWidth = MulDiv(ButtonSize.cx, dpi, 96);
         }
 
         if (!hasPlacement ||

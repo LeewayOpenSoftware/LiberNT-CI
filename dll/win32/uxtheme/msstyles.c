@@ -1676,7 +1676,7 @@ HBITMAP MSSTYLES_LoadBitmap (PTHEME_CLASS tc, LPCWSTR lpFilename, BOOL* hasAlpha
     WCHAR szFile[MAX_PATH];
     LPWSTR tmp;
     PTHEME_IMAGE img;
-    BOOL has_default;
+    BOOL has_default, has_alpha_scan;
 
     lstrcpynW(szFile, lpFilename, ARRAY_SIZE(szFile));
     tmp = szFile;
@@ -1712,17 +1712,23 @@ HBITMAP MSSTYLES_LoadBitmap (PTHEME_CLASS tc, LPCWSTR lpFilename, BOOL* hasAlpha
         /* "#<id>": an IMAGE resource of the style's view; a version-4 file has no module to fall back to */
         img->image = MSSTYLES_V4_LoadImage(tc->tf, szFile);
         *hasAlpha = FALSE;
-        if (img->image)
-            prepare_png_alpha(img->image, hasAlpha);
         has_default = FALSE;
+        if (img->image)
+        {
+            prepare_png_alpha(img->image, hasAlpha);
+            if (!*hasAlpha)
+                prepare_alpha(img->image, &has_alpha_scan, &has_default);
+        }
     }
     else
 #endif
 #if defined(__REACTOS__) && defined(ENABLE_PNG_SUPPORT)
     if (MSSTYLES_TryLoadPng(tc->hTheme, szFile, L"IMAGE", &img->image))
     {
-        prepare_png_alpha(img->image, hasAlpha);
         has_default = FALSE;
+        prepare_png_alpha(img->image, hasAlpha);
+        if (!*hasAlpha)
+            prepare_alpha(img->image, &has_alpha_scan, &has_default);
     }
     else
     {
