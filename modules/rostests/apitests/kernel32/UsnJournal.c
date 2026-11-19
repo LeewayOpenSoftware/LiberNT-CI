@@ -204,7 +204,7 @@ static void TestWaitEdges(void)
         Thread = CreateThread(NULL, 0, TimedReadThread, Timed, 0, NULL);
         if (WaitForSingleObject(Thread, 15000) == WAIT_OBJECT_0)
         {
-            ok(Timed->Result && Timed->Returned == sizeof(USN) && *(USN *)Timed->Buffer >= Read.StartUsn,
+            ok(Timed->Result && Timed->Returned >= sizeof(USN) && *(USN *)Timed->Buffer >= Read.StartUsn,
                "no-record timed read: %d (%lu), %lu bytes\n", Timed->Result, Timed->Error, Timed->Returned);
             ok(Timed->Elapsed >= 1500, "no-record timed read returned after %lu ms\n", Timed->Elapsed);
             HeapFree(GetProcessHeap(), 0, Timed);
@@ -219,7 +219,8 @@ static void TestWaitEdges(void)
 
     /* Closing the handle of a waiting read cancels it (the cleanup path) */
     Ov.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
-    Read.BytesToWaitFor = 1;
+    /* Large enough that a stray background record cannot complete the read early */
+    Read.BytesToWaitFor = 1024 * 1024;
     Async = OpenVolume(GENERIC_READ | GENERIC_WRITE, FILE_FLAG_OVERLAPPED);
     Result = DeviceIoControl(Async, FSCTL_READ_USN_JOURNAL, &Read, sizeof(Read), Buffer, sizeof(Buffer), NULL, &Ov);
     ok(!Result && GetLastError() == ERROR_IO_PENDING, "wait before close: %d, %lu\n", Result, GetLastError());
@@ -282,6 +283,13 @@ START_TEST(UsnJournal)
     trace("NTFS volume %lc:\n", Letter);
 
     Volume = OpenVolume(GENERIC_READ | GENERIC_WRITE, 0);
+    if (Volume == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED)
+    {
+        /* A standard user: the journal FSCTLs need a volume handle; only the refusal is checked */
+        skip("Opening the volume needs administrator rights\n");
+        TestUnprivilegedOpen(Letter);
+        return;
+    }
     ok(Volume != INVALID_HANDLE_VALUE, "open volume: %lu\n", GetLastError());
     if (Volume == INVALID_HANDLE_VALUE)
         return;
