@@ -12,12 +12,14 @@ add_custom_command(
 
 list(APPEND SOURCE
     apartment.c
+    callctl.c
     combase.c
     comcat.c
     errorinfo.c
     hglobalstream.c
     malloc.c
     marshal.c
+    neutral.c
     roapi.c
     rpc.c
     string.c

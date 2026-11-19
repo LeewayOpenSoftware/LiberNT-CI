@@ -2,15 +2,15 @@
 > **English** | [中文](translations/zh-CN/README.md) | [Français](translations/fr-FR/README.md) | [Español](translations/es-ES/README.md) | [日本語](translations/ja-JP/README.md) | [العربية](translations/ar-MA/README.md)
 
 <p align="center">
-  <img src="media/graphics/branding/libernt-banner.png" width="480" alt="LiberNT">
+  <img src="media/graphics/branding/orosi-banner.png" width="500" alt="LiberNT">
 </p>
 
 > [!IMPORTANT]
-> LiberNT is in active development. The builds on the [Releases](https://github.com/LiberNT/LiberNT/releases) page are Debug pre-releases for testing: run them in a virtual machine or on spare hardware, not on a computer you depend on.
+> Orosi is in active development. The builds on the [Releases](https://github.com/LiberNT/LiberNT/releases) page are Debug pre-releases for testing: run them in a virtual machine or on spare hardware, not on a computer you depend on.
 
 <div align="center">
 
-# [LiberNT](https://libernt.com)
+# [Orosi](https://libernt.com)
 ### A free NT operating system
 
 **Built out of love for the NT architecture. Windows® 11 compatible, for amd64, arm64 and riscv64.**
@@ -50,8 +50,6 @@
 <p align="center"><sub>The LiberNT desktop on amd64</sub></p>
 
 ---
-
-# Orosi
 
 ### An independent NT operating system by Leeway Open Software
 
