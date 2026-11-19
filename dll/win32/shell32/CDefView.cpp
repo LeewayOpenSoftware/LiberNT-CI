@@ -2214,7 +2214,10 @@ int CDefView::LV_AddItem(PCUITEMID_CHILD pidl)
         lvItem.state = GetItemAttributes(pidl, SFGAO_HIDDEN | SFGAO_GHOSTED) ? LVIS_CUT : 0;
     }
 
-    return m_ListView.InsertItem(&lvItem);
+    int nItem = m_ListView.InsertItem(&lvItem);
+    if (nItem < 0)
+        ILFree(reinterpret_cast<PITEMID_CHILD>(lvItem.lParam)); // the list did not take it
+    return nItem;
 }
 
 BOOLEAN CDefView::LV_DeleteItem(PCUITEMID_CHILD pidl)
@@ -2980,11 +2983,16 @@ HRESULT CDefView::FillFileMenu()
         return hr;
 
     HMENU hmenu = CreatePopupMenu();
+    if (!hmenu)
+        return E_OUTOFMEMORY;
 
     UINT cmf = GetContextMenuFlags(m_pShellBrowser, GetSelectionAttributes(SFGAO_CANRENAME));
     hr = m_pFileMenu->QueryContextMenu(hmenu, 0, DVIDM_CONTEXTMENU_FIRST, DVIDM_CONTEXTMENU_LAST, cmf);
     if (FAILED_UNEXPECTEDLY(hr))
+    {
+        ::DestroyMenu(hmenu);
         return hr;
+    }
 
     // TODO: filter or something
     if (!selcount)
@@ -3046,6 +3054,7 @@ HRESULT CDefView::FillArrangeAsMenu(HMENU hmenuArrange)
         C_ASSERT(DVIDM_ARRANGESORT_FIRST + DEFVIEW_ARRANGESORT_MAXENUM == DVIDM_ARRANGESORT_LAST);
         WCHAR buf[MAX_PATH];
         LVCOLUMN lvc;
+        buf[0] = UNICODE_NULL; // in case the column cannot be read
         lvc.mask = LVCF_TEXT;
         lvc.pszText = buf;
         lvc.cchTextMax = _countof(buf);
@@ -5849,10 +5858,11 @@ LRESULT CALLBACK CDefView::ListViewInputHook(HWND hwnd, UINT uMsg, WPARAM wParam
             gi.cbSize = sizeof(gi);
             if (GetGestureInfo((HGESTUREINFO)lParam, &gi))
             {
-                BOOL isZoom = gi.dwID == GID_ZOOM;
-                CloseGestureInfoHandle((HGESTUREINFO)lParam);
-                if (isZoom)
+                // Only a gesture handled here is closed here: the list view's own
+                // handling of any other one closes it (DefWindowProc)
+                if (gi.dwID == GID_ZOOM)
                 {
+                    CloseGestureInfoHandle((HGESTUREINFO)lParam);
                     INT dist = (INT)(gi.ullArguments & 0xFFFF);
                     if (gi.dwFlags & GF_BEGIN)
                         pThis->m_GestureZoomDistance = dist;
