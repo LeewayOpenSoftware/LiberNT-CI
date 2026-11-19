@@ -694,21 +694,27 @@ INT SIC_GetIconIndex (LPCWSTR sSourceFile, INT dwSourceIndex, DWORD dwFlags )
 BOOL SIC_Initialize(void)
 {
     HICON hSm = NULL, hLg = NULL;
+    HDPA hdpa;
     INT bpp;
     DWORD ilMask;
     BOOL result = FALSE;
 
     TRACE("Entered SIC_Initialize\n");
 
+    /* Callers test sic_hdpa without the lock, so two threads can get here at once */
+    EnterCriticalSection(&SHELL32_SicCS);
+
     if (sic_hdpa)
     {
         TRACE("Icon cache already initialized\n");
+        LeaveCriticalSection(&SHELL32_SicCS);
         return TRUE;
     }
 
-    sic_hdpa = DPA_Create(16);
-    if (!sic_hdpa)
+    hdpa = DPA_Create(16);
+    if (!hdpa)
     {
+        LeaveCriticalSection(&SHELL32_SicCS);
         return FALSE;
     }
 
@@ -745,6 +751,10 @@ BOOL SIC_Initialize(void)
         ERR("Failed to create the big icon list.\n");
         goto end;
     }
+
+    /* Publish the cache only once its image lists exist: code that sees sic_hdpa set
+     * without taking the lock (Shell_GetImageLists) uses the lists right away */
+    sic_hdpa = hdpa;
 
     /* Load the document icon, which is used as the default if an icon isn't found. */
     hSm = (HICON)LoadImageW(shell32_hInstance, MAKEINTRESOURCEW(IDI_SHELL_DOCUMENT),
@@ -787,16 +797,17 @@ end:
     /* Clean everything if something went wrong */
     if(!result)
     {
-        if(sic_hdpa) DPA_Destroy(sic_hdpa);
+        sic_hdpa = NULL;
+        DPA_Destroy(hdpa);
         if(ShellSmallIconList) ImageList_Destroy(ShellSmallIconList);
         if(ShellBigIconList) ImageList_Destroy(ShellBigIconList);
-        sic_hdpa = NULL;
         ShellSmallIconList = NULL;
         ShellBigIconList = NULL;
     }
 
     TRACE("hIconSmall=%p hIconBig=%p\n",ShellSmallIconList, ShellBigIconList);
 
+    LeaveCriticalSection(&SHELL32_SicCS);
     return result;
 }
 
