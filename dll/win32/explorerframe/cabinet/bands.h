@@ -106,6 +106,7 @@ private:
     HIMAGELIST m_Images;
     HFONT m_Font;
     PIDLIST_ABSOLUTE m_Crumbs[CABINET_MAX_CRUMBS];
+    PWSTR m_CrumbNames[CABINET_MAX_CRUMBS];
     int m_CrumbCount;
     int m_FirstVisible;
     BOOL m_Editing;
