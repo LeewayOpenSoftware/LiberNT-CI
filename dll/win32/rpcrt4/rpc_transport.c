@@ -102,9 +102,10 @@ static void release_np_event(RpcConnection_np *connection, HANDLE event)
  * otherwise a Win32 error code is returned.
  *
  * @remarks
- * Everyone (aka World SID) and anonynous users
- * are given a subset of rights to access the pipe,
- * whereas admins are given full power.
+ * Everyone (aka World SID) and anonynous users may open, read and write the
+ * pipe but not create instances of it (FILE_CREATE_PIPE_INSTANCE), so that no
+ * other process can serve the endpoint's clients. The server's own user and
+ * admins are given full power; the server's user owns the pipe.
  */
 static DWORD
 rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
@@ -112,10 +113,30 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
     DWORD ErrCode;
     PACL Dacl = NULL;
     ULONG DaclSize, RelSDSize = 0;
-    PSID EveryoneSid = NULL, AnonymousSid = NULL, AdminsSid = NULL;
+    PSID EveryoneSid = NULL, AnonymousSid = NULL, AdminsSid = NULL, ServerSid;
     PSECURITY_DESCRIPTOR AbsSD = NULL, RelSD = NULL;
+    BYTE ServerUser[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    HANDLE Token;
+    DWORD Length;
+    const ACCESS_MASK ClientAccess = (FILE_GENERIC_READ | FILE_GENERIC_WRITE) & ~FILE_CREATE_PIPE_INSTANCE;
     static SID_IDENTIFIER_AUTHORITY WorldAuthority = {SECURITY_WORLD_SID_AUTHORITY};
     static SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &Token))
+    {
+        ErrCode = GetLastError();
+        ERR("rpcrt4_create_pipe_security(): Failed to open the process token (error %lu)\n", ErrCode);
+        return ErrCode;
+    }
+    if (!GetTokenInformation(Token, TokenUser, ServerUser, sizeof(ServerUser), &Length))
+    {
+        ErrCode = GetLastError();
+        CloseHandle(Token);
+        ERR("rpcrt4_create_pipe_security(): Failed to query the process user (error %lu)\n", ErrCode);
+        return ErrCode;
+    }
+    CloseHandle(Token);
+    ServerSid = ((PTOKEN_USER)ServerUser)->User.Sid;
 
     if (!AllocateAndInitializeSid(&WorldAuthority,
                                   1,
@@ -169,7 +190,8 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
     DaclSize = sizeof(ACL) +
                sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(EveryoneSid) +
                sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(AnonymousSid) +
-               sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(AdminsSid);
+               sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(AdminsSid) +
+               sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(ServerSid);
 
     Dacl = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, DaclSize);
     if (Dacl == NULL)
@@ -188,7 +210,7 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
 
     if (!AddAccessAllowedAce(Dacl,
                              ACL_REVISION,
-                             GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE | READ_CONTROL,
+                             ClientAccess,
                              EveryoneSid))
     {
         ErrCode = GetLastError();
@@ -198,7 +220,7 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
 
     if (!AddAccessAllowedAce(Dacl,
                              ACL_REVISION,
-                             GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE | READ_CONTROL,
+                             ClientAccess,
                              AnonymousSid))
     {
         ErrCode = GetLastError();
@@ -216,6 +238,17 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
         goto Quit;
     }
 
+    /* The server creates the further instances of its own pipe */
+    if (!AddAccessAllowedAce(Dacl,
+                             ACL_REVISION,
+                             GENERIC_ALL,
+                             ServerSid))
+    {
+        ErrCode = GetLastError();
+        ERR("rpcrt4_create_pipe_security(): Failed to set up ACE for the server SID (error %lu)\n", ErrCode);
+        goto Quit;
+    }
+
     if (!SetSecurityDescriptorDacl(AbsSD, TRUE, Dacl, FALSE))
     {
         ErrCode = GetLastError();
@@ -223,14 +256,14 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
         goto Quit;
     }
 
-    if (!SetSecurityDescriptorOwner(AbsSD, AdminsSid, FALSE))
+    if (!SetSecurityDescriptorOwner(AbsSD, ServerSid, FALSE))
     {
         ErrCode = GetLastError();
         ERR("rpcrt4_create_pipe_security(): Failed to set SD owner (error %lu)\n", ErrCode);
         goto Quit;
     }
 
-    if (!SetSecurityDescriptorGroup(AbsSD, AdminsSid, FALSE))
+    if (!SetSecurityDescriptorGroup(AbsSD, ServerSid, FALSE))
     {
         ErrCode = GetLastError();
         ERR("rpcrt4_create_pipe_security(): Failed to set SD group (error %lu)\n", ErrCode);
