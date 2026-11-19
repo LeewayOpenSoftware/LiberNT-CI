@@ -1692,7 +1692,8 @@ CCabinetWindow::StartSearch()
         RunPendingSearch(tab);
         return;
     }
-    // A search running in another tab keeps its results; this tab gets its own
+    // Another tab's search keeps what it found so far (its status timer stops);
+    // this tab gets a search of its own
     m_SearchActive = FALSE;
     KillTimer(m_hwnd, IDT_CABINET_SEARCH);
     m_SearchBrowser = tab->Browser;
@@ -1859,7 +1860,8 @@ CCabinetWindow::WatchFolder()
         return;
     entry.pidl = tab->Pidl;
     entry.fRecursive = FALSE;
-    m_ChangeNotify = SHChangeNotifyRegister(m_hwnd, SHCNRF_ShellLevel | SHCNRF_InterruptLevel,
+    // New delivery: WM_CABINET_CHANGED ignores its parameters, so no broker window is needed
+    m_ChangeNotify = SHChangeNotifyRegister(m_hwnd, SHCNRF_ShellLevel | SHCNRF_InterruptLevel | SHCNRF_NewDelivery,
                                             SHCNE_CREATE | SHCNE_DELETE | SHCNE_MKDIR | SHCNE_RMDIR |
                                             SHCNE_RENAMEITEM | SHCNE_RENAMEFOLDER | SHCNE_UPDATEDIR |
                                             SHCNE_UPDATEITEM, WM_CABINET_CHANGED, 1, &entry);
