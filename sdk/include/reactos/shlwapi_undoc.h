@@ -55,32 +55,10 @@ LONG WINAPI SHGlobalCounterIncrement(HANDLE hGlobalCounter);
 #endif
 #define SHELL_GCOUNTER_DECLAREPARAMETERS(handle, id) SHELL_GCOUNTER_PARAMETERS(HANDLE handle, SHGLOBALCOUNTER id)
 
-/* LiberNT: bumped by SHChangeNotify(SHCNE_ASSOCCHANGED) and SHSetKnownFolderPath; read by the per-extension and known-folder caches */
-#define SHELL_GCOUNTER_GUID_LIBERNT_ASSOC { 0x5b1fd3a2, 0x7d0e, 0x4e71, { 0x9a, 0x6c, 0x2f, 0x03, 0xb8, 0x4d, 0xc1, 0x17 } }
-
-static __inline HANDLE SHELL_AssocCounter(void)
-{
-    static const GUID s_Guid = SHELL_GCOUNTER_GUID_LIBERNT_ASSOC;
-    static HANDLE s_hCounter = NULL;
-
-    if (!SHELL_GlobalCounterIsInitialized(s_hCounter))
-        SHELL_GlobalCounterCreate(&s_Guid, s_hCounter);
-    return s_hCounter;
-}
-
-/* Without the semaphore (it could not be created or opened) the generation stays 0 and the caches keyed on it never invalidate */
-static __inline LONG SHELL_AssocGenerationGet(void)
-{
-    HANDLE hCounter = SHELL_AssocCounter();
-    return hCounter ? SHELL_GlobalCounterGet(hCounter) : 0;
-}
-
-static __inline void SHELL_AssocGenerationIncrement(void)
-{
-    HANDLE hCounter = SHELL_AssocCounter();
-    if (hCounter)
-        SHELL_GlobalCounterIncrement(hCounter);
-}
+/* LiberNT (windows.storage): a cross-process counter bumped by SHChangeNotify(SHCNE_ASSOCCHANGED) and SHSetKnownFolderPath,
+   read by the per-extension and known-folder caches; the generation stays 0 when the counter cannot be opened */
+LONG SHELL_AssocGenerationGet(void);
+void SHELL_AssocGenerationIncrement(void);
 
 DWORD WINAPI
 SHRestrictionLookup(
