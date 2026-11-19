@@ -524,6 +524,10 @@ Quit:
  * A handle to a valid thread of which security information is
  * to be changed by setting up a new security descriptor.
  *
+ * @param[in] Token
+ * The new primary token of the process; the descriptors are set as this user
+ * when the caller may not name it as owner.
+ *
  * @param[in] ProcessSecurity
  * A pointer to a security descriptor that is for the process.
  *
@@ -536,31 +540,67 @@ Quit:
  */
 static
 BOOL
+SetNewProcessObjectSecurity(
+    _In_ HANDLE ObjectHandle,
+    _In_opt_ HANDLE Token,
+    _In_ PSECURITY_DESCRIPTOR Security)
+{
+    const SECURITY_INFORMATION All = DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION;
+    HANDLE SavedToken = NULL;
+    BOOL Success;
+
+    if (SetKernelObjectSecurity(ObjectHandle, All, Security))
+        return TRUE;
+    if (GetLastError() != ERROR_INVALID_OWNER)
+        return FALSE;
+
+    /*
+     * The caller may not name the new user as owner (that needs SeRestorePrivilege),
+     * but the new user may always name itself: set the descriptor as the new user,
+     * then restore whatever impersonation the calling thread had.
+     */
+    if (Token)
+    {
+        if (!OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &SavedToken))
+            SavedToken = NULL;
+        if (ImpersonateLoggedOnUser(Token))
+        {
+            Success = SetKernelObjectSecurity(ObjectHandle, All, Security);
+            if (!SetThreadToken(NULL, SavedToken))
+                ERR("SetNewProcessObjectSecurity(): Failed to restore the thread token (error %lu)\n", GetLastError());
+            if (SavedToken)
+                CloseHandle(SavedToken);
+            if (Success)
+                return TRUE;
+        }
+        else if (SavedToken)
+        {
+            CloseHandle(SavedToken);
+        }
+    }
+
+    /* Keep the owner the object got and set the DACL only */
+    return SetKernelObjectSecurity(ObjectHandle, DACL_SECURITY_INFORMATION, Security);
+}
+
+static
+BOOL
 InsertProcessSecurityCommon(
     _In_ HANDLE ProcessHandle,
     _In_ HANDLE ThreadHandle,
+    _In_opt_ HANDLE Token,
     _In_ PSECURITY_DESCRIPTOR ProcessSecurity,
     _In_ PSECURITY_DESCRIPTOR ThreadSecurity)
 {
-    /* Set new security data for the process. Naming the new user as owner needs
-     * SeRestorePrivilege when the caller is not that user; without it, keep the
-     * owner the process got and set the DACL only. */
-    if (!SetKernelObjectSecurity(ProcessHandle,
-                                 DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
-                                 ProcessSecurity) &&
-        (GetLastError() != ERROR_INVALID_OWNER ||
-         !SetKernelObjectSecurity(ProcessHandle, DACL_SECURITY_INFORMATION, ProcessSecurity)))
+    /* Set new security data for the process */
+    if (!SetNewProcessObjectSecurity(ProcessHandle, Token, ProcessSecurity))
     {
         ERR("InsertProcessSecurityCommon(): Failed to set security for process (error %lu)\n", GetLastError());
         return FALSE;
     }
 
     /* Set new security data for the thread */
-    if (!SetKernelObjectSecurity(ThreadHandle,
-                                 DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
-                                 ThreadSecurity) &&
-        (GetLastError() != ERROR_INVALID_OWNER ||
-         !SetKernelObjectSecurity(ThreadHandle, DACL_SECURITY_INFORMATION, ThreadSecurity)))
+    if (!SetNewProcessObjectSecurity(ThreadHandle, Token, ThreadSecurity))
     {
         ERR("InsertProcessSecurityCommon(): Failed to set security for thread (error %lu)\n", GetLastError());
         return FALSE;
@@ -1005,6 +1045,7 @@ CreateProcessAsUserCommon(
         /* Set new security info to the process and thread now */
         if (!InsertProcessSecurityCommon(lpProcessInformation->hProcess,
                                          lpProcessInformation->hThread,
+                                         hTokenDup,
                                          ProcessSd,
                                          ThreadSd))
         {
