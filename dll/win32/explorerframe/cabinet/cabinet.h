@@ -30,6 +30,7 @@
 #define CABINET_MAX_HISTORY 64
 
 class CCabinetWindow;
+struct CabinetDetailsJob;
 
 struct CabinetTab
 {
@@ -155,9 +156,10 @@ private:
     void PlacePanes();
     void ShowPreviewMessage(UINT id);
     BOOL ShowPreviewHandler(IShellItem *item, PCWSTR path);
-    BOOL ShowPreviewThumbnail(IShellItem *item);
-    BOOL ShowPreviewImage(PCWSTR path);
-    BOOL ShowPreviewText(PCWSTR path);
+    BOOL ShowPreviewLines(PCWSTR lines);
+    void RequestDetailsJob(IShellItem *item, PCWSTR path, UINT parts, int rowIndex);
+    void StartDetailsJob();
+    void OnDetailsJobReady(CabinetDetailsJob *job);
     void SetPreviewBitmap(HBITMAP bitmap);
     void SyncTabs();
     void MoveTab(int from, int to);
@@ -235,6 +237,9 @@ private:
     PIDLIST_ABSOLUTE m_PreviewPidl;
     HICON m_DetailsIconHandle;
     HBITMAP m_DetailsBitmap;
+    ULONG m_DetailsGeneration;
+    ULONG m_PreviewGeneration;
+    CabinetDetailsJob *m_PendingJob;
     BOOL m_InHistoryNavigation;
     BOOL m_FocusViewOnNavigate;
     ULONG m_NavigationDepth;

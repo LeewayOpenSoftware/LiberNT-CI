@@ -29,11 +29,66 @@
 #define WM_CABINET_STATUS (WM_APP + 1)
 #define WM_CABINET_CHANGED (WM_APP + 2)
 #define WM_CABINET_FOCUSVIEW (WM_APP + 3)
+#define WM_CABINET_DETAILS_START (WM_APP + 4)
+#define WM_CABINET_DETAILS_READY (WM_APP + 5)
 #define IDT_CABINET_STATUS 1
 #define IDT_CABINET_SEARCH 2
 #define IDT_CABINET_SELECTION 3
 #define IDT_CABINET_SELECTION_SIZE 4
 #define CABINET_SELECTION_IDLE_MS 200
+#define CABINET_JOB_DETAILS 1
+#define CABINET_JOB_PREVIEW 2
+
+struct CabinetDetailsJob
+{
+    HWND Window;
+    ULONG DetailsGeneration;
+    ULONG PreviewGeneration;
+    UINT Parts;
+    PIDLIST_ABSOLUTE Pidl;
+    WCHAR Path[MAX_PATH];
+    SIZE DetailsSize;
+    SIZE PreviewSize;
+    COLORREF PreviewBack;
+    int RowIndex;
+    HBITMAP DetailsBitmap;
+    HBITMAP PreviewBitmap;
+    PWSTR PreviewLines;
+    UINT RowCount;
+    struct
+    {
+        PROPERTYKEY Key;
+        WCHAR Text[64];
+    } Rows[9];
+};
+
+static LONG s_CabinetJobSerial;
+
+static void
+FreeDetailsJob(CabinetDetailsJob *job)
+{
+    if (!job)
+        return;
+    if (job->Pidl)
+        ILFree(job->Pidl);
+    if (job->DetailsBitmap)
+        DeleteObject(job->DetailsBitmap);
+    if (job->PreviewBitmap)
+        DeleteObject(job->PreviewBitmap);
+    if (job->PreviewLines)
+        HeapFree(GetProcessHeap(), 0, job->PreviewLines);
+    HeapFree(GetProcessHeap(), 0, job);
+}
+
+static void
+AddJobRow(CabinetDetailsJob *job, REFPROPERTYKEY key, LPCWSTR text)
+{
+    if (job->RowCount >= _countof(job->Rows))
+        return;
+    job->Rows[job->RowCount].Key = key;
+    StringCchCopyW(job->Rows[job->RowCount].Text, _countof(job->Rows[job->RowCount].Text), text);
+    job->RowCount++;
+}
 
 HINSTANCE
 CabinetModule()
@@ -140,6 +195,9 @@ CCabinetWindow::CCabinetWindow() :
     m_PreviewPidl(NULL),
     m_DetailsIconHandle(NULL),
     m_DetailsBitmap(NULL),
+    m_DetailsGeneration(0),
+    m_PreviewGeneration(0),
+    m_PendingJob(NULL),
     m_InHistoryNavigation(FALSE),
     m_FocusViewOnNavigate(FALSE),
     m_NavigationDepth(0),
@@ -163,6 +221,7 @@ CCabinetWindow::~CCabinetWindow()
 {
     CancelSelectionSize();
     ClearPreview();
+    FreeDetailsJob(m_PendingJob);
     if (m_DetailsIconHandle)
         DestroyIcon(m_DetailsIconHandle);
     if (m_DetailsBitmap)
@@ -887,7 +946,7 @@ CreateImageBitmap(PCWSTR path, UINT maxWidth, UINT maxHeight, COLORREF back)
 }
 
 static void
-AddDetailsRow(HWND list, LPCWSTR label, LPCWSTR text)
+AddDetailsRow(HWND list, LPCWSTR label, LPCWSTR text, int index = -1)
 {
     LVFINDINFOW find = { LVFI_STRING };
     LVITEMW row = { LVIF_TEXT };
@@ -895,28 +954,28 @@ AddDetailsRow(HWND list, LPCWSTR label, LPCWSTR text)
     find.psz = label;
     if (!label || !label[0] || !text || !text[0] || ListView_FindItem(list, -1, &find) >= 0)
         return;
-    row.iItem = ListView_GetItemCount(list);
+    row.iItem = index < 0 ? ListView_GetItemCount(list) : index;
     row.pszText = (LPWSTR)label;
     row.iItem = ListView_InsertItem(list, &row);
     ListView_SetItemText(list, row.iItem, 1, (LPWSTR)text);
 }
 
 static void
-AddDetailsKeyRow(HWND list, REFPROPERTYKEY key, LPCWSTR text)
+AddDetailsKeyRow(HWND list, REFPROPERTYKEY key, LPCWSTR text, int index = -1)
 {
     IPropertyDescription *desc = NULL;
     PWSTR label = NULL;
 
     if (SUCCEEDED(PSGetPropertyDescription(key, IID_PPV_ARG(IPropertyDescription, &desc))) &&
         SUCCEEDED(desc->GetDisplayName(&label)))
-        AddDetailsRow(list, label, text);
+        AddDetailsRow(list, label, text, index);
     CoTaskMemFree(label);
     if (desc)
         desc->Release();
 }
 
 static void
-AddImageDetails(HWND list, PCWSTR path)
+AddImageDetails(CabinetDetailsJob *job, PCWSTR path)
 {
     IWICImagingFactory *factory = NULL;
     IWICBitmapDecoder *decoder = NULL;
@@ -939,7 +998,7 @@ AddImageDetails(HWND list, PCWSTR path)
         if (SUCCEEDED(frame->GetSize(&width, &height)) && width && height)
         {
             StringCchPrintfW(text, _countof(text), L"%u x %u", width, height);
-            AddDetailsKeyRow(list, PKEY_Image_Dimensions, text);
+            AddJobRow(job, PKEY_Image_Dimensions, text);
         }
         if (SUCCEEDED(frame->GetPixelFormat(&pixelFormat)) &&
             SUCCEEDED(factory->CreateComponentInfo(pixelFormat, &component)) &&
@@ -947,14 +1006,14 @@ AddImageDetails(HWND list, PCWSTR path)
             SUCCEEDED(format->GetBitsPerPixel(&bits)) && bits)
         {
             StringCchPrintfW(text, _countof(text), L"%u", bits);
-            AddDetailsKeyRow(list, PKEY_Image_BitDepth, text);
+            AddJobRow(job, PKEY_Image_BitDepth, text);
         }
         if (SUCCEEDED(frame->GetResolution(&dpiX, &dpiY)) && dpiX > 0.0 && dpiY > 0.0)
         {
             StringCchPrintfW(text, _countof(text), L"%u dpi", (UINT)(dpiX + 0.5));
-            AddDetailsKeyRow(list, PKEY_Image_HorizontalResolution, text);
+            AddJobRow(job, PKEY_Image_HorizontalResolution, text);
             StringCchPrintfW(text, _countof(text), L"%u dpi", (UINT)(dpiY + 0.5));
-            AddDetailsKeyRow(list, PKEY_Image_VerticalResolution, text);
+            AddJobRow(job, PKEY_Image_VerticalResolution, text);
         }
     }
     if (format)
@@ -969,7 +1028,7 @@ AddImageDetails(HWND list, PCWSTR path)
 }
 
 static void
-AddVersionDetails(HWND list, PCWSTR path)
+AddVersionDetails(CabinetDetailsJob *job, PCWSTR path)
 {
     static const struct { LPCWSTR Name; const PROPERTYKEY *Key; } Strings[] =
     {
@@ -1002,7 +1061,7 @@ AddVersionDetails(HWND list, PCWSTR path)
             StringCchPrintfW(query, _countof(query), L"\\StringFileInfo\\%04x%04x\\%s", translation->Language,
                              translation->CodePage, Strings[i].Name);
             if (VerQueryValueW(data, query, (void **)&value, &valueLength) && value && valueLength > 1)
-                AddDetailsKeyRow(list, *Strings[i].Key, value);
+                AddJobRow(job, *Strings[i].Key, value);
         }
     }
     HeapFree(GetProcessHeap(), 0, data);
@@ -1088,6 +1147,7 @@ CCabinetWindow::UpdateDetails()
     UINT count = 0;
     WCHAR name[MAX_PATH] = L"", subtitle[MAX_PATH] = L"", format[64];
 
+    m_DetailsGeneration = (ULONG)InterlockedIncrement(&s_CabinetJobSerial);
     ListView_DeleteAllItems(m_DetailsList);
     if (m_DetailsIconHandle)
         DestroyIcon(m_DetailsIconHandle);
@@ -1163,23 +1223,11 @@ CCabinetWindow::UpdateDetails()
         if (item && selected == 1)
         {
             PWSTR path = NULL;
-            IShellItemImageFactory *factory = NULL;
-            RECT header;
-            GetClientRect(m_DetailsIcon, &header);
-            if (header.right > 0 && header.bottom > 0 &&
-                SUCCEEDED(item->QueryInterface(IID_PPV_ARG(IShellItemImageFactory, &factory))))
-            {
-                SIZE size = { header.right, header.bottom };
-                if (FAILED(factory->GetImage(size, SIIGBF_THUMBNAILONLY, &m_DetailsBitmap)))
-                    m_DetailsBitmap = NULL;
-                factory->Release();
-            }
-            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
-            {
-                AddImageDetails(m_DetailsList, path);
-                AddVersionDetails(m_DetailsList, path);
-                CoTaskMemFree(path);
-            }
+
+            if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+                path = NULL;
+            RequestDetailsJob(item, path, CABINET_JOB_DETAILS, ListView_GetItemCount(m_DetailsList));
+            CoTaskMemFree(path);
         }
         if (item && selected == 1)
         {
@@ -1242,6 +1290,7 @@ CCabinetWindow::SetPane(BOOL details, BOOL preview)
 void
 CCabinetWindow::ClearPreview()
 {
+    m_PreviewGeneration = (ULONG)InterlockedIncrement(&s_CabinetJobSerial);
     if (m_PreviewHandler)
     {
         m_PreviewHandler->Unload();
@@ -1348,44 +1397,8 @@ CCabinetWindow::ShowPreviewHandler(IShellItem *item, PCWSTR path)
     return TRUE;
 }
 
-BOOL
-CCabinetWindow::ShowPreviewThumbnail(IShellItem *item)
-{
-    IShellItemImageFactory *factory = NULL;
-    SIZE size;
-    HBITMAP bitmap = NULL;
-    HRESULT hr;
-
-    size.cx = max(m_PaneRect.right - m_PaneRect.left - Scale(20), Scale(64));
-    size.cy = max(m_PaneRect.bottom - m_PaneRect.top - Scale(20), Scale(64));
-    if (FAILED(item->QueryInterface(IID_PPV_ARG(IShellItemImageFactory, &factory))))
-        return FALSE;
-    hr = factory->GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &bitmap);
-    factory->Release();
-    if (FAILED(hr) || !bitmap)
-        return FALSE;
-    SetPreviewBitmap(bitmap);
-    return TRUE;
-}
-
-BOOL
-CCabinetWindow::ShowPreviewImage(PCWSTR path)
-{
-    HBITMAP bitmap;
-
-    if (!IsImageFile(path))
-        return FALSE;
-    bitmap = CreateImageBitmap(path, (UINT)max(m_PaneRect.right - m_PaneRect.left - Scale(20), Scale(64)),
-                               (UINT)max(m_PaneRect.bottom - m_PaneRect.top - Scale(20), Scale(64)),
-                               GetSysColor(COLOR_WINDOW));
-    if (!bitmap)
-        return FALSE;
-    SetPreviewBitmap(bitmap);
-    return TRUE;
-}
-
-BOOL
-CCabinetWindow::ShowPreviewText(PCWSTR path)
+static PWSTR
+ReadPreviewText(PCWSTR path)
 {
     PERCEIVED type = PERCEIVED_TYPE_UNSPECIFIED;
     PERCEIVEDFLAG flags = 0;
@@ -1399,18 +1412,18 @@ CCabinetWindow::ShowPreviewText(PCWSTR path)
 
     if (!extension || !extension[0] || FAILED(AssocGetPerceivedType(extension, &type, &flags, NULL)) ||
         type != PERCEIVED_TYPE_TEXT)
-        return FALSE;
+        return NULL;
     file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
                        OPEN_EXISTING, 0, NULL);
     if (file == INVALID_HANDLE_VALUE)
-        return FALSE;
+        return NULL;
     data = (BYTE *)HeapAlloc(GetProcessHeap(), 0, 65536);
     if (!data || !ReadFile(file, data, 65536, &read, NULL))
     {
         CloseHandle(file);
         if (data)
             HeapFree(GetProcessHeap(), 0, data);
-        return FALSE;
+        return NULL;
     }
     CloseHandle(file);
     if (read >= 2 && data[0] == 0xFF && data[1] == 0xFE)
@@ -1439,12 +1452,12 @@ CCabinetWindow::ShowPreviewText(PCWSTR path)
     }
     HeapFree(GetProcessHeap(), 0, data);
     if (!text)
-        return FALSE;
+        return NULL;
     lines = (PWSTR)HeapAlloc(GetProcessHeap(), 0, (count * 2 + 1) * sizeof(WCHAR));
     if (!lines)
     {
         HeapFree(GetProcessHeap(), 0, text);
-        return FALSE;
+        return NULL;
     }
     for (int i = 0; i < count && text[i]; i++)
     {
@@ -1454,10 +1467,183 @@ CCabinetWindow::ShowPreviewText(PCWSTR path)
     }
     lines[out] = UNICODE_NULL;
     HeapFree(GetProcessHeap(), 0, text);
+    return lines;
+}
+
+BOOL
+CCabinetWindow::ShowPreviewLines(PCWSTR lines)
+{
+    if (!lines || !m_PreviewText)
+        return FALSE;
     SetWindowTextW(m_PreviewText, lines);
-    HeapFree(GetProcessHeap(), 0, lines);
     ShowWindow(m_PreviewText, SW_SHOW);
     return TRUE;
+}
+
+static DWORD WINAPI
+DetailsJobThread(LPVOID parameter)
+{
+    CabinetDetailsJob *job = (CabinetDetailsJob *)parameter;
+    IShellItem *item = NULL;
+    IShellItemImageFactory *factory = NULL;
+    HRESULT hrInit = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+
+    if (job->Pidl && SUCCEEDED(SHCreateItemFromIDList(job->Pidl, IID_PPV_ARG(IShellItem, &item))) &&
+        SUCCEEDED(item->QueryInterface(IID_PPV_ARG(IShellItemImageFactory, &factory))))
+    {
+        if ((job->Parts & CABINET_JOB_DETAILS) && job->DetailsSize.cx > 0 && job->DetailsSize.cy > 0 &&
+            FAILED(factory->GetImage(job->DetailsSize, SIIGBF_THUMBNAILONLY, &job->DetailsBitmap)))
+            job->DetailsBitmap = NULL;
+        if ((job->Parts & CABINET_JOB_PREVIEW) &&
+            FAILED(factory->GetImage(job->PreviewSize, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK,
+                                     &job->PreviewBitmap)))
+            job->PreviewBitmap = NULL;
+    }
+    if (factory)
+        factory->Release();
+    if (item)
+        item->Release();
+    if (job->Path[0])
+    {
+        if (job->Parts & CABINET_JOB_DETAILS)
+        {
+            AddImageDetails(job, job->Path);
+            AddVersionDetails(job, job->Path);
+        }
+        if ((job->Parts & CABINET_JOB_PREVIEW) && !job->PreviewBitmap)
+        {
+            if (IsImageFile(job->Path))
+                job->PreviewBitmap = CreateImageBitmap(job->Path, (UINT)job->PreviewSize.cx,
+                                                       (UINT)job->PreviewSize.cy, job->PreviewBack);
+            if (!job->PreviewBitmap)
+                job->PreviewLines = ReadPreviewText(job->Path);
+        }
+    }
+    if (SUCCEEDED(hrInit))
+        CoUninitialize();
+    if (!PostMessageW(job->Window, WM_CABINET_DETAILS_READY, 0, (LPARAM)job))
+        FreeDetailsJob(job);
+    return 0;
+}
+
+void
+CCabinetWindow::RequestDetailsJob(IShellItem *item, PCWSTR path, UINT parts, int rowIndex)
+{
+    CabinetDetailsJob *job = m_PendingJob;
+    PIDLIST_ABSOLUTE pidl = NULL;
+
+    if (!m_hwnd || !item || FAILED(SHGetIDListFromObject(item, &pidl)) || !pidl)
+        return;
+    if (job && !ILIsEqual(job->Pidl, pidl))
+    {
+        FreeDetailsJob(job);
+        job = NULL;
+        m_PendingJob = NULL;
+    }
+    if (!job)
+    {
+        job = (CabinetDetailsJob *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*job));
+        if (!job)
+        {
+            ILFree(pidl);
+            return;
+        }
+        job->Window = m_hwnd;
+        job->Pidl = pidl;
+        pidl = NULL;
+        if (path)
+            StringCchCopyW(job->Path, _countof(job->Path), path);
+        if (!PostMessageW(m_hwnd, WM_CABINET_DETAILS_START, 0, 0))
+        {
+            FreeDetailsJob(job);
+            return;
+        }
+        m_PendingJob = job;
+    }
+    if (pidl)
+        ILFree(pidl);
+    job->Parts |= parts;
+    if (parts & CABINET_JOB_DETAILS)
+    {
+        RECT header;
+
+        job->DetailsGeneration = m_DetailsGeneration;
+        job->RowIndex = rowIndex;
+        GetClientRect(m_DetailsIcon, &header);
+        job->DetailsSize.cx = header.right;
+        job->DetailsSize.cy = header.bottom;
+    }
+    if (parts & CABINET_JOB_PREVIEW)
+    {
+        job->PreviewGeneration = m_PreviewGeneration;
+        job->PreviewSize.cx = max(m_PaneRect.right - m_PaneRect.left - Scale(20), Scale(64));
+        job->PreviewSize.cy = max(m_PaneRect.bottom - m_PaneRect.top - Scale(20), Scale(64));
+        job->PreviewBack = GetSysColor(COLOR_WINDOW);
+    }
+}
+
+void
+CCabinetWindow::StartDetailsJob()
+{
+    CabinetDetailsJob *job = m_PendingJob;
+    HANDLE thread;
+
+    m_PendingJob = NULL;
+    if (!job)
+        return;
+    if (!(((job->Parts & CABINET_JOB_DETAILS) && job->DetailsGeneration == m_DetailsGeneration) ||
+          ((job->Parts & CABINET_JOB_PREVIEW) && job->PreviewGeneration == m_PreviewGeneration)))
+    {
+        FreeDetailsJob(job);
+        return;
+    }
+    thread = CreateThread(NULL, 0, DetailsJobThread, job, 0, NULL);
+    if (!thread)
+    {
+        FreeDetailsJob(job);
+        return;
+    }
+    CloseHandle(thread);
+}
+
+void
+CCabinetWindow::OnDetailsJobReady(CabinetDetailsJob *job)
+{
+    if (!job)
+        return;
+    if ((job->Parts & CABINET_JOB_DETAILS) && job->DetailsGeneration == m_DetailsGeneration && m_DetailsPane)
+    {
+        int index = min(job->RowIndex, ListView_GetItemCount(m_DetailsList));
+
+        if (job->DetailsBitmap)
+        {
+            if (m_DetailsBitmap)
+                DeleteObject(m_DetailsBitmap);
+            m_DetailsBitmap = job->DetailsBitmap;
+            job->DetailsBitmap = NULL;
+            InvalidateRect(m_DetailsIcon, NULL, TRUE);
+        }
+        for (UINT i = 0; i < job->RowCount; i++)
+        {
+            int before = ListView_GetItemCount(m_DetailsList);
+
+            AddDetailsKeyRow(m_DetailsList, job->Rows[i].Key, job->Rows[i].Text, index);
+            if (ListView_GetItemCount(m_DetailsList) > before)
+                index++;
+        }
+    }
+    if ((job->Parts & CABINET_JOB_PREVIEW) && job->PreviewGeneration == m_PreviewGeneration && m_PreviewPane &&
+        !m_PreviewHandler)
+    {
+        if (job->PreviewBitmap)
+        {
+            SetPreviewBitmap(job->PreviewBitmap);
+            job->PreviewBitmap = NULL;
+        }
+        else if (!ShowPreviewLines(job->PreviewLines))
+            ShowPreviewMessage(IDS_CAB_PREVIEW_NONE);
+    }
+    FreeDetailsJob(job);
 }
 
 void
@@ -1517,9 +1703,8 @@ CCabinetWindow::UpdatePreview()
     {
         if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
             path = NULL;
-        if (!ShowPreviewHandler(item, path) && !ShowPreviewThumbnail(item) && !ShowPreviewImage(path) &&
-            !ShowPreviewText(path))
-            ShowPreviewMessage(IDS_CAB_PREVIEW_NONE);
+        if (!ShowPreviewHandler(item, path))
+            RequestDetailsJob(item, path, CABINET_JOB_PREVIEW, 0);
         if (path)
             CoTaskMemFree(path);
     }
@@ -3642,6 +3827,12 @@ CCabinetWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         case WM_CABINET_FOCUSVIEW:
             FocusView();
             return 0;
+        case WM_CABINET_DETAILS_START:
+            StartDetailsJob();
+            return 0;
+        case WM_CABINET_DETAILS_READY:
+            OnDetailsJobReady((CabinetDetailsJob *)lParam);
+            return 0;
         case WM_TIMER:
             if (wParam == IDT_CABINET_SELECTION_SIZE)
             {
@@ -3741,6 +3932,9 @@ CCabinetWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         case WM_DESTROY:
             CancelSelectionSize();
             ClearPreview();
+            m_DetailsGeneration = (ULONG)InterlockedIncrement(&s_CabinetJobSerial);
+            FreeDetailsJob(m_PendingJob);
+            m_PendingJob = NULL;
             if (m_ChangeNotify)
                 SHChangeNotifyDeregister(m_ChangeNotify);
             m_ChangeNotify = 0;
