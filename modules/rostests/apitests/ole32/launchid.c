@@ -344,6 +344,25 @@ static void TestInteractiveUser(DWORD MySession)
         ok(Identity.Session == MySession, "the server runs in session %lu, the caller in %lu\n", Identity.Session, MySession);
     }
     RemoveRegistration(0);
+
+    /* The AppID's LaunchPermission decides, whatever the Enforcement switch says */
+    if (AddRegistration(L"Interactive User", 0))
+    {
+        PSECURITY_DESCRIPTOR Sd;
+        ULONG SdSize;
+        HKEY AppId;
+
+        if (ConvertStringSecurityDescriptorToSecurityDescriptorW(L"O:BAG:BAD:(A;;0x3;;;SY)", SDDL_REVISION_1, &Sd, &SdSize) &&
+            !RegOpenKeyExW(HKEY_LOCAL_MACHINE, AppIdKey, 0, KEY_SET_VALUE, &AppId))
+        {
+            RegSetValueExW(AppId, L"LaunchPermission", 0, REG_BINARY, Sd, SdSize);
+            RegCloseKey(AppId);
+            LocalFree(Sd);
+            hr = Activate(CLSCTX_LOCAL_SERVER, &Identity);
+            ok(hr == E_ACCESSDENIED, "RunAs activation against a SYSTEM-only LaunchPermission returned %#lx\n", hr);
+        }
+    }
+    RemoveRegistration(0);
 }
 
 /* A named account: a local test user whose password the configuration stores as SCM:{AppID} */

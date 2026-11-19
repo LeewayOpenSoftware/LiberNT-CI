@@ -82,51 +82,22 @@ HRESULT launch_bitness_view(DWORD bitness, REGSAM *view, BOOL *opposite)
     return S_OK;
 }
 
-static LONG launch_read_string(const WCHAR *subkey, const WCHAR *name, REGSAM view, WCHAR *value, DWORD size)
-{
-    HKEY key;
-    LONG ret;
-
-    ret = RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey, 0, KEY_READ | view, &key);
-    if (ret)
-        return ret;
-    ret = RegGetValueW(key, NULL, name, RRF_RT_REG_SZ, NULL, value, &size);
-    RegCloseKey(key);
-    return ret;
-}
-
-/* Whether the class's AppID names a RunAs account; only machine-wide registrations count */
-static BOOL launch_has_runas(REFCLSID clsid, DWORD bitness)
-{
-    WCHAR clsid_string[CHARS_IN_GUID], appid[CHARS_IN_GUID], key[MAX_PATH], runas[256];
-    REGSAM view = 0;
-    BOOL opposite;
-
-    if (bitness && FAILED(launch_bitness_view(bitness, &view, &opposite)))
-        return FALSE;
-    StringFromGUID2(clsid, clsid_string, ARRAY_SIZE(clsid_string));
-    _snwprintf(key, ARRAY_SIZE(key), L"Software\\Classes\\CLSID\\%ls", clsid_string);
-    if (launch_read_string(key, L"AppID", view, appid, sizeof(appid)))
-        return FALSE;
-    _snwprintf(key, ARRAY_SIZE(key), L"Software\\Classes\\AppID\\%ls", appid);
-    return !launch_read_string(key, L"RunAs", view, runas, sizeof(runas)) && runas[0];
-}
-
 /*
- * Starts the server through rpcss when its AppID has RunAs: S_FALSE if it has none (the caller
- * starts it itself), else rpcss's answer. A RunAs server is never started as the caller.
+ * With the switch on, rpcss decides whether the class has RunAs, in the same registry views it
+ * would start it from: S_FALSE (none) lets the caller start the server itself, any failure
+ * stops the activation, so a RunAs server is never started as the caller.
  */
 HRESULT launch_runas_server(REFCLSID clsid, DWORD bitness, HANDLE *process)
 {
     DWORD pid = 0;
     HRESULT hr;
 
-    if (!com_launch_identity_enabled() || !launch_has_runas(clsid, bitness))
+    if (!com_launch_identity_enabled())
         return S_FALSE;
     hr = rpcss_launch_server(clsid, bitness, &pid);
     TRACE("%s: rpcss started pid %lu, hr %#lx\n", debugstr_guid(clsid), pid, hr);
-    if (FAILED(hr))
-        return hr;
+    if (hr != S_OK)
+        return FAILED(hr) ? hr : S_FALSE;
     /* Another user's process may not be ours to wait on; then the registration is polled */
     *process = OpenProcess(SYNCHRONIZE, FALSE, pid);
     return S_OK;

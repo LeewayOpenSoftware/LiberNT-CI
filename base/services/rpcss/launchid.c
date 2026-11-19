@@ -13,6 +13,7 @@
 #include <userenv.h>
 #include <wtsapi32.h>
 #include <wine/debug.h>
+#include <comsec.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(ole);
 
@@ -29,25 +30,93 @@ static BOOL launch_identity_enabled(void)
                          NULL, &value, &size) && value == 1;
 }
 
-/* Windows' default launch permission: SYSTEM, Administrators and interactive users */
-static BOOL launch_caller_allowed(HANDLE token)
+/*
+ * Starting code as another account is a privilege boundary of its own, so the AppID's
+ * LaunchPermission (else DefaultLaunchPermission, else SYSTEM, Administrators and interactive
+ * users) and MachineLaunchRestriction are checked whatever the Enforcement switch says.
+ */
+static BOOL launch_permitted(const GUID *clsid, const WCHAR *appid, REGSAM view, HANDLE caller, DWORD pid)
 {
-    static const WELL_KNOWN_SID_TYPE allowed[] = { WinLocalSystemSid, WinBuiltinAdministratorsSid, WinInteractiveSid };
-    BYTE sid[SECURITY_MAX_SID_SIZE];
+    PSECURITY_DESCRIPTOR sd = NULL, machine;
+    WCHAR subkey[MAX_PATH];
     HANDLE check;
-    DWORD size, i;
-    BOOL member = FALSE;
+    HKEY key;
+    BOOL allowed;
 
-    if (!DuplicateToken(token, SecurityIdentification, &check))
+    if (!DuplicateToken(caller, SecurityIdentification, &check))
         return FALSE;
-    for (i = 0; i < ARRAYSIZE(allowed) && !member; i++)
+    _snwprintf(subkey, ARRAYSIZE(subkey), L"Software\\Classes\\AppID\\%ls", appid);
+    if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey, 0, KEY_READ | view, &key))
     {
-        size = sizeof(sid);
-        if (CreateWellKnownSid(allowed[i], NULL, sid, &size) && !CheckTokenMembership(check, sid, &member))
-            member = FALSE;
+        /* A damaged value refuses; only an absent one falls back */
+        sd = comsec_read_sd_key(key, L"LaunchPermission");
+        RegCloseKey(key);
     }
+    if (!sd)
+        sd = comsec_read_sd(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Ole", L"DefaultLaunchPermission");
+    if (!sd)
+        sd = comsec_default_launch_sd();
+    machine = comsec_read_sd(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Ole", L"MachineLaunchRestriction");
+    allowed = sd && comsec_check(check, machine, COM_RIGHTS_EXECUTE_LOCAL) &&
+              comsec_check(check, sd, COM_RIGHTS_EXECUTE_LOCAL);
+    if (!allowed)
+    {
+        WARN("RunAs launch of %s by process %lu refused\n", debugstr_guid(clsid), pid);
+        comsec_report_denial(COMSEC_ENFORCE, L"RunAs launch", clsid, check, pid);
+    }
+    LocalFree(machine);
+    LocalFree(sd);
     CloseHandle(check);
-    return member;
+    return allowed;
+}
+
+/* S2: an AppID read from the registry names a key and an LSA secret: it must look like {GUID} */
+static BOOL launch_valid_guid_string(const WCHAR *s)
+{
+    int i;
+
+    if (wcslen(s) != 38 || s[0] != '{' || s[37] != '}')
+        return FALSE;
+    for (i = 1; i < 37; i++)
+    {
+        if (i == 9 || i == 14 || i == 19 || i == 24)
+        {
+            if (s[i] != '-')
+                return FALSE;
+        }
+        else if (!iswxdigit(s[i]))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+/* S1: the image path, so CreateProcess does not search an unquoted path that has spaces */
+static BOOL launch_split_command(const WCHAR *command, WCHAR *application, DWORD count)
+{
+    const WCHAR *end, *p;
+
+    if (command[0] == '"')
+    {
+        if (!(end = wcschr(command + 1, '"')) || (DWORD)(end - command - 1) >= count)
+            return FALSE;
+        memcpy(application, command + 1, (end - command - 1) * sizeof(WCHAR));
+        application[end - command - 1] = 0;
+        return TRUE;
+    }
+    /* Unquoted: up to the first ".exe" that ends a word */
+    for (p = command; (p = wcschr(p, '.')); p++)
+    {
+        if (!_wcsnicmp(p, L".exe", 4) && (!p[4] || p[4] == ' '))
+        {
+            end = p + 4;
+            if ((DWORD)(end - command) >= count)
+                return FALSE;
+            memcpy(application, command, (end - command) * sizeof(WCHAR));
+            application[end - command] = 0;
+            return TRUE;
+        }
+    }
+    return FALSE;
 }
 
 /* Only machine-wide registrations: a per-user one must not choose who rpcss starts code as */
@@ -75,7 +144,7 @@ static HRESULT launch_command(const GUID *clsid, REGSAM view, WCHAR *appid, WCHA
                clsid->Data4[3], clsid->Data4[4], clsid->Data4[5], clsid->Data4[6], clsid->Data4[7]);
     clsid_string[38] = 0;
     _snwprintf(key, ARRAYSIZE(key), L"Software\\Classes\\CLSID\\%ls", clsid_string);
-    if (launch_read_string(key, L"AppID", view, appid, 39))
+    if (launch_read_string(key, L"AppID", view, appid, 39) || !launch_valid_guid_string(appid))
         return REGDB_E_CLASSNOTREG;
 
     _snwprintf(key, ARRAYSIZE(key), L"Software\\Classes\\CLSID\\%ls\\LocalServer32", clsid_string);
@@ -119,7 +188,8 @@ static BOOL launch_runas_password(const WCHAR *appid, WCHAR *password, DWORD cou
     key.MaximumLength = key.Length + sizeof(WCHAR);
     if (LsaOpenPolicy(NULL, &attributes, POLICY_GET_PRIVATE_INFORMATION, &policy))
         return FALSE;
-    if (!LsaRetrievePrivateData(policy, &key, &data) && data && data->Length / sizeof(WCHAR) < count)
+    if (!LsaRetrievePrivateData(policy, &key, &data) && data && !(data->Length % sizeof(WCHAR)) &&
+        data->Length / sizeof(WCHAR) < count)
     {
         memcpy(password, data->Buffer, data->Length);
         password[data->Length / sizeof(WCHAR)] = 0;
@@ -176,10 +246,11 @@ static HRESULT launch_token(const WCHAR *appid, const WCHAR *runas, HANDLE calle
 
 HRESULT __cdecl irpcss_launch_server(handle_t handle, const GUID *clsid, DWORD bitness, DWORD *pid)
 {
-    WCHAR appid[39], key[MAX_PATH], runas[256], command[LAUNCH_COMMAND_MAX];
+    WCHAR appid[39], key[MAX_PATH], runas[256], command[LAUNCH_COMMAND_MAX], application[MAX_PATH];
     STARTUPINFOW startup = { sizeof(startup) };
     PROCESS_INFORMATION info;
     HANDLE process = NULL, caller = NULL, token = NULL;
+    ULONG caller_pid = 0;
     const WCHAR *desktop = NULL;
     void *environment = NULL;
     REGSAM views[2];
@@ -197,11 +268,7 @@ HRESULT __cdecl irpcss_launch_server(handle_t handle, const GUID *clsid, DWORD b
         return E_ACCESSDENIED;
     }
     CloseHandle(process);
-    if (!launch_caller_allowed(caller))
-    {
-        CloseHandle(caller);
-        return E_ACCESSDENIED;
-    }
+    I_RpcBindingInqLocalClientPID(handle, &caller_pid);
 
     if (bitness == 32)
         views[view_count++] = KEY_WOW64_32KEY;
@@ -215,14 +282,30 @@ HRESULT __cdecl irpcss_launch_server(handle_t handle, const GUID *clsid, DWORD b
     }
     for (i = 0; i < view_count && FAILED(hr); i++)
         hr = launch_command(clsid, views[i], appid, command);
+    /*
+     * rpcss alone decides whether RunAs applies, in the view where it finds the machine-wide
+     * class: S_FALSE (no such class, or no RunAs) lets the caller start the server itself.
+     */
     if (FAILED(hr))
+    {
+        hr = S_FALSE;
         goto done;
-
+    }
     _snwprintf(key, ARRAYSIZE(key), L"Software\\Classes\\AppID\\%ls", appid);
     if (launch_read_string(key, L"RunAs", views[i - 1], runas, ARRAYSIZE(runas)) || !runas[0])
     {
-        /* Without RunAs the caller starts the server itself */
-        hr = REGDB_E_CLASSNOTREG;
+        hr = S_FALSE;
+        goto done;
+    }
+    if (!launch_permitted(clsid, appid, views[i - 1], caller, caller_pid))
+    {
+        hr = E_ACCESSDENIED;
+        goto done;
+    }
+    if (!launch_split_command(command, application, ARRAYSIZE(application)))
+    {
+        WARN("no image path in %s\n", debugstr_w(command));
+        hr = CO_E_SERVER_EXEC_FAILURE;
         goto done;
     }
     hr = launch_token(appid, runas, caller, &token, &desktop);
@@ -232,7 +315,7 @@ HRESULT __cdecl irpcss_launch_server(handle_t handle, const GUID *clsid, DWORD b
     TRACE("starting %s as %s\n", debugstr_w(command), debugstr_w(runas));
     CreateEnvironmentBlock(&environment, token, FALSE);
     startup.lpDesktop = (WCHAR *)desktop;
-    if (!CreateProcessAsUserW(token, NULL, command, NULL, NULL, FALSE, CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS,
+    if (!CreateProcessAsUserW(token, application, command, NULL, NULL, FALSE, CREATE_UNICODE_ENVIRONMENT | DETACHED_PROCESS,
                               environment, NULL, &startup, &info))
     {
         WARN("starting %s failed, error %lu\n", debugstr_w(command), GetLastError());
