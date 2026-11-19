@@ -40,6 +40,7 @@ list(APPEND SOURCE
     PathProcessCommand.cpp
     PathResolve.cpp
     PreviewHandler.cpp
+    AboutBanner.c
     ProgramFilesDir.cpp
     SHGetFolderPathToken.cpp
     RealShellExecuteEx.cpp

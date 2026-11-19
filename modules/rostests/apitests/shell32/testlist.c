@@ -41,6 +41,7 @@ extern void func_PathIsTemporary(void);
 extern void func_PathMakeUniqueName(void);
 extern void func_PathProcessCommand(void);
 extern void func_PathResolve(void);
+extern void func_AboutBanner(void);
 extern void func_ProgramFilesDir(void);
 extern void func_SHGetFolderPathToken(void);
 extern void func_PIDL(void);
@@ -140,6 +141,7 @@ const struct test winetest_testlist[] =
     { "PathMakeUniqueName", func_PathMakeUniqueName },
     { "PathProcessCommand", func_PathProcessCommand },
     { "PathResolve", func_PathResolve },
+    { "AboutBanner", func_AboutBanner },
     { "ProgramFilesDir", func_ProgramFilesDir },
     { "SHGetFolderPathToken", func_SHGetFolderPathToken },
     { "PIDL", func_PIDL },

@@ -2447,6 +2447,19 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
                     SetDlgItemTextW(hWnd, IDC_ABOUT_PHYSMEM, szBuf);
                 }
 
+                if (!GetParent(hWnd))
+                {
+                    RECT rcWork, rcDlg;
+
+                    if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0) && GetWindowRect(hWnd, &rcDlg))
+                    {
+                        SetWindowPos(hWnd, NULL,
+                                     rcWork.left + ((rcWork.right - rcWork.left) - (rcDlg.right - rcDlg.left)) / 2,
+                                     rcWork.top + ((rcWork.bottom - rcWork.top) - (rcDlg.bottom - rcDlg.top)) / 2,
+                                     0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    }
+                }
+
                 // Add the Authors dialog
                 hWndAuthors = CreateDialogW(shell32_hInstance, MAKEINTRESOURCEW(IDD_ABOUT_AUTHORS), hWnd, AboutAuthorsDlgProc);
                 LoadStringW(shell32_hInstance, IDS_SHELL_ABOUT_AUTHORS, szAuthorsText, ARRAY_SIZE(szAuthorsText));
@@ -2470,11 +2483,24 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
 
                 if (hdcMem)
                 {
+                    RECT rcClient;
+                    int cxDest, cyLogoDest, cyLineDest;
+
+                    GetClientRect(hWnd, &rcClient);
+                    cxDest = rcClient.right - rcClient.left;
+                    if (cxDest <= 0)
+                        cxDest = cxLogoBmp;
+                    cyLogoDest = MulDiv(cyLogoBmp, cxDest, cxLogoBmp);
+                    cyLineDest = max(1, MulDiv(cyLineBmp, cxDest, cxLogoBmp));
+
+                    SetStretchBltMode(hdc, HALFTONE);
+                    SetBrushOrgEx(hdc, 0, 0, NULL);
+
                     hOldObj = SelectObject(hdcMem, hLogoBmp);
-                    BitBlt(hdc, 0, 0, cxLogoBmp, cyLogoBmp, hdcMem, 0, 0, SRCCOPY);
+                    StretchBlt(hdc, 0, 0, cxDest, cyLogoDest, hdcMem, 0, 0, cxLogoBmp, cyLogoBmp, SRCCOPY);
 
                     SelectObject(hdcMem, hLineBmp);
-                    BitBlt(hdc, 0, cyLogoBmp, cxLogoBmp, cyLineBmp, hdcMem, 0, 0, SRCCOPY);
+                    StretchBlt(hdc, 0, cyLogoDest, cxDest, cyLineDest, hdcMem, 0, 0, cxLogoBmp, cyLineBmp, SRCCOPY);
 
                     SelectObject(hdcMem, hOldObj);
                     DeleteDC(hdcMem);
