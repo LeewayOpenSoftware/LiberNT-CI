@@ -1446,13 +1446,18 @@ SeSubProcessToken(
     OBJECT_ATTRIBUTES ObjectAttributes;
     SECURITY_DESCRIPTOR SecurityDescriptor;
     PVOID SdBuffer;
-    NTSTATUS Status;
+    NTSTATUS Status, SdStatus;
 
-    Status = SepCreateSubProcessTokenSd(ParentToken, &SecurityDescriptor, &SdBuffer);
+    /*
+     * The new token is owned by its own user. The creator (services.exe, winlogon, ...) may
+     * not name that owner, so the descriptor is not given at creation, where the owner is
+     * checked against the creator, but set by the kernel right after the insertion, before
+     * anyone can reach the token.
+     */
+    SdStatus = SepCreateSubProcessTokenSd(ParentToken, &SecurityDescriptor, &SdBuffer);
 
     /* Initialize the attributes and duplicate it */
-    InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL,
-                               NT_SUCCESS(Status) ? &SecurityDescriptor : NULL);
+    InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL, NULL);
     Status = SepDuplicateToken(ParentToken,
                                &ObjectAttributes,
                                FALSE,
@@ -1471,6 +1476,16 @@ SeSubProcessToken(
                                 0,
                                 NULL,
                                 NULL);
+        if (NT_SUCCESS(Status) && NT_SUCCESS(SdStatus))
+        {
+            Status = ObSetSecurityObjectByPointer(NewToken,
+                                                  OWNER_SECURITY_INFORMATION |
+                                                  GROUP_SECURITY_INFORMATION |
+                                                  DACL_SECURITY_INFORMATION,
+                                                  &SecurityDescriptor);
+            if (!NT_SUCCESS(Status))
+                ObDereferenceObject(NewToken);
+        }
         if (NT_SUCCESS(Status))
         {
             /* Set the session ID */
