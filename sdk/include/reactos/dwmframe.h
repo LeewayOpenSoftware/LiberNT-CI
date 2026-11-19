@@ -415,6 +415,10 @@ typedef struct _DWM_WIN
     ULONG DxDrawHeight;
     ULONG DxSourceWidth; /* top-left texels shown over the draw size */
     ULONG DxSourceHeight;
+    /* Transparent outer band of the frame (DWM_PROP_FRAME_INSETS), in backing
+     * pixels. Only the rect {left, top, cx - right, cy - bottom} is visible:
+     * it is drawn, shadowed, rounded and counted as opaque; the band is not. */
+    RECTL FrameInsets;
 } DWM_WIN, *PDWM_WIN;
 
 typedef struct _DWM_FRAME_HEADER

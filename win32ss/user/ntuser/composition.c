@@ -144,6 +144,50 @@ IntCompositionFrameProperty(_In_ PWND Wnd, _In_ ATOM Atom)
     return Atom != 0 ? (ULONG_PTR)UserGetProp(Wnd, Atom, FALSE) : 0;
 }
 
+/*
+ * The transparent outer band of a themed frame (DWM_PROP_FRAME_INSETS). It has
+ * its own gate, a window edge, independent of DWM_PROP_FRAME_ALPHA: ordinary
+ * themed windows publish it. Each side is clamped to the window border on
+ * that side (on top the border only, never the caption) and to the client
+ * offset, so the band never covers client pixels. A maximized, minimized or
+ * regioned window has no band.
+ */
+static VOID
+IntCompositionReadFrameInsets(_In_ PWND Wnd, _Inout_ PDWM_WIN Window)
+{
+    ULONG_PTR Packed;
+    LONG Left, Top, Right, Bottom, BorderX, BorderY;
+    SIZE Border;
+
+    RtlZeroMemory(&Window->FrameInsets, sizeof(Window->FrameInsets));
+    if (AtomDwmFrameInsets == 0 || (Wnd->style & (WS_MINIMIZE | WS_MAXIMIZE)) ||
+        Wnd->hrgnClip != NULL || Window->cx <= 0 || Window->cy <= 0 ||
+        !UserHasWindowEdge(Wnd->style, Wnd->ExStyle))
+        return;
+    Packed = (ULONG_PTR)UserGetProp(Wnd, AtomDwmFrameInsets, FALSE);
+    if (Packed == 0)
+        return;
+
+    UserGetWindowBorders(Wnd, Wnd->style, Wnd->ExStyle, &Border, FALSE);
+    BorderX = IntCompositionFrameUnits(Wnd, Border.cx);
+    BorderY = IntCompositionFrameUnits(Wnd, Border.cy);
+    Left = IntCompositionFrameUnits(Wnd, (LONG)(Packed & 0xFF));
+    Top = IntCompositionFrameUnits(Wnd, (LONG)((Packed >> 8) & 0xFF));
+    Right = IntCompositionFrameUnits(Wnd, (LONG)((Packed >> 16) & 0xFF));
+    Bottom = IntCompositionFrameUnits(Wnd, (LONG)((Packed >> 24) & 0xFF));
+    Left = max(0, min(Left, min(BorderX, Window->ClientX)));
+    Top = max(0, min(Top, min(BorderY, Window->ClientY)));
+    Right = max(0, min(Right, min(BorderX, Window->cx - Window->ClientX - Window->ClientWidth)));
+    Bottom = max(0, min(Bottom, min(BorderY, Window->cy - Window->ClientY - Window->ClientHeight)));
+    if (Left + Right >= Window->cx || Top + Bottom >= Window->cy)
+        return;
+
+    Window->FrameInsets.left = Left;
+    Window->FrameInsets.top = Top;
+    Window->FrameInsets.right = Right;
+    Window->FrameInsets.bottom = Bottom;
+}
+
 static VOID
 IntCompositionReadFrameExtension(_In_ PWND Wnd, _Inout_ PDWM_WIN Window)
 {
@@ -151,6 +195,7 @@ IntCompositionReadFrameExtension(_In_ PWND Wnd, _Inout_ PDWM_WIN Window)
     ULONG_PTR Row, Span, State;
     ULONG Index;
 
+    IntCompositionReadFrameInsets(Wnd, Window);
     if (IntCompositionFrameProperty(Wnd, AtomDwmFrameAlpha) == 0 ||
         !UserHasWindowEdge(Wnd->style, Wnd->ExStyle))
         return;
@@ -195,6 +240,7 @@ IntCompositionIsFrameAtom(_In_ ATOM Atom)
 {
     return Atom != 0 &&
            (Atom == AtomDwmFrameAlpha ||
+            Atom == AtomDwmFrameInsets ||
             Atom == AtomDwmBackdropNcExtend ||
             Atom == AtomDwmBackdropNcExtendLeft ||
             Atom == AtomDwmBackdropNcExtendRight ||
@@ -3457,6 +3503,8 @@ IntCompositionDwmGetFrame(_In_ PVOID pUser)
         RtlZeroMemory(g_DwmFrameWindows[count].CaptionButtons,
                       sizeof(g_DwmFrameWindows[count].CaptionButtons));
         g_DwmFrameWindows[count].CaptionState = 0;
+        RtlZeroMemory(&g_DwmFrameWindows[count].FrameInsets,
+                      sizeof(g_DwmFrameWindows[count].FrameInsets));
         g_DwmFrameWindows[count].CornerRadius = IntCompositionCornerRadius(w);
         {
             const RECTL *Client = Held ? &e->Redirect.rcFrontClient : &e->Redirect.rcClient;
