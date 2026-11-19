@@ -895,6 +895,8 @@ class CTrayWindow :
     BOOL     m_bSecondary;
 
     RECT m_TrayRects[4];
+    /* Edges whose docked rectangle has been fitted to the rebar (1 << ABE_*) */
+    DWORD m_FittedEdges;
     SIZE m_TraySize;
 
     HWND m_TrayPropertiesOwner;
@@ -918,6 +920,7 @@ public:
             DWORD InSizeMove : 1;
             DWORD IsDragging : 1;
             DWORD ThemeLayoutPending : 1;
+            DWORD SizedInSizeMove : 1;
         };
     };
 
@@ -937,6 +940,7 @@ public:
         m_DraggingPosition(0),
         m_DraggingMonitor(NULL),
         m_bSecondary(FALSE),
+        m_FittedEdges(0),
         m_TrayPropertiesOwner(NULL),
         m_RunFileDlgOwner(NULL),
         m_AutoHideState(NULL),
@@ -2376,7 +2380,8 @@ ChangePos:
                               SPIF_SENDCHANGE);
     }
 
-    VOID CheckTrayWndPosition()
+    /* bFitToRebar: FALSE keeps the docked size (Lock already moved it by the sizing bar) */
+    VOID CheckTrayWndPosition(BOOL bFitToRebar = TRUE)
     {
         /* Force the rebar bands to resize */
         IUnknown_Exec(m_TrayBandSite,
@@ -2387,7 +2392,11 @@ ChangePos:
                       NULL);
 
         /* Calculate the size of the taskbar based on the rebar */
-        FitToRebar(&m_TrayRects[m_Position]);
+        if (bFitToRebar)
+        {
+            FitToRebar(&m_TrayRects[m_Position]);
+            m_FittedEdges |= 1 << m_Position;
+        }
 
         /* Move the tray window */
         /* The handler of WM_WINDOWPOSCHANGING will override whatever size
@@ -2395,6 +2404,9 @@ ChangePos:
         SetWindowPos(NULL, 0, 0, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE);
         ResizeWorkArea();
         ApplyClipping(TRUE);
+        /* Lay the children out even when the size did not change (no WM_SIZE then):
+           the notification area re-decides its modern or classic layout here */
+        AlignControls(NULL);
         RedrawWindow(NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_INVALIDATE | RDW_ALLCHILDREN);
 
         {
@@ -2453,6 +2465,7 @@ ChangePos:
 
         rcScreen = m_TrayRects[m_Position];
         GetScreenRect(m_Monitor, &rcScreen);
+        m_FittedEdges = 0;
         for (DWORD Position = ABE_LEFT; Position <= ABE_BOTTOM; ++Position)
         {
             GetTrayRectFromScreenRect(Position, &rcScreen, &m_TraySize,
@@ -2543,6 +2556,7 @@ ChangePos:
         /* Calculate all docking rectangles. We need to do this here so they're
            initialized and dragging the tray window to another position gives
            usable results */
+        m_FittedEdges = 0;
         for (Pos = ABE_LEFT; Pos <= ABE_BOTTOM; Pos++)
         {
             GetTrayRectFromScreenRect(Pos,
@@ -3145,10 +3159,7 @@ ChangePos:
         if (!Create(NULL, rcWnd, NULL, dwStyle, dwExStyle))
             return E_FAIL;
 
-        /* Align all controls on the tray window */
-        AlignControls(NULL);
-
-        /* Move the tray window to the right position and resize it if necessary */
+        /* Move the tray window to the right position, resize it if necessary and align its controls */
         CheckTrayWndPosition();
 
         return S_OK;
@@ -3228,8 +3239,10 @@ ChangePos:
                 }
             }
             SetWindowPos(NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOOWNERZORDER);
-            ResizeWorkArea();
-            ApplyClipping(TRUE);
+            /* Lay out and repaint everything so the sizing bar's strip and the
+               unlocked-state paint do not outlive the toggle. Keep the docked size:
+               fitting to the rebar here grew the taskbar by the rebar's minimum */
+            CheckTrayWndPosition(FALSE);
         }
 
         return bPrevLock;
@@ -3434,6 +3447,9 @@ ChangePos:
 
     LRESULT OnThemeChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        /* Sizes fitted under the previous theme no longer hold for any edge */
+        m_FittedEdges = 0;
+
         if (m_Theme)
             CloseThemeData(m_Theme);
 
@@ -3490,7 +3506,8 @@ ChangePos:
             SendMessage(m_TrayNotify, uMsg, wParam, lParam);
             SendMessage(m_TaskSwitch, uMsg, wParam, lParam);
             UpdateFonts();
-            AlignControls(NULL);
+            /* New fonts change the row height on every edge */
+            m_FittedEdges = 0;
             CheckTrayWndPosition();
         }
 
@@ -3556,7 +3573,7 @@ ChangePos:
             ::SendMessageW(m_TaskSwitch, WM_THEMECHANGED, 0, 0);
         if (m_TrayNotify)
             ::SendMessageW(m_TrayNotify, WM_THEMECHANGED, 0, 0);
-        AlignControls(NULL);
+        /* Every caller runs CheckTrayWndPosition next, which aligns the controls */
     }
 
     LRESULT OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -3750,6 +3767,7 @@ ChangePos:
 
         if (!g_TaskbarSettings.bLock)
         {
+            SizedInSizeMove = TRUE;
             FitToRebar(pRect);
         }
         else
@@ -3795,6 +3813,7 @@ ChangePos:
     {
         InSizeMove = TRUE;
         IsDragging = FALSE;
+        SizedInSizeMove = FALSE;
         ERR("[T2] EnterSizeMove lock %d pos %lu\n", (int)g_TaskbarSettings.bLock, (ULONG)m_Position);
         if (!g_TaskbarSettings.bLock)
         {
@@ -3811,7 +3830,13 @@ ChangePos:
         InSizeMove = FALSE;
         if (!g_TaskbarSettings.bLock && m_Position <= ABE_BOTTOM)
         {
-            FitToRebar(&m_TrayRects[m_Position]);
+            /* Fit an edge once, and again after a resize: a move back to an edge keeps the
+               size it had there, as Windows does (fitting again added the rebar's minimum) */
+            if (SizedInSizeMove || !(m_FittedEdges & (1 << m_Position)))
+            {
+                FitToRebar(&m_TrayRects[m_Position]);
+                m_FittedEdges |= 1 << m_Position;
+            }
 
             g_TaskbarSettings.sr.Position = m_Position;
             g_TaskbarSettings.sr.Rect = m_TrayRects[m_Position];
@@ -3822,6 +3847,8 @@ ChangePos:
             /* Apply clipping */
             PostMessage(WM_SIZE, SIZE_RESTORED, 0);
         }
+        /* Nothing painted for the edges the taskbar passed over may stay behind */
+        RedrawWindow(NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
         return TRUE;
     }
 
