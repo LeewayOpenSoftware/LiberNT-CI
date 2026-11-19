@@ -2098,7 +2098,7 @@
 @ stdcall -arch=win64 CcIsThereDirtyDataEx(ptr ptr)
 @ stub -arch=win64 CcIsThereDirtyLoggedPages
 @ stub -arch=win64 CcRegisterExternalCache
-@ stub -arch=win64 CcScheduleReadAheadEx
+@ stdcall -arch=win64 CcScheduleReadAheadEx(ptr ptr long ptr)
 @ stdcall -arch=win64 CcSetFileSizesEx(ptr ptr)
 @ stub -arch=win64 CcSetLogHandleForFileEx
 @ stub -arch=win64 CcSetLoggedDataThreshold
@@ -2335,7 +2335,7 @@
 @ stdcall FsRtlInsertPerFileContext(ptr ptr)
 @ stub -arch=win64 FsRtlInsertPerFileContextWithReserve
 @ stub -arch=win64 FsRtlIs32BitProcess
-@ stub -arch=win64 FsRtlIsDaxVolume
+@ stdcall -arch=win64 FsRtlIsDaxVolume(ptr)
 @ stdcall FsRtlIsEcpAcknowledged(ptr)
 @ stdcall FsRtlIsEcpFromUserMode(ptr)
 @ stub -arch=win64 FsRtlIsExtentDangling
@@ -2343,7 +2343,7 @@
 @ stdcall -arch=win64 FsRtlIsNameInUnUpcasedExpression(ptr ptr long ptr)
 @ stub -arch=win64 FsRtlIsNonEmptyDirectoryReparsePointAllowed
 @ stdcall -arch=win64 FsRtlIsSystemPagingFile(ptr)
-@ stub -arch=win64 FsRtlIssueDeviceIoControl
+@ stdcall -arch=win64 FsRtlIssueDeviceIoControl(ptr long long ptr long ptr long ptr)
 @ stdcall -arch=win64 FsRtlKernelFsControlFile(ptr long ptr long ptr long ptr)
 @ stub -arch=win64 FsRtlLogCcFlushError
 @ stdcall FsRtlLookupPerFileContext(ptr ptr ptr)
@@ -2364,7 +2364,7 @@
 @ stub -arch=win64 FsRtlPrepareMdlWriteEx
 @ stdcall FsRtlPrepareToReuseEcp(ptr)
 @ stdcall -arch=win64 FsRtlQueryCachedVdl(ptr ptr)
-@ stub -arch=win64 FsRtlQueryInformationFile
+@ stdcall -arch=win64 FsRtlQueryInformationFile(ptr ptr long long ptr)
 @ stub -arch=win64 FsRtlQueryKernelEaFile
 @ stub -arch=win64 FsRtlQueryMaximumVirtualDiskNestingLevel
 @ stub -arch=win64 FsRtlRegisterFltMgrCalls
@@ -2495,7 +2495,7 @@
 @ stub -arch=win64 IoIsActivityTracingEnabled
 @ stdcall IoIsFileObjectIgnoringSharing(ptr)
 @ stub -arch=win64 IoIsInitiator32bitProcess
-@ stub -arch=win64 IoIsValidIrpStatus
+@ stdcall -arch=win64 IoIsValidIrpStatus(long)
 @ stdcall -arch=win64 IoMakeAssociatedIrpEx(ptr ptr long)
 @ stub -arch=win64 IoMapKsrPersistentMemoryEx
 @ stdcall IoOpenDriverRegistryKey(ptr long long long ptr)
@@ -2745,7 +2745,7 @@
 @ stub -arch=win64 MmMdlPagesAreZero
 @ stub -arch=arm64 MmObtainChargesToLockPagedPool
 @ stdcall -version=0x602+ MmPrefetchVirtualAddresses(ptr)
-@ stub -arch=win64 MmProtectDriverSection
+@ stdcall -arch=win64 MmProtectDriverSection(ptr long long)
 @ stub -arch=win64 MmQueryMemoryRanges
 @ stub -arch=arm64 MmReturnChargesToLockPagedPool
 @ stdcall MmRotatePhysicalView(ptr ptr ptr long ptr ptr)
@@ -2804,13 +2804,13 @@
 @ stub -arch=win64 NtThawTransactions
 @ stdcall NtTraceControl(long ptr long ptr long ptr)
 @ stdcall -arch=arm64 NtWaitForAlertByThreadId(ptr ptr)
-@ stub -arch=win64 ObDereferenceObjectDeferDeleteWithTag
+@ stdcall -arch=win64 ObDereferenceObjectDeferDeleteWithTag(ptr long)
 @ stdcall ObGetFilterVersion()
 @ stdcall ObIsDosDeviceLocallyMapped(long ptr)
 @ stub -arch=win64 ObOpenObjectByNameEx
-@ stub -arch=win64 ObOpenObjectByPointerWithTag
+@ stdcall -arch=win64 ObOpenObjectByPointerWithTag(ptr long ptr long ptr long long ptr)
 @ stdcall ObReferenceObjectByHandleWithTag(ptr long ptr long long ptr ptr)
-@ stub -arch=win64 ObReferenceObjectByPointerWithTag
+@ stdcall -arch=win64 ObReferenceObjectByPointerWithTag(ptr long ptr long long)
 @ stub -arch=win64 ObReferenceObjectSafeWithTag
 @ stdcall ObRegisterCallbacks(ptr ptr)
 @ stdcall ObUnRegisterCallbacks(ptr)
@@ -2919,7 +2919,7 @@
 @ stub -arch=win64 PsGetSiloIdentifier
 @ stdcall -arch=win64 PsGetSiloMonitorContextSlot(ptr)
 @ stdcall -arch=win64 PsGetThreadCreateTime(ptr)
-@ stub -arch=win64 PsGetThreadExitStatus
+@ stdcall -arch=win64 PsGetThreadExitStatus(ptr)
 @ stdcall PsGetThreadProperty(ptr ptr long)
 @ stdcall -arch=win64 PsGetThreadServerSilo(ptr)
 @ stdcall PsGetWin32KFilterSet()
@@ -2969,7 +2969,7 @@
 @ stub -arch=win64 PsReleaseProcessWakeCounter
 @ stub -arch=win64 PsReleaseSiloHardReference
 @ stdcall -arch=win64 PsRemoveSiloContext(ptr long ptr)
-@ stub -arch=win64 PsReplaceSiloContext
+@ stdcall -arch=win64 PsReplaceSiloContext(ptr long ptr ptr)
 @ stub -arch=win64 PsRevertToUserMultipleGroupAffinityThread
 @ stdcall -version=0xA00+ PsSetCreateProcessNotifyRoutineEx2(long ptr long)
 @ stdcall -arch=win64 PsSetCreateThreadNotifyRoutineEx(long ptr)
@@ -3038,7 +3038,7 @@
 @ stdcall -arch=win64 RtlDecompressFragmentEx(long ptr long ptr long long long ptr ptr)
 @ stub -arch=win64 RtlDeleteElementGenericTableAvlEx
 @ stdcall -arch=win64 RtlDeriveCapabilitySidsFromName(ptr ptr ptr)
-@ stub -arch=win64 RtlDrainNonVolatileFlush
+@ stdcall -arch=win64 RtlDrainNonVolatileFlush(ptr)
 @ stdcall -arch=win64 RtlEndStrongEnumerationHashTable(ptr ptr)
 @ stub -arch=win64 RtlEqualWnfChangeStamps
 @ stdcall RtlEthernetAddressToStringA(ptr ptr)
@@ -3049,7 +3049,7 @@
 @ stdcall -arch=win64 RtlExtractBitMap(ptr ptr long long)
 @ stub -arch=win64 RtlExtractBitMapEx
 @ stdcall -arch=win64 RtlFillMemoryNonTemporal(ptr long long)
-@ stub -arch=win64 RtlFillNonVolatileMemory
+@ stdcall -arch=win64 RtlFillNonVolatileMemory(ptr ptr long long long)
 @ stdcall -arch=win64 RtlFindAceByType(ptr long ptr)
 @ stdcall -arch=win64 RtlFindClearBitsAndSetEx(ptr int64 int64) RtlFindClearBitsAndSet64
 @ stub -arch=win64 RtlFindClearBitsEx
@@ -3062,9 +3062,9 @@
 @ stdcall RtlFindUnicodeSubstring(ptr ptr long)
 @ stub -arch=win64 RtlFlushFeatureUsage
 @ stdcall -arch=win64 RtlFlushNonVolatileMemory(ptr ptr long long)
-@ stub -arch=win64 RtlFlushNonVolatileMemoryRanges
+@ stdcall -arch=win64 RtlFlushNonVolatileMemoryRanges(ptr ptr long long)
 @ stdcall -arch=win64 RtlFreeNonVolatileToken(ptr)
-@ stub -arch=win64 RtlFreeUTF8String
+@ stdcall -arch=win64 RtlFreeUTF8String(ptr)
 @ stdcall RtlGenerateClass5Guid(ptr ptr long ptr)
 @ stdcall RtlGetAcesBufferSize(ptr ptr)
 @ stdcall RtlGetActiveConsoleId()
@@ -3094,10 +3094,10 @@
 @ stub -arch=win64 RtlIdnToNameprepUnicode
 @ stub -arch=win64 RtlIdnToUnicode
 @ stdcall -arch=win64 RtlIncrementCorrelationVector(ptr)
-@ stub -arch=win64 RtlInitStringEx
+@ stdcall -arch=win64 RtlInitStringEx(ptr str)
 @ stdcall -arch=win64 RtlInitStrongEnumerationHashTable(ptr ptr)
 @ stdcall RtlInitUTF8String(ptr str)
-@ stub -arch=win64 RtlInitUTF8StringEx
+@ stdcall -arch=win64 RtlInitUTF8StringEx(ptr str)
 @ stdcall -arch=win64 RtlInitializeBitMapEx(ptr ptr int64) RtlInitializeBitMap64
 @ stdcall -arch=win64 RtlInitializeCorrelationVector(ptr long ptr)
 @ stub -arch=win64 RtlInitializeExtendedContext
@@ -3163,7 +3163,7 @@
 @ stub -arch=win64 RtlQueryPointerMapping
 @ stub -arch=win64 RtlQueryProcessPlaceholderCompatibilityMode
 @ stub -arch=win64 RtlQueryPropertyStore
-@ stub -arch=win64 RtlQueryRegistryValueWithFallback
+@ stdcall -arch=win64 RtlQueryRegistryValueWithFallback(ptr ptr ptr long ptr ptr ptr)
 @ stdcall -arch=win64 RtlQueryRegistryValuesEx(long wstr ptr ptr ptr)
 @ stub -arch=win64 RtlQueryThreadPlaceholderCompatibilityMode
 @ stub -arch=win64 RtlQueryValidationRunlevel
@@ -3205,13 +3205,13 @@
 @ stdcall RtlUTF8StringToUnicodeString(ptr ptr long)
 @ stub -arch=arm64 RtlUdiv128
 @ stdcall -arch=win64 RtlUnicodeStringToInt64(ptr long ptr ptr)
-@ stub -arch=win64 RtlUnicodeStringToUTF8String
+@ stdcall -arch=win64 RtlUnicodeStringToUTF8String(ptr ptr long)
 @ stdcall RtlUnregisterFeatureConfigurationChangeNotification(ptr)
 @ stdcall RtlUnregisterFeatureUsageProvider(ptr)
 @ stub -arch=arm64 RtlUnsignedMultiplyHigh
 @ stdcall -arch=win64 RtlValidateCorrelationVector(ptr)
 @ stdcall -arch=win64 RtlVirtualUnwind2(long int64 int64 ptr ptr ptr ptr ptr ptr ptr ptr ptr long)
-@ stub -arch=win64 RtlWriteNonVolatileMemory
+@ stdcall -arch=win64 RtlWriteNonVolatileMemory(ptr ptr ptr long long)
 @ stub -arch=win64 SeAccessCheckEx
 @ stdcall -arch=win64 SeAccessCheckFromState(ptr ptr ptr long long ptr ptr long ptr ptr)
 @ stub -arch=win64 SeAccessCheckFromStateEx

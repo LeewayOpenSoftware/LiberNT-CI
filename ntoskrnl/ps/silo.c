@@ -263,6 +263,57 @@ PsRemoveSiloContext(
     return STATUS_SUCCESS;
 }
 
+
+NTSTATUS
+NTAPI
+PsReplaceSiloContext(
+    _In_ PESILO Silo,
+    _In_ ULONG ContextSlot,
+    _In_ PVOID NewSiloContext,
+    _Outptr_opt_result_maybenull_ PVOID *OldSiloContext)
+{
+    PVOID OldContext;
+
+    PAGED_CODE();
+
+    if (OldSiloContext != NULL)
+        *OldSiloContext = NULL;
+
+    if (Silo != NULL)
+        return STATUS_NOT_SUPPORTED;
+    if ((NewSiloContext == NULL) || (ContextSlot >= PS_SILO_CONTEXT_SLOTS_MAX) ||
+        !PsSiloContextSlotAllocated(ContextSlot))
+        return STATUS_INVALID_PARAMETER;
+
+    ExAcquireFastMutex(&PsSiloContextLock);
+
+    if (PsHostSiloContextPermanent[ContextSlot / 32] & (1UL << (ContextSlot % 32)))
+    {
+        ExReleaseFastMutex(&PsSiloContextLock);
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (ContextSlot >= PsHostSiloContextSlotCount)
+        PsHostSiloContextSlotCount = ContextSlot + 1;
+
+    OldContext = PsHostSiloContextTable[ContextSlot];
+    PsHostSiloContextTable[ContextSlot] = NewSiloContext;
+    InterlockedIncrement(&PsSiloContextHeader(NewSiloContext)->RefCount);
+
+    ExReleaseFastMutex(&PsSiloContextLock);
+
+    /* As in PsRemoveSiloContext, the table's reference on the old context passes to the caller */
+    if (OldContext != NULL)
+    {
+        if (OldSiloContext != NULL)
+            *OldSiloContext = OldContext;
+        else
+            PsDereferenceSiloContext(OldContext);
+    }
+
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 PsGetSiloContext(

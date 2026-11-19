@@ -2898,6 +2898,41 @@ RtlUnicodeToUTF8N(
   _In_reads_bytes_(UnicodeStringByteCount) PCWCH UnicodeStringSource,
   _In_ ULONG UnicodeStringByteCount);
 
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlInitStringEx(
+  _Out_ PSTRING DestinationString,
+  _In_opt_z_ __drv_aliasesMem PCSZ SourceString);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlInitUTF8StringEx(
+  _Out_ PUTF8_STRING DestinationString,
+  _In_opt_z_ __drv_aliasesMem PCSZ SourceString);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Must_inspect_result_
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlUnicodeStringToUTF8String(
+  _When_(AllocateDestinationString, _Out_ _At_(DestinationString->Buffer, __drv_allocatesMem(Mem)))
+  _When_(!AllocateDestinationString, _Inout_)
+      PUTF8_STRING DestinationString,
+  _In_ PCUNICODE_STRING SourceString,
+  _In_ BOOLEAN AllocateDestinationString);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
+VOID
+NTAPI
+RtlFreeUTF8String(
+  _Inout_ _At_(Utf8String->Buffer, __drv_freesMem(Mem)) PUTF8_STRING Utf8String);
+
 #define FLUSH_NV_MEMORY_IN_FLAG_NO_DRAIN 0x00000001
 
 _IRQL_requires_max_(APC_LEVEL)
@@ -2925,6 +2960,76 @@ RtlFlushNonVolatileMemory(
   _In_ PVOID NvBuffer,
   _In_ SIZE_T Size,
   _In_ ULONG Flags);
+
+
+typedef struct _NV_MEMORY_RANGE {
+  VOID *BaseAddress;
+  SIZE_T Length;
+} NV_MEMORY_RANGE, *PNV_MEMORY_RANGE;
+
+#define FLUSH_NV_MEMORY_DEFAULT_TOKEN (ULONG_PTR)(-1)
+
+#define WRITE_NV_MEMORY_FLAG_FLUSH        0x00000001
+#define WRITE_NV_MEMORY_FLAG_NON_TEMPORAL 0x00000002
+#define WRITE_NV_MEMORY_FLAG_PERSIST      (WRITE_NV_MEMORY_FLAG_FLUSH | WRITE_NV_MEMORY_FLAG_NON_TEMPORAL)
+#define WRITE_NV_MEMORY_FLAG_NO_DRAIN     0x00000100
+
+#define FILL_NV_MEMORY_FLAG_FLUSH         0x00000001
+#define FILL_NV_MEMORY_FLAG_NON_TEMPORAL  0x00000002
+#define FILL_NV_MEMORY_FLAG_PERSIST       (FILL_NV_MEMORY_FLAG_FLUSH | FILL_NV_MEMORY_FLAG_NON_TEMPORAL)
+#define FILL_NV_MEMORY_FLAG_NO_DRAIN      0x00000100
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDrainNonVolatileFlush(
+  _In_ PVOID NvToken);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlWriteNonVolatileMemory(
+  _In_ PVOID NvToken,
+  _Out_writes_bytes_(Size) VOID UNALIGNED *NvDestination,
+  _In_reads_bytes_(Size) CONST VOID UNALIGNED *Source,
+  _In_ SIZE_T Size,
+  _In_ ULONG Flags);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFillNonVolatileMemory(
+  _In_ PVOID NvToken,
+  _Out_writes_bytes_(Size) VOID UNALIGNED *NvDestination,
+  _In_ SIZE_T Size,
+  _In_ CONST UCHAR Value,
+  _In_ ULONG Flags);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFlushNonVolatileMemoryRanges(
+  _In_ PVOID NvToken,
+  _In_reads_(NumRanges) PNV_MEMORY_RANGE NvRanges,
+  _In_ SIZE_T NumRanges,
+  _In_ ULONG Flags);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlQueryRegistryValueWithFallback(
+  _In_opt_ HANDLE PrimaryHandle,
+  _In_opt_ HANDLE FallbackHandle,
+  _In_ PUNICODE_STRING ValueName,
+  _In_ ULONG ValueLength,
+  _Out_opt_ PULONG ValueType,
+  _Out_writes_bytes_to_(ValueLength, *ResultLength) PVOID ValueData,
+  _Out_range_(<=, ValueLength) PULONG ResultLength);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_

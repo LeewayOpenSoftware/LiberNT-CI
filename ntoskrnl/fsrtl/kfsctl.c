@@ -174,4 +174,111 @@ FsRtlKernelFsControlFile(
     return Status;
 }
 
+NTSTATUS
+NTAPI
+FsRtlIssueDeviceIoControl(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ ULONG IoCtl,
+    _In_ UCHAR Flags,
+    _In_opt_ PVOID InputBuffer,
+    _In_ ULONG InputBufferLength,
+    _In_opt_ PVOID OutputBuffer,
+    _In_ ULONG OutputBufferLength,
+    _Out_opt_ PULONG_PTR IosbInformation)
+{
+    IO_STATUS_BLOCK IoStatus;
+    NTSTATUS Status;
+    KEVENT Event;
+    PIRP Irp;
+
+    PAGED_CODE();
+
+    if (IosbInformation != NULL)
+        *IosbInformation = 0;
+
+    if (DeviceObject == NULL ||
+        (InputBufferLength != 0 && InputBuffer == NULL) ||
+        (OutputBufferLength != 0 && OutputBuffer == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+    Irp = IoBuildDeviceIoControlRequest(IoCtl, DeviceObject,
+                                        InputBuffer, InputBufferLength,
+                                        OutputBuffer, OutputBufferLength,
+                                        FALSE, &Event, &IoStatus);
+    if (Irp == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    /* A UCHAR of flags is the stack location's, such as SL_OVERRIDE_VERIFY_VOLUME */
+    IoGetNextIrpStackLocation(Irp)->Flags |= Flags;
+
+    Status = IoCallDriver(DeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+    {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+        Status = IoStatus.Status;
+    }
+
+    if (IosbInformation != NULL)
+        *IosbInformation = IoStatus.Information;
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+FsRtlQueryInformationFile(
+    _In_ PFILE_OBJECT FileObject,
+    _Out_writes_bytes_to_(Length, *RetFileInformationSize) PVOID FileInformation,
+    _In_ ULONG Length,
+    _In_ FILE_INFORMATION_CLASS FileInformationClass,
+    _Out_ PULONG RetFileInformationSize)
+{
+    ULONG Returned = 0;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (FileObject == NULL || RetFileInformationSize == NULL ||
+        (Length != 0 && FileInformation == NULL))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = IoQueryFileInformation(FileObject, FileInformationClass, Length,
+                                    FileInformation, &Returned);
+    *RetFileInformationSize = NT_ERROR(Status) ? 0 : Returned;
+    return Status;
+}
+
+BOOLEAN
+NTAPI
+FsRtlIsDaxVolume(
+    _In_ PFILE_OBJECT FileObject)
+{
+    union
+    {
+        FILE_FS_ATTRIBUTE_INFORMATION Info;
+        UCHAR Buffer[sizeof(FILE_FS_ATTRIBUTE_INFORMATION) + 32 * sizeof(WCHAR)];
+    } Attributes;
+    ULONG Returned;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (FileObject == NULL)
+        return FALSE;
+
+    /* A long file system name only overflows the buffer; the attributes still arrive */
+    RtlZeroMemory(&Attributes, sizeof(Attributes));
+    Status = IoQueryVolumeInformation(FileObject, FileFsAttributeInformation,
+                                      sizeof(Attributes), &Attributes, &Returned);
+    if (NT_ERROR(Status))
+        return FALSE;
+
+    return (Attributes.Info.FileSystemAttributes & FILE_DAX_VOLUME) != 0;
+}
+
 /* EOF */

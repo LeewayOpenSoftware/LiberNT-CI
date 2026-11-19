@@ -2549,6 +2549,13 @@ IoCreateStreamFileObjectEx2(
   _Out_ PFILE_OBJECT *StreamFileObject,
   _Out_opt_ PHANDLE FileHandle);
 
+
+NTKERNELAPI
+LOGICAL
+NTAPI
+IoIsValidIrpStatus(
+  _In_ NTSTATUS Status);
+
 NTKERNELAPI
 BOOLEAN
 NTAPI

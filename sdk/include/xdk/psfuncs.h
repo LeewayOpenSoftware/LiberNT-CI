@@ -341,6 +341,22 @@ PsRemoveSiloContext(
   _In_ ULONG ContextSlot,
   _Out_opt_ PVOID *RemovedSiloContext);
 
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsReplaceSiloContext(
+  _In_ PESILO Silo,
+  _In_ ULONG ContextSlot,
+  _In_ PVOID NewSiloContext,
+  _Outptr_opt_result_maybenull_ PVOID *OldSiloContext);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsGetThreadExitStatus(
+  _In_ PETHREAD Thread);
+
 NTKERNELAPI
 HANDLE
 NTAPI

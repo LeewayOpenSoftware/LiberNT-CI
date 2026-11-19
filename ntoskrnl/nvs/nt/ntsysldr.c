@@ -2866,3 +2866,22 @@ MmGetSystemRoutineAddress(IN PUNICODE_STRING SystemRoutineName)
     RtlFreeAnsiString(&AnsiRoutineName);
     return ProcAddress;
 }
+
+
+NTSTATUS
+NTAPI
+MmProtectDriverSection(
+    _In_ PVOID AddressWithinSection,
+    _In_ SIZE_T Size,
+    _In_ ULONG Flags)
+{
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(AddressWithinSection);
+
+    if ((Size != 0) || (Flags & ~MM_PROTECT_DRIVER_SECTION_VALID_FLAGS))
+        return STATUS_INVALID_PARAMETER;
+
+    /* The protection lives in the VSM second-level tables; this kernel runs without VSM */
+    return STATUS_INVALID_DEVICE_STATE;
+}

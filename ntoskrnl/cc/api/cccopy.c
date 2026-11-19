@@ -381,3 +381,17 @@ CcScheduleReadAhead(
     CcNtReadAhead(FileObject, NtMap, Offset, Length);
     CcNtDereferenceMap(NtMap);
 }
+
+
+VOID
+NTAPI
+CcScheduleReadAheadEx(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ PLARGE_INTEGER FileOffset,
+    _In_ ULONG Length,
+    _In_ PETHREAD IoIssuerThread)
+{
+    /* No per-thread I/O accounting yet, as in CcCopyReadEx */
+    UNREFERENCED_PARAMETER(IoIssuerThread);
+    CcScheduleReadAhead(FileObject, FileOffset, Length);
+}

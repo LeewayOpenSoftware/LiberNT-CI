@@ -245,4 +245,85 @@ RtlIsCloudFilesPlaceholder(
            ((ReparseTag & ~IO_REPARSE_TAG_CLOUD_MASK) == IO_REPARSE_TAG_CLOUD);
 }
 
+/* REGISTRY ******************************************************************/
+
+#define TAG_RTL_REGISTRY_FALLBACK 'bFgR'
+
+static
+NTSTATUS
+RtlpQueryRegistryValueData(
+    _In_ HANDLE KeyHandle,
+    _In_ PUNICODE_STRING ValueName,
+    _In_ ULONG ValueLength,
+    _Out_opt_ PULONG ValueType,
+    _Out_writes_bytes_to_(ValueLength, *ResultLength) PVOID ValueData,
+    _Out_ PULONG ResultLength)
+{
+    PKEY_VALUE_PARTIAL_INFORMATION Info;
+    ULONG InfoLength;
+    ULONG Returned;
+    NTSTATUS Status;
+
+    InfoLength = FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + ValueLength;
+    if (InfoLength < ValueLength)
+        return STATUS_INVALID_PARAMETER;
+
+    Info = ExAllocatePoolWithTag(PagedPool, InfoLength, TAG_RTL_REGISTRY_FALLBACK);
+    if (Info == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = ZwQueryValueKey(KeyHandle, ValueName, KeyValuePartialInformation,
+                             Info, InfoLength, &Returned);
+    if (NT_SUCCESS(Status) || (Status == STATUS_BUFFER_OVERFLOW))
+    {
+        /* On overflow the size is the one the caller needs */
+        if (ValueType != NULL)
+            *ValueType = Info->Type;
+        *ResultLength = Info->DataLength;
+        if (NT_SUCCESS(Status))
+            RtlCopyMemory(ValueData, Info->Data, Info->DataLength);
+    }
+
+    ExFreePoolWithTag(Info, TAG_RTL_REGISTRY_FALLBACK);
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+RtlQueryRegistryValueWithFallback(
+    _In_opt_ HANDLE PrimaryHandle,
+    _In_opt_ HANDLE FallbackHandle,
+    _In_ PUNICODE_STRING ValueName,
+    _In_ ULONG ValueLength,
+    _Out_opt_ PULONG ValueType,
+    _Out_writes_bytes_to_(ValueLength, *ResultLength) PVOID ValueData,
+    _Out_range_(<=, ValueLength) PULONG ResultLength)
+{
+    NTSTATUS Status = STATUS_OBJECT_NAME_NOT_FOUND;
+
+    PAGED_CODE();
+
+    if ((ValueName == NULL) || (ResultLength == NULL) ||
+        ((ValueLength != 0) && (ValueData == NULL)) ||
+        ((PrimaryHandle == NULL) && (FallbackHandle == NULL)))
+        return STATUS_INVALID_PARAMETER;
+
+    *ResultLength = 0;
+
+    if (PrimaryHandle != NULL)
+    {
+        Status = RtlpQueryRegistryValueData(PrimaryHandle, ValueName, ValueLength,
+                                            ValueType, ValueData, ResultLength);
+    }
+
+    /* Only a missing value falls back; any other failure is returned as it is */
+    if ((Status == STATUS_OBJECT_NAME_NOT_FOUND) && (FallbackHandle != NULL))
+    {
+        Status = RtlpQueryRegistryValueData(FallbackHandle, ValueName, ValueLength,
+                                            ValueType, ValueData, ResultLength);
+    }
+
+    return Status;
+}
+
 /* EOF */

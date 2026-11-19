@@ -2765,3 +2765,22 @@ IoGetSiloParameters(
     UNREFERENCED_PARAMETER(FileObject);
     return NULL;
 }
+
+
+LOGICAL
+NTAPI
+IoIsValidIrpStatus(
+    _In_ NTSTATUS Status)
+{
+    ULONG Value = (ULONG)Status;
+
+    /* Customer codes (C bit) follow their own rules */
+    if (Value & 0x20000000)
+        return TRUE;
+
+    /* Otherwise the reserved N bit must be clear and the facility a defined one */
+    if (Value & 0x10000000)
+        return FALSE;
+
+    return ((Value >> 16) & 0xFFF) <= FACILITY_MAXIMUM_VALUE;
+}

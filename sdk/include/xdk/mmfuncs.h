@@ -375,6 +375,19 @@ MmMapMdl(
   _In_ PMM_MDL_ROUTINE DriverRoutine,
   _In_opt_ PVOID DriverContext);
 
+
+#define MM_PROTECT_DRIVER_SECTION_ALLOW_UNLOAD 0x1
+#define MM_PROTECT_DRIVER_SECTION_VALID_FLAGS (MM_PROTECT_DRIVER_SECTION_ALLOW_UNLOAD)
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+MmProtectDriverSection(
+  _In_ PVOID AddressWithinSection,
+  _In_ SIZE_T Size,
+  _In_ ULONG Flags);
+
 _IRQL_requires_max_(APC_LEVEL)
 NTKERNELAPI
 PVOID
