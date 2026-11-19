@@ -476,13 +476,14 @@ extern "C" BOOL WINAPI SHOnCWMCommandLine(HANDLE hSharedInfo)
     TRACE("SHOnCWMCommandLine\n");
 
     PIE_THREAD_PARAM_BLOCK params = ParseSharedPacket(hSharedInfo);
+    BOOL ret = FALSE;
 
     if (params)
-        return SHOpenFolderWindow(params);
+        ret = SHOpenFolderWindow(params); /* the window thread gets its own copy */
 
     SHDestroyIETHREADPARAM(params);
 
-    return FALSE;
+    return ret;
 }
 
 /*************************************************************************
