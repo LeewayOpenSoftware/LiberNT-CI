@@ -74,7 +74,7 @@ CabinetFillRound(HDC dc, const RECT &rc, int radius, COLORREF color)
 
     if (radius > 0 && width > 4 * radius && height > 4 * radius)
     {
-        HBRUSH solid = CreateSolidBrush(color);
+        HBRUSH solid = (HBRUSH)GetStockObject(DC_BRUSH);
         RECT middle = { rc.left + radius, rc.top, rc.right - radius, rc.bottom };
         RECT side = { rc.left, rc.top + radius, rc.left + radius, rc.bottom - radius };
         int box = 2 * radius + 2;
@@ -84,11 +84,11 @@ CabinetFillRound(HDC dc, const RECT &rc, int radius, COLORREF color)
                                   { rc.left, rc.bottom - radius }, { rc.right - radius, rc.bottom - radius } };
         BOOL visible[4], any = FALSE;
 
+        SetDCBrushColor(dc, color);
         FillRect(dc, &middle, solid);
         FillRect(dc, &side, solid);
         OffsetRect(&side, width - radius, 0);
         FillRect(dc, &side, solid);
-        DeleteObject(solid);
         for (int i = 0; i < 4; i++)
         {
             RECT test = { square[i].x, square[i].y, square[i].x + radius, square[i].y + radius };
@@ -850,13 +850,11 @@ CCabinetAddressBand::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         {
             CabinetPalette palette;
             RECT client;
-            HBRUSH brush;
             HDC dc = (HDC)wParam;
             CabinetGetPalette(&palette);
             GetClientRect(m_hwnd, &client);
-            brush = CreateSolidBrush(palette.Band);
-            FillRect(dc, &client, brush);
-            DeleteObject(brush);
+            SetDCBrushColor(dc, palette.Band);
+            FillRect(dc, &client, (HBRUSH)GetStockObject(DC_BRUSH));
             CabinetFillRound(dc, client, Scale(4), m_Editing ? palette.Window : palette.Box);
             if (m_Editing)
             {
@@ -1002,14 +1000,12 @@ CCabinetSearchBox::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
         {
             CabinetPalette palette;
             RECT client;
-            HBRUSH brush;
             HDC dc = (HDC)wParam;
             BOOL focus = GetFocus() == m_Edit;
             CabinetGetPalette(&palette);
             GetClientRect(m_hwnd, &client);
-            brush = CreateSolidBrush(palette.Band);
-            FillRect(dc, &client, brush);
-            DeleteObject(brush);
+            SetDCBrushColor(dc, palette.Band);
+            FillRect(dc, &client, (HBRUSH)GetStockObject(DC_BRUSH));
             CabinetFillRound(dc, client, Scale(4), focus ? palette.Window : palette.Box);
             if (focus)
             {

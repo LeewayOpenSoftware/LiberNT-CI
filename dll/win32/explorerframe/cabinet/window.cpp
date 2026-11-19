@@ -655,9 +655,8 @@ CCabinetWindow::PaintBackground(HDC dc)
     for (UINT i = 0; i < _countof(bands); i++)
     {
         RECT rc = { 0, bands[i].Top, client.right, bands[i].Bottom };
-        HBRUSH brush = CreateSolidBrush(bands[i].Color);
-        FillRect(dc, &rc, brush);
-        DeleteObject(brush);
+        SetDCBrushColor(dc, bands[i].Color);
+        FillRect(dc, &rc, (HBRUSH)GetStockObject(DC_BRUSH));
     }
     if (IntersectRect(&hit, &m_PanelRect, &clip))
     {
@@ -704,9 +703,8 @@ CCabinetWindow::PaintBackground(HDC dc)
     if ((m_DetailsPane || m_PreviewPane) && !IsRectEmpty(&m_PaneRect))
     {
         RECT line = { m_PaneRect.left, m_PaneRect.top, m_PaneRect.left + 1, m_PaneRect.bottom };
-        HBRUSH brush = CreateSolidBrush(palette.BandLine);
-        FillRect(dc, &line, brush);
-        DeleteObject(brush);
+        SetDCBrushColor(dc, palette.BandLine);
+        FillRect(dc, &line, (HBRUSH)GetStockObject(DC_BRUSH));
     }
     PaintCaptionButtons(dc);
 }
@@ -737,37 +735,50 @@ CCabinetWindow::FitCommandBar(int width)
     InvalidateRect(m_CommandBar, NULL, TRUE);
 }
 
+static void
+PlaceChild(HDWP *hdwp, HWND hwnd, int x, int y, int cx, int cy, HWND insertAfter = NULL)
+{
+    UINT flags = SWP_NOACTIVATE | (insertAfter ? 0 : SWP_NOZORDER);
+
+    if (!hwnd)
+        return;
+    if (*hdwp)
+        *hdwp = DeferWindowPos(*hdwp, hwnd, insertAfter, x, y, cx, cy, flags);
+    if (!*hdwp)
+        SetWindowPos(hwnd, insertAfter, x, y, cx, cy, flags);
+}
+
 void
 CCabinetWindow::OnSize()
 {
     RECT client, status;
     SIZE size;
+    HDWP hdwp;
     int top, bottom, left, right, pane, search, row, statusHeight;
 
     if (!m_TabBand || !m_TabBand->Window())
         return;
     GetClientRect(m_hwnd, &client);
-    MoveWindow(m_TabBand->Window(), 0, 0, max(0, (int)client.right - CaptionButtonsWidth() - Scale(8)), TabStripHeight(),
-               TRUE);
+    hdwp = BeginDeferWindowPos(8 + CABINET_MAX_TABS);
+    PlaceChild(&hdwp, m_TabBand->Window(), 0, 0, max(0, (int)client.right - CaptionButtonsWidth() - Scale(8)),
+               TabStripHeight());
     m_TabBand->SetShadeBottom(AddressBottom() - 1);
     size = ToolbarSize(m_NavBar);
-    MoveWindow(m_NavBar, Scale(3), TabStripHeight() + Scale(8) + (Scale(32) - size.cy) / 2, size.cx, size.cy, TRUE);
+    PlaceChild(&hdwp, m_NavBar, Scale(3), TabStripHeight() + Scale(8) + (Scale(32) - size.cy) / 2, size.cx, size.cy);
     left = Scale(3) + size.cx + Scale(6);
     search = min(Scale(300), max(Scale(140), (int)(client.right - Scale(214)) / 3));
-    if (m_SearchBox->Window())
-        MoveWindow(m_SearchBox->Window(), client.right - Scale(13) - search, TabStripHeight() + Scale(8), search,
-                   Scale(32), TRUE);
-    if (m_AddressBand->Window())
-        MoveWindow(m_AddressBand->Window(), left, TabStripHeight() + Scale(8),
-                   max(0, (int)client.right - Scale(13) - search - Scale(10) - left), Scale(32), TRUE);
+    PlaceChild(&hdwp, m_SearchBox->Window(), client.right - Scale(13) - search, TabStripHeight() + Scale(8), search,
+               Scale(32));
+    PlaceChild(&hdwp, m_AddressBand->Window(), left, TabStripHeight() + Scale(8),
+               max(0, (int)client.right - Scale(13) - search - Scale(10) - left), Scale(32));
     size = ToolbarSize(m_DetailsBar);
     row = AddressBottom() + (CommandBottom() - 1 - AddressBottom() - (int)size.cy) / 2;
-    MoveWindow(m_DetailsBar, client.right - Scale(8) - size.cx, row, size.cx, size.cy, TRUE);
+    PlaceChild(&hdwp, m_DetailsBar, client.right - Scale(8) - size.cx, row, size.cx, size.cy);
     right = max(0, (int)client.right - Scale(8) - (int)size.cx - Scale(16) - Scale(8));
     FitCommandBar(right);
     size = ToolbarSize(m_CommandBar);
     row = AddressBottom() + (CommandBottom() - 1 - AddressBottom() - (int)size.cy) / 2;
-    MoveWindow(m_CommandBar, Scale(8), row, right, size.cy, TRUE);
+    PlaceChild(&hdwp, m_CommandBar, Scale(8), row, right, size.cy);
 
     SendMessageW(m_Status, WM_SIZE, 0, 0);
     GetWindowRect(m_Status, &status);
@@ -778,8 +789,8 @@ CCabinetWindow::OnSize()
         SendMessageW(m_Status, SB_SETPARTS, _countof(parts), (LPARAM)parts);
     }
     size = ToolbarSize(m_ViewBar);
-    SetWindowPos(m_ViewBar, HWND_TOP, client.right - Scale(8) - size.cx,
-                 client.bottom - statusHeight + (statusHeight - size.cy) / 2, size.cx, size.cy, SWP_NOACTIVATE);
+    PlaceChild(&hdwp, m_ViewBar, client.right - Scale(8) - size.cx,
+               client.bottom - statusHeight + (statusHeight - size.cy) / 2, size.cx, size.cy, HWND_TOP);
     top = CommandBottom();
     bottom = client.bottom - statusHeight;
     left = 0;
@@ -789,7 +800,7 @@ CCabinetWindow::OnSize()
         if (m_NavigationVisible)
         {
             left = Scale(160);
-            MoveWindow(m_NavigationWindow, Scale(2), top, Scale(154), max(0, bottom - top), TRUE);
+            PlaceChild(&hdwp, m_NavigationWindow, Scale(2), top, Scale(154), max(0, bottom - top));
         }
     }
     SetRect(&m_PanelRect, left ? left : -Scale(8), top, client.right, bottom);
@@ -800,7 +811,9 @@ CCabinetWindow::OnSize()
     right = client.right - pane;
     SetRect(&m_ViewRect, left, top, max(left, right), bottom);
     SetRect(&m_PaneRect, max(left, right), top, client.right, bottom);
-    PlaceBrowsers();
+    PlaceBrowsers(&hdwp);
+    if (hdwp)
+        EndDeferWindowPos(hdwp);
     PlacePanes();
     {
         RECT chrome = { 0, 0, client.right, CommandBottom() };
@@ -2254,14 +2267,14 @@ CCabinetWindow::ActivateTab(int index)
 }
 
 void
-CCabinetWindow::PlaceBrowsers()
+CCabinetWindow::PlaceBrowsers(HDWP *hdwp)
 {
     RECT empty = { 0, 0, 0, 0 };
 
     for (int i = 0; i < m_TabCount; i++)
     {
         if (m_Tabs[i].Browser)
-            m_Tabs[i].Browser->SetRect(NULL, i == m_ActiveTab ? m_ViewRect : empty);
+            m_Tabs[i].Browser->SetRect(hdwp && *hdwp ? hdwp : NULL, i == m_ActiveTab ? m_ViewRect : empty);
     }
 }
 
@@ -2533,12 +2546,10 @@ CCabinetWindow::PaintNavigationItem(HDC dc, const RECT &rc, const NSTCCUSTOMDRAW
     else if (index == m_PinnedCount && index)
     {
         RECT line = { rc.left + Scale(12), rc.top, rc.right - Scale(12), rc.top + 1 };
-        HBRUSH brush;
 
         CabinetGetPalette(&palette);
-        brush = CreateSolidBrush(palette.BandLine);
-        FillRect(dc, &line, brush);
-        DeleteObject(brush);
+        SetDCBrushColor(dc, palette.BandLine);
+        FillRect(dc, &line, (HBRUSH)GetStockObject(DC_BRUSH));
     }
 }
 

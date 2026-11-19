@@ -114,7 +114,7 @@ private:
     int AddTab(PCIDLIST_ABSOLUTE pidl, BOOL activate);
     void CloseTab(int index);
     void ActivateTab(int index);
-    void PlaceBrowsers();
+    void PlaceBrowsers(HDWP *hdwp = NULL);
     void Navigate(PCIDLIST_ABSOLUTE pidl);
     HRESULT BrowseTab(CabinetTab *tab, PCIDLIST_ABSOLUTE pidl);
     void NavigateHistory(int delta);
