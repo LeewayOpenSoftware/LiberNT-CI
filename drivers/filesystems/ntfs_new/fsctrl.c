@@ -2591,6 +2591,16 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                 IrpSp);
                         break;
 
+                    case FSCTL_CREATE_USN_JOURNAL:
+                    case FSCTL_QUERY_USN_JOURNAL:
+                    case FSCTL_READ_USN_JOURNAL:
+                        Irp->IoStatus.Status =
+                            NtfsUsnFsControl(
+                                VolumeDeviceObject,
+                                Irp,
+                                IrpSp);
+                        break;
+
                     default:
                         Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
                         break;

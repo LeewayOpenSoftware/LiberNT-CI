@@ -395,3 +395,9 @@ DeviceIoControl(_In_    PDEVICE_OBJECT DeviceObject,
                 _Inout_ PVOID OutputBuffer,
                 _Inout_ PULONG OutputBufferSize,
                 _In_    BOOLEAN Override);
+
+/* usn.c: FSCTL_CREATE_USN_JOURNAL, FSCTL_QUERY_USN_JOURNAL and FSCTL_READ_USN_JOURNAL */
+NTSTATUS
+NtfsUsnFsControl(_In_    PDEVICE_OBJECT VolumeDeviceObject,
+                 _Inout_ PIRP Irp,
+                 _In_    PIO_STACK_LOCATION IrpSp);

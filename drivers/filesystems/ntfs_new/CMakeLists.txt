@@ -13,6 +13,7 @@ list(APPEND SOURCE
      registry.c
      security.c
      txf.c
+     usn.c
      vol.c
      write.c
 )
