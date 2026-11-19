@@ -678,6 +678,9 @@ SHChangeNotify(LONG wEventId, UINT uFlags, LPCVOID dwItem1, LPCVOID dwItem2)
 {
     TRACE("(0x%08x,0x%08x,%p,%p)\n", wEventId, uFlags, dwItem1, dwItem2);
 
+    if (wEventId & SHCNE_ASSOCCHANGED)
+        SHELL_AssocGenerationIncrement();
+
     if (!GetNotificationServer(FALSE))
         return;
 

@@ -264,14 +264,17 @@ getKnownFolderIconLocation(LPCWSTR path, LPWSTR iconFile, UINT cchMax, int *icon
         { &FOLDERID_Videos,    IDI_SHELL_MY_MOVIES },
     };
 
+    /* Process-wide (NULL token): resolved for the process user, refreshed on the counter and every FOLDER_ICON_CACHE_MS */
     static WCHAR s_Paths[_countof(folders)][MAX_PATH];
     static DWORD s_PathsTick;
+    static LONG s_PathsGeneration;
     static BOOL s_PathsValid;
     DWORD now = GetTickCount();
+    LONG generation = SHELL_AssocGenerationGet();
     HRESULT hr = S_FALSE;
 
     AcquireSRWLockExclusive(&s_FolderIconLock);
-    if (!s_PathsValid || now - s_PathsTick > FOLDER_ICON_CACHE_MS)
+    if (!s_PathsValid || generation != s_PathsGeneration || now - s_PathsTick > FOLDER_ICON_CACHE_MS)
     {
         for (UINT i = 0; i < _countof(folders); ++i)
         {
@@ -285,6 +288,7 @@ getKnownFolderIconLocation(LPCWSTR path, LPWSTR iconFile, UINT cchMax, int *icon
             }
         }
         s_PathsTick = now;
+        s_PathsGeneration = generation;
         s_PathsValid = TRUE;
     }
     for (UINT i = 0; i < _countof(folders); ++i)
