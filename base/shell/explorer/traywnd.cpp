@@ -3228,8 +3228,9 @@ ChangePos:
                 }
             }
             SetWindowPos(NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOOWNERZORDER);
-            ResizeWorkArea();
-            ApplyClipping(TRUE);
+            /* Fit the docked size to the rebar again and repaint everything: the sizing
+               bar's strip and the unlocked-state paint must not outlive the toggle */
+            CheckTrayWndPosition();
         }
 
         return bPrevLock;
