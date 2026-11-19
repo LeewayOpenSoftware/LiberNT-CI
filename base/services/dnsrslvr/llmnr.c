@@ -114,7 +114,7 @@ static BOOL LlmnrNameMatches(const UCHAR *Packet, int Length, int *Offset, const
     return TRUE;
 }
 
-static BOOL LlmnrInterfaceAddress(ULONG Index, ADDRESS_FAMILY Family, BOOL LinkLocal, SOCKADDR_INET *Result)
+BOOL LlmnrInterfaceAddress(ULONG Index, ADDRESS_FAMILY Family, BOOL LinkLocal, SOCKADDR_INET *Result)
 {
     MIB_UNICASTIPADDRESS_TABLE *Table;
     BOOL Found = FALSE;

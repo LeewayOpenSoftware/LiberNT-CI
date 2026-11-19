@@ -5,6 +5,7 @@ list(APPEND SOURCE
     ExtractRecords.c
     HostsFile.c
     HostsCache.c
+    LlmnrMdns.c
     NegativeCache.c
     testlist.c)
 
