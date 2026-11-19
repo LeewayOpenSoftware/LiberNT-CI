@@ -86,10 +86,12 @@ extern ULONG KiFeatureSettingsOverrideMask;
 #define KSPEC_BTI_NONE                  0
 #define KSPEC_BTI_EIBRS                 1
 #define KSPEC_BTI_AUTO_IBRS             2
+#define KSPEC_BTI_LEGACY_IBRS           3  /* IBRS written on every kernel entry and exit */
 
 extern ULONG KiSpeculationBtiMode;
 extern ULONG KiSpeculationActive;
-extern ULONG64 KiSpecCtrlValue;
+extern ULONG64 KiSpecCtrlKernel;
+extern ULONG64 KiSpecCtrlUser;
 extern BOOLEAN KiSpeculationIbpbOnSwitch;
 
 /* Barrier between the predictor state of two processes */

@@ -22,7 +22,8 @@ ULONG KiFeatureSettingsOverrideMask;
 ULONG KiSpeculationHardening;
 ULONG KiSpeculationBtiMode;
 ULONG KiSpeculationActive;
-ULONG64 KiSpecCtrlValue;
+ULONG64 KiSpecCtrlKernel;
+ULONG64 KiSpecCtrlUser;
 BOOLEAN KiSpeculationIbpbOnSwitch;
 ULONG_PTR KiSpeculationIndexMaskOff = (ULONG_PTR)-1;
 #ifdef _M_IX86
@@ -30,13 +31,25 @@ BOOLEAN KiSpeculationFenceEnabled;
 #endif
 
 #ifdef _M_AMD64
-static const UCHAR KiFenceSiteMarker[7] = { KSPEC_FENCE_SITE_BYTES };
+/* Patch site: a 7-byte nop whose first six bytes mark it and whose last byte says what it becomes */
+static const UCHAR KiSiteMarker[6] = { 0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54 };
+#define KSPEC_SITE_FENCE                0x46
+#define KSPEC_SITE_VERW                 0x4D
+#define KSPEC_SITE_ENTER                0x49
+#define KSPEC_SITE_EXIT                 0x58
+#define KSPEC_SITE_RSB                  0x52
+
+/* Internal kind: IBRS written on kernel entry and exit */
+#define KSPEC_PATCH_IBRS                0x80000000
+
 /* lfence followed by a 4-byte nop */
 static const UCHAR KiFenceSiteLfence[7] = { 0x0F, 0xAE, 0xE8, 0x0F, 0x1F, 0x40, 0x00 };
-static const UCHAR KiVerwSiteMarker[7] = { KSPEC_VERW_SITE_BYTES };
 /* verw operand: a writable data segment selector */
 static USHORT KiVerwSelector = KGDT64_R0_DATA;
-static ULONG KiVerwSitesSkipped;
+
+VOID KiSpecCtrlEnterKernel(VOID);
+VOID KiSpecCtrlExitKernel(VOID);
+VOID KiSpecFillReturnStack(VOID);
 #endif
 
 /* FUNCTIONS *****************************************************************/
@@ -126,7 +139,11 @@ KeQuerySpeculationControlInformation(
 
     /* No mitigation is active yet: report what the hardware offers */
     if (KiSpeculationBtiMode != KSPEC_BTI_NONE)
-        Info.Flags |= SPECCTRL_BPB_ENABLED | SPECCTRL_ENHANCED_IBRS;
+    {
+        Info.Flags |= SPECCTRL_BPB_ENABLED;
+        if (KiSpeculationBtiMode != KSPEC_BTI_LEGACY_IBRS)
+            Info.Flags |= SPECCTRL_ENHANCED_IBRS;
+    }
     else if (Features & (KSPEC_IBRS | KSPEC_PRED_CMD))
         Info.Flags |= SPECCTRL_BPB_DISABLED_SYSTEM_POLICY;
     else
@@ -150,6 +167,25 @@ KeQuerySpeculationControlInformation(
 }
 
 #ifdef _M_AMD64
+/* Encode a 7-byte site as an instruction with a rel32 operand followed by padding */
+CODE_SEG("INIT")
+static
+VOID
+KiWriteRel32Site(
+    _Out_writes_(7) PUCHAR Code,
+    _In_ ULONG OpcodeLength,
+    _In_reads_(OpcodeLength) const UCHAR *Opcode,
+    _In_ PVOID Target)
+{
+    LONG Disp = (LONG)((LONG_PTR)Target - (LONG_PTR)(Code + OpcodeLength + sizeof(LONG)));
+    ULONG i;
+
+    RtlCopyMemory(Code, Opcode, OpcodeLength);
+    RtlCopyMemory(Code + OpcodeLength, &Disp, sizeof(Disp));
+    for (i = OpcodeLength + sizeof(LONG); i < 7; i++)
+        Code[i] = 0x90;
+}
+
 CODE_SEG("INIT")
 static
 ULONG
@@ -157,6 +193,8 @@ KiPatchImageSites(
     _In_ PVOID ImageBase,
     _In_ ULONG Kinds)
 {
+    static const UCHAR Verw[3] = { 0x0F, 0x00, 0x2D };
+    static const UCHAR Call[1] = { 0xE8 };
     PIMAGE_NT_HEADERS NtHeaders = RtlImageNtHeader(ImageBase);
     PIMAGE_SECTION_HEADER Section;
     ULONG i, Sites = 0;
@@ -173,38 +211,43 @@ KiPatchImageSites(
 
         Code = (PUCHAR)ImageBase + Section->VirtualAddress;
         End = Code + min(Section->Misc.VirtualSize, Section->SizeOfRawData);
-        for (; Code + sizeof(KiFenceSiteMarker) <= End; Code++)
+        for (; Code + 7 <= End; Code++)
         {
-            if (Code[0] != 0x0F)
+            if (Code[0] != 0x0F || !RtlEqualMemory(Code, KiSiteMarker, sizeof(KiSiteMarker)))
                 continue;
 
-            if ((Kinds & KSPEC_HARDEN_BOUNDS) &&
-                RtlEqualMemory(Code, KiFenceSiteMarker, sizeof(KiFenceSiteMarker)))
+            switch (Code[6])
             {
-                RtlCopyMemory(Code, KiFenceSiteLfence, sizeof(KiFenceSiteLfence));
-                Code += sizeof(KiFenceSiteMarker) - 1;
-                Sites++;
-            }
-            else if ((Kinds & KSPEC_HARDEN_MDS) &&
-                     RtlEqualMemory(Code, KiVerwSiteMarker, sizeof(KiVerwSiteMarker)))
-            {
-                /* verw word ptr [rip + disp32] */
-                LONG64 Disp = (LONG64)((ULONG_PTR)&KiVerwSelector - (ULONG_PTR)(Code + 7));
-                LONG Disp32 = (LONG)Disp;
+                case KSPEC_SITE_FENCE:
+                    if (!(Kinds & KSPEC_HARDEN_BOUNDS)) continue;
+                    RtlCopyMemory(Code, KiFenceSiteLfence, sizeof(KiFenceSiteLfence));
+                    break;
 
-                if (Disp32 != Disp)
-                {
-                    KiVerwSitesSkipped++;
+                case KSPEC_SITE_VERW:
+                    if (!(Kinds & KSPEC_HARDEN_MDS)) continue;
+                    KiWriteRel32Site(Code, sizeof(Verw), Verw, &KiVerwSelector);
+                    break;
+
+                case KSPEC_SITE_ENTER:
+                    if (!(Kinds & KSPEC_PATCH_IBRS)) continue;
+                    KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecCtrlEnterKernel);
+                    break;
+
+                case KSPEC_SITE_EXIT:
+                    if (!(Kinds & KSPEC_PATCH_IBRS)) continue;
+                    KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecCtrlExitKernel);
+                    break;
+
+                case KSPEC_SITE_RSB:
+                    if (!(Kinds & KSPEC_PATCH_IBRS)) continue;
+                    KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecFillReturnStack);
+                    break;
+
+                default:
                     continue;
-                }
-
-                Code[0] = 0x0F;
-                Code[1] = 0x00;
-                Code[2] = 0x2D;
-                RtlCopyMemory(&Code[3], &Disp32, sizeof(Disp32));
-                Code += sizeof(KiVerwSiteMarker) - 1;
-                Sites++;
             }
+            Code += 6;
+            Sites++;
         }
     }
     return Sites;
@@ -216,12 +259,34 @@ static
 ULONG
 KiPatchBootImages(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
-    _In_ ULONG Kinds)
+    _Inout_ PULONG Kinds)
 {
-    PLIST_ENTRY Entry = LoaderBlock->LoadOrderListHead.Flink;
-    PLDR_DATA_TABLE_ENTRY LdrEntry;
-    ULONG_PTR Cr0, Flags;
+    PLIST_ENTRY Entry;
+    PLDR_DATA_TABLE_ENTRY Images[2] = { NULL, NULL };
+    ULONG_PTR Cr0, Flags, Low, High;
     ULONG i, Sites = 0;
+
+    for (i = 0, Entry = LoaderBlock->LoadOrderListHead.Flink;
+         i < 2 && Entry != &LoaderBlock->LoadOrderListHead;
+         i++, Entry = Entry->Flink)
+    {
+        Images[i] = CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+    }
+
+    /* rel32 sites reach the kernel; all of it must stay within 2 GB of every patched image */
+    if (Images[0] && Images[1])
+    {
+        Low = min((ULONG_PTR)Images[0]->DllBase, (ULONG_PTR)Images[1]->DllBase);
+        High = max((ULONG_PTR)Images[0]->DllBase + Images[0]->SizeOfImage,
+                   (ULONG_PTR)Images[1]->DllBase + Images[1]->SizeOfImage);
+        if (High - Low >= 0x7FFF0000)
+        {
+            DPRINT1("Speculation hardening: kernel and HAL too far apart, rel32 sites not patched\n");
+            *Kinds &= ~(KSPEC_HARDEN_MDS | KSPEC_PATCH_IBRS);
+        }
+    }
+    if (!*Kinds)
+        return 0;
 
     /* Boot processor only, before the other processors start; the images may be write-protected */
     Flags = __readeflags();
@@ -229,13 +294,11 @@ KiPatchBootImages(
     Cr0 = __readcr0();
     __writecr0(Cr0 & ~CR0_WP);
 
-    for (i = 0; i < 2 && Entry != &LoaderBlock->LoadOrderListHead; i++, Entry = Entry->Flink)
+    for (i = 0; i < 2 && Images[i]; i++)
     {
-        ULONG ImageSites;
+        ULONG ImageSites = KiPatchImageSites(Images[i]->DllBase, *Kinds);
 
-        LdrEntry = CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-        ImageSites = KiPatchImageSites(LdrEntry->DllBase, Kinds);
-        DPRINT1("Speculation sites patched in %wZ: %lu\n", &LdrEntry->BaseDllName, ImageSites);
+        DPRINT1("Speculation sites patched in %wZ: %lu\n", &Images[i]->BaseDllName, ImageSites);
         Sites += ImageSites;
     }
 
@@ -258,6 +321,7 @@ KiApplySpeculationPolicy(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     ULONG Kinds = 0, Sites = 0;
+    ULONG64 Base = 0;
 
     if (KiSpeculationHardening & KSPEC_HARDEN_BOUNDS)
     {
@@ -278,58 +342,79 @@ KiApplySpeculationPolicy(
         Kinds |= KSPEC_HARDEN_MDS;
     }
 
+    if ((KiSpeculationHardening & KSPEC_HARDEN_STIBP) && (KiSpeculationFeatures & KSPEC_STIBP))
+        Base |= SPEC_CTRL_STIBP;
+    if ((KiSpeculationHardening & KSPEC_HARDEN_IBPB) && (KiSpeculationFeatures & KSPEC_PRED_CMD))
+        KiSpeculationIbpbOnSwitch = TRUE;
+
     /* Branch target injection: FeatureSettingsOverride bit 0 always wins */
     if ((KiSpeculationHardening & KSPEC_HARDEN_BTI) &&
         !(KiFeatureSettingsOverride & KiFeatureSettingsOverrideMask & FSO_DISABLE_BTI))
     {
+        /* AMD user-to-kernel protection is opt-in on Windows client */
+        BOOLEAN Allowed = (KeGetCurrentPrcb()->CpuVendor != CPU_AMD) ||
+                          (KiFeatureSettingsOverride & FSO_AMD_USER_TO_KERNEL);
+
         if (KiSpeculationFeatures & KSPEC_EIBRS)
         {
             KiSpeculationBtiMode = KSPEC_BTI_EIBRS;
-            KiSpecCtrlValue |= SPEC_CTRL_IBRS;
         }
 #ifdef _M_AMD64
-        /* AMD user-to-kernel protection is opt-in on Windows client */
-        else if ((KiSpeculationFeatures & KSPEC_AUTO_IBRS) &&
-                 (KiFeatureSettingsOverride & FSO_AMD_USER_TO_KERNEL))
+        else if (Allowed && (KiSpeculationFeatures & KSPEC_AUTO_IBRS))
         {
             KiSpeculationBtiMode = KSPEC_BTI_AUTO_IBRS;
         }
+        else if (Allowed && (KiSpeculationFeatures & KSPEC_IBRS))
+        {
+            KiSpeculationBtiMode = KSPEC_BTI_LEGACY_IBRS;
+            Kinds |= KSPEC_PATCH_IBRS;
+        }
 #endif
     }
-    if ((KiSpeculationHardening & KSPEC_HARDEN_STIBP) && (KiSpeculationFeatures & KSPEC_STIBP))
-        KiSpecCtrlValue |= SPEC_CTRL_STIBP;
-    if ((KiSpeculationHardening & KSPEC_HARDEN_IBPB) && (KiSpeculationFeatures & KSPEC_PRED_CMD))
-        KiSpeculationIbpbOnSwitch = TRUE;
-
-    /* The other processors apply it when they start */
-    KiApplySpeculationControlProcessor();
 
 #ifdef _M_AMD64
     if (Kinds)
-        Sites = KiPatchBootImages(LoaderBlock, Kinds);
-    if (KiVerwSitesSkipped)
-    {
-        DPRINT1("Speculation hardening: %lu verw sites out of range, buffer clearing incomplete\n",
-                KiVerwSitesSkipped);
-        Kinds &= ~KSPEC_HARDEN_MDS;
-    }
+        Sites = KiPatchBootImages(LoaderBlock, &Kinds);
+    if ((KiSpeculationBtiMode == KSPEC_BTI_LEGACY_IBRS) && !(Kinds & KSPEC_PATCH_IBRS))
+        KiSpeculationBtiMode = KSPEC_BTI_NONE;
+    Kinds &= ~KSPEC_PATCH_IBRS;
 #else
     UNREFERENCED_PARAMETER(LoaderBlock);
     /* No buffer clearing sites on this architecture yet */
     Kinds &= ~KSPEC_HARDEN_MDS;
 #endif
+
+    /* The user value is what runs outside the kernel; with IBRS on entry the kernel adds IBRS */
+    KiSpecCtrlUser = Base;
+    KiSpecCtrlKernel = Base;
+    if (KiSpeculationBtiMode == KSPEC_BTI_EIBRS)
+    {
+        KiSpecCtrlUser |= SPEC_CTRL_IBRS;
+        KiSpecCtrlKernel |= SPEC_CTRL_IBRS;
+    }
+    else if (KiSpeculationBtiMode == KSPEC_BTI_LEGACY_IBRS)
+    {
+        KiSpecCtrlKernel |= SPEC_CTRL_IBRS;
+    }
+
+    /* The other processors apply it when they start */
+    KiApplySpeculationControlProcessor();
+
+    if (KiSpeculationHardening & KSPEC_HARDEN_BTI)
+        Kinds |= (KiSpeculationBtiMode != KSPEC_BTI_NONE) ? KSPEC_HARDEN_BTI : 0;
     KiSpeculationActive = Kinds;
-    DPRINT1("Speculation hardening 0x%lx: active 0x%lx, %lu sites, BTI mode %lu, SPEC_CTRL 0x%I64x, IBPB %u\n",
-            KiSpeculationHardening, Kinds, Sites, KiSpeculationBtiMode, KiSpecCtrlValue, KiSpeculationIbpbOnSwitch);
+    DPRINT1("Speculation hardening 0x%lx: active 0x%lx, %lu sites, BTI mode %lu, SPEC_CTRL 0x%I64x/0x%I64x, IBPB %u\n",
+            KiSpeculationHardening, Kinds, Sites, KiSpeculationBtiMode,
+            KiSpecCtrlKernel, KiSpecCtrlUser, KiSpeculationIbpbOnSwitch);
 }
 
 VOID
 NTAPI
 KiApplySpeculationControlProcessor(VOID)
 {
-    /* Leave the MSRs alone unless a policy asks for something */
-    if (KiSpecCtrlValue != 0)
-        __writemsr(MSR_IA32_SPEC_CTRL, KiSpecCtrlValue);
+    /* Leave the MSRs alone unless a policy asks for something; the processor is in the kernel here */
+    if (KiSpecCtrlKernel != 0)
+        __writemsr(MSR_IA32_SPEC_CTRL, KiSpecCtrlKernel);
 #ifdef _M_AMD64
     if (KiSpeculationBtiMode == KSPEC_BTI_AUTO_IBRS)
         __writemsr(MSR_EFER, __readmsr(MSR_EFER) | EFER_AUTOIBRS);

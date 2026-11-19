@@ -1159,6 +1159,7 @@ PUBLIC KiSystemCallEntry64
 
     /* Allocate a TRAP_FRAME and space for parameters */
     sub rsp, (KTRAP_FRAME_LENGTH + MAX_SYSCALL_PARAM_SIZE)
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(49) /* kernel entry site, see KiApplySpeculationPolicy */
 
     /* Save volatile registers and rbp in the trap frame */
     mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rax], rax
@@ -1302,6 +1303,7 @@ NoUserApcPending:
     jnz SystemServiceInstrumented
 
 SystemServiceInstrumentationDone:
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(58) /* kernel exit site, see KiApplySpeculationPolicy */
     /* SYSRET is used only for a return address inside the user range */
     mov rdx, rcx
     shr rdx, 47
@@ -1419,6 +1421,7 @@ KiPicoSystemCallEntry:
     mov r10, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R10]
     mov r11, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R11]
     mov rbp, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rbp]
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(58) /* kernel exit site, see KiApplySpeculationPolicy */
     add rsp, MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip
     swapgs
     .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(4D) /* verw site, see KiApplySpeculationPolicy */

@@ -127,6 +127,8 @@ KiUserCallbackExit:
 UserCallbackInstrumentationDone:
     xor edx, edx
 
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(58) /* kernel exit site, see KiApplySpeculationPolicy */
+
     /* Load user mode stack (It was copied to the trap frame) */
     mov rsp, [rsp + KTRAP_FRAME_Rsp]
 
