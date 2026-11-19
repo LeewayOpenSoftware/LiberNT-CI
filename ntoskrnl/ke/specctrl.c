@@ -168,23 +168,45 @@ KeQuerySpeculationControlInformation(
 }
 
 #ifdef _M_AMD64
+/*
+ * An NMI can run a site while it is rewritten, so each step leaves a valid instruction:
+ * first a short jump over the site, then the tail, then the head. One store instruction
+ * per step is enough on the single processor running at this point.
+ */
+CODE_SEG("INIT")
+static
+VOID
+KiWriteSite(
+    _Inout_updates_(7) PUCHAR Code,
+    _In_reads_(7) const UCHAR *NewCode)
+{
+    ULONG i;
+
+    *(volatile USHORT UNALIGNED *)Code = 0x05EB;
+    for (i = 2; i < 7; i++)
+        ((volatile UCHAR *)Code)[i] = NewCode[i];
+    *(volatile USHORT UNALIGNED *)Code = *(const USHORT UNALIGNED *)NewCode;
+}
+
 /* Encode a 7-byte site as an instruction with a rel32 operand followed by padding */
 CODE_SEG("INIT")
 static
 VOID
 KiWriteRel32Site(
-    _Out_writes_(7) PUCHAR Code,
+    _Inout_updates_(7) PUCHAR Code,
     _In_ ULONG OpcodeLength,
     _In_reads_(OpcodeLength) const UCHAR *Opcode,
     _In_ PVOID Target)
 {
     LONG Disp = (LONG)((LONG_PTR)Target - (LONG_PTR)(Code + OpcodeLength + sizeof(LONG)));
+    UCHAR NewCode[7];
     ULONG i;
 
-    RtlCopyMemory(Code, Opcode, OpcodeLength);
-    RtlCopyMemory(Code + OpcodeLength, &Disp, sizeof(Disp));
+    RtlCopyMemory(NewCode, Opcode, OpcodeLength);
+    RtlCopyMemory(NewCode + OpcodeLength, &Disp, sizeof(Disp));
     for (i = OpcodeLength + sizeof(LONG); i < 7; i++)
-        Code[i] = 0x90;
+        NewCode[i] = 0x90;
+    KiWriteSite(Code, NewCode);
 }
 
 CODE_SEG("INIT")
@@ -199,6 +221,7 @@ KiPatchImageSites(
     PIMAGE_NT_HEADERS NtHeaders = RtlImageNtHeader(ImageBase);
     PIMAGE_SECTION_HEADER Section;
     ULONG i, Sites = 0;
+    ULONG Fence = 0, Clear = 0, Enter = 0, Exit = 0, Refill = 0;
     PUCHAR Code, End;
 
     if (!NtHeaders)
@@ -221,27 +244,32 @@ KiPatchImageSites(
             {
                 case KSPEC_SITE_FENCE:
                     if (!(Kinds & KSPEC_HARDEN_BOUNDS)) continue;
-                    RtlCopyMemory(Code, KiFenceSiteLfence, sizeof(KiFenceSiteLfence));
+                    KiWriteSite(Code, KiFenceSiteLfence);
+                    Fence++;
                     break;
 
                 case KSPEC_SITE_VERW:
                     if (!(Kinds & KSPEC_HARDEN_MDS)) continue;
                     KiWriteRel32Site(Code, sizeof(Verw), Verw, &KiVerwSelector);
+                    Clear++;
                     break;
 
                 case KSPEC_SITE_ENTER:
                     if (!(Kinds & KSPEC_PATCH_IBRS)) continue;
                     KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecCtrlEnterKernel);
+                    Enter++;
                     break;
 
                 case KSPEC_SITE_EXIT:
                     if (!(Kinds & KSPEC_PATCH_IBRS)) continue;
                     KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecCtrlExitKernel);
+                    Exit++;
                     break;
 
                 case KSPEC_SITE_RSB:
                     if (!(Kinds & KSPEC_PATCH_RSB)) continue;
                     KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecFillReturnStack);
+                    Refill++;
                     break;
 
                 default:
@@ -251,6 +279,9 @@ KiPatchImageSites(
             Sites++;
         }
     }
+    /* Counted per kind so a smoke can compare them with the sites in the sources */
+    DPRINT1("Speculation sites at %p: fence %lu, clear %lu, entry %lu, exit %lu, refill %lu\n",
+            ImageBase, Fence, Clear, Enter, Exit, Refill);
     return Sites;
 }
 

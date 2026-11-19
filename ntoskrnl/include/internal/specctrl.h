@@ -129,11 +129,7 @@ KiSpeculationIndexMask(
     return Mask | KiSpeculationIndexMaskOff;
 }
 
-/* A marked 7-byte nop that KiApplySpeculationPolicy turns into lfence */
-#define KSPEC_FENCE_SITE_BYTES          0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54, 0x46
-/* Same, turned into verw */
-#define KSPEC_VERW_SITE_BYTES           0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54, 0x4D
-
+/* KiSpeculationBarrier emits a marked 7-byte nop that KiApplySpeculationPolicy turns into lfence */
 FORCEINLINE
 VOID
 KiSpeculationBarrier(VOID)
