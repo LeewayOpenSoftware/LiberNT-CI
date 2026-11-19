@@ -789,6 +789,27 @@ static BOOL UXTHEME_ClassListContains(LPCWSTR classList, LPCWSTR wanted)
     return FALSE;
 }
 
+/* A style may ask for composited materials, but they only exist while the compositor runs; without it the plain
+ * (Basic) look applies. The probe is asked each time: composition can start or stop after the process did. */
+BOOL UXTHEME_CompositionAvailable(void)
+{
+    typedef HRESULT (WINAPI *PFN_DWMISCOMPOSITIONENABLED)(BOOL *);
+    static PFN_DWMISCOMPOSITIONENABLED pfn;
+    BOOL enabled = FALSE;
+
+    if (!pfn)
+    {
+        HMODULE module = LoadLibraryW(L"dwmapi.dll");
+
+        if (!module)
+            return FALSE;
+        pfn = (PFN_DWMISCOMPOSITIONENABLED)GetProcAddress(module, "DwmIsCompositionEnabled");
+        if (!pfn)
+            return FALSE;
+    }
+    return SUCCEEDED(pfn(&enabled)) && enabled;
+}
+
 static void UXTHEME_ClearLiquidProperties(HWND hwnd, ULONG region)
 {
     ULONG_PTR currentRegion = (ULONG_PTR)GetPropW(hwnd, DWM_PROP_BACKDROP_REGION);
@@ -883,6 +904,12 @@ static void UXTHEME_ApplyLiquidProperties(HWND hwnd, LPCWSTR classList,
     }
     if (!role)
         return;
+
+    if (!UXTHEME_CompositionAvailable())
+    {
+        UXTHEME_ClearLiquidProperties(hwnd, region);
+        return;
+    }
 
     liquid = NULL;
     if (bThemeActive && !shell && DwmSettingsReadColorScheme() == DWM_COLOR_SCHEME_LIGHT)

@@ -210,6 +210,8 @@ ThemeHasCompositedFrame(void)
     PTHEME_CLASS liquid;
     BOOL composited = FALSE;
 
+    if (!UXTHEME_CompositionAvailable())
+        return FALSE;
     liquid = MSSTYLES_OpenThemeClass(L"NonClient", L"Liquid", 96);
     if (!liquid)
         return FALSE;

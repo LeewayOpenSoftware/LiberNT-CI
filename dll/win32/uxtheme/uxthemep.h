@@ -180,6 +180,7 @@ HBRUSH UXTHEME_GetDialogBackgroundBrush(HWND hwnd, BOOL create);
 void UXTHEME_DestroyDialogBrush(HWND hwnd);
 HTHEME UXTHEME_OpenNcThemeData(HWND hWnd, LPCWSTR pszClassList, DWORD flags);
 void UXTHEME_ClearNonClientLiquidProperties(HWND hwnd);
+BOOL UXTHEME_CompositionAvailable(void);
 HTHEME GetNCCaptionTheme(HWND hWnd, DWORD style);
 HTHEME GetNCScrollbarTheme(HWND hWnd, DWORD style);
 
