@@ -349,7 +349,7 @@ if(_standard_signature)
 ${_object}\\Description\",\"Type\",0x00010001,0x10200003
 ${_object}\\Elements\\11000001\",\"Element\",0x1,${BCD_BOOT_DEVICE}
 ${_object}\\Elements\\12000002\",\"Element\",,\"\\EFI\\LiberNT\\Boot\\${BOOTLOADER_OS_LOADER}\"
-${_object}\\Elements\\12000004\",\"Element\",,\"LiberNT (HTTP disk image)\"
+${_object}\\Elements\\12000004\",\"Element\",,\"Orosi (HTTP disk image)\"
 ${_object}\\Elements\\12000005\",\"Element\",,\"en-US\"
 ${_object}\\Elements\\14000006\",\"Element\",0x10000,\"{6efb52bf-1766-41db-a6b3-0ee5eff72bd7}\"
 ${_object}\\Elements\\16000009\",\"Element\",0x1,00
