@@ -71,6 +71,7 @@ typedef struct _SERVICE
     PSERVICE_IMAGE lpImage;
     BOOL bDeleted;
     DWORD dwResumeCount;
+    DWORD dwStatusHandle;   /* random, unique, never 0 */
     LONG RefCount;
 
     SERVICE_STATUS Status;

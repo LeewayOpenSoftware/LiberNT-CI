@@ -1411,7 +1411,7 @@ ScmSendControl(
         dwError = ScmControlService(lpService->lpImage->hControlPipe,
                                     lpService->lpServiceName,
                                     dwControl,
-                                    lpService->dwResumeCount);
+                                    lpService->dwStatusHandle);
 
         /* Return service status information */
         RtlCopyMemory(lpServiceStatus,
@@ -1876,7 +1876,7 @@ ScmStopThread(PVOID pParam)
         ScmControlService(lpImage->hControlPipe,
                           L"",
                           SERVICE_CONTROL_STOP,
-                          lpService->dwResumeCount);
+                          lpService->dwStatusHandle);
     }
 
     /* Lock the service database exclusively */
@@ -7515,7 +7515,7 @@ RI_ScSendPnPMessage(
 
     ControlPacket->dwSize = PacketSize;
     ControlPacket->dwControl = dwControl;
-    ControlPacket->hServiceStatus = pService->dwResumeCount;
+    ControlPacket->hServiceStatus = pService->dwStatusHandle;
     ControlPacket->dwServiceTag = pService->dwServiceTag;
 
     /* Copy the event type and event data into the control packet */
@@ -7583,7 +7583,7 @@ RI_ScValidatePnPService(
     if (pService == NULL)
         return ERROR_SERVICE_DOES_NOT_EXIST;
 
-    *phServiceStatus = pService->dwResumeCount;
+    *phServiceStatus = pService->dwStatusHandle;
 
     return ERROR_SUCCESS;
 }
