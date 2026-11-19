@@ -340,6 +340,7 @@ static VOID
 TestStatusAndProtection(VOID)
 {
     static ULONG Data;
+    PVOID Pool;
 
     ok(IoIsValidIrpStatus(STATUS_SUCCESS), "STATUS_SUCCESS\n");
     ok(IoIsValidIrpStatus(STATUS_PENDING), "STATUS_PENDING\n");
@@ -354,6 +355,13 @@ TestStatusAndProtection(VOID)
     ok_eq_hex(MmProtectDriverSection(&Data, 1, 0), STATUS_INVALID_PARAMETER);
     ok_eq_hex(MmProtectDriverSection(&Data, 0, 2), STATUS_INVALID_PARAMETER);
     ok_eq_hex(MmProtectDriverSection(&Data, 0, MM_PROTECT_DRIVER_SECTION_ALLOW_UNLOAD), STATUS_INVALID_DEVICE_STATE);
+    ok_eq_hex(MmProtectDriverSection((PVOID)(ULONG_PTR)TestOb, 0, 0), STATUS_INVALID_PAGE_PROTECTION);
+    Pool = ExAllocatePoolWithTag(NonPagedPool, 16, TAG_TEST);
+    if (Pool != NULL)
+    {
+        ok_eq_hex(MmProtectDriverSection(Pool, 0, 0), STATUS_INVALID_PARAMETER);
+        ExFreePoolWithTag(Pool, TAG_TEST);
+    }
 }
 
 static VOID

@@ -87,6 +87,65 @@ TestFillAndPlaceholder(VOID)
     ok(!RtlIsCloudFilesPlaceholder(FILE_ATTRIBUTE_REPARSE_POINT, IO_REPARSE_TAG_SYMLINK), "symlink\n");
 }
 
+/* Three literal-only LZNT1 chunks of 512 bytes each; RtlCompressBuffer only makes 4096-byte chunks */
+static ULONG
+Build512ChunkStream(
+    _In_reads_bytes_(3 * 512) const UCHAR *Plain,
+    _Out_writes_bytes_(3 * 578) PUCHAR Stream)
+{
+    PUCHAR Out = Stream;
+    ULONG Chunk, Group, Byte;
+
+    for (Chunk = 0; Chunk < 3; Chunk++)
+    {
+        Out[0] = (UCHAR)((576 - 1) & 0xFF);
+        Out[1] = (UCHAR)(0xB0 | ((576 - 1) >> 8));
+        Out += 2;
+        for (Group = 0; Group < 64; Group++)
+        {
+            *Out++ = 0;
+            for (Byte = 0; Byte < 8; Byte++)
+                *Out++ = Plain[Chunk * 512 + Group * 8 + Byte];
+        }
+    }
+    return (ULONG)(Out - Stream);
+}
+
+static VOID
+TestDecompress512Chunks(
+    _In_ PVOID FragmentSpace)
+{
+    PUCHAR Plain, Stream, Output;
+    ULONG Index, StreamSize, Final = 0;
+    NTSTATUS Status;
+
+    Plain = ExAllocatePoolWithTag(PagedPool, 3 * 512 + 3 * 578 + 3 * 512, TAG_TEST);
+    if (skip(Plain != NULL, "no memory\n"))
+        return;
+    Stream = Plain + 3 * 512;
+    Output = Stream + 3 * 578;
+    for (Index = 0; Index < 3 * 512; Index++)
+        Plain[Index] = (UCHAR)(Index * 7 + Index / 512);
+    StreamSize = Build512ChunkStream(Plain, Stream);
+
+    RtlFillMemory(Output, 3 * 512, 0xEE);
+    Status = RtlDecompressBufferEx2(COMPRESSION_FORMAT_LZNT1, Output, 3 * 512, Stream, StreamSize, 512,
+                                    &Final, FragmentSpace);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(Final, 3UL * 512);
+    ok(RtlEqualMemory(Output, Plain, 3 * 512), "512-byte chunks decoded wrongly\n");
+
+    /* Starts inside the first chunk and runs through the other two */
+    RtlFillMemory(Output, 3 * 512, 0xEE);
+    Status = RtlDecompressFragmentEx(COMPRESSION_FORMAT_LZNT1, Output, 1400, Stream, StreamSize,
+                                     100, 512, &Final, FragmentSpace);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_ulong(Final, 1400UL);
+    ok(RtlEqualMemory(Output, Plain + 100, 1400), "fragment over 512-byte chunks differs\n");
+
+    ExFreePoolWithTag(Plain, TAG_TEST);
+}
+
 static VOID
 TestDecompressFragmentEx(VOID)
 {
@@ -127,6 +186,8 @@ TestDecompressFragmentEx(VOID)
         Status = RtlDecompressFragmentEx(COMPRESSION_FORMAT_NONE, Output, 1000, Compressed, CompressedSize,
                                          0, 4096, &Final, FragmentSpace);
         ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+        TestDecompress512Chunks(FragmentSpace);
     }
 
     if (FragmentSpace) ExFreePoolWithTag(FragmentSpace, TAG_TEST);
@@ -334,6 +395,42 @@ TestDeviceRoutines(VOID)
     ObDereferenceObject(FileObject);
 }
 
+static VOID
+TestStreamTargetOnVolume(VOID)
+{
+    static UNICODE_STRING Name = RTL_CONSTANT_STRING(L"\\SystemRoot\\System32\\ntoskrnl.exe");
+    IO_CREATE_STREAM_FILE_OPTIONS Options;
+    OBJECT_ATTRIBUTES Attributes;
+    IO_STATUS_BLOCK IoStatus;
+    PFILE_OBJECT FileObject, Stream = NULL;
+    HANDLE Handle;
+    NTSTATUS Status;
+
+    InitializeObjectAttributes(&Attributes, &Name, OBJ_KERNEL_HANDLE | OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = ZwOpenFile(&Handle, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &Attributes, &IoStatus,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_SYNCHRONOUS_IO_NONALERT);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+    Status = ObReferenceObjectByHandle(Handle, 0, *IoFileObjectType, KernelMode, (PVOID *)&FileObject, NULL);
+    ZwClose(Handle);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+
+    if (!skip(FileObject->Vpb != NULL && FileObject->Vpb->DeviceObject != NULL &&
+              FileObject->Vpb->DeviceObject != FileObject->DeviceObject, "the system file is not on a mounted volume\n"))
+    {
+        /* Requests go down the file system's volume stack, so a storage-stack device is no valid target.
+           Only the rejection is tested: a stream the file system never set up would still get its close. */
+        RtlZeroMemory(&Options, sizeof(Options));
+        Options.Size = sizeof(Options);
+        Options.Flags = IO_CREATE_STREAM_FILE_LITE;
+        Options.TargetDeviceObject = FileObject->DeviceObject;
+        ok_eq_hex(IoCreateStreamFileObjectEx2(&Options, FileObject, NULL, &Stream, NULL), STATUS_INVALID_PARAMETER);
+        ok(Stream == NULL, "a stream was returned for a rejected target\n");
+    }
+    ObDereferenceObject(FileObject);
+}
+
 START_TEST(NtosStubExports3)
 {
     TestCorrelationVectors();
@@ -343,4 +440,5 @@ START_TEST(NtosStubExports3)
     TestMapMdl();
     TestCacheQueries();
     TestDeviceRoutines();
+    TestStreamTargetOnVolume();
 }
