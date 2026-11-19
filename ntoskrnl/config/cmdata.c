@@ -251,6 +251,22 @@ DATA_SEG("INITDATA") CM_SYSTEM_CONTROL_VECTOR CmControlVector[] =
         NULL,
         NULL
     },
+#if defined(_M_IX86) || defined(_M_AMD64)
+    {
+        L"Session Manager\\Memory Management",
+        L"FeatureSettingsOverride",
+        &KiFeatureSettingsOverride,
+        NULL,
+        NULL
+    },
+    {
+        L"Session Manager\\Memory Management",
+        L"FeatureSettingsOverrideMask",
+        &KiFeatureSettingsOverrideMask,
+        NULL,
+        NULL
+    },
+#endif
     {
         L"Session Manager\\Memory Management",
         L"Mirroring",

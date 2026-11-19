@@ -3941,6 +3941,14 @@ ExpQueryProcessorCycleTimes(
     return Count < (ULONG)KeNumberProcessors ? STATUS_INFO_LENGTH_MISMATCH : STATUS_SUCCESS;
 }
 
+#if defined(_M_IX86) || defined(_M_AMD64)
+/* Class 201 - Speculation Control Information */
+QSI_DEF(SystemSpeculationControlInformation)
+{
+    return KeQuerySpeculationControlInformation(Buffer, Size, ReqSize);
+}
+#endif
+
 QSI_DEF(SystemProcessorIdleCycleTimeInformation)
 {
     return ExpQueryProcessorCycleTimes(Buffer, Size, ReqSize, TRUE);
@@ -4151,6 +4159,9 @@ CallQS[] =
     // Win10 RS4 and later (gaps in between stay NULL and fail
     // with STATUS_NOT_IMPLEMENTED)
     SI_QX(SystemPhysicalMemoryInformation),
+#if defined(_M_IX86) || defined(_M_AMD64)
+    SI_QX(SystemSpeculationControlInformation),
+#endif
 };
 
 C_ASSERT(SystemBasicInformation == 0);
