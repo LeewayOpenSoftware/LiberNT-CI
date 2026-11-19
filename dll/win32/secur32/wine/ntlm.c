@@ -619,6 +619,15 @@ SECURITY_STATUS SEC_ENTRY ntlm_InitializeSecurityContextW(
             goto isc_end;
         }
         helper->mode = NTLM_CLIENT;
+#ifdef __REACTOS__
+        if (pszTargetName && *pszTargetName)
+        {
+            SIZE_T size = (lstrlenW(pszTargetName) + 1) * sizeof(WCHAR);
+
+            if ((helper->target_name = HeapAlloc(GetProcessHeap(), 0, size)))
+                memcpy(helper->target_name, pszTargetName, size);
+        }
+#endif
 
         if((ret = ntlm_SetContextCredentials(helper, ntlm_cred, pszTargetName)) != SEC_E_OK)
         {

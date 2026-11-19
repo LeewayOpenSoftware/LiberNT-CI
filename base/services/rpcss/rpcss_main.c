@@ -37,6 +37,10 @@
 #include "wine/debug.h"
 #include "wine/list.h"
 
+#ifdef __REACTOS__
+#include "caller.h"
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(ole);
 
 static WCHAR rpcssW[] = L"RpcSs";
@@ -52,6 +56,8 @@ struct registered_class
     unsigned int single_use : 1;
 #ifdef __REACTOS__
     HANDLE process;
+    ULONG pid;       /* the registering process */
+    DWORD integrity; /* its integrity level; only callers at the same level see the class */
 #endif
 };
 
@@ -78,6 +84,8 @@ HRESULT __cdecl irpcss_server_register(handle_t h, const GUID *clsid, unsigned i
     memcpy(&entry->object->abData, object->abData, object->ulCntData);
     *cookie = entry->cookie = InterlockedIncrement(&next_cookie);
 #ifdef __REACTOS__
+    entry->pid = rpcss_caller_pid(h);
+    entry->integrity = rpcss_caller_integrity(h);
     {
         ULONG pid;
 
@@ -110,12 +118,20 @@ static void scm_revoke_class(struct registered_class *_class)
 HRESULT __cdecl irpcss_server_revoke(handle_t h, unsigned int cookie)
 {
     struct registered_class *cur;
+#ifdef __REACTOS__
+    ULONG pid = rpcss_caller_pid(h);
+#endif
 
     EnterCriticalSection(&registered_classes_cs);
 
     LIST_FOR_EACH_ENTRY(cur, &registered_classes, struct registered_class, entry)
     {
+#ifdef __REACTOS__
+        /* only the registering process may revoke its class */
+        if (cur->cookie == cookie && cur->pid == pid)
+#else
         if (cur->cookie == cookie)
+#endif
         {
             scm_revoke_class(cur);
             break;
@@ -133,6 +149,7 @@ HRESULT __cdecl irpcss_get_class_object(handle_t h, const GUID *clsid,
     struct registered_class *cur;
 #ifdef __REACTOS__
     struct registered_class *next;
+    DWORD integrity = rpcss_caller_integrity(h);
 #endif
 
     *object = NULL;
@@ -150,7 +167,12 @@ HRESULT __cdecl irpcss_get_class_object(handle_t h, const GUID *clsid,
 
     LIST_FOR_EACH_ENTRY(cur, &registered_classes, struct registered_class, entry)
     {
+#ifdef __REACTOS__
+        /* a class registered by another integrity level is not handed out, as on Windows */
+        if (!memcmp(clsid, &cur->clsid, sizeof(*clsid)) && rpcss_integrity_visible(cur->integrity, integrity))
+#else
         if (!memcmp(clsid, &cur->clsid, sizeof(*clsid)))
+#endif
         {
             *object = MIDL_user_allocate(FIELD_OFFSET(MInterfacePointer, abData[cur->object->ulCntData]));
             if (*object)
@@ -300,7 +322,14 @@ static RPC_STATUS RPCSS_Initialize(void)
 
     for (i = 0, j = 0; i < ARRAY_SIZE(ifspecs); ++i, j = i)
     {
+#ifdef __REACTOS__
+        /* The endpoint mapper must stay reachable from other machines; the private interfaces must not */
+        status = RpcServerRegisterIf3(ifspecs[i], NULL, NULL,
+                ifspecs[i] == epm_v3_0_s_ifspec ? 0 : RPC_IF_ALLOW_LOCAL_ONLY,
+                RPC_C_LISTEN_MAX_CALLS_DEFAULT, (UINT)-1, NULL, NULL);
+#else
         status = RpcServerRegisterIf(ifspecs[i], NULL, NULL);
+#endif
         if (status != RPC_S_OK)
             goto fail;
     }

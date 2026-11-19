@@ -409,6 +409,24 @@ SepCreateToken(
 
 BOOLEAN
 NTAPI
+SepSinglePrivilegeCheck(
+    _In_ LUID PrivilegeValue,
+    _In_ PTOKEN Token,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+BOOLEAN
+NTAPI
+SepCanAssignOwner(
+    _In_ PTOKEN Token,
+    _In_ PSID Owner);
+
+BOOLEAN
+NTAPI
+SepCallerCanAssignOwner(
+    _In_ PSID Owner);
+
+BOOLEAN
+NTAPI
 SepTokenIsOwner(
     _In_ PACCESS_TOKEN _Token,
     _In_ PSECURITY_DESCRIPTOR SecurityDescriptor,

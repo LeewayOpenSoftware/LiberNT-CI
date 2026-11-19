@@ -3517,7 +3517,7 @@ ObInsertObject(IN PVOID Object,
     OB_OPEN_REASON OpenReason;
     KPROCESSOR_MODE PreviousMode;
     NTSTATUS Status = STATUS_SUCCESS, RealStatus;
-    BOOLEAN IsNewObject;
+    BOOLEAN IsNewObject, Unlinked;
     PAGED_CODE();
 
     /* Get the Header */
@@ -3760,16 +3760,33 @@ ObInsertObject(IN PVOID Object,
         /* Check if anything until now failed */
         if (!NT_SUCCESS(Status))
         {
-            /* Check if the directory was added */
-            if (Context.DirectoryLocked)
+            /* The security of the new object could not be set, e.g. the caller named an
+             * owner it may not name (STATUS_INVALID_OWNER) */
+            DPRINT1("OB: new %wZ object not inserted, security status 0x%lx (process %s)\n",
+                    &ObjectType->Name, Status, PsGetCurrentProcess()->ImageFileName);
+
+            /*
+             * A new named object is already in its directory, with no security yet:
+             * take it out while the directory is still locked, so nobody can open it.
+             */
+            Unlinked = FALSE;
+            if ((ObjectNameInfo) && (ObjectNameInfo->Directory) && (Context.DirectoryLocked))
             {
-                /* Weird case where we need to do a manual delete */
-                DPRINT1("Unhandled path\n");
-                ASSERT(FALSE);
+                ObpDeleteEntryDirectory(&Context);
+                if (ObjectType == ObpSymbolicLinkObjectType)
+                    ObpDeleteSymbolicLinkName(Object);
+                Unlinked = TRUE;
             }
 
             /* Cleanup the lookup */
             ObpReleaseLookupContext(&Context);
+
+            if (Unlinked)
+            {
+                /* Drop what the directory entry held: the name (with the directory reference) and the object */
+                ObpDereferenceNameInfo(ObjectNameInfo);
+                ObDereferenceObject(Object);
+            }
 
             /* Remove query reference that we added */
             ObpDereferenceNameInfo(ObjectNameInfo);
@@ -3783,7 +3800,6 @@ ObInsertObject(IN PVOID Object,
             }
 
             /* Return failure code */
-            ASSERT(FALSE);
             return Status;
         }
     }
