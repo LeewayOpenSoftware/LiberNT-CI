@@ -86,6 +86,13 @@ grep -qx "next=$next" "$workdir/read.txt" || fail "read next: $(tail -n 1 "$work
 "$driver" --usn-read "$image" 4096 >"$workdir/read2.txt"
 test "$(grep -c '^usn=' "$workdir/read2.txt")" -eq 25 || fail "partial read count"
 
+# A USN inside a record is bad caller input (STATUS_INVALID_PARAMETER), not corruption.
+if "$driver" --usn-read "$image" 8 >"$workdir/err3.txt" 2>&1
+then
+    fail "read from inside a record succeeded"
+fi
+grep -q 'c000000d' "$workdir/err3.txt" || fail "mid-record read: $(cat "$workdir/err3.txt")"
+
 # $J as ntfs-3g sees it ends at the next USN, and page 0 ends with zero fill.
 "$ntfscat" -a 0x80 -n '$J' "$image" '/$Extend/$UsnJrnl' >"$workdir/j.bin"
 test "$(wc -c <"$workdir/j.bin")" -eq "$next" || fail "\$J size $(wc -c <"$workdir/j.bin"), expected $next"

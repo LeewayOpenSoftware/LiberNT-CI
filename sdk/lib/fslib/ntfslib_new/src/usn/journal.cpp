@@ -427,6 +427,7 @@ NtfsUsnJournalRead(
     UsnJrnlMaxData Max;
     ULONGLONG DataSize, End, Cursor;
     ULONG Copied = 0;
+    BOOLEAN CallerChoseStart = (StartUsn != 0);
     NTSTATUS Status;
 
     if (!Buffer || !BytesReturned || !NextUsn || StartUsn < 0)
@@ -490,7 +491,9 @@ NtfsUsnJournalRead(
             }
             if (!UsnRecordLooksValid(Record, (ULONG)(PageStart + Length - Cursor), Cursor))
             {
-                Status = STATUS_FILE_CORRUPT_ERROR;
+                /* A USN from the caller that is not a record boundary is bad input, not corruption */
+                Status = (CallerChoseStart && Cursor == (ULONGLONG)StartUsn && Copied == 0) ? STATUS_INVALID_PARAMETER
+                                                                       : STATUS_FILE_CORRUPT_ERROR;
                 goto Done;
             }
             if (Copied + RecordLength > BufferLength)
