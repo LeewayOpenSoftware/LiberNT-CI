@@ -198,6 +198,7 @@ CCabinetWindow::CCabinetWindow() :
     m_DetailsGeneration(0),
     m_PreviewGeneration(0),
     m_PendingJob(NULL),
+    m_JobRunning(FALSE),
     m_InHistoryNavigation(FALSE),
     m_FocusViewOnNavigate(FALSE),
     m_NavigationDepth(0),
