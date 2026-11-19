@@ -93,6 +93,7 @@ struct LISTVIEW_SORT_INFO
 #define DEFVIEW_ENUM_BATCH_ITEMS 8
 #define DEFVIEW_ENUM_BATCH_MS 2
 #define DEFVIEW_FILL_TIMER_ID 0x1113
+#define DEFVIEW_FILL_YIELD_MS 50
 
 struct PERSISTCOLUMNS
 {
@@ -392,6 +393,7 @@ private:
     BOOL  m_FillListIsRefresh;
     ULONG m_FillListGeneration;
     BOOL m_FillListRedrawOff;
+    DWORD m_FillListLastYield;
     CSimpleArray<PITEMID_CHILD> m_AddedDuringFill;
     DWORD m_dwPositionCookie;
     struct ITEM_POSITION
@@ -855,6 +857,7 @@ CDefView::CDefView() :
     m_FillListIsRefresh(FALSE),
     m_FillListGeneration(0),
     m_FillListRedrawOff(FALSE),
+    m_FillListLastYield(0),
     m_dwPositionCookie(0),
     m_hMyComputerIcon(NULL),
     m_IconSize(0),
@@ -2732,8 +2735,10 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
         return hr == S_FALSE ? S_OK : hr;
     }
 
-    if (HIWORD(GetQueueStatus(QS_INPUT | QS_PAINT)))
+    if (GetTickCount() - m_FillListLastYield >= DEFVIEW_FILL_YIELD_MS &&
+        HIWORD(GetQueueStatus(QS_KEY | QS_MOUSEBUTTON | QS_PAINT)))
     {
+        m_FillListLastYield = GetTickCount();
         if (m_FillListRedrawOff)
         {
             m_ListView.SetRedraw(TRUE);

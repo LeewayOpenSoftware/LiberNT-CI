@@ -108,6 +108,7 @@ private:
     LRESULT OnNotify(NMHDR *header);
     void OnCreate();
     void OnSize();
+    void LayoutChildren(HDWP *hdwp);
     int Scale(int value) const;
 
     CabinetTab *ActiveTab() { return m_ActiveTab >= 0 ? &m_Tabs[m_ActiveTab] : NULL; }
@@ -241,6 +242,7 @@ private:
     ULONG m_DetailsGeneration;
     ULONG m_PreviewGeneration;
     CabinetDetailsJob *m_PendingJob;
+    BOOL m_JobRunning;
     BOOL m_InHistoryNavigation;
     BOOL m_FocusViewOnNavigate;
     ULONG m_NavigationDepth;

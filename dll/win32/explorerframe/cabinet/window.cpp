@@ -749,36 +749,32 @@ PlaceChild(HDWP *hdwp, HWND hwnd, int x, int y, int cx, int cy, HWND insertAfter
 }
 
 void
-CCabinetWindow::OnSize()
+CCabinetWindow::LayoutChildren(HDWP *hdwp)
 {
     RECT client, status;
     SIZE size;
-    HDWP hdwp;
     int top, bottom, left, right, pane, search, row, statusHeight;
 
-    if (!m_TabBand || !m_TabBand->Window())
-        return;
     GetClientRect(m_hwnd, &client);
-    hdwp = BeginDeferWindowPos(8 + CABINET_MAX_TABS);
-    PlaceChild(&hdwp, m_TabBand->Window(), 0, 0, max(0, (int)client.right - CaptionButtonsWidth() - Scale(8)),
+    PlaceChild(hdwp, m_TabBand->Window(), 0, 0, max(0, (int)client.right - CaptionButtonsWidth() - Scale(8)),
                TabStripHeight());
     m_TabBand->SetShadeBottom(AddressBottom() - 1);
     size = ToolbarSize(m_NavBar);
-    PlaceChild(&hdwp, m_NavBar, Scale(3), TabStripHeight() + Scale(8) + (Scale(32) - size.cy) / 2, size.cx, size.cy);
+    PlaceChild(hdwp,m_NavBar, Scale(3), TabStripHeight() + Scale(8) + (Scale(32) - size.cy) / 2, size.cx, size.cy);
     left = Scale(3) + size.cx + Scale(6);
     search = min(Scale(300), max(Scale(140), (int)(client.right - Scale(214)) / 3));
-    PlaceChild(&hdwp, m_SearchBox->Window(), client.right - Scale(13) - search, TabStripHeight() + Scale(8), search,
+    PlaceChild(hdwp,m_SearchBox->Window(), client.right - Scale(13) - search, TabStripHeight() + Scale(8), search,
                Scale(32));
-    PlaceChild(&hdwp, m_AddressBand->Window(), left, TabStripHeight() + Scale(8),
+    PlaceChild(hdwp,m_AddressBand->Window(), left, TabStripHeight() + Scale(8),
                max(0, (int)client.right - Scale(13) - search - Scale(10) - left), Scale(32));
     size = ToolbarSize(m_DetailsBar);
     row = AddressBottom() + (CommandBottom() - 1 - AddressBottom() - (int)size.cy) / 2;
-    PlaceChild(&hdwp, m_DetailsBar, client.right - Scale(8) - size.cx, row, size.cx, size.cy);
+    PlaceChild(hdwp,m_DetailsBar, client.right - Scale(8) - size.cx, row, size.cx, size.cy);
     right = max(0, (int)client.right - Scale(8) - (int)size.cx - Scale(16) - Scale(8));
     FitCommandBar(right);
     size = ToolbarSize(m_CommandBar);
     row = AddressBottom() + (CommandBottom() - 1 - AddressBottom() - (int)size.cy) / 2;
-    PlaceChild(&hdwp, m_CommandBar, Scale(8), row, right, size.cy);
+    PlaceChild(hdwp,m_CommandBar, Scale(8), row, right, size.cy);
 
     SendMessageW(m_Status, WM_SIZE, 0, 0);
     GetWindowRect(m_Status, &status);
@@ -789,7 +785,7 @@ CCabinetWindow::OnSize()
         SendMessageW(m_Status, SB_SETPARTS, _countof(parts), (LPARAM)parts);
     }
     size = ToolbarSize(m_ViewBar);
-    PlaceChild(&hdwp, m_ViewBar, client.right - Scale(8) - size.cx,
+    PlaceChild(hdwp,m_ViewBar, client.right - Scale(8) - size.cx,
                client.bottom - statusHeight + (statusHeight - size.cy) / 2, size.cx, size.cy, HWND_TOP);
     top = CommandBottom();
     bottom = client.bottom - statusHeight;
@@ -800,7 +796,7 @@ CCabinetWindow::OnSize()
         if (m_NavigationVisible)
         {
             left = Scale(160);
-            PlaceChild(&hdwp, m_NavigationWindow, Scale(2), top, Scale(154), max(0, bottom - top));
+            PlaceChild(hdwp,m_NavigationWindow, Scale(2), top, Scale(154), max(0, bottom - top));
         }
     }
     SetRect(&m_PanelRect, left ? left : -Scale(8), top, client.right, bottom);
@@ -811,13 +807,30 @@ CCabinetWindow::OnSize()
     right = client.right - pane;
     SetRect(&m_ViewRect, left, top, max(left, right), bottom);
     SetRect(&m_PaneRect, max(left, right), top, client.right, bottom);
-    PlaceBrowsers(&hdwp);
+    PlaceBrowsers(hdwp);
+}
+
+void
+CCabinetWindow::OnSize()
+{
+    RECT client;
+    HDWP hdwp;
+    BOOL batched;
+
+    if (!m_TabBand || !m_TabBand->Window())
+        return;
+    hdwp = BeginDeferWindowPos(8 + CABINET_MAX_TABS);
+    batched = hdwp != NULL;
+    LayoutChildren(&hdwp);
     if (hdwp)
         EndDeferWindowPos(hdwp);
+    else if (batched)
+        LayoutChildren(&hdwp);
     PlacePanes();
+    GetClientRect(m_hwnd, &client);
     {
         RECT chrome = { 0, 0, client.right, CommandBottom() };
-        RECT footer = { 0, bottom, client.right, client.bottom };
+        RECT footer = { 0, m_PanelRect.bottom, client.right, client.bottom };
         RedrawWindow(m_hwnd, &chrome, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
         RedrawWindow(m_hwnd, &footer, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
         RedrawWindow(m_hwnd, &m_PanelRect, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_NOCHILDREN);
@@ -1601,9 +1614,9 @@ CCabinetWindow::StartDetailsJob()
     CabinetDetailsJob *job = m_PendingJob;
     HANDLE thread;
 
-    m_PendingJob = NULL;
-    if (!job)
+    if (!job || m_JobRunning)
         return;
+    m_PendingJob = NULL;
     if (!(((job->Parts & CABINET_JOB_DETAILS) && job->DetailsGeneration == m_DetailsGeneration) ||
           ((job->Parts & CABINET_JOB_PREVIEW) && job->PreviewGeneration == m_PreviewGeneration)))
     {
@@ -1616,12 +1629,16 @@ CCabinetWindow::StartDetailsJob()
         FreeDetailsJob(job);
         return;
     }
+    m_JobRunning = TRUE;
     CloseHandle(thread);
 }
 
 void
 CCabinetWindow::OnDetailsJobReady(CabinetDetailsJob *job)
 {
+    m_JobRunning = FALSE;
+    if (m_PendingJob)
+        StartDetailsJob();
     if (!job)
         return;
     if ((job->Parts & CABINET_JOB_DETAILS) && job->DetailsGeneration == m_DetailsGeneration && m_DetailsPane)
@@ -3957,6 +3974,12 @@ CCabinetWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
             m_DetailsGeneration = (ULONG)InterlockedIncrement(&s_CabinetJobSerial);
             FreeDetailsJob(m_PendingJob);
             m_PendingJob = NULL;
+            {
+                MSG ready;
+
+                while (PeekMessageW(&ready, m_hwnd, WM_CABINET_DETAILS_READY, WM_CABINET_DETAILS_READY, PM_REMOVE))
+                    FreeDetailsJob((CabinetDetailsJob *)ready.lParam);
+            }
             if (m_ChangeNotify)
                 SHChangeNotifyDeregister(m_ChangeNotify);
             m_ChangeNotify = 0;
