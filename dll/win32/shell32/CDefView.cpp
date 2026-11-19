@@ -92,6 +92,7 @@ struct LISTVIEW_SORT_INFO
 #define CONTEXT_MENU_BASE_ID 1
 #define DEFVIEW_ENUM_BATCH_ITEMS 8
 #define DEFVIEW_ENUM_BATCH_MS 2
+#define DEFVIEW_FILL_TIMER_ID 0x1113
 
 struct PERSISTCOLUMNS
 {
@@ -717,6 +718,7 @@ public:
     LRESULT OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnUpdateStatusbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnFillList(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnArrangeComputer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnMenuMessage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
@@ -769,6 +771,7 @@ public:
     MESSAGE_HANDLER(SHV_CHANGE_NOTIFY, OnChangeNotify)
     MESSAGE_HANDLER(SHV_UPDATESTATUSBAR, OnUpdateStatusbar)
     MESSAGE_HANDLER(SHV_FILL_LIST, OnFillList)
+    MESSAGE_HANDLER(WM_TIMER, OnTimer)
     MESSAGE_HANDLER(SHV_ARRANGE_COMPUTER, OnArrangeComputer)
     MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
     MESSAGE_HANDLER(WM_DRAWITEM, OnMenuMessage)
@@ -2395,6 +2398,8 @@ void CDefView::CancelFillList()
 {
     if (++m_FillListGeneration == 0)
         ++m_FillListGeneration;
+    if (m_hWnd)
+        KillTimer(DEFVIEW_FILL_TIMER_ID);
     m_pEnumIDList.Release();
     ClearAddedDuringFill();
     if (m_FillListRedrawOff)
@@ -2724,6 +2729,18 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
         return hr == S_FALSE ? S_OK : hr;
     }
 
+    if (HIWORD(GetQueueStatus(QS_INPUT | QS_PAINT)))
+    {
+        if (m_FillListRedrawOff)
+        {
+            m_ListView.SetRedraw(TRUE);
+            m_FillListRedrawOff = FALSE;
+            m_ListView.InvalidateRect(NULL, FALSE);
+        }
+        if (SetTimer(DEFVIEW_FILL_TIMER_ID, USER_TIMER_MINIMUM))
+            return S_OK;
+    }
+
     if (!PostMessage(SHV_FILL_LIST, 0, Generation))
     {
         DWORD Error = GetLastError();
@@ -2792,6 +2809,19 @@ LRESULT CDefView::OnFillList(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHan
         ContinueFillList((ULONG)lParam);
     else
         FillList((BOOL)wParam);
+    return 0;
+}
+
+LRESULT CDefView::OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    if (wParam != DEFVIEW_FILL_TIMER_ID)
+    {
+        bHandled = FALSE;
+        return 0;
+    }
+    bHandled = TRUE;
+    KillTimer(DEFVIEW_FILL_TIMER_ID);
+    ContinueFillList(m_FillListGeneration);
     return 0;
 }
 
