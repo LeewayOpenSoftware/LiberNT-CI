@@ -194,7 +194,17 @@ void CChangeNotifyServer::DestroyItem(CWatchItem *pItem, HWND *phwndBroker)
     pItem->hwndBroker = NULL;
     if (hwndBroker && hwndBroker != *phwndBroker)
     {
-        ::DestroyWindow(hwndBroker);
+        // The broker belongs to the client's thread, and DestroyWindow from this
+        // thread fails there (ERROR_ACCESS_DENIED). Let that thread destroy it, once
+        // we know the handle still names that client's broker.
+        DWORD dwPID = 0;
+        WCHAR szClass[16];
+        if (::GetWindowThreadProcessId(hwndBroker, &dwPID) && dwPID == pItem->dwUserPID &&
+            ::GetClassNameW(hwndBroker, szClass, _countof(szClass)) &&
+            lstrcmpW(szClass, L"WorkerW") == 0)
+        {
+            ::PostMessageW(hwndBroker, WM_CLOSE, 0, 0);
+        }
         *phwndBroker = hwndBroker;
     }
 
