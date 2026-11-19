@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT NTFS driver
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
- * PURPOSE:     USN change journal FSCTLs: create, query, read, close records, file data, mark handle
+ * PURPOSE:     USN change journal FSCTLs and the queue of reads waiting for records
  */
 
 #include "ntfspch.h"
@@ -163,6 +163,408 @@ NtfsUsnRecordSelected(
     return TRUE;
 }
 
+/*
+ * Reads records for one request into Staging: the next USN in Cursor, the journal's next USN
+ * in JournalNext. Filtered-out records still advance Cursor. One call looks at a bounded
+ * amount of journal and may return nothing with the USN to go on from.
+ */
+static
+NTSTATUS
+NtfsUsnCollect(
+    _In_ PVolumeContextBlock VolCB,
+    _In_ const READ_USN_JOURNAL_DATA_V1* Input,
+    _Out_writes_bytes_(Capacity) PUCHAR Staging,
+    _In_ ULONG Capacity,
+    _Inout_updates_bytes_(Capacity) PUCHAR Raw,
+    _Out_ PULONG Filled,
+    _Out_ LONGLONG* Cursor,
+    _Out_ LONGLONG* JournalNext)
+{
+    NtfsUsnJournalData Data;
+    ULONGLONG Scanned = 0;
+    ULONG RawLength, Offset;
+    LONGLONG Next;
+    NTSTATUS Status;
+
+    *Filled = 0;
+    *Cursor = Input->StartUsn;
+    *JournalNext = 0;
+
+    KeEnterCriticalRegion();
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsUsnJournalQuery(VolCB->DiskVolume, &Data);
+    if (NT_SUCCESS(Status) && Data.UsnJournalId != Input->UsnJournalID)
+        Status = STATUS_INVALID_PARAMETER;
+    if (NT_SUCCESS(Status))
+        *JournalNext = Data.NextUsn;
+
+    while (NT_SUCCESS(Status) && *Filled < Capacity && Scanned < NTFS_USN_READ_SCAN_MAX)
+    {
+        Status = NtfsUsnJournalRead(VolCB->DiskVolume, *Cursor, Raw, Capacity - *Filled, &RawLength, &Next);
+        if (Status == STATUS_BUFFER_TOO_SMALL)
+        {
+            /* The next record does not fit what is left of the caller's buffer */
+            Status = STATUS_SUCCESS;
+            break;
+        }
+        if (!NT_SUCCESS(Status))
+            break;
+
+        for (Offset = 0; Offset + sizeof(USN_RECORD_COMMON_HEADER) <= RawLength;)
+        {
+            const USN_RECORD_COMMON_HEADER* Header = (const USN_RECORD_COMMON_HEADER*)(Raw + Offset);
+
+            if (NtfsUsnRecordSelected(Raw + Offset, Input))
+            {
+                RtlCopyMemory(Staging + *Filled, Raw + Offset, Header->RecordLength);
+                *Filled += Header->RecordLength;
+            }
+            Offset += Header->RecordLength;
+        }
+        if (Next > *Cursor)
+            Scanned += (ULONGLONG)(Next - *Cursor);
+        *Cursor = Next;
+        if (RawLength == 0)
+            break;
+    }
+    /* 0 asks for the first record; report the real USN reading continues from */
+    if (NT_SUCCESS(Status) && *Cursor == 0)
+        *Cursor = Data.FirstUsn;
+    NtfsReleaseMetadata(VolCB);
+    KeLeaveCriticalRegion();
+    return Status;
+}
+
+/* Per-request wait state, in Irp->Tail.Overlay.DriverContext[0] (the CSQ owns [3]) */
+typedef struct _NTFS_USN_WAIT
+{
+    READ_USN_JOURNAL_DATA_V1 Input;
+    ULONG OutputLength;
+    LONGLONG ThresholdUsn;          /* journal next USN at which BytesToWaitFor is met */
+    ULONGLONG Deadline;             /* interrupt time when Timeout elapses, 0 for none */
+} NTFS_USN_WAIT, *PNTFS_USN_WAIT;
+
+#define NTFS_USN_WAIT_TAG       'wUtN'
+#define NTFS_USN_TIMER_PERIOD   1000    /* ms between Timeout checks while someone waits */
+
+static
+VOID
+NtfsUsnCompleteWait(
+    _In_ PIRP Irp,
+    _In_ NTSTATUS Status,
+    _In_ ULONG_PTR Information)
+{
+    PNTFS_USN_WAIT Wait = (PNTFS_USN_WAIT)Irp->Tail.Overlay.DriverContext[0];
+
+    Irp->Tail.Overlay.DriverContext[0] = NULL;
+    if (Wait)
+        ExFreePoolWithTag(Wait, NTFS_USN_WAIT_TAG);
+    Irp->IoStatus.Status = Status;
+    Irp->IoStatus.Information = NT_SUCCESS(Status) ? Information : 0;
+    IoCompleteRequest(Irp, IO_DISK_INCREMENT);
+}
+
+static
+VOID
+NTAPI
+NtfsUsnCsqInsert(
+    _In_ PIO_CSQ Csq,
+    _In_ PIRP Irp)
+{
+    PVolumeContextBlock VolCB = CONTAINING_RECORD(Csq, VolumeContextBlock, UsnWaitCsq);
+
+    InsertTailList(&VolCB->UsnWaitList, &Irp->Tail.Overlay.ListEntry);
+}
+
+static
+VOID
+NTAPI
+NtfsUsnCsqRemove(
+    _In_ PIO_CSQ Csq,
+    _In_ PIRP Irp)
+{
+    UNREFERENCED_PARAMETER(Csq);
+    RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
+}
+
+/* PeekContext, when given, is the file object whose requests are wanted */
+static
+PIRP
+NTAPI
+NtfsUsnCsqPeekNext(
+    _In_ PIO_CSQ Csq,
+    _In_opt_ PIRP Irp,
+    _In_opt_ PVOID PeekContext)
+{
+    PVolumeContextBlock VolCB = CONTAINING_RECORD(Csq, VolumeContextBlock, UsnWaitCsq);
+    PLIST_ENTRY Entry = Irp ? Irp->Tail.Overlay.ListEntry.Flink : VolCB->UsnWaitList.Flink;
+
+    for (; Entry != &VolCB->UsnWaitList; Entry = Entry->Flink)
+    {
+        PIRP Next = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+
+        if (!PeekContext || IoGetCurrentIrpStackLocation(Next)->FileObject == (PFILE_OBJECT)PeekContext)
+            return Next;
+    }
+    return NULL;
+}
+
+static
+VOID
+NTAPI
+NtfsUsnCsqAcquire(
+    _In_ PIO_CSQ Csq,
+    _Out_ PKIRQL Irql)
+{
+    PVolumeContextBlock VolCB = CONTAINING_RECORD(Csq, VolumeContextBlock, UsnWaitCsq);
+
+    KeAcquireSpinLock(&VolCB->UsnWaitLock, Irql);
+}
+
+static
+VOID
+NTAPI
+NtfsUsnCsqRelease(
+    _In_ PIO_CSQ Csq,
+    _In_ KIRQL Irql)
+{
+    PVolumeContextBlock VolCB = CONTAINING_RECORD(Csq, VolumeContextBlock, UsnWaitCsq);
+
+    KeReleaseSpinLock(&VolCB->UsnWaitLock, Irql);
+}
+
+static
+VOID
+NTAPI
+NtfsUsnCsqCompleteCanceled(
+    _In_ PIO_CSQ Csq,
+    _In_ PIRP Irp)
+{
+    UNREFERENCED_PARAMETER(Csq);
+    NtfsUsnCompleteWait(Irp, STATUS_CANCELLED, 0);
+}
+
+static
+VOID
+NTAPI
+NtfsUsnWakeWorker(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID Context);
+
+/* Queues one re-check of the waiting reads; repeated calls before it runs coalesce */
+VOID
+NtfsUsnWakeWaiters(
+    _In_ PVolumeContextBlock VolCB)
+{
+    PIO_WORKITEM Item;
+
+    if (!VolCB->UsnDeviceObject || InterlockedCompareExchange(&VolCB->UsnWakeQueued, 1, 0) != 0)
+        return;
+    Item = IoAllocateWorkItem(VolCB->UsnDeviceObject);
+    if (!Item)
+    {
+        InterlockedExchange(&VolCB->UsnWakeQueued, 0);
+        return;
+    }
+    IoQueueWorkItem(Item, NtfsUsnWakeWorker, DelayedWorkQueue, Item);
+}
+
+static
+VOID
+NTAPI
+NtfsUsnTimerDpc(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID Context,
+    _In_opt_ PVOID Argument1,
+    _In_opt_ PVOID Argument2)
+{
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(Argument1);
+    UNREFERENCED_PARAMETER(Argument2);
+    NtfsUsnWakeWaiters((PVolumeContextBlock)Context);
+}
+
+static
+VOID
+NtfsUsnArmTimer(
+    _In_ PVolumeContextBlock VolCB)
+{
+    LARGE_INTEGER Due;
+    KIRQL Irql;
+
+    KeAcquireSpinLock(&VolCB->UsnWaitLock, &Irql);
+    if (!VolCB->UsnWaitTimerArmed)
+    {
+        Due.QuadPart = -10000LL * NTFS_USN_TIMER_PERIOD;
+        KeSetTimerEx(&VolCB->UsnWaitTimer, Due, NTFS_USN_TIMER_PERIOD, &VolCB->UsnWaitTimerDpc);
+        VolCB->UsnWaitTimerArmed = TRUE;
+    }
+    KeReleaseSpinLock(&VolCB->UsnWaitLock, Irql);
+}
+
+/*
+ * Re-checks every waiting read at PASSIVE_LEVEL. A read completes when records match and
+ * either BytesToWaitFor bytes were added since it started waiting or its Timeout elapsed;
+ * otherwise it goes back to the queue, starting from where the last check stopped.
+ */
+static
+VOID
+NTAPI
+NtfsUsnWakeWorker(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID Context)
+{
+    PVolumeContextBlock VolCB = (PVolumeContextBlock)DeviceObject->DeviceExtension;
+    PIO_WORKITEM Item = (PIO_WORKITEM)Context;
+    PUCHAR Staging = NULL, Raw = NULL;
+    BOOLEAN AnyDeadline = FALSE;
+    LIST_ENTRY Keep;
+    PIRP Irp;
+    KIRQL Irql;
+
+    /* A wake that arrives from here on queues another pass */
+    InterlockedExchange(&VolCB->UsnWakeQueued, 0);
+    InitializeListHead(&Keep);
+    Staging = ExAllocatePoolWithTag(PagedPool, NTFS_USN_STAGING_MAX, TAG_NTFS);
+    Raw = ExAllocatePoolWithTag(PagedPool, NTFS_USN_STAGING_MAX, TAG_NTFS);
+
+    while ((Irp = IoCsqRemoveNextIrp(&VolCB->UsnWaitCsq, NULL)) != NULL)
+    {
+        PNTFS_USN_WAIT Wait = (PNTFS_USN_WAIT)Irp->Tail.Overlay.DriverContext[0];
+        ULONG Capacity, Filled = 0;
+        LONGLONG Cursor = 0, JournalNext = 0;
+        PUCHAR Output;
+        BOOLEAN TimedOut;
+        NTSTATUS Status;
+
+        if (VolCB->Dismounted)
+        {
+            NtfsUsnCompleteWait(Irp, STATUS_VOLUME_DISMOUNTED, 0);
+            continue;
+        }
+        /* The handle was cleaned up while this request was out of the queue */
+        if (IoGetCurrentIrpStackLocation(Irp)->FileObject->Flags & FO_CLEANUP_COMPLETE)
+        {
+            NtfsUsnCompleteWait(Irp, STATUS_CANCELLED, 0);
+            continue;
+        }
+        if (!Staging || !Raw)
+        {
+            NtfsUsnCompleteWait(Irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+            continue;
+        }
+        Output = MmGetSystemAddressForMdlSafe(Irp->MdlAddress, NormalPagePriority);
+        if (!Output)
+        {
+            NtfsUsnCompleteWait(Irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+            continue;
+        }
+
+        Capacity = min(Wait->OutputLength - (ULONG)sizeof(USN), (ULONG)NTFS_USN_STAGING_MAX);
+        Status = NtfsUsnCollect(VolCB, &Wait->Input, Staging, Capacity, Raw, &Filled, &Cursor, &JournalNext);
+        if (!NT_SUCCESS(Status))
+        {
+            /* The journal was deleted or replaced, or reading failed */
+            NtfsUsnCompleteWait(Irp, Status, 0);
+            continue;
+        }
+
+        TimedOut = Wait->Deadline && KeQueryInterruptTime() >= Wait->Deadline;
+        if (Filled && (JournalNext >= Wait->ThresholdUsn || TimedOut))
+        {
+            RtlCopyMemory(Output, &Cursor, sizeof(Cursor));
+            RtlCopyMemory(Output + sizeof(USN), Staging, Filled);
+            NtfsUsnCompleteWait(Irp, STATUS_SUCCESS, sizeof(USN) + Filled);
+            continue;
+        }
+
+        /* Keep waiting; filtered-out records are not looked at again */
+        if (!Filled)
+            Wait->Input.StartUsn = Cursor;
+        if (JournalNext >= Wait->ThresholdUsn)
+            Wait->ThresholdUsn = JournalNext + (LONGLONG)Wait->Input.BytesToWaitFor;
+        if (TimedOut)
+            Wait->Deadline = KeQueryInterruptTime() + Wait->Input.Timeout * 10000000ULL;
+        if (Wait->Deadline)
+            AnyDeadline = TRUE;
+        InsertTailList(&Keep, &Irp->Tail.Overlay.ListEntry);
+    }
+
+    while (!IsListEmpty(&Keep))
+    {
+        Irp = CONTAINING_RECORD(RemoveHeadList(&Keep), IRP, Tail.Overlay.ListEntry);
+        /* A request cancelled while it was out of the queue completes here as cancelled */
+        IoCsqInsertIrp(&VolCB->UsnWaitCsq, Irp, NULL);
+    }
+
+    if (!AnyDeadline)
+    {
+        KeAcquireSpinLock(&VolCB->UsnWaitLock, &Irql);
+        if (VolCB->UsnWaitTimerArmed)
+        {
+            KeCancelTimer(&VolCB->UsnWaitTimer);
+            VolCB->UsnWaitTimerArmed = FALSE;
+        }
+        KeReleaseSpinLock(&VolCB->UsnWaitLock, Irql);
+    }
+
+    if (Staging)
+        ExFreePoolWithTag(Staging, TAG_NTFS);
+    if (Raw)
+        ExFreePoolWithTag(Raw, TAG_NTFS);
+    IoFreeWorkItem(Item);
+}
+
+VOID
+NtfsUsnInitializeVolume(
+    _In_ PVolumeContextBlock VolCB,
+    _In_ PDEVICE_OBJECT VolumeDeviceObject)
+{
+    InitializeListHead(&VolCB->UsnWaitList);
+    KeInitializeSpinLock(&VolCB->UsnWaitLock);
+    IoCsqInitialize(&VolCB->UsnWaitCsq,
+                    NtfsUsnCsqInsert,
+                    NtfsUsnCsqRemove,
+                    NtfsUsnCsqPeekNext,
+                    NtfsUsnCsqAcquire,
+                    NtfsUsnCsqRelease,
+                    NtfsUsnCsqCompleteCanceled);
+    KeInitializeTimerEx(&VolCB->UsnWaitTimer, NotificationTimer);
+    KeInitializeDpc(&VolCB->UsnWaitTimerDpc, NtfsUsnTimerDpc, VolCB);
+    VolCB->UsnWaitTimerArmed = FALSE;
+    VolCB->UsnWakeQueued = 0;
+    VolCB->UsnDeviceObject = VolumeDeviceObject;
+}
+
+/* Volume teardown: nothing may wait or tick on a volume that is going away */
+VOID
+NtfsUsnShutdownVolume(
+    _In_ PVolumeContextBlock VolCB)
+{
+    PIRP Irp;
+
+    while ((Irp = IoCsqRemoveNextIrp(&VolCB->UsnWaitCsq, NULL)) != NULL)
+        NtfsUsnCompleteWait(Irp, STATUS_VOLUME_DISMOUNTED, 0);
+    KeCancelTimer(&VolCB->UsnWaitTimer);
+    VolCB->UsnWaitTimerArmed = FALSE;
+    KeFlushQueuedDpcs();
+}
+
+/* IRP_MJ_CLEANUP of a handle ends the journal reads still waiting on it */
+VOID
+NtfsUsnCancelFileWaiters(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _In_ PFILE_OBJECT FileObject)
+{
+    PVolumeContextBlock VolCB = VolumeDeviceObject ? (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension : NULL;
+    PIRP Irp;
+
+    if (!VolCB || !VolCB->UsnDeviceObject || !FileObject)
+        return;
+    while ((Irp = IoCsqRemoveNextIrp(&VolCB->UsnWaitCsq, FileObject)) != NULL)
+        NtfsUsnCompleteWait(Irp, STATUS_CANCELLED, 0);
+}
+
 static
 NTSTATUS
 NtfsUsnRead(
@@ -171,7 +573,6 @@ NtfsUsnRead(
     _In_ PIO_STACK_LOCATION IrpSp)
 {
     READ_USN_JOURNAL_DATA_V1 Input;
-    NtfsUsnJournalData Data;
     PVolumeContextBlock VolCB;
     PFileContextBlock FileCB;
     PVOID InputBuffer = IrpSp->Parameters.FileSystemControl.Type3InputBuffer;
@@ -180,10 +581,10 @@ NtfsUsnRead(
     PUCHAR Output;
     PUCHAR Staging = NULL;
     PUCHAR Raw = NULL;
-    ULONG CopyLength, Capacity, Filled = 0, RawLength, Offset;
+    ULONG CopyLength, Capacity, Filled = 0;
     BOOLEAN IsV1;
-    LONGLONG Cursor, Next;
-    ULONGLONG Scanned = 0;
+    LONGLONG Cursor = 0, JournalNext = 0;
+    PNTFS_USN_WAIT Wait;
     NTSTATUS Status;
 
     Status = NtfsUsnGetVolume(VolumeDeviceObject, IrpSp, &VolCB, &FileCB);
@@ -242,53 +643,63 @@ NtfsUsnRead(
         }
     }
 
-    KeEnterCriticalRegion();
-    NtfsAcquireMetadata(VolCB);
-    Status = NtfsUsnJournalQuery(VolCB->DiskVolume, &Data);
-    if (NT_SUCCESS(Status) && Data.UsnJournalId != Input.UsnJournalID)
-        Status = STATUS_INVALID_PARAMETER;
-
-    /*
-     * Filtered-out records still advance the USN returned for the next read. A call that
-     * reaches the scan bound returns what it has, possibly nothing, and the USN to go on from.
-     */
-    Cursor = Input.StartUsn;
-    while (NT_SUCCESS(Status) && Filled < Capacity && Scanned < NTFS_USN_READ_SCAN_MAX)
-    {
-        Status = NtfsUsnJournalRead(VolCB->DiskVolume, Cursor, Raw, Capacity - Filled, &RawLength, &Next);
-        if (Status == STATUS_BUFFER_TOO_SMALL)
-        {
-            /* The next record does not fit what is left of the caller's buffer */
-            Status = STATUS_SUCCESS;
-            break;
-        }
-        if (!NT_SUCCESS(Status))
-            break;
-
-        for (Offset = 0; Offset + sizeof(USN_RECORD_COMMON_HEADER) <= RawLength;)
-        {
-            const USN_RECORD_COMMON_HEADER* Header = (const USN_RECORD_COMMON_HEADER*)(Raw + Offset);
-
-            if (NtfsUsnRecordSelected(Raw + Offset, &Input))
-            {
-                RtlCopyMemory(Staging + Filled, Raw + Offset, Header->RecordLength);
-                Filled += Header->RecordLength;
-            }
-            Offset += Header->RecordLength;
-        }
-        if (Next > Cursor)
-            Scanned += (ULONGLONG)(Next - Cursor);
-        Cursor = Next;
-        if (RawLength == 0)
-            break;
-    }
-    /* 0 asks for the first record; report the real USN reading continues from */
-    if (NT_SUCCESS(Status) && Cursor == 0)
-        Cursor = Data.FirstUsn;
-    NtfsReleaseMetadata(VolCB);
-    KeLeaveCriticalRegion();
+    Status = NtfsUsnCollect(VolCB, &Input, Staging, Capacity, Raw, &Filled, &Cursor, &JournalNext);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
+
+    /*
+     * Nothing to return and the caller asked to wait: queue the request. Its output buffer
+     * is locked now, while this is still the caller's thread, and filled by the wake worker.
+     */
+    if (!Filled && Input.BytesToWaitFor && Capacity)
+    {
+        Wait = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Wait), NTFS_USN_WAIT_TAG);
+        if (!Wait)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        Wait->Input = Input;
+        Wait->Input.StartUsn = Cursor;
+        Wait->OutputLength = OutputLength;
+        Wait->ThresholdUsn = JournalNext + (LONGLONG)Input.BytesToWaitFor;
+        /* Timeout is ignored for asynchronously opened handles */
+        Wait->Deadline = (Input.Timeout && (IrpSp->FileObject->Flags & FO_SYNCHRONOUS_IO))
+                       ? KeQueryInterruptTime() + Input.Timeout * 10000000ULL : 0;
+
+        if (!IoAllocateMdl(Output, OutputLength, FALSE, FALSE, Irp))
+        {
+            ExFreePoolWithTag(Wait, NTFS_USN_WAIT_TAG);
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        _SEH2_TRY
+        {
+            MmProbeAndLockPages(Irp->MdlAddress, Irp->RequestorMode, IoWriteAccess);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+        if (!NT_SUCCESS(Status))
+        {
+            IoFreeMdl(Irp->MdlAddress);
+            Irp->MdlAddress = NULL;
+            ExFreePoolWithTag(Wait, NTFS_USN_WAIT_TAG);
+            goto Cleanup;
+        }
+
+        Irp->Tail.Overlay.DriverContext[0] = Wait;
+        if (Wait->Deadline)
+            NtfsUsnArmTimer(VolCB);
+        /* Marks the IRP pending; one cancelled meanwhile is completed by the queue */
+        IoCsqInsertIrp(&VolCB->UsnWaitCsq, Irp, NULL);
+        /* Records appended since the check above must not be missed */
+        NtfsUsnWakeWaiters(VolCB);
+        Status = STATUS_PENDING;
+        goto Cleanup;
+    }
 
     _SEH2_TRY
     {
@@ -444,6 +855,7 @@ NtfsUsnWriteCloseRecord(
     KeLeaveCriticalRegion();
     if (!NT_SUCCESS(Status))
         return Status;
+    NtfsUsnWakeWaiters(VolCB);
 
     _SEH2_TRY
     {

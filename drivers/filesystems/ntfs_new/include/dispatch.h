@@ -396,8 +396,22 @@ DeviceIoControl(_In_    PDEVICE_OBJECT DeviceObject,
                 _Inout_ PULONG OutputBufferSize,
                 _In_    BOOLEAN Override);
 
-/* usn.c: the USN change journal FSCTLs */
+/* usn.c: the USN change journal FSCTLs; STATUS_PENDING means the IRP was queued */
 NTSTATUS
 NtfsUsnFsControl(_In_    PDEVICE_OBJECT VolumeDeviceObject,
                  _Inout_ PIRP Irp,
                  _In_    PIO_STACK_LOCATION IrpSp);
+
+VOID
+NtfsUsnInitializeVolume(_In_ struct _VolumeContextBlock* VolCB,
+                        _In_ PDEVICE_OBJECT VolumeDeviceObject);
+
+VOID
+NtfsUsnShutdownVolume(_In_ struct _VolumeContextBlock* VolCB);
+
+VOID
+NtfsUsnWakeWaiters(_In_ struct _VolumeContextBlock* VolCB);
+
+VOID
+NtfsUsnCancelFileWaiters(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                         _In_ PFILE_OBJECT FileObject);

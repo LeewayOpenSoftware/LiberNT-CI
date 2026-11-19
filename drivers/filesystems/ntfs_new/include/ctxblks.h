@@ -108,6 +108,15 @@ typedef struct _VolumeContextBlock
     /* Context blocks kept with their resources still initialized. */
     FAST_MUTEX IdleFcbMutex;
     LIST_ENTRY IdleFcbList;
+    /* FSCTL_READ_USN_JOURNAL requests waiting for records (usn.c) */
+    IO_CSQ UsnWaitCsq;
+    LIST_ENTRY UsnWaitList;
+    KSPIN_LOCK UsnWaitLock;
+    PDEVICE_OBJECT UsnDeviceObject;
+    LONG UsnWakeQueued;
+    KTIMER UsnWaitTimer;
+    KDPC UsnWaitTimerDpc;
+    BOOLEAN UsnWaitTimerArmed;
     ULONG IdleFcbCount;
 
     /* Linkage on the global mounted-volume list (ntfsinit.c), walked by

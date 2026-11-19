@@ -972,6 +972,8 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
     FileCB = NtfsGetFileContext(IrpSp->FileObject);
+    /* Journal reads still waiting on this handle end with it */
+    NtfsUsnCancelFileWaiters(VolumeDeviceObject, IrpSp->FileObject);
 
     if (FileCB && !FileCB->CleanupComplete)
     {
