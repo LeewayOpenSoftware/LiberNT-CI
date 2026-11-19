@@ -29,6 +29,9 @@ BOOLEAN KiSpeculationFenceEnabled;
 static const UCHAR KiFenceSiteMarker[7] = { KSPEC_FENCE_SITE_BYTES };
 /* lfence followed by a 4-byte nop */
 static const UCHAR KiFenceSiteLfence[7] = { 0x0F, 0xAE, 0xE8, 0x0F, 0x1F, 0x40, 0x00 };
+static const UCHAR KiVerwSiteMarker[7] = { KSPEC_VERW_SITE_BYTES };
+/* verw operand: a writable data segment selector */
+static USHORT KiVerwSelector = KGDT64_R0_DATA;
 #endif
 
 /* FUNCTIONS *****************************************************************/
@@ -135,7 +138,8 @@ CODE_SEG("INIT")
 static
 ULONG
 KiPatchImageSites(
-    _In_ PVOID ImageBase)
+    _In_ PVOID ImageBase,
+    _In_ ULONG Kinds)
 {
     PIMAGE_NT_HEADERS NtHeaders = RtlImageNtHeader(ImageBase);
     PIMAGE_SECTION_HEADER Section;
@@ -155,10 +159,31 @@ KiPatchImageSites(
         End = Code + min(Section->Misc.VirtualSize, Section->SizeOfRawData);
         for (; Code + sizeof(KiFenceSiteMarker) <= End; Code++)
         {
-            if (Code[0] == 0x0F && RtlEqualMemory(Code, KiFenceSiteMarker, sizeof(KiFenceSiteMarker)))
+            if (Code[0] != 0x0F)
+                continue;
+
+            if ((Kinds & KSPEC_HARDEN_BOUNDS) &&
+                RtlEqualMemory(Code, KiFenceSiteMarker, sizeof(KiFenceSiteMarker)))
             {
                 RtlCopyMemory(Code, KiFenceSiteLfence, sizeof(KiFenceSiteLfence));
                 Code += sizeof(KiFenceSiteMarker) - 1;
+                Sites++;
+            }
+            else if ((Kinds & KSPEC_HARDEN_MDS) &&
+                     RtlEqualMemory(Code, KiVerwSiteMarker, sizeof(KiVerwSiteMarker)))
+            {
+                /* verw word ptr [rip + disp32] */
+                LONG64 Disp = (LONG64)((ULONG_PTR)&KiVerwSelector - (ULONG_PTR)(Code + 7));
+                LONG Disp32 = (LONG)Disp;
+
+                if (Disp32 != Disp)
+                    continue;
+
+                Code[0] = 0x0F;
+                Code[1] = 0x00;
+                Code[2] = 0x2D;
+                RtlCopyMemory(&Code[3], &Disp32, sizeof(Disp32));
+                Code += sizeof(KiVerwSiteMarker) - 1;
                 Sites++;
             }
         }
@@ -171,7 +196,8 @@ CODE_SEG("INIT")
 static
 ULONG
 KiPatchBootImages(
-    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_ ULONG Kinds)
 {
     PLIST_ENTRY Entry = LoaderBlock->LoadOrderListHead.Flink;
     PLDR_DATA_TABLE_ENTRY LdrEntry;
@@ -189,7 +215,7 @@ KiPatchBootImages(
         ULONG ImageSites;
 
         LdrEntry = CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-        ImageSites = KiPatchImageSites(LdrEntry->DllBase);
+        ImageSites = KiPatchImageSites(LdrEntry->DllBase, Kinds);
         DPRINT1("Speculation sites patched in %wZ: %lu\n", &LdrEntry->BaseDllName, ImageSites);
         Sites += ImageSites;
     }
@@ -212,22 +238,33 @@ NTAPI
 KiApplySpeculationPolicy(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    ULONG Sites = 0;
+    ULONG Kinds = 0, Sites = 0;
 
-    if (!(KiSpeculationHardening & KSPEC_HARDEN_BOUNDS))
+    if (KiSpeculationHardening & KSPEC_HARDEN_BOUNDS)
     {
-        DPRINT1("Speculation hardening 0x%lx: bound checks unchanged\n", KiSpeculationHardening);
-        return;
+        Kinds |= KSPEC_HARDEN_BOUNDS;
+        KiSpeculationIndexMaskOff = 0;
+#ifdef _M_IX86
+        /* lfence needs SSE2 */
+        if (KeFeatureBits & KF_XMMI64)
+            KiSpeculationFenceEnabled = TRUE;
+#endif
     }
 
-    KiSpeculationIndexMaskOff = 0;
+    /* verw clears the buffers only where MD_CLEAR is enumerated, and is needed only where MDS applies */
+    if ((KiSpeculationHardening & KSPEC_HARDEN_MDS) &&
+        (KiSpeculationFeatures & KSPEC_MD_CLEAR) &&
+        !(KiSpeculationFeatures & KSPEC_MDS_NO))
+    {
+        Kinds |= KSPEC_HARDEN_MDS;
+    }
+
 #ifdef _M_AMD64
-    Sites = KiPatchBootImages(LoaderBlock);
+    if (Kinds)
+        Sites = KiPatchBootImages(LoaderBlock, Kinds);
 #else
-    /* lfence needs SSE2 */
-    if (KeFeatureBits & KF_XMMI64)
-        KiSpeculationFenceEnabled = TRUE;
+    UNREFERENCED_PARAMETER(LoaderBlock);
 #endif
-    DPRINT1("Speculation hardening 0x%lx: index masking on, %lu fence sites\n",
-            KiSpeculationHardening, Sites);
+    DPRINT1("Speculation hardening 0x%lx: active 0x%lx, %lu sites patched\n",
+            KiSpeculationHardening, Kinds, Sites);
 }

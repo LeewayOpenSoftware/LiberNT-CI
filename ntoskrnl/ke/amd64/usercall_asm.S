@@ -132,6 +132,7 @@ UserCallbackInstrumentationDone:
 
     /* Swap gs back to user */
     swapgs
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(4D) /* verw site, see KiApplySpeculationPolicy */
 
     /* return to user mode */
     sysretq

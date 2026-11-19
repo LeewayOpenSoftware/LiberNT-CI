@@ -62,6 +62,7 @@ extern ULONG KiFeatureSettingsOverrideMask;
 
 /* Session Manager\Kernel SpeculationHardening, our own switch until each class has a default */
 #define KSPEC_HARDEN_BOUNDS             0x00000001  /* Index masking and fences after bound checks */
+#define KSPEC_HARDEN_MDS                0x00000002  /* Clear CPU buffers on return to user mode */
 
 extern ULONG KiSpeculationHardening;
 extern ULONG_PTR KiSpeculationIndexMaskOff;
@@ -87,6 +88,8 @@ KiSpeculationIndexMask(
 
 /* A marked 7-byte nop that KiApplySpeculationPolicy turns into lfence */
 #define KSPEC_FENCE_SITE_BYTES          0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54, 0x46
+/* Same, turned into verw */
+#define KSPEC_VERW_SITE_BYTES           0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54, 0x4D
 
 FORCEINLINE
 VOID

@@ -425,6 +425,7 @@ MACRO(ExitTrap, Flags)
 
     /* Swap gs to user mode */
     swapgs
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(4D) /* verw site, see KiApplySpeculationPolicy */
 #ifdef _USE_ML
     jmp debug_registers_restored
 #else

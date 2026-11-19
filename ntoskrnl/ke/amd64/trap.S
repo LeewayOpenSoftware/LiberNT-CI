@@ -1327,6 +1327,7 @@ SystemServiceInstrumentationDone:
     pxor xmm4, xmm4
     pxor xmm5, xmm5
     xor rdx, rdx
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(4D) /* verw site, see KiApplySpeculationPolicy */
 
     /* return to user mode */
     sysretq
@@ -1345,6 +1346,7 @@ SystemServiceIretq:
     pxor xmm4, xmm4
     pxor xmm5, xmm5
     xor edx, edx
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(4D) /* verw site, see KiApplySpeculationPolicy */
     iretq
 
 SystemServiceInstrumented:
@@ -1419,6 +1421,7 @@ KiPicoSystemCallEntry:
     mov rbp, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rbp]
     add rsp, MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip
     swapgs
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(4D) /* verw site, see KiApplySpeculationPolicy */
     iretq
 
 .ENDP
