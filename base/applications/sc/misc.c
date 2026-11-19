@@ -50,6 +50,24 @@ static const OPTION_INFO TagOpts[] =
 
 
 BOOL
+ApplyDelayedAutoStart(
+    SC_HANDLE hService,
+    BOOL bDelayedAutoStart)
+{
+    SERVICE_DELAYED_AUTO_START_INFO Info;
+
+    Info.fDelayedAutostart = bDelayedAutoStart;
+    if (!ChangeServiceConfig2(hService, SERVICE_CONFIG_DELAYED_AUTO_START_INFO, &Info))
+    {
+        _tprintf(_T("[SC] ChangeServiceConfig2 FAILED %lu:\n\n"), GetLastError());
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+
+BOOL
 ParseCreateConfigArguments(
     LPCTSTR *ServiceArgs,
     INT ArgCount,
@@ -93,15 +111,26 @@ ParseCreateConfigArguments(
         }
         else if (!lstrcmpi(ServiceArgs[ArgIndex], _T("start=")))
         {
-            for (i = 0; i < sizeof(StartOpts) / sizeof(StartOpts[0]); i++)
-                if (!lstrcmpi(ServiceArgs[ArgIndex + 1], StartOpts[i].lpOption))
-                {
-                    lpServiceInfo->dwStartType = StartOpts[i].dwValue;
-                    break;
-                }
+            if (!lstrcmpi(ServiceArgs[ArgIndex + 1], _T("delayed-auto")))
+            {
+                lpServiceInfo->dwStartType = SERVICE_AUTO_START;
+                lpServiceInfo->bStartTypeSet = TRUE;
+                lpServiceInfo->bDelayedAutoStart = TRUE;
+            }
+            else
+            {
+                for (i = 0; i < sizeof(StartOpts) / sizeof(StartOpts[0]); i++)
+                    if (!lstrcmpi(ServiceArgs[ArgIndex + 1], StartOpts[i].lpOption))
+                    {
+                        lpServiceInfo->dwStartType = StartOpts[i].dwValue;
+                        lpServiceInfo->bStartTypeSet = TRUE;
+                        lpServiceInfo->bDelayedAutoStart = FALSE;
+                        break;
+                    }
 
-            if (i == sizeof(StartOpts) / sizeof(StartOpts[0]))
-                break;
+                if (i == sizeof(StartOpts) / sizeof(StartOpts[0]))
+                    break;
+            }
         }
         else if (!lstrcmpi(ServiceArgs[ArgIndex], _T("error=")))
         {

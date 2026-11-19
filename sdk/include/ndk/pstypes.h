@@ -1753,6 +1753,7 @@ typedef struct _ETHREAD
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
            ULONG RateApcState:2;
 #endif
+           ULONG NonSystemThreadNotified:1;
         };
         ULONG SameThreadPassiveFlags;
     };

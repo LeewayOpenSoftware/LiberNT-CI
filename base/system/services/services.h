@@ -280,7 +280,7 @@ VOID ScmServiceFailure(PSERVICE lpService, BOOL bCrashed);
 DWORD ScmSetServiceTriggers(HKEY hServiceKey, const SERVICE_TRIGGER_INFO *lpInfo);
 DWORD ScmQueryServiceTriggers(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, LPDWORD pcbBytesNeeded);
 VOID ScmStartTriggers(VOID);
-#define SCM_DEFAULT_PRESHUTDOWN_TIMEOUT 180000
+#define SCM_DEFAULT_PRESHUTDOWN_TIMEOUT 10000
 
 VOID ScmPreshutdownServices(VOID);
 BOOLEAN ScmReadDelayedAutoStart(_In_ HKEY hServiceKey);

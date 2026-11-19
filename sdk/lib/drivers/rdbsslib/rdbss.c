@@ -8938,12 +8938,37 @@ TryAgain:
     return Status;
 }
 
+/* Called after the paging resource is released (as FAT does); the stream may be cached
+ * through another file object, so check the shared cache map */
+static
+VOID
+RxReportNewSizesToCache(
+    PFCB Fcb,
+    PFILE_OBJECT FileObject,
+    BOOLEAN Truncated)
+{
+    CC_FILE_SIZES Sizes;
+
+    if (FileObject != NULL && Fcb->NonPaged->SectionObjectPointers.SharedCacheMap != NULL)
+    {
+        Sizes.AllocationSize = Fcb->Header.AllocationSize;
+        Sizes.FileSize = Fcb->Header.FileSize;
+        Sizes.ValidDataLength = Fcb->Header.ValidDataLength;
+        CcSetFileSizes(FileObject, &Sizes);
+    }
+    else if (Truncated && Fcb->NonPaged->SectionObjectPointers.DataSectionObject != NULL)
+    {
+        CcPurgeCacheSection(&Fcb->NonPaged->SectionObjectPointers, &Fcb->Header.FileSize, 0, FALSE);
+    }
+}
+
 NTSTATUS
 RxSetAllocationInfo(
     PRX_CONTEXT RxContext)
 {
     PFCB Fcb;
     PFILE_ALLOCATION_INFORMATION AllocInfo;
+    BOOLEAN Truncated;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -8970,25 +8995,34 @@ RxSetAllocationInfo(
         return STATUS_USER_MAPPED_FILE;
     }
 
+    /* Paging I/O (the lazy writer too) takes only the paging resource and clips against FileSize:
+     * keep it out until the new size is set, or a flush can re-extend the file on the server */
+    Truncated = (AllocInfo->AllocationSize.QuadPart < Fcb->Header.FileSize.QuadPart);
+    RxAcquirePagingIoResource(RxContext, Fcb);
+
     /* The mini-rdr does the real work */
     Status = RxpSetInfoMiniRdr(RxContext, FileAllocationInformation);
-    if (!NT_SUCCESS(Status))
+    if (NT_SUCCESS(Status))
     {
-        return Status;
+        Fcb->Header.AllocationSize = AllocInfo->AllocationSize;
+        if (AllocInfo->AllocationSize.QuadPart < Fcb->Header.FileSize.QuadPart)
+        {
+            Fcb->Header.FileSize = AllocInfo->AllocationSize;
+        }
+        if (AllocInfo->AllocationSize.QuadPart < Fcb->Header.ValidDataLength.QuadPart)
+        {
+            Fcb->Header.ValidDataLength = AllocInfo->AllocationSize;
+        }
     }
 
-    /* Keep the FCB in line with what the server now has (the caller holds the FCB exclusive) */
-    Fcb->Header.AllocationSize = AllocInfo->AllocationSize;
-    if (AllocInfo->AllocationSize.QuadPart < Fcb->Header.FileSize.QuadPart)
+    RxReleasePagingIoResource(RxContext, Fcb);
+
+    if (NT_SUCCESS(Status))
     {
-        Fcb->Header.FileSize = AllocInfo->AllocationSize;
-    }
-    if (AllocInfo->AllocationSize.QuadPart < Fcb->Header.ValidDataLength.QuadPart)
-    {
-        Fcb->Header.ValidDataLength = AllocInfo->AllocationSize;
+        RxReportNewSizesToCache(Fcb, RxContext->CurrentIrpSp->FileObject, Truncated);
     }
 
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 /*
@@ -9145,6 +9179,7 @@ RxSetEndOfFileInfo(
     PFILE_OBJECT FileObject;
     PFILE_END_OF_FILE_INFORMATION EofInfo;
     LARGE_INTEGER NewSize;
+    BOOLEAN Truncated;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -9173,39 +9208,34 @@ RxSetEndOfFileInfo(
         return STATUS_USER_MAPPED_FILE;
     }
 
+    /* Same rule as RxSetAllocationInfo: no paging I/O between the server change and the new FileSize */
+    Truncated = (NewSize.QuadPart < Fcb->Header.FileSize.QuadPart);
+    RxAcquirePagingIoResource(RxContext, Fcb);
+
     /* The mini-rdr does the real work */
     Status = RxpSetInfoMiniRdr(RxContext, FileEndOfFileInformation);
-    if (!NT_SUCCESS(Status))
+    if (NT_SUCCESS(Status))
     {
-        return Status;
+        Fcb->Header.FileSize = NewSize;
+        if (NewSize.QuadPart < Fcb->Header.ValidDataLength.QuadPart)
+        {
+            Fcb->Header.ValidDataLength = NewSize;
+        }
+        if (NewSize.QuadPart > Fcb->Header.AllocationSize.QuadPart)
+        {
+            Fcb->Header.AllocationSize = NewSize;
+        }
     }
 
-    /* Keep the FCB in line with what the server now has (the caller holds the FCB exclusive) */
-    if (NewSize.QuadPart < Fcb->Header.FileSize.QuadPart &&
-        Fcb->NonPaged->SectionObjectPointers.DataSectionObject != NULL)
-    {
-        CcPurgeCacheSection(&Fcb->NonPaged->SectionObjectPointers, &NewSize, 0, FALSE);
-    }
-    Fcb->Header.FileSize = NewSize;
-    if (NewSize.QuadPart < Fcb->Header.ValidDataLength.QuadPart)
-    {
-        Fcb->Header.ValidDataLength = NewSize;
-    }
-    if (NewSize.QuadPart > Fcb->Header.AllocationSize.QuadPart)
-    {
-        Fcb->Header.AllocationSize = NewSize;
-    }
-    if (FileObject != NULL && FileObject->PrivateCacheMap != NULL)
-    {
-        CC_FILE_SIZES Sizes;
+    RxReleasePagingIoResource(RxContext, Fcb);
 
-        Sizes.AllocationSize = Fcb->Header.AllocationSize;
-        Sizes.FileSize = Fcb->Header.FileSize;
-        Sizes.ValidDataLength = Fcb->Header.ValidDataLength;
-        CcSetFileSizes(FileObject, &Sizes);
+    /* Cc purges cached pages past a smaller FileSize */
+    if (NT_SUCCESS(Status))
+    {
+        RxReportNewSizesToCache(Fcb, FileObject, Truncated);
     }
 
-    return STATUS_SUCCESS;
+    return Status;
 }
 
 NTSTATUS

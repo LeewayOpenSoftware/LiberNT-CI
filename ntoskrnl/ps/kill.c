@@ -579,6 +579,7 @@ PspExitThread(IN NTSTATUS ExitStatus)
 
     /* Run Thread Notify Routines before we desintegrate the thread */
     PspRunCreateThreadNotifyRoutines(Thread, FALSE);
+    PspRunNonSystemThreadNotifyRoutines(Thread, FALSE);
 
     if (Thread->Tcb.Header.Minimal)
         PspPicoThreadExit(Thread);

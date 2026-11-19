@@ -515,6 +515,68 @@ PsGetThreadServerSilo(
     return NULL;
 }
 
+NTSTATUS
+NTAPI
+PsGetJobSilo(
+    _In_ PEJOB Job,
+    _Out_ PESILO *Silo)
+{
+    PEJOB Current;
+
+    if (Job == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* The ancestor chain of a referenced job does not change */
+    for (Current = Job; Current != NULL; Current = Current->ParentJob)
+    {
+        if (Current->Silo)
+        {
+            *Silo = Current;
+            return STATUS_SUCCESS;
+        }
+    }
+
+    *Silo = NULL;
+    return STATUS_JOB_NO_CONTAINER;
+}
+
+NTSTATUS
+NTAPI
+PsGetJobServerSilo(
+    _In_opt_ PEJOB Job,
+    _Out_ PESILO *ServerSilo)
+{
+    PEJOB Current;
+
+    if (Job == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* App silos are skipped; without a server silo the answer is the host silo */
+    for (Current = Job; Current != NULL; Current = Current->ParentJob)
+    {
+        if (Current->Silo && Current->ServerSiloGlobals != NULL)
+        {
+            *ServerSilo = Current;
+            return STATUS_SUCCESS;
+        }
+    }
+
+    *ServerSilo = PsGetHostSilo();
+    return STATUS_SUCCESS;
+}
+
+GUID*
+NTAPI
+PsGetSiloContainerId(
+    _In_ PESILO Silo)
+{
+    /* The host silo is no container, so its identifier is the null GUID */
+    static GUID PsHostSiloContainerId;
+
+    PAGED_CODE();
+    return (Silo != NULL) ? &Silo->ContainerId : &PsHostSiloContainerId;
+}
+
 /* INITIALIZATION ************************************************************/
 
 VOID

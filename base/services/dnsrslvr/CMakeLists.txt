@@ -9,6 +9,7 @@ list(APPEND SOURCE
     dnsrslvr.c
     hostsfile.c
     llmnr.c
+    mdns.c
     rpcserver.c
     wskname.c
     precomp.h
