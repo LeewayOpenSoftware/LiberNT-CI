@@ -206,7 +206,7 @@ RtlFillMemoryNonTemporal(
     _In_ SIZE_T Length,
     _In_ const UCHAR Value)
 {
-#if defined(_M_AMD64) && defined(__GNUC__)
+#if defined(_M_AMD64)
     PUCHAR Current = Destination;
     ULONG64 Pattern = 0x0101010101010101ULL * Value;
 
@@ -220,11 +220,11 @@ RtlFillMemoryNonTemporal(
         }
         while (Length >= 8)
         {
-            __asm__ __volatile__("movnti %1, %0" : "=m"(*(ULONG64 *)Current) : "r"(Pattern));
+            _mm_stream_si64((long long *)Current, (long long)Pattern);
             Current += 8;
             Length -= 8;
         }
-        __asm__ __volatile__("sfence" ::: "memory");
+        _mm_sfence();
     }
     RtlFillMemory(Current, Length, Value);
 #else
@@ -297,7 +297,7 @@ RtlQueryRegistryValueWithFallback(
     _In_ ULONG ValueLength,
     _Out_opt_ PULONG ValueType,
     _Out_writes_bytes_to_(ValueLength, *ResultLength) PVOID ValueData,
-    _Out_range_(<=, ValueLength) PULONG ResultLength)
+    _Out_ PULONG ResultLength)
 {
     NTSTATUS Status = STATUS_OBJECT_NAME_NOT_FOUND;
 

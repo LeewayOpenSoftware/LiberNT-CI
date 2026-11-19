@@ -3029,7 +3029,7 @@ RtlQueryRegistryValueWithFallback(
   _In_ ULONG ValueLength,
   _Out_opt_ PULONG ValueType,
   _Out_writes_bytes_to_(ValueLength, *ResultLength) PVOID ValueData,
-  _Out_range_(<=, ValueLength) PULONG ResultLength);
+  _Out_ PULONG ResultLength);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_

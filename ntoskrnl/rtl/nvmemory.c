@@ -69,7 +69,7 @@ RtlpCopyNonTemporal(
     _In_reads_bytes_(Length) const UCHAR *Source,
     _In_ SIZE_T Length)
 {
-#if defined(_M_AMD64) && defined(__GNUC__)
+#if defined(_M_AMD64)
     ULONG64 Value;
 
     /* MOVNTI needs an aligned quadword */
@@ -81,7 +81,7 @@ RtlpCopyNonTemporal(
     while (Length >= 8)
     {
         RtlCopyMemory(&Value, Source, sizeof(Value));
-        __asm__ __volatile__("movnti %1, %0" : "=m"(*(ULONG64 *)Destination) : "r"(Value));
+        _mm_stream_si64((long long *)Destination, (long long)Value);
         Destination += 8;
         Source += 8;
         Length -= 8;

@@ -2875,12 +2875,48 @@ MmProtectDriverSection(
     _In_ SIZE_T Size,
     _In_ ULONG Flags)
 {
-    PAGED_CODE();
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    PIMAGE_NT_HEADERS NtHeaders;
+    PIMAGE_SECTION_HEADER Section;
+    ULONG Characteristics = 0;
+    BOOLEAN Found = FALSE;
+    ULONG_PTR Rva;
+    ULONG Index;
 
-    UNREFERENCED_PARAMETER(AddressWithinSection);
+    PAGED_CODE();
 
     if ((Size != 0) || (Flags & ~MM_PROTECT_DRIVER_SECTION_VALID_FLAGS))
         return STATUS_INVALID_PARAMETER;
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&PsLoadedModuleResource, TRUE);
+    LdrEntry = MiLookupDataTableEntry(AddressWithinSection);
+    if (LdrEntry != NULL)
+    {
+        NtHeaders = RtlImageNtHeader(LdrEntry->DllBase);
+        Rva = (ULONG_PTR)AddressWithinSection - (ULONG_PTR)LdrEntry->DllBase;
+        Section = NtHeaders ? IMAGE_FIRST_SECTION(NtHeaders) : NULL;
+        for (Index = 0; Section != NULL && Index < NtHeaders->FileHeader.NumberOfSections; Index++, Section++)
+        {
+            if (Rva >= Section->VirtualAddress &&
+                Rva < Section->VirtualAddress + max(Section->Misc.VirtualSize, Section->SizeOfRawData))
+            {
+                Characteristics = Section->Characteristics;
+                Found = TRUE;
+                break;
+            }
+        }
+    }
+    ExReleaseResourceLite(&PsLoadedModuleResource);
+    KeLeaveCriticalRegion();
+
+    /* Learn bugchecks for an address outside every driver section; a status still tells the caller */
+    if (!Found)
+        return STATUS_INVALID_PARAMETER;
+    if (Characteristics & IMAGE_SCN_MEM_EXECUTE)
+        return STATUS_INVALID_PAGE_PROTECTION;
+    if (Characteristics & IMAGE_SCN_MEM_DISCARDABLE)
+        return STATUS_ACCESS_VIOLATION;
 
     /* The protection lives in the VSM second-level tables; this kernel runs without VSM */
     return STATUS_INVALID_DEVICE_STATE;

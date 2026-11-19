@@ -3687,6 +3687,17 @@ IoCreateStreamFileObject(IN PFILE_OBJECT FileObject,
     return IoCreateStreamFileObjectEx(FileObject, DeviceObject, NULL);
 }
 
+/* A stream file gets DeviceObject's VPB, so its requests start at the mounted volume, if any */
+static
+PDEVICE_OBJECT
+IopStreamFileBaseDevice(
+    _In_ PDEVICE_OBJECT DeviceObject)
+{
+    PVPB Vpb = DeviceObject->Vpb;
+
+    return (Vpb != NULL && Vpb->DeviceObject != NULL) ? Vpb->DeviceObject : DeviceObject;
+}
+
 /*
  * @implemented
  */
@@ -3715,10 +3726,11 @@ IoCreateStreamFileObjectEx2(
     if (FileObject != NULL)
         DeviceObject = FileObject->DeviceObject;
 
-    /* A lite stream file has no handle; a target must sit on the same device stack */
+    /* A lite stream file has no handle; a target must sit on the stack IoGetRelatedDeviceObject uses.
+       It is checked before creation, so a rejected target leaves no file object to close. */
     if ((CreateOptions->Flags & ~(IO_CREATE_STREAM_FILE_RAISE_ON_ERROR | IO_CREATE_STREAM_FILE_LITE)) ||
         DeviceObject == NULL || StreamFileObject == NULL || (Lite && FileHandle != NULL) ||
-        (Target != NULL && !IopVerifyDeviceObjectOnStack(DeviceObject, Target)))
+        (Target != NULL && !IopVerifyDeviceObjectOnStack(IopStreamFileBaseDevice(DeviceObject), Target)))
     {
         Status = STATUS_INVALID_PARAMETER;
         goto Done;

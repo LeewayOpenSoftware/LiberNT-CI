@@ -190,7 +190,7 @@ static NTSTATUS lznt1_decompress(UCHAR *dst, ULONG dst_size, UCHAR *src, ULONG s
             return STATUS_BAD_COMPRESSION_BUFFER;
 
         /* add padding if required */
-        block_size = ((dst_cur - dst) + offset) & 0xFFF;
+        block_size = ((dst_cur - dst) + offset) & (chunk_unit - 1);
         if (block_size)
         {
             block_size = chunk_unit - block_size;
@@ -566,7 +566,8 @@ RtlDecompressBufferEx2(IN USHORT CompressionFormat,
                 return STATUS_INVALID_PARAMETER;
             }
             return lznt1_decompress(UncompressedBuffer, UncompressedBufferSize, CompressedBuffer,
-                                    CompressedBufferSize, 0, FinalUncompressedSize, WorkSpace, FALSE, 0x1000);
+                                    CompressedBufferSize, 0, FinalUncompressedSize, WorkSpace, FALSE,
+                                    UncompressedChunkSize);
 
         case COMPRESSION_FORMAT_NONE:
         case COMPRESSION_FORMAT_DEFAULT:

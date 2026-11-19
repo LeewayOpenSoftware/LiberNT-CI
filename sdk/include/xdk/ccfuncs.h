@@ -415,6 +415,7 @@ CcSetParallelFlushFile(
 
 NTKERNELAPI
 BOOLEAN
+NTAPI
 CcIsThereDirtyDataEx(
   _In_ PVPB Vpb,
   _In_opt_ PULONG NumberOfDirtyPages);

@@ -547,12 +547,14 @@ CcIsThereDirtyData(
 }
 
 BOOLEAN
+NTAPI
 CcIsThereDirtyDataEx(
     _In_ PVPB Vpb,
     _In_opt_ PULONG NumberOfDirtyPages)
 {
     KIRQL OldIrql;
     ULONG64 DirtyPages = 0;
+    BOOLEAN Writing = FALSE;
     PLIST_ENTRY Entry;
     ULONG Index;
 
@@ -567,14 +569,19 @@ CcIsThereDirtyDataEx(
             PCC_NT_MAP NtMap = CONTAINING_RECORD(Entry, CC_NT_MAP, Link);
 
             if (NtMap->FileObject->Vpb == Vpb)
+            {
                 DirtyPages += CC_ATOMIC_READ64(&NtMap->Map.DirtyPages);
+                /* A flush takes pages off the dirty count before writing them: that data is queued to the volume */
+                if (NtMap->Map.FlushesInProgress != 0)
+                    Writing = TRUE;
+            }
         }
         KeReleaseSpinLock(&Bucket->Lock, OldIrql);
     }
 
     if (NumberOfDirtyPages != NULL)
         *NumberOfDirtyPages = (ULONG)min(DirtyPages, (ULONG64)MAXULONG);
-    return DirtyPages != 0;
+    return (DirtyPages != 0) || Writing;
 }
 
 VOID

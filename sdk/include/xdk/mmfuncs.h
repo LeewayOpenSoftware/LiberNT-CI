@@ -365,7 +365,7 @@ typedef VOID
   _In_ PVOID MappedVa);
 typedef MM_MDL_ROUTINE *PMM_MDL_ROUTINE;
 
-_IRQL_requires_max_(APC_LEVEL)
+_IRQL_requires_max_(DISPATCH_LEVEL)
 NTKERNELAPI
 NTSTATUS
 NTAPI
