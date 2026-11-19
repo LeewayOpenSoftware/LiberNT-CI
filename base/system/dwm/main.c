@@ -72,13 +72,6 @@ DwmSignalComposition(void)
         SignalStartNow();
 }
 
-static void
-DwmBroadcastCompositionChanged(void)
-{
-    /* Notify, not send: a hung top-level window must not stall dwm. */
-    SendNotifyMessageW(HWND_BROADCAST, WM_DWMCOMPOSITIONCHANGED, 0, 0);
-}
-
 static LRESULT CALLBACK
 DwmNotificationWindowProc(HWND Window, UINT Message, WPARAM WParam,
                           LPARAM LParam)
@@ -120,7 +113,6 @@ DwmNotificationWindowProc(HWND Window, UINT Message, WPARAM WParam,
                 Host->Connection = NULL;
                 DwmUninitializeEngine(Connection);
             }
-            DwmBroadcastCompositionChanged();
             PostQuitMessage(0);
             return 0;
 
@@ -403,8 +395,6 @@ wWinMain(HINSTANCE Instance, HINSTANCE PreviousInstance,
         DestroyWindow(NotificationWindow);
         return (int)Result;
     }
-
-    DwmBroadcastCompositionChanged();
 
     ZeroMemory(&Message, sizeof(Message));
     while ((MessageResult = GetMessageW(&Message, NULL, 0, 0)) != FALSE &&
