@@ -1781,6 +1781,28 @@ ThemePaintWindow(PDRAW_CONTEXT pcontext, RECT* prcCurrent, BOOL bDoDoubleBufferi
  * Message handlers
  */
 
+/* Whatever a compositor shows of the transparent band (GL fallback, or no DWM consumer) is the frame fill, not stale pixels */
+static void
+ThemeFillFrameBand(PDRAW_CONTEXT pcontext, const RECT *Window)
+{
+    COLORREF color;
+    RECT rc;
+
+    if (IsRectEmpty(&pcontext->FrameInsets))
+        return;
+    if (pcontext->DarkMode)
+        color = ThemeDarkCaptionColor(pcontext);
+    else if (FAILED(GetThemeColor(pcontext->theme, WP_CAPTION, pcontext->Active ? FS_ACTIVE : FS_INACTIVE,
+                                  TMT_FILLCOLORHINT, &color)))
+        color = GetSysColor(pcontext->Active ? COLOR_ACTIVECAPTION : COLOR_INACTIVECAPTION);
+    SetRect(&rc, Window->left, Window->top, Window->left + pcontext->FrameInsets.left, Window->bottom);
+    ThemeFillSolidRect(pcontext->hDC, &rc, color);
+    SetRect(&rc, Window->right - pcontext->FrameInsets.right, Window->top, Window->right, Window->bottom);
+    ThemeFillSolidRect(pcontext->hDC, &rc, color);
+    SetRect(&rc, Window->left, Window->bottom - pcontext->FrameInsets.bottom, Window->right, Window->bottom);
+    ThemeFillSolidRect(pcontext->hDC, &rc, color);
+}
+
 static LRESULT
 ThemeHandleNCPaint(HWND hWnd, HRGN hRgn, const BOOL *pActive)
 {
@@ -1796,6 +1818,7 @@ ThemeHandleNCPaint(HWND hWnd, HRGN hRgn, const BOOL *pActive)
 
     rcCurrent = context.wi.rcWindow;
     OffsetRect( &rcCurrent, -context.wi.rcWindow.left, -context.wi.rcWindow.top);
+    ThemeFillFrameBand(&context, &rcCurrent);
     rcCurrent.left += context.FrameInsets.left;
     rcCurrent.top += context.FrameInsets.top;
     rcCurrent.right -= context.FrameInsets.right;
