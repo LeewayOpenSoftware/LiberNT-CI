@@ -110,7 +110,7 @@ public:
 
     void OnFinalMessage(HWND) override
     {
-        // The server will destroy this window.
+        // The server posts WM_CLOSE, so this thread destroys the window.
         // After the window gets destroyed we can delete this broker here.
         delete this;
     }
