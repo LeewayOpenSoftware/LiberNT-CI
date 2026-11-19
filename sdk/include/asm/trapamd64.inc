@@ -21,11 +21,11 @@ SPSITES ENDS
 ENDM
 #else
 MACRO(SPEC_SITE, Kind)
-770:
+.Lspsite\@:
     .byte 0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54, Kind
     .pushsection .spsites, "dr"
     .p2align 2
-    .rva 770b
+    .rva .Lspsite\@
     .popsection
 ENDM
 #endif
