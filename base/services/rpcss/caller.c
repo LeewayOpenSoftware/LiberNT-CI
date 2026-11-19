@@ -26,34 +26,20 @@ static DWORD rpcss_token_integrity(HANDLE token)
     return *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1);
 }
 
-/* The integrity level RID of the caller, or 0 when it cannot be read */
+/* The integrity level RID of the client's token, or 0 when there is none to read */
 DWORD rpcss_caller_integrity(handle_t h)
 {
     DWORD rid = 0;
-    HANDLE token, process;
-    ULONG pid;
+    HANDLE token;
 
-    if (RpcImpersonateClient(h) == RPC_S_OK)
+    if (RpcImpersonateClient(h) != RPC_S_OK)
+        return 0;
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
     {
-        if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
-        {
-            rid = rpcss_token_integrity(token);
-            CloseHandle(token);
-        }
-        RpcRevertToSelf();
+        rid = rpcss_token_integrity(token);
+        CloseHandle(token);
     }
-
-    /* Without a client token, the process at the other end of the pipe (named by the kernel) */
-    if (!rid && (pid = rpcss_caller_pid(h)) &&
-        (process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)))
-    {
-        if (OpenProcessToken(process, TOKEN_QUERY, &token))
-        {
-            rid = rpcss_token_integrity(token);
-            CloseHandle(token);
-        }
-        CloseHandle(process);
-    }
+    RpcRevertToSelf();
     return rid;
 }
 
