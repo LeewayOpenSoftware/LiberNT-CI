@@ -198,17 +198,36 @@ HRESULT GetItemCLSID(PCUIDLIST_RELATIVE pidl, CLSID *pclsid)
     return hr;
 }
 
+#define FOLDER_ICON_CACHE_MS 5000
+
+static SRWLOCK s_FolderIconLock = SRWLOCK_INIT;
+
 static HRESULT
 getDefaultIconLocation(LPWSTR szIconFile, UINT cchMax, int *piIndex, UINT uFlags)
 {
-    if (!HLM_GetIconW(IDI_SHELL_FOLDER - 1, szIconFile, cchMax, piIndex))
+    static WCHAR s_DefaultFile[MAX_PATH];
+    static int s_DefaultIndex;
+    static DWORD s_DefaultTick;
+    static BOOL s_DefaultValid;
+    DWORD now = GetTickCount();
+
+    AcquireSRWLockExclusive(&s_FolderIconLock);
+    if (!s_DefaultValid || now - s_DefaultTick > FOLDER_ICON_CACHE_MS)
     {
-        if (!HCR_GetIconW(L"Folder", szIconFile, NULL, cchMax, piIndex))
+        if (!HLM_GetIconW(IDI_SHELL_FOLDER - 1, s_DefaultFile, _countof(s_DefaultFile), &s_DefaultIndex))
         {
-            StringCchCopyW(szIconFile, cchMax, swShell32Name);
-            *piIndex = -IDI_SHELL_FOLDER;
+            if (!HCR_GetIconW(L"Folder", s_DefaultFile, NULL, _countof(s_DefaultFile), &s_DefaultIndex))
+            {
+                StringCchCopyW(s_DefaultFile, _countof(s_DefaultFile), swShell32Name);
+                s_DefaultIndex = -IDI_SHELL_FOLDER;
+            }
         }
+        s_DefaultTick = now;
+        s_DefaultValid = TRUE;
     }
+    StringCchCopyW(szIconFile, cchMax, s_DefaultFile);
+    *piIndex = s_DefaultIndex;
+    ReleaseSRWLockExclusive(&s_FolderIconLock);
 
     if (uFlags & GIL_OPENICON)
     {
@@ -245,24 +264,44 @@ getKnownFolderIconLocation(LPCWSTR path, LPWSTR iconFile, UINT cchMax, int *icon
         { &FOLDERID_Videos,    IDI_SHELL_MY_MOVIES },
     };
 
+    static WCHAR s_Paths[_countof(folders)][MAX_PATH];
+    static DWORD s_PathsTick;
+    static BOOL s_PathsValid;
+    DWORD now = GetTickCount();
+    HRESULT hr = S_FALSE;
+
+    AcquireSRWLockExclusive(&s_FolderIconLock);
+    if (!s_PathsValid || now - s_PathsTick > FOLDER_ICON_CACHE_MS)
+    {
+        for (UINT i = 0; i < _countof(folders); ++i)
+        {
+            CComHeapPtr<WCHAR> folderPath;
+
+            s_Paths[i][0] = UNICODE_NULL;
+            if (SUCCEEDED(SHGetKnownFolderPath(*folders[i].id, KF_FLAG_DONT_VERIFY, NULL, &folderPath)) &&
+                SUCCEEDED(StringCchCopyW(s_Paths[i], _countof(s_Paths[i]), folderPath)))
+            {
+                PathRemoveBackslashW(s_Paths[i]);
+            }
+        }
+        s_PathsTick = now;
+        s_PathsValid = TRUE;
+    }
     for (UINT i = 0; i < _countof(folders); ++i)
     {
-        CComHeapPtr<WCHAR> folderPath;
-        if (FAILED(SHGetKnownFolderPath(*folders[i].id, KF_FLAG_DONT_VERIFY, NULL, &folderPath)))
+        if (!s_Paths[i][0] || lstrcmpiW(path, s_Paths[i]) != 0)
             continue;
 
-        PathRemoveBackslashW(folderPath);
-        if (lstrcmpiW(path, folderPath) != 0)
-            continue;
-
-        HRESULT hr = StringCchCopyW(iconFile, cchMax, swShell32Name);
-        if (FAILED(hr))
-            return hr;
-        *iconIndex = -folders[i].icon;
-        return S_OK;
+        hr = StringCchCopyW(iconFile, cchMax, swShell32Name);
+        if (SUCCEEDED(hr))
+        {
+            *iconIndex = -folders[i].icon;
+            hr = S_OK;
+        }
+        break;
     }
-
-    return S_FALSE;
+    ReleaseSRWLockExclusive(&s_FolderIconLock);
+    return hr;
 }
 
 static HRESULT
@@ -278,8 +317,6 @@ getIconLocationForFolder(IShellFolder * psf, PCITEMID_CHILD pidl, UINT uFlags,
 
     // get path
     if (!ILGetDisplayNameExW(psf, pidl, wszPath, 0))
-        goto Quit;
-    if (!PathIsDirectoryW(wszPath))
         goto Quit;
 
     // read-only or system folder?
@@ -346,7 +383,9 @@ KnownFolder:
         return S_OK;
 
 Quit:
-    return getDefaultIconLocation(szIconFile, cchMax, piIndex, uFlags);
+    if (FAILED(getDefaultIconLocation(szIconFile, cchMax, piIndex, uFlags)))
+        return E_FAIL;
+    return S_FALSE;
 }
 
 HRESULT CFSExtractIcon_CreateInstance(IShellFolder * psf, LPCITEMIDLIST pidl, REFIID iid, LPVOID * ppvOut)
@@ -363,21 +402,21 @@ HRESULT CFSExtractIcon_CreateInstance(IShellFolder * psf, LPCITEMIDLIST pidl, RE
 
     if (_ILIsFolder (pidl))
     {
-        if (SUCCEEDED(getIconLocationForFolder(psf,
-                          pidl, 0, wTemp, _countof(wTemp),
-                          &icon_idx,
-                          &flags)))
+        hr = getIconLocationForFolder(psf,
+                 pidl, 0, wTemp, _countof(wTemp),
+                 &icon_idx,
+                 &flags);
+        if (SUCCEEDED(hr))
         {
             initIcon->SetNormalIcon(wTemp, icon_idx);
             // FIXME: if/when getIconLocationForFolder does something for
             //        GIL_FORSHORTCUT, code below should be uncommented. and
             //        the following line removed.
             initIcon->SetShortcutIcon(wTemp, icon_idx);
+            if (hr == S_OK)
+                initIcon->SetOpenIcon(wTemp, icon_idx);
         }
-        if (SUCCEEDED(getIconLocationForFolder(psf,
-                          pidl, GIL_DEFAULTICON, wTemp, _countof(wTemp),
-                          &icon_idx,
-                          &flags)))
+        if (SUCCEEDED(getDefaultIconLocation(wTemp, _countof(wTemp), &icon_idx, 0)))
         {
             initIcon->SetDefaultIcon(wTemp, icon_idx);
         }
@@ -388,10 +427,8 @@ HRESULT CFSExtractIcon_CreateInstance(IShellFolder * psf, LPCITEMIDLIST pidl, RE
         // {
         //     initIcon->SetShortcutIcon(wTemp, icon_idx);
         // }
-        if (SUCCEEDED(getIconLocationForFolder(psf,
-                          pidl, GIL_OPENICON, wTemp, _countof(wTemp),
-                          &icon_idx,
-                          &flags)))
+        if (hr != S_OK &&
+            SUCCEEDED(getDefaultIconLocation(wTemp, _countof(wTemp), &icon_idx, GIL_OPENICON)))
         {
             initIcon->SetOpenIcon(wTemp, icon_idx);
         }
