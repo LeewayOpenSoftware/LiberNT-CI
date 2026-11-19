@@ -264,7 +264,7 @@ def record(name_id, type_id, cls, part, state, ref, data, logical=None):
     return pad(h + (data if ref == 0 else b''), 8)
 
 
-KNOWN_ABSENT = ('normal/ie_personalbarmenu.bmp', 'normal/normalgroupcollapse.bmp', 'normal/normalgroupexpand.bmp')
+KNOWN_ABSENT = ('normal/explorerbarheaderpin.bmp', 'normal/ie_personalbarmenu.bmp', 'normal/normalgroupcollapse.bmp', 'normal/normalgroupexpand.bmp')
 
 
 def main():
@@ -473,7 +473,7 @@ def main():
           (len(real), stats['records'], len(images), len(fonts), len(variant)))
     print({k: v for k, v in stats.items() if k != 'records'})
     # Explorer bar images map to the 'dummy' bitmap in win8.rc and are known to be absent; anything else is a lost image
-    lost = [m for m in missing if 'explorerbar' not in m.lower() and m.lower().replace(chr(92), '/') not in KNOWN_ABSENT]
+    lost = [m for m in missing if m.lower().replace(chr(92), '/') not in KNOWN_ABSENT]
     if lost:
         raise SystemExit('unresolved images: %s' % ', '.join(sorted(set(lost))))
 
