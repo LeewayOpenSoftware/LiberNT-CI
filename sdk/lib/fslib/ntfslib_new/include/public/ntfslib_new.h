@@ -1176,6 +1176,8 @@ NtfsUsnJournalAppend(
 /*
  * FSCTL_ENUM_USN_DATA: version 2 records for the in-use files from StartFileReference whose
  * $STANDARD_INFORMATION USN is in [LowUsn, HighUsn]; STATUS_END_OF_FILE when none is left.
+ * One call looks at a bounded number of records and may return none with success: continue
+ * from NextFileReference.
  */
 NTSTATUS
 NtfsUsnJournalEnumerate(

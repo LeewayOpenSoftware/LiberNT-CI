@@ -20,6 +20,8 @@
 #define NTFS_USN_V3_USN_OFFSET      0x28    /* V3 and V4 carry 128-bit file references */
 #define NTFS_USN_MAX_USN            0x7FFFFFFFFFFF0000LL
 #define NTFS_USN_ALIGN(x)           (((x) + 7) & ~7ULL)
+/* Records an enumeration call looks at before it returns, so one call holds no lock for long */
+#define NTFS_USN_ENUM_SCAN_LIMIT    65536
 
 static WCHAR UsnJournalPath[] = L"\\$Extend\\$UsnJrnl";
 static WCHAR UsnJournalDataStream[] = L"$J";
@@ -541,7 +543,7 @@ NtfsUsnJournalEnumerate(
 {
     PVolume DiskVolume = reinterpret_cast<PVolume>(Volume);
     NtfsVolumeInformation Info;
-    ULONGLONG Number, Count;
+    ULONGLONG Number, Count, Limit;
     ULONG Copied = 0;
     BOOLEAN Full = FALSE;
     NTSTATUS Status;
@@ -561,7 +563,8 @@ NtfsUsnJournalEnumerate(
     if (Count > (ULONGLONG)MAXULONG + 1)
         Count = (ULONGLONG)MAXULONG + 1;
 
-    for (; Number < Count; Number++)
+    Limit = (Count - Number > NTFS_USN_ENUM_SCAN_LIMIT) ? Number + NTFS_USN_ENUM_SCAN_LIMIT : Count;
+    for (; Number < Limit; Number++)
     {
         PFileRecord Record = NULL;
         NtfsFileBasicInformation Basic;
@@ -623,8 +626,11 @@ NtfsUsnJournalEnumerate(
 
     *BytesReturned = Copied;
     *NextFileReference = Number;
-    if (Copied == 0)
-        return Full ? STATUS_BUFFER_TOO_SMALL : STATUS_END_OF_FILE;
+    /* Stopping at the scan limit is not the end: the caller continues from Number */
+    if (Copied == 0 && !Full && Number >= Count)
+        return STATUS_END_OF_FILE;
+    if (Copied == 0 && Full)
+        return STATUS_BUFFER_TOO_SMALL;
     return STATUS_SUCCESS;
 }
 

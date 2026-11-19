@@ -424,9 +424,13 @@ NtfsUsnWriteCloseRecord(
         Input.FileNameLength = Desc.Name.Length;
         Status = NtfsUsnJournalAppend(VolCB->DiskVolume, &Input, &Usn);
     }
-    /* The name points into the record: it is consumed above, before the record can change */
+    /*
+     * The name points into the record: it is consumed above, before the record can change.
+     * Once appended the close record is durable, so its USN is returned even if stamping
+     * $STANDARD_INFORMATION fails; the file then keeps its previous USN.
+     */
     if (NT_SUCCESS(Status))
-        Status = NtfsFileRecordSetUpdateSequenceNumber(FileCB->FileRec, Usn);
+        (VOID)NtfsFileRecordSetUpdateSequenceNumber(FileCB->FileRec, Usn);
     NtfsReleaseMetadata(VolCB);
     ExReleaseResourceLite(NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
