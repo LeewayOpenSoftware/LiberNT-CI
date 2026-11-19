@@ -21,7 +21,7 @@ KiSpecCtrlEnterKernel:
     push rcx
     push rdx
     mov rcx, gs:[PcCurrentPrcb]
-    movzx ecx, word ptr [rcx + PbNumber]
+    movzx ecx, byte ptr [rcx + PbNumber]
     lea rax, KiSpecCtrlKernelCpu[rip]
     mov eax, dword ptr [rax + rcx * 8]
     mov ecx, HEX(48)
@@ -38,7 +38,7 @@ KiSpecCtrlExitKernel:
     push rcx
     push rdx
     mov rcx, gs:[PcCurrentPrcb]
-    movzx ecx, word ptr [rcx + PbNumber]
+    movzx ecx, byte ptr [rcx + PbNumber]
     lea rax, KiSpecCtrlUserCpu[rip]
     mov eax, dword ptr [rax + rcx * 8]
     mov ecx, HEX(48)
