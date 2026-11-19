@@ -10,7 +10,7 @@
 
 <div align="center">
 
-# [LiberNT](https://libernt.com)
+# Orosi [LiberNT](https://libernt.com)
 ### A free NT operating system
 
 **Built out of love for the NT architecture. Windows® 11 compatible, for amd64, arm64 and riscv64.**
@@ -50,8 +50,6 @@
 <p align="center"><sub>The LiberNT desktop on amd64</sub></p>
 
 ---
-
-# Orosi
 
 ### An independent NT operating system by Leeway Open Software
 
