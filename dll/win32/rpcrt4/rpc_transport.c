@@ -97,9 +97,9 @@ static void release_np_event(RpcConnection_np *connection, HANDLE event)
 /* The access an ncalrpc client asks for on Windows, where the endpoint is a port */
 #define RPCRT4_PORT_CONNECT 0x0001
 
-/* The DACL a server gave its endpoint, in pipe rights: its deny entries, the server user (which must reach
- * the pipe to create its instances, and alone may), then its allow entries. For ncalrpc, an entry that
- * covers connecting covers the client's access. */
+/* The DACL a server gave its endpoint, in pipe rights, after the server user: NPFS checks each further
+ * instance the server creates against this DACL (read, write and create instance), and no one else may
+ * create one. For ncalrpc, an entry that covers connecting covers the client's access. */
 static DWORD
 rpcrt4_build_endpoint_dacl(PACL *Out, PACL CallerDacl, BOOL Lrpc, PSID ServerSid, PSID EveryoneSid, PSID AnonymousSid)
 {
@@ -119,24 +119,19 @@ rpcrt4_build_endpoint_dacl(PACL *Out, PACL CallerDacl, BOOL Lrpc, PSID ServerSid
 
     if (!(Dacl = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size)))
         return ERROR_OUTOFMEMORY;
-    if (!InitializeAcl(Dacl, Size, ACL_REVISION))
+    if (!InitializeAcl(Dacl, Size, ACL_REVISION) ||
+        !AddAccessAllowedAce(Dacl, ACL_REVISION, FILE_ALL_ACCESS, ServerSid) ||
+        !AddAccessDeniedAce(Dacl, ACL_REVISION, FILE_CREATE_PIPE_INSTANCE, EveryoneSid))
+        goto fail;
+    /* a NULL DACL lets everyone connect */
+    if (!CallerDacl &&
+        (!AddAccessAllowedAce(Dacl, ACL_REVISION, ClientAccess, EveryoneSid) ||
+         !AddAccessAllowedAce(Dacl, ACL_REVISION, ClientAccess, AnonymousSid)))
         goto fail;
 
-    /* pass 0: the caller's deny entries; pass 1: the server user, then the caller's allow entries */
+    /* pass 0: the caller's deny entries, pass 1: its allow entries */
     for (Pass = 0; Pass < 2; Pass++)
     {
-        if (Pass == 1)
-        {
-            if (!AddAccessAllowedAce(Dacl, ACL_REVISION, GENERIC_ALL, ServerSid) ||
-                !AddAccessDeniedAce(Dacl, ACL_REVISION, FILE_CREATE_PIPE_INSTANCE, EveryoneSid))
-                goto fail;
-            /* a NULL DACL lets everyone connect */
-            if (!CallerDacl &&
-                (!AddAccessAllowedAce(Dacl, ACL_REVISION, ClientAccess, EveryoneSid) ||
-                 !AddAccessAllowedAce(Dacl, ACL_REVISION, ClientAccess, AnonymousSid)))
-                goto fail;
-        }
-
         for (i = 0; CallerDacl && i < CallerDacl->AceCount; i++)
         {
             ACCESS_ALLOWED_ACE *Entry;
@@ -157,6 +152,7 @@ rpcrt4_build_endpoint_dacl(PACL *Out, PACL CallerDacl, BOOL Lrpc, PSID ServerSid
             }
             else
                 MapGenericMask(&Mask, &FileMapping);
+            Mask &= ~FILE_CREATE_PIPE_INSTANCE;
             if (!Mask)
                 continue;
             if (Pass ? !AddAccessAllowedAce(Dacl, ACL_REVISION, Mask, (PSID)&Entry->SidStart) :
