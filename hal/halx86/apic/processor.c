@@ -8,6 +8,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <hal.h>
+#include "apicp.h"
 #include <smp.h>
 #define NDEBUG
 #include <debug.h>
@@ -63,6 +64,17 @@ VOID
 NTAPI
 HalProcessorIdle(VOID)
 {
+#ifdef _M_AMD64
+    /*
+     * The interrupt priority lives in CR8 on amd64. A local APIC emulated
+     * outside the processor only learns of it when the guest leaves, and can go
+     * on holding back what is pending behind a priority lowered long ago. Give
+     * the priority to the APIC itself before halting on it.
+     */
+    if (!HalpApicX2Mode)
+        ApicWrite(APIC_TPR, IrqlToTpr(KeGetCurrentIrql()));
+#endif
+
     /* Enable interrupts and halt the processor */
     _enable();
     __halt();

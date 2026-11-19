@@ -320,4 +320,17 @@ KeQueryPerformanceCounter(PLARGE_INTEGER PerformanceFrequency)
     return CurrentPerfCounter;
 }
 
+/*
+ * @implemented
+ *
+ * The PIT clock only ticks at its own rates: the caller keeps to those.
+ */
+BOOLEAN
+NTAPI
+HalSetClockDeadline(_In_ ULONGLONG InterruptTime)
+{
+    UNREFERENCED_PARAMETER(InterruptTime);
+    return FALSE;
+}
+
 /* EOF */

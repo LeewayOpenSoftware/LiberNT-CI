@@ -92,7 +92,16 @@ HalStartProfileInterrupt(IN KPROFILE_SOURCE ProfileSource)
         /* OK, we are profiling now */
         HalIsProfiling = TRUE;
 
-        /* FIXME: with the local APIC timer as the clock, samples come at the clock rate, not at the profile interval */
+        /*
+         * When the local APIC timer is the clock (HalpInitializeClock), each
+         * processor has only that one timer and it is programmed for the
+         * clock period. Reprogramming it for the profile interval would
+         * change the clock. Profile samples are then taken by the clock
+         * interrupt on the boot processor and by the clock IPI on the others
+         * (rtctimer.c, while HalIsProfiling is set), so they arrive at the
+         * clock period. HalSetProfileInterval reports that period to the
+         * kernel as the interval in effect, so KiProfileTimeInterval is true.
+         */
         if (HalpApicTimerClock)
             return;
 
@@ -119,6 +128,8 @@ HalStopProfileInterrupt(IN KPROFILE_SOURCE ProfileSource)
     {
         /* We are not profiling */
         HalIsProfiling = FALSE;
+
+        /* The clock interrupt stops sampling; the timer must keep running */
         if (HalpApicTimerClock)
             return;
 
@@ -159,9 +170,20 @@ HalSetProfileInterval(IN ULONG_PTR Interval)
     /* Remember recalculated interval in PCR */
     KeGetPcr()->HalReserved[HAL_PROFILING_INTERVAL] = (ULONG)TimerInterval;
 
-    /* And set it */
-    if (!HalpApicTimerClock)
-        ApicWrite(APIC_TICR, (ULONG)TimerInterval);
+    /*
+     * With the local APIC timer as the clock, samples come with the clock
+     * interrupt (see HalStartProfileInterrupt). The other processors take
+     * theirs from the clock IPI, which the boot processor sends once per
+     * maximum time increment, and the boot processor samples at that period
+     * too unless the timer resolution was raised. That period, which
+     * KeQueryTimeIncrement returns, is the interval in effect.
+     */
+    if (HalpApicTimerClock)
+        return (ULONG_PTR)KeQueryTimeIncrement();
 
-    return Interval;
+    /* And set it */
+    ApicWrite(APIC_TICR, (ULONG)TimerInterval);
+
+    /* Return the interval actually used, after clamping */
+    return (ULONG_PTR)FixedInterval;
 }
