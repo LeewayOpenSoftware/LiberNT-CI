@@ -685,12 +685,25 @@ HRESULT rpc_get_local_class_object(REFCLSID rclsid, REFIID riid, void **obj)
 
         if (SUCCEEDED(hr = rpcss_get_class_object(rclsid, &objref)))
             break;
+#ifdef __REACTOS__
+        /* RpcSs refused the activation (DCOM step 5): starting a server would not change that */
+        if (hr == E_ACCESSDENIED && com_access_mode() != COMSEC_OFF)
+            return hr;
+#endif
 
         if (tries == 1)
         {
+#ifdef __REACTOS__
+            if ((hr = create_local_service(rclsid)) == E_ACCESSDENIED && com_access_mode() != COMSEC_OFF)
+                return hr;
+            if (hr && (hr = create_server(rclsid, &process)) &&
+                (hr = create_surrogate_server(rclsid, &process)) )
+                return hr;
+#else
             if ((hr = create_local_service(rclsid)) && (hr = create_server(rclsid, &process)) &&
                 (hr = create_surrogate_server(rclsid, &process)) )
                 return hr;
+#endif
         }
 
 #ifdef __REACTOS__
@@ -2460,6 +2473,15 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
     RpcBindingInqObject(msg->Handle, &ipid);
 
     TRACE("ipid = %s, iMethod = %d\n", debugstr_guid(&ipid), msg->ProcNum);
+
+#ifdef __REACTOS__
+    /* DCOM step 5: the access check of the server process */
+    if (FAILED(hr = com_access_check_call(msg->Handle)))
+    {
+        RpcRaiseException(hr);
+        return;
+    }
+#endif
 
     params = malloc(sizeof(*params));
     if (!params)

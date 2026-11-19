@@ -12,6 +12,7 @@ add_custom_command(
 
 list(APPEND SOURCE
     apartment.c
+    comaccess.c
     combase.c
     comcat.c
     errorinfo.c
@@ -36,7 +37,7 @@ if(MSVC)
     # Disable warning C4312: 'type cast': conversion from 'unsigned int' to 'void *' of greater size
     target_compile_options(combase PRIVATE /wd4090 /wd4312)
 endif()
-target_link_libraries(combase wine uuid pseh)
+target_link_libraries(combase wine uuid pseh comsec)
 add_importlibs(combase advapi32 ole32 oleaut32 user32 gdi32 rpcrt4 msvcrt kernelbase kernel32_vista kernel32 ntdll)
 add_dependencies(combase combase_idlheader wineheaders rpcss)
 add_cd_file(TARGET combase DESTINATION reactos/system32 FOR all)

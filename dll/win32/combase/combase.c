@@ -1478,11 +1478,12 @@ HRESULT WINAPI CoInitializeSecurity(PSECURITY_DESCRIPTOR sd, LONG cAuthSvc,
         hr = RPC_E_TOO_LATE;
     else
         hr = com_security_store(cAuthSvc, asAuthSvc, authn_level, imp_level, capabilities);
+    if (hr == S_OK)
+        com_access_store(sd, capabilities);
     LeaveCriticalSection(&com_security_cs);
 
-    if (hr == S_OK && (sd || authn_level > RPC_C_AUTHN_LEVEL_NONE || capabilities != EOAC_NONE))
-        FIXME("security descriptor %p, authentication level %ld and capabilities %#lx are not enforced\n",
-              sd, authn_level, capabilities);
+    if (hr == S_OK && (authn_level > RPC_C_AUTHN_LEVEL_NONE || capabilities != EOAC_NONE))
+        FIXME("authentication level %ld and capabilities %#lx are not enforced\n", authn_level, capabilities);
     return hr;
 #else
     static LONG warned;

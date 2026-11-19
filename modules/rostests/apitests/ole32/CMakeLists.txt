@@ -1,5 +1,5 @@
 
-add_executable(ole32_apitest globaloptions.c initializespy.cpp localserver.c security.c storagestat.c surrogate.c testlist.c uninitquit.c)
+add_executable(ole32_apitest enforce.c globaloptions.c initializespy.cpp localserver.c security.c storagestat.c surrogate.c testlist.c uninitquit.c)
 target_link_libraries(ole32_apitest wine uuid cpprt)
 set_module_type(ole32_apitest win32cui)
 add_importlibs(ole32_apitest advapi32 user32 gdi32 shell32 ole32 shlwapi msvcrt kernel32)
