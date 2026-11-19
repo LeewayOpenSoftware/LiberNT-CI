@@ -481,7 +481,8 @@ SHChangeNotifyRegister(HWND hwnd, INT fSources, LONG wEventMask, UINT uMsg,
     // The owner PID is the process ID of the server
     GetWindowThreadProcessId(hwndServer, &dwOwnerPID);
 
-    EnterCriticalSection(&SHELL32_ChangenotifyCS);
+    // No lock held across the sends below: the server may itself be waiting on a
+    // window of this process, whose thread would then block on that lock (deadlock)
     for (iItem = 0; iItem < cItems; ++iItem)
     {
         // create a registration entry
@@ -565,7 +566,6 @@ SHChangeNotifyRegister(HWND hwnd, INT fSources, LONG wEventMask, UINT uMsg,
             }
         }
     }
-    LeaveCriticalSection(&SHELL32_ChangenotifyCS);
 
     return nRegID;
 }
