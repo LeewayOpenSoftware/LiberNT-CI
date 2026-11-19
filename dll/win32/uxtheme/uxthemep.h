@@ -105,6 +105,7 @@ typedef struct _DRAW_CONTEXT
     BOOL DarkMode;
     HRGN hRgn;
     int CaptionHeight;
+    RECT FrameInsets; /* transparent outer band of the NC area: nothing is painted there */
 
     /* for double buffering */
     HDC hDCScreen;
