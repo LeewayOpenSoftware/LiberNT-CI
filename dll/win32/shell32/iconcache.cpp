@@ -409,6 +409,59 @@ SIC_AppendSizedIcon(
     return index;
 }
 
+/* Extract an icon at the size of hList without touching any shared image list,
+ * so it can run outside SHELL32_SicCS. NULL for the "*" pseudo file. */
+static HICON
+SIC_ExtractSizedIcon(
+    _In_ LPCWSTR sSourceFile,
+    _In_ INT dwSourceIndex,
+    _In_opt_ HIMAGELIST hList)
+{
+    HICON hIcon = NULL;
+    INT cx, cy;
+
+    if (!hList || !wcscmp(sSourceFile, L"*") || !ImageList_GetIconSize(hList, &cx, &cy))
+        return NULL;
+    PrivateExtractIconsW(sSourceFile, dwSourceIndex, cx, cy, &hIcon, NULL, 1, LR_COPYFROMRESOURCE);
+    return hIcon;
+}
+
+/* Append a sized icon extracted by SIC_ExtractSizedIcon for hPreloadList; with the
+ * lock held. Takes ownership of hIcon. Falls back to loading it here when nothing
+ * was preloaded for this list (the list was created meanwhile, or "*"). */
+static INT
+SIC_AppendPreloadedIcon(
+    _In_ HIMAGELIST hList,
+    _In_opt_ HIMAGELIST hPreloadList,
+    _In_opt_ HICON hIcon,
+    _In_ LPCWSTR sSourceFile,
+    _In_ INT dwSourceIndex,
+    _In_ DWORD dwFlags,
+    _In_ HICON hFallback)
+{
+    INT index;
+
+    if (hList != hPreloadList || !wcscmp(sSourceFile, L"*"))
+    {
+        if (hIcon)
+            DestroyIcon(hIcon);
+        return SIC_AppendSizedIcon(hList, sSourceFile, dwSourceIndex, dwFlags, hFallback);
+    }
+    if (hIcon && (dwFlags & GIL_FORSHORTCUT))
+    {
+        HICON hShortcut = SIC_OverlayShortcutImage(hIcon, hList);
+        if (hShortcut)
+        {
+            DestroyIcon(hIcon);
+            hIcon = hShortcut;
+        }
+    }
+    index = ImageList_AddIcon(hList, hIcon ? hIcon : hFallback);
+    if (hIcon)
+        DestroyIcon(hIcon);
+    return index;
+}
+
 /*****************************************************************************
  * SIC_IconAppend            [internal]
  *
@@ -434,7 +487,29 @@ static INT SIC_IconAppend (LPCWSTR sSourceFile, INT dwSourceIndex, HICON hSmallI
     lpsice->dwSourceIndex = dwSourceIndex;
     lpsice->dwFlags = dwFlags;
 
+    /* The larger sizes are read from the file here, not under the lock, so a slow or
+     * unreachable source does not stall every icon user of the process. Lists are
+     * never destroyed while the cache is in use, so reading the pointers is safe. */
+    HIMAGELIST hPreloadXL = ShellExtraLargeIconList, hPreloadJumbo = ShellJumboIconList;
+    HICON hIconXL = SIC_ExtractSizedIcon(sSourceFile, dwSourceIndex, hPreloadXL);
+    HICON hIconJumbo = SIC_ExtractSizedIcon(sSourceFile, dwSourceIndex, hPreloadJumbo);
+
     EnterCriticalSection(&SHELL32_SicCS);
+
+    /* Another thread may have cached the same icon while this one was loading it */
+    indexDPA = DPA_Search (sic_hdpa, lpsice, 0, SIC_CompareEntries, 0, DPAS_SORTED);
+    if (indexDPA != -1)
+    {
+        ret = ((LPSIC_ENTRY)DPA_GetPtr(sic_hdpa, indexDPA))->dwListIndex;
+        LeaveCriticalSection(&SHELL32_SicCS);
+        if (hIconXL)
+            DestroyIcon(hIconXL);
+        if (hIconJumbo)
+            DestroyIcon(hIconJumbo);
+        HeapFree(GetProcessHeap(), 0, lpsice->sSourceFile);
+        SHFree(lpsice);
+        return ret;
+    }
 
     indexDPA = DPA_Search (sic_hdpa, lpsice, 0, SIC_CompareEntries, 0, DPAS_SORTED|DPAS_INSERTAFTER);
     indexDPA = DPA_InsertPtr(sic_hdpa, indexDPA, lpsice);
@@ -447,9 +522,13 @@ static INT SIC_IconAppend (LPCWSTR sSourceFile, INT dwSourceIndex, HICON hSmallI
     index = ImageList_AddIcon (ShellSmallIconList, hSmallIcon);
     index1= ImageList_AddIcon (ShellBigIconList, hBigIcon);
     index2 = ShellExtraLargeIconList ?
-             SIC_AppendSizedIcon(ShellExtraLargeIconList, sSourceFile, dwSourceIndex, dwFlags, hBigIcon) : index;
+             SIC_AppendPreloadedIcon(ShellExtraLargeIconList, hPreloadXL, hIconXL,
+                                     sSourceFile, dwSourceIndex, dwFlags, hBigIcon) : index;
+    hIconXL = NULL;
     index3 = ShellJumboIconList ?
-             SIC_AppendSizedIcon(ShellJumboIconList, sSourceFile, dwSourceIndex, dwFlags, hBigIcon) : index;
+             SIC_AppendPreloadedIcon(ShellJumboIconList, hPreloadJumbo, hIconJumbo,
+                                     sSourceFile, dwSourceIndex, dwFlags, hBigIcon) : index;
+    hIconJumbo = NULL;
 
     /* Something went wrong when allocating a new image in the list. Abort. */
     if((index == -1) || (index1 == -1) || (index2 == -1) || (index3 == -1))
@@ -480,6 +559,10 @@ leave:
         SHFree(lpsice);
     }
     LeaveCriticalSection(&SHELL32_SicCS);
+    if (hIconXL)
+        DestroyIcon(hIconXL);
+    if (hIconJumbo)
+        DestroyIcon(hIconJumbo);
     return ret;
 }
 /****************************************************************************
@@ -495,11 +578,14 @@ static INT SIC_LoadIcon (LPCWSTR sSourceFile, INT dwSourceIndex, DWORD dwFlags)
 
     if (!wcscmp(sSourceFile, L"*"))
     {
+        EnterCriticalSection(&SHELL32_SicCS);
         hiconLarge = ImageList_GetIcon(ShellBigIconList, dwSourceIndex, ILD_NORMAL);
         hiconSmall = ImageList_GetIcon(ShellSmallIconList, dwSourceIndex, ILD_NORMAL);
+        LeaveCriticalSection(&SHELL32_SicCS);
     }
     else
     {
+        /* Called without SHELL32_SicCS (see SIC_GetIconIndex): file I/O */
         PrivateExtractIconsW(sSourceFile, dwSourceIndex, ShellLargeIconSize, ShellLargeIconSize,
                              &hiconLarge, NULL, 1, LR_COPYFROMRESOURCE);
         PrivateExtractIconsW(sSourceFile, dwSourceIndex, ShellSmallIconSize, ShellSmallIconSize,
@@ -516,8 +602,12 @@ static INT SIC_LoadIcon (LPCWSTR sSourceFile, INT dwSourceIndex, DWORD dwFlags)
 
     if (0 != (dwFlags & GIL_FORSHORTCUT))
     {
-        HICON hiconLargeShortcut = SIC_OverlayShortcutImage(hiconLarge, ShellBigIconList);
-        HICON hiconSmallShortcut = SIC_OverlayShortcutImage(hiconSmall, ShellSmallIconList);
+        HICON hiconLargeShortcut, hiconSmallShortcut;
+        /* The overlay comes from the shared image lists */
+        EnterCriticalSection(&SHELL32_SicCS);
+        hiconLargeShortcut = SIC_OverlayShortcutImage(hiconLarge, ShellBigIconList);
+        hiconSmallShortcut = SIC_OverlayShortcutImage(hiconSmall, ShellSmallIconList);
+        LeaveCriticalSection(&SHELL32_SicCS);
         if (NULL != hiconLargeShortcut && NULL != hiconSmallShortcut)
         {
             DestroyIcon(hiconLarge);
@@ -583,18 +673,19 @@ INT SIC_GetIconIndex (LPCWSTR sSourceFile, INT dwSourceIndex, DWORD dwFlags )
       index = DPA_Search (sic_hdpa, &sice, 0, SIC_CompareEntries, 0, DPAS_SORTED);
     }
 
-    if ( INVALID_INDEX == index )
-    {
-          ret = SIC_LoadIcon (sSourceFile, dwSourceIndex, dwFlags);
-    }
-    else
+    if ( INVALID_INDEX != index )
     {
       TRACE("-- found\n");
       ret = ((LPSIC_ENTRY)DPA_GetPtr(sic_hdpa, index))->dwListIndex;
+      LeaveCriticalSection(&SHELL32_SicCS);
+      return ret;
     }
 
+    /* Not cached: load it without holding the lock, so that extracting from a slow or
+     * unreachable file does not block every thread that needs an icon. SIC_IconAppend
+     * takes the lock again and copes with another thread adding it meanwhile. */
     LeaveCriticalSection(&SHELL32_SicCS);
-    return ret;
+    return SIC_LoadIcon (sSourceFile, dwSourceIndex, dwFlags);
 }
 
 /*****************************************************************************
