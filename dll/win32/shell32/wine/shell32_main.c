@@ -38,6 +38,7 @@
 #include "shlobj.h"
 #include "rpcproxy.h"
 #include "shlwapi.h"
+#include "shlwapi_undoc.h"
 #include "propsys.h"
 #include "commoncontrols.h"
 
@@ -120,14 +121,44 @@ static DWORD shgfi_get_exe_type(LPCWSTR szFullPath)
  *
  * Decide if an item id list points to a shell shortcut
  */
+#define SHORTCUT_EXT_CACHE_SIZE 32
+
+typedef struct tagSHORTCUT_EXT
+{
+    char Ext[32];
+    LONG Generation;
+    BOOL IsShortcut;
+} SHORTCUT_EXT;
+
+static SHORTCUT_EXT s_ShortcutExts[SHORTCUT_EXT_CACHE_SIZE];
+static UINT s_ShortcutExtCount, s_ShortcutExtNext;
+static SRWLOCK s_ShortcutExtLock = SRWLOCK_INIT;
+
 BOOL SHELL_IsShortcut(LPCITEMIDLIST pidlLast)
 {
-    char szTemp[MAX_PATH];
+    char szExt[MAX_PATH], szTemp[MAX_PATH];
     HKEY keyCls;
     BOOL ret = FALSE;
+    LONG generation;
+    UINT i;
 
-    if (_ILGetExtension(pidlLast, szTemp, MAX_PATH) &&
-          HCR_MapTypeToValueA(szTemp, szTemp, MAX_PATH, TRUE))
+    if (!_ILGetExtension(pidlLast, szExt, MAX_PATH))
+        return FALSE;
+
+    generation = SHELL_AssocGenerationGet();
+    AcquireSRWLockShared(&s_ShortcutExtLock);
+    for (i = 0; i < s_ShortcutExtCount; i++)
+    {
+        if (s_ShortcutExts[i].Generation == generation && !lstrcmpiA(s_ShortcutExts[i].Ext, szExt))
+        {
+            ret = s_ShortcutExts[i].IsShortcut;
+            ReleaseSRWLockShared(&s_ShortcutExtLock);
+            return ret;
+        }
+    }
+    ReleaseSRWLockShared(&s_ShortcutExtLock);
+
+    if (HCR_MapTypeToValueA(szExt, szTemp, MAX_PATH, TRUE))
     {
         if (ERROR_SUCCESS == RegOpenKeyExA(HKEY_CLASSES_ROOT, szTemp, 0, KEY_QUERY_VALUE, &keyCls))
         {
@@ -136,6 +167,32 @@ BOOL SHELL_IsShortcut(LPCITEMIDLIST pidlLast)
 
           RegCloseKey(keyCls);
         }
+    }
+
+    if (strlen(szExt) < sizeof(s_ShortcutExts[0].Ext))
+    {
+        AcquireSRWLockExclusive(&s_ShortcutExtLock);
+        for (i = 0; i < s_ShortcutExtCount; i++)
+        {
+            if (!lstrcmpiA(s_ShortcutExts[i].Ext, szExt))
+                break;
+        }
+        if (i == s_ShortcutExtCount)
+        {
+            if (s_ShortcutExtCount < SHORTCUT_EXT_CACHE_SIZE)
+            {
+                i = s_ShortcutExtCount++;
+            }
+            else
+            {
+                i = s_ShortcutExtNext;
+                s_ShortcutExtNext = (s_ShortcutExtNext + 1) % SHORTCUT_EXT_CACHE_SIZE;
+            }
+        }
+        strcpy(s_ShortcutExts[i].Ext, szExt);
+        s_ShortcutExts[i].Generation = generation;
+        s_ShortcutExts[i].IsShortcut = ret;
+        ReleaseSRWLockExclusive(&s_ShortcutExtLock);
     }
 
     return ret;
