@@ -14,25 +14,46 @@
 
 #include "caller.h"
 
-/* The integrity level RID of the calling token, or 0 when it cannot be read */
-DWORD rpcss_caller_integrity(handle_t h)
+static DWORD rpcss_token_integrity(HANDLE token)
 {
     BYTE buffer[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
-    DWORD size, rid = 0;
-    HANDLE token;
+    DWORD size;
+    PSID sid;
 
-    if (RpcImpersonateClient(h) != RPC_S_OK)
+    if (!GetTokenInformation(token, TokenIntegrityLevel, buffer, sizeof(buffer), &size))
         return 0;
-    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
+    sid = ((TOKEN_MANDATORY_LABEL *)buffer)->Label.Sid;
+    return *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1);
+}
+
+/* The integrity level RID of the caller, or 0 when it cannot be read */
+DWORD rpcss_caller_integrity(handle_t h)
+{
+    DWORD rid = 0;
+    HANDLE token, process;
+    ULONG pid;
+
+    if (RpcImpersonateClient(h) == RPC_S_OK)
     {
-        if (GetTokenInformation(token, TokenIntegrityLevel, buffer, sizeof(buffer), &size))
+        if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
         {
-            PSID sid = ((TOKEN_MANDATORY_LABEL *)buffer)->Label.Sid;
-            rid = *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1);
+            rid = rpcss_token_integrity(token);
+            CloseHandle(token);
         }
-        CloseHandle(token);
+        RpcRevertToSelf();
     }
-    RpcRevertToSelf();
+
+    /* Without a client token, the process at the other end of the pipe (named by the kernel) */
+    if (!rid && (pid = rpcss_caller_pid(h)) &&
+        (process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)))
+    {
+        if (OpenProcessToken(process, TOKEN_QUERY, &token))
+        {
+            rid = rpcss_token_integrity(token);
+            CloseHandle(token);
+        }
+        CloseHandle(process);
+    }
     return rid;
 }
 
