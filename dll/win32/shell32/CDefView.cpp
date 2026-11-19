@@ -4929,7 +4929,7 @@ HRESULT WINAPI CDefView::GetItemObject(UINT uItem, REFIID riid, LPVOID *ppvOut)
         case SVGIO_BACKGROUND:
             if (IsEqualIID(riid, IID_IContextMenu))
             {
-                hr = CDefViewBckgrndMenu_CreateInstance(m_pSF2Parent, riid, ppvOut);
+                hr = CDefViewBckgrndMenu_CreateInstance(m_pSFParent, riid, ppvOut);
                 if (FAILED_UNEXPECTEDLY(hr))
                     return hr;
 
