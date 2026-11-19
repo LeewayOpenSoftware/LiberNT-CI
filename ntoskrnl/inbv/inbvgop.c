@@ -644,7 +644,7 @@ InbvGopLogoSetup(
         if (DisplayInfo.PhysicalHeight && DisplayInfo.Height && DisplayInfo.Width &&
             DisplayInfo.CharacterWidth && DisplayInfo.CharacterHeight < DisplayInfo.Height)
         {
-            LogoBottom = (ULONG)(((ULONGLONG)(S->Top + S->Height) * DisplayInfo.Height) /
+            LogoBottom = (ULONG)(((ULONGLONG)(MarkTop + MarkHeight) * DisplayInfo.Height) /
                                  DisplayInfo.PhysicalHeight);
             g_Status.Width = DisplayInfo.Width;
             g_Status.CharWidth = DisplayInfo.CharacterWidth;
@@ -754,6 +754,7 @@ InbvGopLogoStart(
     }
 }
 
+/* Kept for its callers; the spinner is indeterminate, so progress no longer changes the picture */
 VOID
 NTAPI
 InbvIndicateProgress(VOID)
