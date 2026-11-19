@@ -543,7 +543,7 @@ static HRESULT wait_dispatching(struct apartment *apt, BOOL all, DWORD timeout, 
         DWORD *index)
 {
     DWORD start = GetTickCount(), elapsed, res;
-    BOOL quit = FALSE;
+    BOOL quit = FALSE, more = FALSE;
     UINT quit_code = 0;
     int msg_count;
     HRESULT hr;
@@ -556,28 +556,46 @@ static HRESULT wait_dispatching(struct apartment *apt, BOOL all, DWORD timeout, 
     for (;;)
     {
         elapsed = GetTickCount() - start;
-        res = MsgWaitForMultipleObjectsEx(count, handles,
-                timeout == INFINITE ? INFINITE : (elapsed >= timeout ? 0 : timeout - elapsed),
-                all ? QS_ALLINPUT : QS_SENDMESSAGE | QS_POSTMESSAGE | QS_PAINT, 0);
+        if (more)
+        {
+            /* Messages are still queued: look at the handles without waiting, then go on draining */
+            res = WaitForMultipleObjectsEx(count, handles, FALSE, 0, FALSE);
+            if (res == WAIT_TIMEOUT && (timeout == INFINITE || elapsed < timeout))
+                res = WAIT_OBJECT_0 + count;
+        }
+        else
+        {
+            res = MsgWaitForMultipleObjectsEx(count, handles,
+                    timeout == INFINITE ? INFINITE : (elapsed >= timeout ? 0 : timeout - elapsed),
+                    all ? QS_ALLINPUT : QS_SENDMESSAGE | QS_ALLPOSTMESSAGE | QS_PAINT, 0);
+        }
 
         if (res == WAIT_OBJECT_0 + count)
         {
             /* Back to the handles after 100 messages, as CoWaitForMultipleHandles does */
             msg_count = 0;
-            while (!quit && msg_count++ < 100 && peek_wait_message(win, all, &msg))
+            more = TRUE;
+            while (msg_count++ < 100)
             {
+                if (!peek_wait_message(win, all, &msg))
+                {
+                    more = FALSE;
+                    break;
+                }
                 /* WM_QUIT passes every filter; it goes back to the thread when the wait ends */
                 if (msg.message == WM_QUIT)
                 {
                     quit = TRUE;
                     quit_code = (UINT)msg.wParam;
-                    break;
+                    continue;
                 }
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-            /* Marks the rest as seen, so that only new messages wake the wait */
-            PeekMessageW(&msg, NULL, 0, 0, PM_NOREMOVE | PM_NOYIELD);
+            /* Once drained, marks what is left (not ours to dispatch) as seen, so that only new
+               messages wake the wait */
+            if (!more)
+                PeekMessageW(&msg, NULL, 0, 0, PM_NOREMOVE | PM_NOYIELD);
             continue;
         }
         if (res == WAIT_TIMEOUT)
