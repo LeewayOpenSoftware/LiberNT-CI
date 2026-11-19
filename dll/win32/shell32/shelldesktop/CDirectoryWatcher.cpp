@@ -250,6 +250,8 @@ void CDirectoryWatcher::ReadCompletion(DWORD dwErrorCode, DWORD dwNumberOfBytesT
         TRACE("ERROR_OPERATION_ABORTED\n");
         if (IsDead())
             delete this;
+        else
+            StopIdle();
         return;
     }
 
@@ -311,6 +313,15 @@ BOOL CDirectoryWatcher::RestartWatching()
     {
         delete this;
         return FALSE; // the watch is dead
+    }
+
+    // The window it watched for is gone: stop watching, but the server still owns
+    // this watcher until it calls QuitWatching
+    if (m_hNotifyWnd && !::IsWindow(m_hNotifyWnd))
+    {
+        m_hNotifyWnd = NULL;
+        StopIdle();
+        return FALSE;
     }
 
     // initialize the buffer and the overlapped
@@ -401,14 +412,9 @@ void CDirectoryWatcher::QuitWatching()
     CancelIo(m_hDirectory); // the completion deletes this
 }
 
+// Dead means the server asked for termination (QuitWatching): only then may the
+// watcher free itself, since the server keeps its pointer until it asks
 BOOL CDirectoryWatcher::IsDead()
 {
-    if (m_hNotifyWnd && !::IsWindow(m_hNotifyWnd))
-    {
-        m_hNotifyWnd = NULL;
-        m_fDead = TRUE;
-        if (m_hDirectory != INVALID_HANDLE_VALUE)
-            CancelIo(m_hDirectory);
-    }
     return m_fDead;
 }
