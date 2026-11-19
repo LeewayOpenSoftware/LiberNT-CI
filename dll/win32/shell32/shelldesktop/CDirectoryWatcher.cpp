@@ -239,6 +239,7 @@ void CDirectoryWatcher::ReadCompletion(DWORD dwErrorCode, DWORD dwNumberOfBytesT
     if (dwErrorCode == ERROR_INVALID_FUNCTION)
     {
         ERR("ERROR_INVALID_FUNCTION\n");
+        StopIdle();
         return;
     }
 
@@ -325,6 +326,7 @@ BOOL CDirectoryWatcher::RestartWatching()
     {
         ERR("ReadDirectoryChangesW for '%S' failed (error: %ld)\n",
             m_szDirectoryPath, GetLastError());
+        StopIdle();
         return FALSE; // failure
     }
 
@@ -374,11 +376,29 @@ BOOL CDirectoryWatcher::RequestTermination()
     QueueUserAPC(_RequestAllTerminationAPC, s_hThreadAPC, (ULONG_PTR)NULL);
 }
 
+// No read is in flight any more and none will be issued: release the directory
+// now, and let QuitWatching free the watcher, since no completion will come to do it
+void CDirectoryWatcher::StopIdle()
+{
+    if (m_hDirectory != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(m_hDirectory);
+        m_hDirectory = INVALID_HANDLE_VALUE;
+    }
+    if (m_fDead) // QuitWatching already ran
+        delete this;
+}
+
 void CDirectoryWatcher::QuitWatching()
 {
     m_fDead = TRUE;
     m_hNotifyWnd = NULL;
-    CancelIo(m_hDirectory);
+    if (m_hDirectory == INVALID_HANDLE_VALUE)
+    {
+        delete this; // idle: see StopIdle
+        return;
+    }
+    CancelIo(m_hDirectory); // the completion deletes this
 }
 
 BOOL CDirectoryWatcher::IsDead()
@@ -387,7 +407,8 @@ BOOL CDirectoryWatcher::IsDead()
     {
         m_hNotifyWnd = NULL;
         m_fDead = TRUE;
-        CancelIo(m_hDirectory);
+        if (m_hDirectory != INVALID_HANDLE_VALUE)
+            CancelIo(m_hDirectory);
     }
     return m_fDead;
 }

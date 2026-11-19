@@ -37,5 +37,6 @@ protected:
 
     BOOL CreateAPCThread();
     void ProcessNotification();
+    void StopIdle();
     CDirectoryWatcher(HWND hNotifyWnd, LPCWSTR pszDirectoryPath, BOOL fSubTree);
 };
