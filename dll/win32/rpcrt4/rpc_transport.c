@@ -67,6 +67,9 @@ typedef struct _RpcConnection_np
     IO_STATUS_BLOCK io_status;
     HANDLE event_cache;
     BOOL read_closed;
+#ifdef __REACTOS__
+    PACL label; /* the endpoint's mandatory label, put on every instance of the pipe */
+#endif
 } RpcConnection_np;
 
 static RpcConnection *rpcrt4_conn_np_alloc(void)
@@ -108,7 +111,7 @@ static void release_np_event(RpcConnection_np *connection, HANDLE event)
  * admins are given full power; the server's user owns the pipe.
  */
 static DWORD
-rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
+rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc, PACL Label)
 {
     DWORD ErrCode;
     PACL Dacl = NULL;
@@ -270,6 +273,13 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
         goto Quit;
     }
 
+    if (Label && !SetSecurityDescriptorSacl(AbsSD, TRUE, Label, FALSE))
+    {
+        ErrCode = GetLastError();
+        ERR("rpcrt4_create_pipe_security(): Failed to set the label (error %lu)\n", ErrCode);
+        goto Quit;
+    }
+
     if (MakeSelfRelativeSD(AbsSD, NULL, &RelSDSize) ||
         (GetLastError() != ERROR_INSUFFICIENT_BUFFER))
     {
@@ -329,7 +339,7 @@ static RPC_STATUS rpcrt4_conn_create_pipe(RpcConnection *conn)
     TRACE("listening on %s\n", connection->listen_pipe);
 
 #ifdef __REACTOS__
-    ErrCode = rpcrt4_create_pipe_security(&PipeSecDesc);
+    ErrCode = rpcrt4_create_pipe_security(&PipeSecDesc, connection->label);
     if (ErrCode != ERROR_SUCCESS)
     {
         ERR("rpcrt4_conn_create_pipe(): Pipe security descriptor creation failed\n");
@@ -519,6 +529,43 @@ static RPC_STATUS rpcrt4_ncalrpc_open(RpcConnection* Connection)
   return r;
 }
 
+#ifdef __REACTOS__
+/* Only the mandatory label of the endpoint descriptor is used: the pipe keeps its own DACL,
+ * which stops other processes from creating instances of it */
+static RPC_STATUS rpcrt4_np_set_label(RpcConnection_np *npc, PSECURITY_DESCRIPTOR sd)
+{
+    BOOL present, defaulted;
+    PACL sacl;
+    ACE_HEADER *ace;
+    DWORD i, size;
+
+    if (!sd)
+        return RPC_S_OK;
+    if (!GetSecurityDescriptorSacl(sd, &present, &sacl, &defaulted))
+        return RPC_S_INVALID_SECURITY_DESC;
+    if (!present || !sacl)
+        return RPC_S_OK;
+
+    for (i = 0; i < sacl->AceCount; i++)
+    {
+        if (!GetAce(sacl, i, (void **)&ace) || ace->AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE)
+            continue;
+        size = sizeof(ACL) + ace->AceSize;
+        if (!(npc->label = HeapAlloc(GetProcessHeap(), 0, size)))
+            return RPC_S_OUT_OF_RESOURCES;
+        if (!InitializeAcl(npc->label, size, ACL_REVISION) ||
+            !AddAce(npc->label, ACL_REVISION, MAXDWORD, ace, ace->AceSize))
+        {
+            HeapFree(GetProcessHeap(), 0, npc->label);
+            npc->label = NULL;
+            return RPC_S_INVALID_SECURITY_DESC;
+        }
+        break;
+    }
+    return RPC_S_OK;
+}
+#endif
+
 static RPC_STATUS rpcrt4_protseq_ncalrpc_open_endpoint(RpcServerProtseq* protseq, const char *endpoint)
 {
   RPC_STATUS r;
@@ -540,6 +587,14 @@ static RPC_STATUS rpcrt4_protseq_ncalrpc_open_endpoint(RpcServerProtseq* protseq
   if (r != RPC_S_OK)
       return r;
 
+#ifdef __REACTOS__
+  r = rpcrt4_np_set_label((RpcConnection_np *)Connection, protseq->endpoint_sd);
+  if (r != RPC_S_OK)
+  {
+      RPCRT4_ReleaseConnection(Connection);
+      return r;
+  }
+#endif
   ((RpcConnection_np*)Connection)->listen_pipe = ncalrpc_pipe_name(Connection->Endpoint);
   r = rpcrt4_conn_create_pipe(Connection);
 
@@ -646,6 +701,12 @@ static RPC_STATUS rpcrt4_protseq_ncacn_np_open_endpoint(RpcServerProtseq *protse
     return r;
 
 #ifdef __REACTOS__
+  r = rpcrt4_np_set_label((RpcConnection_np *)Connection, protseq->endpoint_sd);
+  if (r != RPC_S_OK)
+  {
+      RPCRT4_ReleaseConnection(Connection);
+      return r;
+  }
   ((RpcConnection_np*)Connection)->listen_pipe = ncacn_pipe_name(NULL, Connection->Endpoint);
 #else
   ((RpcConnection_np*)Connection)->listen_pipe = ncacn_pipe_name(Connection->Endpoint);
