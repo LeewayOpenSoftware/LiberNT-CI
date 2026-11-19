@@ -40,22 +40,28 @@ DWORD comsec_read_mode(void)
     return value;
 }
 
+/* The rule is per descriptor: legacy when every allow and deny ACE is exactly COM_RIGHTS_EXECUTE */
 static void comsec_widen_legacy(PACL acl)
 {
     ACE_HEADER *ace;
-    DWORD i;
+    DWORD i, count = 0;
 
     for (i = 0; i < acl->AceCount; i++)
     {
         if (!GetAce(acl, i, (void **)&ace))
-            break;
+            return;
         if (ace->AceType == ACCESS_ALLOWED_ACE_TYPE || ace->AceType == ACCESS_DENIED_ACE_TYPE)
         {
-            ACCESS_MASK *mask = &((ACCESS_ALLOWED_ACE *)ace)->Mask;
-
-            if (*mask == COM_RIGHTS_EXECUTE)
-                *mask = COMSEC_ALL_RIGHTS;
+            if (((ACCESS_ALLOWED_ACE *)ace)->Mask != COM_RIGHTS_EXECUTE)
+                return;
+            count++;
         }
+    }
+    for (i = 0; count && i < acl->AceCount; i++)
+    {
+        if (GetAce(acl, i, (void **)&ace) &&
+            (ace->AceType == ACCESS_ALLOWED_ACE_TYPE || ace->AceType == ACCESS_DENIED_ACE_TYPE))
+            ((ACCESS_ALLOWED_ACE *)ace)->Mask = COMSEC_ALL_RIGHTS;
     }
 }
 
@@ -98,21 +104,41 @@ PSECURITY_DESCRIPTOR comsec_normalize(PSECURITY_DESCRIPTOR sd, DWORD length)
     return result;
 }
 
-PSECURITY_DESCRIPTOR comsec_read_sd(HKEY root, const WCHAR *subkey, const WCHAR *value)
+static PSECURITY_DESCRIPTOR comsec_from_sddl(const WCHAR *sddl);
+
+PSECURITY_DESCRIPTOR comsec_deny_sd(void)
+{
+    return comsec_from_sddl(L"D:");
+}
+
+PSECURITY_DESCRIPTOR comsec_read_sd_key(HKEY key, const WCHAR *value)
 {
     PSECURITY_DESCRIPTOR raw, result = NULL;
     DWORD type, size = 0;
-    HKEY key;
+    LONG error;
 
-    if (RegOpenKeyExW(root, subkey, 0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key))
+    error = RegQueryValueExW(key, value, NULL, &type, NULL, &size);
+    if (error == ERROR_FILE_NOT_FOUND)
         return NULL;
-    if (!RegQueryValueExW(key, value, NULL, &type, NULL, &size) && type == REG_BINARY &&
-        size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) && size <= COMSEC_MAX_SD && (raw = LocalAlloc(LMEM_FIXED, size)))
+    if (!error && type == REG_BINARY && size >= sizeof(SECURITY_DESCRIPTOR_RELATIVE) && size <= COMSEC_MAX_SD &&
+        (raw = LocalAlloc(LMEM_FIXED, size)))
     {
         if (!RegQueryValueExW(key, value, NULL, &type, raw, &size) && type == REG_BINARY)
             result = comsec_normalize(raw, size);
         LocalFree(raw);
     }
+    /* Present but unusable: refuse rather than fall back to a wider default */
+    return result ? result : comsec_deny_sd();
+}
+
+PSECURITY_DESCRIPTOR comsec_read_sd(HKEY root, const WCHAR *subkey, const WCHAR *value)
+{
+    PSECURITY_DESCRIPTOR result;
+    HKEY key;
+
+    if (RegOpenKeyExW(root, subkey, 0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key))
+        return NULL;
+    result = comsec_read_sd_key(key, value);
     RegCloseKey(key);
     return result;
 }

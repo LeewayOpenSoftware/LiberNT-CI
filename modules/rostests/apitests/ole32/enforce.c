@@ -15,6 +15,9 @@
  * Expected: the admitting cases succeed in every position; for the others off and audit
  * allow, enforce refuses; audit and enforce log the denial.
  *
+ * The access server also calls itself across apartments (STA object, MTA caller): that call
+ * must succeed in every position, as the server's own process is not checked.
+ *
  * "ole32_apitest enforce reference" runs only the access cases with the enforce
  * expectations and without the event log, as a reference on Windows; it needs no elevation.
  */
@@ -122,6 +125,56 @@ static void WriteAll(HANDLE Pipe, const void *Data, DWORD Size)
     WriteFile(Pipe, Data, Size, &Written, NULL);
 }
 
+static HRESULT InprocResult = E_FAIL;
+
+static DWORD WINAPI InprocCaller(void *Param)
+{
+    IClassFactory *Proxy;
+    IUnknown *Object;
+    HRESULT hr;
+
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    hr = CoUnmarshalInterface(Param, &IID_IClassFactory, (void **)&Proxy);
+    if (SUCCEEDED(hr))
+    {
+        hr = IClassFactory_CreateInstance(Proxy, NULL, &IID_IUnknown, (void **)&Object);
+        IClassFactory_Release(Proxy);
+    }
+    InprocResult = hr;
+    CoUninitialize();
+    return 0;
+}
+
+/* The STA thread that owns the factory pumps while an MTA thread calls it */
+static HRESULT CallSelfAcrossApartments(void)
+{
+    LARGE_INTEGER Zero = { { 0 } };
+    IStream *Stream;
+    HANDLE Thread;
+    MSG Msg;
+    HRESULT hr;
+
+    if (FAILED(hr = CreateStreamOnHGlobal(NULL, TRUE, &Stream)))
+        return hr;
+    hr = CoMarshalInterface(Stream, &IID_IClassFactory, (IUnknown *)&Factory, MSHCTX_INPROC, NULL, MSHLFLAGS_NORMAL);
+    if (SUCCEEDED(hr))
+    {
+        IStream_Seek(Stream, Zero, STREAM_SEEK_SET, NULL);
+        Thread = CreateThread(NULL, 0, InprocCaller, Stream, 0, NULL);
+        while (Thread && MsgWaitForMultipleObjects(1, &Thread, FALSE, 20000, QS_ALLINPUT) == WAIT_OBJECT_0 + 1)
+        {
+            while (PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
+                DispatchMessageW(&Msg);
+        }
+        if (Thread)
+            CloseHandle(Thread);
+        /* the caller's unmarshal consumed the normal marshal: nothing to release */
+        hr = InprocResult;
+    }
+    IStream_Release(Stream);
+    return hr;
+}
+
 /* CoInitializeSecurity is given the descriptor in absolute format */
 static PSECURITY_DESCRIPTOR AbsoluteSd(const WCHAR *Sddl)
 {
@@ -146,8 +199,9 @@ static PSECURITY_DESCRIPTOR AbsoluteSd(const WCHAR *Sddl)
     return Absolute;
 }
 
-/* "access": CoInitializeSecurity with a descriptor admitting only Guests (or this user), then marshal a
- * factory. On failure the size is 0 and the failing HRESULT follows. */
+/* "access": CoInitializeSecurity with a descriptor admitting only Guests (or this user), call itself
+ * across apartments, then marshal a factory. On failure the size is 0 and the failing HRESULT
+ * follows; on success the marshal data is followed by the HRESULT of the call to itself. */
 static void ChildAccess(HANDLE Pipe, BOOL Admit)
 {
     WCHAR Sddl[256] = L"O:BAG:BAD:(A;;0x7;;;BG)";
@@ -173,11 +227,13 @@ static void ChildAccess(HANDLE Pipe, BOOL Admit)
         WriteAll(Pipe, &hr, sizeof(hr));
         return;
     }
+    hr = CallSelfAcrossApartments();
     GetHGlobalFromStream(Stream, &Global);
     Size = (DWORD)GlobalSize(Global);
     WriteAll(Pipe, &Size, sizeof(Size));
     WriteAll(Pipe, GlobalLock(Global), Size);
     GlobalUnlock(Global);
+    WriteAll(Pipe, &hr, sizeof(hr));
     CloseHandle(Pipe);
     Serve();
 }
@@ -358,6 +414,11 @@ static void TestAccess(const char *Exe, DWORD Mode, BOOL Admit)
     }
     ReadAll(Read, GlobalLock(Global), Size);
     GlobalUnlock(Global);
+    if (ReadAll(Read, &hr, sizeof(hr)))
+        ok(hr == E_NOTIMPL, "%s/%s: the server's call to itself across apartments returned 0x%lx\n",
+           ModeName[Mode], Case, hr);
+    else
+        ok(0, "%s/%s: the server reported no result for its call to itself\n", ModeName[Mode], Case);
     CreateStreamOnHGlobal(Global, TRUE, &Stream);
     hr = CoUnmarshalInterface(Stream, &IID_IClassFactory, (void **)&Proxy);
     ok(hr == S_OK, "%s/%s: CoUnmarshalInterface returned 0x%lx\n", ModeName[Mode], Case, hr);

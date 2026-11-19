@@ -10,7 +10,10 @@
  * - an explicit NULL descriptor without EOAC_APPID: no access check;
  * - CoInitializeSecurity not called: the executable's AppID AccessPermission, else the
  *   machine's DefaultAccessPermission, else the server's own user and Local System.
- * The machine-wide limit MachineAccessRestriction applies in every case.
+ * The machine-wide limit MachineAccessRestriction applies in every case. A value that is
+ * present but unusable refuses every caller instead of falling back; so does an explicit
+ * descriptor that is not valid (logged once).
+ * Calls from the server's own process (cross-apartment calls) are not checked.
  * Security values are read from HKLM\Software\Classes only, never from a per-user view.
  *
  * Off unless HKLM\Software\LiberNT\COM Enforcement is 1 (audit) or 2 (enforce); read once
@@ -50,6 +53,7 @@ static CRITICAL_SECTION access_cs = { &access_cs_debug, -1, 0, 0, 0, 0 };
 static BOOL access_explicit;            /* CoInitializeSecurity was called */
 static BOOL access_explicit_none;       /* ... with a NULL descriptor and no EOAC_APPID */
 static BOOL access_explicit_appid;      /* ... with EOAC_APPID and a GUID */
+static BOOL access_explicit_invalid;    /* ... with a descriptor that is not valid */
 static GUID access_appid;
 static PSECURITY_DESCRIPTOR access_explicit_sd;
 
@@ -87,7 +91,11 @@ void com_access_store(PSECURITY_DESCRIPTOR sd, DWORD capabilities)
     else if (!sd)
         access_explicit_none = TRUE;
     else if (!(access_explicit_sd = comsec_normalize(sd, 0)))
-        WARN("invalid security descriptor %p, the registry decides\n", sd);
+    {
+        WARN("invalid security descriptor %p, every caller is refused\n", sd);
+        access_explicit_sd = comsec_deny_sd();
+        access_explicit_invalid = TRUE;
+    }
     LeaveCriticalSection(&access_cs);
 }
 
@@ -167,6 +175,9 @@ static BOOL access_resolve(void)
             ret = access_sd != NULL;
         }
         access_resolved = ret;
+        if (ret && access_explicit_invalid)
+            comsec_report_denial(com_access_mode(), L"invalid CoInitializeSecurity descriptor, every call",
+                                 NULL, NULL, GetCurrentProcessId());
     }
     LeaveCriticalSection(&access_cs);
     return ret;
@@ -181,6 +192,9 @@ HRESULT com_access_check_call(RPC_BINDING_HANDLE binding)
 
     if ((mode = com_access_mode()) == COMSEC_OFF)
         return S_OK;
+    /* Cross-apartment calls inside the server's own process are not checked */
+    if (I_RpcBindingInqLocalClientPID(binding, &pid) == RPC_S_OK && pid == GetCurrentProcessId())
+        return S_OK;
 
     if (RpcImpersonateClient(binding) == RPC_S_OK)
     {
@@ -192,7 +206,6 @@ HRESULT com_access_check_call(RPC_BINDING_HANDLE binding)
               comsec_check(token, access_sd, COM_RIGHTS_EXECUTE_LOCAL);
     if (!allowed)
     {
-        I_RpcBindingInqLocalClientPID(binding, &pid);
         WARN("call from process %lu %s\n", pid, mode == COMSEC_ENFORCE ? "refused" : "would be refused");
         comsec_report_denial(mode, L"call", NULL, token, pid);
     }

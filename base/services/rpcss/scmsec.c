@@ -68,19 +68,13 @@ static BOOL appid_has_value(const GUID *clsid, const WCHAR *value)
 
 static PSECURITY_DESCRIPTOR launch_sd(const GUID *clsid)
 {
-    PSECURITY_DESCRIPTOR sd = NULL, raw;
-    DWORD type, size = 0;
+    PSECURITY_DESCRIPTOR sd = NULL;
     HKEY key;
 
     if ((key = open_appid(clsid)))
     {
-        if (!RegQueryValueExW(key, L"LaunchPermission", NULL, &type, NULL, &size) && type == REG_BINARY &&
-            size && size <= 0x10000 && (raw = LocalAlloc(LMEM_FIXED, size)))
-        {
-            if (!RegQueryValueExW(key, L"LaunchPermission", NULL, &type, raw, &size) && type == REG_BINARY)
-                sd = comsec_normalize(raw, size);
-            LocalFree(raw);
-        }
+        /* A damaged value refuses (comsec_read_sd_key); only an absent one falls back */
+        sd = comsec_read_sd_key(key, L"LaunchPermission");
         RegCloseKey(key);
     }
     if (!sd)

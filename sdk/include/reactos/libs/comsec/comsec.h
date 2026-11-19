@@ -23,13 +23,20 @@ extern "C" {
 DWORD comsec_read_mode(void);
 
 /* Reads a self-relative security descriptor stored as REG_BINARY and returns a
- * normalized copy (see comsec_normalize), or NULL when the value is absent or invalid.
- * The key is opened in the 64-bit view. Free the result with LocalFree. */
+ * normalized copy (see comsec_normalize). NULL only when the value is absent; a value
+ * that is present but unusable (wrong type, too large, invalid) yields the descriptor of
+ * comsec_deny_sd, so that a damaged setting refuses instead of falling back to a wider
+ * default. The key is opened in the 64-bit view. Free the result with LocalFree. */
 PSECURITY_DESCRIPTOR comsec_read_sd(HKEY root, const WCHAR *subkey, const WCHAR *value);
+PSECURITY_DESCRIPTOR comsec_read_sd_key(HKEY key, const WCHAR *value);
+
+/* A descriptor with an empty DACL: it grants nothing */
+PSECURITY_DESCRIPTOR comsec_deny_sd(void);
 
 /* Copies the DACL of a descriptor into a new self-relative descriptor that AccessCheck
- * accepts (owner and group set to Local System). An ACE whose mask is exactly
- * COM_RIGHTS_EXECUTE, as written before Windows XP SP2, is widened to every COM right.
+ * accepts (owner and group set to Local System). A descriptor written before Windows XP
+ * SP2, in which every ACE's mask is exactly COM_RIGHTS_EXECUTE, is widened to every COM
+ * right; a descriptor with any other bit is taken as it is.
  * Returns NULL on failure. Free the result with LocalFree. */
 PSECURITY_DESCRIPTOR comsec_normalize(PSECURITY_DESCRIPTOR sd, DWORD length);
 
