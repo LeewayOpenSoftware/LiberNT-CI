@@ -1053,7 +1053,12 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
             DeleteSecurityContext(&conn->ctx);
             SecInvalidateHandle(&conn->ctx);
         }
+#ifdef __REACTOS__
+        /* auth_length_in is the header's auth_len: the token, without the verifier in front of it */
+        if (auth_length_in)
+#else
         if (auth_length_in >= sizeof(RpcAuthVerifier))
+#endif
         {
             CredHandle cred;
             TimeStamp exp;
@@ -1081,7 +1086,11 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
         }
     }
 
+#ifdef __REACTOS__
+    if (!auth_length_in)
+#else
     if (auth_length_in < sizeof(RpcAuthVerifier))
+#endif
         return RPC_S_OK;
 
     if (!conn->AuthInfo)
@@ -1090,7 +1099,11 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
 
     status = rpcrt4_conn_authorize(
         conn, start, (unsigned char *)(auth_data_in + 1),
+#ifdef __REACTOS__
+        auth_length_in, NULL, &out_size);
+#else
         auth_length_in - sizeof(RpcAuthVerifier), NULL, &out_size);
+#endif
     if (status) return status;
 
     out_buffer = malloc(out_size);
@@ -1098,7 +1111,11 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
 
     status = rpcrt4_conn_authorize(
         conn, start, (unsigned char *)(auth_data_in + 1),
+#ifdef __REACTOS__
+        auth_length_in, out_buffer, &out_size);
+#else
         auth_length_in - sizeof(RpcAuthVerifier), out_buffer, &out_size);
+#endif
     if (status != RPC_S_OK)
     {
         free(out_buffer);
@@ -1112,6 +1129,11 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
         free(out_buffer);
         return RPC_S_SEC_PKG_ERROR;
     }
+#ifdef __REACTOS__
+    /* AUTH3 expects no reply and passes no output pointers */
+    else if (!auth_data_out)
+        free(out_buffer);
+#endif
     else
     {
         *auth_data_out = out_buffer;
@@ -1514,6 +1536,15 @@ RPC_STATUS RPCRT4_ReceiveWithAuth(RpcConnection *Connection, RpcPktHdr **Header,
        * function */
       if (!packet_does_auth_negotiation(*Header) && rpcrt4_conn_is_authorized(Connection))
       {
+#ifdef __REACTOS__
+        /* the context exists after the first leg; it has keys only once auth3 has been accepted */
+        if (Connection->server && !Connection->auth_complete)
+        {
+            WARN("authenticated packet before the security context was established\n");
+            status = RPC_S_ACCESS_DENIED;
+            goto fail;
+        }
+#endif
         status = rpcrt4_conn_secure_packet(Connection, SECURE_PACKET_RECEIVE,
             CurrentHeader, hdr_length,
             (unsigned char *)pMsg->Buffer + buffer_length, data_length,
