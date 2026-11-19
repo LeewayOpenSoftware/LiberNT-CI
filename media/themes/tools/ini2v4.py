@@ -264,6 +264,9 @@ def record(name_id, type_id, cls, part, state, ref, data, logical=None):
     return pad(h + (data if ref == 0 else b''), 8)
 
 
+KNOWN_ABSENT = ('normal/ie_personalbarmenu.bmp', 'normal/normalgroupcollapse.bmp', 'normal/normalgroupexpand.bmp')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--ini', required=True)
@@ -284,6 +287,10 @@ def main():
     os.makedirs(os.path.join(a.out, 'img'), exist_ok=True)
 
     bmps = {f.upper(): f for f in os.listdir(a.bitmaps)}
+    # win8.rc ids drop underscores that the file names keep (NORMAL_FLUENTSMALLCLOSEGLYPH12_BMP vs NORMAL_FLUENT_SMALLCLOSEGLYPH12.bmp)
+    loose = {}
+    for k in bmps:
+        loose.setdefault(k.replace('_', ''), []).append(k)
     classes, order = {}, []
     stats = dict(unknown_prop=0, unknown_section=0, unresolved_image=0, bad_value=0, records=0)
 
@@ -294,6 +301,7 @@ def main():
         return classes[name]
 
     images, fonts = {}, {}
+    missing = []
     next_img = [IMAGE_BASE]
 
     def image_id(fname):
@@ -302,7 +310,10 @@ def main():
             key = key[:-4]
         c = key + '.BMP'
         if c not in bmps:
-            return None
+            hits = loose.get(c.replace('_', ''), [])
+            if len(hits) != 1:
+                return None
+            c = hits[0]
         if c not in images:
             images[c] = next_img[0]
             next_img[0] += 1
@@ -359,6 +370,7 @@ def main():
             i = image_id(text)
             if i is None:
                 stats['unresolved_image'] += 1
+                missing.append(text)
                 return None
             return ptype, i, b'', 0
         if ptype == TYPES['FONT']:
@@ -460,6 +472,10 @@ def main():
     print('classes=%d records=%d images=%d fonts=%d variant=%d bytes' %
           (len(real), stats['records'], len(images), len(fonts), len(variant)))
     print({k: v for k, v in stats.items() if k != 'records'})
+    # Explorer bar images map to the 'dummy' bitmap in win8.rc and are known to be absent; anything else is a lost image
+    lost = [m for m in missing if 'explorerbar' not in m.lower() and m.lower().replace(chr(92), '/') not in KNOWN_ABSENT]
+    if lost:
+        raise SystemExit('unresolved images: %s' % ', '.join(sorted(set(lost))))
 
 
 if __name__ == '__main__':
