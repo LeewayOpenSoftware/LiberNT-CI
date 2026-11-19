@@ -812,6 +812,23 @@ BOOL UXTHEME_CompositionAvailable(void)
 
 /* The Aero look needs the compositor, and an administrator can switch it off for the machine. Any doubt about the
  * switch (a value that cannot be read) means the Basic look. */
+/* Registry-only Mica policy, safe to call at process attach (no dwmapi / LoadLibrary under the loader lock):
+ * TRUE only when an administrator set HKLM ThemeManager\DisableMica = 1. Absent or unreadable counts as not
+ * disabled (the Aero default). The live compositor capability is a separate, paint-time question (MicaCapable). */
+BOOL UXTHEME_MicaDisabledByPolicy(void)
+{
+    HKEY key;
+    DWORD value = 0, size = sizeof(value), type;
+    LONG status;
+
+    status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, szThemeManager, 0, KEY_QUERY_VALUE, &key);
+    if (status != ERROR_SUCCESS)
+        return FALSE;
+    status = RegQueryValueExW(key, L"DisableMica", NULL, &type, (LPBYTE)&value, &size);
+    RegCloseKey(key);
+    return status == ERROR_SUCCESS && type == REG_DWORD && value == 1;
+}
+
 BOOL UXTHEME_MicaCapable(void)
 {
     HKEY key;

@@ -182,6 +182,7 @@ HTHEME UXTHEME_OpenNcThemeData(HWND hWnd, LPCWSTR pszClassList, DWORD flags);
 void UXTHEME_ClearNonClientLiquidProperties(HWND hwnd);
 BOOL UXTHEME_CompositionAvailable(void);
 BOOL UXTHEME_MicaCapable(void);
+BOOL UXTHEME_MicaDisabledByPolicy(void);
 LPCWSTR UXTHEME_SelectDefaultStyleName(void);
 HTHEME GetNCCaptionTheme(HWND hWnd, DWORD style);
 HTHEME GetNCScrollbarTheme(HWND hWnd, DWORD style);
