@@ -117,6 +117,10 @@ typedef struct _VolumeContextBlock
     KTIMER UsnWaitTimer;
     KDPC UsnWaitTimerDpc;
     BOOLEAN UsnWaitTimerArmed;
+    BOOLEAN UsnShuttingDown;            /* set under UsnWaitLock by NtfsUsnShutdownVolume */
+    EX_RUNDOWN_REF UsnRundown;          /* held by each wake worker and by a queuing read */
+    LONG UsnDeadlineWaiters;            /* queued reads with a Timeout */
+    LONG UsnCleanupSeq;                 /* bumped by each cleanup that cancels waiters */
     ULONG IdleFcbCount;
 
     /* Linkage on the global mounted-volume list (ntfsinit.c), walked by
