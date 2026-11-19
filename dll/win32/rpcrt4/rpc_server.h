@@ -70,6 +70,9 @@ typedef struct _RpcServerInterface
   UINT MaxCalls;
   UINT MaxRpcSize;
   RPC_IF_CALLBACK_FN* IfCallbackFn;
+#ifdef __REACTOS__
+  PSECURITY_DESCRIPTOR SecurityDescriptor; /* self-relative copy, or NULL */
+#endif
   LONG CurrentCalls; /* number of calls currently executing */
   /* set when unregistering interface to let the caller of
    * RpcServerUnregisterIf* know that all calls have finished */

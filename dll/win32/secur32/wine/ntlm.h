@@ -33,6 +33,9 @@ typedef struct _NegoHelper {
     BYTE *challenge_msg;
     ULONG challenge_len;
     BYTE server_challenge[8];
+#ifdef __REACTOS__
+    WCHAR *target_name; /* the client's target, sent in the NTLMv2 response */
+#endif
     HANDLE token;
     BYTE *session_key;
     ULONG neg_flags;
