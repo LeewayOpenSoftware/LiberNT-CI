@@ -52,6 +52,14 @@ void DwmGpuShutdown(void);
  */
 struct _DWM_WIN;
 
+/* After DwmApplyFrameInsets, cx/cy are the visible rect; the backing keeps the
+ * transparent band (FrameInsets) around it. */
+#define DWM_BACKING_CX(w) ((w)->cx + (w)->FrameInsets.left + (w)->FrameInsets.right)
+#define DWM_BACKING_CY(w) ((w)->cy + (w)->FrameInsets.top + (w)->FrameInsets.bottom)
+#define DWM_HAS_FRAME_INSETS(w) \
+    (((w)->FrameInsets.left | (w)->FrameInsets.top | \
+      (w)->FrameInsets.right | (w)->FrameInsets.bottom) != 0)
+
 typedef enum _DWM_GPU_RESULT
 {
     DWM_GPU_FAILED,
