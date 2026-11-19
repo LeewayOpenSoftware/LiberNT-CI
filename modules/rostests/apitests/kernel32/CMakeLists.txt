@@ -10,6 +10,7 @@ add_message_headers(ANSI FormatMessage.mc)
 
 list(APPEND SOURCE
     FileSecurityCache.c
+    UsnJournal.c
     ActCtxDependencyVersions.c
     AlternateComputerNames.c
     UniversalThunks.c

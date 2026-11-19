@@ -108,6 +108,19 @@ typedef struct _VolumeContextBlock
     /* Context blocks kept with their resources still initialized. */
     FAST_MUTEX IdleFcbMutex;
     LIST_ENTRY IdleFcbList;
+    /* FSCTL_READ_USN_JOURNAL requests waiting for records (usn.c) */
+    IO_CSQ UsnWaitCsq;
+    LIST_ENTRY UsnWaitList;
+    KSPIN_LOCK UsnWaitLock;
+    PDEVICE_OBJECT UsnDeviceObject;
+    LONG UsnWakeQueued;
+    KTIMER UsnWaitTimer;
+    KDPC UsnWaitTimerDpc;
+    BOOLEAN UsnWaitTimerArmed;
+    BOOLEAN UsnShuttingDown;            /* set under UsnWaitLock by NtfsUsnShutdownVolume */
+    EX_RUNDOWN_REF UsnRundown;          /* held by each wake worker and by a queuing read */
+    LONG UsnDeadlineWaiters;            /* queued reads with a Timeout */
+    LONG UsnCleanupSeq;                 /* bumped by each cleanup that cancels waiters */
     ULONG IdleFcbCount;
 
     /* Linkage on the global mounted-volume list (ntfsinit.c), walked by
@@ -430,6 +443,10 @@ typedef struct _FCB
     ACCESS_MASK DesiredAccess;
     ACCESS_MASK MaximumAccess;
     ULONG AutomaticTimestampMask;
+    /* USN_SOURCE_* flags set by FSCTL_MARK_HANDLE, stamped on this handle's journal records */
+    ULONG UsnSourceInfo;
+    /* Set by cleanup before it cancels this handle's waiting journal reads */
+    BOOLEAN UsnCleanedUp;
 
     // Used for file name information;
     UNICODE_STRING FileName;

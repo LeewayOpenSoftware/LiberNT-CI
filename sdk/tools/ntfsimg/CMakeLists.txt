@@ -13,6 +13,7 @@ add_library(ntfslib_host STATIC
     ${NTFSLIB_ROOT}/src/capi/lfs.cpp
     ${NTFSLIB_ROOT}/src/capi/mft.cpp
     ${NTFSLIB_ROOT}/src/capi/volume.cpp
+    ${NTFSLIB_ROOT}/src/usn/journal.cpp
     ${NTFSLIB_ROOT}/src/filerecord/attributes/addattr.cpp
     ${NTFSLIB_ROOT}/src/filerecord/attributes/findattr.cpp
     ${NTFSLIB_ROOT}/src/filerecord/read/allocation.cpp

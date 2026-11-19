@@ -1723,6 +1723,7 @@ NtfsDismountVolume(
     if (NT_SUCCESS(Status))
     {
         VolCB->Dismounted = TRUE;
+        NtfsUsnWakeWaiters(VolCB);
         VolCB->BootRepairDismount = NtfsIsBootExecuteWindow(VolumeDeviceObject, VolCB);
         FileCB->DismountedVolume = TRUE;
         IoAcquireVpbSpinLock(&OldIrql);
@@ -2382,6 +2383,8 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     UNREFERENCED_PARAMETER(VolumeDeviceObject);
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    BOOLEAN UsnPending = FALSE;
+
     Irp->IoStatus.Information = 0;
 
     if ((IrpSp->MajorFunction == IRP_MJ_FILE_SYSTEM_CONTROL) &&
@@ -2591,11 +2594,26 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                 IrpSp);
                         break;
 
+                    case FSCTL_CREATE_USN_JOURNAL:
+                    case FSCTL_QUERY_USN_JOURNAL:
+                    case FSCTL_READ_USN_JOURNAL:
+                    case FSCTL_WRITE_USN_CLOSE_RECORD:
+                    case FSCTL_READ_FILE_USN_DATA:
+                    case FSCTL_MARK_HANDLE:
+                    case FSCTL_ENUM_USN_DATA:
+                        /* A queued read belongs to the wait queue: do not touch the IRP again */
+                        Status = NtfsUsnFsControl(VolumeDeviceObject, Irp, IrpSp);
+                        if (Status == STATUS_PENDING)
+                            UsnPending = TRUE;
+                        else
+                            Irp->IoStatus.Status = Status;
+                        break;
+
                     default:
                         Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
                         break;
                 }
-                Status = Irp->IoStatus.Status;
+                Status = UsnPending ? STATUS_PENDING : Irp->IoStatus.Status;
                 break;
 
             case IRP_MN_MOUNT_VOLUME:
@@ -2611,8 +2629,15 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
                 break;
         }
-        Status = Irp->IoStatus.Status;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        if (UsnPending)
+        {
+            Status = STATUS_PENDING;
+        }
+        else
+        {
+            Status = Irp->IoStatus.Status;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        }
     }
     if (TopLevel) { IoSetTopLevelIrp(NULL); }
     FsRtlExitFileSystem();
