@@ -24,6 +24,12 @@ ULONG KiSpeculationBtiMode;
 ULONG KiSpeculationActive;
 ULONG64 KiSpecCtrlKernel;
 ULONG64 KiSpecCtrlUser;
+/* What each processor runs with; the entry and exit stubs read these */
+ULONG64 KiSpecCtrlKernelCpu[MAXIMUM_PROCESSORS];
+ULONG64 KiSpecCtrlUserCpu[MAXIMUM_PROCESSORS];
+ULONG KiSpeculationSsbdMode;
+BOOLEAN KiSpeculationSsbdPerProcess;
+static BOOLEAN KiSpeculationSsbdSystemWide;
 BOOLEAN KiSpeculationIbpbOnSwitch;
 ULONG_PTR KiSpeculationIndexMaskOff = (ULONG_PTR)-1;
 #ifdef _M_IX86
@@ -155,6 +161,8 @@ KeQuerySpeculationControlInformation(
     if (Features & KSPEC_STIBP) Info.Flags |= SPECCTRL_STIBP_PRESENT;
     if (KeFeatureBits & KF_SMEP) Info.Flags |= SPECCTRL_SMEP_PRESENT;
     if (Features & (KSPEC_SSBD | KSPEC_VIRT_SSBD)) Info.Flags |= SPECCTRL_SSBD_SUPPORTED;
+    if (KiSpeculationSsbdMode != KSPEC_SSBD_NONE) Info.Flags |= SPECCTRL_SSBD_AVAILABLE;
+    if (KiSpeculationSsbdSystemWide) Info.Flags |= SPECCTRL_SSBD_SYSTEM_WIDE | SPECCTRL_SSBD_KERNEL;
     if (!(Features & KSPEC_SSB_NO)) Info.Flags |= SPECCTRL_SSBD_REQUIRED;
     if (Features & (KSPEC_EIBRS | KSPEC_AUTO_IBRS)) Info.Flags |= SPECCTRL_ENHANCED_IBRS_REPORTED;
     if (Features & KSPEC_MDS_NO) Info.Flags |= SPECCTRL_MDS_HARDWARE_PROTECTED;
@@ -419,6 +427,26 @@ KiApplySpeculationPolicy(
     Kinds &= ~KSPEC_HARDEN_MDS;
 #endif
 
+    /* Speculative store bypass: off unless the system (FeatureSettingsOverride bit 3) or a process opts in */
+    if (KiSpeculationHardening & KSPEC_HARDEN_SSBD)
+    {
+        if (KiSpeculationFeatures & KSPEC_SSBD)
+            KiSpeculationSsbdMode = KSPEC_SSBD_SPEC_CTRL;
+#ifdef _M_AMD64
+        else if (KiSpeculationFeatures & KSPEC_VIRT_SSBD)
+            KiSpeculationSsbdMode = KSPEC_SSBD_VIRT_SPEC_CTRL;
+#endif
+        if (KiSpeculationSsbdMode != KSPEC_SSBD_NONE)
+        {
+            if (KiFeatureSettingsOverride & FSO_ENABLE_SSBD)
+                KiSpeculationSsbdSystemWide = TRUE;
+            else
+                KiSpeculationSsbdPerProcess = TRUE;
+        }
+        if (KiSpeculationSsbdSystemWide && KiSpeculationSsbdMode == KSPEC_SSBD_SPEC_CTRL)
+            Base |= SPEC_CTRL_SSBD;
+    }
+
     /* The user value is what runs outside the kernel; with IBRS on entry the kernel adds IBRS */
     KiSpecCtrlUser = Base;
     KiSpecCtrlKernel = Base;
@@ -437,21 +465,56 @@ KiApplySpeculationPolicy(
 
     if (KiSpeculationHardening & KSPEC_HARDEN_BTI)
         Kinds |= (KiSpeculationBtiMode != KSPEC_BTI_NONE) ? KSPEC_HARDEN_BTI : 0;
+    if (KiSpeculationSsbdMode != KSPEC_SSBD_NONE)
+        Kinds |= KSPEC_HARDEN_SSBD;
     KiSpeculationActive = Kinds;
-    DPRINT1("Speculation hardening 0x%lx: active 0x%lx, %lu sites, BTI mode %lu, SPEC_CTRL 0x%I64x/0x%I64x, IBPB %u\n",
+    DPRINT1("Speculation hardening 0x%lx: active 0x%lx, %lu sites, BTI mode %lu, SPEC_CTRL 0x%I64x/0x%I64x, IBPB %u, SSBD mode %lu %s\n",
             KiSpeculationHardening, Kinds, Sites, KiSpeculationBtiMode,
-            KiSpecCtrlKernel, KiSpecCtrlUser, KiSpeculationIbpbOnSwitch);
+            KiSpecCtrlKernel, KiSpecCtrlUser, KiSpeculationIbpbOnSwitch, KiSpeculationSsbdMode,
+            KiSpeculationSsbdSystemWide ? "system" : (KiSpeculationSsbdPerProcess ? "per process" : "off"));
 }
 
 VOID
 NTAPI
 KiApplySpeculationControlProcessor(VOID)
 {
+    ULONG Number = KeGetCurrentPrcb()->Number;
+
+    KiSpecCtrlKernelCpu[Number] = KiSpecCtrlKernel;
+    KiSpecCtrlUserCpu[Number] = KiSpecCtrlUser;
+
     /* Leave the MSRs alone unless a policy asks for something; the processor is in the kernel here */
     if (KiSpecCtrlKernel != 0)
         __writemsr(MSR_IA32_SPEC_CTRL, KiSpecCtrlKernel);
 #ifdef _M_AMD64
     if (KiSpeculationBtiMode == KSPEC_BTI_AUTO_IBRS)
         __writemsr(MSR_EFER, __readmsr(MSR_EFER) | EFER_AUTOIBRS);
+    if (KiSpeculationSsbdSystemWide && KiSpeculationSsbdMode == KSPEC_SSBD_VIRT_SPEC_CTRL)
+        __writemsr(MSR_AMD64_VIRT_SPEC_CTRL, SPEC_CTRL_SSBD);
 #endif
+}
+
+/* Called on process switch when processes may opt in to SSBD */
+VOID
+NTAPI
+KiSpeculationSwitchSsbd(
+    _In_ PKPROCESS NewProcess)
+{
+    ULONG Number = KeGetCurrentPrcb()->Number;
+    ULONG64 Want = ((PEPROCESS)NewProcess)->MitigationFlags2Values.SpeculativeStoreBypassDisable ?
+                   SPEC_CTRL_SSBD : 0;
+
+    if ((KiSpecCtrlUserCpu[Number] & SPEC_CTRL_SSBD) == Want)
+        return;
+
+    KiSpecCtrlUserCpu[Number] = (KiSpecCtrlUserCpu[Number] & ~SPEC_CTRL_SSBD) | Want;
+    KiSpecCtrlKernelCpu[Number] = (KiSpecCtrlKernelCpu[Number] & ~SPEC_CTRL_SSBD) | Want;
+#ifdef _M_AMD64
+    if (KiSpeculationSsbdMode == KSPEC_SSBD_VIRT_SPEC_CTRL)
+    {
+        __writemsr(MSR_AMD64_VIRT_SPEC_CTRL, Want);
+        return;
+    }
+#endif
+    __writemsr(MSR_IA32_SPEC_CTRL, KiSpecCtrlKernelCpu[Number]);
 }

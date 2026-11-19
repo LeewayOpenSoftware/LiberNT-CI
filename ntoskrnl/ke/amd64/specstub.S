@@ -8,8 +8,8 @@
 #include <asm.inc>
 #include <ksamd64.inc>
 
-EXTERN KiSpecCtrlKernel:QWORD
-EXTERN KiSpecCtrlUser:QWORD
+EXTERN KiSpecCtrlKernelCpu:QWORD
+EXTERN KiSpecCtrlUserCpu:QWORD
 
 .code64
 
@@ -20,8 +20,11 @@ KiSpecCtrlEnterKernel:
     push rax
     push rcx
     push rdx
+    mov rcx, gs:[PcCurrentPrcb]
+    movzx ecx, word ptr [rcx + PbNumber]
+    lea rax, KiSpecCtrlKernelCpu[rip]
+    mov eax, dword ptr [rax + rcx * 8]
     mov ecx, HEX(48)
-    mov eax, dword ptr KiSpecCtrlKernel[rip]
     mov edx, 0
     wrmsr
     pop rdx
@@ -34,8 +37,11 @@ KiSpecCtrlExitKernel:
     push rax
     push rcx
     push rdx
+    mov rcx, gs:[PcCurrentPrcb]
+    movzx ecx, word ptr [rcx + PbNumber]
+    lea rax, KiSpecCtrlUserCpu[rip]
+    mov eax, dword ptr [rax + rcx * 8]
     mov ecx, HEX(48)
-    mov eax, dword ptr KiSpecCtrlUser[rip]
     mov edx, 0
     wrmsr
     pop rdx

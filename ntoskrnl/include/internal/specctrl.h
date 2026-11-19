@@ -14,6 +14,7 @@
 #define MSR_IA32_PRED_CMD               0x00000049
 #define MSR_IA32_ARCH_CAPABILITIES      0x0000010A
 #define MSR_IA32_FLUSH_CMD              0x0000010B
+#define MSR_AMD64_VIRT_SPEC_CTRL        0xC001011F
 
 /* CPUID.(EAX=07h,ECX=0):EDX */
 #define CPUID07_EDX_MD_CLEAR            (1UL << 10)
@@ -51,6 +52,7 @@
 
 /* FeatureSettingsOverride bits documented in KB4073119 */
 #define FSO_DISABLE_BTI                 0x00000001
+#define FSO_ENABLE_SSBD                 0x00000008
 #define FSO_AMD_USER_TO_KERNEL          0x00000040
 
 /* What the processor offers, collected once on the boot processor */
@@ -81,6 +83,12 @@ extern ULONG KiFeatureSettingsOverrideMask;
 #define KSPEC_HARDEN_BTI                0x00000004  /* Kernel protection against branch target injection */
 #define KSPEC_HARDEN_IBPB               0x00000008  /* Barrier on process switch (opt-in) */
 #define KSPEC_HARDEN_STIBP              0x00000010  /* Single-thread indirect branch predictors (opt-in) */
+#define KSPEC_HARDEN_SSBD               0x00000020  /* Honour the SSBD system and process opt-ins */
+
+/* How speculative store bypass is disabled */
+#define KSPEC_SSBD_NONE                 0
+#define KSPEC_SSBD_SPEC_CTRL            1
+#define KSPEC_SSBD_VIRT_SPEC_CTRL       2
 
 /* How branch target injection is mitigated */
 #define KSPEC_BTI_NONE                  0
@@ -93,14 +101,24 @@ extern ULONG KiSpeculationActive;
 extern ULONG64 KiSpecCtrlKernel;
 extern ULONG64 KiSpecCtrlUser;
 extern BOOLEAN KiSpeculationIbpbOnSwitch;
+extern ULONG KiSpeculationSsbdMode;
+extern BOOLEAN KiSpeculationSsbdPerProcess;
 
-/* Barrier between the predictor state of two processes */
+VOID
+NTAPI
+KiSpeculationSwitchSsbd(
+    _In_ PKPROCESS NewProcess);
+
+/* Speculation state that follows the process: predictor barrier and store bypass */
 FORCEINLINE
 VOID
-KiSpeculationProcessSwitch(VOID)
+KiSpeculationProcessSwitch(
+    _In_ PKPROCESS NewProcess)
 {
     if (KiSpeculationIbpbOnSwitch)
         __writemsr(MSR_IA32_PRED_CMD, 1);
+    if (KiSpeculationSsbdPerProcess)
+        KiSpeculationSwitchSsbd(NewProcess);
 }
 
 VOID

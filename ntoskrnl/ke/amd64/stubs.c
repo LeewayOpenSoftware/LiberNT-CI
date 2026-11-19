@@ -275,7 +275,7 @@ KiSwapProcess(IN PKPROCESS NewProcess,
     __writecr3(NewProcess->DirectoryTableBase[0]);
 #endif
 
-    if (NewProcess != OldProcess) KiSpeculationProcessSwitch();
+    if (NewProcess != OldProcess) KiSpeculationProcessSwitch(NewProcess);
 
 #ifdef CONFIG_SMP
     if (NewProcess != OldProcess)
