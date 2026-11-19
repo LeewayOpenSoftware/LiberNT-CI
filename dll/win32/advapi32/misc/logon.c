@@ -559,15 +559,23 @@ SetNewProcessObjectSecurity(
      * but the new user may always name itself: set the descriptor as the new user,
      * then restore whatever impersonation the calling thread had.
      */
-    if (Token)
+    /* Only when the thread's current identity can be put back exactly: no thread
+     * token at all, or one we could open */
+    if (Token &&
+        (OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &SavedToken) ||
+         GetLastError() == ERROR_NO_TOKEN))
     {
-        if (!OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &SavedToken))
-            SavedToken = NULL;
         if (ImpersonateLoggedOnUser(Token))
         {
             Success = SetKernelObjectSecurity(ObjectHandle, All, Security);
             if (!SetThreadToken(NULL, SavedToken))
+            {
+                /* The thread would go on as the new user: fail, the caller ends the new process */
                 ERR("SetNewProcessObjectSecurity(): Failed to restore the thread token (error %lu)\n", GetLastError());
+                if (SavedToken)
+                    CloseHandle(SavedToken);
+                return FALSE;
+            }
             if (SavedToken)
                 CloseHandle(SavedToken);
             if (Success)
