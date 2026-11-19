@@ -78,6 +78,9 @@ typedef struct _RpcConnection
   TimeStamp exp;
   ULONG attr;
   RpcAuthInfo *AuthInfo;
+#ifdef __REACTOS__
+  BOOL auth_complete; /* server: the security context is established, not only started */
+#endif
   ULONG auth_context_id;
   ULONG encryption_auth_len;
   ULONG signature_auth_len;

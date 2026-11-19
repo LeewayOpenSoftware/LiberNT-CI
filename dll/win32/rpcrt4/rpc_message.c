@@ -976,6 +976,10 @@ RPC_STATUS RPCRT4_default_authorize(RpcConnection *conn, BOOL first_time,
       }
       conn->signature_auth_len = secctx_sizes.cbMaxSignature;
       conn->encryption_auth_len = secctx_sizes.cbSecurityTrailer;
+#ifdef __REACTOS__
+      if (conn->server)
+          conn->auth_complete = TRUE;
+#endif
   }
 
   *out_size = out.cbBuffer;
@@ -1035,6 +1039,9 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
 
     if (start)
     {
+#ifdef __REACTOS__
+        conn->auth_complete = FALSE;
+#endif
         /* remove any existing authentication information */
         if (conn->AuthInfo)
         {
@@ -1491,6 +1498,15 @@ RPC_STATUS RPCRT4_ReceiveWithAuth(RpcConnection *Connection, RpcPktHdr **Header,
        * function */
       if (!packet_does_auth_negotiation(*Header) && rpcrt4_conn_is_authorized(Connection))
       {
+#ifdef __REACTOS__
+        /* the context exists after the first leg; it has keys only once auth3 has been accepted */
+        if (Connection->server && !Connection->auth_complete)
+        {
+            WARN("authenticated packet before the security context was established\n");
+            status = RPC_S_ACCESS_DENIED;
+            goto fail;
+        }
+#endif
         status = rpcrt4_conn_secure_packet(Connection, SECURE_PACKET_RECEIVE,
             CurrentHeader, hdr_length,
             (unsigned char *)pMsg->Buffer + buffer_length, data_length,
