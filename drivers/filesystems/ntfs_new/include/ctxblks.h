@@ -430,6 +430,8 @@ typedef struct _FCB
     ACCESS_MASK DesiredAccess;
     ACCESS_MASK MaximumAccess;
     ULONG AutomaticTimestampMask;
+    /* USN_SOURCE_* flags set by FSCTL_MARK_HANDLE, stamped on this handle's journal records */
+    ULONG UsnSourceInfo;
 
     // Used for file name information;
     UNICODE_STRING FileName;

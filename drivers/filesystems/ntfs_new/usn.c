@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT NTFS driver
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
- * PURPOSE:     USN change journal FSCTLs: create, query and read
+ * PURPOSE:     USN change journal FSCTLs: create, query, read, close records, file data, mark handle
  */
 
 #include "ntfspch.h"
@@ -303,6 +303,357 @@ Cleanup:
     return Status;
 }
 
+/* What a journal record says about a file: references, first long name, attributes */
+typedef struct _NTFS_USN_FILE_DESCRIPTION
+{
+    ULONGLONG FileReference;
+    ULONGLONG ParentReference;
+    UNICODE_STRING Name;            /* points into the file record */
+    ULONG FileAttributes;
+    ULONG SecurityId;
+    LONGLONG ChangeTime;
+    LONGLONG StoredUsn;
+} NTFS_USN_FILE_DESCRIPTION, *PNTFS_USN_FILE_DESCRIPTION;
+
+static
+NTSTATUS
+NtfsUsnDescribeFile(
+    _In_ PVolumeContextBlock VolCB,
+    _In_ PNtfsFileRecord FileRec,
+    _Out_ PNTFS_USN_FILE_DESCRIPTION Desc)
+{
+    PFileRecordHeader Header = NtfsFileRecordGetHeader(FileRec);
+    NtfsFileBasicInformation Basic;
+    ULONG Context = 0;
+    NTSTATUS Status;
+
+    RtlZeroMemory(Desc, sizeof(*Desc));
+    Desc->FileReference = ((ULONGLONG)Header->SequenceNumber << 48) | Header->MFTRecordNumber;
+    Status = NtfsMasterFileTableEnumerateLinks(NtfsVolumeGetMft(VolCB->DiskVolume),
+                                               FileRec,
+                                               &Context,
+                                               &Desc->ParentReference,
+                                               &Desc->Name);
+    if (Status == STATUS_NO_MORE_ENTRIES)
+    {
+        RtlZeroMemory(&Desc->Name, sizeof(Desc->Name));
+        Status = STATUS_SUCCESS;
+    }
+    if (NT_SUCCESS(Status))
+        Status = NtfsFileRecordGetBasicInformation(FileRec, &Basic);
+    if (NT_SUCCESS(Status))
+        Status = NtfsFileRecordGetUsnInformation(FileRec, &Desc->StoredUsn, &Desc->SecurityId);
+    if (NT_SUCCESS(Status))
+    {
+        Desc->FileAttributes = Basic.FileAttributes;
+        Desc->ChangeTime = (LONGLONG)Basic.ChangeTime;
+    }
+    return Status;
+}
+
+/* A file handle (the per-file journal FSCTLs do not take a volume handle) */
+static
+NTSTATUS
+NtfsUsnGetFile(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _In_ PIO_STACK_LOCATION IrpSp,
+    _Out_ PVolumeContextBlock* VolCB,
+    _Out_ PFileContextBlock* FileCB)
+{
+    *VolCB = VolumeDeviceObject ? (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension : NULL;
+    *FileCB = NtfsGetFileContext(IrpSp->FileObject);
+    if (!*VolCB || !(*VolCB)->DiskVolume || !*FileCB || !(*FileCB)->FileRec || (*FileCB)->IsVolumeOpen)
+        return STATUS_INVALID_PARAMETER;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NtfsUsnWriteCloseRecord(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _In_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION IrpSp)
+{
+    ULONG OutputLength = IrpSp->Parameters.FileSystemControl.OutputBufferLength;
+    NTFS_USN_FILE_DESCRIPTION Desc;
+    NtfsUsnRecordInput Input;
+    PVolumeContextBlock VolCB;
+    PFileContextBlock FileCB;
+    LARGE_INTEGER Now;
+    PUCHAR Output;
+    LONGLONG Usn = 0;
+    NTSTATUS Status;
+
+    Status = NtfsUsnGetFile(VolumeDeviceObject, IrpSp, &VolCB, &FileCB);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Output = GetUserBuffer(Irp);
+    if (!Output || OutputLength < sizeof(USN))
+        return STATUS_BUFFER_TOO_SMALL;
+    if (NtfsVolumeIsReadOnly(VolCB->DiskVolume))
+        return STATUS_MEDIA_WRITE_PROTECTED;
+    _SEH2_TRY
+    {
+        if (Irp->RequestorMode != KernelMode)
+            ProbeForWrite(Output, sizeof(USN), sizeof(UCHAR));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    KeQuerySystemTime(&Now);
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsUsnDescribeFile(VolCB, FileCB->FileRec, &Desc);
+    if (NT_SUCCESS(Status))
+    {
+        RtlZeroMemory(&Input, sizeof(Input));
+        Input.FileReferenceNumber = Desc.FileReference;
+        Input.ParentFileReferenceNumber = Desc.ParentReference;
+        Input.TimeStamp = (ULONGLONG)Now.QuadPart;
+        Input.Reason = USN_REASON_CLOSE;
+        Input.SourceInfo = FileCB->UsnSourceInfo;
+        Input.SecurityId = Desc.SecurityId;
+        Input.FileAttributes = Desc.FileAttributes;
+        Input.FileName = Desc.Name.Buffer;
+        Input.FileNameLength = Desc.Name.Length;
+        Status = NtfsUsnJournalAppend(VolCB->DiskVolume, &Input, &Usn);
+    }
+    /* The name points into the record: it is consumed above, before the record can change */
+    if (NT_SUCCESS(Status))
+        Status = NtfsFileRecordSetUpdateSequenceNumber(FileCB->FileRec, Usn);
+    NtfsReleaseMetadata(VolCB);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+    KeLeaveCriticalRegion();
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    _SEH2_TRY
+    {
+        RtlCopyMemory(Output, &Usn, sizeof(Usn));
+        Irp->IoStatus.Information = sizeof(USN);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    return Status;
+}
+
+static
+NTSTATUS
+NtfsUsnReadFileData(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _In_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION IrpSp)
+{
+    PVOID InputBuffer = IrpSp->Parameters.FileSystemControl.Type3InputBuffer;
+    ULONG InputLength = IrpSp->Parameters.FileSystemControl.InputBufferLength;
+    ULONG OutputLength = IrpSp->Parameters.FileSystemControl.OutputBufferLength;
+    READ_FILE_USN_DATA Versions;
+    NTFS_USN_FILE_DESCRIPTION Desc;
+    PVolumeContextBlock VolCB;
+    PFileContextBlock FileCB;
+    PUCHAR Output, Record = NULL;
+    ULONG HeaderLength = 0, Length = 0;
+    USHORT Version;
+    NTSTATUS Status;
+
+    Status = NtfsUsnGetFile(VolumeDeviceObject, IrpSp, &VolCB, &FileCB);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Output = GetUserBuffer(Irp);
+    if (!Output)
+        return STATUS_INVALID_USER_BUFFER;
+
+    /* The version range is optional; without it the record is version 2 */
+    Versions.MinMajorVersion = 2;
+    Versions.MaxMajorVersion = 2;
+    _SEH2_TRY
+    {
+        if (Irp->RequestorMode != KernelMode)
+        {
+            if (InputBuffer && InputLength >= sizeof(Versions))
+                ProbeForRead(InputBuffer, sizeof(Versions), sizeof(UCHAR));
+            ProbeForWrite(Output, OutputLength, sizeof(UCHAR));
+        }
+        if (InputBuffer && InputLength >= sizeof(Versions))
+            RtlCopyMemory(&Versions, InputBuffer, sizeof(Versions));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Versions.MinMajorVersion > Versions.MaxMajorVersion)
+        return STATUS_INVALID_PARAMETER;
+    if (Versions.MinMajorVersion <= 2 && Versions.MaxMajorVersion >= 2)
+        Version = 2;
+    else if (Versions.MinMajorVersion <= 3 && Versions.MaxMajorVersion >= 3)
+        Version = 3;
+    else
+        return STATUS_INVALID_PARAMETER;
+
+    Record = ExAllocatePoolWithTag(PagedPool, PAGE_SIZE, TAG_NTFS);
+    if (!Record)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), TRUE);
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsUsnDescribeFile(VolCB, FileCB->FileRec, &Desc);
+    if (NT_SUCCESS(Status))
+    {
+        HeaderLength = (Version == 3) ? FIELD_OFFSET(USN_RECORD_V3, FileName)
+                                      : FIELD_OFFSET(USN_RECORD_V2, FileName);
+        Length = ALIGN_UP_BY(HeaderLength + Desc.Name.Length, 8);
+        if (Length > PAGE_SIZE)
+            Status = STATUS_FILE_CORRUPT_ERROR;
+    }
+    if (NT_SUCCESS(Status))
+    {
+        RtlZeroMemory(Record, Length);
+        if (Version == 3)
+        {
+            PUSN_RECORD_V3 R3 = (PUSN_RECORD_V3)Record;
+
+            R3->RecordLength = Length;
+            R3->MajorVersion = 3;
+            RtlCopyMemory(&R3->FileReferenceNumber, &Desc.FileReference, sizeof(ULONGLONG));
+            RtlCopyMemory(&R3->ParentFileReferenceNumber, &Desc.ParentReference, sizeof(ULONGLONG));
+            R3->Usn = Desc.StoredUsn;
+            R3->TimeStamp.QuadPart = Desc.ChangeTime;
+            R3->SecurityId = Desc.SecurityId;
+            R3->FileAttributes = Desc.FileAttributes;
+            R3->FileNameLength = Desc.Name.Length;
+            R3->FileNameOffset = (USHORT)HeaderLength;
+        }
+        else
+        {
+            PUSN_RECORD_V2 R2 = (PUSN_RECORD_V2)Record;
+
+            R2->RecordLength = Length;
+            R2->MajorVersion = 2;
+            R2->FileReferenceNumber = Desc.FileReference;
+            R2->ParentFileReferenceNumber = Desc.ParentReference;
+            R2->Usn = Desc.StoredUsn;
+            R2->TimeStamp.QuadPart = Desc.ChangeTime;
+            R2->SecurityId = Desc.SecurityId;
+            R2->FileAttributes = Desc.FileAttributes;
+            R2->FileNameLength = Desc.Name.Length;
+            R2->FileNameOffset = (USHORT)HeaderLength;
+        }
+        if (Desc.Name.Length)
+            RtlCopyMemory(Record + HeaderLength, Desc.Name.Buffer, Desc.Name.Length);
+    }
+    NtfsReleaseMetadata(VolCB);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+    KeLeaveCriticalRegion();
+
+    if (NT_SUCCESS(Status) && OutputLength < Length)
+        Status = STATUS_BUFFER_TOO_SMALL;
+    if (NT_SUCCESS(Status))
+    {
+        _SEH2_TRY
+        {
+            RtlCopyMemory(Output, Record, Length);
+            Irp->IoStatus.Information = Length;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+    ExFreePoolWithTag(Record, TAG_NTFS);
+    return Status;
+}
+
+#define NTFS_USN_VALID_SOURCES (USN_SOURCE_DATA_MANAGEMENT | USN_SOURCE_AUXILIARY_DATA | \
+                                USN_SOURCE_REPLICATION_MANAGEMENT | USN_SOURCE_CLIENT_REPLICATION_MANAGEMENT)
+
+/*
+ * Sets the USN source flags of this handle. The caller proves its rights over the volume by
+ * passing a volume handle of the same volume opened for data access. Handle flags (cluster
+ * protection, TxF log handles) are not supported and are refused rather than ignored.
+ */
+static
+NTSTATUS
+NtfsUsnMarkHandle(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _In_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION IrpSp)
+{
+    ULONG InputLength = IrpSp->Parameters.FileSystemControl.InputBufferLength;
+    PVOID Buffer = Irp->AssociatedIrp.SystemBuffer;
+    PVolumeContextBlock VolCB;
+    PFileContextBlock FileCB, VolumeFileCB;
+    PFILE_OBJECT VolumeFileObject;
+    HANDLE VolumeHandle;
+    ULONG SourceInfo, HandleInfo;
+    NTSTATUS Status;
+
+    Status = NtfsUsnGetFile(VolumeDeviceObject, IrpSp, &VolCB, &FileCB);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!Buffer)
+        return STATUS_INVALID_PARAMETER;
+#ifdef _WIN64
+    if (IoIs32bitProcess(Irp))
+    {
+        PMARK_HANDLE_INFO32 Info32 = (PMARK_HANDLE_INFO32)Buffer;
+
+        if (InputLength < sizeof(MARK_HANDLE_INFO32))
+            return STATUS_INVALID_PARAMETER;
+        SourceInfo = Info32->UsnSourceInfo;
+        VolumeHandle = (HANDLE)(ULONG_PTR)Info32->VolumeHandle;
+        HandleInfo = Info32->HandleInfo;
+    }
+    else
+#endif
+    {
+        PMARK_HANDLE_INFO Info = (PMARK_HANDLE_INFO)Buffer;
+
+        if (InputLength < sizeof(MARK_HANDLE_INFO))
+            return STATUS_INVALID_PARAMETER;
+        SourceInfo = Info->UsnSourceInfo;
+        VolumeHandle = Info->VolumeHandle;
+        HandleInfo = Info->HandleInfo;
+    }
+    if ((SourceInfo & ~NTFS_USN_VALID_SOURCES) || HandleInfo != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = ObReferenceObjectByHandle(VolumeHandle,
+                                       0,
+                                       *IoFileObjectType,
+                                       Irp->RequestorMode,
+                                       (PVOID*)&VolumeFileObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    VolumeFileCB = NtfsGetFileContext(VolumeFileObject);
+    if (!VolumeFileCB || !VolumeFileCB->IsVolumeOpen ||
+        VolumeFileObject->Vpb != IrpSp->FileObject->Vpb ||
+        !(VolumeFileCB->DesiredAccess & (FILE_READ_DATA | FILE_WRITE_DATA)))
+    {
+        Status = STATUS_ACCESS_DENIED;
+    }
+    ObDereferenceObject(VolumeFileObject);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    FileCB->UsnSourceInfo = SourceInfo;
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NtfsUsnFsControl(
     _In_ PDEVICE_OBJECT VolumeDeviceObject,
@@ -318,6 +669,12 @@ NtfsUsnFsControl(
             return NtfsUsnQuery(VolumeDeviceObject, Irp, IrpSp);
         case FSCTL_READ_USN_JOURNAL:
             return NtfsUsnRead(VolumeDeviceObject, Irp, IrpSp);
+        case FSCTL_WRITE_USN_CLOSE_RECORD:
+            return NtfsUsnWriteCloseRecord(VolumeDeviceObject, Irp, IrpSp);
+        case FSCTL_READ_FILE_USN_DATA:
+            return NtfsUsnReadFileData(VolumeDeviceObject, Irp, IrpSp);
+        case FSCTL_MARK_HANDLE:
+            return NtfsUsnMarkHandle(VolumeDeviceObject, Irp, IrpSp);
         default:
             return STATUS_INVALID_DEVICE_REQUEST;
     }

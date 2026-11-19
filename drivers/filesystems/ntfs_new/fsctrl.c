@@ -2594,6 +2594,9 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     case FSCTL_CREATE_USN_JOURNAL:
                     case FSCTL_QUERY_USN_JOURNAL:
                     case FSCTL_READ_USN_JOURNAL:
+                    case FSCTL_WRITE_USN_CLOSE_RECORD:
+                    case FSCTL_READ_FILE_USN_DATA:
+                    case FSCTL_MARK_HANDLE:
                         Irp->IoStatus.Status =
                             NtfsUsnFsControl(
                                 VolumeDeviceObject,
