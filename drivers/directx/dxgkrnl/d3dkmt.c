@@ -466,10 +466,13 @@ DxgkpShareObjects(
         return STATUS_INVALID_PARAMETER;
     }
 
+    /* The attributes are already captured (kernel copies), but the name, the root
+     * directory and the descriptor are the user's: look them up and check them as
+     * the user's (UserMode ownership). */
     Status = ObCreateObject(KernelMode,
                             DxgkSharedResourceObjectType,
                             &ObjectAttributes,
-                            KernelMode,
+                            UserMode,
                             NULL,
                             sizeof(*SharedObject),
                             0,
