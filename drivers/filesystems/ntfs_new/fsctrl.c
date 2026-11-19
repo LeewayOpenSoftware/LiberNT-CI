@@ -2597,6 +2597,7 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     case FSCTL_WRITE_USN_CLOSE_RECORD:
                     case FSCTL_READ_FILE_USN_DATA:
                     case FSCTL_MARK_HANDLE:
+                    case FSCTL_ENUM_USN_DATA:
                         Irp->IoStatus.Status =
                             NtfsUsnFsControl(
                                 VolumeDeviceObject,

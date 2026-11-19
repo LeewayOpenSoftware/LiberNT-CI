@@ -654,6 +654,101 @@ NtfsUsnMarkHandle(
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+NtfsUsnEnum(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _In_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION IrpSp)
+{
+    MFT_ENUM_DATA_V1 Input;
+    PVolumeContextBlock VolCB;
+    PFileContextBlock FileCB;
+    PVOID InputBuffer = IrpSp->Parameters.FileSystemControl.Type3InputBuffer;
+    ULONG InputLength = IrpSp->Parameters.FileSystemControl.InputBufferLength;
+    ULONG OutputLength = IrpSp->Parameters.FileSystemControl.OutputBufferLength;
+    PUCHAR Output, Staging = NULL;
+    ULONG CopyLength, Capacity, Returned = 0;
+    ULONGLONG Next = 0;
+    BOOLEAN IsV1;
+    NTSTATUS Status;
+
+    Status = NtfsUsnGetVolume(VolumeDeviceObject, IrpSp, &VolCB, &FileCB);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Output = GetUserBuffer(Irp);
+    if (!InputBuffer || InputLength < sizeof(MFT_ENUM_DATA_V0))
+        return STATUS_INVALID_PARAMETER;
+    if (!Output || OutputLength < sizeof(ULONGLONG))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    /* V1 adds the version range at the end of the V0 layout */
+    IsV1 = InputLength >= FIELD_OFFSET(MFT_ENUM_DATA_V1, MaxMajorVersion) + sizeof(USHORT);
+    CopyLength = IsV1 ? min(InputLength, (ULONG)sizeof(Input)) : sizeof(MFT_ENUM_DATA_V0);
+    RtlZeroMemory(&Input, sizeof(Input));
+    _SEH2_TRY
+    {
+        if (Irp->RequestorMode != KernelMode)
+        {
+            ProbeForRead(InputBuffer, CopyLength, sizeof(UCHAR));
+            ProbeForWrite(Output, OutputLength, sizeof(UCHAR));
+        }
+        RtlCopyMemory(&Input, InputBuffer, CopyLength);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (!IsV1)
+    {
+        Input.MinMajorVersion = 2;
+        Input.MaxMajorVersion = 2;
+    }
+    /* Only version 2 records are produced */
+    if (Input.MinMajorVersion > 2 || Input.MaxMajorVersion < 2 || Input.LowUsn > Input.HighUsn)
+        return STATUS_INVALID_PARAMETER;
+
+    Capacity = min(OutputLength - (ULONG)sizeof(ULONGLONG), (ULONG)NTFS_USN_STAGING_MAX);
+    if (Capacity == 0)
+        return STATUS_BUFFER_TOO_SMALL;
+    Staging = ExAllocatePoolWithTag(PagedPool, Capacity, TAG_NTFS);
+    if (!Staging)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    KeEnterCriticalRegion();
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsUsnJournalEnumerate(VolCB->DiskVolume,
+                                     Input.StartFileReferenceNumber,
+                                     Input.LowUsn,
+                                     Input.HighUsn,
+                                     Staging,
+                                     Capacity,
+                                     &Returned,
+                                     &Next);
+    NtfsReleaseMetadata(VolCB);
+    KeLeaveCriticalRegion();
+
+    if (NT_SUCCESS(Status))
+    {
+        _SEH2_TRY
+        {
+            RtlCopyMemory(Output, &Next, sizeof(Next));
+            RtlCopyMemory(Output + sizeof(ULONGLONG), Staging, Returned);
+            Irp->IoStatus.Information = sizeof(ULONGLONG) + Returned;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+    ExFreePoolWithTag(Staging, TAG_NTFS);
+    return Status;
+}
+
 NTSTATUS
 NtfsUsnFsControl(
     _In_ PDEVICE_OBJECT VolumeDeviceObject,
@@ -675,6 +770,8 @@ NtfsUsnFsControl(
             return NtfsUsnReadFileData(VolumeDeviceObject, Irp, IrpSp);
         case FSCTL_MARK_HANDLE:
             return NtfsUsnMarkHandle(VolumeDeviceObject, Irp, IrpSp);
+        case FSCTL_ENUM_USN_DATA:
+            return NtfsUsnEnum(VolumeDeviceObject, Irp, IrpSp);
         default:
             return STATUS_INVALID_DEVICE_REQUEST;
     }
