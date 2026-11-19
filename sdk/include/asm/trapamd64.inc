@@ -334,6 +334,7 @@ MACRO(EnterTrap, Flags)
     mov ds, ax
     mov es, ax
     swapgs
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(46) /* fence site, see KiApplySpeculationPolicy */
 
     SAVE_USER_DEBUG_REGISTERS rbp
 
@@ -352,6 +353,7 @@ kernel_mode_entry:
 #else
 2:
 #endif
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(46) /* fence site, see KiApplySpeculationPolicy */
 
     if ((Flags) AND TF_DEBUG)
         SAVE_DEBUG_REGISTERS rbp, rax

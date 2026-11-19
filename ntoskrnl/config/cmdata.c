@@ -266,6 +266,13 @@ DATA_SEG("INITDATA") CM_SYSTEM_CONTROL_VECTOR CmControlVector[] =
         NULL,
         NULL
     },
+    {
+        L"Session Manager\\Kernel",
+        L"SpeculationHardening",
+        &KiSpeculationHardening,
+        NULL,
+        NULL
+    },
 #endif
     {
         L"Session Manager\\Memory Management",

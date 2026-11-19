@@ -1847,6 +1847,9 @@ KiSystemServiceHandler(IN PKTRAP_FRAME TrapFrame,
     /* FIXME: Increase individual counts on debug systems */
     //KiIncreaseSystemCallCount(DescriptorTable, Id);
 
+    /* A mispredicted bound check must not index the tables */
+    Id &= KiSpeculationIndexMask(Id, DescriptorTable->Limit);
+
     /* Get stack bytes */
     StackBytes = DescriptorTable->Number[Id];
 

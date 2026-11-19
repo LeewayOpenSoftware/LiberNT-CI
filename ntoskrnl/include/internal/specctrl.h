@@ -60,10 +60,56 @@ extern ULONG64 KiArchCapabilities;
 extern ULONG KiFeatureSettingsOverride;
 extern ULONG KiFeatureSettingsOverrideMask;
 
+/* Session Manager\Kernel SpeculationHardening, our own switch until each class has a default */
+#define KSPEC_HARDEN_BOUNDS             0x00000001  /* Index masking and fences after bound checks */
+
+extern ULONG KiSpeculationHardening;
+extern ULONG_PTR KiSpeculationIndexMaskOff;
+#ifdef _M_IX86
+extern BOOLEAN KiSpeculationFenceEnabled;
+#endif
+
+/* All ones when Index < Size, zero otherwise, without a branch the processor can mispredict */
+FORCEINLINE
+ULONG_PTR
+KiSpeculationIndexMask(
+    _In_ ULONG_PTR Index,
+    _In_ ULONG_PTR Size)
+{
+    ULONG_PTR Mask;
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ ("cmp %1, %2; sbb %0, %0" : "=r"(Mask) : "rm"(Size), "r"(Index) : "cc");
+#else
+    Mask = (ULONG_PTR)(~(LONG_PTR)(Index | (Size - 1 - Index)) >> (sizeof(ULONG_PTR) * 8 - 1));
+#endif
+    return Mask | KiSpeculationIndexMaskOff;
+}
+
+/* A marked 7-byte nop that KiApplySpeculationPolicy turns into lfence */
+#define KSPEC_FENCE_SITE_BYTES          0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54, 0x46
+
+FORCEINLINE
+VOID
+KiSpeculationBarrier(VOID)
+{
+#if defined(_M_AMD64) && (defined(__GNUC__) || defined(__clang__))
+    __asm__ __volatile__ (".byte 0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54, 0x46" ::: "memory");
+#elif defined(_M_AMD64)
+    if (KiSpeculationIndexMaskOff == 0) _mm_lfence();
+#else
+    if (KiSpeculationFenceEnabled) _mm_lfence();
+#endif
+}
+
 CODE_SEG("INIT")
 VOID
 NTAPI
 KiDetectSpeculationFeatures(VOID);
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+KiApplySpeculationPolicy(VOID);
 
 NTSTATUS
 NTAPI
@@ -71,5 +117,9 @@ KeQuerySpeculationControlInformation(
     _Out_writes_bytes_to_(Length, *ReturnLength) PVOID Buffer,
     _In_ ULONG Length,
     _Out_ PULONG ReturnLength);
+
+#else
+
+#define KiSpeculationBarrier() ((void)0)
 
 #endif /* _M_IX86 || _M_AMD64 */

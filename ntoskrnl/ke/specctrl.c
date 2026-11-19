@@ -19,6 +19,19 @@ ULONG64 KiArchCapabilities;
 ULONG KiFeatureSettingsOverride;
 ULONG KiFeatureSettingsOverrideMask;
 
+ULONG KiSpeculationHardening;
+ULONG_PTR KiSpeculationIndexMaskOff = (ULONG_PTR)-1;
+#ifdef _M_IX86
+BOOLEAN KiSpeculationFenceEnabled;
+#endif
+
+#ifdef _M_AMD64
+extern IMAGE_DOS_HEADER __ImageBase;
+static const UCHAR KiFenceSiteMarker[7] = { KSPEC_FENCE_SITE_BYTES };
+/* lfence followed by a 4-byte nop */
+static const UCHAR KiFenceSiteLfence[7] = { 0x0F, 0xAE, 0xE8, 0x0F, 0x1F, 0x40, 0x00 };
+#endif
+
 /* FUNCTIONS *****************************************************************/
 
 CODE_SEG("INIT")
@@ -116,4 +129,81 @@ KeQuerySpeculationControlInformation(
     RtlCopyMemory(Buffer, &Info, Size);
     *ReturnLength = Size;
     return STATUS_SUCCESS;
+}
+
+#ifdef _M_AMD64
+CODE_SEG("INIT")
+static
+ULONG
+KiPatchFenceSites(VOID)
+{
+    PIMAGE_NT_HEADERS NtHeaders = RtlImageNtHeader(&__ImageBase);
+    PIMAGE_SECTION_HEADER Section;
+    ULONG i, Sites = 0;
+    ULONG_PTR Cr0, Flags;
+    PUCHAR Code, End;
+
+    if (!NtHeaders)
+        return 0;
+
+    /* Boot processor only, before the other processors start; the image may still be write-protected */
+    Flags = __readeflags();
+    _disable();
+    Cr0 = __readcr0();
+    __writecr0(Cr0 & ~CR0_WP);
+
+    Section = IMAGE_FIRST_SECTION(NtHeaders);
+    for (i = 0; i < NtHeaders->FileHeader.NumberOfSections; i++, Section++)
+    {
+        if (!(Section->Characteristics & IMAGE_SCN_MEM_EXECUTE))
+            continue;
+
+        Code = (PUCHAR)&__ImageBase + Section->VirtualAddress;
+        End = Code + min(Section->Misc.VirtualSize, Section->SizeOfRawData);
+        for (; Code + sizeof(KiFenceSiteMarker) <= End; Code++)
+        {
+            if (Code[0] == 0x0F && RtlEqualMemory(Code, KiFenceSiteMarker, sizeof(KiFenceSiteMarker)))
+            {
+                RtlCopyMemory(Code, KiFenceSiteLfence, sizeof(KiFenceSiteLfence));
+                Code += sizeof(KiFenceSiteMarker) - 1;
+                Sites++;
+            }
+        }
+    }
+
+    __writecr0(Cr0);
+    __writeeflags(Flags);
+
+    /* Serialize so this processor does not run stale instructions */
+    {
+        INT Regs[4];
+        __cpuid(Regs, 0);
+    }
+    return Sites;
+}
+#endif
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+KiApplySpeculationPolicy(VOID)
+{
+    ULONG Sites = 0;
+
+    if (!(KiSpeculationHardening & KSPEC_HARDEN_BOUNDS))
+    {
+        DPRINT1("Speculation hardening 0x%lx: bound checks unchanged\n", KiSpeculationHardening);
+        return;
+    }
+
+    KiSpeculationIndexMaskOff = 0;
+#ifdef _M_AMD64
+    Sites = KiPatchFenceSites();
+#else
+    /* lfence needs SSE2 */
+    if (KeFeatureBits & KF_XMMI64)
+        KiSpeculationFenceEnabled = TRUE;
+#endif
+    DPRINT1("Speculation hardening 0x%lx: index masking on, %lu fence sites\n",
+            KiSpeculationHardening, Sites);
 }
