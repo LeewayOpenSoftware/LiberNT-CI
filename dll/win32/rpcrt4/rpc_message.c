@@ -1480,12 +1480,12 @@ RPC_STATUS RPCRT4_ReceiveWithAuth(RpcConnection *Connection, RpcPktHdr **Header,
     memcpy((unsigned char *)pMsg->Buffer + buffer_length, payload, data_length);
 
 #ifdef __REACTOS__
-    /* A connection bound at integrity or privacy takes requests only with that protection; the
-       level a packet claims is not enough */
+    /* A connection bound at integrity or privacy takes requests only with that protection, and only
+       after its handshake finished; the level a packet claims is not enough */
     if (Connection->server && CurrentHeader->common.ptype == PKT_REQUEST &&
         rpcrt4_conn_is_authorized(Connection) &&
         Connection->AuthInfo->AuthnLevel >= RPC_C_AUTHN_LEVEL_PKT_INTEGRITY &&
-        (header_auth_len < sizeof(RpcAuthVerifier) ||
+        (!Connection->auth_complete || header_auth_len < sizeof(RpcAuthVerifier) ||
          ((const RpcAuthVerifier *)((unsigned char *)payload + data_length))->auth_level !=
              Connection->AuthInfo->AuthnLevel))
     {
