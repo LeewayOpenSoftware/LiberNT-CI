@@ -1126,6 +1126,7 @@ HRESULT CDefaultContextMenu::DoPaste(LPCMINVOKECOMMANDINFOEX lpcmi, BOOL bLink)
             ERR("No drop effect obtained\n");
         }
         GlobalUnlock(medium2.hGlobal);
+        ReleaseStgMedium(&medium2);
     }
 
     if (bLink)
