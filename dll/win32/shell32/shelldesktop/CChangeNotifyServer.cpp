@@ -536,7 +536,17 @@ BOOL CChangeNotifyServer::DeliverNotification(HANDLE hTicket, DWORD dwOwnerPID)
             // do notify
             TRACE("Notifying: %p, 0x%x, %p, %lu\n",
                   LongToHandle(pRegEntry->hwnd), pRegEntry->uMsg, hTicket, dwOwnerPID);
-            SendMessageW((HWND)LongToHandle(pRegEntry->hwnd), pRegEntry->uMsg, (WPARAM)hTicket, dwOwnerPID);
+            // Skip a window that is already hung instead of blocking the server (and every
+            // SHChangeNotify caller) on it. No real timeout: the ticket is freed when this
+            // returns, so a message must never be delivered late.
+            DWORD_PTR dwResult;
+            if (!SendMessageTimeoutW((HWND)LongToHandle(pRegEntry->hwnd), pRegEntry->uMsg,
+                                     (WPARAM)hTicket, dwOwnerPID, SMTO_ABORTIFHUNG,
+                                     0x7FFFFFFF, &dwResult) &&
+                ::GetLastError() == ERROR_TIMEOUT)
+            {
+                WARN("Window %p is hung, notification skipped\n", LongToHandle(pRegEntry->hwnd));
+            }
             TRACE("GetLastError(): %ld\n", ::GetLastError());
         }
     }
