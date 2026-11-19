@@ -387,6 +387,9 @@ ENDM
  *  ExitTrap - Restore registers and free stack space
  */
 MACRO(ExitTrap, Flags)
+#ifdef _USE_ML
+    LOCAL BuffersCleared
+#endif
 
     ASSERT_TRAP_FRAME_IRQL_VALID rbp
 
@@ -425,7 +428,6 @@ MACRO(ExitTrap, Flags)
 
     /* Swap gs to user mode */
     swapgs
-    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(4D) /* verw site, see KiApplySpeculationPolicy */
 #ifdef _USE_ML
     jmp debug_registers_restored
 #else
@@ -477,6 +479,20 @@ debug_registers_restored:
         /* Write 0 to the local APIC EOI register */
         mov dword ptr [APIC_EOI], 0
     endif
+
+    /* Clear CPU buffers as the last step of a return to user mode */
+    test byte ptr [rsp + 8], 1
+#ifdef _USE_ML
+    jz BuffersCleared
+#else
+    jz 5f
+#endif
+    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(4D) /* verw site, see KiApplySpeculationPolicy */
+#ifdef _USE_ML
+BuffersCleared:
+#else
+5:
+#endif
 
     /* Return from the trap */
     iretq

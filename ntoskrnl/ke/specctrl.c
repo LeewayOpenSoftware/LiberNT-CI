@@ -21,6 +21,7 @@ ULONG KiFeatureSettingsOverrideMask;
 
 ULONG KiSpeculationHardening;
 ULONG KiSpeculationBtiMode;
+ULONG KiSpeculationActive;
 ULONG64 KiSpecCtrlValue;
 BOOLEAN KiSpeculationIbpbOnSwitch;
 ULONG_PTR KiSpeculationIndexMaskOff = (ULONG_PTR)-1;
@@ -35,6 +36,7 @@ static const UCHAR KiFenceSiteLfence[7] = { 0x0F, 0xAE, 0xE8, 0x0F, 0x1F, 0x40, 
 static const UCHAR KiVerwSiteMarker[7] = { KSPEC_VERW_SITE_BYTES };
 /* verw operand: a writable data segment selector */
 static USHORT KiVerwSelector = KGDT64_R0_DATA;
+static ULONG KiVerwSitesSkipped;
 #endif
 
 /* FUNCTIONS *****************************************************************/
@@ -139,6 +141,7 @@ KeQuerySpeculationControlInformation(
     if (Features & (KSPEC_EIBRS | KSPEC_AUTO_IBRS)) Info.Flags |= SPECCTRL_ENHANCED_IBRS_REPORTED;
     if (Features & KSPEC_MDS_NO) Info.Flags |= SPECCTRL_MDS_HARDWARE_PROTECTED;
     if (Features & KSPEC_MD_CLEAR) Info.Flags |= SPECCTRL_MB_CLEAR_REPORTED;
+    if (KiSpeculationActive & KSPEC_HARDEN_MDS) Info.Flags |= SPECCTRL_MB_CLEAR_ENABLED;
 
     Size = (Length >= sizeof(Info)) ? sizeof(Info) : sizeof(Info.Flags);
     RtlCopyMemory(Buffer, &Info, Size);
@@ -190,7 +193,10 @@ KiPatchImageSites(
                 LONG Disp32 = (LONG)Disp;
 
                 if (Disp32 != Disp)
+                {
+                    KiVerwSitesSkipped++;
                     continue;
+                }
 
                 Code[0] = 0x0F;
                 Code[1] = 0x00;
@@ -301,9 +307,18 @@ KiApplySpeculationPolicy(
 #ifdef _M_AMD64
     if (Kinds)
         Sites = KiPatchBootImages(LoaderBlock, Kinds);
+    if (KiVerwSitesSkipped)
+    {
+        DPRINT1("Speculation hardening: %lu verw sites out of range, buffer clearing incomplete\n",
+                KiVerwSitesSkipped);
+        Kinds &= ~KSPEC_HARDEN_MDS;
+    }
 #else
     UNREFERENCED_PARAMETER(LoaderBlock);
+    /* No buffer clearing sites on this architecture yet */
+    Kinds &= ~KSPEC_HARDEN_MDS;
 #endif
+    KiSpeculationActive = Kinds;
     DPRINT1("Speculation hardening 0x%lx: active 0x%lx, %lu sites, BTI mode %lu, SPEC_CTRL 0x%I64x, IBPB %u\n",
             KiSpeculationHardening, Kinds, Sites, KiSpeculationBtiMode, KiSpecCtrlValue, KiSpeculationIbpbOnSwitch);
 }

@@ -88,6 +88,7 @@ extern ULONG KiFeatureSettingsOverrideMask;
 #define KSPEC_BTI_AUTO_IBRS             2
 
 extern ULONG KiSpeculationBtiMode;
+extern ULONG KiSpeculationActive;
 extern ULONG64 KiSpecCtrlValue;
 extern BOOLEAN KiSpeculationIbpbOnSwitch;
 
