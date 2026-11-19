@@ -57,6 +57,8 @@ static const UCHAR KiSiteMarker[6] = { 0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54 };
 static const UCHAR KiFenceSiteLfence[7] = { 0x0F, 0xAE, 0xE8, 0x0F, 0x1F, 0x40, 0x00 };
 /* verw operand: a writable data segment selector */
 static USHORT KiVerwSelector = KGDT64_R0_DATA;
+/* Sites patched per kind over all boot images */
+static ULONG KiPatchedClear, KiPatchedEnter, KiPatchedExit;
 
 VOID KiSpecCtrlEnterKernel(VOID);
 VOID KiSpecCtrlExitKernel(VOID);
@@ -267,7 +269,7 @@ KiPatchImageSites(
     for (i = 0; i < Entries; i++)
     {
         /* Alignment padding between object contributions is zero */
-        if (Table[i] == 0 || Table[i] + 7 > NtHeaders->OptionalHeader.SizeOfImage)
+        if (Table[i] == 0 || Table[i] > NtHeaders->OptionalHeader.SizeOfImage - 7)
             continue;
 
         Listed++;
@@ -320,6 +322,9 @@ KiPatchImageSites(
     /* Listed is every site in the sources; a smoke compares it with the patched counts per kind */
     DPRINT1("Speculation sites at %p: listed %lu, stale %lu, fence %lu, clear %lu, entry %lu, exit %lu, refill %lu\n",
             ImageBase, Listed, Stale, Fence, Clear, Enter, Exit, Refill);
+    KiPatchedClear += Clear;
+    KiPatchedEnter += Enter;
+    KiPatchedExit += Exit;
     return Sites;
 }
 
@@ -374,6 +379,12 @@ KiPatchBootImages(
 
     __writecr0(Cr0);
     __writeeflags(Flags);
+
+    /* A kind without patched sites (for example a lost site table) is not active */
+    if (KiPatchedClear == 0)
+        *Kinds &= ~KSPEC_HARDEN_MDS;
+    if (KiPatchedEnter == 0 || KiPatchedExit == 0)
+        *Kinds &= ~KSPEC_PATCH_IBRS;
 
     /* Serialize so this processor does not run stale instructions */
     {
