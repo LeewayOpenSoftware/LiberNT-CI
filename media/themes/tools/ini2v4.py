@@ -274,6 +274,7 @@ def main():
     ap.add_argument('--name', default='liberntv4')
     ap.add_argument('--display', default='LiberNT')
     ap.add_argument('--description', default='')
+    ap.add_argument('--basic', action='store_true', help='switch every Liquid (composited material) class off')
     ap.add_argument('--reactos-version', action='store_true')
     a = ap.parse_args()
 
@@ -385,6 +386,8 @@ def main():
             if pr is None:
                 stats['unknown_prop'] += 1
                 continue
+            if a.basic and cname.lower() == 'liquid' and k.upper() == 'COMPOSITED':
+                v = 'false'
             enc = encode(pr[0], pr[1], v, None)
             if enc is None:
                 stats['bad_value'] += 1
