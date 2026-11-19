@@ -487,6 +487,43 @@ ScmIsCallerLocalSystem(VOID)
 }
 
 
+/* TRUE when the RPC caller is LocalSystem or the user of hAccountToken (may be NULL). */
+BOOL
+ScmIsCallerAccount(HANDLE hAccountToken)
+{
+    BYTE Buffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    BYTE AccountBuffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    DWORD dwLength;
+    HANDLE hToken = NULL;
+    PSID pCallerSid;
+    BOOL bResult = FALSE;
+
+    if (RpcImpersonateClient(NULL) != RPC_S_OK)
+        return FALSE;
+
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &hToken))
+        hToken = NULL;
+
+    RpcRevertToSelf();
+
+    if (hToken == NULL)
+        return FALSE;
+
+    if (GetTokenInformation(hToken, TokenUser, Buffer, sizeof(Buffer), &dwLength))
+    {
+        pCallerSid = ((PTOKEN_USER)Buffer)->User.Sid;
+        if (RtlEqualSid(pCallerSid, pLocalSystemSid))
+            bResult = TRUE;
+        else if (hAccountToken != NULL &&
+                 GetTokenInformation(hAccountToken, TokenUser, AccountBuffer, sizeof(AccountBuffer), &dwLength))
+            bResult = RtlEqualSid(pCallerSid, ((PTOKEN_USER)AccountBuffer)->User.Sid);
+    }
+
+    CloseHandle(hToken);
+    return bResult;
+}
+
+
 DWORD
 ScmCreateDefaultServiceSD(
     PSECURITY_DESCRIPTOR *ppSecurityDescriptor)

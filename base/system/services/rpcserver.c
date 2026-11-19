@@ -467,8 +467,10 @@ ScmIsCallerServiceProcess(PSERVICE lpService)
 {
     ULONG ulPid;
 
+    /* Only ncalrpc reports the client process; over the named pipe the caller must run
+     * as the account of the service's process, or as LocalSystem */
     if (I_RpcBindingInqLocalClientPID(NULL, &ulPid) != RPC_S_OK)
-        return FALSE;
+        return ScmIsCallerAccount(lpService->lpImage != NULL ? lpService->lpImage->hToken : NULL);
 
     if (ulPid == GetCurrentProcessId())
         return TRUE;

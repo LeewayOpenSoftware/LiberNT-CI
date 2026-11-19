@@ -344,6 +344,9 @@ ScmAccessCheckCaller(
 BOOL
 ScmIsCallerLocalSystem(VOID);
 
+BOOL
+ScmIsCallerAccount(HANDLE hAccountToken);
+
 DWORD
 ScmCreateDefaultServiceSD(
     PSECURITY_DESCRIPTOR *ppSecurityDescriptor);
