@@ -6,6 +6,7 @@ extern void func_ActCtxWithXmlNamespaces(void);
 extern void func_ActCtxDependencyVersions(void);
 extern void func_AlternateComputerNames(void);
 extern void func_UniversalThunks(void);
+extern void func_UsnJournal(void);
 extern void func_LoadAppInitDlls(void);
 extern void func_ComPlusPackageInstallStatus(void);
 extern void func_IntegratedDisplaySize(void);
@@ -468,5 +469,6 @@ const struct test winetest_testlist[] =
     { "XState",                      func_XState },
     { "ForwardCycles",               func_ForwardCycles },
     { "DllDirectories",              func_DllDirectories },
+    { "UsnJournal",                  func_UsnJournal },
     { 0, 0 }
 };
