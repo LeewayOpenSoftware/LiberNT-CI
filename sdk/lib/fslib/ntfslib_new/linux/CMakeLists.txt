@@ -32,6 +32,7 @@ add_library(ntfslib_linux STATIC
     "${NTFSLIB_ROOT}/src/capi/lfs.cpp"
     "${NTFSLIB_ROOT}/src/capi/mft.cpp"
     "${NTFSLIB_ROOT}/src/capi/volume.cpp"
+    "${NTFSLIB_ROOT}/src/usn/journal.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/attributes/addattr.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/attributes/findattr.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/read/allocation.cpp"
@@ -416,6 +417,17 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
         )
         if(NTFSINFO_EXECUTABLE AND
            NTFSCLUSTER_EXECUTABLE)
+            add_test(
+                NAME ntfslib_linux_usn
+                COMMAND /bin/sh
+                    "${CMAKE_CURRENT_LIST_DIR}/tests/usn_smoke.sh"
+                    "$<TARGET_FILE:ntfslib_fuse>"
+                    "${MKNTFS_EXECUTABLE}"
+                    "${NTFSCP_EXECUTABLE}"
+                    "${NTFSCAT_EXECUTABLE}"
+                    "${NTFSFIX_EXECUTABLE}"
+                    "${NTFSINFO_EXECUTABLE}"
+            )
             add_test(
                 NAME ntfslib_linux_ads
                 COMMAND /bin/sh
