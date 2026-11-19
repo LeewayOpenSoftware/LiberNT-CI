@@ -69,6 +69,8 @@ typedef struct _RpcConnection_np
     BOOL read_closed;
 #ifdef __REACTOS__
     PACL label; /* the endpoint's mandatory label, put on every instance of the pipe */
+    PACL dacl;  /* the endpoint's DACL; NULL with has_dacl set is a NULL DACL */
+    BOOL has_dacl;
 #endif
 } RpcConnection_np;
 
@@ -92,6 +94,86 @@ static void release_np_event(RpcConnection_np *connection, HANDLE event)
 }
 
 #ifdef __REACTOS__
+/* The access an ncalrpc client asks for on Windows, where the endpoint is a port */
+#define RPCRT4_PORT_CONNECT 0x0001
+
+/* The DACL a server gave its endpoint, in pipe rights: its deny entries, the server user (which must reach
+ * the pipe to create its instances, and alone may), then its allow entries. For ncalrpc, an entry that
+ * covers connecting covers the client's access. */
+static DWORD
+rpcrt4_build_endpoint_dacl(PACL *Out, PACL CallerDacl, BOOL Lrpc, PSID ServerSid, PSID EveryoneSid, PSID AnonymousSid)
+{
+    static GENERIC_MAPPING PortMapping = { READ_CONTROL | RPCRT4_PORT_CONNECT, DELETE | RPCRT4_PORT_CONNECT, 0,
+                                           STANDARD_RIGHTS_REQUIRED | RPCRT4_PORT_CONNECT };
+    static GENERIC_MAPPING FileMapping = { FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS };
+    const ACCESS_MASK ClientAccess = (FILE_GENERIC_READ | FILE_GENERIC_WRITE) & ~FILE_CREATE_PIPE_INSTANCE;
+    ULONG Size = sizeof(ACL) + 4 * sizeof(ACCESS_ALLOWED_ACE) +
+                 RtlLengthSid(ServerSid) + 2 * RtlLengthSid(EveryoneSid) + RtlLengthSid(AnonymousSid);
+    ACE_HEADER *Ace;
+    PACL Dacl;
+    DWORD i, Pass, Err;
+
+    for (i = 0; CallerDacl && i < CallerDacl->AceCount; i++)
+        if (GetAce(CallerDacl, i, (void **)&Ace))
+            Size += Ace->AceSize;
+
+    if (!(Dacl = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size)))
+        return ERROR_OUTOFMEMORY;
+    if (!InitializeAcl(Dacl, Size, ACL_REVISION))
+        goto fail;
+
+    /* pass 0: the caller's deny entries; pass 1: the server user, then the caller's allow entries */
+    for (Pass = 0; Pass < 2; Pass++)
+    {
+        if (Pass == 1)
+        {
+            if (!AddAccessAllowedAce(Dacl, ACL_REVISION, GENERIC_ALL, ServerSid) ||
+                !AddAccessDeniedAce(Dacl, ACL_REVISION, FILE_CREATE_PIPE_INSTANCE, EveryoneSid))
+                goto fail;
+            /* a NULL DACL lets everyone connect */
+            if (!CallerDacl &&
+                (!AddAccessAllowedAce(Dacl, ACL_REVISION, ClientAccess, EveryoneSid) ||
+                 !AddAccessAllowedAce(Dacl, ACL_REVISION, ClientAccess, AnonymousSid)))
+                goto fail;
+        }
+
+        for (i = 0; CallerDacl && i < CallerDacl->AceCount; i++)
+        {
+            ACCESS_ALLOWED_ACE *Entry;
+            ACCESS_MASK Mask;
+
+            if (!GetAce(CallerDacl, i, (void **)&Ace))
+                goto fail;
+            /* rpcrt4_np_set_security refused the deny entries that cannot be applied */
+            if (Ace->AceType != (Pass ? ACCESS_ALLOWED_ACE_TYPE : ACCESS_DENIED_ACE_TYPE) ||
+                (Ace->AceFlags & INHERIT_ONLY_ACE))
+                continue;
+            Entry = (ACCESS_ALLOWED_ACE *)Ace;
+            Mask = Entry->Mask;
+            if (Lrpc)
+            {
+                MapGenericMask(&Mask, &PortMapping);
+                Mask = (Mask & RPCRT4_PORT_CONNECT) ? ClientAccess : 0;
+            }
+            else
+                MapGenericMask(&Mask, &FileMapping);
+            if (!Mask)
+                continue;
+            if (Pass ? !AddAccessAllowedAce(Dacl, ACL_REVISION, Mask, (PSID)&Entry->SidStart) :
+                       !AddAccessDeniedAce(Dacl, ACL_REVISION, Mask, (PSID)&Entry->SidStart))
+                goto fail;
+        }
+    }
+
+    *Out = Dacl;
+    return ERROR_SUCCESS;
+
+fail:
+    Err = GetLastError();
+    HeapFree(GetProcessHeap(), 0, Dacl);
+    return Err ? Err : ERROR_INVALID_ACL;
+}
+
 /**
  * @brief
  * Creates a security descriptor for RPC4 pipe
@@ -111,7 +193,7 @@ static void release_np_event(RpcConnection_np *connection, HANDLE event)
  * admins are given full power; the server's user owns the pipe.
  */
 static DWORD
-rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc, PACL Label)
+rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc, PACL Label, PACL CallerDacl, BOOL HasCallerDacl, BOOL Lrpc)
 {
     DWORD ErrCode;
     PACL Dacl = NULL;
@@ -190,6 +272,17 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc, PACL Label)
         goto Quit;
     }
 
+    if (HasCallerDacl)
+    {
+        ErrCode = rpcrt4_build_endpoint_dacl(&Dacl, CallerDacl, Lrpc, ServerSid, EveryoneSid, AnonymousSid);
+        if (ErrCode != ERROR_SUCCESS)
+        {
+            ERR("rpcrt4_create_pipe_security(): Failed to build the endpoint DACL (error %lu)\n", ErrCode);
+            goto Quit;
+        }
+        goto HaveDacl;
+    }
+
     DaclSize = sizeof(ACL) +
                sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(EveryoneSid) +
                sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(AnonymousSid) +
@@ -252,6 +345,7 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc, PACL Label)
         goto Quit;
     }
 
+HaveDacl:
     if (!SetSecurityDescriptorDacl(AbsSD, TRUE, Dacl, FALSE))
     {
         ErrCode = GetLastError();
@@ -339,7 +433,8 @@ static RPC_STATUS rpcrt4_conn_create_pipe(RpcConnection *conn)
     TRACE("listening on %s\n", connection->listen_pipe);
 
 #ifdef __REACTOS__
-    ErrCode = rpcrt4_create_pipe_security(&PipeSecDesc, connection->label);
+    ErrCode = rpcrt4_create_pipe_security(&PipeSecDesc, connection->label, connection->dacl, connection->has_dacl,
+                                          !strcmp(conn->ops->name, "ncalrpc"));
     if (ErrCode != ERROR_SUCCESS)
     {
         ERR("rpcrt4_conn_create_pipe(): Pipe security descriptor creation failed\n");
@@ -530,9 +625,8 @@ static RPC_STATUS rpcrt4_ncalrpc_open(RpcConnection* Connection)
 }
 
 #ifdef __REACTOS__
-/* Only the mandatory label of an endpoint descriptor without a DACL is used: the pipe keeps its
- * own DACL, which stops other processes from creating instances of it */
-static RPC_STATUS rpcrt4_np_set_label(RpcConnection_np *npc, PSECURITY_DESCRIPTOR sd)
+/* The DACL and the mandatory label of an endpoint descriptor, put on every instance of the pipe */
+static RPC_STATUS rpcrt4_np_set_security(RpcConnection_np *npc, PSECURITY_DESCRIPTOR sd)
 {
     BOOL present, defaulted;
     PACL dacl, sacl;
@@ -541,11 +635,27 @@ static RPC_STATUS rpcrt4_np_set_label(RpcConnection_np *npc, PSECURITY_DESCRIPTO
 
     if (!sd)
         return RPC_S_OK;
-    /* a caller DACL is not applied, so its label must not admit clients that DACL denies */
     if (!GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted))
         return RPC_S_INVALID_SECURITY_DESC;
     if (present)
-        return RPC_S_OK;
+    {
+        for (i = 0; dacl && i < dacl->AceCount; i++)
+        {
+            /* a deny entry that cannot be applied would leave the endpoint more open than asked */
+            if (!GetAce(dacl, i, (void **)&ace) ||
+                (ace->AceType != ACCESS_ALLOWED_ACE_TYPE && ace->AceType != ACCESS_DENIED_ACE_TYPE &&
+                 ace->AceType != ACCESS_ALLOWED_OBJECT_ACE_TYPE && ace->AceType != ACCESS_ALLOWED_CALLBACK_ACE_TYPE &&
+                 ace->AceType != ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE))
+                return RPC_S_INVALID_SECURITY_DESC;
+        }
+        if (dacl)
+        {
+            if (!(npc->dacl = HeapAlloc(GetProcessHeap(), 0, dacl->AclSize)))
+                return RPC_S_OUT_OF_RESOURCES;
+            memcpy(npc->dacl, dacl, dacl->AclSize);
+        }
+        npc->has_dacl = TRUE;
+    }
     if (!GetSecurityDescriptorSacl(sd, &present, &sacl, &defaulted))
         return RPC_S_INVALID_SECURITY_DESC;
     if (!present || !sacl)
@@ -593,7 +703,7 @@ static RPC_STATUS rpcrt4_protseq_ncalrpc_open_endpoint(RpcServerProtseq* protseq
       return r;
 
 #ifdef __REACTOS__
-  r = rpcrt4_np_set_label((RpcConnection_np *)Connection, protseq->endpoint_sd);
+  r = rpcrt4_np_set_security((RpcConnection_np *)Connection, protseq->endpoint_sd);
   if (r != RPC_S_OK)
   {
       RPCRT4_ReleaseConnection(Connection);
@@ -706,7 +816,7 @@ static RPC_STATUS rpcrt4_protseq_ncacn_np_open_endpoint(RpcServerProtseq *protse
     return r;
 
 #ifdef __REACTOS__
-  r = rpcrt4_np_set_label((RpcConnection_np *)Connection, protseq->endpoint_sd);
+  r = rpcrt4_np_set_security((RpcConnection_np *)Connection, protseq->endpoint_sd);
   if (r != RPC_S_OK)
   {
       RPCRT4_ReleaseConnection(Connection);
