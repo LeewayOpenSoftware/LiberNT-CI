@@ -449,6 +449,7 @@ private:
     SIZED_VIEW_LIST *GetSizedViewImageList(INT cx);
     BOOL EnsureViewIcon(INT index);
     void EnsureViewIconsForItems();
+    void InvalidateSizedViewIcons();
     void DestroySizedViewImageLists();
     void ApplyViewIconSize();
     INT GetZoomStep() const;
@@ -2348,6 +2349,7 @@ void CDefView::LV_RefreshItems()
 {
     ASSERT(m_ListView);
 
+    InvalidateSizedViewIcons();
     for (INT iItem = -1;;)
     {
         iItem = ListView_GetNextItem(m_ListView, iItem, LVNI_ALL);
@@ -5761,7 +5763,9 @@ CDefView::SIZED_VIEW_LIST *CDefView::GetSizedViewImageList(INT cx)
     }
     else
     {
-        if (m_SizedLists[m_SizedListNext].List == m_himlView)
+        HIMAGELIST inUse = ListView_GetImageList(m_ListView, LVSIL_NORMAL);
+
+        if (m_SizedLists[m_SizedListNext].List == inUse)
             m_SizedListNext = (m_SizedListNext + 1) % capacity;
         entry = &m_SizedLists[m_SizedListNext];
         m_SizedListNext = (m_SizedListNext + 1) % capacity;
@@ -5806,10 +5810,17 @@ BOOL CDefView::EnsureViewIcon(INT index)
     }
     if (entry->Scaled[index])
         return TRUE;
-    if (!ReplaceIconScaled(entry->List, index, GetScaleSourceList(bigList), bigList, entry->Size))
-        return FALSE;
     entry->Scaled[index] = TRUE;
-    return TRUE;
+    return ReplaceIconScaled(entry->List, index, GetScaleSourceList(bigList), bigList, entry->Size);
+}
+
+void CDefView::InvalidateSizedViewIcons()
+{
+    for (INT i = 0; i < m_SizedListCount; i++)
+    {
+        if (m_SizedLists[i].Scaled)
+            ZeroMemory(m_SizedLists[i].Scaled, m_SizedLists[i].ScaledCount);
+    }
 }
 
 void CDefView::EnsureViewIconsForItems()
