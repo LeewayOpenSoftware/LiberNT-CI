@@ -196,9 +196,18 @@ HRESULT MSSTYLES_V4_Open(HANDLE hFile, HANDLE hSection, const BYTE *base, SIZE_T
     if (pszPath) lstrcpynW(tf->szThemeFile, pszPath, MAX_PATH);   /* the built store path, from the gate */
     tf->pszAvailColors = v4->names;
     tf->pszAvailSizes = v4->names + v4->namesSizeOff;
-    tf->pszSelectedColor = (pszColorName && lstrcmpiW(pszColorName, tf->pszAvailColors)) ? NULL : tf->pszAvailColors;
-    tf->pszSelectedSize = (pszSizeName && lstrcmpiW(pszSizeName, tf->pszAvailSizes)) ? NULL : tf->pszAvailSizes;
-    if (!tf->pszSelectedColor || !tf->pszSelectedSize) { hr = E_PROP_ID_UNSUPPORTED; goto fail; }
+    /* A version-4 style carries one colour/size variant. If the caller asked for a name this style does not have
+     * -- for instance the v3 "Normal Size" spelling still cached from a running v3 style and carried into a live
+     * switch to a version-4 style -- fall back to the style's own variant instead of refusing, so the switch
+     * cannot drop the process to Classic (the caller re-reads the resolved names from pszSelected*). */
+    tf->pszSelectedColor = tf->pszAvailColors;
+    tf->pszSelectedSize = tf->pszAvailSizes;
+    if (pszColorName && lstrcmpiW(pszColorName, tf->pszAvailColors))
+        TRACE("requested colour %s is not in the style, using %s\n",
+              debugstr_w(pszColorName), debugstr_w(tf->pszAvailColors));
+    if (pszSizeName && lstrcmpiW(pszSizeName, tf->pszAvailSizes))
+        TRACE("requested size %s is not in the style, using %s\n",
+              debugstr_w(pszSizeName), debugstr_w(tf->pszAvailSizes));
     tf->v4 = v4;
 
     /* 4. the class list: names from the CMAP in the view, under SEH */

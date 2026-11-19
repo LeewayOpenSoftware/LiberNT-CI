@@ -333,8 +333,11 @@ TrustClassify(void)
 decide:
     cls = tl4_trust_classify(&f);
     g_privileged = cls != TL4_TRUST_ORDINARY;
-    /* T-PRIV-2 (the pure decision) or T-PRIV-6 (logon or secure desktop, kept here as Jim 2 asked) */
-    g_machineDefault = tl4_trust_uses_machine_default(&f) || f.is_logon_process ||
+    /* T-PRIV-2 (the pure decision) or T-PRIV-6 (logon or secure desktop, kept here as Jim 2 asked).
+     * A privileged process also takes the machine default: owner 2026-11-18 wants it on version 4, but from the
+     * trusted store and never a user-writable path, so it reads the admin-set machine default (a store style,
+     * version 4 when one is installed, else the v3 legacy default) rather than the user ThemeManager selection. */
+    g_machineDefault = g_privileged || tl4_trust_uses_machine_default(&f) || f.is_logon_process ||
                        (dchars == 8 && !_wcsnicmp(desk, L"Winlogon", 8)) ||
                        (dchars == 12 && !_wcsnicmp(desk, L"Screen-saver", 12)) ||
                        !(wchars == 7 && !_wcsnicmp(winsta, L"WinSta0", 7));
@@ -1045,7 +1048,37 @@ TrustPeekVersion(const UXT_VIEW *v, WORD *version)
 static BOOL
 TrustV4Enabled(void)
 {
-    return TrustGateDword(UXTHEME_TrustIsPrivileged() ? L"EnableV4Privileged" : L"EnableV4Ordinary");
+    DWORD v, t, n;
+    HKEY gate;
+    BOOL allowed;
+
+    /* Never trust the "privileged" safe default while classification is still in flight: a concurrent first caller
+     * sees g_classState != 2 and would otherwise be handed version 4 against the ordinary gate. Fail closed until
+     * the class is settled. */
+    TrustEnsureClassified();
+    if (g_classState != 2)
+        return FALSE;
+
+    if (!UXTHEME_TrustIsPrivileged())
+        return TrustGateDword(L"EnableV4Ordinary");
+
+    /* Owner 2026-11-18: every process uses version 4; a privileged process may use it too, but only from the
+     * trusted system store, which the caller (UXTHEME_TrustOpenThemeFile) already enforces by the store path and
+     * the SY/BA-owned non-user-writable descriptor. Read the gate key once: if it is not protected (tampered or
+     * unreadable) fail closed, so an admin EnableV4Privileged = 0 is never silently ignored; a protected key with
+     * the value absent is the owner default (allowed), an explicit 0 forces it off. */
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ, &gate) != ERROR_SUCCESS)
+        return FALSE;
+    allowed = TrustKeyProtected(gate);
+    if (allowed)
+    {
+        n = sizeof(v);
+        if (RegQueryValueExW(gate, L"EnableV4Privileged", NULL, &t, (BYTE *)&v, &n) == ERROR_SUCCESS &&
+            t == REG_DWORD && n == sizeof(v))
+            allowed = (v == 1);
+    }
+    RegCloseKey(gate);
+    return allowed;
 }
 
 /* the language module beside the style: <store>\<name>\<locale>\<name>.msstyles.mui, opened with the same checks;
