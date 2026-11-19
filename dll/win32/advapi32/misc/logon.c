@@ -542,10 +542,14 @@ InsertProcessSecurityCommon(
     _In_ PSECURITY_DESCRIPTOR ProcessSecurity,
     _In_ PSECURITY_DESCRIPTOR ThreadSecurity)
 {
-    /* Set new security data for the process */
+    /* Set new security data for the process. Naming the new user as owner needs
+     * SeRestorePrivilege when the caller is not that user; without it, keep the
+     * owner the process got and set the DACL only. */
     if (!SetKernelObjectSecurity(ProcessHandle,
                                  DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
-                                 ProcessSecurity))
+                                 ProcessSecurity) &&
+        (GetLastError() != ERROR_INVALID_OWNER ||
+         !SetKernelObjectSecurity(ProcessHandle, DACL_SECURITY_INFORMATION, ProcessSecurity)))
     {
         ERR("InsertProcessSecurityCommon(): Failed to set security for process (error %lu)\n", GetLastError());
         return FALSE;
@@ -554,7 +558,9 @@ InsertProcessSecurityCommon(
     /* Set new security data for the thread */
     if (!SetKernelObjectSecurity(ThreadHandle,
                                  DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION,
-                                 ThreadSecurity))
+                                 ThreadSecurity) &&
+        (GetLastError() != ERROR_INVALID_OWNER ||
+         !SetKernelObjectSecurity(ThreadHandle, DACL_SECURITY_INFORMATION, ThreadSecurity)))
     {
         ERR("InsertProcessSecurityCommon(): Failed to set security for thread (error %lu)\n", GetLastError());
         return FALSE;
