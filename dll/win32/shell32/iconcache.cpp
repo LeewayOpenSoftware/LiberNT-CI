@@ -795,14 +795,20 @@ end:
     if(hLg) DestroyIcon(hLg);
 
     /* Clean everything if something went wrong */
-    if(!result)
+    if(!result && sic_hdpa != hdpa)
     {
-        sic_hdpa = NULL;
+        /* Failed before the cache was published: nobody else can hold these */
         DPA_Destroy(hdpa);
         if(ShellSmallIconList) ImageList_Destroy(ShellSmallIconList);
         if(ShellBigIconList) ImageList_Destroy(ShellBigIconList);
         ShellSmallIconList = NULL;
         ShellBigIconList = NULL;
+    }
+    else if(!result)
+    {
+        /* Failed after publishing (default icon): readers that do not take the lock
+         * may already use the lists, so keep the cache rather than free it under them */
+        ERR("Icon cache initialized without its default icons\n");
     }
 
     TRACE("hIconSmall=%p hIconBig=%p\n",ShellSmallIconList, ShellBigIconList);
