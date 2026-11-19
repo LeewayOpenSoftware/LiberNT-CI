@@ -58,6 +58,7 @@ typedef struct _RpcQualityOfService
     LONG refs;
 
     RPC_SECURITY_QOS_V2_W *qos;
+    PSID sid; /* RPC_SECURITY_QOS_V3 Sid: the user the server must run as */
 } RpcQualityOfService;
 
 struct connection_ops;

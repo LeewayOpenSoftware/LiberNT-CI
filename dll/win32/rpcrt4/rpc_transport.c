@@ -446,6 +446,52 @@ static char *ncalrpc_pipe_name(const char *endpoint)
   return pipe_name;
 }
 
+/*
+ * The client named the server it expects: the RPC_SECURITY_QOS_V3 Sid, and with
+ * RPC_C_QOS_CAPABILITIES_MUTUAL_AUTH the server principal name. Either must be the
+ * user the server runs as. rpcrt4 servers create their pipes owned by their process
+ * user, and nobody may name an owner it could not be, so the owner stands for the
+ * server. Like Windows, a mismatch is ERROR_ACCESS_DENIED when connecting.
+ */
+static RPC_STATUS rpcrt4_ncalrpc_check_server(RpcConnection *Connection, HANDLE pipe)
+{
+  const RpcQualityOfService *qos = Connection->QOS;
+  const WCHAR *principal = NULL;
+  PSECURITY_DESCRIPTOR sd = NULL;
+  BYTE named[SECURITY_MAX_SID_SIZE];
+  WCHAR domain[256];
+  DWORD size = 0, named_size = sizeof(named), domain_size = sizeof(domain) / sizeof(domain[0]);
+  SID_NAME_USE use;
+  PSID owner = NULL;
+  BOOL defaulted, ok = FALSE;
+
+  if (qos && (qos->qos->Capabilities & RPC_C_QOS_CAPABILITIES_MUTUAL_AUTH) &&
+      Connection->AuthInfo && Connection->AuthInfo->server_principal_name)
+    principal = Connection->AuthInfo->server_principal_name;
+  if (!(qos && qos->sid) && !principal)
+    return RPC_S_OK;
+
+  GetKernelObjectSecurity(pipe, OWNER_SECURITY_INFORMATION, NULL, 0, &size);
+  if (size && (sd = malloc(size)) &&
+      GetKernelObjectSecurity(pipe, OWNER_SECURITY_INFORMATION, sd, size, &size) &&
+      GetSecurityDescriptorOwner(sd, &owner, &defaulted) && owner)
+  {
+    ok = TRUE;
+    if (qos && qos->sid && !EqualSid(owner, qos->sid))
+      ok = FALSE;
+    /* the principal may be DOMAIN\user or a bare user name, in any case */
+    if (ok && principal &&
+        (!LookupAccountNameW(NULL, principal, named, &named_size, domain, &domain_size, &use) ||
+         !EqualSid(owner, named)))
+      ok = FALSE;
+  }
+  free(sd);
+
+  if (!ok)
+    WARN("the server is not the one the client named\n");
+  return ok ? RPC_S_OK : RPC_S_ACCESS_DENIED;
+}
+
 static RPC_STATUS rpcrt4_ncalrpc_open(RpcConnection* Connection)
 {
   RpcConnection_np *npc = (RpcConnection_np *) Connection;
@@ -459,6 +505,16 @@ static RPC_STATUS rpcrt4_ncalrpc_open(RpcConnection* Connection)
   pname = ncalrpc_pipe_name(Connection->Endpoint);
   r = rpcrt4_conn_open_pipe(Connection, pname, TRUE);
   I_RpcFree(pname);
+
+  if (r == RPC_S_OK)
+  {
+    r = rpcrt4_ncalrpc_check_server(Connection, npc->pipe);
+    if (r != RPC_S_OK)
+    {
+      CloseHandle(npc->pipe);
+      npc->pipe = NULL;
+    }
+  }
 
   return r;
 }
