@@ -974,6 +974,22 @@ static RPC_STATUS RPCRT4_use_protseq(RpcServerProtseq* ps, const char *endpoint)
   return status;
 }
 
+#ifdef __REACTOS__
+/* A TCP endpoint listens once per address family; it is still one binding */
+static BOOL RPCRT4_is_duplicate_listener(RpcServerProtseq *ps, RpcConnection *conn)
+{
+  RpcConnection *prev;
+
+  LIST_FOR_EACH_ENTRY(prev, &ps->listeners, RpcConnection, protseq_entry) {
+    if (prev == conn)
+      return FALSE;
+    if (prev->Endpoint && conn->Endpoint && !strcmp(prev->Endpoint, conn->Endpoint))
+      return TRUE;
+  }
+  return FALSE;
+}
+#endif
+
 /***********************************************************************
  *             RpcServerInqBindings (RPCRT4.@)
  */
@@ -995,6 +1011,9 @@ RPC_STATUS WINAPI RpcServerInqBindings( RPC_BINDING_VECTOR** BindingVector )
   LIST_FOR_EACH_ENTRY(ps, &protseqs, RpcServerProtseq, entry) {
     EnterCriticalSection(&ps->cs);
     LIST_FOR_EACH_ENTRY(conn, &ps->listeners, RpcConnection, protseq_entry)
+#ifdef __REACTOS__
+      if (!RPCRT4_is_duplicate_listener(ps, conn))
+#endif
       count++;
     LeaveCriticalSection(&ps->cs);
   }
@@ -1010,6 +1029,10 @@ RPC_STATUS WINAPI RpcServerInqBindings( RPC_BINDING_VECTOR** BindingVector )
     LIST_FOR_EACH_ENTRY(ps, &protseqs, RpcServerProtseq, entry) {
       EnterCriticalSection(&ps->cs);
       LIST_FOR_EACH_ENTRY(conn, &ps->listeners, RpcConnection, protseq_entry) {
+#ifdef __REACTOS__
+       if (RPCRT4_is_duplicate_listener(ps, conn))
+         continue;
+#endif
        RPCRT4_MakeBinding((RpcBinding**)&(*BindingVector)->BindingH[count],
                           conn);
        count++;

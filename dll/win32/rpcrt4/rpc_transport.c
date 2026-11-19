@@ -1509,6 +1509,10 @@ static RPC_STATUS rpcrt4_protseq_ncacn_ip_tcp_open_endpoint(RpcServerProtseq *pr
     struct addrinfo *ai;
     struct addrinfo *ai_cur;
     struct addrinfo hints;
+#ifdef __REACTOS__
+    USHORT bound_port = 0;
+    BOOL listening = FALSE;
+#endif
 
     TRACE("(%p, %s)\n", protseq, endpoint);
 
@@ -1562,6 +1566,22 @@ static RPC_STATUS rpcrt4_protseq_ncacn_ip_tcp_open_endpoint(RpcServerProtseq *pr
             continue;
         }
 
+#ifdef __REACTOS__
+        /* One listening socket per address family on the same port, as Windows does: the IPv6
+           socket takes IPv6 only, and a dynamic endpoint reuses the port the first socket got */
+        if (ai_cur->ai_family == AF_INET6)
+        {
+            DWORD v6only = 1;
+            setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&v6only, sizeof(v6only));
+        }
+        if (bound_port)
+        {
+            if (ai_cur->ai_family == AF_INET6)
+                ((struct sockaddr_in6 *)ai_cur->ai_addr)->sin6_port = bound_port;
+            else
+                ((struct sockaddr_in *)ai_cur->ai_addr)->sin_port = bound_port;
+        }
+#endif
         ret = bind(sock, ai_cur->ai_addr, ai_cur->ai_addrlen);
         if (ret < 0)
         {
@@ -1632,6 +1652,17 @@ static RPC_STATUS rpcrt4_protseq_ncacn_ip_tcp_open_endpoint(RpcServerProtseq *pr
         tcpc->common.protseq = protseq;
         LeaveCriticalSection(&protseq->cs);
 
+#ifdef __REACTOS__
+        TRACE("listening on %s (family %d)\n", service, ai_cur->ai_family);
+        bound_port = sa.ss_family == AF_INET6 ? ((struct sockaddr_in6 *)&sa)->sin6_port
+                                              : ((struct sockaddr_in *)&sa)->sin_port;
+        listening = TRUE;
+    }
+
+    freeaddrinfo(ai);
+    if (listening)
+        return RPC_S_OK;
+#else
         freeaddrinfo(ai);
 
         /* since IPv4 and IPv6 share the same port space, we only need one
@@ -1641,6 +1672,7 @@ static RPC_STATUS rpcrt4_protseq_ncacn_ip_tcp_open_endpoint(RpcServerProtseq *pr
     }
 
     freeaddrinfo(ai);
+#endif
     ERR("couldn't listen on port %s\n", endpoint);
     return status;
 }
