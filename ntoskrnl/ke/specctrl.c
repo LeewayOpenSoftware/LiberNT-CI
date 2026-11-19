@@ -217,6 +217,30 @@ KiWriteRel32Site(
     KiWriteSite(Code, NewCode);
 }
 
+/* Find the .spsites table that the SPEC_SITE macro and KiSpeculationBarrier fill */
+CODE_SEG("INIT")
+static
+PULONG
+KiFindSiteTable(
+    _In_ PVOID ImageBase,
+    _In_ PIMAGE_NT_HEADERS NtHeaders,
+    _Out_ PULONG Count)
+{
+    PIMAGE_SECTION_HEADER Section = IMAGE_FIRST_SECTION(NtHeaders);
+    ULONG i;
+
+    for (i = 0; i < NtHeaders->FileHeader.NumberOfSections; i++, Section++)
+    {
+        if (RtlEqualMemory(Section->Name, ".spsites", IMAGE_SIZEOF_SHORT_NAME))
+        {
+            *Count = min(Section->Misc.VirtualSize, Section->SizeOfRawData) / sizeof(ULONG);
+            return (PULONG)((PUCHAR)ImageBase + Section->VirtualAddress);
+        }
+    }
+    *Count = 0;
+    return NULL;
+}
+
 CODE_SEG("INIT")
 static
 ULONG
@@ -227,69 +251,71 @@ KiPatchImageSites(
     static const UCHAR Verw[3] = { 0x0F, 0x00, 0x2D };
     static const UCHAR Call[1] = { 0xE8 };
     PIMAGE_NT_HEADERS NtHeaders = RtlImageNtHeader(ImageBase);
-    PIMAGE_SECTION_HEADER Section;
-    ULONG i, Sites = 0;
+    ULONG i, Entries, Sites = 0, Listed = 0, Stale = 0;
     ULONG Fence = 0, Clear = 0, Enter = 0, Exit = 0, Refill = 0;
-    PUCHAR Code, End;
+    PULONG Table;
+    PUCHAR Code;
 
     if (!NtHeaders)
         return 0;
 
-    Section = IMAGE_FIRST_SECTION(NtHeaders);
-    for (i = 0; i < NtHeaders->FileHeader.NumberOfSections; i++, Section++)
+    Table = KiFindSiteTable(ImageBase, NtHeaders, &Entries);
+    for (i = 0; i < Entries; i++)
     {
-        if (!(Section->Characteristics & IMAGE_SCN_MEM_EXECUTE))
+        /* Alignment padding between object contributions is zero */
+        if (Table[i] == 0 || Table[i] + 7 > NtHeaders->OptionalHeader.SizeOfImage)
             continue;
 
-        Code = (PUCHAR)ImageBase + Section->VirtualAddress;
-        End = Code + min(Section->Misc.VirtualSize, Section->SizeOfRawData);
-        for (; Code + 7 <= End; Code++)
+        Listed++;
+        Code = (PUCHAR)ImageBase + Table[i];
+        if (!RtlEqualMemory(Code, KiSiteMarker, sizeof(KiSiteMarker)))
         {
-            if (Code[0] != 0x0F || !RtlEqualMemory(Code, KiSiteMarker, sizeof(KiSiteMarker)))
-                continue;
-
-            switch (Code[6])
-            {
-                case KSPEC_SITE_FENCE:
-                    if (!(Kinds & KSPEC_HARDEN_BOUNDS)) continue;
-                    KiWriteSite(Code, KiFenceSiteLfence);
-                    Fence++;
-                    break;
-
-                case KSPEC_SITE_VERW:
-                    if (!(Kinds & KSPEC_HARDEN_MDS)) continue;
-                    KiWriteRel32Site(Code, sizeof(Verw), Verw, &KiVerwSelector);
-                    Clear++;
-                    break;
-
-                case KSPEC_SITE_ENTER:
-                    if (!(Kinds & KSPEC_PATCH_IBRS)) continue;
-                    KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecCtrlEnterKernel);
-                    Enter++;
-                    break;
-
-                case KSPEC_SITE_EXIT:
-                    if (!(Kinds & KSPEC_PATCH_IBRS)) continue;
-                    KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecCtrlExitKernel);
-                    Exit++;
-                    break;
-
-                case KSPEC_SITE_RSB:
-                    if (!(Kinds & KSPEC_PATCH_RSB)) continue;
-                    KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecFillReturnStack);
-                    Refill++;
-                    break;
-
-                default:
-                    continue;
-            }
-            Code += 6;
-            Sites++;
+            Stale++;
+            continue;
         }
+
+        switch (Code[6])
+        {
+            case KSPEC_SITE_FENCE:
+                if (!(Kinds & KSPEC_HARDEN_BOUNDS)) continue;
+                KiWriteSite(Code, KiFenceSiteLfence);
+                Fence++;
+                break;
+
+            case KSPEC_SITE_VERW:
+                if (!(Kinds & KSPEC_HARDEN_MDS)) continue;
+                KiWriteRel32Site(Code, sizeof(Verw), Verw, &KiVerwSelector);
+                Clear++;
+                break;
+
+            case KSPEC_SITE_ENTER:
+                if (!(Kinds & KSPEC_PATCH_IBRS)) continue;
+                KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecCtrlEnterKernel);
+                Enter++;
+                break;
+
+            case KSPEC_SITE_EXIT:
+                if (!(Kinds & KSPEC_PATCH_IBRS)) continue;
+                KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecCtrlExitKernel);
+                Exit++;
+                break;
+
+            case KSPEC_SITE_RSB:
+                if (!(Kinds & KSPEC_PATCH_RSB)) continue;
+                KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecFillReturnStack);
+                Refill++;
+                break;
+
+            default:
+                Stale++;
+                continue;
+        }
+        Sites++;
     }
-    /* Counted per kind so a smoke can compare them with the sites in the sources */
-    DPRINT1("Speculation sites at %p: fence %lu, clear %lu, entry %lu, exit %lu, refill %lu\n",
-            ImageBase, Fence, Clear, Enter, Exit, Refill);
+
+    /* Listed is every site in the sources; a smoke compares it with the patched counts per kind */
+    DPRINT1("Speculation sites at %p: listed %lu, stale %lu, fence %lu, clear %lu, entry %lu, exit %lu, refill %lu\n",
+            ImageBase, Listed, Stale, Fence, Clear, Enter, Exit, Refill);
     return Sites;
 }
 

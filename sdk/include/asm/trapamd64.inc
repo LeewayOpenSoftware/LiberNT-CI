@@ -5,6 +5,31 @@
  * COPYRIGHT:   Copyright 2011-2024 Timo Kreuzer (timo.kreuzer@reactos.org)
  */
 
+/*
+ * Speculation control site: a marked 7-byte nop whose address goes into the .spsites table.
+ * KiApplySpeculationPolicy rewrites the listed sites at boot when a policy asks for them;
+ * the last byte names the kind (see KSPEC_SITE_* in ntoskrnl/ke/specctrl.c).
+ */
+#ifdef _USE_ML
+MACRO(SPEC_SITE, Kind)
+    LOCAL SpecSite
+SpecSite:
+    db 0Fh, 1Fh, 80h, 4Ch, 4Eh, 54h, Kind
+SPSITES SEGMENT READONLY ALIGN(4) ALIAS(".spsites") 'CONST'
+    DD IMAGEREL SpecSite
+SPSITES ENDS
+ENDM
+#else
+MACRO(SPEC_SITE, Kind)
+770:
+    .byte 0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54, Kind
+    .pushsection .spsites, "dr"
+    .p2align 2
+    .rva 770b
+    .popsection
+ENDM
+#endif
+
 #ifdef _USE_ML
 
 MACRO(ASSERT_TRAP_FRAME_INTS_ENABLED, Register)
@@ -334,8 +359,8 @@ MACRO(EnterTrap, Flags)
     mov ds, ax
     mov es, ax
     swapgs
-    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(46) /* fence site, see KiApplySpeculationPolicy */
-    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(49) /* kernel entry site, see KiApplySpeculationPolicy */
+    SPEC_SITE HEX(46) /* fence */
+    SPEC_SITE HEX(49) /* kernel entry */
 
     SAVE_USER_DEBUG_REGISTERS rbp
 
@@ -354,7 +379,7 @@ kernel_mode_entry:
 #else
 2:
 #endif
-    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(46) /* fence site, see KiApplySpeculationPolicy */
+    SPEC_SITE HEX(46) /* fence */
 
     if ((Flags) AND TF_DEBUG)
         SAVE_DEBUG_REGISTERS rbp, rax
@@ -429,7 +454,7 @@ MACRO(ExitTrap, Flags)
 
     /* Swap gs to user mode */
     swapgs
-    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(58) /* kernel exit site, see KiApplySpeculationPolicy */
+    SPEC_SITE HEX(58) /* kernel exit */
 #ifdef _USE_ML
     jmp debug_registers_restored
 #else
@@ -489,7 +514,7 @@ debug_registers_restored:
 #else
     jz 5f
 #endif
-    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(4D) /* verw site, see KiApplySpeculationPolicy */
+    SPEC_SITE HEX(4D) /* verw */
 #ifdef _USE_ML
 BuffersCleared:
 #else

@@ -153,7 +153,11 @@ VOID
 KiSpeculationBarrier(VOID)
 {
 #if defined(_M_AMD64) && (defined(__GNUC__) || defined(__clang__))
-    __asm__ __volatile__ (".byte 0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54, 0x46" ::: "memory");
+    __asm__ __volatile__ ("770: .byte 0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54, 0x46\n\t"
+                          ".pushsection .spsites, \"dr\"\n\t"
+                          ".p2align 2\n\t"
+                          ".rva 770b\n\t"
+                          ".popsection" ::: "memory");
 #elif defined(_M_AMD64)
     if (KiSpeculationIndexMaskOff == 0) _mm_lfence();
 #else

@@ -127,14 +127,14 @@ KiUserCallbackExit:
 UserCallbackInstrumentationDone:
     xor edx, edx
 
-    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(58) /* kernel exit site, see KiApplySpeculationPolicy */
+    SPEC_SITE HEX(58) /* kernel exit */
 
     /* Load user mode stack (It was copied to the trap frame) */
     mov rsp, [rsp + KTRAP_FRAME_Rsp]
 
     /* Swap gs back to user */
     swapgs
-    .byte HEX(0F), HEX(1F), HEX(80), HEX(4C), HEX(4E), HEX(54), HEX(4D) /* verw site, see KiApplySpeculationPolicy */
+    SPEC_SITE HEX(4D) /* verw */
 
     /* return to user mode */
     sysretq
