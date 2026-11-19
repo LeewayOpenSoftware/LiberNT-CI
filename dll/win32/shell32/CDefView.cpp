@@ -2671,6 +2671,9 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
         return E_ABORT;
     }
 
+    if (ListView_GetEditControl(m_ListView.m_hWnd) && SetTimer(DEFVIEW_FILL_TIMER_ID, USER_TIMER_MINIMUM))
+        return S_OK;
+
     Enumerator = m_pEnumIDList;
     m_ListView.SetRedraw(FALSE);
     m_FillListRedrawOff = TRUE;
@@ -4221,6 +4224,7 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             HRESULT hr = m_pSFParent->SetNameOf(0, pidlOld, lpdi->item.pszText, SHGDN_INFOLDER, &pidlNew);
             if (SUCCEEDED(hr) && pidlNew)
             {
+                RecordAddedDuringFill(pidlNew);
                 int iNew = LV_FindItemByPidl(pidlNew);
                 if (iNew != lpdi->item.iItem && iNew >= 0)
                     ILFree(pidlNew);// A SHCNE has updated the item already
