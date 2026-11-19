@@ -186,6 +186,58 @@ VOID TestGetUIObjectOf()
     ok(hr == E_INVALIDARG, "hr = %lx\n", hr);
 }
 
+static int CompareByType(IShellFolder *psf, PCUITEMID_CHILD pidl1, PCUITEMID_CHILD pidl2)
+{
+    HRESULT hr = psf->CompareIDs(2, pidl1, pidl2);
+    ok(SUCCEEDED(hr), "hr = %lx\n", hr);
+    return (short)HRESULT_CODE(hr);
+}
+
+static BOOL GetTypeName(PCIDLIST_ABSOLUTE pidl, LPWSTR pszType, UINT cchType)
+{
+    SHFILEINFOW info;
+    if (!SHGetFileInfoW((LPCWSTR)pidl, 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_TYPENAME))
+        return FALSE;
+    lstrcpynW(pszType, info.szTypeName, cchType);
+    return TRUE;
+}
+
+VOID TestCompareIDsByType()
+{
+    static const LPCWSTR names[] = { L"kernel32.dll", L"user32.dll", L"notepad.exe" };
+    CComHeapPtr<ITEMIDLIST> pidls[_countof(names)];
+    PCUITEMID_CHILD children[_countof(names)];
+    WCHAR types[_countof(names)][80];
+    WCHAR szPath[MAX_PATH];
+    CComPtr<IShellFolder> psf;
+    HRESULT hr;
+
+    for (UINT i = 0; i < _countof(names); ++i)
+    {
+        GetSystemDirectoryW(szPath, _countof(szPath));
+        PathAppendW(szPath, names[i]);
+        hr = SHParseDisplayName(szPath, NULL, &pidls[i], 0, NULL);
+        ok(hr == S_OK, "hr = %lx for %S\n", hr, szPath);
+        if (hr != S_OK)
+            return;
+        children[i] = ILFindLastID(pidls[i]);
+        ok(GetTypeName(pidls[i], types[i], _countof(types[i])), "no type name for %S\n", szPath);
+    }
+
+    hr = SHBindToParent(pidls[0], IID_PPV_ARG(IShellFolder, &psf), NULL);
+    ok(hr == S_OK, "hr = %lx\n", hr);
+    if (hr != S_OK)
+        return;
+
+    ok(CompareByType(psf, children[0], children[0]) == 0, "an item must compare equal to itself by type\n");
+    ok(CompareByType(psf, children[0], children[1]) == 0, "'%S' and '%S' must compare equal by type\n", types[0], types[1]);
+    int ExeVsDll = CompareByType(psf, children[2], children[0]);
+    ok(ExeVsDll != 0, "'%S' and '%S' must not compare equal by type\n", types[2], types[0]);
+    ok(CompareByType(psf, children[0], children[2]) == -ExeVsDll, "type comparison must be antisymmetric\n");
+    ok((CompareStringW(LOCALE_USER_DEFAULT, NORM_IGNORECASE, types[2], -1, types[0], -1) - CSTR_EQUAL < 0) == (ExeVsDll < 0),
+       "type order %d does not follow the type names '%S' / '%S'\n", ExeVsDll, types[2], types[0]);
+}
+
 START_TEST(CFSFolder)
 {
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
@@ -193,4 +245,5 @@ START_TEST(CFSFolder)
     TestUninitialized();
     TestInitialize();
     TestGetUIObjectOf();
+    TestCompareIDsByType();
 }

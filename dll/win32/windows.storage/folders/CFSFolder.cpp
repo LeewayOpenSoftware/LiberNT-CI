@@ -469,6 +469,43 @@ private:
     WIN32_FIND_DATAW m_FindData;
     BOOL m_FirstResultPending;
     BOOL m_EnumerationComplete;
+    struct EXT_CLASS
+    {
+        WCHAR Ext[32];
+        BOOL Folder;
+    };
+    EXT_CLASS m_ExtClasses[32];
+    UINT m_ExtClassCount;
+
+    BOOL IsShellFolderClass(LPCWSTR pExtension)
+    {
+        UINT i;
+        for (i = 0; i < m_ExtClassCount; ++i)
+        {
+            if (_wcsicmp(m_ExtClasses[i].Ext, pExtension) == 0)
+                return m_ExtClasses[i].Folder;
+        }
+
+        CLSID clsidFile;
+        BOOL Folder = FALSE;
+        if (GetCLSIDForFileTypeFromExtension(pExtension, L"CLSID", &clsidFile) == S_OK)
+        {
+            HKEY hkey;
+            if (SUCCEEDED(SHRegGetCLSIDKeyW(clsidFile, L"ShellFolder", FALSE, FALSE, &hkey)))
+            {
+                ::RegCloseKey(hkey);
+                Folder = TRUE;
+            }
+        }
+
+        if (i < _countof(m_ExtClasses) && wcslen(pExtension) < _countof(m_ExtClasses[i].Ext))
+        {
+            StringCchCopyW(m_ExtClasses[i].Ext, _countof(m_ExtClasses[i].Ext), pExtension);
+            m_ExtClasses[i].Folder = Folder;
+            m_ExtClassCount = i + 1;
+        }
+        return Folder;
+    }
 
     HRESULT _AddFindResult(LPWSTR sParentDir, const WIN32_FIND_DATAW& FindData, DWORD dwFlags)
     {
@@ -490,7 +527,6 @@ private:
 
         BOOL bDirectory = (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
-        HRESULT hr;
         if (bDirectory)
         {
             // Skip the current and parent directory nodes
@@ -499,25 +535,12 @@ private:
         }
         else
         {
-            CLSID clsidFile;
             LPWSTR pExtension = PathFindExtensionW(FindData.cFileName);
-            if (pExtension)
+            if (pExtension && IsShellFolderClass(pExtension))
             {
-                // FIXME: Cache this?
-                hr = GetCLSIDForFileTypeFromExtension(pExtension, L"CLSID", &clsidFile);
-                if (hr == S_OK)
-                {
-                    HKEY hkey;
-                    hr = SHRegGetCLSIDKeyW(clsidFile, L"ShellFolder", FALSE, FALSE, &hkey);
-                    if (SUCCEEDED(hr))
-                    {
-                        ::RegCloseKey(hkey);
-
-                        // This should be presented as directory!
-                        bDirectory = TRUE;
-                        TRACE("Treating '%S' as directory!\n", FindData.cFileName);
-                    }
-                }
+                // This should be presented as directory!
+                bDirectory = TRUE;
+                TRACE("Treating '%S' as directory!\n", FindData.cFileName);
             }
         }
 
@@ -609,7 +632,8 @@ public:
         m_dwFlags(0),
         m_hFind(INVALID_HANDLE_VALUE),
         m_FirstResultPending(FALSE),
-        m_EnumerationComplete(FALSE)
+        m_EnumerationComplete(FALSE),
+        m_ExtClassCount(0)
     {
         m_sPathTarget[0] = UNICODE_NULL;
         m_sFindPattern[0] = UNICODE_NULL;
@@ -1358,13 +1382,10 @@ HRESULT WINAPI CFSFolder::CompareIDs(LPARAM lParam,
             break;
         case SHFSF_COL_TYPE:
         {
-            SHFILEINFOW info1, info2;
-            enum { flags = SHGFI_PIDL | SHGFI_TYPENAME };
-            if (SHGetFileInfoW((LPCWSTR)pidl1, 0, &info1, sizeof(info1), flags) &&
-                SHGetFileInfoW((LPCWSTR)pidl2, 0, &info2, sizeof(info2), flags))
-            {
-                result = CompareUiStrings(info1.szTypeName, info2.szTypeName, lParam);
-            }
+            WCHAR szType1[MAX_PATH], szType2[MAX_PATH];
+            GetItemDescription(pidl1, szType1, _countof(szType1));
+            GetItemDescription(pidl2, szType2, _countof(szType2));
+            result = CompareUiStrings(szType1, szType2, lParam);
             break;
         }
         case SHFSF_COL_MDATE:
