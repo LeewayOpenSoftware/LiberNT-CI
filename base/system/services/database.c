@@ -17,6 +17,7 @@
 #include <winbase_undoc.h>
 #include <userenv.h>
 #include <strsafe.h>
+#include <ntsecapi.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -31,8 +32,6 @@ static LONG ScmImageSerial;
 
 static RTL_RESOURCE DatabaseLock;
 static DWORD ResumeCount = 1;
-
-BOOLEAN WINAPI SystemFunction036(PVOID pBuffer, ULONG ulLength);
 static DWORD NoInteractiveServices = 1;
 static DWORD ServiceTag = 0;
 
@@ -1258,10 +1257,10 @@ ScmNewStatusHandle(VOID)
 
     for (;;)
     {
-        if (!SystemFunction036(&dwHandle, sizeof(dwHandle)))
+        if (!RtlGenRandom(&dwHandle, sizeof(dwHandle)))
         {
             /* No random source: still not the plain resume count */
-            DPRINT1("SystemFunction036 failed (Error %lu)\n", GetLastError());
+            DPRINT1("RtlGenRandom failed (Error %lu)\n", GetLastError());
             dwFallback = (dwFallback ^ (DWORD)GetTickCount64()) * 2654435761u + ResumeCount;
             dwHandle = dwFallback;
         }

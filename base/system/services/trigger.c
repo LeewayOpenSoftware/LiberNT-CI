@@ -440,7 +440,7 @@ ScmRunTriggerAction(PSERVICE lpService, DWORD dwAction)
         !(lpService->Status.dwControlsAccepted & SERVICE_ACCEPT_STOP))
         return;
     dwError = ScmControlService(lpService->lpImage->hControlPipe, lpService->lpServiceName,
-                                SERVICE_CONTROL_STOP, lpService->dwResumeCount);
+                                SERVICE_CONTROL_STOP, lpService->dwStatusHandle);
     if (dwError != ERROR_SUCCESS)
         DPRINT1("Trigger stop of %S failed (Error %lu)\n", lpService->lpServiceName, dwError);
 }
