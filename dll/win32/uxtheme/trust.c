@@ -662,13 +662,14 @@ UXTHEME_TrustMachineDefault(LPWSTR name, DWORD cchName)
         return;
     }
 
-    /* No explicit default: pick the default style by compositor capability (LiberNTAero when Mica is capable, else
-     * LiberNT), but only when that style is actually installed in the store. Until the version-4 styles ship, the
-     * selected name is not present, so fall back to the shipped v3 default (UXT_DEFAULT_STYLE) rather than let a
-     * privileged process drop to Classic on an open that cannot resolve. This activates automatically once the
-     * version-4 styles are installed. */
-    sel = UXTHEME_SelectDefaultStyleName();
-    if (sel && UXTHEME_TrustBuildV3Path(sel, path, ARRAY_SIZE(path)) &&
+    /* No explicit default. This runs at process attach (DllMain) for every privileged process, so it must not
+     * probe the compositor: dwmapi / LoadLibrary is forbidden under the loader lock. Choose by registry policy
+     * only -- the Aero default (LiberNTAero) unless an administrator disabled Mica, otherwise the Basic one. The
+     * Aero style renders plain until the compositor is up and switches to Mica on WM_DWMCOMPOSITIONCHANGED, so a
+     * process that attaches before dwm is not downgraded for its lifetime. Fall back to the shipped v3 default
+     * (UXT_DEFAULT_STYLE) when the chosen style is not installed, so nothing drops to Classic before P1 ships. */
+    sel = UXTHEME_MicaDisabledByPolicy() ? L"LiberNT" : L"LiberNTAero";
+    if (UXTHEME_TrustBuildV3Path(sel, path, ARRAY_SIZE(path)) &&
         GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
         StringCchCopyW(name, cchName, sel);
     else
