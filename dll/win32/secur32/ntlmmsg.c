@@ -697,6 +697,33 @@ Done:
     return SEC_E_LOGON_DENIED;
 }
 
+/* A dotted IPv4 literal in the loopback network 127.0.0.0/8 */
+static BOOL NtlmIsLoopbackIpv4(const WCHAR *Host)
+{
+    ULONG Parts = 0, Digits = 0;
+
+    if (wcsncmp(Host, L"127.", 4))
+        return FALSE;
+    for (; *Host; Host++)
+    {
+        if (*Host == L'.')
+        {
+            if (!Digits)
+                return FALSE;
+            Parts++;
+            Digits = 0;
+        }
+        else if (*Host >= L'0' && *Host <= L'9')
+        {
+            if (++Digits > 3)
+                return FALSE;
+        }
+        else
+            return FALSE;
+    }
+    return Parts == 3 && Digits;
+}
+
 /* Whether the host of a "service/host[:port]" target is this machine; other forms are not checked */
 static BOOL NtlmTargetIsLocal(const BYTE *Data, ULONG Length)
 {
@@ -714,10 +741,16 @@ static BOOL NtlmTargetIsLocal(const BYTE *Data, ULONG Length)
     if (!(Host = wcschr(Target, L'/')))
         return TRUE;
     Host++;
-    if ((End = wcspbrk(Host, L":/")))
+    if (*Host == L'[')
+    {
+        /* an IPv6 literal keeps its brackets; a port may follow them */
+        if ((End = wcschr(Host, L']')))
+            End[1] = 0;
+    }
+    else if ((End = wcspbrk(Host, L":/")))
         *End = 0;
 
-    if (!_wcsicmp(Host, L"localhost") || !wcsncmp(Host, L"127.", 4) || !_wcsicmp(Host, L"[::1]"))
+    if (!_wcsicmp(Host, L"localhost") || NtlmIsLoopbackIpv4(Host) || !_wcsicmp(Host, L"[::1]"))
         return TRUE;
     for (i = 0; i < ARRAY_SIZE(Formats); i++)
     {
