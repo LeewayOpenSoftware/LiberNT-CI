@@ -1028,6 +1028,17 @@ ThemeDwmFrameChanged(HWND hWnd)
     ThemeDwmUpdateCaptionButtons(hWnd);
 }
 
+static BOOL CALLBACK
+ThemePostThemeChangedToProcess(HWND hWnd, LPARAM lParam)
+{
+    DWORD dwProcessId = 0;
+
+    GetWindowThreadProcessId(hWnd, &dwProcessId);
+    if (dwProcessId == (DWORD)(ULONG_PTR)lParam)
+        PostMessageW(hWnd, WM_THEMECHANGED, 0, 0);
+    return TRUE;
+}
+
 BOOL CALLBACK
 ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)
 {
@@ -1112,10 +1123,63 @@ ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)
 
     UXTHEME_LoadThemeIfChanged();
 
+    /* The hook is usually injected into a process lazily, on its first
+     * DefWindowProc, long after the session theme was established at logon.
+     * Top-level windows this process created before the hook loaded were
+     * painted unhooked, and the very WM_THEMECHANGED that triggered the load
+     * was dispatched by the still-unhooked DefWindowProc (WM_THEMECHANGED is a
+     * WndProcArray message only, so RealDefWindowProc did nothing with it), so
+     * they keep their classic frame.  Post a fresh WM_THEMECHANGED to this
+     * process's own top-level windows so they are re-evaluated now that the
+     * hook is active.  It must be Post, not Send: InitUserApiHook holds the
+     * user-api-hook critical section across this callback, so a synchronous
+     * message could deadlock. */
+    EnumWindows(ThemePostThemeChangedToProcess, (LPARAM)(ULONG_PTR)GetCurrentProcessId());
+
     return TRUE;
 }
 
 typedef BOOL (WINAPI *PREGISTER_UAH)(PUSERAPIHOOKINFO puah);
+
+static BOOL CALLBACK
+ThemeSendThemeChanged(HWND hWnd, LPARAM lParam)
+{
+    SendNotifyMessageW(hWnd, WM_THEMECHANGED, 0, 0);
+    return TRUE;
+}
+
+static BOOL CALLBACK
+ThemeSendThemeChangedTree(HWND hWnd, LPARAM lParam)
+{
+    SendNotifyMessageW(hWnd, WM_THEMECHANGED, 0, 0);
+    EnumChildWindows(hWnd, ThemeSendThemeChanged, 0);
+    return TRUE;
+}
+
+/*
+ * ThemeHooksInstall() runs in the Themes server, which lives in winlogon, so
+ * its thread sits on the Winlogon desktop and the broadcast above only reaches
+ * that desktop.  Windows already created on the interactive "Default" desktop
+ * before the active visual style was established at logon (for example an
+ * Explorer that started while the Themes service was still coming up) were
+ * painted unthemed and will not repaint on their own.  Post a single
+ * WM_THEMECHANGED to the Default desktop so those pre-existing windows pick up
+ * the session theme.  This fires once when the hooks are installed, not once
+ * per process, so it does not cause a broadcast storm, and SendNotifyMessage
+ * keeps a hung client from stalling winlogon.
+ */
+static VOID
+ThemeBroadcastToInteractiveDesktop(VOID)
+{
+    HDESK hDesk;
+
+    hDesk = OpenDesktopW(L"Default", 0, FALSE, DESKTOP_READOBJECTS);
+    if (!hDesk)
+        return;
+
+    EnumDesktopWindows(hDesk, ThemeSendThemeChangedTree, 0);
+    CloseDesktop(hDesk);
+}
 
 BOOL WINAPI
 ThemeHooksInstall()
@@ -1137,6 +1201,7 @@ ThemeHooksInstall()
     ret = register_hook(&uah);
 
     UXTHEME_broadcast_theme_changed (NULL, TRUE);
+    ThemeBroadcastToInteractiveDesktop();
 
     return ret;
 }
