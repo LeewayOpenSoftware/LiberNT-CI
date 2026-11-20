@@ -4857,8 +4857,10 @@ HRESULT CDefView::LoadViewState()
     if (IsShowableFolderViewMode(cvs.FolderSettings.ViewMode))
     {
         m_FolderSettings.ViewMode = cvs.FolderSettings.ViewMode;
-        if (m_FolderSettings.ViewMode == FVM_ICON && savedIconSize >= 16 && savedIconSize <= 256)
-            m_IconSize = savedIconSize;
+        /* The saved view replaces the folder type default, icon size included
+           (a bag saved without IconSize means the standard size) */
+        m_IconSize = (m_FolderSettings.ViewMode == FVM_ICON && savedIconSize >= 16 && savedIconSize <= 256)
+                   ? savedIconSize : 0;
     }
     m_FolderSettings.fFlags &= ~cvs.VALIDFWF;
     m_FolderSettings.fFlags |= cvs.FolderSettings.fFlags & cvs.VALIDFWF;
@@ -5253,15 +5255,17 @@ GetFolderTypeOfIDList(PCIDLIST_ABSOLUTE pidl, GUID *pType)
         return TRUE;
     }
 
+    /* Compare targets, not PIDLs: the same folder can be reached through a
+       virtual item (My Documents) or through its path */
     for (i = 0; i < _countof(g_KnownFolderTypes); ++i)
     {
-        PIDLIST_ABSOLUTE pidlKnown = NULL;
+        PWSTR pszKnown = NULL;
         BOOL bMatch;
 
-        if (FAILED(SHGetKnownFolderIDList(g_KnownFolderTypes[i].Folder, KF_FLAG_DEFAULT, NULL, &pidlKnown)))
+        if (FAILED(SHGetKnownFolderPath(g_KnownFolderTypes[i].Folder, KF_FLAG_DONT_VERIFY, NULL, &pszKnown)))
             continue;
-        bMatch = ILIsEqual(pidlKnown, pidl);
-        ILFree(pidlKnown);
+        bMatch = !lstrcmpiW(pszKnown, szPath);
+        CoTaskMemFree(pszKnown);
         if (!bMatch)
             continue;
 
