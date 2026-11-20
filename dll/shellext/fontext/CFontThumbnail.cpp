@@ -21,10 +21,56 @@ STDMETHODIMP CFontThumbnail::Initialize(LPCWSTR pszFilePath, DWORD grfMode)
 }
 
 /*
+ * A thumbnail parses the font in the kernel font engine without any click, so
+ * only files from trusted locations get one: the system directory (the Fonts
+ * folder lives there) and local fixed drives, and never a file that carries a
+ * Zone.Identifier stream (downloaded). Removable and network files keep their
+ * icon.
+ */
+static BOOL IsTrustedFontLocation(LPCWSTR pszPath)
+{
+    WCHAR szRoot[MAX_PATH];
+    WCHAR szDrive[4];
+    UINT cch;
+    HANDLE hStream;
+    CStringW strStream;
+
+    if (!pszPath || !*pszPath || PathIsUNCW(pszPath))
+        return FALSE;
+
+    cch = GetWindowsDirectoryW(szRoot, _countof(szRoot));
+    if (cch && cch < _countof(szRoot) && StrCmpNIW(pszPath, szRoot, cch) == 0 &&
+        (pszPath[cch] == L'\\' || pszPath[cch] == UNICODE_NULL))
+        return TRUE;
+
+    if (!pszPath[0] || pszPath[1] != L':')
+        return FALSE;
+    szDrive[0] = pszPath[0];
+    szDrive[1] = L':';
+    szDrive[2] = L'\\';
+    szDrive[3] = UNICODE_NULL;
+    if (GetDriveTypeW(szDrive) != DRIVE_FIXED)
+        return FALSE;
+
+    strStream = pszPath;
+    strStream += L":Zone.Identifier";
+    hStream = CreateFileW(strStream, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                          NULL, OPEN_EXISTING, 0, NULL);
+    if (hStream != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(hStream);
+        TRACE("'%S' carries a Zone.Identifier stream: no thumbnail\n", pszPath);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/*
  * The sample text in the face itself on a white tile, as the Fonts folder
  * shows it. The file is loaded as a private, non-enumerable resource for the
- * duration of the call (plain load as a fallback), so an uninstalled font does
- * not stay in the font list.
+ * duration of the call, so it never shows up as an installed font; the font
+ * mapper searches the process-private list first, so the file's own face is
+ * the one drawn even when an installed face has the same name.
  */
 STDMETHODIMP CFontThumbnail::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE *pdwAlpha)
 {
@@ -38,7 +84,7 @@ STDMETHODIMP CFontThumbnail::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE
     HFONT hFont;
     LOGFONTW lf;
     RECT rc;
-    BOOL bPrivate = FALSE, bPlain = FALSE;
+    BOOL bPrivate = FALSE;
     HRESULT hr = E_FAIL;
 
     if (pdwAlpha)
@@ -48,20 +94,14 @@ STDMETHODIMP CFontThumbnail::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE
     *phbmp = NULL;
     if (m_Path.IsEmpty() || !cx || cx > 4096)
         return E_FAIL;
+    if (!IsTrustedFontLocation(m_Path))
+        return E_FAIL;
 
     bPrivate = AddFontResourceExW(m_Path, FR_PRIVATE | FR_NOT_ENUM, NULL) != 0;
-    if (!GetFontResourceInfoW(m_Path, &Size, Logfonts, 2) || Size < sizeof(LOGFONTW))
+    if (!bPrivate || !GetFontResourceInfoW(m_Path, &Size, Logfonts, 2) || Size < sizeof(LOGFONTW))
     {
-        if (bPrivate)
-            RemoveFontResourceExW(m_Path, FR_PRIVATE | FR_NOT_ENUM, NULL);
-        bPrivate = FALSE;
-        Size = sizeof(Logfonts);
-        bPlain = AddFontResourceW(m_Path) != 0;
-        if (!GetFontResourceInfoW(m_Path, &Size, Logfonts, 2) || Size < sizeof(LOGFONTW))
-        {
-            ERR("GetFontResourceInfoW('%S') failed (%lu)\n", (LPCWSTR)m_Path, GetLastError());
-            goto done;
-        }
+        ERR("Cannot load '%S' as a private font resource (%lu)\n", (LPCWSTR)m_Path, GetLastError());
+        goto done;
     }
 
     ZeroMemory(&bmi, sizeof(bmi));
@@ -118,7 +158,5 @@ STDMETHODIMP CFontThumbnail::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE
 done:
     if (bPrivate)
         RemoveFontResourceExW(m_Path, FR_PRIVATE | FR_NOT_ENUM, NULL);
-    if (bPlain)
-        RemoveFontResourceW(m_Path);
     return hr;
 }

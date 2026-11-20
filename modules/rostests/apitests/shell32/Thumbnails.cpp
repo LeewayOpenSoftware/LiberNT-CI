@@ -890,6 +890,43 @@ TestFontThumbnail(void)
     }
 
     Factory.Release();
+
+    /* A downloaded font (Zone.Identifier stream) is not a trusted location: no thumbnail, icon stays */
+    {
+        static const char ZoneData[] = "[ZoneTransfer]\r\nZoneId=3\r\n";
+        WCHAR szZoned[MAX_PATH], szStream[MAX_PATH + 32];
+        HANDLE hStream;
+
+        wsprintfW(szZoned, L"%s\\downloaded.ttf", g_Dir);
+        wsprintfW(szStream, L"%s:Zone.Identifier", szZoned);
+        if (CopyFileW(szFont, szZoned, FALSE))
+        {
+            hStream = CreateFileW(szStream, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (hStream != INVALID_HANDLE_VALUE)
+            {
+                DWORD Written;
+                WriteFile(hStream, ZoneData, sizeof(ZoneData) - 1, &Written, NULL);
+                CloseHandle(hStream);
+                hr = SHCreateItemFromParsingName(szZoned, NULL, IID_PPV_ARG(IShellItemImageFactory, &Factory));
+                ok_hr(hr, S_OK);
+                if (SUCCEEDED(hr))
+                {
+                    Bitmap = NULL;
+                    hr = Factory->GetImage(Size, SIIGBF_THUMBNAILONLY, &Bitmap);
+                    ok(FAILED(hr), "zone-marked font got a thumbnail: %#lx\n", hr);
+                    if (Bitmap)
+                        DeleteObject(Bitmap);
+                    Factory.Release();
+                }
+            }
+            else
+            {
+                skip("no alternate data streams here: %lu\n", GetLastError());
+            }
+            DeleteFileW(szZoned);
+        }
+    }
+
     DeleteFileW(szCopy);
     if (CreatedKey)
         RegDeleteKeyW(HKEY_CLASSES_ROOT, szKey);
