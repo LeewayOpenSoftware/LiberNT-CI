@@ -6,7 +6,6 @@
  */
 
 #include "precomp.h"
-#include "undocgdi.h" // for GetFontResourceInfoW
 #include <winternl.h>
 
 /* The NDK I/O headers clash with the ATL status macros, so the little of
@@ -125,17 +124,162 @@ static BOOL IsTrustedFontLocation(LPCWSTR pszGivenPath)
     return TRUE;
 }
 
+static ULONG BE32(const BYTE *p)
+{
+    return ((ULONG)p[0] << 24) | ((ULONG)p[1] << 16) | ((ULONG)p[2] << 8) | p[3];
+}
+
+static USHORT BE16(const BYTE *p)
+{
+    return (USHORT)((p[0] << 8) | p[1]);
+}
+
+static BOOL ReadAt(HANDLE hFile, ULONGLONG Offset, void *pBuffer, DWORD cb)
+{
+    LARGE_INTEGER li;
+    DWORD cbRead;
+
+    li.QuadPart = Offset;
+    return SetFilePointerEx(hFile, li, NULL, FILE_BEGIN) && ReadFile(hFile, pBuffer, cb, &cbRead, NULL) && cbRead == cb;
+}
+
+/*
+ * Family and style of the first face of a TrueType/OpenType file or
+ * collection, from its own 'name' table: typographic family (16) before the
+ * legacy family (1), as FreeType names the face, and the subfamily (2) for the
+ * weight and slant. GetFontResourceInfoW cannot be used here because
+ * win32k describes only globally installed fonts, not a private resource.
+ */
+static BOOL GetSfntNames(LPCWSTR pszPath, LPWSTR pszFamily, UINT cchFamily, LPWSTR pszStyle, UINT cchStyle)
+{
+    HANDLE hFile;
+    BYTE Header[12];
+    BYTE *pDir = NULL, *pName = NULL;
+    ULONGLONG Base = 0;
+    ULONG Tag, NameOffset = 0, NameLength = 0;
+    USHORT NumTables, Count, StringOffset, i;
+    int BestFamily = 0, BestStyle = 0;
+    BOOL bRet = FALSE;
+
+    pszFamily[0] = pszStyle[0] = UNICODE_NULL;
+    hFile = CreateFileW(pszPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return FALSE;
+    if (!ReadAt(hFile, 0, Header, sizeof(Header)))
+        goto done;
+    Tag = BE32(Header);
+    if (Tag == 0x74746366) /* 'ttcf': first font of the collection */
+    {
+        Base = BE32(Header + 8);
+        if (!ReadAt(hFile, Base, Header, sizeof(Header)))
+            goto done;
+        Tag = BE32(Header);
+    }
+    if (Tag != 0x00010000 && Tag != 0x4F54544F /* 'OTTO' */ && Tag != 0x74727565 /* 'true' */)
+        goto done;
+    NumTables = BE16(Header + 4);
+    if (!NumTables || NumTables > 512)
+        goto done;
+    pDir = (BYTE *)HeapAlloc(GetProcessHeap(), 0, NumTables * 16);
+    if (!pDir || !ReadAt(hFile, Base + 12, pDir, NumTables * 16))
+        goto done;
+    for (i = 0; i < NumTables; i++)
+    {
+        if (BE32(pDir + i * 16) == 0x6E616D65) /* 'name' */
+        {
+            NameOffset = BE32(pDir + i * 16 + 8);
+            NameLength = BE32(pDir + i * 16 + 12);
+            break;
+        }
+    }
+    if (NameLength < 6 || NameLength > (1 << 20))
+        goto done;
+    pName = (BYTE *)HeapAlloc(GetProcessHeap(), 0, NameLength);
+    if (!pName || !ReadAt(hFile, NameOffset, pName, NameLength))
+        goto done;
+    Count = BE16(pName + 2);
+    StringOffset = BE16(pName + 4);
+    for (i = 0; i < Count && 6 + (ULONG)(i + 1) * 12 <= NameLength; i++)
+    {
+        const BYTE *pRec = pName + 6 + i * 12;
+        USHORT Platform = BE16(pRec), Encoding = BE16(pRec + 2), Language = BE16(pRec + 4);
+        USHORT Id = BE16(pRec + 6), Length = BE16(pRec + 8), Offset = BE16(pRec + 10);
+        const BYTE *pStr = pName + StringOffset + Offset;
+        BOOL bWide;
+        int Score;
+        LPWSTR pszOut;
+        UINT cchOut, n, cch;
+
+        if (Id != 16 && Id != 1 && Id != 2)
+            continue;
+        if ((ULONG)StringOffset + Offset + Length > NameLength || !Length)
+            continue;
+        if (Platform == 3 && (Encoding == 1 || Encoding == 10))
+        {
+            bWide = TRUE;
+            Score = (Language == 0x0409) ? 6 : 4;
+        }
+        else if (Platform == 0)
+        {
+            bWide = TRUE;
+            Score = 3;
+        }
+        else if (Platform == 1 && Encoding == 0)
+        {
+            bWide = FALSE;
+            Score = 1;
+        }
+        else
+        {
+            continue;
+        }
+        if (Id == 16)
+            Score += 10; /* the typographic family wins over the legacy one */
+        if (Id == 2)
+        {
+            if (Score <= BestStyle)
+                continue;
+            BestStyle = Score;
+            pszOut = pszStyle;
+            cchOut = cchStyle;
+        }
+        else
+        {
+            if (Score <= BestFamily)
+                continue;
+            BestFamily = Score;
+            pszOut = pszFamily;
+            cchOut = cchFamily;
+        }
+        cch = bWide ? Length / 2 : Length;
+        if (cch > cchOut - 1)
+            cch = cchOut - 1;
+        for (n = 0; n < cch; n++)
+            pszOut[n] = bWide ? (WCHAR)BE16(pStr + n * 2) : (WCHAR)pStr[n];
+        pszOut[cch] = UNICODE_NULL;
+    }
+    bRet = pszFamily[0] != UNICODE_NULL;
+
+done:
+    if (pName)
+        HeapFree(GetProcessHeap(), 0, pName);
+    if (pDir)
+        HeapFree(GetProcessHeap(), 0, pDir);
+    CloseHandle(hFile);
+    return bRet;
+}
+
 /*
  * The sample text in the face itself on a white tile, as the Fonts folder
  * shows it. The file is loaded as a private, non-enumerable resource for the
  * duration of the call, so it never shows up as an installed font; the font
  * mapper searches the process-private list first, so the file's own face is
- * the one drawn even when an installed face has the same name.
+ * the one drawn even when an installed face has the same name. Raster fonts
+ * (.fon/.fnt) carry no 'name' table and get no thumbnail for now.
  */
 STDMETHODIMP CFontThumbnail::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE *pdwAlpha)
 {
-    LOGFONTW Logfonts[16];
-    DWORD Size = sizeof(Logfonts);
+    WCHAR szFamily[LF_FACESIZE], szStyle[64];
     BITMAPINFO bmi;
     RGBQUAD *pBits = NULL;
     HDC hdc;
@@ -156,9 +300,14 @@ STDMETHODIMP CFontThumbnail::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE
         return E_FAIL;
     if (!IsTrustedFontLocation(m_Path))
         return E_FAIL;
+    if (!GetSfntNames(m_Path, szFamily, _countof(szFamily), szStyle, _countof(szStyle)))
+    {
+        TRACE("'%S' has no usable name table: no thumbnail\n", (LPCWSTR)m_Path);
+        return E_FAIL;
+    }
 
     bPrivate = AddFontResourceExW(m_Path, FR_PRIVATE | FR_NOT_ENUM, NULL) != 0;
-    if (!bPrivate || !GetFontResourceInfoW(m_Path, &Size, Logfonts, 2) || Size < sizeof(LOGFONTW))
+    if (!bPrivate)
     {
         ERR("Cannot load '%S' as a private font resource (%lu)\n", (LPCWSTR)m_Path, GetLastError());
         goto done;
@@ -186,11 +335,15 @@ STDMETHODIMP CFontThumbnail::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE
     }
     FillMemory(pBits, cx * cx * sizeof(RGBQUAD), 0xFF); /* white, opaque */
 
-    lf = Logfonts[0];
+    ZeroMemory(&lf, sizeof(lf));
     lf.lfHeight = -(LONG)(cx * 9 / 20);
-    lf.lfWidth = 0;
-    lf.lfEscapement = lf.lfOrientation = 0;
+    lf.lfWeight = StrStrIW(szStyle, L"Bold") ? FW_BOLD : FW_NORMAL;
+    lf.lfItalic = (StrStrIW(szStyle, L"Italic") || StrStrIW(szStyle, L"Oblique")) ? TRUE : FALSE;
+    lf.lfCharSet = DEFAULT_CHARSET;
+    lf.lfOutPrecision = OUT_TT_PRECIS;
     lf.lfQuality = ANTIALIASED_QUALITY;
+    lf.lfPitchAndFamily = DEFAULT_PITCH;
+    StringCchCopyW(lf.lfFaceName, _countof(lf.lfFaceName), szFamily);
     hFont = CreateFontIndirectW(&lf);
 
     hbmOld = SelectObject(hdc, hbm);
