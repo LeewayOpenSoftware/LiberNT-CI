@@ -1,3 +1,4 @@
+# Code points and names: Microsoft Learn, CC BY 4.0, https://learn.microsoft.com/windows/apps/design/style/segoe-ui-symbol-font and https://learn.microsoft.com/windows/apps/design/style/segoe-fluent-icons-font (MicrosoftDocs/windows-dev-docs, hub/apps/design/iconography/). source/style/match: LiberNT mapping to Fluent UI System Icons (MIT).
 codepoint,fonts,name,source,style,match
 E700,mf,GlobalNavButton/GlobalNavigationButton,navigation,regular,manual
 E701,mf,Wifi,wifi_1,regular,exact

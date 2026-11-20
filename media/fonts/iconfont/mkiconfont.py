@@ -41,7 +41,7 @@ def sha256(path):
 
 def load_map():
     with open(os.path.join(HERE, 'iconmap.csv'), newline='', encoding='utf-8') as f:
-        return [r for r in csv.DictReader(f) if not r['codepoint'].startswith('#')]
+        return list(csv.DictReader(l for l in f if not l.startswith('#')))
 
 
 class Fluent:
@@ -125,6 +125,9 @@ def build(key, rows, fluent, outdir):
     fb.setupHead(unitsPerEm=UPEM, fontRevision=1.0, created=TIMESTAMP, modified=TIMESTAMP)
     font = fb.font
     font.recalcTimestamp = False
+    os2 = font['OS/2']
+    os2.recalcUnicodeRanges(font)
+    os2.setUnicodeRanges(os2.getUnicodeRanges() | {60})
     out = os.path.join(outdir, fname)
     font.save(out)
     return out, len(cmap) - 1, len(order) - 2
