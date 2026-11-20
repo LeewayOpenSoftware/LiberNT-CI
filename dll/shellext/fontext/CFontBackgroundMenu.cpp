@@ -34,6 +34,19 @@ STDMETHODIMP CFontBackgroundMenu::QueryContextMenu(HMENU hMenu, UINT indexMenu, 
     CString strProp(MAKEINTRESOURCEW(IDS_PROPERTIES));
     INT idCmd = idCmdFirst;
     AppendMenuW(hMenu, MF_STRING, idCmd++, strProp);
+
+    // The tasks of the folder: command ids 1..N follow the task numbers
+    bool bSeparator = false;
+    for (UINT i = 0; i < FontTask_Count(); ++i)
+    {
+        if (!FontTask_Available(i))
+            continue;
+        if (!bSeparator)
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+        bSeparator = true;
+        AppendMenuW(hMenu, MF_STRING, idCmdFirst + 1 + i, FontTask_Title(i));
+    }
+    idCmd = idCmdFirst + 1 + FontTask_Count();
     return MAKE_HRESULT(SEVERITY_SUCCESS, 0, idCmd - idCmdFirst);
 }
 
@@ -59,6 +72,9 @@ STDMETHODIMP CFontBackgroundMenu::InvokeCommand(LPCMINVOKECOMMANDINFO lpcmi)
             CoTaskMemFree(pidl);
         return bOK ? S_OK : E_FAIL;
     }
+
+    if (idCmd >= 1 && (UINT)idCmd <= FontTask_Count())
+        return FontTask_Run(m_hwnd, idCmd - 1);
 
     if (idCmd == FCIDM_SHVIEW_INSERT || (idCmd == -1 && !lstrcmpiA(lpcmi->lpVerb, "paste")))
     {

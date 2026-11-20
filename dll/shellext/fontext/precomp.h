@@ -57,6 +57,13 @@ HRESULT _CEnumFonts_CreateInstance(CFontExt* zip, DWORD flags, REFIID riid, LPVO
 HRESULT _CDataObject_CreateInstance(PCIDLIST_ABSOLUTE folder, UINT cidl, PCUITEMID_CHILD_ARRAY apidl,
                                     REFIID riid, LPVOID* ppvOut);
 
+UINT FontTask_Count();
+CStringW FontTask_Title(UINT iTask);
+bool FontTask_Available(UINT iTask);
+HRESULT FontTask_Run(HWND hwnd, UINT iTask);
+HRESULT _CFontCommandProvider_Create(REFIID riid, LPVOID* ppvOut);
+HRESULT _FontThumbnail_Create(PCWSTR pszPath, REFIID riid, LPVOID* ppvOut);
+
 inline BOOL IsFontDotExt(LPCWSTR pchDotExt)
 {
     static const LPCWSTR array[] =

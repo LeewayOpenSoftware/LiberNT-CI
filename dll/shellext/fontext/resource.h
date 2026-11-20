@@ -38,6 +38,9 @@
 #define IDS_EMB_PREVIEW         327
 #define IDS_EMB_RESTRICTED      328
 #define IDS_STYLES_FMT          329
+#define IDS_TASK_SETTINGS       330
+#define IDS_TASK_CLEARTYPE      331
+#define IDS_TASK_CHARMAP        332
 
 #define IDS_FONT_HIDE_VERB      402
 #define IDS_FONT_SHOW_VERB      403

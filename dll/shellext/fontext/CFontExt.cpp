@@ -7,6 +7,8 @@
  */
 
 #include "precomp.h"
+#include <propsys.h>
+#include <thumbcache.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(fontext);
 
@@ -744,6 +746,10 @@ STDMETHODIMP CFontExt::CreateViewObject(HWND hwndOwner, REFIID riid, LPVOID *ppv
         AddRef();
         hr = S_OK;
     }
+    else if (IsEqualIID(riid, IID_IExplorerCommandProvider))
+    {
+        return _CFontCommandProvider_Create(riid, ppvOut);
+    }
     else if (IsEqualIID(riid, IID_IContextMenu))
     {
         TRACE("IContextMenu\n");
@@ -988,6 +994,14 @@ STDMETHODIMP CFontExt::GetUIObjectOf(HWND hwndOwner, UINT cidl, PCUITEMID_CHILD_
         {
             ERR("IID_IExtractIcon with cidl != 1 UNIMPLEMENTED\n");
         }
+    }
+    else if (IsEqualIID(riid, __uuidof(IThumbnailProvider)))
+    {
+        const FontPidlEntry* thumbEntry = (cidl == 1) ? _AnyFontEntry(*apidl) : nullptr;
+        CFontInfo* thumbInfo = thumbEntry ? g_FontCache->FindByName(thumbEntry->Name()) : nullptr;
+        if (!thumbInfo)
+            return E_INVALIDARG;
+        return _FontThumbnail_Create(g_FontCache->Filename(thumbInfo, true), riid, ppvOut);
     }
     else if (riid == IID_IDataObject)
     {
