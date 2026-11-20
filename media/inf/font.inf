@@ -132,19 +132,35 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Trebuchet M
 [Font.CJK.KO.Reg]
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Courier",0x00000000,"Courier New"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Fixedsys",0x00000000,"Fixedsys Excelsior 3.01-L2"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Franklin Gothic Medium",0x00000000,"Droid Sans Fallback"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Franklin Gothic Medium",0x00000000,"Noto Sans KR"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Helv",0x00000000,"MS Sans Serif"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Helvetica",0x00000000,"Arial"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Sans Serif",0x00000000,"Droid Sans Fallback"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Shell Dlg",0x00000000,"Droid Sans Fallback"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Shell Dlg 2",0x00000000,"Droid Sans Fallback"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS UI Gothic",0x00000000,"Droid Sans Fallback"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS UI Gothic 2",0x00000000,"Droid Sans Fallback"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Sans Serif",0x00000000,"Noto Sans KR"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Shell Dlg",0x00000000,"Noto Sans KR"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Shell Dlg 2",0x00000000,"Noto Sans KR"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS UI Gothic",0x00000000,"Noto Sans KR"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS UI Gothic 2",0x00000000,"Noto Sans KR"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Symbol",0x00000000,"Arial"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Terminal",0x00000000,"Lucida Console"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Times",0x00000000,"Times New Roman"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Tms Rmn",0x00000000,"Times New Roman"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Trebuchet MS",0x00000000,"Droid Sans Fallback"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Trebuchet MS",0x00000000,"Noto Sans KR"
+
+[Font.CJK.TC.Reg]
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Courier",0x00000000,"Courier New"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Fixedsys",0x00000000,"Fixedsys Excelsior 3.01-L2"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Franklin Gothic Medium",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Helv",0x00000000,"MS Sans Serif"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Helvetica",0x00000000,"Arial"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Sans Serif",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Shell Dlg",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Shell Dlg 2",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS UI Gothic",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS UI Gothic 2",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Terminal",0x00000000,"Lucida Console"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Times",0x00000000,"Times New Roman"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Tms Rmn",0x00000000,"Times New Roman"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Trebuchet MS",0x00000000,"Noto Sans TC"
 
 [Font.Unicode.Reg]
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Courier",0x00000000,"Courier New"
@@ -338,11 +354,11 @@ AddReg = Font.CJK.KO.Reg
 ; cp950/cp950 Traditional Chinese
 [Font.CP950.96]
 AddReg = Font.Reg.96
-AddReg = Font.CJK.SC.Reg
+AddReg = Font.CJK.TC.Reg
 
 [Font.CP950.120]
 AddReg = Font.Reg.120
-AddReg = Font.CJK.SC.Reg
+AddReg = Font.CJK.TC.Reg
 
 [Font Sizes]
 Small Fonts = 96
