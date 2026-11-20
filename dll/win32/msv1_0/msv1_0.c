@@ -586,7 +586,7 @@ MsvpRefreshNtOwfCredential(
 
 static
 NTSTATUS
-MsvpChangePassword(IN PLSA_CLIENT_REQUEST ClientRequest,
+MsvpChangePasswordWorker(IN PLSA_CLIENT_REQUEST ClientRequest,
                    IN PVOID ProtocolSubmitBuffer,
                    IN PVOID ClientBufferBase,
                    IN ULONG SubmitBufferLength,
@@ -748,6 +748,31 @@ done:
     if (ServerHandle != NULL)
         SamrCloseHandle(&ServerHandle);
 
+    return Status;
+}
+
+
+/* The caller reads the outcome from ProtocolStatus as well, so set it on every path */
+static
+NTSTATUS
+MsvpChangePassword(IN PLSA_CLIENT_REQUEST ClientRequest,
+                   IN PVOID ProtocolSubmitBuffer,
+                   IN PVOID ClientBufferBase,
+                   IN ULONG SubmitBufferLength,
+                   OUT PVOID *ProtocolReturnBuffer,
+                   OUT PULONG ReturnBufferLength,
+                   OUT PNTSTATUS ProtocolStatus)
+{
+    NTSTATUS Status;
+
+    Status = MsvpChangePasswordWorker(ClientRequest,
+                                      ProtocolSubmitBuffer,
+                                      ClientBufferBase,
+                                      SubmitBufferLength,
+                                      ProtocolReturnBuffer,
+                                      ReturnBufferLength,
+                                      ProtocolStatus);
+    *ProtocolStatus = Status;
     return Status;
 }
 
