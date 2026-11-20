@@ -6649,7 +6649,11 @@ void CDefView::RequestThumbnail(INT iItem)
         m_ThumbArmed = TRUE;
     }
     if (FAILED(SHCreateShellItem(NULL, m_pSFParent, pidl, &psi)))
+    {
+        entry.bNone = TRUE; // painting it must not scan again
+        DSA_InsertItem(m_hdsaThumbs, index, &entry);
         return;
+    }
     entry.Gen = (++m_ThumbGen) & 0xFF;
     hr = m_pThumbnail->GetBitmapFromShellItem(psi, entry.Id | (entry.Gen << DEFVIEW_THUMB_GEN_SHIFT),
                                               m_ThumbSize, m_ThumbSize);
@@ -6692,11 +6696,15 @@ void CDefView::ScheduleThumbnailScan()
     m_ThumbScanPending = SetTimer(DEFVIEW_THUMB_SCAN_TIMER_ID, DEFVIEW_THUMB_SCAN_MS) != 0;
 }
 
-/* What stays: the client area and one page on each side of it */
+/* What stays: the client area and one page on each side of it, along the
+   direction the view scrolls (sideways with LVS_ALIGNLEFT) */
 void CDefView::GetThumbnailKeepRect(RECT *prc)
 {
     m_ListView.GetClientRect(prc);
-    InflateRect(prc, prc->right - prc->left, prc->bottom - prc->top);
+    if (m_ListView.GetStyle() & LVS_ALIGNLEFT)
+        InflateRect(prc, prc->right - prc->left, 0);
+    else
+        InflateRect(prc, 0, prc->bottom - prc->top);
 }
 
 static int __cdecl CompareThumbUse(const void *p1, const void *p2)
