@@ -499,6 +499,8 @@ KiApplySpeculationPolicy(
             KiSpeculationBtiMode = KSPEC_BTI_LEGACY_IBRS;
             Kinds |= KSPEC_PATCH_IBRS;
         }
+#else
+        UNREFERENCED_PARAMETER(Allowed);
 #endif
     }
 
