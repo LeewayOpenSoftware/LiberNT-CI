@@ -4033,6 +4033,13 @@ DxgkVidPnQueryMonitorPreferredMode(
     _Out_ PULONG Height,
     _Out_ PULONG RefreshRate);
 
+BOOLEAN
+DxgkVidPnIsDisplayModeListed(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Width,
+    _In_ ULONG Height,
+    _Out_ PBOOLEAN Listed);
+
 NTSTATUS
 NTAPI
 DxgkSetVidPnSourceOwner(

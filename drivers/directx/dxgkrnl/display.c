@@ -186,15 +186,19 @@ DxgkpRegWriteDword(
 }
 
 static BOOLEAN
-DxgkpRegHasDisplaySettings(
-    _In_ HANDLE KeyHandle)
+DxgkpRegReadDisplaySettings(
+    _In_ HANDLE KeyHandle,
+    _Out_ PULONG Width,
+    _Out_ PULONG Height)
 {
     PCWSTR Names[] = {L"DefaultSettings.XResolution", L"DefaultSettings.YResolution"};
     UCHAR Buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
     PKEY_VALUE_PARTIAL_INFORMATION Info = (PKEY_VALUE_PARTIAL_INFORMATION)Buffer;
+    PULONG Values[] = {Width, Height};
     UNICODE_STRING Name;
     ULONG Index, Length;
 
+    *Width = *Height = 0;
     for (Index = 0; Index < RTL_NUMBER_OF(Names); ++Index)
     {
         RtlInitUnicodeString(&Name, Names[Index]);
@@ -205,13 +209,15 @@ DxgkpRegHasDisplaySettings(
         {
             return FALSE;
         }
+        *Values[Index] = *(PULONG)Info->Data;
     }
     return TRUE;
 }
 
 /* SharedPrimaryMutex is held after publishing a successful VidPN. The bridge
  * is registered before monitor negotiation finishes, so its POST defaults
- * must be replaced once by the first committed native mode. Later mode changes
+ * must be replaced once by the first committed native mode. A saved mode the
+ * display no longer lists is replaced by the preferred one. Later mode changes
  * leave registry persistence to ChangeDisplaySettingsEx. */
 VOID
 DxgkpDisplayPublishInitialMode(
@@ -227,15 +233,39 @@ DxgkpDisplayPublishInitialMode(
     PCWSTR Names[] = {L"DefaultSettings.XResolution", L"DefaultSettings.YResolution",
                       L"DefaultSettings.VRefresh"};
     ULONG Values[RTL_NUMBER_OF(Names)];
-    BOOLEAN Preferred;
+    ULONG SavedWidth, SavedHeight;
+    BOOLEAN Preferred, Listed;
 
     if (g_DisplayAdapter != Adapter || !g_DisplayInitialModePending ||
         (!Adapter->VidPnCommitted && !Adapter->HeadlessDesktop))
         return;
+    RtlStringCchPrintfW(KeyBuffer, RTL_NUMBER_OF(KeyBuffer),
+                        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\dxgkrnl\\Device%lu",
+                        g_DisplayDeviceNumber);
+    RtlInitUnicodeString(&KeyName, KeyBuffer);
+    InitializeObjectAttributes(&Attributes, &KeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenKey(&Key, KEY_QUERY_VALUE | KEY_SET_VALUE, &Attributes);
+    if (!NT_SUCCESS(Status))
+        return;
     if (!g_DisplaySettingsSeeded)
     {
-        g_DisplayInitialModePending = FALSE;
-        return;
+        if (!DxgkpRegReadDisplaySettings(Key, &SavedWidth, &SavedHeight))
+        {
+            ZwClose(Key);
+            g_DisplayInitialModePending = FALSE;
+            return;
+        }
+        if (!DxgkVidPnIsDisplayModeListed(Adapter, SavedWidth, SavedHeight, &Listed))
+        {
+            ZwClose(Key);
+            return;
+        }
+        if (Listed)
+        {
+            ZwClose(Key);
+            g_DisplayInitialModePending = FALSE;
+            return;
+        }
     }
     RtlZeroMemory(&Current, sizeof(Current));
     (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
@@ -244,16 +274,14 @@ DxgkpDisplayPublishInitialMode(
     KeReleaseMutex(&Adapter->VidPnMutex, FALSE);
     Status = DxgkVidPnQueryCurrentDisplayMode(Adapter, &Current);
     if (!NT_SUCCESS(Status))
+    {
+        ZwClose(Key);
         return;
-    RtlStringCchPrintfW(KeyBuffer, RTL_NUMBER_OF(KeyBuffer),
-                        L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\dxgkrnl\\Device%lu",
-                        g_DisplayDeviceNumber);
-    RtlInitUnicodeString(&KeyName, KeyBuffer);
-    InitializeObjectAttributes(&Attributes, &KeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
-    Status = ZwOpenKey(&Key, KEY_SET_VALUE, &Attributes);
-    if (!NT_SUCCESS(Status))
-        return;
+    }
     Preferred = DxgkVidPnQueryMonitorPreferredMode(Adapter, &Values[0], &Values[1], &Values[2]);
+    if (Preferred && !g_DisplaySettingsSeeded &&
+        DxgkVidPnIsDisplayModeListed(Adapter, Values[0], Values[1], &Listed) && !Listed)
+        Preferred = FALSE;
     if (!Preferred)
     {
         Values[0] = Current.DisplayMode.Width;
@@ -267,7 +295,7 @@ DxgkpDisplayPublishInitialMode(
             break;
     }
     ZwClose(Key);
-    if (NT_SUCCESS(Status) && Adapter->VidPnCommitted && Preferred)
+    if (NT_SUCCESS(Status) && Adapter->VidPnCommitted && (Preferred || !g_DisplaySettingsSeeded))
         g_DisplayInitialModePending = FALSE;
 }
 
@@ -5604,6 +5632,7 @@ DxgkDisplayRegister(
     HANDLE          hVideoMap = NULL;
     HANDLE          hDriverKey = NULL;
     ULONG           Disposition = 0;
+    ULONG           SavedWidth, SavedHeight;
     ULONG           DeviceNumber;
     ULONG           ExistingMax;
     BOOLEAN         Adopted = FALSE;
@@ -5746,7 +5775,7 @@ DxgkDisplayRegister(
 
         /* Seed the display settings from the POST resolution only when none were saved */
         g_DisplaySettingsSeeded = (Disposition == REG_CREATED_NEW_KEY ||
-                                   !DxgkpRegHasDisplaySettings(hDriverKey));
+                                   !DxgkpRegReadDisplaySettings(hDriverKey, &SavedWidth, &SavedHeight));
         if (g_DisplaySettingsSeeded)
         {
             ULONG DefW = Adapter->CommittedWidth ? Adapter->CommittedWidth :

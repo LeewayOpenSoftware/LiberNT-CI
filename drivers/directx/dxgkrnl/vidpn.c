@@ -8443,6 +8443,28 @@ Cleanup:
     return Status;
 }
 
+/* The caller holds SharedPrimaryMutex. The list exists once win32k has asked for the modes. */
+BOOLEAN
+DxgkVidPnIsDisplayModeListed(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ ULONG Width,
+    _In_ ULONG Height,
+    _Out_ PBOOLEAN Listed)
+{
+    DXGKP_DISPLAY_MODE_CACHE *Cache = Adapter->DisplayModeCache;
+    ULONG Index;
+
+    *Listed = FALSE;
+    if (Cache == NULL)
+        return FALSE;
+    for (Index = 0; Index < Cache->Count && !*Listed; ++Index)
+    {
+        *Listed = Cache->Entries[Index].Mode.Width == Width &&
+                  Cache->Entries[Index].Mode.Height == Height;
+    }
+    return TRUE;
+}
+
 NTSTATUS
 DxgkVidPnSetVideoMode(
     _In_ PDXGKRNL_ADAPTER Adapter,
