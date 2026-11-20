@@ -1575,6 +1575,7 @@ MsvpGetChallengeResponse(
                                  (ULONG_PTR)ProtocolSubmitBuffer - (ULONG_PTR)ClientBufferBase);
     BlobLength = Request->ServerName.Length;
     if (Blob == NULL || BlobLength < BlobHeaderLength ||
+        BlobLength > MAXUSHORT - MSV1_0_NTLM3_RESPONSE_LENGTH ||
         !MsvpIsInSubmitBuffer(ProtocolSubmitBuffer, SubmitBufferLength, Blob, BlobLength) ||
         Blob[0] != 1 || Blob[1] != 1)
     {
