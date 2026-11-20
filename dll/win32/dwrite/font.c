@@ -3375,11 +3375,15 @@ static const WCHAR *reactos_family_substitute(const WCHAR *name)
         { L"Segoe UI Variable Small", L"Selawik" },
         { L"Segoe Fluent Icons", L"Segoe MDL2 Assets" },
         { L"Segoe UI Symbol", L"Segoe MDL2 Assets" },
-        { L"Calibri", L"Selawik" },
-        { L"Cambria", L"Georgia" },
-        { L"Consolas", L"Lucida Console" },
-        { L"Cascadia Code", L"Lucida Console" },
-        { L"Cascadia Mono", L"Lucida Console" },
+        /* Office families: the same interim targets as the GDI FontSubstitutes in hivesft.inf */
+        { L"Calibri", L"Carlito" },
+        { L"Calibri Light", L"Carlito" },
+        { L"Cambria", L"Caladea" },
+        { L"Constantia", L"Caladea" },
+        { L"Candara", L"Source Sans Pro" },
+        { L"Corbel", L"Source Sans Pro" },
+        { L"Consolas", L"Cascadia Mono" },
+        { L"Cascadia Code", L"Cascadia Mono" },
     };
     ULONG i;
 
