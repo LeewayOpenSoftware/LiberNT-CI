@@ -67,20 +67,24 @@ ENDFUNC
  */
 PUBLIC KiSpecCtrlEnterParanoid
 FUNC KiSpecCtrlEnterParanoid
+    push rax
+    .pushreg rax
+    push rcx
+    .pushreg rcx
+    push rdx
+    .pushreg rdx
+    /* Flags last, so the epilog after popfq is plain pops the unwinder recognises */
     pushfq
     .allocstack 8
-    SPEC_STUB_PROLOG
+    .endprolog
     mov ecx, HEX(48)
     rdmsr
     mov dword ptr [rbp + KTRAP_FRAME_LastExceptionFromRip], eax
     mov dword ptr [rbp + KTRAP_FRAME_LastExceptionFromRip + 4], edx
     or eax, 1
     wrmsr
-    pop rdx
-    pop rcx
-    pop rax
     popfq
-    ret
+    SPEC_STUB_EPILOG
 ENDFUNC
 
 /* Before iretq to kernel mode: give back what the interrupted code ran with */
@@ -94,14 +98,17 @@ FUNC KiSpecCtrlExitParanoid
     SPEC_STUB_EPILOG
 ENDFUNC
 
-/* Overwrite all 32 return stack buffer entries with harmless targets; the 32 pushed
-   return addresses are dropped before the epilog, so only the prolog needs unwind codes */
+/* Overwrite all 32 return stack buffer entries with harmless targets. The frame pointer lets
+   a stack walk get through while the loop has return addresses pushed; lea and jrcxz leave
+   the flags alone, so they need no saving. */
 PUBLIC KiSpecFillReturnStack
 FUNC KiSpecFillReturnStack
-    pushfq
-    .allocstack 8
     push rcx
     .pushreg rcx
+    push rbp
+    .pushreg rbp
+    mov rbp, rsp
+    .setframe rbp, 0
     .endprolog
     mov ecx, 16
 KiSpecFillLoop:
@@ -117,11 +124,13 @@ KiSpecFillTrap2:
     lfence
     jmp KiSpecFillTrap2
 KiSpecFillSecond:
-    dec ecx
-    jnz KiSpecFillLoop
-    add rsp, 32 * 8
+    lea ecx, [rcx - 1]
+    jrcxz KiSpecFillDone
+    jmp KiSpecFillLoop
+KiSpecFillDone:
+    lea rsp, [rbp]
+    pop rbp
     pop rcx
-    popfq
     ret
 ENDFUNC
 
