@@ -8455,7 +8455,8 @@ DxgkVidPnIsDisplayModeListed(
     ULONG Index;
 
     *Listed = FALSE;
-    if (Cache == NULL)
+    if (Cache == NULL ||
+        Cache->HotPlugGeneration != InterlockedCompareExchange64(&Adapter->HotPlugGeneration, 0, 0))
         return FALSE;
     for (Index = 0; Index < Cache->Count && !*Listed; ++Index)
     {
