@@ -480,7 +480,7 @@ NtCreatePagingFile(
     if (MiSoftPageFileSlotLimit != 0 &&
         ((ULONG64)SafeMaximum.QuadPart >> PAGE_SHIFT) > MiSoftPageFileSlotLimit)
     {
-        DPRINT1("Paging file limited to %I64u MB by not-present entry inversion\n",
+        DbgPrint("Paging file limited to %I64u MB by not-present entry inversion\n",
                 MiSoftPageFileSlotLimit >> (20 - PAGE_SHIFT));
         SafeMaximum.QuadPart = (LONGLONG)(MiSoftPageFileSlotLimit << PAGE_SHIFT);
         if (SafeMinimum.QuadPart > SafeMaximum.QuadPart)
