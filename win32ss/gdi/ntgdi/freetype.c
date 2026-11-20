@@ -1057,12 +1057,16 @@ static void FontLink_DeleteEntries(VOID)
     }
 }
 
+#define FONTLINK_MAX_DATA 0x10000 /* bytes; a SystemLink value is a few hundred WCHARs */
+
 static NTSTATUS FontLink_PopulateEntries(VOID)
 {
     NTSTATUS Status;
     HKEY hKey;
     DWORD cchName, cbData, dwType;
-    WCHAR szName[LF_FACESIZE], szzFontLink[300];
+    WCHAR szName[LF_FACESIZE];
+    PWSTR pszzFontLink, pszzNew;
+    DWORD cbBuffer = 300 * sizeof(WCHAR);
 
     // Open the registry key
     Status = RegOpenKey(
@@ -1071,23 +1075,53 @@ static NTSTATUS FontLink_PopulateEntries(VOID)
     if (!NT_SUCCESS(Status))
         return Status;
 
+    /* Two spare WCHARs after the data for the double NUL */
+    pszzFontLink = ExAllocatePoolWithTag(PagedPool, cbBuffer + 2 * sizeof(WCHAR), TAG_FONT);
+    if (!pszzFontLink)
+    {
+        ZwClose(hKey);
+        return STATUS_NO_MEMORY;
+    }
+
     for (DWORD dwIndex = 0;; ++dwIndex)
     {
         cchName = _countof(szName);
-        cbData = sizeof(szzFontLink);
-        Status = RegEnumValueW(hKey, dwIndex, szName, &cchName, &dwType, szzFontLink, &cbData);
+        cbData = cbBuffer;
+        Status = RegEnumValueW(hKey, dwIndex, szName, &cchName, &dwType, pszzFontLink, &cbData);
+        if (Status == STATUS_BUFFER_OVERFLOW)
+        {
+            /* cchName now holds the name length in bytes */
+            if (cchName / sizeof(WCHAR) >= _countof(szName) || dwType != REG_MULTI_SZ ||
+                cbData > FONTLINK_MAX_DATA)
+            {
+                /* Not a face name, or not a link list: skip it, keep the next ones */
+                DPRINT1("Skipping SystemLink value %lu\n", dwIndex);
+                continue;
+            }
+
+            /* The list is longer than the buffer: grow it and read the value again */
+            pszzNew = ExAllocatePoolWithTag(PagedPool, cbData + 2 * sizeof(WCHAR), TAG_FONT);
+            if (!pszzNew)
+                break;
+            ExFreePoolWithTag(pszzFontLink, TAG_FONT);
+            pszzFontLink = pszzNew;
+            cbBuffer = cbData;
+            --dwIndex;
+            continue;
+        }
         if (!NT_SUCCESS(Status))
             break;
         if (dwType != REG_MULTI_SZ)
             continue;
 
-        // Ensure double-NUL-terminated
-        szzFontLink[_countof(szzFontLink) - 1] = UNICODE_NULL;
-        szzFontLink[_countof(szzFontLink) - 2] = UNICODE_NULL;
+        // Ensure double-NUL-terminated, right after the data
+        pszzFontLink[cbData / sizeof(WCHAR)] = UNICODE_NULL;
+        pszzFontLink[cbData / sizeof(WCHAR) + 1] = UNICODE_NULL;
 
-        FontLink_AddEntry(szName, szzFontLink);
+        FontLink_AddEntry(szName, pszzFontLink);
     }
 
+    ExFreePoolWithTag(pszzFontLink, TAG_FONT);
     ZwClose(hKey); // Close the registry key
     return STATUS_SUCCESS;
 }
