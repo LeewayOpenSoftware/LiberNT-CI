@@ -19,7 +19,7 @@ ULONG64 KiArchCapabilities;
 ULONG KiFeatureSettingsOverride;
 ULONG KiFeatureSettingsOverrideMask;
 
-ULONG KiSpeculationHardening;
+ULONG KiSpeculationHardening = KSPEC_HARDEN_DEFAULTS;
 ULONG KiSpeculationBtiMode;
 ULONG KiSpeculationActive;
 ULONG64 KiSpecCtrlKernel;
@@ -465,6 +465,7 @@ KiApplySpeculationPolicy(
 {
     ULONG Kinds = 0, Sites = 0;
     ULONG64 Base = 0;
+    BOOLEAN DefaultPolicy = (KiSpeculationHardening & KSPEC_HARDEN_DEFAULT) != 0;
 
     if (KiSpeculationHardening & KSPEC_HARDEN_BOUNDS)
     {
@@ -494,8 +495,8 @@ KiApplySpeculationPolicy(
     if ((KiSpeculationHardening & KSPEC_HARDEN_BTI) &&
         !(KiFeatureSettingsOverride & KiFeatureSettingsOverrideMask & FSO_DISABLE_BTI))
     {
-        /* AMD user-to-kernel protection is opt-in on Windows client */
-        BOOLEAN Allowed = (KeGetCurrentPrcb()->CpuVendor != CPU_AMD) ||
+        /* AMD user-to-kernel protection is opt-in on Windows client; the default policy turns AutoIBRS on */
+        BOOLEAN Allowed = DefaultPolicy || (KeGetCurrentPrcb()->CpuVendor != CPU_AMD) ||
                           (KiFeatureSettingsOverride & FSO_AMD_USER_TO_KERNEL);
 
         if (KiSpeculationFeatures & KSPEC_EIBRS)
@@ -507,7 +508,7 @@ KiApplySpeculationPolicy(
         {
             KiSpeculationBtiMode = KSPEC_BTI_AUTO_IBRS;
         }
-        else if (Allowed && (KiSpeculationFeatures & KSPEC_IBRS))
+        else if (Allowed && !DefaultPolicy && (KiSpeculationFeatures & KSPEC_IBRS))
         {
             KiSpeculationBtiMode = KSPEC_BTI_LEGACY_IBRS;
             Kinds |= KSPEC_PATCH_IBRS;
@@ -581,6 +582,14 @@ KiApplySpeculationPolicy(
             KiSpeculationHardening, Kinds, Sites, KiSpeculationBtiMode,
             KiSpecCtrlKernel, KiSpecCtrlUser, KiSpeculationIbpbOnSwitch, KiSpeculationSsbdMode,
             KiSpeculationSsbdSystemWide ? "system" : (KiSpeculationSsbdPerProcess ? "per process" : "off"));
+    DPRINT1("Speculation BTI %s, %s policy%s\n",
+            KiSpeculationBtiMode == KSPEC_BTI_EIBRS ? "eIBRS" :
+            KiSpeculationBtiMode == KSPEC_BTI_AUTO_IBRS ? "AutoIBRS" :
+            KiSpeculationBtiMode == KSPEC_BTI_LEGACY_IBRS ? "legacy IBRS" : "off",
+            DefaultPolicy ? "default" : "registry",
+            (KiFeatureSettingsOverride & KiFeatureSettingsOverrideMask & FSO_DISABLE_BTI) ? ", disabled by FeatureSettingsOverride" :
+            (DefaultPolicy && KiSpeculationBtiMode == KSPEC_BTI_NONE && (KiSpeculationFeatures & KSPEC_IBRS)) ?
+                ", legacy IBRS needs SpeculationHardening bit 2" : "");
 }
 
 VOID

@@ -77,7 +77,7 @@ extern ULONG64 KiArchCapabilities;
 extern ULONG KiFeatureSettingsOverride;
 extern ULONG KiFeatureSettingsOverrideMask;
 
-/* Session Manager\Kernel SpeculationHardening, our own switch until each class has a default */
+/* Session Manager\Kernel SpeculationHardening; without the value KSPEC_HARDEN_DEFAULTS applies */
 #define KSPEC_HARDEN_BOUNDS             0x00000001  /* Index masking and fences after bound checks */
 #define KSPEC_HARDEN_MDS                0x00000002  /* Clear CPU buffers on return to user mode */
 #define KSPEC_HARDEN_BTI                0x00000004  /* Kernel protection against branch target injection */
@@ -85,6 +85,9 @@ extern ULONG KiFeatureSettingsOverrideMask;
 #define KSPEC_HARDEN_STIBP              0x00000010  /* Single-thread indirect branch predictors (opt-in) */
 #define KSPEC_HARDEN_SSBD               0x00000020  /* Honour the SSBD system and process opt-ins */
 #define KSPEC_HARDEN_L1TF               0x00000040  /* Invert the value bits of not-present page table entries */
+#define KSPEC_HARDEN_DEFAULT            0x80000000  /* Set only while no registry value replaced the defaults */
+/* BTI by default only where IBRS needs no SPEC_CTRL write on each kernel entry */
+#define KSPEC_HARDEN_DEFAULTS           (KSPEC_HARDEN_DEFAULT | KSPEC_HARDEN_BTI)
 
 /* How speculative store bypass is disabled */
 #define KSPEC_SSBD_NONE                 0
