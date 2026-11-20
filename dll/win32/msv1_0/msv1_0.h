@@ -382,6 +382,16 @@ VOID
 WINAPI
 MD5Final(PMD5_CTX Context);
 
+/* sam.c */
+VOID
+MsvpHmacMd5(
+    _In_reads_bytes_(MSV1_0_NTLM3_OWF_LENGTH) const UCHAR *Key,
+    _In_reads_bytes_(FirstLength) const UCHAR *First,
+    _In_ ULONG FirstLength,
+    _In_reads_bytes_opt_(SecondLength) const UCHAR *Second,
+    _In_ ULONG SecondLength,
+    _Out_writes_bytes_(MSV1_0_NTLM3_OWF_LENGTH) PUCHAR Digest);
+
 NTSTATUS
 NTAPI
 LsaApCallPackage(

@@ -61,7 +61,6 @@ done:
 }
 
 
-static
 VOID
 MsvpHmacMd5(
     _In_reads_bytes_(MSV1_0_NTLM3_OWF_LENGTH) const UCHAR *Key,
