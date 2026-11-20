@@ -1239,7 +1239,7 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Palatino Linotype (Tr
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Palatino Linotype Bold (TrueType)",0x00000000,"palab.ttf"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Palatino Linotype Bold Italic (TrueType)",0x00000000,"palabi.ttf"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Palatino Linotype Italic (TrueType)",0x00000000,"palai.ttf"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Segoe MDL2 Assets (TrueType)",0x00000000,"segmdl2.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Segoe MDL2 Assets (Leeway replacement) (TrueType)",0x00000000,"segmdl2.ttf"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Selawik (TrueType)",0x00000000,"selawk.ttf"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Selawik Bold (TrueType)",0x00000000,"selawkb.ttf"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Selawik Light (TrueType)",0x00000000,"selawkl.ttf"
@@ -1284,6 +1284,8 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12,14,18,24 (Cyrillic)",0x00000000,"sserifer.fon"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12,14,18,24 (Turkish)",0x00000000,"sserifet.fon"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Terminal 8 (VGA res)",0x00000000,"vgaoem.fon"
+; F1 file (icon font card)
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Segoe Fluent Icons (Leeway replacement) (TrueType)",0x00000000,"SegoeIcons.ttf"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","System",0x00000000,"FreeSans"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI",0x00000000,"Selawik"

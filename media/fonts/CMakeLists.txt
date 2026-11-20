@@ -85,6 +85,20 @@ foreach(item ${FONT_FILES})
     add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/${item}" DESTINATION reactos/Fonts FOR all)
 endforeach(item)
 
+# With the Fonts key filled, win32k loads fonts from it and skips the directory scan, so every shipped file needs a value
+file(READ "${REACTOS_SOURCE_DIR}/boot/bootdata/hivesft.inf" _hivesft_inf)
+set(_fonts_missing "")
+foreach(item ${FONT_FILES})
+    string(REPLACE "." "\\." _item_re "${item}")
+    if(NOT _hivesft_inf MATCHES "Fonts\",\"[^\"\r\n]*\",0x00000000,\"${_item_re}\"")
+        list(APPEND _fonts_missing "${item}")
+    endif()
+endforeach()
+if(_fonts_missing)
+    message(FATAL_ERROR "No Fonts registry value in boot/bootdata/hivesft.inf for: ${_fonts_missing}")
+endif()
+unset(_hivesft_inf)
+
 add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansJP/LICENSE.txt"
     DESTINATION reactos NAME_ON_CD NotoSansJP-LICENSE.txt NO_CAB FOR all)
 add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansSC/LICENSE.txt"
