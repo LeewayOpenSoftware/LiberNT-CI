@@ -949,6 +949,7 @@ AlpcpImpersonateMessage(
     NTSTATUS Status;
     PKALPC_SECURITY_DATA Data = NULL;
     PALPC_PORT ClientPort = NULL;
+    PALPC_COMMUNICATION_INFO Info;
     PETHREAD ClientThread;
     SECURITY_CLIENT_CONTEXT ClientContext;
     SECURITY_QUALITY_OF_SERVICE Qos;
@@ -970,14 +971,25 @@ AlpcpImpersonateMessage(
         Data = Message->Attributes.SecurityData;
         InterlockedIncrement(&Data->ReferenceCount);
     }
-    else if (Port->CommunicationInfo && Port->CommunicationInfo->ClientCommunicationPort &&
-             ObReferenceObjectSafe(Port->CommunicationInfo->ClientCommunicationPort))
-    {
-        ClientPort = Port->CommunicationInfo->ClientCommunicationPort;
-        Dynamic = (ClientPort->Flags & ALPC_PORT_FLAG_DYNAMIC_SECURITY) != 0;
-        Qos = ClientPort->SecurityQos;
-    }
     AlpcpReleasePortLock(Port);
+
+    if (!Data)
+    {
+        /* A connection port has no communication information; the message keeps the endpoint */
+        AlpcpAcquireLock();
+        Info = Port->CommunicationInfo;
+        if (!Info) Info = Message->CommunicationInfo;
+        if (!Info && Message->SenderPort) Info = Message->SenderPort->CommunicationInfo;
+        if (!Info && Message->QueuePort) Info = Message->QueuePort->CommunicationInfo;
+        if (Info && Info->ClientCommunicationPort &&
+            ObReferenceObjectSafe(Info->ClientCommunicationPort))
+        {
+            ClientPort = Info->ClientCommunicationPort;
+            Dynamic = (ClientPort->Flags & ALPC_PORT_FLAG_DYNAMIC_SECURITY) != 0;
+            Qos = ClientPort->SecurityQos;
+        }
+        AlpcpReleaseLock();
+    }
 
     if (Data)
     {
