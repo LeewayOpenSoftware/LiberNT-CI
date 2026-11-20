@@ -48,6 +48,8 @@ static const UCHAR KiSiteMarker[6] = { 0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54 };
 #define KSPEC_SITE_ENTER                0x49
 #define KSPEC_SITE_EXIT                 0x58
 #define KSPEC_SITE_RSB                  0x52
+#define KSPEC_SITE_ENTER_PARANOID       0x50
+#define KSPEC_SITE_EXIT_PARANOID        0x70
 
 /* Internal kinds: IBRS written on kernel entry and exit; return stack refill on context switch */
 #define KSPEC_PATCH_IBRS                0x80000000
@@ -63,6 +65,8 @@ static ULONG KiPatchedClear, KiPatchedEnter, KiPatchedExit;
 VOID KiSpecCtrlEnterKernel(VOID);
 VOID KiSpecCtrlExitKernel(VOID);
 VOID KiSpecFillReturnStack(VOID);
+VOID KiSpecCtrlEnterParanoid(VOID);
+VOID KiSpecCtrlExitParanoid(VOID);
 #endif
 
 /* FUNCTIONS *****************************************************************/
@@ -258,7 +262,7 @@ KiPatchImageSites(
     static const UCHAR Call[1] = { 0xE8 };
     PIMAGE_NT_HEADERS NtHeaders = RtlImageNtHeader(ImageBase);
     ULONG i, Entries, Sites = 0, Listed = 0, Stale = 0;
-    ULONG Fence = 0, Clear = 0, Enter = 0, Exit = 0, Refill = 0;
+    ULONG Fence = 0, Clear = 0, Enter = 0, Exit = 0, Refill = 0, Paranoid = 0;
     PULONG Table;
     PUCHAR Code;
 
@@ -306,6 +310,15 @@ KiPatchImageSites(
                 Exit++;
                 break;
 
+            case KSPEC_SITE_ENTER_PARANOID:
+            case KSPEC_SITE_EXIT_PARANOID:
+                if (!(Kinds & KSPEC_PATCH_IBRS)) continue;
+                KiWriteRel32Site(Code, sizeof(Call), Call,
+                                 (Code[6] == KSPEC_SITE_ENTER_PARANOID) ? (PVOID)KiSpecCtrlEnterParanoid :
+                                                                          (PVOID)KiSpecCtrlExitParanoid);
+                Paranoid++;
+                break;
+
             case KSPEC_SITE_RSB:
                 if (!(Kinds & KSPEC_PATCH_RSB)) continue;
                 KiWriteRel32Site(Code, sizeof(Call), Call, (PVOID)KiSpecFillReturnStack);
@@ -320,8 +333,8 @@ KiPatchImageSites(
     }
 
     /* Listed is every site in the sources; a smoke compares it with the patched counts per kind */
-    DPRINT1("Speculation sites at %p: listed %lu, stale %lu, fence %lu, clear %lu, entry %lu, exit %lu, refill %lu\n",
-            ImageBase, Listed, Stale, Fence, Clear, Enter, Exit, Refill);
+    DPRINT1("Speculation sites at %p: listed %lu, stale %lu, fence %lu, clear %lu, entry %lu, exit %lu, refill %lu, paranoid %lu\n",
+            ImageBase, Listed, Stale, Fence, Clear, Enter, Exit, Refill, Paranoid);
     KiPatchedClear += Clear;
     KiPatchedEnter += Enter;
     KiPatchedExit += Exit;

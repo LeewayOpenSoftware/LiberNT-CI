@@ -292,12 +292,12 @@ ENDFUNC
 PUBLIC KiNmiInterrupt
 FUNC KiNmiInterrupt
     /* Push pseudo error code */
-    EnterTrap TF_SAVE_ALL
+    EnterTrap (TF_SAVE_ALL OR TF_SPEC_PARANOID)
 
     call KiNmiInterruptWithEf
 
     /* Return */
-    ExitTrap TF_SAVE_ALL
+    ExitTrap (TF_SAVE_ALL OR TF_SPEC_PARANOID)
 ENDFUNC
 
 
@@ -434,7 +434,7 @@ FUNC KiDoubleFaultAbort
     and rsp, HEX(FFFFFFFFFFFFFFF0)
 
     /* A zero error code is pushed */
-    EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL)
+    EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL OR TF_SPEC_PARANOID)
 
     /* Bugcheck */
     Fatal 8 // EXCEPTION_DOUBLE_FAULT
@@ -813,7 +813,7 @@ ENDFUNC
 PUBLIC KiMcheckAbort
 FUNC KiMcheckAbort
     /* Push pseudo error code */
-    EnterTrap TF_SAVE_ALL
+    EnterTrap (TF_SAVE_ALL OR TF_SPEC_PARANOID)
 
     mov rcx, rbp
     call KiMcheckAbortHandler
