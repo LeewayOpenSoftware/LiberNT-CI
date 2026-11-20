@@ -112,7 +112,9 @@ def build(key, rows, fluent, outdir):
     fb.setupNameTable({
         'copyright': 'Glyphs: Copyright (c) 2020 Microsoft Corporation (Fluent UI System Icons).',
         'familyName': family, 'styleName': 'Regular',
-        'uniqueFontIdentifier': 'LiberNT %s 1.0' % family, 'fullName': family,
+        'uniqueFontIdentifier': 'LiberNT %s 1.0' % family,
+        'fullName': '%s (Leeway replacement)' % family,
+        'description': '%s (Leeway replacement)' % family,
         'version': version, 'psName': psname,
         'vendorURL': 'https://github.com/microsoft/fluentui-system-icons',
         'licenseDescription': 'MIT License',
