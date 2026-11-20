@@ -10,12 +10,16 @@
 
 extern void func_EmbeddedPointers(void);
 extern void func_LocalAuth(void);
+extern void func_ServerIdentity(void);
 extern void func_ServerRestart(void);
+extern void func_TcpListen(void);
 
 const struct test winetest_testlist[] =
 {
     { "EmbeddedPointers", func_EmbeddedPointers },
     { "LocalAuth", func_LocalAuth },
+    { "ServerIdentity", func_ServerIdentity },
     { "ServerRestart", func_ServerRestart },
+    { "TcpListen", func_TcpListen },
     { 0, 0 }
 };

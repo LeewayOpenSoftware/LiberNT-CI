@@ -619,6 +619,15 @@ SECURITY_STATUS SEC_ENTRY ntlm_InitializeSecurityContextW(
             goto isc_end;
         }
         helper->mode = NTLM_CLIENT;
+#ifdef __REACTOS__
+        if (pszTargetName && *pszTargetName)
+        {
+            SIZE_T size = (lstrlenW(pszTargetName) + 1) * sizeof(WCHAR);
+
+            if ((helper->target_name = HeapAlloc(GetProcessHeap(), 0, size)))
+                memcpy(helper->target_name, pszTargetName, size);
+        }
+#endif
 
         if((ret = ntlm_SetContextCredentials(helper, ntlm_cred, pszTargetName)) != SEC_E_OK)
         {
@@ -1196,6 +1205,15 @@ static SECURITY_STATUS SEC_ENTRY ntlm_RevertSecurityContext(PCtxtHandle phContex
  * CreateSignature shouldn't do it. In this case, encrypt_sig can be set to
  * false.
  */
+#ifdef __REACTOS__
+/* The signing and sealing state exists only once the handshake has completed */
+static BOOL ntlm_HasSessionSecurity(PNegoHelper helper)
+{
+    return helper && helper->crypt.ntlm.a4i && helper->crypt.ntlm2.send_sign_key &&
+           helper->crypt.ntlm2.recv_sign_key;
+}
+#endif
+
 static SECURITY_STATUS ntlm_CreateSignature(PNegoHelper helper, PSecBufferDesc pMessage,
         int token_idx, SignDirection direction, BOOL encrypt_sig)
 {
@@ -1350,6 +1368,10 @@ SECURITY_STATUS SEC_ENTRY ntlm_MakeSignature(PCtxtHandle phContext,
 
     helper = (PNegoHelper)phContext->dwLower;
     TRACE("Negotiated flags are: 0x%08x\n", helper->neg_flags);
+#ifdef __REACTOS__
+    if (!ntlm_HasSessionSecurity(helper))
+        return SEC_E_INVALID_HANDLE;
+#endif
 
     return ntlm_CreateSignature(helper, pMessage, token_idx, NTLM_SEND, TRUE);
 }
@@ -1386,6 +1408,10 @@ SECURITY_STATUS SEC_ENTRY ntlm_VerifySignature(PCtxtHandle phContext,
 
     helper = (PNegoHelper)phContext->dwLower;
     TRACE("Negotiated flags: 0x%08x\n", helper->neg_flags);
+#ifdef __REACTOS__
+    if (!ntlm_HasSessionSecurity(helper))
+        return SEC_E_INVALID_HANDLE;
+#endif
 
     local_buff = HeapAlloc(GetProcessHeap(), 0, pMessage->cBuffers * sizeof(SecBuffer));
 
@@ -1477,6 +1503,10 @@ SECURITY_STATUS SEC_ENTRY ntlm_EncryptMessage(PCtxtHandle phContext,
         return SEC_E_BUFFER_TOO_SMALL;
 
     helper = (PNegoHelper) phContext->dwLower;
+#ifdef __REACTOS__
+    if (!ntlm_HasSessionSecurity(helper))
+        return SEC_E_INVALID_HANDLE;
+#endif
 
     if(!(helper->neg_flags & (NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_SEAL)))
         return SEC_E_UNSUPPORTED_FUNCTION;
@@ -1552,6 +1582,10 @@ SECURITY_STATUS SEC_ENTRY ntlm_DecryptMessage(PCtxtHandle phContext,
         return SEC_E_BUFFER_TOO_SMALL;
 
     helper = (PNegoHelper) phContext->dwLower;
+#ifdef __REACTOS__
+    if (!ntlm_HasSessionSecurity(helper))
+        return SEC_E_INVALID_HANDLE;
+#endif
 
     if(!(helper->neg_flags & (NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_SEAL)))
         return SEC_E_UNSUPPORTED_FUNCTION;

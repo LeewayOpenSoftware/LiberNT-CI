@@ -58,6 +58,7 @@ typedef struct _RpcQualityOfService
     LONG refs;
 
     RPC_SECURITY_QOS_V2_W *qos;
+    PSID sid; /* RPC_SECURITY_QOS_V3 Sid: the user the server must run as */
 } RpcQualityOfService;
 
 struct connection_ops;
@@ -78,6 +79,9 @@ typedef struct _RpcConnection
   TimeStamp exp;
   ULONG attr;
   RpcAuthInfo *AuthInfo;
+#ifdef __REACTOS__
+  BOOL auth_complete; /* server: the security context is established, not only started */
+#endif
   ULONG auth_context_id;
   ULONG encryption_auth_len;
   ULONG signature_auth_len;

@@ -6,6 +6,7 @@ add_rpc_files(server
 
 
 list(APPEND SOURCE
+    caller.c
     epmp.c
     irotp.c
     rpcss_main.c
