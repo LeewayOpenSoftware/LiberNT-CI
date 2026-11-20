@@ -458,11 +458,15 @@ static SECURITY_STATUS ntlm_SetContextCredentials(PNegoHelper helper, PNtlmCrede
     if (ntlm_cred->default_credentials)
     {
         if (!ntlm_GetCachedCredential(pszTargetName, &cred))
+        {
+            helper->use_logon_session = TRUE;
             return SEC_E_OK;
+        }
 
         if (!cred->UserName)
         {
             CredFree(cred);
+            helper->use_logon_session = TRUE;
             return SEC_E_OK;
         }
 
