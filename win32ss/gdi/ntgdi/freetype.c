@@ -267,6 +267,11 @@ static LIST_ENTRY g_FontCacheBuckets[FONT_CACHE_BUCKETS];
 static UINT g_FontCacheNumEntries;
 static SIZE_T g_FontCacheBytes;
 
+/* Fonts directory stamp (see IntGetFontsDirectoryStamp) */
+static BOOL IntGetFontsDirectoryStamp(_Out_ PLARGE_INTEGER Stamp);
+static BOOL IntFontsDirectoryChanged(_In_ PLARGE_INTEGER Stamp);
+static VOID IntSaveFontsDirectoryStamp(_In_ PLARGE_INTEGER Stamp);
+
 static inline PLIST_ENTRY
 IntGetFontCacheBucket(DWORD dwHash)
 {
@@ -923,7 +928,7 @@ IntLoadFontSubstList(PLIST_ENTRY pHead)
         }
 
         pInfo = (PKEY_VALUE_FULL_INFORMATION)InfoBuffer;
-        if ((pInfo->Type != REG_SZ && pInfo->Type != REG_EXPAND_SZ) ||
+        if (pInfo->Type != REG_SZ ||    /* Windows uses REG_SZ only */
             pInfo->NameLength == 0 || pInfo->NameLength > MAXUSHORT - sizeof(WCHAR) ||
             pInfo->DataLength > MAXUSHORT - sizeof(WCHAR) ||
             pInfo->DataOffset > Length || pInfo->DataLength > Length - pInfo->DataOffset)
@@ -1092,6 +1097,8 @@ InitFontSupport(VOID)
 {
     ULONG ulError;
     ULONG i;
+    LARGE_INTEGER FontsStamp;
+    BOOL bHaveStamp;
 
     g_FontCacheNumEntries = 0;
     g_FontCacheBytes = 0;
@@ -1118,16 +1125,23 @@ InitFontSupport(VOID)
         DPRINT1("FT_Library_SetLcdFilter failed with error code 0x%x\n", ulError);
     }
 
+    /* Read the stamp before loading: adding fonts writes the registry, not the directory */
+    bHaveStamp = IntGetFontsDirectoryStamp(&FontsStamp);
+
     if (!IntLoadFontsInRegistry())
     {
         /* Load font(s) with writing registry */
         IntLoadSystemFonts();
+        if (bHaveStamp)
+            IntSaveFontsDirectoryStamp(&FontsStamp);
     }
-    else
+    else if (!bHaveStamp || IntFontsDirectoryChanged(&FontsStamp))
     {
-        /* The image may have added fonts since the Fonts key was written:
-           load and register those too */
+        /* Files were added to the Fonts directory since the last boot (a new image
+           over an existing profile): load and register the ones not loaded yet */
         IntLoadSystemFontsEx(TRUE);
+        if (bHaveStamp)
+            IntSaveFontsDirectoryStamp(&FontsStamp);
     }
 
     IntLoadFontSubstList(&g_FontSubstListHead);
@@ -1545,6 +1559,165 @@ FontLink_Chain_Populate(
 
     ASSERT(FontLink_Chain_IsPopulated(pChain));
     return Status;
+}
+
+/*
+ * Fonts directory stamp: a digest of the names of the files in
+ * \SystemRoot\Fonts, kept in HKLM\SOFTWARE\Leeway\Win32k\FontsDirectoryStamp
+ * (not under the Fonts key, whose values are all fonts). Windows never scans
+ * the Fonts directory; we scan it only when its set of files changed since the
+ * last boot (a new image or an update dropped files in), so a font removed
+ * from the Fonts key on purpose stays removed. Names, not the directory time:
+ * FAT does not update a directory's time when an entry is added and stores
+ * local time.
+ */
+static const UNICODE_STRING g_LeewayKeyPath =
+    RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SOFTWARE\\Leeway");
+static const UNICODE_STRING g_Win32kKeyPath =
+    RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SOFTWARE\\Leeway\\Win32k");
+static const UNICODE_STRING g_FontsStampName =
+    RTL_CONSTANT_STRING(L"FontsDirectoryStamp");
+
+/* Order-independent digest of the file names (upcased): the sum of their
+   64-bit FNV-1a hashes plus the file count. One directory pass, no file opened. */
+static BOOL
+IntGetFontsDirectoryStamp(_Out_ PLARGE_INTEGER Stamp)
+{
+    UNICODE_STRING Directory = RTL_CONSTANT_STRING(L"\\SystemRoot\\Fonts");
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK Iosb;
+    PFILE_DIRECTORY_INFORMATION DirInfo;
+    PBYTE DirInfoBuffer;
+    HANDLE hDirectory;
+    NTSTATUS Status;
+    BOOLEAN bRestartScan = TRUE;
+    ULONGLONG ullSum = 0, ullCount = 0, ullHash;
+    ULONG i;
+    WCHAR wch;
+    const ULONG cbBuffer = 0x4000;
+
+    InitializeObjectAttributes(&ObjectAttributes, &Directory,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenFile(&hDirectory, SYNCHRONIZE | FILE_LIST_DIRECTORY, &ObjectAttributes, &Iosb,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        FILE_SYNCHRONOUS_IO_NONALERT | FILE_DIRECTORY_FILE);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    DirInfoBuffer = ExAllocatePoolWithTag(PagedPool, cbBuffer, TAG_FONT);
+    if (!DirInfoBuffer)
+    {
+        ZwClose(hDirectory);
+        return FALSE;
+    }
+
+    for (;;)
+    {
+        Status = ZwQueryDirectoryFile(hDirectory, NULL, NULL, NULL, &Iosb, DirInfoBuffer, cbBuffer,
+                                      FileDirectoryInformation, FALSE, NULL, bRestartScan);
+        bRestartScan = FALSE;
+        if (Status == STATUS_NO_MORE_FILES)
+        {
+            Status = STATUS_SUCCESS;
+            break;
+        }
+        if (!NT_SUCCESS(Status))
+            break;
+
+        DirInfo = (PFILE_DIRECTORY_INFORMATION)DirInfoBuffer;
+        for (;;)
+        {
+            if (!(DirInfo->FileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            {
+                ullHash = 0xCBF29CE484222325ULL;
+                for (i = 0; i < DirInfo->FileNameLength / sizeof(WCHAR); ++i)
+                {
+                    wch = RtlUpcaseUnicodeChar(DirInfo->FileName[i]);
+                    ullHash = (ullHash ^ (wch & 0xFF)) * 0x100000001B3ULL;
+                    ullHash = (ullHash ^ (wch >> 8)) * 0x100000001B3ULL;
+                }
+                ullSum += ullHash;
+                ++ullCount;
+            }
+
+            if (DirInfo->NextEntryOffset == 0)
+                break;
+            DirInfo = (PFILE_DIRECTORY_INFORMATION)((PBYTE)DirInfo + DirInfo->NextEntryOffset);
+        }
+    }
+
+    ExFreePoolWithTag(DirInfoBuffer, TAG_FONT);
+    ZwClose(hDirectory);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    Stamp->QuadPart = (LONGLONG)(ullSum + ullCount * 0x9E3779B97F4A7C15ULL);
+    return TRUE;
+}
+
+/* TRUE when the saved stamp is missing or differs from Stamp */
+static BOOL
+IntFontsDirectoryChanged(_In_ PLARGE_INTEGER Stamp)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE hKey;
+    NTSTATUS Status;
+    ULONG Length;
+    struct
+    {
+        KEY_VALUE_PARTIAL_INFORMATION Info;
+        LARGE_INTEGER Space;
+    } Value;
+    BOOL bChanged = TRUE;
+
+    InitializeObjectAttributes(&ObjectAttributes, (PUNICODE_STRING)&g_Win32kKeyPath,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenKey(&hKey, KEY_QUERY_VALUE, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        return TRUE;
+
+    Status = ZwQueryValueKey(hKey, (PUNICODE_STRING)&g_FontsStampName, KeyValuePartialInformation,
+                             &Value, sizeof(Value), &Length);
+    if (NT_SUCCESS(Status) && Value.Info.Type == REG_QWORD &&
+        Value.Info.DataLength == sizeof(LARGE_INTEGER))
+    {
+        LARGE_INTEGER Saved;
+        RtlCopyMemory(&Saved, Value.Info.Data, sizeof(Saved));
+        bChanged = (Saved.QuadPart != Stamp->QuadPart);
+    }
+    ZwClose(hKey);
+    return bChanged;
+}
+
+static VOID
+IntSaveFontsDirectoryStamp(_In_ PLARGE_INTEGER Stamp)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE hParent, hKey;
+    NTSTATUS Status;
+
+    InitializeObjectAttributes(&ObjectAttributes, (PUNICODE_STRING)&g_LeewayKeyPath,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwCreateKey(&hParent, KEY_CREATE_SUB_KEY, &ObjectAttributes, 0, NULL,
+                         REG_OPTION_NON_VOLATILE, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Cannot create the Leeway key: 0x%08lx\n", Status);
+        return;
+    }
+    ZwClose(hParent);
+
+    InitializeObjectAttributes(&ObjectAttributes, (PUNICODE_STRING)&g_Win32kKeyPath,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwCreateKey(&hKey, KEY_SET_VALUE, &ObjectAttributes, 0, NULL,
+                         REG_OPTION_NON_VOLATILE, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Cannot create the Win32k key: 0x%08lx\n", Status);
+        return;
+    }
+    ZwSetValueKey(hKey, (PUNICODE_STRING)&g_FontsStampName, 0, REG_QWORD, Stamp, sizeof(*Stamp));
+    ZwClose(hKey);
 }
 
 /*
@@ -2548,6 +2721,8 @@ IntGdiAddFontResourceSingle(
             if (QueryStatus != STATUS_OBJECT_NAME_NOT_FOUND)
             {
                 /* The value exists (or cannot be checked): leave it as it is */
+                DPRINT1("Fonts value %wZ kept; %wZ loaded without registering it\n",
+                        &LoadFont.RegValueName, &PathName);
                 ZwClose(KeyHandle);
                 Status = STATUS_OBJECT_NAME_EXISTS;
             }
@@ -4571,6 +4746,10 @@ IntFindGlyphCache(IN const FONT_CACHE_ENTRY *pCache)
     return FontEntry->BitmapGlyph;
 }
 
+/*
+ * The glyph returned is owned by the cache: it stays valid only while the
+ * FreeType lock is held and until the next insert, which may evict it.
+ */
 static FT_BitmapGlyph
 IntGetBitmapGlyphWithCache(
     IN OUT PFONT_CACHE_ENTRY Cache,
