@@ -2517,13 +2517,14 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
                         static const WCHAR szLine2[] = L"Based on LiberNT \x00A9 2026 and ReactOS \x00A9 1996\x2013" L"2026.";
                         HFONT hFont, hOldFont;
                         TEXTMETRICW tm;
-                        int x = MulDiv(8, cxDest, 413), y = MulDiv(42, cxDest, 413);
+                        int x = MulDiv(8, cxDest, 413), y;
 
                         if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0) &&
                             (hFont = CreateFontIndirectW(&ncm.lfMessageFont)))
                         {
                             hOldFont = SelectObject(hdc, hFont);
                             GetTextMetricsW(hdc, &tm);
+                            y = max(0, cyLogoDest - 2 * tm.tmHeight - MulDiv(2, cxDest, 413));
                             SetBkMode(hdc, TRANSPARENT);
                             SetTextColor(hdc, RGB(255, 255, 255));
                             TextOutW(hdc, x, y, szLine1, ARRAYSIZE(szLine1) - 1);
