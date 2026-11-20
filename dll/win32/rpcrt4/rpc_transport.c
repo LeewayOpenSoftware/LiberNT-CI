@@ -517,6 +517,10 @@ static RPC_STATUS rpcrt4_conn_open_pipe(RpcConnection *Connection, LPCSTR pname,
     } else if (err == ERROR_BAD_NETPATH) {
       TRACE("connection failed, error=%x\n", err);
       return RPC_S_SERVER_UNAVAILABLE;
+    } else if (err == ERROR_ACCESS_DENIED) {
+      /* the endpoint's security refuses this client: waiting cannot change that */
+      WARN("connection refused, error=%lx\n", err);
+      return RPC_S_ACCESS_DENIED;
 #endif
     }
     if (!wait || !WaitNamedPipeA(pname, NMPWAIT_WAIT_FOREVER)) {
