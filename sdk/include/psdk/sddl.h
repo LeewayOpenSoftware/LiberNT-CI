@@ -44,6 +44,7 @@ extern "C" {
 #define SDDL_PROTECTED                      TEXT("P")
 #define SDDL_AUTO_INHERIT_REQ               TEXT("AR")
 #define SDDL_AUTO_INHERITED                 TEXT("AI")
+#define SDDL_NULL_ACL                       TEXT("NO_ACCESS_CONTROL")
 
 /*
  * SDDL Rights
