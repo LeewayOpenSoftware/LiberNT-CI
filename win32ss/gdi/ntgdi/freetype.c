@@ -255,10 +255,29 @@ do { \
     ExReleaseFastMutexUnsafeAndLeaveCriticalRegion(g_FreeTypeLock); \
 } while(0)
 
-#define MAX_FONT_CACHE 256
+/* Glyph cache: LRU list plus a hash table. Each size, transform and render mode
+   of a glyph is an entry, so the bound is in entries and in bitmap bytes. */
+#define MAX_FONT_CACHE          4096
+#define MAX_FONT_CACHE_BYTES    (16 * 1024 * 1024)
+#define FONT_CACHE_BUCKET_BITS  10
+#define FONT_CACHE_BUCKETS      (1 << FONT_CACHE_BUCKET_BITS)
 
 static RTL_STATIC_LIST_HEAD(g_FontCacheListHead);
+static LIST_ENTRY g_FontCacheBuckets[FONT_CACHE_BUCKETS];
 static UINT g_FontCacheNumEntries;
+static SIZE_T g_FontCacheBytes;
+
+/* Fonts directory stamp (see IntGetFontsDirectoryStamp) */
+static BOOL IntGetFontsDirectoryStamp(_Out_ PLARGE_INTEGER Stamp);
+static BOOL IntFontsDirectoryChanged(_In_ PLARGE_INTEGER Stamp);
+static VOID IntSaveFontsDirectoryStamp(_In_ PLARGE_INTEGER Stamp);
+
+static inline PLIST_ENTRY
+IntGetFontCacheBucket(DWORD dwHash)
+{
+    /* Fibonacci hashing: the top bits of the product mix every bit of dwHash */
+    return &g_FontCacheBuckets[(dwHash * 0x9E3779B1UL) >> (32 - FONT_CACHE_BUCKET_BITS)];
+}
 
 static PWCHAR g_ElfScripts[32] =   /* These are in the order of the fsCsb[0] bits */
 {
@@ -507,6 +526,9 @@ RemoveCachedEntry(PFONT_CACHE_ENTRY Entry)
 
     FT_Done_Glyph((FT_Glyph)Entry->BitmapGlyph);
     RemoveEntryList(&Entry->ListEntry);
+    RemoveEntryList(&Entry->BucketEntry);
+    ASSERT(g_FontCacheBytes >= Entry->cbBitmap);
+    g_FontCacheBytes -= Entry->cbBitmap;
     ExFreePoolWithTag(Entry, TAG_FONT);
     g_FontCacheNumEntries--;
     ASSERT(g_FontCacheNumEntries <= MAX_FONT_CACHE);
@@ -808,6 +830,23 @@ VOID DumpFontInfo(BOOL bDoLock)
 }
 #endif
 
+/* RtlCreateUnicodeString from a counted string that need not be terminated */
+static BOOLEAN
+IntCreateUnicodeStringFromCounted(_Out_ PUNICODE_STRING Dest, _In_ PCUNICODE_STRING Src)
+{
+    PWSTR pszTemp;
+    BOOLEAN bOK;
+
+    pszTemp = ExAllocatePoolWithTag(PagedPool, Src->Length + sizeof(WCHAR), TAG_FONT);
+    if (!pszTemp)
+        return FALSE;
+    RtlCopyMemory(pszTemp, Src->Buffer, Src->Length);
+    pszTemp[Src->Length / sizeof(WCHAR)] = UNICODE_NULL;
+    bOK = RtlCreateUnicodeString(Dest, pszTemp);
+    ExFreePoolWithTag(pszTemp, TAG_FONT);
+    return bOK;
+}
+
 /*
  * IntLoadFontSubstList --- loads the list of font substitutes
  */
@@ -818,13 +857,14 @@ IntLoadFontSubstList(PLIST_ENTRY pHead)
     HANDLE                          KeyHandle;
     OBJECT_ATTRIBUTES               ObjectAttributes;
     KEY_FULL_INFORMATION            KeyFullInfo;
-    ULONG                           i, Length;
-    UNICODE_STRING                  FromW, ToW;
-    BYTE                            InfoBuffer[128];
+    ULONG                           i, Length, InfoSize;
+    UNICODE_STRING                  FromW, ToW, Name, Data;
+    PBYTE                           InfoBuffer;
     PKEY_VALUE_FULL_INFORMATION     pInfo;
     BYTE                            CharSets[FONTSUBST_FROM_AND_TO];
     LPWSTR                          pch;
     PFONTSUBST_ENTRY                pEntry;
+    BOOL                            bOutOfMemory = FALSE;
 
     /* the FontSubstitutes registry key */
     static UNICODE_STRING FontSubstKey =
@@ -853,50 +893,70 @@ IntLoadFontSubstList(PLIST_ENTRY pHead)
         return FALSE;   /* failure */
     }
 
-    /* for each value */
+    InfoSize = 512;
+    InfoBuffer = ExAllocatePoolWithTag(PagedPool, InfoSize, TAG_FONT);
+    if (!InfoBuffer)
+    {
+        ZwClose(KeyHandle);
+        return FALSE;
+    }
+
+    /* for each value; a value that cannot be used is skipped, not the rest of the list */
     for (i = 0; i < KeyFullInfo.Values; ++i)
     {
-        /* get value name */
+        /* get value name and data */
         Status = ZwEnumerateValueKey(KeyHandle, i, KeyValueFullInformation,
-                                     InfoBuffer, sizeof(InfoBuffer), &Length);
+                                     InfoBuffer, InfoSize, &Length);
+        if ((Status == STATUS_BUFFER_OVERFLOW || Status == STATUS_BUFFER_TOO_SMALL) &&
+            Length > InfoSize && Length <= MAXUSHORT * 2)
+        {
+            ExFreePoolWithTag(InfoBuffer, TAG_FONT);
+            InfoSize = Length;
+            InfoBuffer = ExAllocatePoolWithTag(PagedPool, InfoSize, TAG_FONT);
+            if (!InfoBuffer)
+            {
+                bOutOfMemory = TRUE;
+                break;
+            }
+            Status = ZwEnumerateValueKey(KeyHandle, i, KeyValueFullInformation,
+                                         InfoBuffer, InfoSize, &Length);
+        }
         if (!NT_SUCCESS(Status))
         {
-            DPRINT("ZwEnumerateValueKey failed: 0x%08X\n", Status);
-            break;      /* failure */
+            DPRINT1("FontSubstitutes value %lu skipped: 0x%08X\n", i, Status);
+            continue;
         }
 
-        /* create FromW string */
         pInfo = (PKEY_VALUE_FULL_INFORMATION)InfoBuffer;
-        Length = pInfo->NameLength / sizeof(WCHAR);
-        pInfo->Name[Length] = UNICODE_NULL;   /* truncate */
-        if (!RtlCreateUnicodeString(&FromW, pInfo->Name))
+        if (pInfo->Type != REG_SZ ||    /* Windows uses REG_SZ only */
+            pInfo->NameLength == 0 || pInfo->NameLength > MAXUSHORT - sizeof(WCHAR) ||
+            pInfo->DataLength > MAXUSHORT - sizeof(WCHAR) ||
+            pInfo->DataOffset > Length || pInfo->DataLength > Length - pInfo->DataOffset)
         {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            DPRINT("RtlCreateUnicodeString failed\n");
-            break;      /* failure */
+            DPRINT1("FontSubstitutes value %lu skipped: bad type or size\n", i);
+            continue;
         }
 
-        /* query value */
-        Status = ZwQueryValueKey(KeyHandle, &FromW, KeyValueFullInformation,
-                                 InfoBuffer, sizeof(InfoBuffer), &Length);
-        pInfo = (PKEY_VALUE_FULL_INFORMATION)InfoBuffer;
-        if (!NT_SUCCESS(Status) || !pInfo->DataLength)
-        {
-            DPRINT("ZwQueryValueKey failed: 0x%08X\n", Status);
-            RtlFreeUnicodeString(&FromW);
-            break;      /* failure */
-        }
+        /* counted copies, so nothing is written into InfoBuffer */
+        Name.Buffer = pInfo->Name;
+        Name.Length = Name.MaximumLength = (USHORT)(pInfo->NameLength & ~1);
+        Data.Buffer = (PWCHAR)((PUCHAR)pInfo + pInfo->DataOffset);
+        Data.Length = Data.MaximumLength = (USHORT)(pInfo->DataLength & ~1);
+        while (Data.Length && Data.Buffer[Data.Length / sizeof(WCHAR) - 1] == UNICODE_NULL)
+            Data.Length -= sizeof(WCHAR);
+        if (!Data.Length)
+            continue;
 
-        /* create ToW string */
-        pch = (LPWSTR)((PUCHAR)pInfo + pInfo->DataOffset);
-        Length = pInfo->DataLength / sizeof(WCHAR);
-        pch[Length] = UNICODE_NULL; /* truncate */
-        if (!RtlCreateUnicodeString(&ToW, pch))
+        if (!IntCreateUnicodeStringFromCounted(&FromW, &Name))
         {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            DPRINT("RtlCreateUnicodeString failed\n");
+            bOutOfMemory = TRUE;
+            break;
+        }
+        if (!IntCreateUnicodeStringFromCounted(&ToW, &Data))
+        {
             RtlFreeUnicodeString(&FromW);
-            break;      /* failure */
+            bOutOfMemory = TRUE;
+            break;
         }
 
         /* does charset exist? (from) */
@@ -939,6 +999,7 @@ IntLoadFontSubstList(PLIST_ENTRY pHead)
             DPRINT("ExAllocatePoolWithTag failed\n");
             RtlFreeUnicodeString(&FromW);
             RtlFreeUnicodeString(&ToW);
+            bOutOfMemory = TRUE;
             break;      /* failure */
         }
 
@@ -952,10 +1013,13 @@ IntLoadFontSubstList(PLIST_ENTRY pHead)
         InsertTailList(pHead, &pEntry->ListEntry);
     }
 
+    if (InfoBuffer)
+        ExFreePoolWithTag(InfoBuffer, TAG_FONT);
+
     /* close now */
     ZwClose(KeyHandle);
 
-    return NT_SUCCESS(Status);
+    return !bOutOfMemory;
 }
 
 static NTSTATUS FontLink_AddEntry(LPCWSTR lfFaceName, PZZWSTR pszzFontLink)
@@ -993,12 +1057,16 @@ static void FontLink_DeleteEntries(VOID)
     }
 }
 
+#define FONTLINK_MAX_DATA 0x10000 /* bytes; a SystemLink value is a few hundred WCHARs */
+
 static NTSTATUS FontLink_PopulateEntries(VOID)
 {
     NTSTATUS Status;
     HKEY hKey;
     DWORD cchName, cbData, dwType;
-    WCHAR szName[LF_FACESIZE], szzFontLink[300];
+    WCHAR szName[LF_FACESIZE];
+    PWSTR pszzFontLink, pszzNew;
+    DWORD cbBuffer = 300 * sizeof(WCHAR);
 
     // Open the registry key
     Status = RegOpenKey(
@@ -1007,23 +1075,53 @@ static NTSTATUS FontLink_PopulateEntries(VOID)
     if (!NT_SUCCESS(Status))
         return Status;
 
+    /* Two spare WCHARs after the data for the double NUL */
+    pszzFontLink = ExAllocatePoolWithTag(PagedPool, cbBuffer + 2 * sizeof(WCHAR), TAG_FONT);
+    if (!pszzFontLink)
+    {
+        ZwClose(hKey);
+        return STATUS_NO_MEMORY;
+    }
+
     for (DWORD dwIndex = 0;; ++dwIndex)
     {
         cchName = _countof(szName);
-        cbData = sizeof(szzFontLink);
-        Status = RegEnumValueW(hKey, dwIndex, szName, &cchName, &dwType, szzFontLink, &cbData);
+        cbData = cbBuffer;
+        Status = RegEnumValueW(hKey, dwIndex, szName, &cchName, &dwType, pszzFontLink, &cbData);
+        if (Status == STATUS_BUFFER_OVERFLOW)
+        {
+            /* cchName now holds the name length in bytes */
+            if (cchName / sizeof(WCHAR) >= _countof(szName) || dwType != REG_MULTI_SZ ||
+                cbData > FONTLINK_MAX_DATA)
+            {
+                /* Not a face name, or not a link list: skip it, keep the next ones */
+                DPRINT1("Skipping SystemLink value %lu\n", dwIndex);
+                continue;
+            }
+
+            /* The list is longer than the buffer: grow it and read the value again */
+            pszzNew = ExAllocatePoolWithTag(PagedPool, cbData + 2 * sizeof(WCHAR), TAG_FONT);
+            if (!pszzNew)
+                break;
+            ExFreePoolWithTag(pszzFontLink, TAG_FONT);
+            pszzFontLink = pszzNew;
+            cbBuffer = cbData;
+            --dwIndex;
+            continue;
+        }
         if (!NT_SUCCESS(Status))
             break;
         if (dwType != REG_MULTI_SZ)
             continue;
 
-        // Ensure double-NUL-terminated
-        szzFontLink[_countof(szzFontLink) - 1] = UNICODE_NULL;
-        szzFontLink[_countof(szzFontLink) - 2] = UNICODE_NULL;
+        // Ensure double-NUL-terminated, right after the data
+        pszzFontLink[cbData / sizeof(WCHAR)] = UNICODE_NULL;
+        pszzFontLink[cbData / sizeof(WCHAR) + 1] = UNICODE_NULL;
 
-        FontLink_AddEntry(szName, szzFontLink);
+        FontLink_AddEntry(szName, pszzFontLink);
     }
 
+    ExFreePoolWithTag(pszzFontLink, TAG_FONT);
     ZwClose(hKey); // Close the registry key
     return STATUS_SUCCESS;
 }
@@ -1032,8 +1130,14 @@ BOOL FASTCALL
 InitFontSupport(VOID)
 {
     ULONG ulError;
+    ULONG i;
+    LARGE_INTEGER FontsStamp;
+    BOOL bHaveStamp;
 
     g_FontCacheNumEntries = 0;
+    g_FontCacheBytes = 0;
+    for (i = 0; i < FONT_CACHE_BUCKETS; ++i)
+        InitializeListHead(&g_FontCacheBuckets[i]);
 
     g_FreeTypeLock = ExAllocatePoolWithTag(NonPagedPool, sizeof(FAST_MUTEX), TAG_INTERNAL_SYNC);
     if (g_FreeTypeLock == NULL)
@@ -1055,10 +1159,23 @@ InitFontSupport(VOID)
         DPRINT1("FT_Library_SetLcdFilter failed with error code 0x%x\n", ulError);
     }
 
+    /* Read the stamp before loading: adding fonts writes the registry, not the directory */
+    bHaveStamp = IntGetFontsDirectoryStamp(&FontsStamp);
+
     if (!IntLoadFontsInRegistry())
     {
         /* Load font(s) with writing registry */
         IntLoadSystemFonts();
+        if (bHaveStamp)
+            IntSaveFontsDirectoryStamp(&FontsStamp);
+    }
+    else if (!bHaveStamp || IntFontsDirectoryChanged(&FontsStamp))
+    {
+        /* Files were added to the Fonts directory since the last boot (a new image
+           over an existing profile): load and register the ones not loaded yet */
+        IntLoadSystemFontsEx(TRUE);
+        if (bHaveStamp)
+            IntSaveFontsDirectoryStamp(&FontsStamp);
     }
 
     IntLoadFontSubstList(&g_FontSubstListHead);
@@ -1083,11 +1200,11 @@ FreeFontSupport(VOID)
     PFONTSUBST_ENTRY pSubstEntry;
     PFONT_ENTRY pFontEntry;
 
-    // Free font cache list
+    // Free font cache list (RemoveCachedEntry unlinks the entry from both lists)
     pHead = &g_FontCacheListHead;
     while (!IsListEmpty(pHead))
     {
-        pEntry = RemoveHeadList(pHead);
+        pEntry = pHead->Flink;
         pFontCache = CONTAINING_RECORD(pEntry, FONT_CACHE_ENTRY, ListEntry);
         RemoveCachedEntry(pFontCache);
     }
@@ -1479,12 +1596,220 @@ FontLink_Chain_Populate(
 }
 
 /*
+ * Fonts directory stamp: a digest of the names of the files in
+ * \SystemRoot\Fonts, kept in HKLM\SOFTWARE\Leeway\Win32k\FontsDirectoryStamp
+ * (not under the Fonts key, whose values are all fonts). Windows never scans
+ * the Fonts directory; we scan it only when its set of files changed since the
+ * last boot (a new image or an update dropped files in), so a font removed
+ * from the Fonts key on purpose stays removed. Names, not the directory time:
+ * FAT does not update a directory's time when an entry is added and stores
+ * local time.
+ */
+static const UNICODE_STRING g_LeewayKeyPath =
+    RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SOFTWARE\\Leeway");
+static const UNICODE_STRING g_Win32kKeyPath =
+    RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SOFTWARE\\Leeway\\Win32k");
+static const UNICODE_STRING g_FontsStampName =
+    RTL_CONSTANT_STRING(L"FontsDirectoryStamp");
+
+/* Order-independent digest of the file names (upcased): the sum of their
+   64-bit FNV-1a hashes plus the file count. One directory pass, no file opened. */
+static BOOL
+IntGetFontsDirectoryStamp(_Out_ PLARGE_INTEGER Stamp)
+{
+    UNICODE_STRING Directory = RTL_CONSTANT_STRING(L"\\SystemRoot\\Fonts");
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK Iosb;
+    PFILE_DIRECTORY_INFORMATION DirInfo;
+    PBYTE DirInfoBuffer;
+    HANDLE hDirectory;
+    NTSTATUS Status;
+    BOOLEAN bRestartScan = TRUE;
+    ULONGLONG ullSum = 0, ullCount = 0, ullHash;
+    ULONG i;
+    WCHAR wch;
+    const ULONG cbBuffer = 0x4000;
+
+    InitializeObjectAttributes(&ObjectAttributes, &Directory,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenFile(&hDirectory, SYNCHRONIZE | FILE_LIST_DIRECTORY, &ObjectAttributes, &Iosb,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        FILE_SYNCHRONOUS_IO_NONALERT | FILE_DIRECTORY_FILE);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    DirInfoBuffer = ExAllocatePoolWithTag(PagedPool, cbBuffer, TAG_FONT);
+    if (!DirInfoBuffer)
+    {
+        ZwClose(hDirectory);
+        return FALSE;
+    }
+
+    for (;;)
+    {
+        Status = ZwQueryDirectoryFile(hDirectory, NULL, NULL, NULL, &Iosb, DirInfoBuffer, cbBuffer,
+                                      FileDirectoryInformation, FALSE, NULL, bRestartScan);
+        bRestartScan = FALSE;
+        if (Status == STATUS_NO_MORE_FILES)
+        {
+            Status = STATUS_SUCCESS;
+            break;
+        }
+        if (!NT_SUCCESS(Status))
+            break;
+
+        DirInfo = (PFILE_DIRECTORY_INFORMATION)DirInfoBuffer;
+        for (;;)
+        {
+            if (!(DirInfo->FileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            {
+                ullHash = 0xCBF29CE484222325ULL;
+                for (i = 0; i < DirInfo->FileNameLength / sizeof(WCHAR); ++i)
+                {
+                    wch = RtlUpcaseUnicodeChar(DirInfo->FileName[i]);
+                    ullHash = (ullHash ^ (wch & 0xFF)) * 0x100000001B3ULL;
+                    ullHash = (ullHash ^ (wch >> 8)) * 0x100000001B3ULL;
+                }
+                ullSum += ullHash;
+                ++ullCount;
+            }
+
+            if (DirInfo->NextEntryOffset == 0)
+                break;
+            DirInfo = (PFILE_DIRECTORY_INFORMATION)((PBYTE)DirInfo + DirInfo->NextEntryOffset);
+        }
+    }
+
+    ExFreePoolWithTag(DirInfoBuffer, TAG_FONT);
+    ZwClose(hDirectory);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    Stamp->QuadPart = (LONGLONG)(ullSum + ullCount * 0x9E3779B97F4A7C15ULL);
+    return TRUE;
+}
+
+/* TRUE when the saved stamp is missing or differs from Stamp */
+static BOOL
+IntFontsDirectoryChanged(_In_ PLARGE_INTEGER Stamp)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE hKey;
+    NTSTATUS Status;
+    ULONG Length;
+    struct
+    {
+        KEY_VALUE_PARTIAL_INFORMATION Info;
+        LARGE_INTEGER Space;
+    } Value;
+    BOOL bChanged = TRUE;
+
+    InitializeObjectAttributes(&ObjectAttributes, (PUNICODE_STRING)&g_Win32kKeyPath,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenKey(&hKey, KEY_QUERY_VALUE, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        return TRUE;
+
+    Status = ZwQueryValueKey(hKey, (PUNICODE_STRING)&g_FontsStampName, KeyValuePartialInformation,
+                             &Value, sizeof(Value), &Length);
+    if (NT_SUCCESS(Status) && Value.Info.Type == REG_QWORD &&
+        Value.Info.DataLength == sizeof(LARGE_INTEGER))
+    {
+        LARGE_INTEGER Saved;
+        RtlCopyMemory(&Saved, Value.Info.Data, sizeof(Saved));
+        bChanged = (Saved.QuadPart != Stamp->QuadPart);
+    }
+    ZwClose(hKey);
+    return bChanged;
+}
+
+static VOID
+IntSaveFontsDirectoryStamp(_In_ PLARGE_INTEGER Stamp)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE hParent, hKey;
+    NTSTATUS Status;
+
+    InitializeObjectAttributes(&ObjectAttributes, (PUNICODE_STRING)&g_LeewayKeyPath,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwCreateKey(&hParent, KEY_CREATE_SUB_KEY, &ObjectAttributes, 0, NULL,
+                         REG_OPTION_NON_VOLATILE, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Cannot create the Leeway key: 0x%08lx\n", Status);
+        return;
+    }
+    ZwClose(hParent);
+
+    InitializeObjectAttributes(&ObjectAttributes, (PUNICODE_STRING)&g_Win32kKeyPath,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwCreateKey(&hKey, KEY_SET_VALUE, &ObjectAttributes, 0, NULL,
+                         REG_OPTION_NON_VOLATILE, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Cannot create the Win32k key: 0x%08lx\n", Status);
+        return;
+    }
+    ZwSetValueKey(hKey, (PUNICODE_STRING)&g_FontsStampName, 0, REG_QWORD, Stamp, sizeof(*Stamp));
+    ZwClose(hKey);
+}
+
+/*
+ * IntIsFontFileLoaded
+ *
+ * Whether a global font was loaded from a file of this name (any directory).
+ */
+static BOOL
+IntIsFontFileLoaded(_In_ PCUNICODE_STRING FileTitle)
+{
+    PLIST_ENTRY ListEntry;
+    PFONT_ENTRY FontEntry;
+    UNICODE_STRING EntryTitle;
+    PCWSTR pch;
+    BOOL bFound = FALSE;
+
+    IntLockFreeType();
+    for (ListEntry = g_FontListHead.Flink; ListEntry != &g_FontListHead;
+         ListEntry = ListEntry->Flink)
+    {
+        FontEntry = CONTAINING_RECORD(ListEntry, FONT_ENTRY, ListEntry);
+        if (!FontEntry->Font || !FontEntry->Font->Filename)
+            continue;
+
+        pch = wcsrchr(FontEntry->Font->Filename, L'\\');
+        RtlInitUnicodeString(&EntryTitle, pch ? pch + 1 : FontEntry->Font->Filename);
+        if (RtlEqualUnicodeString(&EntryTitle, FileTitle, TRUE))
+        {
+            bFound = TRUE;
+            break;
+        }
+    }
+    IntUnLockFreeType();
+
+    return bFound;
+}
+
+/*
  * IntLoadSystemFonts
  *
  * Search the system font directory and adds each font found.
  */
 VOID FASTCALL
 IntLoadSystemFonts(VOID)
+{
+    IntLoadSystemFontsEx(FALSE);
+}
+
+/*
+ * IntLoadSystemFontsEx
+ *
+ * Search the system font directory and adds each font found, or with
+ * bOnlyMissing only those not loaded yet (the Fonts key did not list them).
+ * Each font added is written to the Fonts key; with bOnlyMissing an existing
+ * value of the same name is kept.
+ */
+VOID FASTCALL
+IntLoadSystemFontsEx(_In_ BOOL bOnlyMissing)
 {
     OBJECT_ATTRIBUTES ObjectAttributes;
     UNICODE_STRING Directory, FileName, TempString;
@@ -1586,11 +1911,16 @@ IntLoadSystemFonts(VOID)
                 }
 
                 /* If we tried all Ignore patterns and there was no match, try to create a font */
-                if (ign == _countof(IgnoreFiles))
+                if (ign == _countof(IgnoreFiles) &&
+                    !(bOnlyMissing && IntIsFontFileLoaded(&TempString)))
                 {
+                    if (bOnlyMissing)
+                        DPRINT1("Adding font %wZ missing from the Fonts key\n", &TempString);
                     RtlCopyUnicodeString(&FileName, &Directory);
                     RtlAppendUnicodeStringToString(&FileName, &TempString);
-                    if (!IntGdiAddFontResourceEx(&FileName, 1, 0, AFRX_WRITE_REGISTRY))
+                    if (!IntGdiAddFontResourceEx(&FileName, 1, 0,
+                                                 AFRX_WRITE_REGISTRY |
+                                                 (bOnlyMissing ? AFRX_REGISTRY_NO_OVERWRITE : 0)))
                         DPRINT1("ERR: Failed to load %wZ\n", &FileName);
                 }
 
@@ -2414,7 +2744,23 @@ IntGdiAddFontResourceSingle(
         InitializeObjectAttributes(&ObjectAttributes, &g_FontRegPath,
                                    OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
                                    NULL, NULL);
-        Status = ZwOpenKey(&KeyHandle, KEY_WRITE, &ObjectAttributes);
+        Status = ZwOpenKey(&KeyHandle, KEY_READ | KEY_WRITE, &ObjectAttributes);
+        if (NT_SUCCESS(Status) && (dwFlags & AFRX_REGISTRY_NO_OVERWRITE))
+        {
+            KEY_VALUE_BASIC_INFORMATION BasicInfo;
+            ULONG ResultLength;
+            NTSTATUS QueryStatus = ZwQueryValueKey(KeyHandle, &LoadFont.RegValueName,
+                                                   KeyValueBasicInformation, &BasicInfo,
+                                                   sizeof(BasicInfo), &ResultLength);
+            if (QueryStatus != STATUS_OBJECT_NAME_NOT_FOUND)
+            {
+                /* The value exists (or cannot be checked): leave it as it is */
+                DPRINT1("Fonts value %wZ kept; %wZ loaded without registering it\n",
+                        &LoadFont.RegValueName, &PathName);
+                ZwClose(KeyHandle);
+                Status = STATUS_OBJECT_NAME_EXISTS;
+            }
+        }
         if (NT_SUCCESS(Status))
         {
             SIZE_T DataSize;
@@ -4398,17 +4744,18 @@ IntGetHash(IN LPCVOID pv, IN DWORD cdw)
 static FT_BitmapGlyph
 IntFindGlyphCache(IN const FONT_CACHE_ENTRY *pCache)
 {
-    PLIST_ENTRY CurrentEntry;
+    PLIST_ENTRY CurrentEntry, Bucket;
     PFONT_CACHE_ENTRY FontEntry;
     DWORD dwHash = pCache->dwHash;
 
     ASSERT_FREETYPE_LOCK_HELD();
 
-    for (CurrentEntry = g_FontCacheListHead.Flink;
-         CurrentEntry != &g_FontCacheListHead;
+    Bucket = IntGetFontCacheBucket(dwHash);
+    for (CurrentEntry = Bucket->Flink;
+         CurrentEntry != Bucket;
          CurrentEntry = CurrentEntry->Flink)
     {
-        FontEntry = CONTAINING_RECORD(CurrentEntry, FONT_CACHE_ENTRY, ListEntry);
+        FontEntry = CONTAINING_RECORD(CurrentEntry, FONT_CACHE_ENTRY, BucketEntry);
         if (FontEntry->dwHash == dwHash &&
             FontEntry->Hashed.GlyphIndex == pCache->Hashed.GlyphIndex &&
             FontEntry->Hashed.Face == pCache->Hashed.Face &&
@@ -4422,16 +4769,21 @@ IntFindGlyphCache(IN const FONT_CACHE_ENTRY *pCache)
         }
     }
 
-    if (CurrentEntry == &g_FontCacheListHead)
+    if (CurrentEntry == Bucket)
     {
         return NULL;
     }
 
-    RemoveEntryList(CurrentEntry);
-    InsertHeadList(&g_FontCacheListHead, CurrentEntry);
+    /* Most recently used first */
+    RemoveEntryList(&FontEntry->ListEntry);
+    InsertHeadList(&g_FontCacheListHead, &FontEntry->ListEntry);
     return FontEntry->BitmapGlyph;
 }
 
+/*
+ * The glyph returned is owned by the cache: it stays valid only while the
+ * FreeType lock is held and until the next insert, which may evict it.
+ */
 static FT_BitmapGlyph
 IntGetBitmapGlyphWithCache(
     IN OUT PFONT_CACHE_ENTRY Cache,
@@ -4496,12 +4848,21 @@ IntGetBitmapGlyphWithCache(
     NewEntry->BitmapGlyph = BitmapGlyph;
     NewEntry->dwHash = Cache->dwHash;
     NewEntry->Hashed = Cache->Hashed;
+    NewEntry->cbBitmap = (SIZE_T)abs(BitmapGlyph->bitmap.pitch) * BitmapGlyph->bitmap.rows;
 
     InsertHeadList(&g_FontCacheListHead, &NewEntry->ListEntry);
-    if (++g_FontCacheNumEntries > MAX_FONT_CACHE)
+    InsertHeadList(IntGetFontCacheBucket(NewEntry->dwHash), &NewEntry->BucketEntry);
+    g_FontCacheBytes += NewEntry->cbBitmap;
+    ++g_FontCacheNumEntries;
+
+    /* Evict the least recently used entries, never the new one */
+    while (g_FontCacheNumEntries > 1 &&
+           (g_FontCacheNumEntries > MAX_FONT_CACHE || g_FontCacheBytes > MAX_FONT_CACHE_BYTES))
     {
-        NewEntry = CONTAINING_RECORD(g_FontCacheListHead.Blink, FONT_CACHE_ENTRY, ListEntry);
-        RemoveCachedEntry(NewEntry);
+        PFONT_CACHE_ENTRY OldEntry =
+            CONTAINING_RECORD(g_FontCacheListHead.Blink, FONT_CACHE_ENTRY, ListEntry);
+        ASSERT(OldEntry != NewEntry);
+        RemoveCachedEntry(OldEntry);
     }
 
     return BitmapGlyph;

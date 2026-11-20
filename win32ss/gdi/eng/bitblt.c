@@ -1232,7 +1232,9 @@ StandardBltMask(SURFOBJ* psoDest,
     return TRUE;
 }
 
-/* renders an RGB horizontal subpixel alpha mask bitmap */
+/* Renders a horizontal subpixel alpha mask bitmap. The mask holds the coverage of
+   each subpixel from left to right; FontSmoothingOrientation says which colour the
+   leftmost subpixel of the panel is (red for RGB, blue for BGR). */
 static BOOLEAN APIENTRY
 LcdBltMask(SURFOBJ* psoDest,
            SURFOBJ* psoSource, // unused
@@ -1249,6 +1251,7 @@ LcdBltMask(SURFOBJ* psoDest,
     TEXT_BLEND_CONTEXT Blend;
     BYTE *tMask, *lMask;
     BOOL bGrayscale;
+    ULONG iRed, iBlue;
 
     ASSERT(psoSource == NULL);
     ASSERT(pptlSource == NULL);
@@ -1263,14 +1266,25 @@ LcdBltMask(SURFOBJ* psoDest,
     bGrayscale = (psoDest->iBitmapFormat <= BMF_8BPP);
     tMask = (PBYTE)psoMask->pvScan0 + (pptlMask->y * psoMask->lDelta) + pptlMask->x;
 
+    if (gspv.uiFontSmoothingOrientation == FE_FONTSMOOTHINGORIENTATIONBGR)
+    {
+        iRed = 2;
+        iBlue = 0;
+    }
+    else
+    {
+        iRed = 0;
+        iBlue = 2;
+    }
+
     for (j = 0; j < dy; ++j)
     {
         lMask = tMask;
         for (i = 0; i < dx; ++i)
         {
-            BYTE AlphaRed = lMask[0];
+            BYTE AlphaRed = lMask[iRed];
             BYTE AlphaGreen = lMask[1];
-            BYTE AlphaBlue = lMask[2];
+            BYTE AlphaBlue = lMask[iBlue];
 
             if (AlphaRed != 0 || AlphaGreen != 0 || AlphaBlue != 0)
             {

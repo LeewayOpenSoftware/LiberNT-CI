@@ -104,6 +104,7 @@ TEXTOBJ_UnlockText(PLFONT plfnt)
 #define AFRX_WRITE_REGISTRY 0x1
 #define AFRX_ALTERNATIVE_PATH 0x2
 #define AFRX_DOS_DEVICE_PATH 0x4
+#define AFRX_REGISTRY_NO_OVERWRITE 0x8 /* with AFRX_WRITE_REGISTRY: keep a value that exists */
 
 VOID NTAPI LFONT_vCleanup(PVOID ObjectBody);
 PTEXTOBJ FASTCALL RealizeFontInit(HFONT);
@@ -117,6 +118,7 @@ BOOL FASTCALL IntIsFontRenderingEnabled(VOID);
 VOID FASTCALL IntEnableFontRendering(BOOL Enable);
 ULONG FASTCALL FontGetObject(PTEXTOBJ TextObj, ULONG Count, PVOID Buffer);
 VOID FASTCALL IntLoadSystemFonts(VOID);
+VOID FASTCALL IntLoadSystemFontsEx(_In_ BOOL bOnlyMissing);
 BOOL FASTCALL IntLoadFontsInRegistry(VOID);
 VOID FASTCALL IntGdiCleanupPrivateFontsForProcess(VOID);
 INT FASTCALL IntGdiAddFontResourceEx(
