@@ -7,8 +7,7 @@
   fonts (Microsoft Learn, "Segoe MDL2 Assets icons" and "Segoe Fluent Icons
   font").
 - the Fluent UI System Icons fonts (MIT), at the commit and hashes pinned in
-  the script;
-- `../segmdl2.ttx` for the caption buttons (U+E8BB, U+E921-E923, U+EF2C-EF2F).
+  the script.
 
 ```
 git clone https://github.com/microsoft/fluentui-system-icons
@@ -27,7 +26,7 @@ Requires fontTools 4.x. The output is byte-reproducible.
 | name | Windows icon name (Fluent name / MDL2 name when they differ) |
 | source | Fluent UI System Icons base name; empty = not provided yet |
 | style | `regular` or `filled` |
-| match | how the source was chosen: `exact`, `family` (numbered set), `manual`, `partial` (part of the name), `fuzzy` (shared word), `caption`, `none` |
+| match | how the source was chosen: `exact`, `family` (numbered set), `manual`, `partial` (part of the name), `fuzzy` (shared word), `none` |
 
 The 20 px design is used when it exists, then 16, 24, 28, 32, 12, 48 and 10.
 To improve a glyph, edit its row (and set `match` to `manual`), then rerun

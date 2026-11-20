@@ -8,10 +8,6 @@ MIT License (LICENSE-MIT.txt).
   fonts/FluentSystemIcons-Regular.ttf and -Filled.ttf at commit
   6c2c9075cf8952ef48369b2475233b6e9761efed
 
-Caption button glyphs (U+E8BB, U+E921-E923, U+EF2C-EF2F): media/fonts/segmdl2.ttx,
-Copyright (C) 2026 Ahmed ARIF, GPL-3.0-or-later
-(https://www.gnu.org/licenses/gpl-3.0.html).
-
-The combined font is distributed under GPL-3.0-or-later. No Microsoft font
+The font is distributed under the MIT License. No Microsoft font
 file is used; only the family name and the published code point list
 (Microsoft Learn, CC BY 4.0) are reused for compatibility.

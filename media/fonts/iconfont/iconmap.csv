@@ -360,7 +360,7 @@ E8B7,mf,Folder,folder,regular,exact
 E8B8,mf,Webcam,camera,regular,exact
 E8B9,mf,Picture,image,regular,exact
 E8BA,mf,Caption,closed_caption,regular,manual
-E8BB,mf,ChromeClose,,,caption
+E8BB,mf,ChromeClose,dismiss,regular,manual
 E8BC,mf,ShowResults,,,none
 E8BD,mf,Message,chat,regular,exact
 E8BE,mf,Leaf,leaf_one,regular,manual
@@ -453,9 +453,9 @@ E917,f,Clock,clock,regular,exact
 E91B,mf,Photo,image,regular,exact
 E91C,mf,ActionCenter,alert,regular,manual
 E91F,mf,FullCircleMask,circle,regular,fuzzy
-E921,mf,ChromeMinimize,,,caption
-E922,mf,ChromeMaximize,,,caption
-E923,mf,ChromeRestore,,,caption
+E921,mf,ChromeMinimize,subtract,regular,manual
+E922,mf,ChromeMaximize,maximize,regular,manual
+E923,mf,ChromeRestore,square_multiple,regular,manual
 E924,mf,Annotation,note,regular,manual
 E925,mf,BackSpaceQWERTYSm,,,none
 E926,mf,BackSpaceQWERTYMd,,,none
@@ -1052,10 +1052,10 @@ EF18,mf,PointEraseMirrored,eraser,regular,partial
 EF19,mf,ClearAllInkMirrored,inking_tool,regular,partial
 EF1F,mf,BackgroundToggle,color_background,regular,fuzzy
 EF20,mf,Marquee,,,none
-EF2C,mf,ChromeCloseContrast,,,caption
-EF2D,mf,ChromeMinimizeContrast,,,caption
-EF2E,mf,ChromeMaximizeContrast,,,caption
-EF2F,mf,ChromeRestoreContrast,,,caption
+EF2C,mf,ChromeCloseContrast,dismiss,regular,manual
+EF2D,mf,ChromeMinimizeContrast,subtract,regular,manual
+EF2E,mf,ChromeMaximizeContrast,maximize,regular,manual
+EF2F,mf,ChromeRestoreContrast,square_multiple,regular,manual
 EF31,mf,TrafficLight,,,none
 EF3B,mf,Replay,replay,regular,exact
 EF3C,mf,Eyedropper,eyedropper,regular,exact

@@ -3,17 +3,15 @@
 """Build segmdl2.ttf (Segoe MDL2 Assets) and SegoeIcons.ttf (Segoe Fluent Icons).
 
 Glyphs come from Fluent UI System Icons (MIT), placed at the Windows icon-font
-code points listed in iconmap.csv. The caption buttons keep the hand-drawn
-glyphs of ../segmdl2.ttx.
+code points listed in iconmap.csv.
 
 usage: mkiconfont.py FLUENT_FONTS_DIR OUTDIR
 
 FLUENT_FONTS_DIR is fonts/ of the pinned fluentui-system-icons commit.
 """
 import csv, hashlib, json, os, sys
-from fontTools.ttLib import TTFont, newTable
-from fontTools.ttLib.scaleUpem import scale_upem
-from fontTools.ttLib.tables._g_l_y_f import Glyph
+from fontTools.ttLib import TTFont
+from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.pens.transformPen import TransformPen
 
@@ -28,12 +26,12 @@ FLUENT_SHA256 = {
     'FluentSystemIcons-Filled.ttf': '4bca8bf545d00b7a12c226748d78fd483a77fa314c45dbaed1fedd56cb275eaf',
     'FluentSystemIcons-Filled.json': '8dd85fdb51650da93404583c12e0823cae4633bb252b8b2c7d6ea839840af101',
 }
-CAPTION = {0xE8BB: 'close', 0xE921: 'minimize', 0xE922: 'maximize', 0xE923: 'restore',
-           0xEF2C: 'closeHC', 0xEF2D: 'minimizeHC', 0xEF2E: 'maximizeHC', 0xEF2F: 'restoreHC'}
 FONTS = {
     'm': ('segmdl2.ttf', 'Segoe MDL2 Assets', 'SegoeMDL2Assets'),
     'f': ('SegoeIcons.ttf', 'Segoe Fluent Icons', 'SegoeFluentIcons'),
 }
+# 2026-11-20 00:00:00 UTC in seconds since 1904-01-01, for a reproducible head table.
+TIMESTAMP = 3846528000
 
 
 def sha256(path):
@@ -42,20 +40,8 @@ def sha256(path):
 
 
 def load_map():
-    rows = []
     with open(os.path.join(HERE, 'iconmap.csv'), newline='', encoding='utf-8') as f:
-        for r in csv.DictReader(f):
-            if r['codepoint'].startswith('#'):
-                continue
-            rows.append(r)
-    return rows
-
-
-def caption_font():
-    src = TTFont()
-    src.importXML(os.path.join(HERE, '..', 'segmdl2.ttx'))
-    scale_upem(src, UPEM)
-    return src
+        return [r for r in csv.DictReader(f) if not r['codepoint'].startswith('#')]
 
 
 class Fluent:
@@ -80,89 +66,65 @@ class Fluent:
         return pen.glyph()
 
 
-def build(key, rows, fluent, cap, outdir):
+def notdef():
+    pen = TTGlyphPen(None)
+    for (a, b, c, d) in ((256, 0, 1792, 2048), (384, 128, 1664, 1920)):
+        pts = [(a, b), (a, d), (c, d), (c, b)] if a == 256 else [(a, b), (c, b), (c, d), (a, d)]
+        pen.moveTo(pts[0])
+        for p in pts[1:]:
+            pen.lineTo(p)
+        pen.closePath()
+    return pen.glyph()
+
+
+def build(key, rows, fluent, outdir):
     fname, family, psname = FONTS[key]
-    font = caption_font()
     order = ['.notdef', 'space']
-    glyf = font['glyf']
-    hmtx = font['hmtx']
-    glyphs = {'.notdef': glyf['.notdef'], 'space': glyf['space']}
-    metrics = {'.notdef': (UPEM, 0), 'space': (UPEM // 4, 0)}
+    glyphs = {'.notdef': notdef(), 'space': TTGlyphPen(None).glyph()}
     cmap = {0x20: 'space'}
     used = {}
     for r in rows:
-        if key not in r['fonts']:
+        if key not in r['fonts'] or not r['source']:
             continue
         cp = int(r['codepoint'], 16)
-        if cp in CAPTION:
-            n = CAPTION[cp]
-            if n not in glyphs:
-                glyphs[n] = cap['glyf'][n]
-                metrics[n] = (UPEM, cap['hmtx'][n][1])
-                order.append(n)
-            cmap[cp] = n
-            continue
-        if not r['source']:
-            continue
         src = fluent[r['style']].find(r['source'], r['style'])
         if src is None:
             raise SystemExit('missing glyph %s %s for U+%04X' % (r['source'], r['style'], cp))
-        if src not in used:
-            g = fluent[r['style']].draw(src)
+        if (src, r['style']) not in used:
             n = 'uni%04X' % cp
-            used[src] = n
-            glyphs[n] = g
-            g.recalcBounds(None)
-            metrics[n] = (UPEM, getattr(g, 'xMin', 0))
+            used[(src, r['style'])] = n
+            glyphs[n] = fluent[r['style']].draw(src)
             order.append(n)
-        cmap[cp] = used[src]
+        cmap[cp] = used[(src, r['style'])]
 
-    font.setGlyphOrder(order)
-    glyf.glyphs = glyphs
-    glyf.glyphOrder = order
-    hmtx.metrics = metrics
-    for t in list(font.keys()):
-        if t in ('GSUB', 'GPOS', 'kern', 'DSIG', 'hdmx', 'LTSH', 'VDMX'):
-            del font[t]
-    cm = font['cmap']
-    cm.tables = [st for st in cm.tables if st.format == 4]
-    for st in cm.tables:
-        st.cmap = dict(cmap)
-
-    head = font['head']
-    head.unitsPerEm = UPEM
-    head.fontRevision = 1.0
-    head.modified = head.created
-    font.recalcTimestamp = False
-    hhea = font['hhea']
-    hhea.ascent, hhea.descent, hhea.lineGap = UPEM, 0, 0
-    os2 = font['OS/2']
-    os2.sTypoAscender, os2.sTypoDescender, os2.sTypoLineGap = UPEM, 0, 0
-    os2.usWinAscent, os2.usWinDescent = UPEM, 0
-    os2.fsType = 0
-    os2.usFirstCharIndex = min(cmap)
-    os2.usLastCharIndex = max(cmap)
-    os2.xAvgCharWidth = UPEM
-    post = font['post']
-    post.formatType = 3.0
-    post.extraNames = []
-    post.mapping = {}
-
-    name = font['name']
-    name.names = []
+    fb = FontBuilder(UPEM, isTTF=True)
+    fb.setupGlyphOrder(order)
+    fb.setupCharacterMap(cmap)
+    fb.setupGlyf(glyphs)
+    metrics = {}
+    for n in order:
+        g = glyphs[n]
+        g.recalcBounds(fb.font['glyf'])
+        metrics[n] = (UPEM // 4 if n == 'space' else UPEM, getattr(g, 'xMin', 0))
+    fb.setupHorizontalMetrics(metrics)
+    fb.setupHorizontalHeader(ascent=UPEM, descent=0, lineGap=0)
     version = 'Version 1.0; Fluent UI System Icons %s' % FLUENT_COMMIT[:10]
-    for nid, text in (
-        (0, 'Glyphs: Copyright (c) 2020 Microsoft Corporation (Fluent UI System Icons, MIT). '
-            'Caption buttons: Copyright (C) 2026 Ahmed ARIF (GPL-3.0-or-later).'),
-        (1, family), (2, 'Regular'), (3, 'LiberNT %s 1.0' % family), (4, family),
-        (5, version), (6, psname), (11, 'https://github.com/microsoft/fluentui-system-icons'),
-        (13, 'GPL-3.0-or-later; the Fluent UI System Icons glyphs are also available under MIT.'),
-        (14, 'https://www.gnu.org/licenses/gpl-3.0.html'),
-    ):
-        name.setName(text, nid, 3, 1, 0x409)
-        name.setName(text, nid, 1, 0, 0)
-
-    font['maxp'].recalc(font)
+    fb.setupNameTable({
+        'copyright': 'Glyphs: Copyright (c) 2020 Microsoft Corporation (Fluent UI System Icons).',
+        'familyName': family, 'styleName': 'Regular',
+        'uniqueFontIdentifier': 'LiberNT %s 1.0' % family, 'fullName': family,
+        'version': version, 'psName': psname,
+        'vendorURL': 'https://github.com/microsoft/fluentui-system-icons',
+        'licenseDescription': 'MIT License',
+        'licenseInfoURL': 'https://opensource.org/licenses/MIT',
+    })
+    fb.setupOS2(sTypoAscender=UPEM, sTypoDescender=0, sTypoLineGap=0,
+                usWinAscent=UPEM, usWinDescent=0, fsType=0, achVendID='LBNT',
+                xAvgCharWidth=UPEM, ulCodePageRange1=1)
+    fb.setupPost(keepGlyphNames=False)
+    fb.setupHead(unitsPerEm=UPEM, fontRevision=1.0, created=TIMESTAMP, modified=TIMESTAMP)
+    font = fb.font
+    font.recalcTimestamp = False
     out = os.path.join(outdir, fname)
     font.save(out)
     return out, len(cmap) - 1, len(order) - 2
@@ -178,9 +140,8 @@ def main(argv):
                         os.path.join(argv[1], 'FluentSystemIcons-%s.json' % s.title()))
               for s in ('regular', 'filled')}
     rows = load_map()
-    cap = caption_font()
     for key in ('m', 'f'):
-        out, n_cp, n_gl = build(key, rows, fluent, cap, argv[2])
+        out, n_cp, n_gl = build(key, rows, fluent, argv[2])
         print('%s: %d code points, %d glyphs' % (out, n_cp, n_gl))
 
 
