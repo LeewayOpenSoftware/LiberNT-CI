@@ -1894,10 +1894,13 @@ GetPrimaryRect:
             }
         }
 
-        if (sz.cx > (rcScreen.right - rcScreen.left) / 2)
-            sz.cx = (rcScreen.right - rcScreen.left) / 2;
-        if (sz.cy > (rcScreen.bottom - rcScreen.top) / 2)
-            sz.cy = (rcScreen.bottom - rcScreen.top) / 2;
+        /* Size is {width of a vertical bar, height of a horizontal bar}. A width or
+           height of half the screen or more is the length of the other orientation
+           saved as a thickness; fall back to the default instead of a half-screen bar */
+        if (sz.cx >= (rcScreen.right - rcScreen.left) / 2)
+            sz.cx = GetMinimumVerticalWidth();
+        if (sz.cy >= (rcScreen.bottom - rcScreen.top) / 2)
+            sz.cy = GetDefaultTrayHeight();
 
         if (Position == ABE_LEFT || Position == ABE_RIGHT)
         {
@@ -2274,14 +2277,23 @@ GetPrimaryScreenRect:
             }
 
 ChangePos:
-            m_TraySize.cx = rcTray.right - rcTray.left;
-            m_TraySize.cy = rcTray.bottom - rcTray.top;
+            /* Only the thickness of the docked edge is a tray size; the length
+               along the screen edge must not become the other edge's thickness */
+            if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
+                m_TraySize.cy = rcTray.bottom - rcTray.top;
+            else if (m_Position == ABE_LEFT || m_Position == ABE_RIGHT)
+                m_TraySize.cx = rcTray.right - rcTray.left;
+            else
+            {
+                m_TraySize.cx = rcTray.right - rcTray.left;
+                m_TraySize.cy = rcTray.bottom - rcTray.top;
+            }
 
             pwp->flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
             pwp->x = rcTray.left;
             pwp->y = rcTray.top;
-            pwp->cx = m_TraySize.cx;
-            pwp->cy = m_TraySize.cy;
+            pwp->cx = rcTray.right - rcTray.left;
+            pwp->cy = rcTray.bottom - rcTray.top;
         }
     }
 
@@ -2578,6 +2590,12 @@ ChangePos:
         POINT ptTrayNotify = { 0, 0 };
         BOOL Horizontal;
         HDWP dwp;
+
+        /* An unlocked tray gets a sizing strip from WM_NCCALCSIZE when the theme is
+           applied inside WM_CREATE, which sends WM_SIZE before the children exist */
+        if (!m_Rebar || !m_TaskSwitch ||
+            (!m_bSecondary && (!m_StartButton.m_hWnd || !m_TrayNotify)))
+            return;
 
         if (!m_bSecondary)
             m_StartButton.UpdateSize();
@@ -3840,8 +3858,10 @@ ChangePos:
 
             g_TaskbarSettings.sr.Position = m_Position;
             g_TaskbarSettings.sr.Rect = m_TrayRects[m_Position];
-            g_TaskbarSettings.sr.Size.cx = m_TrayRects[m_Position].right - m_TrayRects[m_Position].left;
-            g_TaskbarSettings.sr.Size.cy = m_TrayRects[m_Position].bottom - m_TrayRects[m_Position].top;
+            if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
+                g_TaskbarSettings.sr.Size.cy = m_TrayRects[m_Position].bottom - m_TrayRects[m_Position].top;
+            else
+                g_TaskbarSettings.sr.Size.cx = m_TrayRects[m_Position].right - m_TrayRects[m_Position].left;
             g_TaskbarSettings.Save();
 
             /* Apply clipping */
