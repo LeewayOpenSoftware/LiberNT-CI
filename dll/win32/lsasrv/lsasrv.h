@@ -136,6 +136,9 @@ LsapTerminateLogon(
 NTSTATUS
 StartAuthenticationPort(VOID);
 
+HANDLE
+LsapGetAuthPortHandle(VOID);
+
 BOOL
 LsapIsTrustedClient(
     _In_ HANDLE ProcessHandle);

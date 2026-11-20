@@ -10,6 +10,7 @@
 
 #include <ndk/sefuncs.h>
 #include <ndk/umfuncs.h>
+#include <ndk/lpcfuncs.h>
 
 typedef enum _LSA_TOKEN_INFORMATION_TYPE
 {
@@ -58,7 +59,14 @@ typedef struct _SECPKG_CLIENT_INFO
     BOOLEAN HasTcbPrivilege;
     BOOLEAN Impersonating;
     BOOLEAN Restricted;
+    UCHAR ClientFlags;
+    SECURITY_IMPERSONATION_LEVEL ImpersonationLevel;
+    HANDLE ClientToken;
 } SECPKG_CLIENT_INFO, *PSECPKG_CLIENT_INFO;
+
+/* Must keep the ntsecpkg.h (Windows SDK) layout the packages are built with */
+C_ASSERT(FIELD_OFFSET(SECPKG_CLIENT_INFO, ImpersonationLevel) == 20);
+C_ASSERT(sizeof(SECPKG_CLIENT_INFO) == 24 + sizeof(HANDLE));
 
 typedef NTSTATUS (NTAPI *PLSA_GET_CLIENT_INFO)(PSECPKG_CLIENT_INFO);
 
@@ -504,13 +512,118 @@ LsapCopyFromClientBuffer(IN PLSA_CLIENT_REQUEST ClientRequest,
 }
 
 
+/* The client and its pending request, for the packages' GetClientInfo during one call */
+typedef struct _LSAP_CLIENT_CALL
+{
+    PLSAP_LOGON_CONTEXT LogonContext;
+    PPORT_MESSAGE Message;
+} LSAP_CLIENT_CALL, *PLSAP_CLIENT_CALL;
+
 static
 VOID
 LsapSetClientContext(
-    _In_opt_ PLSAP_LOGON_CONTEXT LogonContext)
+    _In_opt_ PLSAP_CLIENT_CALL Call)
 {
     if (LsapClientTlsIndex != TLS_OUT_OF_INDEXES)
-        TlsSetValue(LsapClientTlsIndex, LogonContext);
+        TlsSetValue(LsapClientTlsIndex, Call);
+}
+
+
+/* Who sent the request. The identity comes from impersonating the ALPC message (what the
+   kernel captured); whether the client thread impersonates, and at what level, from its token. */
+static
+BOOLEAN
+LsapIsRestrictedToken(
+    _In_ HANDLE TokenHandle)
+{
+    ULONG Dummy, Length = 0;
+
+    NtQueryInformationToken(TokenHandle, TokenRestrictedSids, &Dummy, 0, &Length);
+    return Length > FIELD_OFFSET(TOKEN_GROUPS, Groups);
+}
+
+
+static
+VOID
+LsapQueryCaller(
+    _In_ PPORT_MESSAGE Message,
+    _Inout_ PSECPKG_CLIENT_INFO ClientInfo)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    TOKEN_STATISTICS Statistics;
+    HANDLE ThreadHandle, TokenHandle, NoToken = NULL;
+    LUID AnonymousLogonId = ANONYMOUS_LOGON_LUID;
+    BOOLEAN Resolved = FALSE;
+    ULONG Length;
+    NTSTATUS Status;
+
+    ClientInfo->ThreadID = HandleToUlong(Message->ClientId.UniqueThread);
+    ClientInfo->ImpersonationLevel = SecurityImpersonation;
+
+    InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL, NULL);
+    Status = NtOpenThread(&ThreadHandle, THREAD_QUERY_INFORMATION, &ObjectAttributes, &Message->ClientId);
+    if (NT_SUCCESS(Status))
+    {
+        Status = NtOpenThreadToken(ThreadHandle, TOKEN_QUERY, TRUE, &TokenHandle);
+        if (Status == STATUS_CANT_OPEN_ANONYMOUS)
+        {
+            /* An anonymous token can be neither opened nor impersonated through the port */
+            ClientInfo->Impersonating = TRUE;
+            ClientInfo->ImpersonationLevel = SecurityAnonymous;
+            ClientInfo->LogonId = AnonymousLogonId;
+            ClientInfo->Restricted = FALSE;
+            NtClose(ThreadHandle);
+            return;
+        }
+        if (NT_SUCCESS(Status))
+        {
+            if (NT_SUCCESS(NtQueryInformationToken(TokenHandle, TokenStatistics, &Statistics,
+                                                   sizeof(Statistics), &Length)))
+            {
+                ClientInfo->Impersonating = TRUE;
+                ClientInfo->ImpersonationLevel = Statistics.ImpersonationLevel;
+            }
+            else
+            {
+                ClientInfo->Impersonating = TRUE;
+            }
+            NtClose(TokenHandle);
+        }
+        else if (Status != STATUS_NO_TOKEN)
+        {
+            ClientInfo->Impersonating = TRUE;
+        }
+        NtClose(ThreadHandle);
+    }
+    else
+    {
+        ClientInfo->Impersonating = TRUE;
+    }
+
+    Status = NtAlpcImpersonateClientOfPort(LsapGetAuthPortHandle(), Message, NULL);
+    if (NT_SUCCESS(Status))
+    {
+        if (NT_SUCCESS(NtOpenThreadToken(NtCurrentThread(), TOKEN_QUERY, TRUE, &TokenHandle)))
+        {
+            if (NT_SUCCESS(NtQueryInformationToken(TokenHandle, TokenStatistics, &Statistics,
+                                                   sizeof(Statistics), &Length)))
+            {
+                ClientInfo->LogonId = Statistics.AuthenticationId;
+                ClientInfo->Restricted = LsapIsRestrictedToken(TokenHandle);
+                Resolved = TRUE;
+            }
+            NtClose(TokenHandle);
+        }
+        NtSetInformationThread(NtCurrentThread(), ThreadImpersonationToken, &NoToken, sizeof(NoToken));
+    }
+
+    /* The process LogonId stands only for a caller known not to impersonate */
+    if (!Resolved && ClientInfo->Impersonating)
+    {
+        ClientInfo->ImpersonationLevel = SecurityAnonymous;
+        ClientInfo->LogonId = AnonymousLogonId;
+        ClientInfo->Restricted = FALSE;
+    }
 }
 
 
@@ -520,7 +633,8 @@ NTAPI
 LsapGetClientInfo(
     _Out_ PSECPKG_CLIENT_INFO ClientInfo)
 {
-    PLSAP_LOGON_CONTEXT LogonContext = NULL;
+    PLSAP_CLIENT_CALL Call = NULL;
+    PLSAP_LOGON_CONTEXT LogonContext;
     PROCESS_BASIC_INFORMATION ProcessInfo;
     TOKEN_STATISTICS Statistics;
     HANDLE TokenHandle;
@@ -528,10 +642,11 @@ LsapGetClientInfo(
     NTSTATUS Status;
 
     if (LsapClientTlsIndex != TLS_OUT_OF_INDEXES)
-        LogonContext = TlsGetValue(LsapClientTlsIndex);
+        Call = TlsGetValue(LsapClientTlsIndex);
 
-    if (LogonContext == NULL)
+    if (Call == NULL || Call->LogonContext == NULL)
         return STATUS_INVALID_PARAMETER;
+    LogonContext = Call->LogonContext;
 
     RtlZeroMemory(ClientInfo, sizeof(*ClientInfo));
 
@@ -555,11 +670,16 @@ LsapGetClientInfo(
                                          &Length);
         if (NT_SUCCESS(Status))
             ClientInfo->LogonId = Statistics.AuthenticationId;
+        ClientInfo->Restricted = LsapIsRestrictedToken(TokenHandle);
 
         NtClose(TokenHandle);
     }
 
     ClientInfo->HasTcbPrivilege = (BOOLEAN)LsapIsTrustedClient(LogonContext->ClientProcessHandle);
+
+    /* The process token is the fallback; the request's own token wins */
+    if (Call->Message != NULL)
+        LsapQueryCaller(Call->Message, ClientInfo);
 
     return STATUS_SUCCESS;
 }
@@ -662,6 +782,7 @@ NTSTATUS
 LsapCallAuthenticationPackage(PLSA_API_MSG RequestMsg,
                               PLSAP_LOGON_CONTEXT LogonContext)
 {
+    LSAP_CLIENT_CALL Call;
     PAUTH_PACKAGE Package;
     PVOID LocalBuffer = NULL;
     ULONG PackageId;
@@ -702,7 +823,9 @@ LsapCallAuthenticationPackage(PLSA_API_MSG RequestMsg,
         }
     }
 
-    LsapSetClientContext(LogonContext);
+    Call.LogonContext = LogonContext;
+    Call.Message = &RequestMsg->h;
+    LsapSetClientContext(&Call);
 
     if (LogonContext->TrustedCaller)
         Status = Package->LsaApCallPackage((PLSA_CLIENT_REQUEST)LogonContext,
@@ -1911,6 +2034,7 @@ NTSTATUS
 LsapLogonUser(PLSA_API_MSG RequestMsg,
               PLSAP_LOGON_CONTEXT LogonContext)
 {
+    LSAP_CLIENT_CALL Call;
     PAUTH_PACKAGE Package;
     OBJECT_ATTRIBUTES ObjectAttributes;
     SECURITY_QUALITY_OF_SERVICE Qos;
@@ -1990,7 +2114,9 @@ LsapLogonUser(PLSA_API_MSG RequestMsg,
         TRACE("GroupCount: %lu\n", LocalGroups->GroupCount);
     }
 
-    LsapSetClientContext(LogonContext);
+    Call.LogonContext = LogonContext;
+    Call.Message = &RequestMsg->h;
+    LsapSetClientContext(&Call);
 
     if (Package->LsaApLogonUserEx2 != NULL)
     {

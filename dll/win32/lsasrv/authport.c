@@ -159,6 +159,13 @@ LsapCheckLogonProcess(PLSA_API_MSG RequestMsg,
 }
 
 
+HANDLE
+LsapGetAuthPortHandle(VOID)
+{
+    return AuthPortHandle;
+}
+
+
 static NTSTATUS
 LsapHandlePortConnection(PLSA_API_MSG RequestMsg)
 {
