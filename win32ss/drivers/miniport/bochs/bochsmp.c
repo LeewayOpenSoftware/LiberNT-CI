@@ -148,14 +148,14 @@ BochsHasDefaultSettings(VOID)
     ULONG xRes = 0, yRes = 0;
 
     RtlZeroMemory(Table, sizeof(Table));
-    Table[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    Table[0].Flags = RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK;
     Table[0].Name = L"DefaultSettings.XResolution";
     Table[0].EntryContext = &xRes;
-    Table[0].DefaultType = REG_NONE;
-    Table[1].Flags = RTL_QUERY_REGISTRY_DIRECT;
+    Table[0].DefaultType = (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_NONE;
+    Table[1].Flags = RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK;
     Table[1].Name = L"DefaultSettings.YResolution";
     Table[1].EntryContext = &yRes;
-    Table[1].DefaultType = REG_NONE;
+    Table[1].DefaultType = (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_NONE;
 
     if (!NT_SUCCESS(RtlQueryRegistryValues(RTL_REGISTRY_SERVICES,
                                            L"bochsmp\\Device0",
