@@ -263,6 +263,7 @@ TF_HAS_ERROR_CODE       = HEX(40)
 TF_SEND_EOI             = HEX(80)
 //TF_SYSTEMSERVICE        = (TRAPFLAG_VOLATILES or TRAPFLAG_DEBUG)
 TF_CHECKUSERAPC         = HEX(100)
+TF_SPEC_PARANOID        = HEX(200)  /* NMI, #MC, #DF: may interrupt the kernel exit after SPEC_CTRL went back to user */
 
 /*
  * Stack Layout:
@@ -380,6 +381,10 @@ kernel_mode_entry:
 2:
 #endif
     SPEC_SITE HEX(46) /* fence */
+    if ((Flags) AND TF_SPEC_PARANOID)
+        /* Saves SPEC_CTRL in the frame and sets IBRS without trusting gs */
+        SPEC_SITE HEX(50) /* paranoid entry */
+    endif
 
     if ((Flags) AND TF_DEBUG)
         SAVE_DEBUG_REGISTERS rbp, rax
@@ -468,6 +473,9 @@ kernel_mode_return:
 #else
 2:
 #endif
+    if ((Flags) AND TF_SPEC_PARANOID)
+        SPEC_SITE HEX(70) /* paranoid exit */
+    endif
 
     if ((Flags) AND TF_DEBUG)
         RESTORE_DEBUG_REGISTERS rbp, rdx
