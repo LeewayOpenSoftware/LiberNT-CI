@@ -115,6 +115,7 @@ DxgkpSelectDisplayDriver(
  */
 static ULONG g_DisplayDeviceNumber = 0;
 static BOOLEAN g_DisplayInitialModePending;
+static BOOLEAN g_DisplaySettingsSeeded;
 static PVOID g_DisplayWin32kPhysDisp;
 static PVIDEO_WIN32K_CALLOUT g_DisplayWin32kCallout;
 static PEPROCESS g_DisplayWin32kProcess;
@@ -184,6 +185,30 @@ DxgkpRegWriteDword(
                          &Value, sizeof(Value));
 }
 
+static BOOLEAN
+DxgkpRegHasDisplaySettings(
+    _In_ HANDLE KeyHandle)
+{
+    PCWSTR Names[] = {L"DefaultSettings.XResolution", L"DefaultSettings.YResolution"};
+    UCHAR Buffer[sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG)];
+    PKEY_VALUE_PARTIAL_INFORMATION Info = (PKEY_VALUE_PARTIAL_INFORMATION)Buffer;
+    UNICODE_STRING Name;
+    ULONG Index, Length;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Names); ++Index)
+    {
+        RtlInitUnicodeString(&Name, Names[Index]);
+        if (!NT_SUCCESS(ZwQueryValueKey(KeyHandle, &Name, KeyValuePartialInformation,
+                                        Info, sizeof(Buffer), &Length)) ||
+            Info->Type != REG_DWORD || Info->DataLength != sizeof(ULONG) ||
+            *(PULONG)Info->Data == 0)
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
 /* SharedPrimaryMutex is held after publishing a successful VidPN. The bridge
  * is registered before monitor negotiation finishes, so its POST defaults
  * must be replaced once by the first committed native mode. Later mode changes
@@ -207,6 +232,11 @@ DxgkpDisplayPublishInitialMode(
     if (g_DisplayAdapter != Adapter || !g_DisplayInitialModePending ||
         (!Adapter->VidPnCommitted && !Adapter->HeadlessDesktop))
         return;
+    if (!g_DisplaySettingsSeeded)
+    {
+        g_DisplayInitialModePending = FALSE;
+        return;
+    }
     RtlZeroMemory(&Current, sizeof(Current));
     (VOID)KeWaitForSingleObject(&Adapter->VidPnMutex, Executive, KernelMode, FALSE, NULL);
     if (Adapter->VidPn != NULL && ((PDXGKP_VIDPN)Adapter->VidPn)->NumPaths != 0)
@@ -5573,6 +5603,7 @@ DxgkDisplayRegister(
     UNICODE_STRING  KeyName;
     HANDLE          hVideoMap = NULL;
     HANDLE          hDriverKey = NULL;
+    ULONG           Disposition = 0;
     ULONG           DeviceNumber;
     ULONG           ExistingMax;
     BOOLEAN         Adopted = FALSE;
@@ -5673,7 +5704,7 @@ DxgkDisplayRegister(
                                    NULL, NULL);
 
         Status = ZwCreateKey(&hDriverKey, KEY_ALL_ACCESS, &ObjectAttributes,
-                             0, NULL, REG_OPTION_VOLATILE, NULL);
+                             0, NULL, REG_OPTION_NON_VOLATILE, &Disposition);
         if (!NT_SUCCESS(Status))
         {
             DXGKRNL_ERR("DxgkDisplayRegister: ZwCreateKey(%ls) "
@@ -5713,7 +5744,10 @@ DxgkDisplayRegister(
             }
         }
 
-        /* Write default display settings using POST display resolution. */
+        /* Seed the display settings from the POST resolution only when none were saved */
+        g_DisplaySettingsSeeded = (Disposition == REG_CREATED_NEW_KEY ||
+                                   !DxgkpRegHasDisplaySettings(hDriverKey));
+        if (g_DisplaySettingsSeeded)
         {
             ULONG DefW = Adapter->CommittedWidth ? Adapter->CommittedWidth :
                          Adapter->PostDisplayWidth ? Adapter->PostDisplayWidth : 1024;
@@ -5726,11 +5760,11 @@ DxgkDisplayRegister(
             DxgkpRegWriteDword(hDriverKey, L"DefaultSettings.Flags", 0);
             DxgkpRegWriteDword(hDriverKey, L"DefaultSettings.XPanning", 0);
             DxgkpRegWriteDword(hDriverKey, L"DefaultSettings.YPanning", 0);
+            DxgkpRegWriteDword(hDriverKey, L"DefaultSettings.Orientation", 0);
+            DxgkpRegWriteDword(hDriverKey, L"DefaultSettings.FixedOutput", 0);
+            DxgkpRegWriteDword(hDriverKey, L"Attach.RelativeX", 0);
+            DxgkpRegWriteDword(hDriverKey, L"Attach.RelativeY", 0);
         }
-        DxgkpRegWriteDword(hDriverKey, L"DefaultSettings.Orientation", 0);
-        DxgkpRegWriteDword(hDriverKey, L"DefaultSettings.FixedOutput", 0);
-        DxgkpRegWriteDword(hDriverKey, L"Attach.RelativeX", 0);
-        DxgkpRegWriteDword(hDriverKey, L"Attach.RelativeY", 0);
 
         DXGKRNL_TRACE("DxgkDisplayRegister: driver settings key written "
                        "(Device%lu, display=%ls)\n",
