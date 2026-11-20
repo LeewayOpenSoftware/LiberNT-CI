@@ -440,6 +440,7 @@ private:
     void CaptureItemPositions();
     void ApplySavedItemPositions();
     void MoveItemToFreeSlot(INT nItem);
+    void MoveItemsIntoView();
     HRESULT LoadItemPositions(IStream *pStream);
     HRESULT SaveItemPositions(IStream *pStream);
     void FireFolderViewEvent(DISPID dispid);
@@ -2461,6 +2462,8 @@ void CDefView::FinishFillList()
     _DoFolderViewCB(SFVM_LISTREFRESHED, 0, 0);
 
     ApplySavedItemPositions();
+    if (IsDesktop())
+        MoveItemsIntoView();
     ArrangeComputerView();
     if (m_ListView.GetItemCount() > 0 && m_ListView.GetNextItem(-1, LVNI_FOCUSED) < 0)
         m_ListView.SetItemState(0, LVIS_FOCUSED, LVIS_FOCUSED);
@@ -2586,6 +2589,47 @@ void CDefView::MoveItemToFreeSlot(INT nItem)
             m_ListView.SetItemPosition(nItem, &pt);
             return;
         }
+    }
+}
+
+void CDefView::MoveItemsIntoView()
+{
+    if (!m_ListView || GetAutoArrange() == S_OK || IsComputerTileView())
+        return;
+    if (m_FolderSettings.ViewMode != FVM_ICON && m_FolderSettings.ViewMode != FVM_SMALLICON)
+        return;
+
+    RECT rcClient;
+    if (!m_ListView.GetClientRect(&rcClient) || IsRectEmpty(&rcClient))
+        return;
+
+    const INT nCount = m_ListView.GetItemCount();
+    for (INT i = 0; i < nCount; ++i)
+    {
+        RECT rcItem;
+        POINT pt;
+        if (!ListView_GetItemRect(m_ListView, i, &rcItem, LVIR_BOUNDS) ||
+            !ListView_GetItemPosition(m_ListView, i, &pt))
+        {
+            continue;
+        }
+
+        INT dx = 0, dy = 0;
+        if (rcItem.right > rcClient.right)
+            dx = rcClient.right - rcItem.right;
+        if (rcItem.left + dx < rcClient.left)
+            dx = rcClient.left - rcItem.left;
+        if (rcItem.bottom > rcClient.bottom)
+            dy = rcClient.bottom - rcItem.bottom;
+        if (rcItem.top + dy < rcClient.top)
+            dy = rcClient.top - rcItem.top;
+        if (!dx && !dy)
+            continue;
+
+        pt.x += dx;
+        pt.y += dy;
+        m_ListView.SetItemPosition(i, &pt);
+        MoveItemToFreeSlot(i);
     }
 }
 
@@ -3655,6 +3699,8 @@ LRESULT CDefView::OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled
 
     /* Resize the ListView to fit our window */
     ::MoveWindow(m_ListView, 0, 0, wWidth, wHeight, TRUE);
+    if (IsDesktop())
+        MoveItemsIntoView();
     ArrangeComputerView();
 
     _DoFolderViewCB(SFVM_SIZE, 0, 0);
