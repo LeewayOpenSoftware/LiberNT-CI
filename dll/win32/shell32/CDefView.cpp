@@ -452,7 +452,7 @@ private:
     UINT ComputerViewDpi() const;
     SIZED_VIEW_LIST *GetSizedViewImageList(INT cx);
     BOOL EnsureViewIcon(INT index);
-    void EnsureViewIconsForItems();
+    void EnsureViewIconForItem(INT iItem);
     void InvalidateSizedViewIcons();
     void DestroySizedViewImageLists();
     void ApplyViewIconSize();
@@ -4049,12 +4049,14 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
                     return CDRF_SKIPDEFAULT;
                 }
             }
-            else if (lpnmh->hwndFrom == m_ListView && m_ExplorerMaterialActive)
+            else if (lpnmh->hwndFrom == m_ListView && (m_ExplorerMaterialActive || m_SizedCurrent))
             {
                 NMLVCUSTOMDRAW *pDraw = (NMLVCUSTOMDRAW *)lpnmh;
                 if (pDraw->nmcd.dwDrawStage == CDDS_PREPAINT)
                     return CDRF_NOTIFYITEMDRAW;
-                if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT &&
+                if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT && m_SizedCurrent)
+                    EnsureViewIconForItem((INT)pDraw->nmcd.dwItemSpec);
+                if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT && m_ExplorerMaterialActive &&
                     (pDraw->nmcd.uItemState & CDIS_SELECTED) && ::GetFocus() != m_ListView)
                 {
                     const COLORREF Key = m_ExplorerMaterialBack;
@@ -5800,7 +5802,7 @@ StretchIconBitmap(HBITMAP bitmap, INT srcCx, INT srcCy, INT dstCx, INT dstCy, BO
     {
         oldSource = SelectObject(sourceDC, bitmap);
         oldDest = SelectObject(destDC, result);
-        SetStretchBltMode(destDC, isMask ? BLACKONWHITE : HALFTONE);
+        SetStretchBltMode(destDC, isMask ? BLACKONWHITE : (dstCx > srcCx ? COLORONCOLOR : HALFTONE));
         SetBrushOrgEx(destDC, 0, 0, NULL);
         StretchBlt(destDC, 0, 0, dstCx, dstCy, sourceDC, 0, 0, srcCx, srcCy, SRCCOPY);
         SelectObject(destDC, oldDest);
@@ -5941,15 +5943,16 @@ void CDefView::InvalidateSizedViewIcons()
     }
 }
 
-void CDefView::EnsureViewIconsForItems()
+void CDefView::EnsureViewIconForItem(INT iItem)
 {
     LVITEMW item;
 
-    if (!m_SizedCurrent || !m_ListView)
+    if (!m_SizedCurrent || !m_ListView || iItem < 0)
         return;
     item.mask = LVIF_IMAGE;
+    item.iItem = iItem;
     item.iSubItem = 0;
-    for (item.iItem = 0; m_ListView.GetItem(&item); item.iItem++)
+    if (m_ListView.GetItem(&item))
         EnsureViewIcon(item.iImage);
 }
 
@@ -6010,7 +6013,6 @@ void CDefView::ApplyViewIconSize()
                     m_himlView = entry->List;
                     m_himlViewOwned = TRUE;
                     m_SizedCurrent = entry;
-                    EnsureViewIconsForItems();
                 }
             }
             m_himlViewSize = m_IconSize;
