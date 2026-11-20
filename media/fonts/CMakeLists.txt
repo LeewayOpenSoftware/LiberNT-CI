@@ -5,6 +5,18 @@ list(APPEND FONT_FILES
     arialbi.ttf
     ariali.ttf
     ariblk.ttf
+    Caladea-Regular.ttf
+    Caladea-Bold.ttf
+    Caladea-Italic.ttf
+    Caladea-BoldItalic.ttf
+    Carlito-Regular.ttf
+    Carlito-Bold.ttf
+    Carlito-Italic.ttf
+    Carlito-BoldItalic.ttf
+    CascadiaMono-Regular.ttf
+    CascadiaMono-Bold.ttf
+    CascadiaMono-Italic.ttf
+    CascadiaMono-BoldItalic.ttf
     comic.ttf
     comicbd.ttf
     cour.ttf
@@ -82,6 +94,33 @@ foreach(item ${FONT_FILES})
     add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/${item}" DESTINATION reactos/Fonts FOR all)
 endforeach(item)
 
+# With the Fonts key filled, win32k loads fonts from it and skips the directory scan, so every shipped file needs a value
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${REACTOS_SOURCE_DIR}/boot/bootdata/hivesft.inf")
+file(READ "${REACTOS_SOURCE_DIR}/boot/bootdata/hivesft.inf" _hivesft_inf)
+set(_fonts_missing "")
+foreach(item ${FONT_FILES})
+    string(REPLACE "." "\\." _item_re "${item}")
+    if(NOT _hivesft_inf MATCHES "Fonts\",\"[^\"\r\n]*\",0x00000000,\"${_item_re}\"")
+        list(APPEND _fonts_missing "${item}")
+    endif()
+endforeach()
+if(_fonts_missing)
+    message(FATAL_ERROR "No Fonts registry value in boot/bootdata/hivesft.inf for: ${_fonts_missing}")
+endif()
+unset(_hivesft_inf)
+
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/Carlito/OFL.txt"
+    DESTINATION reactos NAME_ON_CD Carlito-LICENSE.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/Carlito/README.txt"
+    DESTINATION reactos NAME_ON_CD Carlito-README.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/Caladea/LICENSE.txt"
+    DESTINATION reactos NAME_ON_CD Caladea-LICENSE.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/Caladea/README.txt"
+    DESTINATION reactos NAME_ON_CD Caladea-README.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/CascadiaMono/OFL.txt"
+    DESTINATION reactos NAME_ON_CD CascadiaMono-LICENSE.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/CascadiaMono/README.txt"
+    DESTINATION reactos NAME_ON_CD CascadiaMono-README.txt NO_CAB FOR all)
 add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansJP/LICENSE.txt"
     DESTINATION reactos NAME_ON_CD NotoSansJP-LICENSE.txt NO_CAB FOR all)
 add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansSC/LICENSE.txt"
