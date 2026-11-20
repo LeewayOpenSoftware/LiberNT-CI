@@ -26,7 +26,15 @@ list(APPEND FONT_FILES
     lucon.ttf
     Marlett.ttf
     micross.ttf
+    NotoSansDevanagari-Regular.ttf
+    NotoSansJP-Bold.otf
     NotoSansJP-Regular.otf
+    NotoSansKR-Bold.otf
+    NotoSansKR-Regular.otf
+    NotoSansSC-Bold.otf
+    NotoSansTC-Bold.otf
+    NotoSansTC-Regular.otf
+    NotoSansThai-Regular.ttf
     NotoSansSC-Regular.otf
     pala.ttf
     palab.ttf
@@ -36,14 +44,14 @@ list(APPEND FONT_FILES
     SourceSansPro-Bold.ttf
     SourceSansPro-BoldIt.ttf
     SourceSansPro-It.ttf
-    #ssee874.fon # to be added (CORE-16165 and CORE-16166)
-    #ssee1255.fon # to be added (CORE-16165 and CORE-16166)
-    #ssee1256.fon # to be added (CORE-16165 and CORE-16166)
-    #ssee1257.fon # to be added (CORE-16165 and CORE-16166)
-    #sserife.fon # to be added (CORE-16165 and CORE-16166)
-    #sserifeg.fon # to be added (CORE-16165 and CORE-16166)
-    #sserifer.fon # to be added (CORE-16165 and CORE-16166)
-    #sserifet.fon # to be added (CORE-16165 and CORE-16166)
+    ssee874.fon
+    ssee1255.fon
+    ssee1256.fon
+    ssee1257.fon
+    sserife.fon
+    sserifeg.fon
+    sserifer.fon
+    sserifet.fon
     segmdl2.ttf
     selawk.ttf
     selawkb.ttf
@@ -66,7 +74,7 @@ list(APPEND FONT_FILES
     verdanaz.ttf
     verdanai.ttf
     verdana.ttf
-    #vgaoem.fon # to be added (CORE-17327)
+    vgaoem.fon
     wingding.ttf)
 
 foreach(item ${FONT_FILES})
@@ -77,3 +85,11 @@ add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansJP/LICENSE.txt"
     DESTINATION reactos NAME_ON_CD NotoSansJP-LICENSE.txt NO_CAB FOR all)
 add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansSC/LICENSE.txt"
     DESTINATION reactos NAME_ON_CD NotoSansSC-LICENSE.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansKR/LICENSE.txt"
+    DESTINATION reactos NAME_ON_CD NotoSansKR-LICENSE.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansTC/LICENSE.txt"
+    DESTINATION reactos NAME_ON_CD NotoSansTC-LICENSE.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansThai/LICENSE.txt"
+    DESTINATION reactos NAME_ON_CD NotoSansThai-LICENSE.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansDevanagari/LICENSE.txt"
+    DESTINATION reactos NAME_ON_CD NotoSansDevanagari-LICENSE.txt NO_CAB FOR all)
