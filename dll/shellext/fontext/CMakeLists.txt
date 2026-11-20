@@ -8,7 +8,9 @@ list(APPEND SOURCE
     CFontCache.cpp
     CFontExt.cpp
     CFontFolderViewCB.cpp
+    CFontIcon.cpp
     fontext.cpp
+    fontmeta.cpp
     fontpidl.cpp
     precomp.h)
 

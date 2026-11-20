@@ -18,6 +18,8 @@ private:
     LARGE_INTEGER m_FileSize;
     FILETIME m_FileWriteTime;
     DWORD m_dwFileAttributes;
+    bool m_MetaRead = false;
+    CFontMeta m_Meta;
 
     void ReadAttrs();
 
@@ -34,6 +36,19 @@ public:
     const LARGE_INTEGER& FileSize();
     const FILETIME& FileWriteTime();
     DWORD FileAttributes();
+
+    CFontMeta& Meta();              // read lazily from the font file
+    CStringW DisplayName() const;   // Name() without the "(TrueType)"/"(OpenType)" suffix
+    CStringW Family();              // family from the file; the display name when unreadable
+};
+
+CStringW FontDisplayName(PCWSTR registryName);
+
+struct FontViewItem
+{
+    bool bFamily;
+    CStringW RegName;   // registry value name (of the representative for a family)
+    CStringW Key;       // family grouping key
 };
 
 class CFontCache
@@ -59,6 +74,11 @@ public:
     CStringW File(size_t Index);
 
     CFontInfo* Find(const FontPidlEntry* fontEntry);
+    CFontInfo* FindByName(PCWSTR registryName);
+    // Items of the root (one per family, plain items for single-style families) or of one family
+    void BuildView(const CStringW* pFamilyKey, CAtlArray<FontViewItem>& items);
+    bool IsHidden(CFontInfo* info);
+    void SetHidden(CFontInfo* info, bool hidden);
     BOOL IsMarkDeleted(size_t Index) const;
     void MarkDeleted(const FontPidlEntry* fontEntry);
     CStringW Filename(CFontInfo* info, bool alwaysFullPath = false);

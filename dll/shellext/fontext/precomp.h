@@ -44,6 +44,7 @@ typedef struct tagINSTALL_FONT_DATA
 
 #include "resource.h"
 #include "fontpidl.hpp"
+#include "fontmeta.hpp"
 #include "CFontCache.hpp"
 #include "CFontExt.hpp"
 #include "CFontFolderViewCB.h"

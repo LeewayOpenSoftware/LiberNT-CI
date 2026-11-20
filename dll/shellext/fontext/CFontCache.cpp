@@ -114,6 +114,134 @@ DWORD CFontInfo::FileAttributes()
     return m_dwFileAttributes;
 }
 
+#define FONT_HIDDEN_KEY L"Software\\Microsoft\\Windows NT\\CurrentVersion\\Font Management\\Hidden"
+
+CStringW FontDisplayName(PCWSTR registryName)
+{
+    CStringW name(registryName);
+    static const PCWSTR suffixes[] = { L" (TrueType)", L" (OpenType)" };
+    for (PCWSTR suffix : suffixes)
+    {
+        int cch = (int)wcslen(suffix);
+        if (name.GetLength() > cch && name.Right(cch).CompareNoCase(suffix) == 0)
+        {
+            name = name.Left(name.GetLength() - cch);
+            break;
+        }
+    }
+    return name;
+}
+
+CStringW CFontInfo::DisplayName() const
+{
+    return FontDisplayName(m_Name);
+}
+
+CFontMeta& CFontInfo::Meta()
+{
+    if (!m_MetaRead)
+    {
+        m_MetaRead = true;
+        CStringW path = g_FontCache->Filename(this, true);
+        if (!path.IsEmpty())
+            ReadFontMeta(path, m_Meta);
+    }
+    return m_Meta;
+}
+
+CStringW CFontInfo::Family()
+{
+    CFontMeta& meta = Meta();
+    return meta.valid ? meta.Family : DisplayName();
+}
+
+CFontInfo* CFontCache::FindByName(PCWSTR registryName)
+{
+    if (m_Fonts.GetSize() == 0)
+        Read();
+
+    for (INT i = 0; i < m_Fonts.GetSize(); ++i)
+    {
+        if (m_Fonts[i].Name().CompareNoCase(registryName) == 0)
+            return &m_Fonts[i];
+    }
+    return nullptr;
+}
+
+void CFontCache::BuildView(const CStringW* pFamilyKey, CAtlArray<FontViewItem>& items)
+{
+    if (m_Fonts.GetSize() == 0)
+        Read();
+
+    INT n = m_Fonts.GetSize();
+    CAtlArray<CStringW> family, label;
+    family.SetCount(n);
+    label.SetCount(n);
+    for (INT i = 0; i < n; ++i)
+    {
+        if (m_Fonts[i].IsMarkDeleted())
+            continue;
+        family[i] = m_Fonts[i].Family();
+        label[i] = m_Fonts[i].DisplayName();
+    }
+
+    for (INT i = 0; i < n; ++i)
+    {
+        if (m_Fonts[i].IsMarkDeleted())
+            continue;
+
+        if (pFamilyKey)
+        {
+            if (family[i].CompareNoCase(*pFamilyKey) == 0)
+            {
+                FontViewItem item = { false, m_Fonts[i].Name(), family[i] };
+                items.Add(item);
+            }
+            continue;
+        }
+
+        INT count = 0, rep = -1;
+        bool seenBefore = false;
+        for (INT j = 0; j < n; ++j)
+        {
+            if (m_Fonts[j].IsMarkDeleted() || family[j].CompareNoCase(family[i]) != 0)
+                continue;
+            ++count;
+            if (j < i)
+                seenBefore = true;
+            if (rep < 0 || label[j].GetLength() < label[rep].GetLength())
+                rep = j;
+        }
+        if (seenBefore)
+            continue;
+
+        FontViewItem item = { count > 1, m_Fonts[count > 1 ? rep : i].Name(), family[i] };
+        items.Add(item);
+    }
+}
+
+bool CFontCache::IsHidden(CFontInfo* info)
+{
+    if (!info)
+        return false;
+    DWORD dwValue = 0, cb = sizeof(dwValue);
+    return RegGetValueW(HKEY_CURRENT_USER, FONT_HIDDEN_KEY, info->Name(), RRF_RT_REG_DWORD, NULL, &dwValue, &cb) ==
+               ERROR_SUCCESS && dwValue != 0;
+}
+
+void CFontCache::SetHidden(CFontInfo* info, bool hidden)
+{
+    if (!info)
+        return;
+    CRegKey key;
+    if (key.Create(HKEY_CURRENT_USER, FONT_HIDDEN_KEY) != ERROR_SUCCESS)
+        return;
+    if (hidden)
+        key.SetDWORDValue(info->Name(), 1);
+    else
+        key.DeleteValue(info->Name());
+}
+
 CFontCache::CFontCache()
 {
 }
