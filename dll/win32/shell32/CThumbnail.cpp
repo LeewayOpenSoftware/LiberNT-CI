@@ -309,6 +309,8 @@ private:
             bPosted = PostMessageW(m_hwnd, m_uMsg, (WPARAM)hbm, (LPARAM)pReq->dwItemID);
         m_bActive = FALSE;
         LeaveCriticalSection(&m_cs);
+        /* Posted: the window owns the bitmap. Not posted (cancelled, stale, no window,
+         * or PostMessage failed because the queue is full or the window is gone): ours to delete. */
         if (!bPosted && hbm)
             DeleteObject(hbm);
     }
