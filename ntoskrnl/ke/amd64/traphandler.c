@@ -355,6 +355,9 @@ KiSystemCallHandler(
         return (PVOID)NtSyscallFailure;
     }
 
+    /* A mispredicted bound check must not index the tables */
+    ServiceNumber &= KiSpeculationIndexMask(ServiceNumber, DescriptorTable->Limit);
+
     /* Get stack bytes and calculate argument count */
     Count = DescriptorTable->Number[ServiceNumber] / 8;
 

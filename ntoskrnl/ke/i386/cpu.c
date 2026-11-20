@@ -372,6 +372,18 @@ KiGetFeatureBits(VOID)
     if (CpuInfo.Ecx & X86_FEATURE_XSAVE) FeatureBits |= KF_XSTATE;
     if (CpuInfo.Ecx & X86_FEATURE_RDRAND) FeatureBits |= KF_RDRAND;
 
+    /* Structured extended features */
+    {
+        INT Leaf7[4];
+
+        __cpuid(Leaf7, 0);
+        if ((ULONG)Leaf7[0] >= 7)
+        {
+            __cpuidex(Leaf7, 7, 0);
+            if (Leaf7[1] & (1 << 7)) FeatureBits |= KF_SMEP;
+        }
+    }
+
     /* Set the current features */
     CpuFeatures = CpuInfo.Edx;
 

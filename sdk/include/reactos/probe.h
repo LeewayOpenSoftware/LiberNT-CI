@@ -27,6 +27,13 @@ static const LARGE_STRING __emptyLargeString = {0, 0, 0, NULL};
 /*
  * NOTE: Alignment of the pointers is not verified!
  */
+/* The kernel turns this into a fence after the bound check when bounds hardening is on */
+#if defined(_NTOSKRNL_) && (defined(_M_IX86) || defined(_M_AMD64))
+#define ProbeSpeculationBarrier() KiSpeculationBarrier()
+#else
+#define ProbeSpeculationBarrier() ((void)0)
+#endif
+
 #if defined(_M_ARM64) && defined(_NTOSKRNL_)
 #define ProbeForWriteGenericType(Ptr, Type) MiArm64ProbeForWriteSmall((PVOID)(Ptr), sizeof(Type))
 #elif defined(_M_ARM64)
@@ -38,6 +45,7 @@ static const LARGE_STRING __emptyLargeString = {0, 0, 0, NULL};
             (ULONG_PTR)(Ptr) + sizeof(Type) - 1 >= (ULONG_PTR)MmUserProbeAddress) { \
             ExRaiseAccessViolation();                                          \
         }                                                                      \
+        ProbeSpeculationBarrier();                                             \
         *(volatile Type *)(Ptr) = *(volatile Type *)(Ptr);                     \
     } while (0)
 #endif
@@ -69,7 +77,7 @@ static const LARGE_STRING __emptyLargeString = {0, 0, 0, NULL};
     (((ULONG_PTR)(Ptr) + sizeof(Type) - 1 < (ULONG_PTR)(Ptr) ||                \
      (ULONG_PTR)(Ptr) + sizeof(Type) - 1 >= (ULONG_PTR)MmUserProbeAddress) ?   \
          ExRaiseAccessViolation(), Default :                     \
-         *(const volatile Type *)(Ptr))
+         (ProbeSpeculationBarrier(), *(const volatile Type *)(Ptr)))
 
 #define ProbeForReadBoolean(Ptr) ProbeForReadGenericType(Ptr, BOOLEAN, FALSE)
 #define ProbeForReadUchar(Ptr) ProbeForReadGenericType(Ptr, UCHAR, 0)

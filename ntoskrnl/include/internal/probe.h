@@ -80,6 +80,7 @@ DefaultSetInfoBufferCheck(
 
     if (Class < ClassListEntries)
     {
+        Class &= KiSpeculationIndexMask(Class, ClassListEntries);
         if (!(ClassList[Class].Flags & ICIF_SET))
         {
             Status = STATUS_INVALID_INFO_CLASS;
@@ -238,6 +239,7 @@ DefaultQueryInfoBufferCheck(
 
     if (Class < ClassListEntries)
     {
+        Class &= KiSpeculationIndexMask(Class, ClassListEntries);
         if (!(ClassList[Class].Flags & ICIF_QUERY))
         {
             Status = STATUS_INVALID_INFO_CLASS;

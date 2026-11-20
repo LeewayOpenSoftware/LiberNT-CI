@@ -353,6 +353,7 @@ if(ARCH STREQUAL "i386")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/i386/kdx86.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/abios.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/cpu.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/specctrl.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/context.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/exp.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/freeze.c
@@ -373,6 +374,7 @@ elseif(ARCH STREQUAL "amd64")
     list(APPEND ASM_SOURCE
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/boot.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/ctxswitch.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/specstub.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/trap.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/usercall_asm.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/zeropage.S)
@@ -382,6 +384,7 @@ elseif(ARCH STREQUAL "amd64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/amd64/kdx64.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/context.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/cpu.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/specctrl.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/except.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/freeze.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/interrupt.c

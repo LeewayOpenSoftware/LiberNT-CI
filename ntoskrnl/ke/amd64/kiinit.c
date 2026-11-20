@@ -399,6 +399,8 @@ KiInitializeKernelMachineDependent(
                    (HvRecommendations & (HV_APIC_ACCESS_RECOMMENDED | HV_X2APIC_MSRS_RECOMMENDED));
     KiRelaxedTiming = (HvRecommendations & HV_RELAXED_TIMING_RECOMMENDED) != 0;
 
+    KiDetectSpeculationFeatures();
+
     /* Set boot-level flags */
     KeI386CpuType = Prcb->CpuType;
     KeI386CpuStep = Prcb->CpuStep;
@@ -580,6 +582,9 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Initialize the CPU features */
     KiInitializeCpu(Pcr);
+
+    /* The boot processor applies it once the policy is read */
+    if (Cpu != 0) KiApplySpeculationControlProcessor();
 
     /* Initial setup for the boot CPU */
     if (Cpu == 0)

@@ -50,6 +50,8 @@ KiSwapProcess(IN PKPROCESS NewProcess,
     /* Update CR3 */
     __writecr3(KPROCESS_DTB0(NewProcess));
 
+    if (NewProcess != OldProcess) KiSpeculationProcessSwitch(NewProcess);
+
     /* Clear GS */
     Ke386SetGs(0);
 

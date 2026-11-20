@@ -12,6 +12,24 @@
 #include <nvs/pool/include/poolva.h>
 #include <nvs/pool/include/poolback.h>
 
+/* Page file slots beyond this would put inverted entries back below the top of memory; 0 means no limit */
+ULONG64 MiSoftPageFileSlotLimit;
+
+/* Called by the speculation policy before memory manager phase 0 */
+BOOLEAN
+NTAPI
+MiEnableSoftPteInversion(
+    _In_ ULONG64 PageFileSlotLimit)
+{
+    /* Inverted and plain entries must never mix */
+    if (MiSoftPteMade)
+        return FALSE;
+
+    MiSoftInvertMask = (MI_PTE)MI_SOFT_INVERT_MASK;
+    MiSoftPageFileSlotLimit = PageFileSlotLimit;
+    return TRUE;
+}
+
 #define MI_BOOT_RESIDENT_POOL_BYTES  (4 * _1MB)
 #define MI_MINIMUM_PHYSICAL_PAGES    ((24 * _1MB) >> PAGE_SHIFT)
 

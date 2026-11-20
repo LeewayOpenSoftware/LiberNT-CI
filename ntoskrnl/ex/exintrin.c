@@ -130,6 +130,7 @@ ProbeForRead(IN CONST VOID *Address,
             /* Raise an access violation */
             ExRaiseAccessViolation();
         }
+        KiSpeculationBarrier();
 
         /* ProbeForRead doesn't check if memory pages are readable! */
     }
@@ -171,6 +172,7 @@ ProbeForWrite(IN PVOID Address,
             /* Raise an access violation */
             ExRaiseAccessViolation();
         }
+        KiSpeculationBarrier();
 
 #ifdef _M_ARM64
         MiArm64ProbeForWrite(Current, Last);

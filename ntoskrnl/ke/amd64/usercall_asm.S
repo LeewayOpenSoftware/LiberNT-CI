@@ -127,11 +127,14 @@ KiUserCallbackExit:
 UserCallbackInstrumentationDone:
     xor edx, edx
 
+    SPEC_SITE HEX(58) /* kernel exit */
+
     /* Load user mode stack (It was copied to the trap frame) */
     mov rsp, [rsp + KTRAP_FRAME_Rsp]
 
     /* Swap gs back to user */
     swapgs
+    SPEC_SITE HEX(4D) /* verw */
 
     /* return to user mode */
     sysretq

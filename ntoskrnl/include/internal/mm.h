@@ -120,6 +120,11 @@ NTAPI
 MiInitializeKernelVaLayout(
     _In_ const LOADER_PARAMETER_BLOCK* LoaderBlock);
 
+BOOLEAN
+NTAPI
+MiEnableSoftPteInversion(
+    _In_ ULONG64 PageFileSlotLimit);
+
 //
 // Pool Quota values
 //

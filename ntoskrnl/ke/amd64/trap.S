@@ -1159,6 +1159,7 @@ PUBLIC KiSystemCallEntry64
 
     /* Allocate a TRAP_FRAME and space for parameters */
     sub rsp, (KTRAP_FRAME_LENGTH + MAX_SYSCALL_PARAM_SIZE)
+    SPEC_SITE HEX(49) /* kernel entry */
 
     /* Save volatile registers and rbp in the trap frame */
     mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rax], rax
@@ -1302,6 +1303,7 @@ NoUserApcPending:
     jnz SystemServiceInstrumented
 
 SystemServiceInstrumentationDone:
+    SPEC_SITE HEX(58) /* kernel exit */
     /* SYSRET is used only for a return address inside the user range */
     mov rdx, rcx
     shr rdx, 47
@@ -1327,6 +1329,7 @@ SystemServiceInstrumentationDone:
     pxor xmm4, xmm4
     pxor xmm5, xmm5
     xor rdx, rdx
+    SPEC_SITE HEX(4D) /* verw */
 
     /* return to user mode */
     sysretq
@@ -1345,6 +1348,7 @@ SystemServiceIretq:
     pxor xmm4, xmm4
     pxor xmm5, xmm5
     xor edx, edx
+    SPEC_SITE HEX(4D) /* verw */
     iretq
 
 SystemServiceInstrumented:
@@ -1417,8 +1421,10 @@ KiPicoSystemCallEntry:
     mov r10, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R10]
     mov r11, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R11]
     mov rbp, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rbp]
+    SPEC_SITE HEX(58) /* kernel exit */
     add rsp, MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip
     swapgs
+    SPEC_SITE HEX(4D) /* verw */
     iretq
 
 .ENDP

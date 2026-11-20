@@ -221,6 +221,7 @@ PUBLIC KiUserThreadStartupExit
 
     /* Load stack of new thread */
     mov rsp, [r8 + KTHREAD_KernelStack]
+    SPEC_SITE HEX(52) /* return stack */
 
     /* User mode can leave any selector in GS; the new thread starts with the flat one */
     mov ax, gs

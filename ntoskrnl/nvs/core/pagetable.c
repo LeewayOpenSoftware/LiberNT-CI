@@ -9,6 +9,9 @@
 
 #include <nvs/include/mm.h>
 
+MI_PTE MiSoftInvertMask;
+BOOLEAN MiSoftPteMade;
+
 FORCEINLINE
 ULONG
 MiPtIndex(const MI_ARCH_DESCRIPTOR *Arch, ULONG64 VirtualAddress, LONG Level)
