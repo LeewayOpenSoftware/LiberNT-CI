@@ -3399,9 +3399,14 @@ static BOOL WINAPI reactos_load_substitutes(INIT_ONCE *once, void *param, void *
         {
             struct reactos_substitute *entry = &reactos_substitutes[reactos_substitutes_count];
 
+            LSTATUS status;
+
             name_len = max_name + 1;
             data_len = max_data;
-            if (RegEnumValueW(key, i, name, &name_len, NULL, &type, (BYTE *)data, &data_len))
+            status = RegEnumValueW(key, i, name, &name_len, NULL, &type, (BYTE *)data, &data_len);
+            if (status == ERROR_MORE_DATA)
+                continue; /* a value grew after the size query; skip it, keep the rest */
+            if (status)
                 break;
             if (type != REG_SZ || !name_len || data_len < sizeof(WCHAR))
                 continue;
@@ -3430,7 +3435,7 @@ static BOOL WINAPI reactos_load_substitutes(INIT_ONCE *once, void *param, void *
 
 static const WCHAR *reactos_family_substitute(const WCHAR *name)
 {
-    /* Used only when the registry key is absent or empty */
+    /* Consulted after the registry: rows the hive does not carry, and the whole set on a system without the key */
     static const struct { const WCHAR *from; const WCHAR *to; } fallback[] =
     {
         { L"Segoe UI", L"Selawik" },
@@ -3455,15 +3460,12 @@ static const WCHAR *reactos_family_substitute(const WCHAR *name)
 
     InitOnceExecuteOnce(&reactos_substitutes_once, reactos_load_substitutes, NULL, NULL);
 
-    if (reactos_substitutes_count)
+    for (i = 0; i < reactos_substitutes_count; i++)
     {
-        for (i = 0; i < reactos_substitutes_count; i++)
-        {
-            if (!wcsicmp(name, reactos_substitutes[i].from)) return reactos_substitutes[i].to;
-        }
-        return NULL;
+        if (!wcsicmp(name, reactos_substitutes[i].from)) return reactos_substitutes[i].to;
     }
 
+    /* Rows the hive does not carry (Cascadia Code, the bare Segoe UI Variable, Fluent Icons) */
     for (i = 0; i < ARRAY_SIZE(fallback); i++)
     {
         if (!wcsicmp(name, fallback[i].from)) return fallback[i].to;

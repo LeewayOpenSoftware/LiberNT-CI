@@ -86,6 +86,7 @@ foreach(item ${FONT_FILES})
 endforeach(item)
 
 # With the Fonts key filled, win32k loads fonts from it and skips the directory scan, so every shipped file needs a value
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${REACTOS_SOURCE_DIR}/boot/bootdata/hivesft.inf")
 file(READ "${REACTOS_SOURCE_DIR}/boot/bootdata/hivesft.inf" _hivesft_inf)
 set(_fonts_missing "")
 foreach(item ${FONT_FILES})
