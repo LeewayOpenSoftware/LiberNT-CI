@@ -15,7 +15,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(shcn);
 static inline void
 NotifyFileSystemChange(LONG wEventId, LPCWSTR path1, LPCWSTR path2)
 {
-    SHChangeNotify(wEventId | SHCNE_INTERRUPT, SHCNF_PATHW | SHCNF_FLUSH, path1, path2);
+    SHChangeNotify(wEventId | SHCNE_INTERRUPT, SHCNF_PATHW | SHCNF_FLUSHNOWAIT, path1, path2);
 }
 
 // The handle of the APC thread
@@ -23,10 +23,6 @@ static HANDLE s_hThreadAPC = NULL;
 
 // Terminate now?
 static BOOL s_fTerminateAllWatchers = FALSE;
-
-// the buffer for ReadDirectoryChangesW
-#define BUFFER_SIZE 0x1000
-static BYTE s_buffer[BUFFER_SIZE];
 
 // The APC thread function for directory watch
 static unsigned __stdcall DirectoryWatcherThreadFuncAPC(void *)
@@ -133,13 +129,13 @@ ConvertActionToEvent(DWORD Action, BOOL fDir)
 // Notify a filesystem notification using pDirectoryWatcher.
 void CDirectoryWatcher::ProcessNotification()
 {
-    PFILE_NOTIFY_INFORMATION pInfo = (PFILE_NOTIFY_INFORMATION)s_buffer;
+    PFILE_NOTIFY_INFORMATION pInfo = (PFILE_NOTIFY_INFORMATION)m_Buffer;
     WCHAR szName[MAX_PATH], szPath[MAX_PATH], szTempPath[MAX_PATH];
     DWORD dwEvent, cbName;
     BOOL fDir;
     TRACE("CDirectoryWatcher::ProcessNotification: enter\n");
 
-    // for each entry in s_buffer
+    // for each entry in m_Buffer
     szPath[0] = szTempPath[0] = 0;
     for (;;)
     {
@@ -239,6 +235,7 @@ void CDirectoryWatcher::ReadCompletion(DWORD dwErrorCode, DWORD dwNumberOfBytesT
     if (dwErrorCode == ERROR_INVALID_FUNCTION)
     {
         ERR("ERROR_INVALID_FUNCTION\n");
+        StopIdle();
         return;
     }
 
@@ -249,6 +246,8 @@ void CDirectoryWatcher::ReadCompletion(DWORD dwErrorCode, DWORD dwNumberOfBytesT
         TRACE("ERROR_OPERATION_ABORTED\n");
         if (IsDead())
             delete this;
+        else
+            StopIdle();
         return;
     }
 
@@ -312,19 +311,29 @@ BOOL CDirectoryWatcher::RestartWatching()
         return FALSE; // the watch is dead
     }
 
+    // The window it watched for is gone: stop watching, but the server still owns
+    // this watcher until it calls QuitWatching
+    if (m_hNotifyWnd && !::IsWindow(m_hNotifyWnd))
+    {
+        m_hNotifyWnd = NULL;
+        StopIdle();
+        return FALSE;
+    }
+
     // initialize the buffer and the overlapped
-    ZeroMemory(s_buffer, sizeof(s_buffer));
+    ZeroMemory(m_Buffer, sizeof(m_Buffer));
     ZeroMemory(&m_overlapped, sizeof(m_overlapped));
     m_overlapped.hEvent = (HANDLE)this;
 
     // start the directory watch
     DWORD dwFilter = GetFilterFromEvents(SHCNE_ALLEVENTS);
-    if (!ReadDirectoryChangesW(m_hDirectory, s_buffer, sizeof(s_buffer),
+    if (!ReadDirectoryChangesW(m_hDirectory, m_Buffer, sizeof(m_Buffer),
                                m_fRecursive, dwFilter, NULL,
                                &m_overlapped, _NotificationCompletion))
     {
         ERR("ReadDirectoryChangesW for '%S' failed (error: %ld)\n",
             m_szDirectoryPath, GetLastError());
+        StopIdle();
         return FALSE; // failure
     }
 
@@ -374,20 +383,34 @@ BOOL CDirectoryWatcher::RequestTermination()
     QueueUserAPC(_RequestAllTerminationAPC, s_hThreadAPC, (ULONG_PTR)NULL);
 }
 
+// No read is in flight any more and none will be issued: release the directory
+// now, and let QuitWatching free the watcher, since no completion will come to do it
+void CDirectoryWatcher::StopIdle()
+{
+    if (m_hDirectory != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(m_hDirectory);
+        m_hDirectory = INVALID_HANDLE_VALUE;
+    }
+    if (m_fDead) // QuitWatching already ran
+        delete this;
+}
+
 void CDirectoryWatcher::QuitWatching()
 {
     m_fDead = TRUE;
     m_hNotifyWnd = NULL;
-    CancelIo(m_hDirectory);
+    if (m_hDirectory == INVALID_HANDLE_VALUE)
+    {
+        delete this; // idle: see StopIdle
+        return;
+    }
+    CancelIo(m_hDirectory); // the completion deletes this
 }
 
+// Dead means the server asked for termination (QuitWatching): only then may the
+// watcher free itself, since the server keeps its pointer until it asks
 BOOL CDirectoryWatcher::IsDead()
 {
-    if (m_hNotifyWnd && !::IsWindow(m_hNotifyWnd))
-    {
-        m_hNotifyWnd = NULL;
-        m_fDead = TRUE;
-        CancelIo(m_hDirectory);
-    }
     return m_fDead;
 }

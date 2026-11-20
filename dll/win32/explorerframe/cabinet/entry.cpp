@@ -56,6 +56,7 @@ Cabinet_OpenWindow(PCIDLIST_ABSOLUTE pidl, PCUITEMID_CHILD select, int showCmd)
     if (!parameters)
         return E_OUTOFMEMORY;
     parameters->directoryPIDL = ILClone(pidl);
-    hr = SHOpenFolderWindow(parameters);
+    hr = SHOpenFolderWindow(parameters); /* the window thread gets its own copy */
+    SHDestroyIETHREADPARAM(parameters);
     return hr;
 }

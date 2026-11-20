@@ -34,8 +34,10 @@ protected:
     BOOL m_fRecursive;
     CDirectoryList m_dir_list;
     OVERLAPPED m_overlapped;
+    DWORD m_Buffer[0x8000 / sizeof(DWORD)];
 
     BOOL CreateAPCThread();
     void ProcessNotification();
+    void StopIdle();
     CDirectoryWatcher(HWND hNotifyWnd, LPCWSTR pszDirectoryPath, BOOL fSubTree);
 };

@@ -140,7 +140,7 @@ HANDLE MakeSharedPacket(IEThreadParamBlock * threadParams, LPCWSTR strPath, int 
     else
     {
         TRACE("pidl80 sent by value = %p\n", pidl80);
-        pidlSize80 = 4;
+        pidlSize80 = sizeof(pidl80);
         sharedBlockSize += pidlSize80;
     }
 
@@ -233,8 +233,25 @@ HANDLE MakeSharedPacket(IEThreadParamBlock * threadParams, LPCWSTR strPath, int 
     return hShared;
 }
 
+/* Clone a pidl only if its terminator lies within the cb bytes it was given */
+static LPITEMIDLIST ClonePacketPidl(PBYTE data, UINT cb)
+{
+    UINT offset = 0;
+    while (cb - offset >= sizeof(USHORT))
+    {
+        USHORT cbItem = *(USHORT UNALIGNED *)(data + offset);
+        if (cbItem == 0)
+            return offset ? ILClone((LPITEMIDLIST)data) : NULL;
+        if (cbItem < sizeof(USHORT) || cbItem > cb - offset)
+            break;
+        offset += cbItem;
+    }
+    return NULL;
+}
+
 PIE_THREAD_PARAM_BLOCK ParseSharedPacket(HANDLE hData)
 {
+    MEMORY_BASIC_INFORMATION mbi;
     HNFBlock * hnfData;
     PBYTE block;
     int pid;
@@ -250,7 +267,17 @@ PIE_THREAD_PARAM_BLOCK ParseSharedPacket(HANDLE hData)
     if (!block)
         goto cleanup2;
 
+    /* cbSize comes from the sender; never read past the view that is really mapped */
+    if (!VirtualQuery(block, &mbi, sizeof(mbi)) ||
+        (SIZE_T)((PBYTE)mbi.BaseAddress + mbi.RegionSize - block) < sizeof(HNFBlock) ||
+        (SIZE_T)((PBYTE)mbi.BaseAddress + mbi.RegionSize - block) < hnfData->cbSize)
+        goto cleanup2;
+
     if (hnfData->cbSize < sizeof(HNFBlock))
+        goto cleanup2;
+
+    if ((ULONGLONG)sizeof(HNFBlock) + hnfData->directoryPidlLength + hnfData->pidlSize7C +
+        hnfData->pidlSize80 + hnfData->pathLength > hnfData->cbSize)
         goto cleanup2;
 
     params = SHCreateIETHREADPARAM(0, hnfData->offset8, 0, 0);
@@ -273,37 +300,26 @@ PIE_THREAD_PARAM_BLOCK ParseSharedPacket(HANDLE hData)
     block += sizeof(*hnfData);
     if (hnfData->directoryPidlLength)
     {
-        LPITEMIDLIST pidl = NULL;
-        if (*block)
-            pidl = ILClone((LPITEMIDLIST) block);
-        params->directoryPIDL = pidl;
+        params->directoryPIDL = ClonePacketPidl(block, hnfData->directoryPidlLength);
 
         block += hnfData->directoryPidlLength;
     }
 
     if (hnfData->pidlSize7C)
     {
-        LPITEMIDLIST pidl = NULL;
-        if (*block)
-            pidl = ILClone((LPITEMIDLIST) block);
-        params->offset7C = pidl;
+        params->offset7C = ClonePacketPidl(block, hnfData->pidlSize7C);
 
-        block += hnfData->pidlSize80;
+        block += hnfData->pidlSize7C;
     }
 
     if (hnfData->pidlSize80)
     {
+        /* MakeSharedPacket sends this pidl by contents unless 0x8000 is set; a pointer
+         * sent by value belongs to the sender's address space and is not usable here */
+        LPITEMIDLIST pidl = NULL;
         if (!(params->offset84 & 0x8000))
-        {
-            params->offset80 = *(LPITEMIDLIST *) block;
-        }
-        else
-        {
-            LPITEMIDLIST pidl = NULL;
-            if (*block)
-                pidl = ILClone((LPITEMIDLIST) block);
-            params->offset80 = pidl;
-        }
+            pidl = ClonePacketPidl(block, hnfData->pidlSize80);
+        params->offset80 = pidl;
 
         block += hnfData->pidlSize80;
     }
@@ -312,6 +328,14 @@ PIE_THREAD_PARAM_BLOCK ParseSharedPacket(HANDLE hData)
     {
         CComPtr<IShellFolder> psfDesktop;
         PWSTR strPath = (PWSTR) block;
+
+        /* The path replaces any pidl sent with it */
+        ILFree(params->directoryPIDL);
+        params->directoryPIDL = NULL;
+
+        if (hnfData->pathLength < sizeof(WCHAR) || (hnfData->pathLength % sizeof(WCHAR)) ||
+            strPath[hnfData->pathLength / sizeof(WCHAR) - 1] != UNICODE_NULL)
+            goto cleanup2;
 
         if (FAILED(SHGetDesktopFolder(&psfDesktop)))
         {
@@ -477,13 +501,14 @@ extern "C" BOOL WINAPI SHOnCWMCommandLine(HANDLE hSharedInfo)
     TRACE("SHOnCWMCommandLine\n");
 
     PIE_THREAD_PARAM_BLOCK params = ParseSharedPacket(hSharedInfo);
+    BOOL ret = FALSE;
 
     if (params)
-        return SHOpenFolderWindow(params);
+        ret = SHOpenFolderWindow(params); /* the window thread gets its own copy */
 
     SHDestroyIETHREADPARAM(params);
 
-    return FALSE;
+    return ret;
 }
 
 /*************************************************************************

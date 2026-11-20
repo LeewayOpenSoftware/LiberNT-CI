@@ -831,6 +831,15 @@ CDefaultContextMenu::AddStaticContextMenusToMenu(
             if (!hide)
                 hide = RegValueExists(hkVerb, L"ProgrammaticAccessOnly");
 
+            // Verbs such as "Open in new tab" only make sense inside an Explorer
+            // file window, which offers SID_SCabinetFrame
+            if (!hide && RegValueExists(hkVerb, L"OnlyInBrowserWindow"))
+            {
+                CComPtr<IOleCommandTarget> pFrame;
+                hide = FAILED(IUnknown_QueryService(m_site, SID_SCabinetFrame,
+                                                    IID_PPV_ARG(IOleCommandTarget, &pFrame)));
+            }
+
             if (!hide && !(uFlags & CMF_DISABLEDVERBS))
                 hide = RegValueExists(hkVerb, L"LegacyDisable");
 
@@ -1126,6 +1135,7 @@ HRESULT CDefaultContextMenu::DoPaste(LPCMINVOKECOMMANDINFOEX lpcmi, BOOL bLink)
             ERR("No drop effect obtained\n");
         }
         GlobalUnlock(medium2.hGlobal);
+        ReleaseStgMedium(&medium2);
     }
 
     if (bLink)
@@ -1282,10 +1292,10 @@ CDefaultContextMenu::DoCreateNewFolder(
     WCHAR wszNewFolder[25];
     HRESULT hr;
 
-    /* Get folder path */
-    hr = SHGetPathFromIDListW(m_pidlFolder, wszPath);
-    if (FAILED_UNEXPECTEDLY(hr))
-        return hr;
+    /* Get folder path; SHGetPathFromIDListW returns a BOOL, and FALSE (a folder
+       with no file system path) would read as S_OK */
+    if (!SHGetPathFromIDListW(m_pidlFolder, wszPath))
+        return E_FAIL;
 
     if (!LoadStringW(shell32_hInstance, IDS_NEWFOLDER, wszNewFolder, _countof(wszNewFolder)))
         return E_FAIL;
@@ -1323,10 +1333,9 @@ CDefaultContextMenu::DoCreateNewFolder(
 
     hr = psv->SelectItem(pidlNewItem, SVSI_DESELECTOTHERS | SVSI_EDIT | SVSI_ENSUREVISIBLE |
                           SVSI_FOCUSED | SVSI_SELECT);
+    SHFree(pidl);
     if (FAILED_UNEXPECTEDLY(hr))
         return hr;
-
-    SHFree(pidl);
 
     return S_OK;
 }

@@ -155,9 +155,11 @@ class CNamespaceTreeControl :
     public CComCoClass<CNamespaceTreeControl, &CLSID_NamespaceTreeControl>,
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
     public INameSpaceTreeControl2,
-    public IOleWindow
+    public IOleWindow,
+    public IObjectWithSite
 {
 private:
+    CComPtr<IUnknown> m_Site; // the host; also the site of the item context menus
     struct RootEntry
     {
         CComPtr<IShellItem> Item;
@@ -209,11 +211,14 @@ private:
     NSTCSTYLE2 m_Style2;
     LONG m_SuppressSelection;
     BOOL m_Destroying;
+    BOOL m_RenamePending; // a label edit was asked for by the Rename command
 
     DWORD GetTreeStyle() const
     {
+        // TVS_EDITLABELS: Rename edits the label in place (TVN_BEGINLABELEDITW only
+        // lets it start from that command)
         DWORD Style = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN |
-                      TVS_DISABLEDRAGDROP;
+                      TVS_DISABLEDRAGDROP | TVS_EDITLABELS;
 
         if (m_Style & NSTCS_HASEXPANDOS)
             Style |= TVS_HASBUTTONS;
@@ -449,6 +454,14 @@ private:
         if (FAILED(hr))
             return hr;
 
+        // Through the host the menu finds its window, which shows verbs such as
+        // "Open in new tab" (OnlyInBrowserWindow) and carries them out
+        IUnknown_SetSite(Menu, m_Site);
+
+        // keep the item: the tree may change while the menu is up
+        CComPtr<IShellItem> Item = Data->Item;
+        BOOL IsRoot = Data->IsRoot;
+
         HMENU Popup = CreatePopupMenu();
         if (!Popup)
             return HRESULT_FROM_WIN32(GetLastError());
@@ -464,20 +477,52 @@ private:
 
             if (Command != 0)
             {
-                CMINVOKECOMMANDINFOEX Info;
+                WCHAR Verb[32];
+                SFGAOF Attributes = SFGAO_FOLDER;
 
-                ZeroMemory(&Info, sizeof(Info));
-                Info.cbSize = sizeof(Info);
-                Info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
-                Info.hwnd = m_hWnd;
-                Info.lpVerbW = MAKEINTRESOURCEW(Command - 1);
-                Info.ptInvoke = Point;
-                Info.nShow = SW_SHOWNORMAL;
-                Menu->InvokeCommand((CMINVOKECOMMANDINFO *)&Info);
+                if (FAILED(Menu->GetCommandString(Command - 1, GCS_VERBW, NULL,
+                                                  reinterpret_cast<LPSTR>(Verb), _countof(Verb))))
+                {
+                    Verb[0] = UNICODE_NULL;
+                }
+
+                if (!_wcsicmp(Verb, L"rename") && !IsRoot)
+                {
+                    // The menu has no shell view to rename in: edit the tree label.
+                    // TreeItem may have gone while the menu was up; EditLabel then
+                    // fails and the flag is cleared, so a later slow click is vetoed.
+                    m_RenamePending = TRUE;
+                    if (!TreeView_EditLabel(m_Tree, TreeItem))
+                        m_RenamePending = FALSE;
+                }
+                else if ((!_wcsicmp(Verb, L"open") || !_wcsicmp(Verb, L"explore")) && Item &&
+                         SUCCEEDED(Item->GetAttributes(SFGAO_FOLDER, &Attributes)) &&
+                         (Attributes & SFGAO_FOLDER))
+                {
+                    // Opening a folder from the pane shows it in this window, as a click does
+                    NotifyItemClick(Item, NSTCEHT_ONITEMLABEL, NSTCECT_LBUTTON);
+                }
+                else
+                {
+                    CMINVOKECOMMANDINFOEX Info;
+
+                    ZeroMemory(&Info, sizeof(Info));
+                    Info.cbSize = sizeof(Info);
+                    Info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
+                    Info.hwnd = m_hWnd;
+                    // A command offset goes in lpVerb: IContextMenu implementations read
+                    // lpVerbW only for a string verb (CDefaultContextMenu::InvokeCommand)
+                    Info.lpVerb = MAKEINTRESOURCEA(Command - 1);
+                    Info.lpVerbW = MAKEINTRESOURCEW(Command - 1);
+                    Info.ptInvoke = Point;
+                    Info.nShow = SW_SHOWNORMAL;
+                    Menu->InvokeCommand((CMINVOKECOMMANDINFO *)&Info);
+                }
             }
         }
 
         DestroyMenu(Popup);
+        IUnknown_SetSite(Menu, NULL);
         return hr;
     }
 
@@ -663,6 +708,60 @@ private:
                 TreeView_SortChildren(m_Tree, Parent, FALSE);
         }
         return FAILED(hr) ? hr : S_OK;
+    }
+
+    // Rename the item of a tree label edit. On success the label is set from the
+    // renamed item's display name (which may differ from what was typed, such as a
+    // hidden extension), so the edit control's text is never kept: always FALSE.
+    BOOL RenameTreeItem(HTREEITEM TreeItem, PCWSTR NewName)
+    {
+        TreeItemData *Data = GetTreeItemData(TreeItem);
+        CComPtr<IShellFolder> Folder;
+        PCUITEMID_CHILD Child = NULL;
+        PITEMID_CHILD NewChild = NULL;
+
+        if (!Data || !Data->Pidl || !NewName || !*NewName)
+            return FALSE;
+        if (FAILED(SHBindToParent(Data->Pidl, IID_PPV_ARG(IShellFolder, &Folder), &Child)) || !Child)
+            return FALSE;
+        // SetNameOf reports its own errors to the user
+        if (FAILED(Folder->SetNameOf(m_hWnd, Child, NewName, SHGDN_INFOLDER, &NewChild)))
+            return FALSE;
+
+        if (NewChild)
+        {
+            PIDLIST_ABSOLUTE Parent = ILClone(Data->Pidl);
+            if (Parent && ILRemoveLastID(Parent))
+            {
+                PIDLIST_ABSOLUTE NewPidl = ILCombine(Parent, NewChild);
+                if (NewPidl)
+                {
+                    CComPtr<IShellItem> NewItem;
+                    if (SUCCEEDED(SHCreateItemFromIDList(NewPidl, IID_PPV_ARG(IShellItem, &NewItem))))
+                        Data->Item = NewItem;
+                    Data->Pidl.Free();
+                    Data->Pidl.Attach(NewPidl);
+                }
+            }
+            ILFree(Parent);
+            ILFree(NewChild);
+        }
+
+        // Show the name the folder now reports, as the label was made on insert
+        CComHeapPtr<WCHAR> DisplayName;
+        if (Data->Item && SUCCEEDED(Data->Item->GetDisplayName(SIGDN_NORMALDISPLAY, &DisplayName)))
+        {
+            TVITEMW TreeItemInfo = {};
+            TreeItemInfo.mask = TVIF_TEXT;
+            TreeItemInfo.hItem = TreeItem;
+            TreeItemInfo.pszText = DisplayName;
+            TreeView_SetItem(m_Tree, &TreeItemInfo);
+        }
+
+        // The children were built from the old path: enumerate them again on expand
+        TreeView_Expand(m_Tree, TreeItem, TVE_COLLAPSE | TVE_COLLAPSERESET);
+        Data->Enumerated = FALSE;
+        return FALSE;
     }
 
     HRESULT PopulateTreeItem(HTREEITEM TreeItem)
@@ -1052,6 +1151,27 @@ private:
                 break;
             }
 
+            case TVN_BEGINLABELEDITW:
+            {
+                // Only the Rename command edits a label, and only of an item that can be renamed
+                NMTVDISPINFOW *Info = reinterpret_cast<NMTVDISPINFOW *>(lParam);
+                TreeItemData *Data = GetTreeItemData(Info->item.hItem);
+                SFGAOF Attributes = SFGAO_CANRENAME;
+                BOOL Allow = m_RenamePending && Data && Data->Item && !Data->IsRoot &&
+                             SUCCEEDED(Data->Item->GetAttributes(SFGAO_CANRENAME, &Attributes)) &&
+                             (Attributes & SFGAO_CANRENAME);
+                m_RenamePending = FALSE;
+                return !Allow;
+            }
+
+            case TVN_ENDLABELEDITW:
+            {
+                NMTVDISPINFOW *Info = reinterpret_cast<NMTVDISPINFOW *>(lParam);
+                if (!Info->item.pszText)
+                    return FALSE; // cancelled
+                return RenameTreeItem(Info->item.hItem, Info->item.pszText);
+            }
+
             case TVN_DELETEITEMW:
             {
                 NMTREEVIEWW *Notify = reinterpret_cast<NMTREEVIEWW *>(lParam);
@@ -1143,7 +1263,8 @@ public:
         m_Style((NSTCSTYLE)0),
         m_Style2(NSTCS2_DEFAULT),
         m_SuppressSelection(0),
-        m_Destroying(FALSE)
+        m_Destroying(FALSE),
+        m_RenamePending(FALSE)
     {
     }
 
@@ -1162,7 +1283,23 @@ public:
         COM_INTERFACE_ENTRY_IID(IID_INameSpaceTreeControl2, INameSpaceTreeControl2)
         COM_INTERFACE_ENTRY2_IID(IID_INameSpaceTreeControl, INameSpaceTreeControl, INameSpaceTreeControl2)
         COM_INTERFACE_ENTRY_IID(IID_IOleWindow, IOleWindow)
+        COM_INTERFACE_ENTRY_IID(IID_IObjectWithSite, IObjectWithSite)
     END_COM_MAP()
+
+    // IObjectWithSite
+    STDMETHODIMP SetSite(IUnknown *pUnkSite) override
+    {
+        m_Site = pUnkSite;
+        return S_OK;
+    }
+
+    STDMETHODIMP GetSite(REFIID riid, void **ppvSite) override
+    {
+        if (!ppvSite)
+            return E_POINTER;
+        *ppvSite = NULL;
+        return m_Site ? m_Site->QueryInterface(riid, ppvSite) : E_FAIL;
+    }
 
     BEGIN_MSG_MAP(CNamespaceTreeControl)
         MESSAGE_HANDLER(WM_CREATE, OnCreate)

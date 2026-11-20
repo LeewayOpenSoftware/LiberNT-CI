@@ -30,6 +30,7 @@
 #define CABINET_MAX_HISTORY 64
 
 class CCabinetWindow;
+struct CabinetDetailsJob;
 
 struct CabinetTab
 {
@@ -107,13 +108,14 @@ private:
     LRESULT OnNotify(NMHDR *header);
     void OnCreate();
     void OnSize();
+    void LayoutChildren(HDWP *hdwp);
     int Scale(int value) const;
 
     CabinetTab *ActiveTab() { return m_ActiveTab >= 0 ? &m_Tabs[m_ActiveTab] : NULL; }
     int AddTab(PCIDLIST_ABSOLUTE pidl, BOOL activate);
     void CloseTab(int index);
     void ActivateTab(int index);
-    void PlaceBrowsers();
+    void PlaceBrowsers(HDWP *hdwp = NULL);
     void Navigate(PCIDLIST_ABSOLUTE pidl);
     HRESULT BrowseTab(CabinetTab *tab, PCIDLIST_ABSOLUTE pidl);
     void NavigateHistory(int delta);
@@ -129,7 +131,8 @@ private:
     void UpdateSelectionSize();
     void UpdateCommands();
     IShellView *CurrentView();
-    BOOL CommandEnabled(CabinetCommand command);
+    BOOL CommandEnabled(CabinetCommand command, int selected = -1);
+    int SelectionCount();
     void ExecuteCommand(CabinetCommand command);
     void InvokeSelectionVerb(LPCSTR verb);
     void InvokeBackgroundVerb(LPCSTR verb);
@@ -155,9 +158,10 @@ private:
     void PlacePanes();
     void ShowPreviewMessage(UINT id);
     BOOL ShowPreviewHandler(IShellItem *item, PCWSTR path);
-    BOOL ShowPreviewThumbnail(IShellItem *item);
-    BOOL ShowPreviewImage(PCWSTR path);
-    BOOL ShowPreviewText(PCWSTR path);
+    BOOL ShowPreviewLines(PCWSTR lines);
+    void RequestDetailsJob(IShellItem *item, PCWSTR path, UINT parts, int rowIndex);
+    void StartDetailsJob();
+    void OnDetailsJobReady(CabinetDetailsJob *job);
     void SetPreviewBitmap(HBITMAP bitmap);
     void SyncTabs();
     void MoveTab(int from, int to);
@@ -235,6 +239,10 @@ private:
     PIDLIST_ABSOLUTE m_PreviewPidl;
     HICON m_DetailsIconHandle;
     HBITMAP m_DetailsBitmap;
+    ULONG m_DetailsGeneration;
+    ULONG m_PreviewGeneration;
+    CabinetDetailsJob *m_PendingJob;
+    BOOL m_JobRunning;
     BOOL m_InHistoryNavigation;
     BOOL m_FocusViewOnNavigate;
     ULONG m_NavigationDepth;

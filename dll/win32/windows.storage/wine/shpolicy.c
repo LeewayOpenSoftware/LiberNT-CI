@@ -1025,6 +1025,22 @@ SHELL_GetCachedGlobalCounter(_Inout_ HANDLE *phGlobalCounter, _In_ REFGUID rguid
     return *phGlobalCounter;
 }
 
+static const GUID SHGCGUID_LiberNTAssoc = { 0x5b1fd3a2, 0x7d0e, 0x4e71, { 0x9a, 0x6c, 0x2f, 0x03, 0xb8, 0x4d, 0xc1, 0x17 } };
+static HANDLE s_hAssocCounter = NULL;
+
+LONG SHELL_AssocGenerationGet(void)
+{
+    HANDLE hCounter = SHELL_GetCachedGlobalCounter(&s_hAssocCounter, &SHGCGUID_LiberNTAssoc);
+    return hCounter ? SHGlobalCounterGetValue(hCounter) : 0;
+}
+
+void SHELL_AssocGenerationIncrement(void)
+{
+    HANDLE hCounter = SHELL_GetCachedGlobalCounter(&s_hAssocCounter, &SHGCGUID_LiberNTAssoc);
+    if (hCounter)
+        SHGlobalCounterIncrement(hCounter);
+}
+
 /****************************************************************************
  *                  SHELL_GetRestrictionsCounter
  *

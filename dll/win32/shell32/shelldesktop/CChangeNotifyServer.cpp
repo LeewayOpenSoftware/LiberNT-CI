@@ -11,6 +11,28 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(shcn);
 
+// How long a SHCNF_FLUSH delivery waits for the windows it notified. SHCNF_FLUSH
+// promises the notification was delivered when SHChangeNotify returns; a window
+// that does not answer within this bound (hung, or busy for long) is given up on
+// for the wait only: it still gets the notification when it pumps again, and the
+// ticket stays alive until then. Non-flush deliveries never wait.
+#define FLUSH_DELIVERY_TIMEOUT 3000
+
+// A delivery ticket kept alive until every window it was sent to has handled it
+struct CPendingTicket
+{
+    HANDLE hTicket;
+    LONG cRefs;
+};
+
+// One window that has not yet handled its notification
+struct CPendingDelivery
+{
+    UINT nID;
+    HWND hwnd;
+    CPendingTicket *pTicket;
+};
+
 //////////////////////////////////////////////////////////////////////////////
 
 // notification target item
@@ -96,19 +118,45 @@ private:
     void DestroyAllItems();
 
     UINT GetNextRegID();
-    BOOL DeliverNotification(HANDLE hTicket, DWORD dwOwnerPID);
+    BOOL DeliverNotification(HANDLE hTicket, DWORD dwOwnerPID, BOOL *pbTicketTaken);
+    void SweepPendingDeliveries();
+    void WaitForDeliveries(CPendingTicket *pTicket, DWORD dwTimeout);
+    static void ReleasePendingTicket(CPendingTicket *pTicket);
+    static VOID CALLBACK DeliveryCallback(HWND hwnd, UINT uMsg, ULONG_PTR dwData, LRESULT lResult);
+
+    CSimpleArray<CPendingDelivery> m_pending;
+    UINT m_nNextDeliveryID;
+    static CChangeNotifyServer *s_pServer; // the server window of this (desktop) thread
+    void OnDeliveryDone(UINT nID);
     BOOL ShouldNotify(LPDELITICKET pTicket, LPREGENTRY pRegEntry);
     BOOL IsCrossSourceDuplicate(LPDELITICKET pTicket);
     void RemoveRecentEvent(INT i);
 };
 
+CChangeNotifyServer *CChangeNotifyServer::s_pServer = NULL;
+
 CChangeNotifyServer::CChangeNotifyServer()
     : m_nNextRegID(INVALID_REG_ID)
+    , m_nNextDeliveryID(0)
 {
+    // Delivery callbacks reach the server only through s_pServer, and delivery IDs
+    // are per instance, so there must be one server per process (the desktop's)
+    assert(s_pServer == NULL);
+    if (s_pServer)
+        ERR("Second change notification server in this process\n");
+    s_pServer = this;
 }
 
 CChangeNotifyServer::~CChangeNotifyServer()
 {
+    if (s_pServer == this)
+        s_pServer = NULL;
+    // Windows still holding a notification can no longer report back
+    while (m_pending.GetSize() > 0)
+    {
+        ReleasePendingTicket(m_pending[0].pTicket);
+        m_pending.RemoveAt(0);
+    }
     while (m_recent.GetSize() > 0)
         RemoveRecentEvent(0);
 }
@@ -194,7 +242,17 @@ void CChangeNotifyServer::DestroyItem(CWatchItem *pItem, HWND *phwndBroker)
     pItem->hwndBroker = NULL;
     if (hwndBroker && hwndBroker != *phwndBroker)
     {
-        ::DestroyWindow(hwndBroker);
+        // The broker belongs to the client's thread, and DestroyWindow from this
+        // thread fails there (ERROR_ACCESS_DENIED). Let that thread destroy it, once
+        // we know the handle still names that client's broker.
+        DWORD dwPID = 0;
+        WCHAR szClass[16];
+        if (::GetWindowThreadProcessId(hwndBroker, &dwPID) && dwPID == pItem->dwUserPID &&
+            ::GetClassNameW(hwndBroker, szClass, _countof(szClass)) &&
+            lstrcmpW(szClass, L"WorkerW") == 0)
+        {
+            ::PostMessageW(hwndBroker, WM_CLOSE, 0, 0);
+        }
         *phwndBroker = hwndBroker;
     }
 
@@ -358,7 +416,7 @@ LRESULT CChangeNotifyServer::OnRegister(UINT uMsg, WPARAM wParam, LPARAM lParam,
     SHUnlockShared(pRegEntry);
 
     // add an item
-    CWatchItem *pItem = new CWatchItem { m_nNextRegID, dwUserPID, pNewEntry, hwndBroker, pDirWatch };
+    CWatchItem *pItem = new CWatchItem { pNewEntry->nRegID, dwUserPID, pNewEntry, hwndBroker, pDirWatch };
     return AddItem(pItem);
 }
 
@@ -394,10 +452,12 @@ LRESULT CChangeNotifyServer::OnDeliverNotification(UINT uMsg, WPARAM wParam, LPA
     DWORD dwOwnerPID = (DWORD)lParam;
 
     // do delivery
-    BOOL ret = DeliverNotification(hTicket, dwOwnerPID);
+    BOOL bTicketTaken = FALSE;
+    BOOL ret = DeliverNotification(hTicket, dwOwnerPID, &bTicketTaken);
 
-    // free the ticket
-    SHFreeShared(hTicket, dwOwnerPID);
+    // free the ticket, unless windows that were sent it still have to handle it
+    if (!bTicketTaken)
+        SHFreeShared(hTicket, dwOwnerPID);
     return ret;
 }
 
@@ -492,11 +552,89 @@ UINT CChangeNotifyServer::GetNextRegID()
     return m_nNextRegID;
 }
 
+void CChangeNotifyServer::ReleasePendingTicket(CPendingTicket *pTicket)
+{
+    if (--pTicket->cRefs == 0)
+    {
+        SHFreeShared(pTicket->hTicket, GetCurrentProcessId());
+        delete pTicket;
+    }
+}
+
+// Called on this thread when a window has handled (or could not take) its notification
+VOID CALLBACK
+CChangeNotifyServer::DeliveryCallback(HWND hwnd, UINT uMsg, ULONG_PTR dwData, LRESULT lResult)
+{
+    if (s_pServer)
+        s_pServer->OnDeliveryDone((UINT)dwData);
+}
+
+void CChangeNotifyServer::OnDeliveryDone(UINT nID)
+{
+    for (INT i = 0; i < m_pending.GetSize(); ++i)
+    {
+        if (m_pending[i].nID == nID)
+        {
+            ReleasePendingTicket(m_pending[i].pTicket);
+            m_pending.RemoveAt(i);
+            return;
+        }
+    }
+    // already swept: the window was destroyed before it reported back
+}
+
+// A destroyed window can no longer read its ticket, and its callback may never come
+void CChangeNotifyServer::SweepPendingDeliveries()
+{
+    for (INT i = m_pending.GetSize() - 1; i >= 0; --i)
+    {
+        if (!::IsWindow(m_pending[i].hwnd))
+        {
+            ReleasePendingTicket(m_pending[i].pTicket);
+            m_pending.RemoveAt(i);
+        }
+    }
+}
+
+// Let the windows notified with this ticket handle it, for at most dwTimeout ms.
+// Only sent messages are processed meanwhile, which is what the callbacks are.
+//
+// Sent messages handled here can re-enter the server (CN_REGISTER, CN_UNREGISTER,
+// another CN_DELIVER_NOTIFICATION), which is fine: the m_items loop has finished and
+// pTicket is kept alive by the caller's reference. The server window cannot be
+// destroyed from inside this wait today: no client sends it WM_DESTROY or
+// WM_CLOSE, and it is destroyed only when the desktop thread ends. If that ever
+// changes, this wait (and DeliverNotification after it) would return into a
+// destroyed server, so the window must then be kept alive across the wait.
+void CChangeNotifyServer::WaitForDeliveries(CPendingTicket *pTicket, DWORD dwTimeout)
+{
+    DWORD dwStart = GetTickCount();
+    while (pTicket->cRefs > 1)
+    {
+        DWORD dwElapsed = GetTickCount() - dwStart;
+        if (dwElapsed >= dwTimeout)
+        {
+            WARN("Flush delivery timed out with %ld window(s) pending\n", pTicket->cRefs - 1);
+            break;
+        }
+        MsgWaitForMultipleObjectsEx(0, NULL, dwTimeout - dwElapsed, QS_SENDMESSAGE, 0);
+        MSG msg;
+        PeekMessageW(&msg, NULL, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+    }
+}
+
 // This function is called from CChangeNotifyServer::OnDeliverNotification.
 // The function notifies to the registration entries that should be notified.
-BOOL CChangeNotifyServer::DeliverNotification(HANDLE hTicket, DWORD dwOwnerPID)
+//
+// Each window gets the notification through SendMessageCallbackW, so a window that
+// is slow or hung never blocks this thread (and with it every SHChangeNotify caller
+// and registration). The ticket stays alive until the last of those windows has
+// handled it; *pbTicketTaken tells the caller not to free it then.
+BOOL CChangeNotifyServer::DeliverNotification(HANDLE hTicket, DWORD dwOwnerPID, BOOL *pbTicketTaken)
 {
     TRACE("DeliverNotification(%p, %p, 0x%lx)\n", m_hWnd, hTicket, dwOwnerPID);
+
+    *pbTicketTaken = FALSE;
 
     // lock the delivery ticket
     LPDELITICKET pTicket = (LPDELITICKET)SHLockSharedEx(hTicket, dwOwnerPID, FALSE);
@@ -506,6 +644,18 @@ BOOL CChangeNotifyServer::DeliverNotification(HANDLE hTicket, DWORD dwOwnerPID)
         SHUnlockShared(pTicket);
         return FALSE;
     }
+
+    SweepPendingDeliveries();
+
+    // The ticket can outlive this call only if it belongs to this process, which is
+    // how SHChangeNotify creates it; otherwise deliver synchronously as before.
+    CPendingTicket *pPending = NULL;
+    if (dwOwnerPID == GetCurrentProcessId())
+    {
+        pPending = new CPendingTicket { hTicket, 1 }; // this function holds one reference
+        *pbTicketTaken = (pPending != NULL);
+    }
+    BOOL bFlush = (pTicket->uFlags & (SHCNF_FLUSH | SHCNF_FLUSHNOWAIT)) == SHCNF_FLUSH;
 
     BOOL bDuplicate = IsCrossSourceDuplicate(pTicket);
 
@@ -536,13 +686,50 @@ BOOL CChangeNotifyServer::DeliverNotification(HANDLE hTicket, DWORD dwOwnerPID)
             // do notify
             TRACE("Notifying: %p, 0x%x, %p, %lu\n",
                   LongToHandle(pRegEntry->hwnd), pRegEntry->uMsg, hTicket, dwOwnerPID);
-            SendMessageW((HWND)LongToHandle(pRegEntry->hwnd), pRegEntry->uMsg, (WPARAM)hTicket, dwOwnerPID);
-            TRACE("GetLastError(): %ld\n", ::GetLastError());
+            HWND hwnd = (HWND)LongToHandle(pRegEntry->hwnd);
+            if (::IsHungAppWindow(hwnd))
+            {
+                WARN("Window %p is hung, notification skipped\n", hwnd);
+                continue;
+            }
+            if (pPending)
+            {
+                CPendingDelivery delivery = { ++m_nNextDeliveryID, hwnd, pPending };
+                if (!m_pending.Add(delivery))
+                {
+                    ERR("Out of memory\n");
+                    continue;
+                }
+                pPending->cRefs++;
+                // For a window of this thread the callback runs before this returns
+                if (!SendMessageCallbackW(hwnd, pRegEntry->uMsg, (WPARAM)hTicket, dwOwnerPID,
+                                          DeliveryCallback, delivery.nID))
+                {
+                    TRACE("SendMessageCallbackW failed: %ld\n", ::GetLastError());
+                    OnDeliveryDone(delivery.nID);
+                }
+            }
+            else
+            {
+                // The ticket is freed when this returns, so a message must never be
+                // delivered late: no timeout, only skip windows that are already hung.
+                DWORD_PTR dwResult;
+                SendMessageTimeoutW(hwnd, pRegEntry->uMsg, (WPARAM)hTicket, dwOwnerPID,
+                                    SMTO_ABORTIFHUNG, 0x7FFFFFFF, &dwResult);
+            }
         }
     }
 
     // unlock the ticket
     SHUnlockShared(pTicket);
+
+    if (pPending)
+    {
+        // SHCNF_FLUSH promises the notification was delivered when SHChangeNotify returns
+        if (bFlush)
+            WaitForDeliveries(pPending, FLUSH_DELIVERY_TIMEOUT);
+        ReleasePendingTicket(pPending);
+    }
 
     return TRUE;
 }

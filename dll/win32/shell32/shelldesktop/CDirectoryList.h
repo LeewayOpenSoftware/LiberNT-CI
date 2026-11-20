@@ -88,6 +88,8 @@ public:
     }
 
 protected:
+    BOOL ScanDirectory(LPCWSTR pszDirectoryPath, BOOL fFresh);
+
     BOOL m_fRecursive;
     CSimpleArray<CDirectoryItem> m_items;
 };
