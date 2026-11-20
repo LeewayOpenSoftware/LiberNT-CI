@@ -1717,6 +1717,11 @@ BOOL CDefView::CreateList()
     if (m_FolderSettings.fFlags & FWF_NOCOLUMNHEADER)
         dwStyle |= LVS_NOCOLUMNHEADER;
 
+    /* The desktop (FWF_NOSCROLL) must not grow scroll bars when an icon is
+       placed beyond the work area */
+    if (m_FolderSettings.fFlags & FWF_NOSCROLL)
+        dwStyle |= LVS_NOSCROLL;
+
 #if 0
     // FIXME: Because this is a negative, everyone gets the new flag by default unless they
     // opt out. This code should be enabled when shell looks like Vista instead of 2003
