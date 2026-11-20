@@ -1123,6 +1123,12 @@ InitFontSupport(VOID)
         /* Load font(s) with writing registry */
         IntLoadSystemFonts();
     }
+    else
+    {
+        /* The image may have added fonts since the Fonts key was written:
+           load and register those too */
+        IntLoadSystemFontsEx(TRUE);
+    }
 
     IntLoadFontSubstList(&g_FontSubstListHead);
 
@@ -1542,12 +1548,61 @@ FontLink_Chain_Populate(
 }
 
 /*
+ * IntIsFontFileLoaded
+ *
+ * Whether a global font was loaded from a file of this name (any directory).
+ */
+static BOOL
+IntIsFontFileLoaded(_In_ PCUNICODE_STRING FileTitle)
+{
+    PLIST_ENTRY ListEntry;
+    PFONT_ENTRY FontEntry;
+    UNICODE_STRING EntryTitle;
+    PCWSTR pch;
+    BOOL bFound = FALSE;
+
+    IntLockFreeType();
+    for (ListEntry = g_FontListHead.Flink; ListEntry != &g_FontListHead;
+         ListEntry = ListEntry->Flink)
+    {
+        FontEntry = CONTAINING_RECORD(ListEntry, FONT_ENTRY, ListEntry);
+        if (!FontEntry->Font || !FontEntry->Font->Filename)
+            continue;
+
+        pch = wcsrchr(FontEntry->Font->Filename, L'\\');
+        RtlInitUnicodeString(&EntryTitle, pch ? pch + 1 : FontEntry->Font->Filename);
+        if (RtlEqualUnicodeString(&EntryTitle, FileTitle, TRUE))
+        {
+            bFound = TRUE;
+            break;
+        }
+    }
+    IntUnLockFreeType();
+
+    return bFound;
+}
+
+/*
  * IntLoadSystemFonts
  *
  * Search the system font directory and adds each font found.
  */
 VOID FASTCALL
 IntLoadSystemFonts(VOID)
+{
+    IntLoadSystemFontsEx(FALSE);
+}
+
+/*
+ * IntLoadSystemFontsEx
+ *
+ * Search the system font directory and adds each font found, or with
+ * bOnlyMissing only those not loaded yet (the Fonts key did not list them).
+ * Each font added is written to the Fonts key; with bOnlyMissing an existing
+ * value of the same name is kept.
+ */
+VOID FASTCALL
+IntLoadSystemFontsEx(_In_ BOOL bOnlyMissing)
 {
     OBJECT_ATTRIBUTES ObjectAttributes;
     UNICODE_STRING Directory, FileName, TempString;
@@ -1649,11 +1704,16 @@ IntLoadSystemFonts(VOID)
                 }
 
                 /* If we tried all Ignore patterns and there was no match, try to create a font */
-                if (ign == _countof(IgnoreFiles))
+                if (ign == _countof(IgnoreFiles) &&
+                    !(bOnlyMissing && IntIsFontFileLoaded(&TempString)))
                 {
+                    if (bOnlyMissing)
+                        DPRINT1("Adding font %wZ missing from the Fonts key\n", &TempString);
                     RtlCopyUnicodeString(&FileName, &Directory);
                     RtlAppendUnicodeStringToString(&FileName, &TempString);
-                    if (!IntGdiAddFontResourceEx(&FileName, 1, 0, AFRX_WRITE_REGISTRY))
+                    if (!IntGdiAddFontResourceEx(&FileName, 1, 0,
+                                                 AFRX_WRITE_REGISTRY |
+                                                 (bOnlyMissing ? AFRX_REGISTRY_NO_OVERWRITE : 0)))
                         DPRINT1("ERR: Failed to load %wZ\n", &FileName);
                 }
 
@@ -2477,7 +2537,21 @@ IntGdiAddFontResourceSingle(
         InitializeObjectAttributes(&ObjectAttributes, &g_FontRegPath,
                                    OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
                                    NULL, NULL);
-        Status = ZwOpenKey(&KeyHandle, KEY_WRITE, &ObjectAttributes);
+        Status = ZwOpenKey(&KeyHandle, KEY_READ | KEY_WRITE, &ObjectAttributes);
+        if (NT_SUCCESS(Status) && (dwFlags & AFRX_REGISTRY_NO_OVERWRITE))
+        {
+            KEY_VALUE_BASIC_INFORMATION BasicInfo;
+            ULONG ResultLength;
+            NTSTATUS QueryStatus = ZwQueryValueKey(KeyHandle, &LoadFont.RegValueName,
+                                                   KeyValueBasicInformation, &BasicInfo,
+                                                   sizeof(BasicInfo), &ResultLength);
+            if (QueryStatus != STATUS_OBJECT_NAME_NOT_FOUND)
+            {
+                /* The value exists (or cannot be checked): leave it as it is */
+                ZwClose(KeyHandle);
+                Status = STATUS_OBJECT_NAME_EXISTS;
+            }
+        }
         if (NT_SUCCESS(Status))
         {
             SIZE_T DataSize;
