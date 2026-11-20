@@ -7,6 +7,8 @@
 
 #include "precomp.h"
 
+#include <ntmsv1_0.h>
+
 #include <wine/debug.h>
 WINE_DEFAULT_DEBUG_CHANNEL(ntlm);
 
@@ -376,6 +378,101 @@ SECURITY_STATUS NtlmBuildChallenge(PNegoHelper Context, const BYTE *Negotiate, U
     return SEC_E_OK;
 }
 
+static BOOL NtlmDupName(WCHAR **Name, ULONG *Length, const UNICODE_STRING *Source, const BYTE *Base, ULONG Size)
+{
+    WCHAR *Copy;
+
+    if (Source->Length && ((const BYTE *)Source->Buffer < Base ||
+        (const BYTE *)Source->Buffer + Source->Length > Base + Size))
+        return FALSE;
+    Copy = HeapAlloc(GetProcessHeap(), 0, Source->Length + sizeof(WCHAR));
+    if (!Copy)
+        return FALSE;
+    memcpy(Copy, Source->Buffer, Source->Length);
+    Copy[Source->Length / sizeof(WCHAR)] = 0;
+    HeapFree(GetProcessHeap(), 0, *Name);
+    *Name = Copy;
+    *Length = Source->Length / sizeof(WCHAR);
+    return TRUE;
+}
+
+/*
+ * Default credentials: msv1_0 computes the NTLMv2 proof over our blob with the
+ * logon session's NT OWF, which stays in the LSA. A new LSA connection for each
+ * response, so the LSA judges the token this thread uses now.
+ */
+static BOOL NtlmSessionResponse(PNegoHelper Context, const BYTE *Blob, ULONG BlobLength,
+                                BYTE *NtResponse, BYTE *LmResponse, BYTE *BaseKey)
+{
+    static const char PackageNameA[] = MSV1_0_PACKAGE_NAME;
+    LSA_STRING PackageName;
+    HANDLE Lsa = NULL;
+    ULONG Package, RequestLength, ResponseLength = 0;
+    PMSV1_0_GETCHALLENRESP_REQUEST Request = NULL;
+    PMSV1_0_GETCHALLENRESP_RESPONSE Response = NULL;
+    NTSTATUS Status, ProtocolStatus = STATUS_SUCCESS;
+    const BYTE *Base;
+    BOOL Ok = FALSE;
+
+    /* Inside lsass the LSA would be calling itself, possibly on its only port thread */
+    if (BlobLength > 0xFFFF - NTLM_KEY_SIZE || GetModuleHandleW(L"lsasrv.dll"))
+        return FALSE;
+    if (!NT_SUCCESS(LsaConnectUntrusted(&Lsa)))
+        return FALSE;
+
+    RtlInitAnsiString((PANSI_STRING)&PackageName, PackageNameA);
+    if (!NT_SUCCESS(LsaLookupAuthenticationPackage(Lsa, &PackageName, &Package)))
+        goto Done;
+
+    RequestLength = sizeof(*Request) + BlobLength;
+    Request = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, RequestLength);
+    if (!Request)
+        goto Done;
+    Request->MessageType = MsV1_0Lm20GetChallengeResponse;
+    Request->ParameterControl = USE_PRIMARY_PASSWORD | GCR_NTLM3_PARMS |
+                                RETURN_PRIMARY_USERNAME | RETURN_PRIMARY_LOGON_DOMAINNAME;
+    memcpy(Request->ChallengeToClient, Context->server_challenge, NTLM_CHALLENGE_LENGTH);
+    Request->ServerName.Buffer = (PWSTR)(Request + 1);
+    Request->ServerName.Length = Request->ServerName.MaximumLength = (USHORT)BlobLength;
+    memcpy(Request + 1, Blob, BlobLength);
+
+    Status = LsaCallAuthenticationPackage(Lsa, Package, Request, RequestLength,
+                                          (PVOID *)&Response, &ResponseLength, &ProtocolStatus);
+    if (!NT_SUCCESS(Status) || !NT_SUCCESS(ProtocolStatus) || !Response || ResponseLength < sizeof(*Response))
+    {
+        TRACE("no logon session response %08x/%08x\n", (unsigned int)Status, (unsigned int)ProtocolStatus);
+        goto Done;
+    }
+
+    Base = (const BYTE *)Response;
+    if (Response->CaseSensitiveChallengeResponse.Length != NTLM_KEY_SIZE + BlobLength ||
+        Response->CaseInsensitiveChallengeResponse.Length != NTLM_V1_RESPONSE_SIZE ||
+        (const BYTE *)Response->CaseSensitiveChallengeResponse.Buffer < Base ||
+        (const BYTE *)Response->CaseSensitiveChallengeResponse.Buffer + NTLM_KEY_SIZE + BlobLength > Base + ResponseLength ||
+        (const BYTE *)Response->CaseInsensitiveChallengeResponse.Buffer < Base ||
+        (const BYTE *)Response->CaseInsensitiveChallengeResponse.Buffer + NTLM_V1_RESPONSE_SIZE > Base + ResponseLength ||
+        !NtlmDupName(&Context->user, &Context->user_len, &Response->UserName, Base, ResponseLength) ||
+        !NtlmDupName(&Context->domain, &Context->domain_len, &Response->LogonDomainName, Base, ResponseLength))
+    {
+        goto Done;
+    }
+
+    memcpy(NtResponse, Response->CaseSensitiveChallengeResponse.Buffer, NTLM_KEY_SIZE);
+    memcpy(LmResponse, Response->CaseInsensitiveChallengeResponse.Buffer, NTLM_V1_RESPONSE_SIZE);
+    memcpy(BaseKey, Response->UserSessionKey, NTLM_KEY_SIZE);
+    Ok = TRUE;
+
+Done:
+    if (Response)
+    {
+        RtlSecureZeroMemory(Response, ResponseLength);
+        LsaFreeReturnBuffer(Response);
+    }
+    HeapFree(GetProcessHeap(), 0, Request);
+    LsaDeregisterLogonProcess(Lsa);
+    return Ok;
+}
+
 SECURITY_STATUS NtlmBuildAuthenticate(PNegoHelper Context, const BYTE *Challenge, ULONG ChallengeLength,
                                       BYTE *Buffer, ULONG Size, ULONG *Length)
 {
@@ -389,7 +486,7 @@ SECURITY_STATUS NtlmBuildAuthenticate(PNegoHelper Context, const BYTE *Challenge
     NTLM_FIELD TargetInfo;
     HMAC_MD5_CTX Hmac;
     FILETIME Time;
-    BOOL Unicode, UseMic = FALSE;
+    BOOL Unicode, UseMic = FALSE, Identified;
     SECURITY_STATUS Status = SEC_E_OK;
 
     *Length = 0;
@@ -418,7 +515,8 @@ SECURITY_STATUS NtlmBuildAuthenticate(PNegoHelper Context, const BYTE *Challenge
     if (!NtlmSaveMessage(&Context->challenge_msg, &Context->challenge_len, Challenge, ChallengeLength))
         return SEC_E_INSUFFICIENT_MEMORY;
 
-    if (!Context->have_credentials)
+    Identified = Context->have_credentials || Context->use_logon_session;
+    if (!Identified)
     {
         Flags |= NTLMSSP_NEGOTIATE_ANONYMOUS;
         LmResponse[0] = 0;
@@ -493,25 +591,46 @@ SECURITY_STATUS NtlmBuildAuthenticate(PNegoHelper Context, const BYTE *Challenge
             Payload += 4 + TargetNameLength * sizeof(WCHAR);
         }
 
-        NtlmOwfV2(Context->password, Context->password_len, Context->user, Context->user_len,
-                  Context->domain, Context->domain_len, OwfKey);
-        NtlmHmacMd5(OwfKey, sizeof(OwfKey), Context->server_challenge, NTLM_CHALLENGE_LENGTH,
-                    Blob, BlobLength, Proof);
-        memcpy(NtResponse, Proof, sizeof(Proof));
-        NtlmHmacMd5(OwfKey, sizeof(OwfKey), Proof, sizeof(Proof), NULL, 0, BaseKey);
-
-        if (UseMic)
+        if (Context->have_credentials)
         {
-            memset(LmResponse, 0, sizeof(LmResponse));
+            NtlmOwfV2(Context->password, Context->password_len, Context->user, Context->user_len,
+                      Context->domain, Context->domain_len, OwfKey);
+            NtlmHmacMd5(OwfKey, sizeof(OwfKey), Context->server_challenge, NTLM_CHALLENGE_LENGTH,
+                        Blob, BlobLength, Proof);
+            memcpy(NtResponse, Proof, sizeof(Proof));
+            NtlmHmacMd5(OwfKey, sizeof(OwfKey), Proof, sizeof(Proof), NULL, 0, BaseKey);
+
+            if (!UseMic)
+            {
+                NtlmHmacMd5(OwfKey, sizeof(OwfKey), Context->server_challenge, NTLM_CHALLENGE_LENGTH,
+                            ClientChallenge, sizeof(ClientChallenge), LmResponse);
+                memcpy(LmResponse + NTLM_KEY_SIZE, ClientChallenge, sizeof(ClientChallenge));
+            }
+            RtlSecureZeroMemory(OwfKey, sizeof(OwfKey));
+        }
+        else if (!NtlmSessionResponse(Context, Blob, BlobLength, NtResponse, LmResponse, BaseKey))
+        {
+            /* No usable logon session credential: stay anonymous, as before */
+            Identified = FALSE;
+        }
+
+        if (!Identified)
+        {
+            HeapFree(GetProcessHeap(), 0, NtResponse);
+            NtResponse = NULL;
+            NtLength = 0;
+            UseMic = FALSE;
+            Flags |= NTLMSSP_NEGOTIATE_ANONYMOUS;
+            LmResponse[0] = 0;
+            LmLength = 1;
+            memset(BaseKey, 0, sizeof(BaseKey));
         }
         else
         {
-            NtlmHmacMd5(OwfKey, sizeof(OwfKey), Context->server_challenge, NTLM_CHALLENGE_LENGTH,
-                        ClientChallenge, sizeof(ClientChallenge), LmResponse);
-            memcpy(LmResponse + NTLM_KEY_SIZE, ClientChallenge, sizeof(ClientChallenge));
+            if (UseMic)
+                memset(LmResponse, 0, sizeof(LmResponse));
+            LmLength = NTLM_V1_RESPONSE_SIZE;
         }
-        LmLength = NTLM_V1_RESPONSE_SIZE;
-        RtlSecureZeroMemory(OwfKey, sizeof(OwfKey));
     }
 
     if (Flags & NTLMSSP_NEGOTIATE_KEY_EXCHANGE)
@@ -548,11 +667,11 @@ SECURITY_STATUS NtlmBuildAuthenticate(PNegoHelper Context, const BYTE *Challenge
     NtlmPutVersion(Buffer + 64);
 
     Offset = NTLM_AUTHENTICATE_SIZE;
-    Written = Context->have_credentials ?
+    Written = Identified ?
               NtlmPutString(Buffer + Offset, Context->domain, Context->domain_len, Unicode) : 0;
     NtlmPutField(Buffer + 28, Written, Offset);
     Offset += Written;
-    Written = Context->have_credentials ?
+    Written = Identified ?
               NtlmPutString(Buffer + Offset, Context->user, Context->user_len, Unicode) : 0;
     NtlmPutField(Buffer + 36, Written, Offset);
     Offset += Written;

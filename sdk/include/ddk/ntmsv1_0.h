@@ -51,6 +51,47 @@ typedef struct _MSV1_0_RELOGON_REQUEST
     UNICODE_STRING LogonServer;
 } MSV1_0_RELOGON_REQUEST, *PMSV1_0_RELOGON_REQUEST;
 
+/* Same layout as ntifs.h, for user-mode callers of MsV1_0Lm20GetChallengeResponse */
+#ifndef USE_PRIMARY_PASSWORD
+#define USE_PRIMARY_PASSWORD            0x01
+#define RETURN_PRIMARY_USERNAME         0x02
+#define RETURN_PRIMARY_LOGON_DOMAINNAME 0x04
+#define RETURN_NON_NT_USER_SESSION_KEY  0x08
+#define GENERATE_CLIENT_CHALLENGE       0x10
+#define GCR_NTLM3_PARMS                 0x20
+#define GCR_TARGET_INFO                 0x40
+#define RETURN_RESERVED_PARAMETER       0x80
+#define GCR_ALLOW_NTLM                 0x100
+#define GCR_USE_OEM_SET                0x200
+#define GCR_MACHINE_CREDENTIAL         0x400
+#define GCR_USE_OWF_PASSWORD           0x800
+#define GCR_ALLOW_LM                  0x1000
+#define GCR_ALLOW_NO_TARGET           0x2000
+
+typedef struct _MSV1_0_GETCHALLENRESP_REQUEST
+{
+    MSV1_0_PROTOCOL_MESSAGE_TYPE MessageType;
+    ULONG ParameterControl;
+    LUID LogonId;
+    UNICODE_STRING Password;
+    UCHAR ChallengeToClient[MSV1_0_CHALLENGE_LENGTH];
+    UNICODE_STRING UserName;
+    UNICODE_STRING LogonDomainName;
+    UNICODE_STRING ServerName;
+} MSV1_0_GETCHALLENRESP_REQUEST, *PMSV1_0_GETCHALLENRESP_REQUEST;
+
+typedef struct _MSV1_0_GETCHALLENRESP_RESPONSE
+{
+    MSV1_0_PROTOCOL_MESSAGE_TYPE MessageType;
+    STRING CaseSensitiveChallengeResponse;
+    STRING CaseInsensitiveChallengeResponse;
+    UNICODE_STRING UserName;
+    UNICODE_STRING LogonDomainName;
+    UCHAR UserSessionKey[MSV1_0_USER_SESSION_KEY_LENGTH];
+    UCHAR LanmanSessionKey[MSV1_0_LANMAN_SESSION_KEY_LENGTH];
+} MSV1_0_GETCHALLENRESP_RESPONSE, *PMSV1_0_GETCHALLENRESP_RESPONSE;
+#endif
+
 #ifdef __cplusplus
 }
 #endif

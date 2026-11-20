@@ -578,8 +578,15 @@ done:
 
 
 static
+VOID
+MsvpRefreshNtOwfCredential(
+    _In_ PUNICODE_STRING AccountName,
+    _In_ PUNICODE_STRING DomainName,
+    _In_reads_bytes_(MSV1_0_OWF_PASSWORD_LENGTH) const UCHAR *NtOwf);
+
+static
 NTSTATUS
-MsvpChangePassword(IN PLSA_CLIENT_REQUEST ClientRequest,
+MsvpChangePasswordWorker(IN PLSA_CLIENT_REQUEST ClientRequest,
                    IN PVOID ProtocolSubmitBuffer,
                    IN PVOID ClientBufferBase,
                    IN ULONG SubmitBufferLength,
@@ -724,6 +731,10 @@ MsvpChangePassword(IN PLSA_CLIENT_REQUEST ClientRequest,
                                             NULL);
     if (!NT_SUCCESS(Status))
         TRACE("SamrUnicodeChangePasswordUser2 failed (Status %08lx)\n", Status);
+    else
+        MsvpRefreshNtOwfCredential(&RequestBuffer->AccountName,
+                                   &RequestBuffer->DomainName,
+                                   (const UCHAR *)&NewNtPassword);
 
 done:
     RtlSecureZeroMemory(&PasswordBuffer, sizeof(PasswordBuffer));
@@ -737,6 +748,31 @@ done:
     if (ServerHandle != NULL)
         SamrCloseHandle(&ServerHandle);
 
+    return Status;
+}
+
+
+/* The caller reads the outcome from ProtocolStatus as well, so set it on every path */
+static
+NTSTATUS
+MsvpChangePassword(IN PLSA_CLIENT_REQUEST ClientRequest,
+                   IN PVOID ProtocolSubmitBuffer,
+                   IN PVOID ClientBufferBase,
+                   IN ULONG SubmitBufferLength,
+                   OUT PVOID *ProtocolReturnBuffer,
+                   OUT PULONG ReturnBufferLength,
+                   OUT PNTSTATUS ProtocolStatus)
+{
+    NTSTATUS Status;
+
+    Status = MsvpChangePasswordWorker(ClientRequest,
+                                      ProtocolSubmitBuffer,
+                                      ClientBufferBase,
+                                      SubmitBufferLength,
+                                      ProtocolReturnBuffer,
+                                      ReturnBufferLength,
+                                      ProtocolStatus);
+    *ProtocolStatus = Status;
     return Status;
 }
 
@@ -1095,6 +1131,18 @@ done:
 }
 
 
+static
+NTSTATUS
+MsvpGetChallengeResponse(
+    _In_ PLSA_CLIENT_REQUEST ClientRequest,
+    _In_ PVOID ProtocolSubmitBuffer,
+    _In_ PVOID ClientBufferBase,
+    _In_ ULONG SubmitBufferLength,
+    _Out_ PVOID *ProtocolReturnBuffer,
+    _Out_ PULONG ReturnBufferLength,
+    _Out_ PNTSTATUS ProtocolStatus,
+    _In_ BOOLEAN TrustedCaller);
+
 /*
  * @unimplemented
  */
@@ -1134,7 +1182,14 @@ LsaApCallPackage(IN PLSA_CLIENT_REQUEST ClientRequest,
             break;
 
         case MsV1_0Lm20GetChallengeResponse:
-            Status = STATUS_NOT_IMPLEMENTED;
+            Status = MsvpGetChallengeResponse(ClientRequest,
+                                              ProtocolSubmitBuffer,
+                                              ClientBufferBase,
+                                              SubmitBufferLength,
+                                              ProtocolReturnBuffer,
+                                              ReturnBufferLength,
+                                              ProtocolStatus,
+                                              TRUE);
             break;
 
         case MsV1_0EnumerateUsers:
@@ -1240,6 +1295,15 @@ LsaApCallPackageUntrusted(IN PLSA_CLIENT_REQUEST ClientRequest,
                                     ProtocolReturnBuffer,
                                     ReturnBufferLength,
                                     ProtocolStatus);
+    else if (MessageType == MsV1_0Lm20GetChallengeResponse)
+        Status = MsvpGetChallengeResponse(ClientRequest,
+                                          ProtocolSubmitBuffer,
+                                          ClientBufferBase,
+                                          SubmitBufferLength,
+                                          ProtocolReturnBuffer,
+                                          ReturnBufferLength,
+                                          ProtocolStatus,
+                                          FALSE);
     else
         Status = STATUS_ACCESS_DENIED;
 
@@ -1431,6 +1495,328 @@ MsvpIsInSubmitBuffer(
     return Address >= Start &&
            Address - Start <= SubmitBufferSize &&
            Length <= SubmitBufferSize - (Address - Start);
+}
+
+/* The NT OWF of the logon password, attached to interactive, batch and service sessions */
+#define MSV1_0_NTOWF_KEY "NtOwf"
+
+static
+BOOLEAN
+MsvpEqualLuid(
+    _In_ const LUID *First,
+    _In_ const LUID *Second)
+{
+    return First->LowPart == Second->LowPart && First->HighPart == Second->HighPart;
+}
+
+static
+VOID
+MsvpStoreNtOwfCredential(
+    _In_ PLUID LogonId,
+    _In_ PUNICODE_STRING Password)
+{
+    UCHAR NtOwf[MSV1_0_OWF_PASSWORD_LENGTH];
+    LSA_STRING KeyValue;
+    LSA_STRING Credential;
+    NTSTATUS Status;
+
+    if (DispatchTable.AddCredential == NULL || LogonId == NULL || Password == NULL)
+        return;
+
+    Status = SystemFunction007(Password, NtOwf);
+    if (NT_SUCCESS(Status))
+    {
+        RtlInitString(&KeyValue, MSV1_0_NTOWF_KEY);
+        Credential.Buffer = (PCHAR)NtOwf;
+        Credential.Length = sizeof(NtOwf);
+        Credential.MaximumLength = sizeof(NtOwf);
+        Status = DispatchTable.AddCredential(LogonId, MsvAuthenticationPackageId, &KeyValue, &Credential);
+    }
+    if (!NT_SUCCESS(Status))
+        TRACE("Storing the NT OWF failed (Status 0x%08lx)\n", Status);
+
+    RtlSecureZeroMemory(NtOwf, sizeof(NtOwf));
+}
+
+/*
+ * MsV1_0Lm20GetChallengeResponse, NTLMv2 only: the caller builds the NTLMv2
+ * client blob and passes it in ServerName (GCR_NTLM3_PARMS); msv1_0 answers
+ * with the HMAC over it, keyed by the logon session's stored NT OWF, which
+ * never leaves the LSA. Without a trusted connection only the caller's own
+ * session can be used, and the caller is judged by its LogonId and
+ * impersonation level as reported for this request.
+ */
+static
+NTSTATUS
+MsvpGetChallengeResponse(
+    _In_ PLSA_CLIENT_REQUEST ClientRequest,
+    _In_ PVOID ProtocolSubmitBuffer,
+    _In_ PVOID ClientBufferBase,
+    _In_ ULONG SubmitBufferLength,
+    _Out_ PVOID *ProtocolReturnBuffer,
+    _Out_ PULONG ReturnBufferLength,
+    _Out_ PNTSTATUS ProtocolStatus,
+    _In_ BOOLEAN TrustedCaller)
+{
+    const ULONG Required = USE_PRIMARY_PASSWORD | GCR_NTLM3_PARMS;
+    const ULONG Optional = RETURN_PRIMARY_USERNAME | RETURN_PRIMARY_LOGON_DOMAINNAME;
+    const ULONG BlobHeaderLength = MSV1_0_NTLM3_INPUT_LENGTH;
+    PMSV1_0_GETCHALLENRESP_REQUEST Request = ProtocolSubmitBuffer;
+    PMSV1_0_GETCHALLENRESP_RESPONSE LocalBuffer = NULL;
+    PVOID ClientBaseAddress = NULL;
+    SECPKG_CLIENT_INFO ClientInfo;
+    LUID AnonymousLogonId = ANONYMOUS_LOGON_LUID;
+    LUID LogonId;
+    PLOGON_LIST_ENTRY LogonEntry;
+    UNICODE_STRING UserName = { 0, 0, NULL }, DomainName = { 0, 0, NULL };
+    LSA_STRING KeyValue, Credential = { 0, 0, NULL };
+    ULONG QueryContext = 0, KeyLength, BlobLength, IdentityLength, BufferLength = 0, Index;
+    PUCHAR Blob, Data;
+    PWCHAR Identity = NULL;
+    UCHAR OwfV2[MSV1_0_NTLM3_OWF_LENGTH], Proof[MSV1_0_NTLM3_RESPONSE_LENGTH];
+    UCHAR LmProof[MSV1_0_NTLM3_RESPONSE_LENGTH];
+    BOOLEAN ReturnNames;
+    NTSTATUS Status;
+
+    TRACE("MsvpGetChallengeResponse()\n");
+
+    RtlZeroMemory(OwfV2, sizeof(OwfV2));
+    RtlZeroMemory(Proof, sizeof(Proof));
+    RtlZeroMemory(LmProof, sizeof(LmProof));
+
+    if (SubmitBufferLength < sizeof(MSV1_0_GETCHALLENRESP_REQUEST))
+        return STATUS_INVALID_PARAMETER;
+
+    if ((Request->ParameterControl & Required) != Required ||
+        (Request->ParameterControl & ~(Required | Optional)) != 0 ||
+        Request->Password.Length != 0 ||
+        Request->UserName.Length != 0 ||
+        Request->LogonDomainName.Length != 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Blob = (PUCHAR)FIXUP_POINTER(Request->ServerName.Buffer,
+                                 (ULONG_PTR)ProtocolSubmitBuffer - (ULONG_PTR)ClientBufferBase);
+    BlobLength = Request->ServerName.Length;
+    if (Blob == NULL || BlobLength < BlobHeaderLength ||
+        BlobLength > MAXUSHORT - MSV1_0_NTLM3_RESPONSE_LENGTH ||
+        !MsvpIsInSubmitBuffer(ProtocolSubmitBuffer, SubmitBufferLength, Blob, BlobLength) ||
+        Blob[0] != 1 || Blob[1] != 1)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (LsaGetClientInfo == NULL || !NT_SUCCESS(LsaGetClientInfo(&ClientInfo)))
+        return STATUS_ACCESS_DENIED;
+
+    /* Decided on LogonId and level, never on Impersonating alone */
+    if (ClientInfo.ImpersonationLevel < SecurityImpersonation ||
+        MsvpEqualLuid(&ClientInfo.LogonId, &AnonymousLogonId))
+    {
+        return STATUS_ACCESS_DENIED;
+    }
+
+    LogonId = Request->LogonId;
+    if (LogonId.LowPart == 0 && LogonId.HighPart == 0)
+        LogonId = ClientInfo.LogonId;
+    else if (!MsvpEqualLuid(&LogonId, &ClientInfo.LogonId) && !TrustedCaller)
+        return STATUS_ACCESS_DENIED;
+
+    /* The identity the server will check: the session's user and logon domain */
+    RtlAcquireResourceShared(&LogonListResource, TRUE);
+    LogonEntry = GetLogonByLogonId(&LogonId);
+    if (LogonEntry != NULL)
+    {
+        PUNICODE_STRING Domain = &LogonEntry->LogonDomainName;
+
+        if (Domain->Length == 0 ||
+            (Domain->Length == sizeof(WCHAR) && Domain->Buffer[0] == L'.'))
+        {
+            Domain = &LogonEntry->LogonServer;
+        }
+
+        UserName.Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, LogonEntry->UserName.Length + sizeof(WCHAR));
+        DomainName.Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Domain->Length + sizeof(WCHAR));
+        if (UserName.Buffer != NULL && DomainName.Buffer != NULL)
+        {
+            UserName.MaximumLength = LogonEntry->UserName.Length + sizeof(WCHAR);
+            DomainName.MaximumLength = Domain->Length + sizeof(WCHAR);
+            RtlCopyUnicodeString(&UserName, &LogonEntry->UserName);
+            RtlCopyUnicodeString(&DomainName, Domain);
+        }
+    }
+    RtlReleaseResource(&LogonListResource);
+
+    if (LogonEntry == NULL)
+    {
+        Status = STATUS_NO_SUCH_LOGON_SESSION;
+        goto done;
+    }
+    if (UserName.Buffer == NULL || DomainName.Buffer == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto done;
+    }
+
+    RtlInitString(&KeyValue, MSV1_0_NTOWF_KEY);
+    Status = DispatchTable.GetCredentials(&LogonId, MsvAuthenticationPackageId, &QueryContext,
+                                          FALSE, &KeyValue, &KeyLength, &Credential);
+    if (!NT_SUCCESS(Status) || Credential.Length != MSV1_0_OWF_PASSWORD_LENGTH)
+    {
+        Status = STATUS_NO_SUCH_LOGON_SESSION;
+        goto done;
+    }
+
+    IdentityLength = UserName.Length + DomainName.Length;
+    Identity = RtlAllocateHeap(RtlGetProcessHeap(), 0, IdentityLength + sizeof(WCHAR));
+    if (Identity == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto done;
+    }
+    for (Index = 0; Index < UserName.Length / sizeof(WCHAR); Index++)
+        Identity[Index] = RtlUpcaseUnicodeChar(UserName.Buffer[Index]);
+    RtlCopyMemory(&Identity[Index], DomainName.Buffer, DomainName.Length);
+
+    MsvpHmacMd5((PUCHAR)Credential.Buffer, (PUCHAR)Identity, IdentityLength, NULL, 0, OwfV2);
+    MsvpHmacMd5(OwfV2, Request->ChallengeToClient, MSV1_0_CHALLENGE_LENGTH, Blob, BlobLength, Proof);
+    /* LMv2: the same key over the client challenge carried in the blob */
+    MsvpHmacMd5(OwfV2, Request->ChallengeToClient, MSV1_0_CHALLENGE_LENGTH,
+                Blob + 16, MSV1_0_CHALLENGE_LENGTH, LmProof);
+
+    ReturnNames = (Request->ParameterControl & Optional) != 0;
+    BufferLength = sizeof(MSV1_0_GETCHALLENRESP_RESPONSE) +
+                   (ReturnNames ? UserName.Length + DomainName.Length : 0) +
+                   MSV1_0_NTLM3_RESPONSE_LENGTH + BlobLength +
+                   MSV1_0_NTLM3_RESPONSE_LENGTH + MSV1_0_CHALLENGE_LENGTH;
+
+    LocalBuffer = DispatchTable.AllocateLsaHeap(BufferLength);
+    if (LocalBuffer == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto done;
+    }
+    RtlZeroMemory(LocalBuffer, BufferLength);
+
+    Status = DispatchTable.AllocateClientBuffer(ClientRequest, BufferLength, &ClientBaseAddress);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+#define MSVP_CLIENT_POINTER(Local) ((PVOID)((ULONG_PTR)ClientBaseAddress + ((ULONG_PTR)(Local) - (ULONG_PTR)LocalBuffer)))
+    LocalBuffer->MessageType = MsV1_0Lm20GetChallengeResponse;
+    Data = (PUCHAR)(LocalBuffer + 1);
+
+    if (ReturnNames)
+    {
+        LocalBuffer->UserName.Length = LocalBuffer->UserName.MaximumLength = UserName.Length;
+        LocalBuffer->UserName.Buffer = MSVP_CLIENT_POINTER(Data);
+        RtlCopyMemory(Data, UserName.Buffer, UserName.Length);
+        Data += UserName.Length;
+
+        LocalBuffer->LogonDomainName.Length = LocalBuffer->LogonDomainName.MaximumLength = DomainName.Length;
+        LocalBuffer->LogonDomainName.Buffer = MSVP_CLIENT_POINTER(Data);
+        RtlCopyMemory(Data, DomainName.Buffer, DomainName.Length);
+        Data += DomainName.Length;
+    }
+
+    LocalBuffer->CaseSensitiveChallengeResponse.Length =
+    LocalBuffer->CaseSensitiveChallengeResponse.MaximumLength = (USHORT)(MSV1_0_NTLM3_RESPONSE_LENGTH + BlobLength);
+    LocalBuffer->CaseSensitiveChallengeResponse.Buffer = MSVP_CLIENT_POINTER(Data);
+    RtlCopyMemory(Data, Proof, MSV1_0_NTLM3_RESPONSE_LENGTH);
+    RtlCopyMemory(Data + MSV1_0_NTLM3_RESPONSE_LENGTH, Blob, BlobLength);
+    Data += MSV1_0_NTLM3_RESPONSE_LENGTH + BlobLength;
+
+    LocalBuffer->CaseInsensitiveChallengeResponse.Length =
+    LocalBuffer->CaseInsensitiveChallengeResponse.MaximumLength = MSV1_0_NTLM3_RESPONSE_LENGTH + MSV1_0_CHALLENGE_LENGTH;
+    LocalBuffer->CaseInsensitiveChallengeResponse.Buffer = MSVP_CLIENT_POINTER(Data);
+    RtlCopyMemory(Data, LmProof, MSV1_0_NTLM3_RESPONSE_LENGTH);
+    RtlCopyMemory(Data + MSV1_0_NTLM3_RESPONSE_LENGTH, Blob + 16, MSV1_0_CHALLENGE_LENGTH);
+#undef MSVP_CLIENT_POINTER
+
+    MsvpHmacMd5(OwfV2, Proof, sizeof(Proof), NULL, 0, LocalBuffer->UserSessionKey);
+
+    Status = DispatchTable.CopyToClientBuffer(ClientRequest, BufferLength, ClientBaseAddress, LocalBuffer);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    *ProtocolReturnBuffer = ClientBaseAddress;
+    *ReturnBufferLength = BufferLength;
+    *ProtocolStatus = STATUS_SUCCESS;
+
+done:
+    RtlSecureZeroMemory(OwfV2, sizeof(OwfV2));
+    RtlSecureZeroMemory(Proof, sizeof(Proof));
+    RtlSecureZeroMemory(LmProof, sizeof(LmProof));
+    if (Credential.Buffer != NULL)
+    {
+        RtlSecureZeroMemory(Credential.Buffer, Credential.MaximumLength);
+        DispatchTable.FreeLsaHeap(Credential.Buffer);
+    }
+    if (LocalBuffer != NULL)
+    {
+        RtlSecureZeroMemory(LocalBuffer, BufferLength);
+        DispatchTable.FreeLsaHeap(LocalBuffer);
+    }
+    if (Identity != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Identity);
+    if (UserName.Buffer != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, UserName.Buffer);
+    if (DomainName.Buffer != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, DomainName.Buffer);
+    if (!NT_SUCCESS(Status) && ClientBaseAddress != NULL)
+        DispatchTable.FreeClientBuffer(ClientRequest, ClientBaseAddress);
+
+    return Status;
+}
+
+/* After a password change by the session's own user, its stored OWF follows the new password */
+static
+VOID
+MsvpRefreshNtOwfCredential(
+    _In_ PUNICODE_STRING AccountName,
+    _In_ PUNICODE_STRING DomainName,
+    _In_reads_bytes_(MSV1_0_OWF_PASSWORD_LENGTH) const UCHAR *NtOwf)
+{
+    SECPKG_CLIENT_INFO ClientInfo;
+    PLOGON_LIST_ENTRY LogonEntry;
+    LSA_STRING KeyValue, Credential = { 0, 0, NULL };
+    ULONG QueryContext = 0, KeyLength;
+    BOOLEAN Refresh = FALSE;
+
+    if (LsaGetClientInfo == NULL || DispatchTable.AddCredential == NULL ||
+        !NT_SUCCESS(LsaGetClientInfo(&ClientInfo)) ||
+        ClientInfo.ImpersonationLevel < SecurityImpersonation)
+    {
+        return;
+    }
+
+    RtlAcquireResourceShared(&LogonListResource, TRUE);
+    LogonEntry = GetLogonByLogonId(&ClientInfo.LogonId);
+    if (LogonEntry != NULL &&
+        RtlEqualUnicodeString(&LogonEntry->UserName, AccountName, TRUE) &&
+        (DomainName->Length == 0 ||
+         RtlEqualUnicodeString(&LogonEntry->LogonDomainName, DomainName, TRUE) ||
+         RtlEqualUnicodeString(&LogonEntry->LogonServer, DomainName, TRUE)))
+    {
+        Refresh = TRUE;
+    }
+    RtlReleaseResource(&LogonListResource);
+
+    /* Only a session that already holds an OWF gets the new one */
+    RtlInitString(&KeyValue, MSV1_0_NTOWF_KEY);
+    if (!Refresh ||
+        !NT_SUCCESS(DispatchTable.GetCredentials(&ClientInfo.LogonId, MsvAuthenticationPackageId,
+                                                 &QueryContext, FALSE, &KeyValue, &KeyLength, &Credential)))
+    {
+        return;
+    }
+    RtlSecureZeroMemory(Credential.Buffer, Credential.MaximumLength);
+    DispatchTable.FreeLsaHeap(Credential.Buffer);
+
+    Credential.Buffer = (PCHAR)NtOwf;
+    Credential.Length = Credential.MaximumLength = MSV1_0_OWF_PASSWORD_LENGTH;
+    DispatchTable.AddCredential(&ClientInfo.LogonId, MsvAuthenticationPackageId, &KeyValue, &Credential);
 }
 
 /*
@@ -1820,6 +2206,14 @@ LsaApLogonUserEx2(IN PLSA_CLIENT_REQUEST ClientRequest,
     /* Give DPAPI its per-session pre-key while the password is still in memory */
     if (SessionCreated && LogonPwdData.PlainPwd != NULL)
         MsvpStoreDpapiCredential(LogonId, LogonPwdData.PlainPwd);
+
+    /* Network and guest logons get no reusable credential */
+    if (SessionCreated && LogonPwdData.PlainPwd != NULL && !SpecialAccount &&
+        (LogonType == Interactive || LogonType == Batch || LogonType == Service) &&
+        UserInfo->All.UserId != DOMAIN_USER_RID_GUEST)
+    {
+        MsvpStoreNtOwfCredential(LogonId, LogonPwdData.PlainPwd);
+    }
 
     LogonEntry = ExistingLogon ? NULL : RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(LOGON_LIST_ENTRY));
     if (LogonEntry)

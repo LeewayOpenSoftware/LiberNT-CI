@@ -35,6 +35,7 @@ typedef struct _NegoHelper {
     BYTE server_challenge[8];
 #ifdef __REACTOS__
     WCHAR *target_name; /* the client's target, sent in the NTLMv2 response */
+    BOOL use_logon_session; /* default credentials: msv1_0 answers from the logon session */
 #endif
     HANDLE token;
     BYTE *session_key;
