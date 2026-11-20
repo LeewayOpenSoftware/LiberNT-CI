@@ -22,7 +22,7 @@ MiEnableSoftPteInversion(
     _In_ ULONG64 PageFileSlotLimit)
 {
     /* Inverted and plain entries must never mix */
-    if (MiSoftPteMade)
+    if (MI_ATOMIC_READ8(&MiSoftPteMade))
         return FALSE;
 
     MiSoftInvertMask = (MI_PTE)MI_SOFT_INVERT_MASK;

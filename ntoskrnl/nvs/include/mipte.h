@@ -113,8 +113,9 @@ MiSoftMake(_In_ MI_SOFT_KIND Kind, _In_ ULONG Protection, _In_ ULONG64 Value)
 
     if (MiSoftKindHasValue(Kind))
     {
-        if (!MiSoftPteMade)
-            MiSoftPteMade = TRUE;
+        /* One-way latch, set from concurrent fault paths that hold different locks */
+        if (!MI_ATOMIC_READ8(&MiSoftPteMade))
+            MI_ATOMIC_OR8(&MiSoftPteMade, TRUE);
         Pte ^= MiSoftInvertMask;
     }
     return Pte;
