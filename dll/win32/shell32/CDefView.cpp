@@ -102,6 +102,16 @@ struct LISTVIEW_SORT_INFO
 #define DEFVIEW_THUMB_TIMER_ID 0x1115
 #define DEFVIEW_THUMB_BATCH 32      /* thumbnail requests per timer tick */
 #define DEFVIEW_THUMB_SIZE 96       /* the Thumbnails view: icons at 96 px */
+#define DEFVIEW_THUMB_SCAN_TIMER_ID 0x1116
+#define DEFVIEW_THUMB_SCAN_MS 100   /* after a paint shows items not asked for yet */
+/* Retained thumbnails: a large folder must not exhaust the GDI handle quota.
+   Off-screen ones above the budget go back to their icons. */
+#define DEFVIEW_THUMB_MAX_BITMAPS 1000
+#define DEFVIEW_THUMB_MAX_BYTES (32 * 1024 * 1024)
+/* The request id is the list-view item id with a generation in the top byte:
+   the list view reuses ids, so an old result must not land on a new item */
+#define DEFVIEW_THUMB_ID_MASK 0x00FFFFFF
+#define DEFVIEW_THUMB_GEN_SHIFT 24
 
 /* comctl32 exports it (ordinal 326); the PSDK header lacks it */
 EXTERN_C BOOL WINAPI DSA_DeleteItem(HDSA hdsa, INT nIndex);
@@ -440,6 +450,10 @@ private:
         DWORD Id;       // list-view unique item id
         HBITMAP hbm;    // NULL while the request is pending
         BOOL bAlpha;    // 32 bpp with a (premultiplied) alpha channel
+        BOOL bNone;     // no thumbnail for this item: never ask again
+        DWORD Gen;      // generation of the outstanding request
+        DWORD cb;       // bitmap bytes
+        DWORD Used;     // last drawn (m_ThumbUseClock)
     };
     CComPtr<IThumbnail3>      m_pThumbnail;
     BOOL                      m_ThumbArmed;         // Init(m_hWnd, SHV_THUMBNAIL) done
@@ -449,6 +463,10 @@ private:
     HDSA                      m_hdsaThumbs;         // THUMB_ENTRY sorted by Id
     CSimpleArray<DWORD>       m_ThumbQueue;         // ids still to request
     INT                       m_ThumbQueuePos;
+    SIZE_T                    m_ThumbBytes;         // bytes held by the retained bitmaps
+    DWORD                     m_ThumbGen;
+    DWORD                     m_ThumbUseClock;
+    BOOL                      m_ThumbScanPending;
 
     HRESULT _MergeToolbar();
     void _MergeMenus();
@@ -515,6 +533,9 @@ private:
     void RequestThumbnail(INT iItem);
     void DropThumbnail(INT iItem, BOOL bRestoreIcon);
     void DrawThumbnail(NMLVCUSTOMDRAW *pDraw);
+    void ScheduleThumbnailScan();
+    void GetThumbnailKeepRect(RECT *prc);
+    void EvictThumbnails();
     BOOL IsDesktop() const { return m_FolderSettings.fFlags & FWF_DESKTOP; }
 
     inline BOOL IsSpecialFolder(int &csidl) const
@@ -928,7 +949,11 @@ CDefView::CDefView() :
     m_ThumbSize(0),
     m_ThumbBitmaps(0),
     m_hdsaThumbs(NULL),
-    m_ThumbQueuePos(0)
+    m_ThumbQueuePos(0),
+    m_ThumbBytes(0),
+    m_ThumbGen(0),
+    m_ThumbUseClock(0),
+    m_ThumbScanPending(FALSE)
 {
     ZeroMemory(m_SizedLists, sizeof(m_SizedLists));
     ZeroMemory(&m_FolderSettings, sizeof(m_FolderSettings));
@@ -3055,6 +3080,15 @@ LRESULT CDefView::OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandle
         PumpThumbnailQueue(DEFVIEW_THUMB_BATCH);
         return 0;
     }
+    if (wParam == DEFVIEW_THUMB_SCAN_TIMER_ID)
+    {
+        bHandled = TRUE;
+        KillTimer(DEFVIEW_THUMB_SCAN_TIMER_ID);
+        m_ThumbScanPending = FALSE;
+        if (m_ThumbSize && !m_pEnumIDList)
+            StartThumbnailRequests();
+        return 0;
+    }
     if (wParam != DEFVIEW_FILL_TIMER_ID)
     {
         bHandled = FALSE;
@@ -4212,7 +4246,7 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
                     return CDRF_SKIPDEFAULT;
                 }
             }
-            else if (lpnmh->hwndFrom == m_ListView && (m_ExplorerMaterialActive || m_SizedCurrent || m_ThumbBitmaps))
+            else if (lpnmh->hwndFrom == m_ListView && (m_ExplorerMaterialActive || m_SizedCurrent || m_ThumbSize || m_ThumbBitmaps))
             {
                 NMLVCUSTOMDRAW *pDraw = (NMLVCUSTOMDRAW *)lpnmh;
                 if (pDraw->nmcd.dwDrawStage == CDDS_PREPAINT)
@@ -4230,9 +4264,16 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
                                            GetBValue(Key) + (Ink - GetBValue(Key)) * 0x14 / 255);
                     pDraw->clrText = ExplorerContentTextColor();
                 }
-                /* The thumbnail goes over the item, in place of its icon */
-                if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT && HasThumbnail((INT)pDraw->nmcd.dwItemSpec))
-                    return CDRF_NOTIFYPOSTPAINT;
+                /* The thumbnail goes over the item, in place of its icon; an item
+                   scrolled into view that was never asked for starts a scan */
+                if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT && (m_ThumbSize || m_ThumbBitmaps))
+                {
+                    THUMB_ENTRY *entry = FindThumbnail(ListView_MapIndexToID(m_ListView.m_hWnd, (INT)pDraw->nmcd.dwItemSpec));
+                    if (entry && entry->hbm)
+                        return CDRF_NOTIFYPOSTPAINT;
+                    if (!entry && m_ThumbSize && !m_ThumbUnavailable && !m_pEnumIDList)
+                        ScheduleThumbnailScan();
+                }
                 if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT)
                     DrawThumbnail(pDraw);
             }
@@ -6446,10 +6487,15 @@ void CDefView::FreeThumbnails(BOOL bRestoreIcons)
     if (m_hdsaThumbs)
         DSA_DeleteAllItems(m_hdsaThumbs);
     m_ThumbBitmaps = 0;
+    m_ThumbBytes = 0;
     m_ThumbQueue.RemoveAll();
     m_ThumbQueuePos = 0;
+    m_ThumbScanPending = FALSE;
     if (m_hWnd)
+    {
         KillTimer(DEFVIEW_THUMB_TIMER_ID);
+        KillTimer(DEFVIEW_THUMB_SCAN_TIMER_ID);
+    }
 }
 
 /* Nothing is posted after Init(NULL, 0); what was posted before is stale */
@@ -6499,12 +6545,13 @@ void CDefView::UpdateThumbnailMode()
         StartThumbnailRequests();
 }
 
-/* Queue every item, the visible ones first: those go out now, the rest on a
-   timer so the UI thread never stalls on a large folder */
+/* Queue the visible items and those one page around them, the visible ones
+   first: those go out now, the others on a timer so the UI thread never
+   stalls. Items further away are asked for when a paint shows them. */
 void CDefView::StartThumbnailRequests()
 {
-    CSimpleArray<DWORD> Hidden;
-    RECT rcClient, rcItem, rcTmp;
+    CSimpleArray<DWORD> Near;
+    RECT rcClient, rcKeep, rcItem, rcTmp;
     INT count, cVisible = 0;
 
     m_ThumbQueue.RemoveAll();
@@ -6517,23 +6564,26 @@ void CDefView::StartThumbnailRequests()
     if (count <= 0)
         return;
     m_ListView.GetClientRect(&rcClient);
+    GetThumbnailKeepRect(&rcKeep);
     for (INT i = 0; i < count; i++)
     {
         DWORD Id = ListView_MapIndexToID(m_ListView.m_hWnd, i);
         if (FindThumbnail(Id))
             continue;
-        if (ListView_GetItemRect(m_ListView.m_hWnd, i, &rcItem, LVIR_BOUNDS) && IntersectRect(&rcTmp, &rcItem, &rcClient))
+        if (!ListView_GetItemRect(m_ListView.m_hWnd, i, &rcItem, LVIR_BOUNDS))
+            continue;
+        if (IntersectRect(&rcTmp, &rcItem, &rcClient))
         {
             m_ThumbQueue.Add(Id);
             cVisible++;
         }
-        else
+        else if (IntersectRect(&rcTmp, &rcItem, &rcKeep))
         {
-            Hidden.Add(Id);
+            Near.Add(Id);
         }
     }
-    for (INT i = 0; i < Hidden.GetSize(); i++)
-        m_ThumbQueue.Add(Hidden[i]);
+    for (INT i = 0; i < Near.GetSize(); i++)
+        m_ThumbQueue.Add(Near[i]);
     PumpThumbnailQueue(cVisible);
     if (m_ThumbQueuePos < m_ThumbQueue.GetSize())
         SetTimer(DEFVIEW_THUMB_TIMER_ID, USER_TIMER_MINIMUM);
@@ -6567,17 +6617,21 @@ void CDefView::RequestThumbnail(INT iItem)
 
     if (!m_ThumbSize || m_ThumbUnavailable || m_Destroyed || iItem < 0 || !m_ListView.m_hWnd)
         return;
+    ZeroMemory(&entry, sizeof(entry));
     entry.Id = ListView_MapIndexToID(m_ListView.m_hWnd, iItem);
-    entry.hbm = NULL;
-    entry.bAlpha = FALSE;
-    if (entry.Id == (DWORD)-1 || FindThumbnail(entry.Id, &index))
-        return;
-    /* File system files only (no folder thumbnails yet) */
-    pidl = _PidlByItem(iItem);
-    if (!pidl || GetItemAttributes(pidl, SFGAO_FILESYSTEM | SFGAO_FOLDER) != SFGAO_FILESYSTEM)
+    if (entry.Id > DEFVIEW_THUMB_ID_MASK || FindThumbnail(entry.Id, &index))
         return;
     if (!m_hdsaThumbs && !(m_hdsaThumbs = DSA_Create(sizeof(THUMB_ENTRY), 64)))
         return;
+    /* File system files only (no folder thumbnails yet); the others are
+       remembered so that painting them does not scan again */
+    pidl = _PidlByItem(iItem);
+    if (!pidl || GetItemAttributes(pidl, SFGAO_FILESYSTEM | SFGAO_FOLDER) != SFGAO_FILESYSTEM)
+    {
+        entry.bNone = TRUE;
+        DSA_InsertItem(m_hdsaThumbs, index, &entry);
+        return;
+    }
     if (!m_pThumbnail &&
         FAILED(CoCreateInstance(CLSID_Thumbnail, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARG(IThumbnail3, &m_pThumbnail))))
     {
@@ -6596,14 +6650,16 @@ void CDefView::RequestThumbnail(INT iItem)
     }
     if (FAILED(SHCreateShellItem(NULL, m_pSFParent, pidl, &psi)))
         return;
-    hr = m_pThumbnail->GetBitmapFromShellItem(psi, entry.Id, m_ThumbSize, m_ThumbSize);
+    entry.Gen = (++m_ThumbGen) & 0xFF;
+    hr = m_pThumbnail->GetBitmapFromShellItem(psi, entry.Id | (entry.Gen << DEFVIEW_THUMB_GEN_SHIFT),
+                                              m_ThumbSize, m_ThumbSize);
     if (hr == E_NOTIMPL)
     {
         m_ThumbUnavailable = TRUE; // no generator in this build: keep the icons
         return;
     }
-    if (SUCCEEDED(hr))
-        DSA_InsertItem(m_hdsaThumbs, index, &entry);
+    entry.bNone = FAILED(hr);
+    DSA_InsertItem(m_hdsaThumbs, index, &entry);
 }
 
 /* The item is going away or changing: forget its thumbnail and request */
@@ -6621,10 +6677,84 @@ void CDefView::DropThumbnail(INT iItem, BOOL bRestoreIcon)
     {
         ::DeleteObject(entry->hbm);
         --m_ThumbBitmaps;
+        m_ThumbBytes -= entry->cb;
         if (bRestoreIcon)
             RestoreItemIcon(iItem);
     }
     DSA_DeleteItem(m_hdsaThumbs, index);
+}
+
+/* A paint showed an item never asked for (scrolling, resizing, arranging) */
+void CDefView::ScheduleThumbnailScan()
+{
+    if (m_ThumbScanPending || !m_hWnd)
+        return;
+    m_ThumbScanPending = SetTimer(DEFVIEW_THUMB_SCAN_TIMER_ID, DEFVIEW_THUMB_SCAN_MS) != 0;
+}
+
+/* What stays: the client area and one page on each side of it */
+void CDefView::GetThumbnailKeepRect(RECT *prc)
+{
+    m_ListView.GetClientRect(prc);
+    InflateRect(prc, prc->right - prc->left, prc->bottom - prc->top);
+}
+
+static int __cdecl CompareThumbUse(const void *p1, const void *p2)
+{
+    const ULONGLONG a = *(const ULONGLONG *)p1, b = *(const ULONGLONG *)p2;
+    return a < b ? -1 : a > b;
+}
+
+/* Over the budget: drop the least recently drawn thumbnails away from the
+   visible page, down to 7/8 of the budget; their items show icons again and
+   are asked for again when scrolled back into view */
+void CDefView::EvictThumbnails()
+{
+    ULONGLONG *pOrder;
+    RECT rcKeep, rcItem, rcTmp;
+    INT count, cOrder = 0;
+
+    if (m_ThumbBitmaps <= DEFVIEW_THUMB_MAX_BITMAPS && m_ThumbBytes <= DEFVIEW_THUMB_MAX_BYTES)
+        return;
+    count = m_hdsaThumbs ? DSA_GetItemCount(m_hdsaThumbs) : 0;
+    pOrder = count ? (ULONGLONG *)LocalAlloc(LMEM_FIXED, count * sizeof(ULONGLONG)) : NULL;
+    if (!pOrder)
+        return;
+    GetThumbnailKeepRect(&rcKeep);
+    for (INT i = 0; i < count; i++)
+    {
+        THUMB_ENTRY *entry = (THUMB_ENTRY *)DSA_GetItemPtr(m_hdsaThumbs, i);
+        INT iItem;
+
+        if (!entry->hbm)
+            continue;
+        iItem = (INT)ListView_MapIDToIndex(m_ListView.m_hWnd, entry->Id);
+        if (iItem >= 0 && ListView_GetItemRect(m_ListView.m_hWnd, iItem, &rcItem, LVIR_BOUNDS) &&
+            IntersectRect(&rcTmp, &rcItem, &rcKeep))
+        {
+            continue;
+        }
+        pOrder[cOrder++] = ((ULONGLONG)entry->Used << 32) | entry->Id;
+    }
+    qsort(pOrder, cOrder, sizeof(ULONGLONG), CompareThumbUse);
+    for (INT i = 0; i < cOrder; i++)
+    {
+        if (m_ThumbBitmaps <= DEFVIEW_THUMB_MAX_BITMAPS * 7 / 8 && m_ThumbBytes <= DEFVIEW_THUMB_MAX_BYTES / 8 * 7)
+            break;
+        DWORD Id = (DWORD)pOrder[i];
+        INT iItem = (INT)ListView_MapIDToIndex(m_ListView.m_hWnd, Id);
+        INT index;
+        THUMB_ENTRY *entry = FindThumbnail(Id, &index);
+
+        if (!entry || !entry->hbm)
+            continue;
+        ::DeleteObject(entry->hbm);
+        --m_ThumbBitmaps;
+        m_ThumbBytes -= entry->cb;
+        DSA_DeleteItem(m_hdsaThumbs, index);
+        RestoreItemIcon(iItem);
+    }
+    LocalFree(pOrder);
 }
 
 static BOOL ThumbnailHasAlpha(HBITMAP hbm)
@@ -6649,16 +6779,25 @@ static BOOL ThumbnailHasAlpha(HBITMAP hbm)
 LRESULT CDefView::OnThumbnail(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
 {
     HBITMAP hbm = (HBITMAP)wParam;
+    const DWORD Id = (DWORD)lParam & DEFVIEW_THUMB_ID_MASK;
+    const DWORD Gen = (DWORD)lParam >> DEFVIEW_THUMB_GEN_SHIFT;
     THUMB_ENTRY *entry = NULL;
     LVITEMW item;
+    BITMAP bm;
     INT iItem = -1, index = 0;
 
     if (!hbm)
         return 0;
     if (m_ThumbSize && !m_Destroyed && m_ListView.m_hWnd)
-        entry = FindThumbnail((DWORD)lParam, &index);
+        entry = FindThumbnail(Id, &index);
+    if (entry && (entry->Gen != Gen || entry->bNone))
+    {
+        /* For an earlier item with the same id: the current request stays */
+        ::DeleteObject(hbm);
+        return 0;
+    }
     if (entry)
-        iItem = (INT)ListView_MapIDToIndex(m_ListView.m_hWnd, (DWORD)lParam);
+        iItem = (INT)ListView_MapIDToIndex(m_ListView.m_hWnd, Id);
     if (iItem < 0)
     {
         /* Not asked for (any more), or the item is gone */
@@ -6668,6 +6807,7 @@ LRESULT CDefView::OnThumbnail(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHa
             {
                 ::DeleteObject(entry->hbm);
                 --m_ThumbBitmaps;
+                m_ThumbBytes -= entry->cb;
             }
             DSA_DeleteItem(m_hdsaThumbs, index);
         }
@@ -6675,17 +6815,27 @@ LRESULT CDefView::OnThumbnail(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHa
         return 0;
     }
     if (entry->hbm)
+    {
         ::DeleteObject(entry->hbm);
+        m_ThumbBytes -= entry->cb;
+    }
     else
+    {
         ++m_ThumbBitmaps;
+    }
     entry->hbm = hbm;
     entry->bAlpha = ThumbnailHasAlpha(hbm);
+    entry->cb = ::GetObjectW(hbm, sizeof(bm), &bm) ? (DWORD)bm.bmWidthBytes * (DWORD)abs(bm.bmHeight) : 0;
+    entry->Used = ++m_ThumbUseClock;
+    m_ThumbBytes += entry->cb;
 
     item.mask = LVIF_IMAGE;
     item.iItem = iItem;
     item.iSubItem = 0;
     item.iImage = I_IMAGENONE;
     m_ListView.SetItem(&item);
+    /* May give this one back its icon if it is already far off-screen */
+    EvictThumbnails();
     ListView_RedrawItems(m_ListView.m_hWnd, iItem, iItem);
     return 0;
 }
@@ -6707,6 +6857,7 @@ void CDefView::DrawThumbnail(NMLVCUSTOMDRAW *pDraw)
     if (!HasThumbnail(iItem))
         return;
     entry = FindThumbnail(ListView_MapIndexToID(m_ListView.m_hWnd, iItem));
+    entry->Used = ++m_ThumbUseClock;
     if (!ListView_GetItemRect(m_ListView.m_hWnd, iItem, &rcIcon, LVIR_ICON) ||
         !::GetObjectW(entry->hbm, sizeof(bm), &bm) || bm.bmWidth <= 0 || !bm.bmHeight)
     {
@@ -6793,9 +6944,11 @@ void CDefView::ApplyViewIconSize()
     Shell_GetImageLists(&bigList, &smallList);
     mode = (FOLDERVIEWMODE)m_FolderSettings.ViewMode;
     bigSize = GetSystemMetrics(SM_CXICON);
-    /* Thumbnails is the icon view at the thumbnail size */
-    iconSize = mode == FVM_THUMBNAIL ? DEFVIEW_THUMB_SIZE : m_IconSize;
-    if ((mode == FVM_ICON || mode == FVM_THUMBNAIL) && !IsComputerTileView() && iconSize > 0 && iconSize != bigSize)
+    /* Thumbnails is the icon view at the thumbnail size; Tiles shows 48 px
+       icons (and 48 px thumbnails) as Windows */
+    iconSize = mode == FVM_THUMBNAIL ? DEFVIEW_THUMB_SIZE : mode == FVM_TILE ? 48 : m_IconSize;
+    if ((mode == FVM_ICON || mode == FVM_THUMBNAIL || mode == FVM_TILE) && !IsComputerTileView() &&
+        iconSize > 0 && iconSize != bigSize)
     {
         if (!m_himlView || m_himlViewSize != iconSize)
         {
