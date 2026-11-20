@@ -141,6 +141,33 @@ BochsInitializeSuitableModeInfo(
 }
 
 CODE_SEG("PAGE")
+static BOOLEAN
+BochsHasDefaultSettings(VOID)
+{
+    RTL_QUERY_REGISTRY_TABLE Table[3];
+    ULONG xRes = 0, yRes = 0;
+
+    RtlZeroMemory(Table, sizeof(Table));
+    Table[0].Flags = RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK;
+    Table[0].Name = L"DefaultSettings.XResolution";
+    Table[0].EntryContext = &xRes;
+    Table[0].DefaultType = (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_NONE;
+    Table[1].Flags = RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK;
+    Table[1].Name = L"DefaultSettings.YResolution";
+    Table[1].EntryContext = &yRes;
+    Table[1].DefaultType = (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_NONE;
+
+    if (!NT_SUCCESS(RtlQueryRegistryValues(RTL_REGISTRY_SERVICES,
+                                           L"bochsmp\\Device0",
+                                           Table, NULL, NULL)))
+    {
+        return FALSE;
+    }
+
+    return (xRes != 0 && yRes != 0);
+}
+
+CODE_SEG("PAGE")
 static VOID
 BochsApplyGopPreferredMode(
     _Inout_ PBOCHS_DEVICE_EXTENSION DeviceExtension)
@@ -201,7 +228,14 @@ BochsApplyGopPreferredMode(
     }
 
     /* Persist GOP res as the device's DefaultSettings so win32k picks it
-     * as the initial mode on next probe. */
+     * as the initial mode on next probe, unless a mode was already saved. */
+    if (BochsHasDefaultSettings())
+    {
+        VideoDebugPrint((Info, "Bochs: keeping the saved DefaultSettings over GOP %lux%lu\n",
+                         Fb.HorizontalResolution, Fb.VerticalResolution));
+        return;
+    }
+
     xRes = Fb.HorizontalResolution;
     yRes = Fb.VerticalResolution;
     (VOID)RtlWriteRegistryValue(RTL_REGISTRY_SERVICES,
