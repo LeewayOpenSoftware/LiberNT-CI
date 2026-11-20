@@ -84,6 +84,7 @@ extern ULONG KiFeatureSettingsOverrideMask;
 #define KSPEC_HARDEN_IBPB               0x00000008  /* Barrier on process switch (opt-in) */
 #define KSPEC_HARDEN_STIBP              0x00000010  /* Single-thread indirect branch predictors (opt-in) */
 #define KSPEC_HARDEN_SSBD               0x00000020  /* Honour the SSBD system and process opt-ins */
+#define KSPEC_HARDEN_L1TF               0x00000040  /* Invert the value bits of not-present page table entries */
 
 /* How speculative store bypass is disabled */
 #define KSPEC_SSBD_NONE                 0

@@ -74,6 +74,7 @@ typedef ULONG64 MI_PTE, *PMI_PTE;
 #define MI_SOFT_FILE_SHIFT        9
 #define MI_SOFT_FILE_MASK         0x7ULL
 #define MI_SOFT_VALUE_SHIFT       12
+#define MI_SOFT_INVERT_MASK       0x000FFFFFFFFFF000ULL
 
 typedef enum _MI_SOFT_KIND
 {
@@ -87,13 +88,36 @@ typedef enum _MI_SOFT_KIND
     MiSoftResident
 } MI_SOFT_KIND;
 
+/* Value bits of not-present entries are stored XOR this mask (0, or MI_SOFT_INVERT_MASK under L1TF hardening) */
+extern MI_PTE MiSoftInvertMask;
+/* Set once a value-carrying entry exists; the mask can no longer change after that */
+extern BOOLEAN MiSoftPteMade;
+
+BOOLEAN MiArchPteIsValid(_In_ MI_PTE Pte);
+
+FORCEINLINE
+BOOLEAN
+MiSoftKindHasValue(_In_ MI_SOFT_KIND Kind)
+{
+    return Kind == MiSoftTransition || Kind == MiSoftPageFile || Kind == MiSoftPrototype ||
+           Kind == MiSoftSubsection || Kind == MiSoftResident;
+}
+
 FORCEINLINE
 MI_PTE
 MiSoftMake(_In_ MI_SOFT_KIND Kind, _In_ ULONG Protection, _In_ ULONG64 Value)
 {
-    return ((ULONG64)Kind << MI_SOFT_KIND_SHIFT) |
-           (((ULONG64)Protection & MI_SOFT_PROT_MASK) << MI_SOFT_PROT_SHIFT) |
-           (Value << MI_SOFT_VALUE_SHIFT);
+    MI_PTE Pte = ((ULONG64)Kind << MI_SOFT_KIND_SHIFT) |
+                 (((ULONG64)Protection & MI_SOFT_PROT_MASK) << MI_SOFT_PROT_SHIFT) |
+                 (Value << MI_SOFT_VALUE_SHIFT);
+
+    if (MiSoftKindHasValue(Kind))
+    {
+        if (!MiSoftPteMade)
+            MiSoftPteMade = TRUE;
+        Pte ^= MiSoftInvertMask;
+    }
+    return Pte;
 }
 
 FORCEINLINE
@@ -124,6 +148,9 @@ FORCEINLINE
 ULONG64
 MiSoftValue(_In_ MI_PTE Pte)
 {
+    MI_ASSERT(MiSoftInvertMask == 0 || !MiArchPteIsValid(Pte));
+    if (MiSoftKindHasValue(MiSoftKind(Pte)))
+        Pte ^= MiSoftInvertMask;
     return Pte >> MI_SOFT_VALUE_SHIFT;
 }
 
@@ -156,7 +183,6 @@ MiProtApplyCache(
 
 MI_PTE MiArchPteMakeLeaf(_In_ ULONG64 Frame, _In_ ULONG Protection, _In_ ULONG Flags);
 MI_PTE MiArchPteMakeTable(_In_ ULONG64 Frame, _In_ ULONG Flags);
-BOOLEAN MiArchPteIsValid(_In_ MI_PTE Pte);
 BOOLEAN MiArchPteIsBlock(_In_ MI_PTE Pte, _In_ ULONG Level);
 MI_PTE MiArchPteMakeBlock(_In_ ULONG64 Frame, _In_ ULONG Protection, _In_ ULONG Flags);
 MI_PTE MiArchPteBlockToPage(_In_ MI_PTE Pte, _In_ ULONG64 Frame);

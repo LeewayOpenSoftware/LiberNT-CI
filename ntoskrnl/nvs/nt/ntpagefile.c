@@ -477,6 +477,16 @@ NtCreatePagingFile(
         return STATUS_INVALID_PARAMETER_2;
     }
 
+    if (MiSoftPageFileSlotLimit != 0 &&
+        ((ULONG64)SafeMaximum.QuadPart >> PAGE_SHIFT) > MiSoftPageFileSlotLimit)
+    {
+        DPRINT1("Paging file limited to %I64u MB by not-present entry inversion\n",
+                MiSoftPageFileSlotLimit >> (20 - PAGE_SHIFT));
+        SafeMaximum.QuadPart = (LONGLONG)(MiSoftPageFileSlotLimit << PAGE_SHIFT);
+        if (SafeMinimum.QuadPart > SafeMaximum.QuadPart)
+            SafeMinimum = SafeMaximum;
+    }
+
     KeAcquireGuardedMutex(&MiPagingFileCreationLock);
 
     if (MI_ATOMIC_READ_POINTER(&MiPagingFile) != NULL)

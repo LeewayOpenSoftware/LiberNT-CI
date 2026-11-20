@@ -62,6 +62,7 @@ typedef struct _MI_SECTION_OBJECT
 extern SIZE_T MmtotalCommitLimitMaximum;
 
 extern MI_SYSTEM MiSystem;
+extern ULONG64 MiSoftPageFileSlotLimit;
 extern MI_PROCESS_MANAGER MiProcessManager;
 
 typedef struct _MI_PROCESS_REFERENCE

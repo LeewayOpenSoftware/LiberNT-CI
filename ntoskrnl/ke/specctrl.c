@@ -395,6 +395,55 @@ KiPatchBootImages(
 }
 #endif
 
+#ifdef _M_AMD64
+/* L1 terminal fault: Intel processors without RDCL_NO; AMD is not affected */
+CODE_SEG("INIT")
+static
+BOOLEAN
+KiApplyL1tfPolicy(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    PMEMORY_ALLOCATION_DESCRIPTOR Descriptor;
+    PLIST_ENTRY Entry;
+    ULONG64 TopPage = 0, SlotLimit;
+    ULONG PhysicalBits = 36;
+    BOOLEAN Guest, Enabled;
+    INT Regs[4];
+
+    if (KeGetCurrentPrcb()->CpuVendor != CPU_INTEL || (KiArchCapabilities & ARCH_CAP_RDCL_NO))
+        return FALSE;
+
+    __cpuid(Regs, 1);
+    Guest = ((ULONG)Regs[2] & (1UL << 31)) != 0;
+    __cpuid(Regs, 0x80000000);
+    if ((ULONG)Regs[0] >= 0x80000008)
+    {
+        __cpuid(Regs, 0x80000008);
+        PhysicalBits = (ULONG)Regs[0] & 0xFF;
+    }
+    if (PhysicalBits < 36 || PhysicalBits > 52)
+        PhysicalBits = 36;
+
+    for (Entry = LoaderBlock->MemoryDescriptorListHead.Flink;
+         Entry != &LoaderBlock->MemoryDescriptorListHead;
+         Entry = Entry->Flink)
+    {
+        Descriptor = CONTAINING_RECORD(Entry, MEMORY_ALLOCATION_DESCRIPTOR, ListEntry);
+        if (Descriptor->MemoryType != LoaderBad)
+            TopPage = max(TopPage, (ULONG64)Descriptor->BasePage + Descriptor->PageCount);
+    }
+
+    /* An inverted value lands at or above 2^(MAXPHYADDR-1) while it stays below 2^(MAXPHYADDR-13) */
+    SlotLimit = 1ULL << (PhysicalBits - 13);
+    Enabled = MiEnableSoftPteInversion(SlotLimit);
+    DPRINT1("L1TF inversion %s: guest %u, MAXPHYADDR %lu, RAM top 0x%I64x, %s, page file limit %I64u MB\n",
+            Enabled ? "on" : "not set, entries already made", Guest, PhysicalBits, TopPage << PAGE_SHIFT,
+            (TopPage < SlotLimit) ? "complete" : "incomplete, memory reaches 2^(MAXPHYADDR-1)",
+            SlotLimit >> (20 - PAGE_SHIFT));
+    return Enabled;
+}
+#endif
+
 CODE_SEG("INIT")
 VOID
 NTAPI
@@ -462,6 +511,10 @@ KiApplySpeculationPolicy(
     if ((KiSpeculationBtiMode == KSPEC_BTI_LEGACY_IBRS) && !(Kinds & KSPEC_PATCH_IBRS))
         KiSpeculationBtiMode = KSPEC_BTI_NONE;
     Kinds &= ~(KSPEC_PATCH_IBRS | KSPEC_PATCH_RSB);
+
+    /* Before nvs phase 0 writes its first not-present entry */
+    if ((KiSpeculationHardening & KSPEC_HARDEN_L1TF) && KiApplyL1tfPolicy(LoaderBlock))
+        Kinds |= KSPEC_HARDEN_L1TF;
 #else
     UNREFERENCED_PARAMETER(LoaderBlock);
     /* No buffer clearing sites on this architecture yet */
