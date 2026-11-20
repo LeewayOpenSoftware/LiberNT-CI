@@ -5,6 +5,8 @@ under the OFL; it is not a Windows font file.
 Origin:  https://github.com/microsoft/cascadia-code/releases/tag/v2407.24
          (CascadiaCode-2407.24.zip, ttf/static/CascadiaMono-*.ttf)
 Licence: SIL Open Font License 1.1, Reserved Font Name "Cascadia Code" (OFL.txt)
+         The name table's description (ID 13) that calls it a Microsoft supplied font
+         is upstream's own text in the release files; it is not a Windows font.
 Metrics: not metric compatible. The cell is 0.586 em against 0.550 em for
          Consolas (about 6.5% wider), so Consolas text set in it runs longer.
          No redistributable monospace with a 0.55 em cell was found.

@@ -99,6 +99,18 @@ if(_fonts_missing)
 endif()
 unset(_hivesft_inf)
 
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/Carlito/OFL.txt"
+    DESTINATION reactos NAME_ON_CD Carlito-LICENSE.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/Carlito/README.txt"
+    DESTINATION reactos NAME_ON_CD Carlito-README.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/Caladea/LICENSE.txt"
+    DESTINATION reactos NAME_ON_CD Caladea-LICENSE.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/Caladea/README.txt"
+    DESTINATION reactos NAME_ON_CD Caladea-README.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/CascadiaMono/OFL.txt"
+    DESTINATION reactos NAME_ON_CD CascadiaMono-LICENSE.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/CascadiaMono/README.txt"
+    DESTINATION reactos NAME_ON_CD CascadiaMono-README.txt NO_CAB FOR all)
 add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansJP/LICENSE.txt"
     DESTINATION reactos NAME_ON_CD NotoSansJP-LICENSE.txt NO_CAB FOR all)
 add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansSC/LICENSE.txt"
