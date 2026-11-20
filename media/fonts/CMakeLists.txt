@@ -45,6 +45,7 @@ list(APPEND FONT_FILES
     #sserifer.fon # to be added (CORE-16165 and CORE-16166)
     #sserifet.fon # to be added (CORE-16165 and CORE-16166)
     segmdl2.ttf
+    SegoeIcons.ttf
     selawk.ttf
     selawkb.ttf
     selawkl.ttf
@@ -77,3 +78,5 @@ add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansJP/LICENSE.txt"
     DESTINATION reactos NAME_ON_CD NotoSansJP-LICENSE.txt NO_CAB FOR all)
 add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansSC/LICENSE.txt"
     DESTINATION reactos NAME_ON_CD NotoSansSC-LICENSE.txt NO_CAB FOR all)
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/SegoeMDL2Assets/LICENSE-MIT.txt"
+    DESTINATION reactos NAME_ON_CD SegoeIcons-LICENSE-MIT.txt NO_CAB FOR all)

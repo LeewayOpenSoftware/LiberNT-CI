@@ -3,8 +3,9 @@
   SPDX-License-Identifier: GPL-3.0-or-later
   Copyright (C) 2026 Ahmed ARIF
 
-  This TTX file is the preferred source form for the ReactOS caption-symbol
-  replacement font. Compile it with fontTools ttx to produce segmdl2.ttf.
+  This TTX file is the preferred source form of the caption-button glyphs of
+  segmdl2.ttf and SegoeIcons.ttf; media/fonts/iconfont/mkiconfont.py builds
+  both fonts from it and the Fluent UI System Icons glyphs.
 -->
 <ttFont sfntVersion="\x00\x01\x00\x00" ttLibVersion="4.63">
 
