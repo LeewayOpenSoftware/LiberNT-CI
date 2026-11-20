@@ -12,8 +12,17 @@
  * FileFsDeviceInformation that is needed here is declared locally. */
 typedef enum _FONTEXT_FS_INFORMATION_CLASS
 {
-    FontextFileFsDeviceInformation = 4
+    FontextFileFsDeviceInformation = 4,
+    FontextFileFsAttributeInformation = 5
 } FONTEXT_FS_INFORMATION_CLASS;
+
+typedef struct _FONTEXT_FS_ATTRIBUTE_INFORMATION
+{
+    ULONG FileSystemAttributes;
+    LONG MaximumComponentNameLength;
+    ULONG FileSystemNameLength;
+    WCHAR FileSystemName[64];
+} FONTEXT_FS_ATTRIBUTE_INFORMATION;
 
 typedef struct _FONTEXT_FS_DEVICE_INFORMATION
 {
@@ -36,6 +45,12 @@ NtQueryVolumeInformationFile(HANDLE FileHandle, PIO_STATUS_BLOCK IoStatusBlock, 
 #endif
 #ifndef FILE_REMOTE_DEVICE
 #define FILE_REMOTE_DEVICE 0x00000010
+#endif
+#ifndef STATUS_BUFFER_OVERFLOW
+#define STATUS_BUFFER_OVERFLOW ((NTSTATUS)0x80000005L)
+#endif
+#ifndef FILE_NAMED_STREAMS
+#define FILE_NAMED_STREAMS 0x00040000
 #endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(fontext);
@@ -60,7 +75,11 @@ STDMETHODIMP CFontThumbnail::Initialize(LPCWSTR pszFilePath, DWORD grfMode)
  * SystemRoot\Fonts, and otherwise files on a local fixed disk (judged on the
  * opened file's own volume, so a junction, a mount point or a SUBST drive onto
  * removable or network storage does not pass) that carry no Zone.Identifier
- * stream. Anything that cannot be verified keeps its icon.
+ * stream. The stream is probed only on a volume that reports named streams:
+ * a volume that cannot store one cannot carry a mark of the web. On such a
+ * volume, "not found", "invalid name", "not supported" and "invalid parameter"
+ * mean no stream; anything else (access denied, sharing) cannot be verified
+ * and the file keeps its icon.
  */
 static BOOL IsTrustedFontLocation(LPCWSTR pszGivenPath)
 {
@@ -71,8 +90,9 @@ static BOOL IsTrustedFontLocation(LPCWSTR pszGivenPath)
     HANDLE hFile, hStream;
     IO_STATUS_BLOCK Iosb;
     FONTEXT_FS_DEVICE_INFORMATION Device = { 0, 0 };
+    FONTEXT_FS_ATTRIBUTE_INFORMATION Attr;
     NTSTATUS Status;
-    DWORD dwError;
+    DWORD dwError, dwFsFlags = 0;
     CStringW strStream;
 
     if (!pszGivenPath || !*pszGivenPath)
@@ -95,13 +115,23 @@ static BOOL IsTrustedFontLocation(LPCWSTR pszGivenPath)
     if (hFile == INVALID_HANDLE_VALUE)
         return FALSE;
     Status = NtQueryVolumeInformationFile(hFile, &Iosb, &Device, sizeof(Device), FontextFileFsDeviceInformation);
+    ZeroMemory(&Attr, sizeof(Attr));
+    if (NT_SUCCESS(NtQueryVolumeInformationFile(hFile, &Iosb, &Attr, sizeof(Attr), FontextFileFsAttributeInformation)) ||
+        Iosb.Status == STATUS_BUFFER_OVERFLOW)
+        dwFsFlags = Attr.FileSystemAttributes;
     CloseHandle(hFile);
     if (!NT_SUCCESS(Status) || Device.DeviceType != FILE_DEVICE_DISK ||
         (Device.Characteristics & (FILE_REMOVABLE_MEDIA | FILE_REMOTE_DEVICE | FILE_FLOPPY_DISKETTE | FILE_PORTABLE_DEVICE)))
     {
-        TRACE("'%S' is not on a local fixed disk (status 0x%08lx type %lu char 0x%lx): no thumbnail\n",
-              pszPath, Status, Device.DeviceType, Device.Characteristics);
+        TRACE("'%S' is not on a local fixed disk (status 0x%08lx type %lu char 0x%lx fsflags 0x%lx): no thumbnail\n",
+              pszPath, Status, Device.DeviceType, Device.Characteristics, dwFsFlags);
         return FALSE;
+    }
+    if (!(dwFsFlags & FILE_NAMED_STREAMS))
+    {
+        /* No stream can exist here, so no mark of the web: the local fixed disk is enough */
+        TRACE("'%S': volume without named streams (fsflags 0x%lx), trusted\n", pszPath, dwFsFlags);
+        return TRUE;
     }
 
     strStream = pszPath;
@@ -115,10 +145,11 @@ static BOOL IsTrustedFontLocation(LPCWSTR pszGivenPath)
         return FALSE;
     }
     dwError = GetLastError();
-    if (dwError != ERROR_FILE_NOT_FOUND && dwError != ERROR_PATH_NOT_FOUND)
+    if (dwError != ERROR_FILE_NOT_FOUND && dwError != ERROR_PATH_NOT_FOUND &&
+        dwError != ERROR_INVALID_NAME && dwError != ERROR_NOT_SUPPORTED && dwError != ERROR_INVALID_PARAMETER)
     {
         /* Cannot tell whether the file was downloaded: do not trust it */
-        TRACE("'%S': Zone.Identifier check failed with %lu: no thumbnail\n", pszPath, dwError);
+        TRACE("'%S': Zone.Identifier open failed with %lu (fsflags 0x%lx): no thumbnail\n", pszPath, dwError, dwFsFlags);
         return FALSE;
     }
     return TRUE;
