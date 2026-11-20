@@ -3374,7 +3374,6 @@ static const WCHAR *reactos_family_substitute(const WCHAR *name)
         { L"Segoe UI Variable Display", L"Selawik" },
         { L"Segoe UI Variable Small", L"Selawik" },
         { L"Segoe Fluent Icons", L"Segoe MDL2 Assets" },
-        { L"Segoe UI Symbol", L"Segoe MDL2 Assets" },
         { L"Calibri", L"Selawik" },
         { L"Cambria", L"Georgia" },
         { L"Consolas", L"Lucida Console" },
