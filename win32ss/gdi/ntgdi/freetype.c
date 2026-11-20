@@ -255,10 +255,24 @@ do { \
     ExReleaseFastMutexUnsafeAndLeaveCriticalRegion(g_FreeTypeLock); \
 } while(0)
 
-#define MAX_FONT_CACHE 256
+/* Glyph cache: LRU list plus a hash table. Each size, transform and render mode
+   of a glyph is an entry, so the bound is in entries and in bitmap bytes. */
+#define MAX_FONT_CACHE          4096
+#define MAX_FONT_CACHE_BYTES    (16 * 1024 * 1024)
+#define FONT_CACHE_BUCKET_BITS  10
+#define FONT_CACHE_BUCKETS      (1 << FONT_CACHE_BUCKET_BITS)
 
 static RTL_STATIC_LIST_HEAD(g_FontCacheListHead);
+static LIST_ENTRY g_FontCacheBuckets[FONT_CACHE_BUCKETS];
 static UINT g_FontCacheNumEntries;
+static SIZE_T g_FontCacheBytes;
+
+static inline PLIST_ENTRY
+IntGetFontCacheBucket(DWORD dwHash)
+{
+    /* Fibonacci hashing: the top bits of the product mix every bit of dwHash */
+    return &g_FontCacheBuckets[(dwHash * 0x9E3779B1UL) >> (32 - FONT_CACHE_BUCKET_BITS)];
+}
 
 static PWCHAR g_ElfScripts[32] =   /* These are in the order of the fsCsb[0] bits */
 {
@@ -507,6 +521,9 @@ RemoveCachedEntry(PFONT_CACHE_ENTRY Entry)
 
     FT_Done_Glyph((FT_Glyph)Entry->BitmapGlyph);
     RemoveEntryList(&Entry->ListEntry);
+    RemoveEntryList(&Entry->BucketEntry);
+    ASSERT(g_FontCacheBytes >= Entry->cbBitmap);
+    g_FontCacheBytes -= Entry->cbBitmap;
     ExFreePoolWithTag(Entry, TAG_FONT);
     g_FontCacheNumEntries--;
     ASSERT(g_FontCacheNumEntries <= MAX_FONT_CACHE);
@@ -1032,8 +1049,12 @@ BOOL FASTCALL
 InitFontSupport(VOID)
 {
     ULONG ulError;
+    ULONG i;
 
     g_FontCacheNumEntries = 0;
+    g_FontCacheBytes = 0;
+    for (i = 0; i < FONT_CACHE_BUCKETS; ++i)
+        InitializeListHead(&g_FontCacheBuckets[i]);
 
     g_FreeTypeLock = ExAllocatePoolWithTag(NonPagedPool, sizeof(FAST_MUTEX), TAG_INTERNAL_SYNC);
     if (g_FreeTypeLock == NULL)
@@ -1083,11 +1104,11 @@ FreeFontSupport(VOID)
     PFONTSUBST_ENTRY pSubstEntry;
     PFONT_ENTRY pFontEntry;
 
-    // Free font cache list
+    // Free font cache list (RemoveCachedEntry unlinks the entry from both lists)
     pHead = &g_FontCacheListHead;
     while (!IsListEmpty(pHead))
     {
-        pEntry = RemoveHeadList(pHead);
+        pEntry = pHead->Flink;
         pFontCache = CONTAINING_RECORD(pEntry, FONT_CACHE_ENTRY, ListEntry);
         RemoveCachedEntry(pFontCache);
     }
@@ -4398,17 +4419,18 @@ IntGetHash(IN LPCVOID pv, IN DWORD cdw)
 static FT_BitmapGlyph
 IntFindGlyphCache(IN const FONT_CACHE_ENTRY *pCache)
 {
-    PLIST_ENTRY CurrentEntry;
+    PLIST_ENTRY CurrentEntry, Bucket;
     PFONT_CACHE_ENTRY FontEntry;
     DWORD dwHash = pCache->dwHash;
 
     ASSERT_FREETYPE_LOCK_HELD();
 
-    for (CurrentEntry = g_FontCacheListHead.Flink;
-         CurrentEntry != &g_FontCacheListHead;
+    Bucket = IntGetFontCacheBucket(dwHash);
+    for (CurrentEntry = Bucket->Flink;
+         CurrentEntry != Bucket;
          CurrentEntry = CurrentEntry->Flink)
     {
-        FontEntry = CONTAINING_RECORD(CurrentEntry, FONT_CACHE_ENTRY, ListEntry);
+        FontEntry = CONTAINING_RECORD(CurrentEntry, FONT_CACHE_ENTRY, BucketEntry);
         if (FontEntry->dwHash == dwHash &&
             FontEntry->Hashed.GlyphIndex == pCache->Hashed.GlyphIndex &&
             FontEntry->Hashed.Face == pCache->Hashed.Face &&
@@ -4422,13 +4444,14 @@ IntFindGlyphCache(IN const FONT_CACHE_ENTRY *pCache)
         }
     }
 
-    if (CurrentEntry == &g_FontCacheListHead)
+    if (CurrentEntry == Bucket)
     {
         return NULL;
     }
 
-    RemoveEntryList(CurrentEntry);
-    InsertHeadList(&g_FontCacheListHead, CurrentEntry);
+    /* Most recently used first */
+    RemoveEntryList(&FontEntry->ListEntry);
+    InsertHeadList(&g_FontCacheListHead, &FontEntry->ListEntry);
     return FontEntry->BitmapGlyph;
 }
 
@@ -4496,12 +4519,21 @@ IntGetBitmapGlyphWithCache(
     NewEntry->BitmapGlyph = BitmapGlyph;
     NewEntry->dwHash = Cache->dwHash;
     NewEntry->Hashed = Cache->Hashed;
+    NewEntry->cbBitmap = (SIZE_T)abs(BitmapGlyph->bitmap.pitch) * BitmapGlyph->bitmap.rows;
 
     InsertHeadList(&g_FontCacheListHead, &NewEntry->ListEntry);
-    if (++g_FontCacheNumEntries > MAX_FONT_CACHE)
+    InsertHeadList(IntGetFontCacheBucket(NewEntry->dwHash), &NewEntry->BucketEntry);
+    g_FontCacheBytes += NewEntry->cbBitmap;
+    ++g_FontCacheNumEntries;
+
+    /* Evict the least recently used entries, never the new one */
+    while (g_FontCacheNumEntries > 1 &&
+           (g_FontCacheNumEntries > MAX_FONT_CACHE || g_FontCacheBytes > MAX_FONT_CACHE_BYTES))
     {
-        NewEntry = CONTAINING_RECORD(g_FontCacheListHead.Blink, FONT_CACHE_ENTRY, ListEntry);
-        RemoveCachedEntry(NewEntry);
+        PFONT_CACHE_ENTRY OldEntry =
+            CONTAINING_RECORD(g_FontCacheListHead.Blink, FONT_CACHE_ENTRY, ListEntry);
+        ASSERT(OldEntry != NewEntry);
+        RemoveCachedEntry(OldEntry);
     }
 
     return BitmapGlyph;

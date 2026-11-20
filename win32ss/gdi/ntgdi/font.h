@@ -54,7 +54,9 @@ typedef struct _FONT_CACHE_HASHED
 
 typedef struct _FONT_CACHE_ENTRY
 {
-    LIST_ENTRY ListEntry;
+    LIST_ENTRY ListEntry;   /* in the LRU list, most recently used first */
+    LIST_ENTRY BucketEntry; /* in the hash bucket of dwHash */
+    SIZE_T cbBitmap;        /* bytes of the cached bitmap */
     FT_BitmapGlyph BitmapGlyph;
     DWORD dwHash;
     FONT_CACHE_HASHED Hashed;
