@@ -129,6 +129,15 @@ VOID
 NTAPI
 KiApplySpeculationControlProcessor(VOID);
 
+#ifdef _M_AMD64
+extern BOOLEAN KiSpeculationIdleClear;
+
+VOID
+FASTCALL
+KiSpeculationIdle(
+    _In_ PKPRCB Prcb);
+#endif
+
 extern ULONG KiSpeculationHardening;
 extern ULONG_PTR KiSpeculationIndexMaskOff;
 #ifdef _M_IX86

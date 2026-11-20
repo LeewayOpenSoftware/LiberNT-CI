@@ -29,6 +29,10 @@ ULONG64 KiSpecCtrlKernelCpu[MAXIMUM_PROCESSORS];
 ULONG64 KiSpecCtrlUserCpu[MAXIMUM_PROCESSORS];
 ULONG KiSpeculationSsbdMode;
 #ifdef _M_AMD64
+/* Legacy IBRS on a core with a sibling thread: drop IBRS while this thread idles */
+BOOLEAN KiSpeculationIdleClear;
+#endif
+#ifdef _M_AMD64
 /* SSBD state per processor when it lives in VIRT_SPEC_CTRL; SPEC_CTRL must never carry it then */
 static UCHAR KiVirtSsbdCpu[MAXIMUM_PROCESSORS];
 #endif
@@ -457,6 +461,69 @@ KiApplyL1tfPolicy(
 }
 #endif
 
+#ifdef _M_AMD64
+/* The idle path needs a sibling to give the core to, and a wait that wakes on interrupts while they are masked */
+CODE_SEG("INIT")
+static
+BOOLEAN
+KiCanClearIbrsWhenIdle(
+    _Out_ PCSTR *Reason)
+{
+    INT Regs[4];
+    ULONG MaxLeaf;
+
+    __cpuid(Regs, 0);
+    MaxLeaf = (ULONG)Regs[0];
+    if (MaxLeaf < 0xB)
+    {
+        *Reason = "no topology leaf";
+        return FALSE;
+    }
+    __cpuidex(Regs, 0xB, 0);
+    if ((((ULONG)Regs[2] >> 8) & 0xFF) != 1 || ((ULONG)Regs[1] & 0xFFFF) < 2)
+    {
+        *Reason = "no SMT";
+        return FALSE;
+    }
+    __cpuid(Regs, 1);
+    if (!((ULONG)Regs[2] & (1UL << 3)))
+    {
+        *Reason = "no MONITOR/MWAIT";
+        return FALSE;
+    }
+    __cpuid(Regs, 5);
+    if (((ULONG)Regs[2] & 3) != 3)
+    {
+        *Reason = "MWAIT cannot wake on masked interrupts";
+        return FALSE;
+    }
+    *Reason = "SMT, MWAIT";
+    return TRUE;
+}
+
+/* Called by the idle loop with interrupts disabled; returns with them enabled */
+VOID
+FASTCALL
+KiSpeculationIdle(
+    _In_ PKPRCB Prcb)
+{
+    ULONG Number = Prcb->Number;
+    volatile VOID *Line = &Prcb->NextThread;
+
+    /* Interrupts stay masked until IBRS is back, so no handler runs without it; NMIs take the paranoid path */
+    __writemsr(MSR_IA32_SPEC_CTRL, KiSpecCtrlUserCpu[Number]);
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ __volatile__ ("monitor" :: "a"(Line), "c"(0), "d"(0));
+    __asm__ __volatile__ ("mwait" :: "a"(0), "c"(1) : "memory");
+#else
+    _mm_monitor((const void *)Line, 0, 0);
+    _mm_mwait(1, 0);
+#endif
+    __writemsr(MSR_IA32_SPEC_CTRL, KiSpecCtrlKernelCpu[Number]);
+    _enable();
+}
+#endif
+
 CODE_SEG("INIT")
 VOID
 NTAPI
@@ -572,6 +639,17 @@ KiApplySpeculationPolicy(
 
     /* The other processors apply it when they start */
     KiApplySpeculationControlProcessor();
+
+#ifdef _M_AMD64
+    if (KiSpeculationBtiMode == KSPEC_BTI_LEGACY_IBRS)
+    {
+        PCSTR Reason;
+
+        KiSpeculationIdleClear = KiCanClearIbrsWhenIdle(&Reason);
+        DPRINT1("Speculation idle: IBRS %s while idle (%s)\n",
+                KiSpeculationIdleClear ? "cleared" : "kept", Reason);
+    }
+#endif
 
     if (KiSpeculationHardening & KSPEC_HARDEN_BTI)
         Kinds |= (KiSpeculationBtiMode != KSPEC_BTI_NONE) ? KSPEC_HARDEN_BTI : 0;

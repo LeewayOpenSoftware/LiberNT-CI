@@ -12,6 +12,8 @@
 #define NDEBUG
 #include <debug.h>
 
+VOID FASTCALL PopIdle0(IN PPROCESSOR_POWER_STATE PowerState);
+
 /* GLOBALS *******************************************************************/
 
 ULONG ProcessCount;
@@ -247,7 +249,10 @@ KiIdleLoop(VOID)
 
             /* The HAL performs the atomic STI;HLT boundary. */
             KiReleasePrcbLock(Prcb);
-            Prcb->PowerState.IdleFunction(&Prcb->PowerState);
+            if (KiSpeculationIdleClear && Prcb->PowerState.IdleFunction == PopIdle0)
+                KiSpeculationIdle(Prcb);
+            else
+                Prcb->PowerState.IdleFunction(&Prcb->PowerState);
             Prcb->Sleeping = FALSE;
         }
     }
