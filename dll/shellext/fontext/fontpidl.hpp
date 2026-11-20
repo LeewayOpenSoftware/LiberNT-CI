@@ -24,3 +24,8 @@ struct FontPidlEntry
 
 PITEMID_CHILD _ILCreate(LPCWSTR lpName, LPCWSTR lpFileName);
 const FontPidlEntry* _FontFromIL(PCITEMID_CHILD pidl);
+
+// A family stack (several styles of one family): Name() = registry name of the representative
+// font, FileName() = the family grouping key. Same layout as a font entry, different magic.
+PITEMID_CHILD _ILCreateFamily(LPCWSTR lpRegName, LPCWSTR lpFamilyKey);
+const FontPidlEntry* _FamilyFromIL(PCITEMID_CHILD pidl);

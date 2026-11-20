@@ -46,3 +46,29 @@ STRINGTABLE
 BEGIN
     IDS_FONT_PREVIEW "Previzualizează"
 END
+
+STRINGTABLE
+BEGIN
+    IDS_COL_STYLE "Font style"
+    IDS_COL_SHOWHIDE "Show/hide"
+    IDS_COL_DESIGNEDFOR "Designed for"
+    IDS_COL_CATEGORY "Category"
+    IDS_COL_DESIGNER "Designer/foundry"
+    IDS_COL_EMBED "Font embeddability"
+    IDS_SHOW "Show"
+    IDS_HIDE "Hide"
+    IDS_CAT_TEXT "Text"
+    IDS_CAT_DISPLAY "Display"
+    IDS_CAT_SYMBOL "Symbol"
+    IDS_EMB_INSTALLABLE "Installable"
+    IDS_EMB_EDITABLE "Editable"
+    IDS_EMB_PREVIEW "Preview and print"
+    IDS_EMB_RESTRICTED "Restricted license"
+    IDS_STYLES_FMT "%u styles"
+    IDS_TASK_SETTINGS "Font settings"
+    IDS_TASK_CLEARTYPE "Adjust ClearType text"
+    IDS_TASK_CHARMAP "Find a character"
+    IDS_FONT_HIDE_VERB "&Hide"
+    IDS_FONT_SHOW_VERB "&Show"
+    IDS_FONT_OPEN_VERB "&Open"
+END

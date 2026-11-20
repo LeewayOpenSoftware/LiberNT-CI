@@ -941,6 +941,21 @@ BOOL PidlToSicIndex (
       if (SUCCEEDED(ei->GetIconLocation(uFlags &~ GIL_FORSHORTCUT, szIconFile, MAX_PATH, &iSourceIndex, &dwFlags)))
       {
         *pIndex = SIC_GetIconIndex(szIconFile, iSourceIndex, uFlags);
+        if (INVALID_INDEX == *pIndex && (dwFlags & GIL_NOTFILENAME) && !(dwFlags & GIL_DONTCACHE))
+        {
+            /* The icon does not live in a file: let the provider draw it (fonts, thumbnails) */
+            HICON hLarge = NULL, hSmall = NULL;
+            if (SUCCEEDED(ei->Extract(szIconFile, iSourceIndex, &hLarge, &hSmall,
+                                      MAKELONG(ShellLargeIconSize, ShellSmallIconSize))) &&
+                hLarge && hSmall)
+            {
+                *pIndex = SIC_IconAppend(szIconFile, iSourceIndex, hSmall, hLarge, uFlags);
+            }
+            if (hLarge)
+                DestroyIcon(hLarge);
+            if (hSmall)
+                DestroyIcon(hSmall);
+        }
         if (INVALID_INDEX == *pIndex && (dwFlags & GIL_NOTFILENAME) && (dwFlags & GIL_PERINSTANCE) &&
             PathIsExeW(szIconFile))
         {

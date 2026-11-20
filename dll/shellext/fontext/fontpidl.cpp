@@ -11,9 +11,10 @@
 WINE_DEFAULT_DEBUG_CHANNEL(fontext);
 
 #define FONTPIDL_MAGIC 0x7066 // 'fp'
+#define FAMILYPIDL_MAGIC 0x7166 // 'fq'
 #define ALIGN_DWORD(size) (((size) + 3) & ~3)
 
-PITEMID_CHILD _ILCreate(LPCWSTR lpName, LPCWSTR lpFileName)
+static PITEMID_CHILD CreateEntry(WORD magic, LPCWSTR lpName, LPCWSTR lpFileName)
 {
     ATLASSERT(lpName);
     ATLASSERT(lpFileName);
@@ -53,7 +54,7 @@ PITEMID_CHILD _ILCreate(LPCWSTR lpName, LPCWSTR lpFileName)
 
     ZeroMemory(pidl, cbData + sizeof(WORD));
     pidl->cb = (WORD)cbData;
-    pidl->Magic = FONTPIDL_MAGIC;
+    pidl->Magic = magic;
     pidl->ibName = (WORD)ibName;
     pidl->ibFileName = (WORD)ibFileName;
 
@@ -72,18 +73,30 @@ PITEMID_CHILD _ILCreate(LPCWSTR lpName, LPCWSTR lpFileName)
 
     *(PWORD)((PBYTE)pidl + cbData) = UNICODE_NULL;
 
-    ATLASSERT(_FontFromIL((PITEMID_CHILD)pidl));
-
     return (PITEMID_CHILD)pidl;
 }
 
-const FontPidlEntry* _FontFromIL(PCITEMID_CHILD pidl)
+PITEMID_CHILD _ILCreate(LPCWSTR lpName, LPCWSTR lpFileName)
+{
+    PITEMID_CHILD pidl = CreateEntry(FONTPIDL_MAGIC, lpName, lpFileName);
+    ATLASSERT(!pidl || _FontFromIL(pidl));
+    return pidl;
+}
+
+PITEMID_CHILD _ILCreateFamily(LPCWSTR lpRegName, LPCWSTR lpFamilyKey)
+{
+    PITEMID_CHILD pidl = CreateEntry(FAMILYPIDL_MAGIC, lpRegName, lpFamilyKey);
+    ATLASSERT(!pidl || _FamilyFromIL(pidl));
+    return pidl;
+}
+
+static const FontPidlEntry* EntryFromIL(PCITEMID_CHILD pidl, WORD magic)
 {
     if (!pidl || pidl->mkid.cb < sizeof(FontPidlEntry))
         return NULL;
 
     const FontPidlEntry* fontEntry = (const FontPidlEntry*)pidl;
-    if (fontEntry->Magic != FONTPIDL_MAGIC)
+    if (fontEntry->Magic != magic)
         return NULL;
 
     // The function gets an arbitrary PIDL here. Security is important.
@@ -104,4 +117,14 @@ const FontPidlEntry* _FontFromIL(PCITEMID_CHILD pidl)
         return NULL;
 
     return fontEntry;
+}
+
+const FontPidlEntry* _FontFromIL(PCITEMID_CHILD pidl)
+{
+    return EntryFromIL(pidl, FONTPIDL_MAGIC);
+}
+
+const FontPidlEntry* _FamilyFromIL(PCITEMID_CHILD pidl)
+{
+    return EntryFromIL(pidl, FAMILYPIDL_MAGIC);
 }
