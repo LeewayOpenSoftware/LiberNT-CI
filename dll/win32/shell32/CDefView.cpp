@@ -557,6 +557,11 @@ public:
     {
         return Mode >= FVM_FIRST && Mode <= FVM_DETAILS; // We don't support Tile nor Thumbstrip
     }
+    /* Modes the list view can show (Content is shown as report) */
+    static inline bool IsShowableFolderViewMode(int Mode)
+    {
+        return IsSupportedFolderViewMode(Mode) || Mode == FVM_CONTENT;
+    }
 
     // *** IOleWindow methods ***
     STDMETHOD(GetWindow)(HWND *lphwnd) override;
@@ -4817,6 +4822,7 @@ HRESULT CDefView::LoadViewState()
     CComPtr<IPropertyBag> pPB;
     bool fallback = false;
     HRESULT hrColumns = E_FAIL;
+    INT savedIconSize = 0;
     HRESULT hr = IUnknown_QueryServicePropertyBag(m_pShellBrowser, SHGVSPB_FOLDER, IID_PPV_ARG(IPropertyBag, &pPB));
     if (SUCCEEDED(hr))
     {
@@ -4824,6 +4830,7 @@ HRESULT CDefView::LoadViewState()
         if (FAILED(hr = SHPropertyBag_ReadDWORD(pPB, L"Mode", &data)))
             goto loadfallback;
         cvs.FolderSettings.ViewMode = data;
+        savedIconSize = (INT)ReadDWORD(pPB, L"IconSize", 0);
         cvs.FolderSettings.fFlags = ReadDWORD(pPB, L"FFlags", FWF_NOGROUPING);
         data = ReadDWORD(pPB, L"Sort", ~0ul);
         cvs.SortColId = data != ~0ul ? (WORD)data : LISTVIEW_SORT_INFO::UNSPECIFIEDCOLUMN;
@@ -4845,7 +4852,14 @@ HRESULT CDefView::LoadViewState()
             return HResultFromWin32(ERROR_INVALID_DATA);
         hrColumns = LoadColumnsStream(cols, pS);
     }
-    m_FolderSettings.ViewMode = cvs.FolderSettings.ViewMode;
+    /* A saved mode we cannot show (Tile or Thumbstrip from an older build) would
+       come up as List: keep the folder type default instead */
+    if (IsShowableFolderViewMode(cvs.FolderSettings.ViewMode))
+    {
+        m_FolderSettings.ViewMode = cvs.FolderSettings.ViewMode;
+        if (m_FolderSettings.ViewMode == FVM_ICON && savedIconSize >= 16 && savedIconSize <= 256)
+            m_IconSize = savedIconSize;
+    }
     m_FolderSettings.fFlags &= ~cvs.VALIDFWF;
     m_FolderSettings.fFlags |= cvs.FolderSettings.fFlags & cvs.VALIDFWF;
     if (pPB && !(m_FolderSettings.fFlags & FWF_AUTOARRANGE))
@@ -4919,6 +4933,10 @@ HRESULT CDefView::SaveViewState(IStream *pStream)
         UINT uViewMode;
         GetCurrentViewMode(&uViewMode);
         hr = SHPropertyBag_WriteDWORD(pPB, L"Mode", uViewMode);
+        if (uViewMode == FVM_ICON && m_IconSize > 0)
+            SHPropertyBag_WriteDWORD(pPB, L"IconSize", m_IconSize);
+        else
+            SHPropertyBag_Delete(pPB, L"IconSize");
         SHPropertyBag_WriteDWORD(pPB, L"FFlags", m_FolderSettings.fFlags);
         SHPropertyBag_WriteDWORD(pPB, L"Sort", cvs.SortColId);
         SHPropertyBag_WriteDWORD(pPB, L"SortDir", cvs.SortDir);
@@ -5348,6 +5366,9 @@ HRESULT STDMETHODCALLTYPE CDefView::SetCurrentViewMode(UINT ViewMode)
         ViewMode = GetDefaultViewMode();
     if ((INT)ViewMode < FVM_FIRST || (INT)ViewMode > FVM_LAST)
         return S_OK;
+    /* Do not show a mode we cannot draw as List, nor save it for the folder */
+    if (!IsShowableFolderViewMode(ViewMode))
+        return E_NOTIMPL;
 
     /* Windows before Vista uses LVM_SETVIEW and possibly
        LVM_SETEXTENDEDLISTVIEWSTYLE to set the style of the listview,
