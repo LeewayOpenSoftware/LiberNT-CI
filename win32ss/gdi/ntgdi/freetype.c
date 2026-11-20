@@ -825,6 +825,23 @@ VOID DumpFontInfo(BOOL bDoLock)
 }
 #endif
 
+/* RtlCreateUnicodeString from a counted string that need not be terminated */
+static BOOLEAN
+IntCreateUnicodeStringFromCounted(_Out_ PUNICODE_STRING Dest, _In_ PCUNICODE_STRING Src)
+{
+    PWSTR pszTemp;
+    BOOLEAN bOK;
+
+    pszTemp = ExAllocatePoolWithTag(PagedPool, Src->Length + sizeof(WCHAR), TAG_FONT);
+    if (!pszTemp)
+        return FALSE;
+    RtlCopyMemory(pszTemp, Src->Buffer, Src->Length);
+    pszTemp[Src->Length / sizeof(WCHAR)] = UNICODE_NULL;
+    bOK = RtlCreateUnicodeString(Dest, pszTemp);
+    ExFreePoolWithTag(pszTemp, TAG_FONT);
+    return bOK;
+}
+
 /*
  * IntLoadFontSubstList --- loads the list of font substitutes
  */
@@ -835,13 +852,14 @@ IntLoadFontSubstList(PLIST_ENTRY pHead)
     HANDLE                          KeyHandle;
     OBJECT_ATTRIBUTES               ObjectAttributes;
     KEY_FULL_INFORMATION            KeyFullInfo;
-    ULONG                           i, Length;
-    UNICODE_STRING                  FromW, ToW;
-    BYTE                            InfoBuffer[128];
+    ULONG                           i, Length, InfoSize;
+    UNICODE_STRING                  FromW, ToW, Name, Data;
+    PBYTE                           InfoBuffer;
     PKEY_VALUE_FULL_INFORMATION     pInfo;
     BYTE                            CharSets[FONTSUBST_FROM_AND_TO];
     LPWSTR                          pch;
     PFONTSUBST_ENTRY                pEntry;
+    BOOL                            bOutOfMemory = FALSE;
 
     /* the FontSubstitutes registry key */
     static UNICODE_STRING FontSubstKey =
@@ -870,50 +888,70 @@ IntLoadFontSubstList(PLIST_ENTRY pHead)
         return FALSE;   /* failure */
     }
 
-    /* for each value */
+    InfoSize = 512;
+    InfoBuffer = ExAllocatePoolWithTag(PagedPool, InfoSize, TAG_FONT);
+    if (!InfoBuffer)
+    {
+        ZwClose(KeyHandle);
+        return FALSE;
+    }
+
+    /* for each value; a value that cannot be used is skipped, not the rest of the list */
     for (i = 0; i < KeyFullInfo.Values; ++i)
     {
-        /* get value name */
+        /* get value name and data */
         Status = ZwEnumerateValueKey(KeyHandle, i, KeyValueFullInformation,
-                                     InfoBuffer, sizeof(InfoBuffer), &Length);
+                                     InfoBuffer, InfoSize, &Length);
+        if ((Status == STATUS_BUFFER_OVERFLOW || Status == STATUS_BUFFER_TOO_SMALL) &&
+            Length > InfoSize && Length <= MAXUSHORT * 2)
+        {
+            ExFreePoolWithTag(InfoBuffer, TAG_FONT);
+            InfoSize = Length;
+            InfoBuffer = ExAllocatePoolWithTag(PagedPool, InfoSize, TAG_FONT);
+            if (!InfoBuffer)
+            {
+                bOutOfMemory = TRUE;
+                break;
+            }
+            Status = ZwEnumerateValueKey(KeyHandle, i, KeyValueFullInformation,
+                                         InfoBuffer, InfoSize, &Length);
+        }
         if (!NT_SUCCESS(Status))
         {
-            DPRINT("ZwEnumerateValueKey failed: 0x%08X\n", Status);
-            break;      /* failure */
+            DPRINT1("FontSubstitutes value %lu skipped: 0x%08X\n", i, Status);
+            continue;
         }
 
-        /* create FromW string */
         pInfo = (PKEY_VALUE_FULL_INFORMATION)InfoBuffer;
-        Length = pInfo->NameLength / sizeof(WCHAR);
-        pInfo->Name[Length] = UNICODE_NULL;   /* truncate */
-        if (!RtlCreateUnicodeString(&FromW, pInfo->Name))
+        if ((pInfo->Type != REG_SZ && pInfo->Type != REG_EXPAND_SZ) ||
+            pInfo->NameLength == 0 || pInfo->NameLength > MAXUSHORT - sizeof(WCHAR) ||
+            pInfo->DataLength > MAXUSHORT - sizeof(WCHAR) ||
+            pInfo->DataOffset > Length || pInfo->DataLength > Length - pInfo->DataOffset)
         {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            DPRINT("RtlCreateUnicodeString failed\n");
-            break;      /* failure */
+            DPRINT1("FontSubstitutes value %lu skipped: bad type or size\n", i);
+            continue;
         }
 
-        /* query value */
-        Status = ZwQueryValueKey(KeyHandle, &FromW, KeyValueFullInformation,
-                                 InfoBuffer, sizeof(InfoBuffer), &Length);
-        pInfo = (PKEY_VALUE_FULL_INFORMATION)InfoBuffer;
-        if (!NT_SUCCESS(Status) || !pInfo->DataLength)
-        {
-            DPRINT("ZwQueryValueKey failed: 0x%08X\n", Status);
-            RtlFreeUnicodeString(&FromW);
-            break;      /* failure */
-        }
+        /* counted copies, so nothing is written into InfoBuffer */
+        Name.Buffer = pInfo->Name;
+        Name.Length = Name.MaximumLength = (USHORT)(pInfo->NameLength & ~1);
+        Data.Buffer = (PWCHAR)((PUCHAR)pInfo + pInfo->DataOffset);
+        Data.Length = Data.MaximumLength = (USHORT)(pInfo->DataLength & ~1);
+        while (Data.Length && Data.Buffer[Data.Length / sizeof(WCHAR) - 1] == UNICODE_NULL)
+            Data.Length -= sizeof(WCHAR);
+        if (!Data.Length)
+            continue;
 
-        /* create ToW string */
-        pch = (LPWSTR)((PUCHAR)pInfo + pInfo->DataOffset);
-        Length = pInfo->DataLength / sizeof(WCHAR);
-        pch[Length] = UNICODE_NULL; /* truncate */
-        if (!RtlCreateUnicodeString(&ToW, pch))
+        if (!IntCreateUnicodeStringFromCounted(&FromW, &Name))
         {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            DPRINT("RtlCreateUnicodeString failed\n");
+            bOutOfMemory = TRUE;
+            break;
+        }
+        if (!IntCreateUnicodeStringFromCounted(&ToW, &Data))
+        {
             RtlFreeUnicodeString(&FromW);
-            break;      /* failure */
+            bOutOfMemory = TRUE;
+            break;
         }
 
         /* does charset exist? (from) */
@@ -956,6 +994,7 @@ IntLoadFontSubstList(PLIST_ENTRY pHead)
             DPRINT("ExAllocatePoolWithTag failed\n");
             RtlFreeUnicodeString(&FromW);
             RtlFreeUnicodeString(&ToW);
+            bOutOfMemory = TRUE;
             break;      /* failure */
         }
 
@@ -969,10 +1008,13 @@ IntLoadFontSubstList(PLIST_ENTRY pHead)
         InsertTailList(pHead, &pEntry->ListEntry);
     }
 
+    if (InfoBuffer)
+        ExFreePoolWithTag(InfoBuffer, TAG_FONT);
+
     /* close now */
     ZwClose(KeyHandle);
 
-    return NT_SUCCESS(Status);
+    return !bOutOfMemory;
 }
 
 static NTSTATUS FontLink_AddEntry(LPCWSTR lfFaceName, PZZWSTR pszzFontLink)
