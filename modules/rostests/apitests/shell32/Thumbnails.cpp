@@ -9,6 +9,8 @@
 #include <shellutils.h>
 #include <shobjidl.h>
 #include <thumbcache.h>
+#include <shlobj_undoc.h>
+#include <shlguid_undoc.h>
 #include <stdio.h>
 
 static WCHAR g_Dir[MAX_PATH];
@@ -448,6 +450,235 @@ TestSharedBitmap(void)
     DeleteObject(Bitmap);
 }
 
+/* Sink for the background generator (CLSID_Thumbnail) */
+#define THUMB_SINK_MSG (WM_USER + 100)
+#define THUMB_RESULT_MAX 16
+
+struct ThumbResult
+{
+    DWORD Id;
+    HBITMAP Bitmap;
+};
+
+static ThumbResult g_Results[THUMB_RESULT_MAX];
+static int g_ResultCount;
+
+static LRESULT CALLBACK
+ThumbSinkProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == THUMB_SINK_MSG)
+    {
+        if (g_ResultCount < THUMB_RESULT_MAX)
+        {
+            g_Results[g_ResultCount].Id = (DWORD)lParam;
+            g_Results[g_ResultCount].Bitmap = (HBITMAP)wParam;
+            g_ResultCount++;
+        }
+        else if (wParam)
+        {
+            DeleteObject((HBITMAP)wParam);
+        }
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static void
+PumpSink(void)
+{
+    MSG msg;
+
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+    {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+}
+
+static BOOL
+PumpUntil(int Count, DWORD TimeoutMs)
+{
+    DWORD Start = GetTickCount();
+
+    for (;;)
+    {
+        PumpSink();
+        if (g_ResultCount >= Count)
+            return TRUE;
+        if (GetTickCount() - Start > TimeoutMs)
+            return FALSE;
+        Sleep(10);
+    }
+}
+
+static const ThumbResult *
+LastResult(DWORD Id)
+{
+    for (int i = g_ResultCount - 1; i >= 0; i--)
+        if (g_Results[i].Id == Id)
+            return &g_Results[i];
+    return NULL;
+}
+
+static void
+ClearResults(void)
+{
+    for (int i = 0; i < g_ResultCount; i++)
+        if (g_Results[i].Bitmap)
+            DeleteObject(g_Results[i].Bitmap);
+    g_ResultCount = 0;
+}
+
+static void
+TestThumbnailGenerator(void)
+{
+    CComPtr<IThumbnail3> Gen;
+    CComPtr<IShellItem> Text;
+    CComHeapPtr<ITEMIDLIST> PngPidl;
+    const ThumbResult *Result;
+    WNDCLASSW wc = { 0 };
+    HWND Sink;
+    LONG Width, Height;
+    WORD Bpp;
+    HRESULT hr;
+
+    wc.lpfnWndProc = ThumbSinkProc;
+    wc.hInstance = GetModuleHandleW(NULL);
+    wc.lpszClassName = L"ThumbnailsApitestSink";
+    RegisterClassW(&wc);
+    Sink = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, wc.hInstance, NULL);
+    ok(Sink != NULL, "sink window: %lu\n", GetLastError());
+    if (!Sink)
+        return;
+
+    hr = CoCreateInstance(CLSID_Thumbnail, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARG(IThumbnail3, &Gen));
+    ok_hr(hr, S_OK);
+    if (SUCCEEDED(hr))
+    {
+        /* Nowhere to deliver before Init() */
+        hr = Gen->GetBitmap(g_Bmp, 1, 64, 64);
+        ok(FAILED(hr), "request before Init: %#lx\n", hr);
+
+        ok_hr(Gen->Init(Sink, THUMB_SINK_MSG), S_OK);
+        ok_hr(Gen->GetBitmap(NULL, 1, 64, 64), E_INVALIDARG);
+        hr = Gen->GetBitmap(L"Z:\\no\\such\\thumbnails-apitest.bmp", 1, 64, 64);
+        ok(FAILED(hr), "missing file: %#lx\n", hr);
+        ok_hr(Gen->GetBitmap(g_Bmp, 1, 0, 64), E_INVALIDARG);
+
+        /* A bitmap arrives as a message, fitted into the requested box */
+        ok_hr(Gen->GetBitmap(g_Bmp, 1, 64, 64), S_OK);
+        ok(PumpUntil(1, 5000), "no thumbnail message within 5 s\n");
+        Result = LastResult(1);
+        ok(Result != NULL, "no result for item 1\n");
+        if (Result && Result->Bitmap)
+        {
+            BitmapSize(Result->Bitmap, &Width, &Height, &Bpp);
+            ok_long(Width, 64);
+            ok_long(Height, 48);
+            ok(IsNear(SamplePixel(Result->Bitmap, Width / 4, Height / 2), RED), "left %06lx\n", SamplePixel(Result->Bitmap, Width / 4, Height / 2));
+            ok(IsNear(SamplePixel(Result->Bitmap, Width * 3 / 4, Height / 2), BLUE), "right %06lx\n", SamplePixel(Result->Bitmap, Width * 3 / 4, Height / 2));
+        }
+        else if (Result)
+        {
+            ok(FALSE, "bmp delivered without a bitmap\n");
+        }
+        ClearResults();
+
+        /* No handler for text: nothing is posted, the view keeps its icon */
+        hr = SHCreateItemFromParsingName(g_Txt, NULL, IID_PPV_ARG(IShellItem, &Text));
+        ok_hr(hr, S_OK);
+        if (SUCCEEDED(hr))
+        {
+            ok_hr(Gen->GetBitmapFromShellItem(Text, 2, 64, 64), S_OK);
+            ok(!PumpUntil(1, 2000), "message for an item without thumbnail (bitmap %p)\n", g_ResultCount ? g_Results[0].Bitmap : NULL);
+        }
+        ClearResults();
+
+        /* Pidl entry point; the newest request for an item wins */
+        hr = SHParseDisplayName(g_Png, NULL, &PngPidl, 0, NULL);
+        ok_hr(hr, S_OK);
+        if (SUCCEEDED(hr))
+        {
+            ok_hr(Gen->GetBitmapFromIDList(PngPidl, 3, 32, 32), S_OK);
+            ok_hr(Gen->GetBitmapFromIDList(PngPidl, 3, 16, 16), S_OK);
+            ok(PumpUntil(1, 5000), "no message for the png item within 5 s\n");
+            Sleep(300);
+            PumpSink();
+            Result = LastResult(3);
+            ok(Result != NULL && Result->Bitmap != NULL, "no png thumbnail\n");
+            if (Result && Result->Bitmap)
+            {
+                BitmapSize(Result->Bitmap, &Width, &Height, &Bpp);
+                ok(max(Width, Height) <= 16, "last result for item 3 is %ldx%ld, expected the 16 request\n", Width, Height);
+            }
+        }
+        ClearResults();
+
+        /* Init(NULL, 0) cancels: nothing is posted after it returns */
+        ok_hr(Gen->GetBitmap(g_Bmp, 4, 48, 48), S_OK);
+        ok_hr(Gen->GetBitmap(g_Png, 5, 48, 48), S_OK);
+        ok_hr(Gen->Init(NULL, 0), S_OK);
+        PumpSink();
+        ClearResults();
+        ok(!PumpUntil(1, 500), "message after cancel (item %lu)\n", g_ResultCount ? g_Results[0].Id : 0);
+        ClearResults();
+
+        /* Release() joins the worker; must not hang with work queued */
+        ok_hr(Gen->Init(Sink, THUMB_SINK_MSG), S_OK);
+        ok_hr(Gen->GetBitmap(g_Bmp, 6, 48, 48), S_OK);
+        Gen.Release();
+        PumpSink();
+        ClearResults();
+    }
+
+    DestroyWindow(Sink);
+    UnregisterClassW(wc.lpszClassName, wc.hInstance);
+}
+
+static void
+TestIconsOnly(void)
+{
+    CComPtr<IShellItemImageFactory> Factory;
+    SHELLSTATE State;
+    BOOL OldIconsOnly, NewIconsOnly;
+    HBITMAP Bitmap = NULL;
+    LONG Width, Height;
+    WORD Bpp;
+    HRESULT hr;
+    SIZE Size;
+
+    ZeroMemory(&State, sizeof(State));
+    SHGetSetSettings(&State, SSF_ICONSONLY, FALSE);
+    OldIconsOnly = State.fIconsOnly;
+    NewIconsOnly = TRUE;
+    State.fIconsOnly = NewIconsOnly;
+    SHGetSetSettings(&State, SSF_ICONSONLY, TRUE);
+
+    hr = SHCreateItemFromParsingName(g_Bmp, NULL, IID_PPV_ARG(IShellItemImageFactory, &Factory));
+    ok_hr(hr, S_OK);
+    if (SUCCEEDED(hr))
+    {
+        Size.cx = Size.cy = 32;
+        hr = Factory->GetImage(Size, SIIGBF_THUMBNAILONLY, &Bitmap);
+        ok(FAILED(hr), "thumbnail with IconsOnly set: %#lx\n", hr);
+        if (Bitmap)
+            DeleteObject(Bitmap);
+        Bitmap = NULL;
+        hr = Factory->GetImage(Size, SIIGBF_RESIZETOFIT, &Bitmap);
+        ok_hr(hr, S_OK);
+        if (Bitmap)
+        {
+            BitmapSize(Bitmap, &Width, &Height, &Bpp);
+            ok_long(Width, 32);
+            ok_long(Height, 32);
+            DeleteObject(Bitmap);
+        }
+    }
+
+    State.fIconsOnly = OldIconsOnly;
+    SHGetSetSettings(&State, SSF_ICONSONLY, TRUE);
+}
+
 START_TEST(Thumbnails)
 {
     WCHAR Temp[MAX_PATH];
@@ -470,6 +701,8 @@ START_TEST(Thumbnails)
     TestThumbnailHandler();
     TestThumbnailCache();
     TestSharedBitmap();
+    TestThumbnailGenerator();
+    TestIconsOnly();
 
     DeleteFileW(g_Bmp);
     DeleteFileW(g_Png);

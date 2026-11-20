@@ -23,6 +23,7 @@
 #include "precomp.h"
 #include <propvarutil.h>
 #include <thumbcache.h>
+#include <shlwapi.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
@@ -1801,8 +1802,22 @@ HRESULT CShellItem::GetIconImage(SIZE size, HBITMAP *phbm)
     return S_OK;
 }
 
+/* Folder Options "Always show icons, never thumbnails" (SHELLSTATE.fIconsOnly) */
+static BOOL SHELL_IconsOnly(void)
+{
+    DWORD dwValue = 0, cbValue = sizeof(dwValue), dwType = REG_NONE;
+
+    if (SHGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced",
+                    L"IconsOnly", &dwType, &dwValue, &cbValue) != ERROR_SUCCESS)
+        return FALSE;
+    return dwType == REG_DWORD && dwValue != 0;
+}
+
 HRESULT CShellItem::GetThumbnailImage(SIZE size, SIIGBF flags, HBITMAP *phbm)
 {
+    if (SHELL_IconsOnly())
+        return WTS_E_FAILEDEXTRACTION;
+
     UINT cxThumb = max(size.cx, size.cy);
     WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
     HBITMAP hbm = NULL;
