@@ -17,8 +17,8 @@ A: No, Fixedsys Excelsior is free. If you feel incredibly grateful, send me an
    favorite. And I am generally more concerned with music than fonts, so if you
    have any of that stuff ... Also, if you use IRC, feel free to proselytize to
    your friends. My real intention, if I have one at all, is to make IRC a more
-   natural world without removing its distinctive feeling. Sure, maybe you don’t
-   speak Farsi, but next time you encounter someone who does, they’ll be typing
+   natural world without removing its distinctive feeling. Sure, maybe you donï¿½t
+   speak Farsi, but next time you encounter someone who does, theyï¿½ll be typing
    in Arabic, not question marks or boxes. The ultimate form of this dream would
    be to have Fixedsys Excelsior distributed with mIRC or other IRC clients.
 [...]"
@@ -50,4 +50,16 @@ https://bugs.launchpad.net/ubuntu/+bug/200671
 PostScript Monospace flag added, and PANOSE proportion byte fixed to Monospace,
 in FSEX301.ttf and FSEX301-L2.ttf.
 
-Hermès Bélusca-Maïto
+Hermï¿½s Bï¿½lusca-Maï¿½to
+
+---- Provenance (LiberNT font program) ----
+
+Fixedsys Excelsior (Darien Valentine) (ReactOS/LiberNT family name kept for compatibility)
+
+Origin:  http://www.fixedsysexcelsior.com/
+Version: 3.01 and 3.01-L2
+Licence: Public domain, as stated by the author (README.txt) (see README.txt)
+
+Files and SHA-256:
+  6dccf21e9b3d0b653927affd89c9d10811f9e5725a33e8b5fe37b147ecd10691  FSEX301.ttf
+  7ea4666ca477a44a958b6d30b8262de13d65f436da1ca15fdcd016383d507d08  FSEX301-L2.ttf

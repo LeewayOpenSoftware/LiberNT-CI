@@ -1,11 +1,16 @@
-This work is under the GUST Font License 1.0 (final version).
-(GUST is the Polish TeX Users Group, http://www.gust.org.pl)
+TeX Gyre Pagella (shipped here under the compatibility name "Palatino Linotype")
+Copyright 2007-2009 B. Jackowski and J.M. Nowacki (on behalf of TeX users groups),
+based on URW Palladio L, Copyright 1999 (URW)++ Design & Development.
+This work is released under the GUST Font License 1.0, reproduced below.
+The LaTeX Project Public License it refers to is in LATEX-LICENSE.txt.
 
-TeX Gyre Pagella Fonts
-Copyright (c) 1999 B. Jackowski and J.M. Nowacki (on behalf of the TeX users groups)
+This is version 1.0, dated 22 June 2009, of the GUST Font License.
+(GUST is the Polish TeX Users Group, https://www.gust.org.pl)
 
-For the GUST Font License 1.0 (final version), see:
-http://www.gust.org.pl/fonts/licenses/GUST-FONT-LICENSE.txt
+For the most recent version of this license see
+https://www.gust.org.pl/fonts/licenses/GUST-FONT-LICENSE.txt
+or
+https://tug.org/fonts/licenses/GUST-FONT-LICENSE.txt
 
 This work may be distributed and/or modified under the conditions
 of the LaTeX Project Public License, either version 1.3c of this
@@ -25,5 +30,6 @@ Please also observe the following clause:
    we recommend a name of the form README-<fontid>.txt.
 
 The latest version of the LaTeX Project Public License is in
-http://www.latex-project.org/lppl.txt and version 1.3c or later
+https://www.latex-project.org/lppl.txt and version 1.3c or later
 is part of all distributions of LaTeX version 2006/05/20 or later.
+

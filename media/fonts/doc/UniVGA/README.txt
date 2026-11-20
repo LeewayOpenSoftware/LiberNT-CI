@@ -3,7 +3,7 @@ Unicode VGA font
 Author : Dmitry Bolkhovityanov
 E-mail : bolkhov@inp.nsk.su
 
-Copyright © 2001 by Dmitry Yu. Bolkhovityanov
+Copyright ï¿½ 2001 by Dmitry Yu. Bolkhovityanov
 
 http://www.inp.nsk.su/~bolkhov/files/fonts/univga/
 
@@ -29,3 +29,14 @@ Credits: Dmitry Bolkhovityanov
 
 http://rtoss.googlecode.com/svn/UniVGA16/
 https://code.google.com/p/rtoss/source/browse/UniVGA16
+
+---- Provenance (LiberNT font program) ----
+
+Unicode VGA font (Dmitry Bolkhovityanov) (ReactOS/LiberNT family name kept for compatibility)
+
+Origin:  http://www.inp.nsk.su/~bolkhov/files/fonts/univga/
+Version: 1.01 (TrueType conversion, khmz), family name Terminal
+Licence: X11 licence (MIT style), per the author's README (see README.txt)
+
+Files and SHA-256:
+  6609e9da6817db197d3818a82ee8a79022e3cedea781804ffdcb87db33ab20ef  UniVGA16.ttf

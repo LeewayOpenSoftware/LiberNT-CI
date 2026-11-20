@@ -1,5 +1,5 @@
-Copyright 2016 SorkinType (https://github.com/sorkintype/gelasio)
-Gelasio font by SorkinType
+Copyright (c) 2013-2018, Sorkin Type Co (https://github.com/SorkinType/Gelasio), with Reserved Font Name 'Gelasio'.
+Copyright (c) 2019 Katayama Hirofumi MZ, renamed as "Georgia".
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
