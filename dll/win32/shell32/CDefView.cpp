@@ -534,6 +534,7 @@ public:
     void ApplyFolderFlags(DWORD dwOldFlags);
     LRESULT OnExplorerCommand(UINT uCommand, BOOL bUseSelection);
     FOLDERVIEWMODE GetDefaultViewMode();
+    BOOL GetFolderTypeDefaultView(FOLDERVIEWMODE *pMode, INT *pIconSize);
     HRESULT GetDefaultViewStream(DWORD Stgm, IStream **ppStream);
     HRESULT LoadViewState();
     HRESULT SaveViewState(IStream *pStream);
@@ -5155,12 +5156,174 @@ HRESULT WINAPI CDefView::GetItemObject(UINT uItem, REFIID riid, LPVOID *ppvOut)
     return hr;
 }
 
+/*
+ * Folder types, as Windows: each file system folder has a type (Generic,
+ * Documents, Pictures, ...) and HKLM\...\Explorer\FolderTypes\{type}\TopViews
+ * gives its default view. The type comes from desktop.ini [ViewState]
+ * FolderType, else from the known folder (FolderDescriptions\{id}\FolderTypeID
+ * overrides the built-in type), else Generic.
+ */
+#define REGSTR_PATH_FOLDERTYPES REGSTR_PATH_EXPLORER L"\\FolderTypes"
+
+static const GUID FOLDERTYPEID_DownloadsLocal =
+    { 0x885a186e, 0xa440, 0x4ada, { 0x81, 0x2b, 0xdb, 0x87, 0x1b, 0x94, 0x22, 0x59 } };
+
+static const struct
+{
+    GUID Folder;
+    const GUID *Type;
+} g_KnownFolderTypes[] =
+{
+    /* FOLDERID_Documents */
+    { { 0xfdd39ad0, 0x238f, 0x46af, { 0xad, 0xb4, 0x6c, 0x85, 0x48, 0x03, 0x69, 0xc7 } }, &FOLDERTYPEID_Documents },
+    /* FOLDERID_Downloads */
+    { { 0x374de290, 0x123f, 0x4565, { 0x91, 0x64, 0x39, 0xc4, 0x92, 0x5e, 0x46, 0x7b } }, &FOLDERTYPEID_DownloadsLocal },
+    /* FOLDERID_Music */
+    { { 0x4bd8d571, 0x6d19, 0x48d3, { 0xbe, 0x97, 0x42, 0x22, 0x20, 0x08, 0x0e, 0x43 } }, &FOLDERTYPEID_Music },
+    /* FOLDERID_Pictures */
+    { { 0x33e28130, 0x4e1e, 0x4676, { 0x83, 0x5a, 0x98, 0x39, 0x5c, 0x3b, 0xc3, 0xbb } }, &FOLDERTYPEID_Pictures },
+    /* FOLDERID_Videos */
+    { { 0x18989b1d, 0x99b5, 0x455b, { 0x84, 0x1c, 0xab, 0x7c, 0x74, 0xe4, 0xdd, 0xfc } }, &FOLDERTYPEID_Videos },
+};
+
+/* desktop.ini FolderType: a GUID or a CanonicalName under FolderTypes */
+static BOOL
+FolderTypeFromName(PCWSTR pszName, GUID *pType)
+{
+    WCHAR szKey[64], szCanonical[64];
+    HKEY hTypes;
+    DWORD i, cch, cb;
+    BOOL bFound = FALSE;
+
+    if (pszName[0] == L'{')
+        return SUCCEEDED(CLSIDFromString(pszName, pType));
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, REGSTR_PATH_FOLDERTYPES, 0, KEY_READ, &hTypes) != ERROR_SUCCESS)
+        return FALSE;
+    for (i = 0; !bFound; ++i)
+    {
+        cch = _countof(szKey);
+        if (RegEnumKeyExW(hTypes, i, szKey, &cch, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+            break;
+        cb = sizeof(szCanonical);
+        if (SHRegGetValueW(hTypes, szKey, L"CanonicalName", SRRF_RT_REG_SZ, NULL, szCanonical, &cb) == ERROR_SUCCESS &&
+            !_wcsicmp(szCanonical, pszName))
+        {
+            bFound = SUCCEEDED(CLSIDFromString(szKey, pType));
+        }
+    }
+    RegCloseKey(hTypes);
+    return bFound;
+}
+
+static BOOL
+GetFolderTypeOfIDList(PCIDLIST_ABSOLUTE pidl, GUID *pType)
+{
+    WCHAR szPath[MAX_PATH], szIni[MAX_PATH], szValue[64], szKey[128], szGuid[40];
+    DWORD cb;
+    UINT i;
+
+    if (!SHGetPathFromIDListW(pidl, szPath))
+        return FALSE; /* not a file system folder: its view callback decides */
+
+    /* desktop.ini is honoured only in read-only or system folders */
+    if (PathIsSystemFolderW(szPath, 0) &&
+        PathCombineW(szIni, szPath, L"desktop.ini") &&
+        GetPrivateProfileStringW(L"ViewState", L"FolderType", NULL, szValue, _countof(szValue), szIni) &&
+        FolderTypeFromName(szValue, pType))
+    {
+        return TRUE;
+    }
+
+    for (i = 0; i < _countof(g_KnownFolderTypes); ++i)
+    {
+        PIDLIST_ABSOLUTE pidlKnown = NULL;
+        BOOL bMatch;
+
+        if (FAILED(SHGetKnownFolderIDList(g_KnownFolderTypes[i].Folder, KF_FLAG_DEFAULT, NULL, &pidlKnown)))
+            continue;
+        bMatch = ILIsEqual(pidlKnown, pidl);
+        ILFree(pidlKnown);
+        if (!bMatch)
+            continue;
+
+        *pType = *g_KnownFolderTypes[i].Type;
+        StringFromGUID2(g_KnownFolderTypes[i].Folder, szGuid, _countof(szGuid));
+        StringCchPrintfW(szKey, _countof(szKey), L"%s\\FolderDescriptions\\%s", REGSTR_PATH_EXPLORER, szGuid);
+        cb = sizeof(szValue);
+        if (SHRegGetValueW(HKEY_LOCAL_MACHINE, szKey, L"FolderTypeID", SRRF_RT_REG_SZ, NULL, szValue, &cb) == ERROR_SUCCESS)
+            CLSIDFromString(szValue, pType);
+        return TRUE;
+    }
+
+    *pType = FOLDERTYPEID_Generic;
+    return TRUE;
+}
+
+BOOL CDefView::GetFolderTypeDefaultView(FOLDERVIEWMODE *pMode, INT *pIconSize)
+{
+    PIDLIST_ABSOLUTE pidl = NULL;
+    GUID Type;
+    WCHAR szGuid[40], szKey[200];
+    DWORD dwMode, dwSize, cb;
+    BOOL bFound;
+
+    *pIconSize = 0;
+    if (m_FolderSettings.fFlags & FWF_DESKTOP)
+        return FALSE;
+    if (FAILED(SHGetIDListFromObject(m_pSFParent, &pidl)))
+        return FALSE;
+    bFound = GetFolderTypeOfIDList(pidl, &Type);
+    ILFree(pidl);
+    if (!bFound)
+        return FALSE;
+
+    StringFromGUID2(Type, szGuid, _countof(szGuid));
+    StringCchPrintfW(szKey, _countof(szKey),
+                     L"%s\\%s\\TopViews\\{00000000-0000-0000-0000-000000000000}",
+                     REGSTR_PATH_FOLDERTYPES, szGuid);
+    cb = sizeof(dwMode);
+    if (SHRegGetValueW(HKEY_LOCAL_MACHINE, szKey, L"LogicalViewMode", SRRF_RT_REG_DWORD, NULL, &dwMode, &cb) != ERROR_SUCCESS)
+        return FALSE;
+
+    switch (dwMode)
+    {
+        case FLVM_DETAILS: *pMode = FVM_DETAILS; break;
+        case FLVM_TILES:   *pMode = FVM_TILE;    break;
+        case FLVM_ICONS:   *pMode = FVM_ICON;    break;
+        case FLVM_LIST:    *pMode = FVM_LIST;    break;
+        case FLVM_CONTENT: *pMode = FVM_CONTENT; break;
+        default:           return FALSE;
+    }
+    if (!IsSupportedFolderViewMode(*pMode))
+        return FALSE;
+
+    cb = sizeof(dwSize);
+    if (*pMode == FVM_ICON &&
+        SHRegGetValueW(HKEY_LOCAL_MACHINE, szKey, L"IconSize", SRRF_RT_REG_DWORD, NULL, &dwSize, &cb) == ERROR_SUCCESS &&
+        dwSize >= 16 && dwSize <= 256)
+    {
+        *pIconSize = (INT)dwSize;
+    }
+    return TRUE;
+}
+
 FOLDERVIEWMODE CDefView::GetDefaultViewMode()
 {
     FOLDERVIEWMODE mode = (m_FolderSettings.fFlags & FWF_DESKTOP) ? FVM_ICON : FVM_DETAILS;
-    FOLDERVIEWMODE temp = mode;
+    FOLDERVIEWMODE temp = FVM_AUTO;
+    INT iconSize;
+    /* A folder whose view callback names a mode (Control Panel, Find) keeps it */
     if (SUCCEEDED(_DoFolderViewCB(SFVM_DEFVIEWMODE, 0, (LPARAM)&temp)) && IsSupportedFolderViewMode(temp))
+    {
         mode = temp;
+    }
+    else if (GetFolderTypeDefaultView(&temp, &iconSize))
+    {
+        mode = temp;
+        if (iconSize > 0)
+            m_IconSize = iconSize;
+    }
     return mode;
 }
 
