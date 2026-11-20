@@ -39,7 +39,7 @@ STDMETHODIMP CFontBackgroundMenu::QueryContextMenu(HMENU hMenu, UINT indexMenu, 
     bool bSeparator = false;
     for (UINT i = 0; i < FontTask_Count(); ++i)
     {
-        if (!FontTask_Available(i))
+        if (!FontTask_Available(i) || idCmdFirst + 1 + i > idCmdLast)
             continue;
         if (!bSeparator)
             AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
