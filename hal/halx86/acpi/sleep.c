@@ -42,6 +42,8 @@
 #define MSR_PAGE_ATTRIBUTE_TABLE        0x0277
 #define MSR_MTRR_DEF_TYPE               0x02FF
 #define MSR_XSS                         0x0DA0
+#define MSR_IA32_SPEC_CTRL              0x0048
+#define MSR_AMD64_VIRT_SPEC_CTRL        0xC001011F
 
 #define HALP_CR0_NW                     0x20000000
 #define HALP_CR0_CD                     0x40000000
@@ -80,6 +82,8 @@ typedef struct _HALP_SLEEP_PROCESSOR
     ULONG64 Efer;
     ULONG64 Pat;
     ULONG64 Sysenter[3];
+    ULONG64 SpecCtrl;
+    ULONG64 VirtSpecCtrl;
     ULONG64 MtrrDefType;
     ULONG64 MtrrFixed[MTRR_FIXED_COUNT];
     ULONG64 MtrrVariable[2 * MTRR_MAX_VARIABLE];
@@ -114,6 +118,8 @@ static BOOLEAN HalpSleepXSave;
 static BOOLEAN HalpSleepXss;
 static BOOLEAN HalpSleepPat;
 static BOOLEAN HalpSleepSysenter;
+static BOOLEAN HalpSleepSpecCtrl;
+static BOOLEAN HalpSleepVirtSpecCtrl;
 static BOOLEAN HalpSleepMtrr;
 static BOOLEAN HalpSleepTscAdjust;
 static ULONG HalpSleepVariableMtrrs;
@@ -302,6 +308,17 @@ HalpSleepDetectProcessorFeatures(VOID)
     {
         __cpuidex(CpuInfo, 7, 0);
         HalpSleepTscAdjust = (CpuInfo[1] & (1 << 1)) != 0;
+        /* IBRS, STIBP or SSBD */
+        HalpSleepSpecCtrl = (CpuInfo[3] & ((1UL << 26) | (1UL << 27) | (1UL << 31))) != 0;
+    }
+    __cpuid(CpuInfo, 0x80000000);
+    if ((ULONG)CpuInfo[0] >= 0x80000008 && (ULONG)CpuInfo[0] < 0x80010000)
+    {
+        __cpuid(CpuInfo, 0x80000008);
+        /* AMD IBRS, STIBP or SSBD; VIRT_SSBD */
+        if (CpuInfo[1] & ((1 << 14) | (1 << 15) | (1 << 24)))
+            HalpSleepSpecCtrl = TRUE;
+        HalpSleepVirtSpecCtrl = (CpuInfo[1] & (1 << 25)) != 0;
     }
 
     HalpSleepXSave = (__readcr4() & HALP_CR4_OSXSAVE) != 0;
@@ -470,6 +487,9 @@ HalpSleepSaveProcessor(
         Save->Sysenter[1] = __readmsr(MSR_SYSENTER_ESP);
         Save->Sysenter[2] = __readmsr(MSR_SYSENTER_EIP);
     }
+    /* The kernel speculation control values, lost with the processor context */
+    Save->SpecCtrl = HalpSleepSpecCtrl ? __readmsr(MSR_IA32_SPEC_CTRL) : 0;
+    Save->VirtSpecCtrl = HalpSleepVirtSpecCtrl ? __readmsr(MSR_AMD64_VIRT_SPEC_CTRL) : 0;
     HalpSleepSaveMtrrs(Save);
 
     Save->XSaveMask = HalpSleepXSave ? HalpSleepReadXcr0() : 0;
@@ -503,6 +523,10 @@ HalpSleepRestoreProcessor(
 #ifdef _M_AMD64
     __writemsr(MSR_EFER, Save->Efer);
 #endif
+    if (Save->SpecCtrl != 0)
+        __writemsr(MSR_IA32_SPEC_CTRL, Save->SpecCtrl);
+    if (Save->VirtSpecCtrl != 0)
+        __writemsr(MSR_AMD64_VIRT_SPEC_CTRL, Save->VirtSpecCtrl);
     HalpSleepRestoreMtrrs(Save);
     if (HalpSleepPat)
         __writemsr(MSR_PAGE_ATTRIBUTE_TABLE, Save->Pat);
@@ -761,6 +785,8 @@ HalpAcpiSleepHandler(
 
     HalpSleepTscOffset = (LONG64)(HalpSleepTsc - __rdtsc());
     HalpSleepRestoreProcessor(0, Save);
+    if (HalpSleepSpecCtrl)
+        DPRINT1("Resume: SPEC_CTRL 0x%I64x restored on the boot processor\n", __readmsr(MSR_IA32_SPEC_CTRL));
     HalpSleepClearWakeStatus();
     HalpRestoreInterruptControllers();
     HalpRestoreClock();
