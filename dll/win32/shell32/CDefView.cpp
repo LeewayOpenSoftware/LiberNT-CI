@@ -108,6 +108,9 @@ struct LISTVIEW_SORT_INFO
    Off-screen ones above the budget go back to their icons. */
 #define DEFVIEW_THUMB_MAX_BITMAPS 1000
 #define DEFVIEW_THUMB_MAX_BYTES (32 * 1024 * 1024)
+/* Requests still out for items scrolled away: above this the generator queue
+   is restarted so that what is on screen comes first */
+#define DEFVIEW_THUMB_MAX_STALE 64
 /* The request id is the list-view item id with a generation in the top byte:
    the list view reuses ids, so an old result must not land on a new item */
 #define DEFVIEW_THUMB_ID_MASK 0x00FFFFFF
@@ -536,6 +539,7 @@ private:
     void ScheduleThumbnailScan();
     void GetThumbnailKeepRect(RECT *prc);
     void EvictThumbnails();
+    void DropStaleThumbnailRequests();
     BOOL IsDesktop() const { return m_FolderSettings.fFlags & FWF_DESKTOP; }
 
     inline BOOL IsSpecialFolder(int &csidl) const
@@ -6563,6 +6567,7 @@ void CDefView::StartThumbnailRequests()
     count = m_ListView.GetItemCount();
     if (count <= 0)
         return;
+    DropStaleThumbnailRequests();
     m_ListView.GetClientRect(&rcClient);
     GetThumbnailKeepRect(&rcKeep);
     for (INT i = 0; i < count; i++)
@@ -6686,6 +6691,46 @@ void CDefView::DropThumbnail(INT iItem, BOOL bRestoreIcon)
             RestoreItemIcon(iItem);
     }
     DSA_DeleteItem(m_hdsaThumbs, index);
+}
+
+/* The generator works first in, first out: after a long scroll it would
+   extract every page scrolled past before the one on screen. When too many
+   outstanding requests are for items away from the view, cancel them all
+   (Init(NULL, 0)) and forget them; the next requests start with what is
+   visible and the items scrolled past are asked for again when shown. */
+void CDefView::DropStaleThumbnailRequests()
+{
+    RECT rcKeep, rcItem, rcTmp;
+    INT count = m_hdsaThumbs ? DSA_GetItemCount(m_hdsaThumbs) : 0, cStale = 0;
+
+    if (!m_ThumbArmed || !count)
+        return;
+    GetThumbnailKeepRect(&rcKeep);
+    for (INT i = 0; i < count && cStale <= DEFVIEW_THUMB_MAX_STALE; i++)
+    {
+        THUMB_ENTRY *entry = (THUMB_ENTRY *)DSA_GetItemPtr(m_hdsaThumbs, i);
+        INT iItem;
+
+        if (entry->hbm || entry->bNone)
+            continue;
+        iItem = (INT)ListView_MapIDToIndex(m_ListView.m_hWnd, entry->Id);
+        if (iItem < 0 || !ListView_GetItemRect(m_ListView.m_hWnd, iItem, &rcItem, LVIR_BOUNDS) ||
+            !IntersectRect(&rcTmp, &rcItem, &rcKeep))
+        {
+            cStale++;
+        }
+    }
+    if (cStale <= DEFVIEW_THUMB_MAX_STALE)
+        return;
+
+    /* Results already posted are dropped too: their items are asked for again */
+    CancelThumbnailRequests();
+    for (INT i = count - 1; i >= 0; i--)
+    {
+        THUMB_ENTRY *entry = (THUMB_ENTRY *)DSA_GetItemPtr(m_hdsaThumbs, i);
+        if (!entry->hbm && !entry->bNone)
+            DSA_DeleteItem(m_hdsaThumbs, i);
+    }
 }
 
 /* A paint showed an item never asked for (scrolling, resizing, arranging) */
