@@ -27,5 +27,9 @@ START_TEST(AboutBanner)
     if (!shell32)
         return;
     check_bitmap(shell32, TEST_IDB_ABOUT_BANNER, 413, 72);
+    check_bitmap(shell32, 132, 516, 90);
+    check_bitmap(shell32, 133, 619, 108);
+    check_bitmap(shell32, 134, 722, 126);
+    check_bitmap(shell32, 135, 826, 144);
     check_bitmap(shell32, TEST_IDB_ABOUT_LINE, 413, 5);
 }

@@ -2340,7 +2340,16 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
                 WCHAR szAuthorsText[20];
 
                 // Preload the ROS bitmap
-                hLogoBmp = (HBITMAP)LoadImage(shell32_hInstance, MAKEINTRESOURCE(IDB_REACTOS), IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
+                {
+                    HDC hdcScreen = GetDC(NULL);
+                    int dpi = hdcScreen ? GetDeviceCaps(hdcScreen, LOGPIXELSX) : 96;
+                    UINT idBanner = dpi >= 192 ? IDB_REACTOS_200 : dpi >= 168 ? IDB_REACTOS_175 :
+                                    dpi >= 144 ? IDB_REACTOS_150 : dpi >= 120 ? IDB_REACTOS_125 : IDB_REACTOS;
+
+                    if (hdcScreen)
+                        ReleaseDC(NULL, hdcScreen);
+                    hLogoBmp = (HBITMAP)LoadImage(shell32_hInstance, MAKEINTRESOURCE(idBanner), IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
+                }
                 hLineBmp = (HBITMAP)LoadImage(shell32_hInstance, MAKEINTRESOURCE(IDB_LINEBAR), IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
 
                 if (hLogoBmp && hLineBmp)
@@ -2501,6 +2510,28 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
 
                     SelectObject(hdcMem, hLineBmp);
                     StretchBlt(hdc, 0, cyLogoDest, cxDest, cyLineDest, hdcMem, 0, 0, cxLogoBmp, cyLineBmp, SRCCOPY);
+
+                    {
+                        NONCLIENTMETRICSW ncm = { sizeof(ncm) };
+                        static const WCHAR szLine1[] = L"Orosi \x00A9 2027 Leeway Open Software.";
+                        static const WCHAR szLine2[] = L"Based on LiberNT \x00A9 2026 and ReactOS \x00A9 1996\x2013" L"2026.";
+                        HFONT hFont, hOldFont;
+                        TEXTMETRICW tm;
+                        int x = MulDiv(8, cxDest, 413), y = MulDiv(42, cxDest, 413);
+
+                        if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0) &&
+                            (hFont = CreateFontIndirectW(&ncm.lfMessageFont)))
+                        {
+                            hOldFont = SelectObject(hdc, hFont);
+                            GetTextMetricsW(hdc, &tm);
+                            SetBkMode(hdc, TRANSPARENT);
+                            SetTextColor(hdc, RGB(255, 255, 255));
+                            TextOutW(hdc, x, y, szLine1, ARRAYSIZE(szLine1) - 1);
+                            TextOutW(hdc, x, y + tm.tmHeight, szLine2, ARRAYSIZE(szLine2) - 1);
+                            SelectObject(hdc, hOldFont);
+                            DeleteObject(hFont);
+                        }
+                    }
 
                     SelectObject(hdcMem, hOldObj);
                     DeleteDC(hdcMem);

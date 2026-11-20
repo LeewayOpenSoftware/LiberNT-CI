@@ -28,6 +28,10 @@
 
 /* Bitmaps */
 #define IDB_REACTOS                 131
+#define IDB_REACTOS_125             132
+#define IDB_REACTOS_150             133
+#define IDB_REACTOS_175             134
+#define IDB_REACTOS_200             135
 #define IDB_LINEBAR                 138
 #define IDB_SHELL_IEXPLORE_LG       204
 #define IDB_SHELL_IEXPLORE_LG_HOT   205
