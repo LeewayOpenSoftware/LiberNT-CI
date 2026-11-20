@@ -2653,6 +2653,35 @@ static UINT LISTVIEW_GetTileColumnCount(const LISTVIEW_INFO *infoPtr, INT nItem)
     return min(lpItem->cColumns, (UINT)infoPtr->tileLines);
 }
 
+/* Number of subitem lines a tile shows: its columns with a non-empty text */
+static UINT LISTVIEW_GetTileLineCount(const LISTVIEW_INFO *infoPtr, INT nItem)
+{
+    UINT cols[TILE_MAX_COLUMNS];
+    ITEM_INFO *lpItem = LISTVIEW_GetItemInfo(infoPtr, nItem);
+    UINT columns = min(LISTVIEW_GetTileColumnCount(infoPtr, nItem), TILE_MAX_COLUMNS);
+    UINT i, lines = 0;
+    WCHAR text[DISP_TEXT_SIZE];
+    LVITEMW sub;
+
+    if (!lpItem || !columns) return 0;
+    /* copy the indices: the text callbacks below may change the item's columns */
+    memcpy(cols, lpItem->puColumns, columns * sizeof(UINT));
+    for (i = 0; i < columns; i++)
+    {
+        if (!cols[i]) continue;
+        text[0] = 0;
+        sub.mask = LVIF_TEXT;
+        sub.iItem = nItem;
+        sub.iSubItem = cols[i];
+        sub.pszText = text;
+        sub.cchTextMax = DISP_TEXT_SIZE;
+        if (!LISTVIEW_GetItemW(infoPtr, &sub)) continue;
+        if (!sub.pszText || sub.pszText == LPSTR_TEXTCALLBACKW || !sub.pszText[0]) continue;
+        lines++;
+    }
+    return lines;
+}
+
 /* Height of the text block of a tile: the label line and the subitem lines */
 static INT LISTVIEW_GetTileTextHeight(const LISTVIEW_INFO *infoPtr, UINT lines)
 {
@@ -2696,7 +2725,9 @@ static void LISTVIEW_GetTileMetrics(const LISTVIEW_INFO *infoPtr, const LVITEMW 
 
     if (lprcLabel)
     {
-        textHeight = LISTVIEW_GetTileTextHeight(infoPtr, LISTVIEW_GetTileColumnCount(infoPtr, lpLVItem->iItem));
+        /* the lines actually drawn (empty ones are skipped), so the label rect
+           matches the text that LISTVIEW_DrawTileText centers */
+        textHeight = LISTVIEW_GetTileTextHeight(infoPtr, LISTVIEW_GetTileLineCount(infoPtr, lpLVItem->iItem));
         areaTop = Box.top + infoPtr->tileLabelMargin.top;
         areaBottom = Box.bottom - infoPtr->tileLabelMargin.bottom;
 
@@ -4962,8 +4993,9 @@ static BOOL set_main_item(LISTVIEW_INFO *infoPtr, const LVITEMW *lpLVItem, BOOL 
                 LISTVIEW_InvalidateList(infoPtr);
         }
     }
-    if (lpItem && (uChanged & LVIF_COLUMNS))
-        LISTVIEW_SetItemColumns(lpItem, lpLVItem->cColumns, lpLVItem->puColumns);
+    if (lpItem && (uChanged & LVIF_COLUMNS) &&
+        !LISTVIEW_SetItemColumns(lpItem, lpLVItem->cColumns, lpLVItem->puColumns))
+        return FALSE;
 #endif
 
     if (uChanged & LVIF_STATE)
@@ -7035,6 +7067,14 @@ static HWND LISTVIEW_EditLabelT(LISTVIEW_INFO *infoPtr, INT nItem, BOOL isW)
     ReleaseDC(infoPtr->hwndSelf, hdc);
 
     sz.cy = rect.bottom - rect.top + 2;
+#ifdef __REACTOS__
+    /* Tiles: edit the name line only, within the text column of the tile */
+    if (infoPtr->uView == LV_VIEW_TILE)
+    {
+        sz.cy = infoPtr->ntmHeight + 2;
+        sz.cx = min(sz.cx, rect.right - rect.left + 4);
+    }
+#endif
     rect.left -= 2;
     rect.top  -= 1;
     TRACE("moving edit (%ld,%ld)-(%ld,%ld)\n", rect.left, rect.top, sz.cx, sz.cy);

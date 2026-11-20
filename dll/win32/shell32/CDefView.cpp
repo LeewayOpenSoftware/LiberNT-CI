@@ -453,6 +453,7 @@ private:
     bool IsComputerTileView() const;
     void ApplyListViewMode();
     void InitTileColumns();
+    void UpdateTileColumns();
     UINT ComputerViewDpi() const;
     SIZED_VIEW_LIST *GetSizedViewImageList(INT cx);
     BOOL EnsureViewIcon(INT index);
@@ -975,26 +976,37 @@ void CDefView::ApplyListViewMode()
 }
 
 /* Tiles show two detail columns under the name: Type and Size in a file system
-   folder (as Windows), else the first two detail columns */
+   folder (as Windows), else the first two folder columns. They are folder
+   columns, mapped to the list columns shown now (the user can change those). */
 void CDefView::InitTileColumns()
 {
-    HWND hHeader = ListView_GetHeader(m_ListView);
-    INT cColumns = hHeader ? Header_GetItemCount(hHeader) : 0;
+    const UINT FolderCols[2] = { m_SpecialFolder == -1 ? 2u : 1u, m_SpecialFolder == -1 ? 1u : 2u };
+    HRESULT hr;
 
     m_cTileColumns = 0;
-    if (cColumns < 3)
+    for (UINT i = 0; i < _countof(FolderCols); ++i)
+    {
+        hr = MapFolderColumnToListColumn(FolderCols[i]);
+        if (SUCCEEDED(hr) && hr > 0)
+            m_TileColumns[m_cTileColumns++] = (UINT)hr;
+    }
+}
+
+/* The list columns changed: point the tiles of every item at the new indices */
+void CDefView::UpdateTileColumns()
+{
+    LVTILEINFO ti = { sizeof(ti) };
+
+    if (m_cTileColumns < 0 || !m_ListView)
         return;
-    if (m_SpecialFolder == -1)
+    InitTileColumns();
+    ti.cColumns = m_cTileColumns;
+    ti.puColumns = m_TileColumns;
+    for (INT i = 0, count = m_ListView.GetItemCount(); i < count; ++i)
     {
-        m_TileColumns[0] = 2;
-        m_TileColumns[1] = 1;
+        ti.iItem = i;
+        m_ListView.SendMessageW(LVM_SETTILEINFO, 0, (LPARAM)&ti);
     }
-    else
-    {
-        m_TileColumns[0] = 1;
-        m_TileColumns[1] = 2;
-    }
-    m_cTileColumns = _countof(m_TileColumns);
 }
 
 static bool IsComputerDriveItem(PCUITEMID_CHILD pidl)
@@ -2099,6 +2111,7 @@ void CDefView::ColumnListChanged()
             break; // Cannot allow holes in the cache, must stop now.
     }
     m_ListToFolderColMap = cache;
+    UpdateTileColumns();
 
     for (;;)
     {
@@ -6443,11 +6456,16 @@ HRESULT STDMETHODCALLTYPE CDefView::GetView(SHELLVIEWID *pVid, ULONG view_type)
         return S_OK;
     }
     if (view_type == SV2GV_CURRENTVIEW)
-        view_type = m_FolderSettings.ViewMode;
-    if ((int)view_type < 0)
-        return E_UNEXPECTED;
-
-    view_type += FVM_FIRST;
+    {
+        view_type = m_FolderSettings.ViewMode; /* already a FOLDERVIEWMODE */
+    }
+    else
+    {
+        /* A view index: the n-th view mode */
+        if ((int)view_type < 0)
+            return E_UNEXPECTED;
+        view_type += FVM_FIRST;
+    }
     if (!IsSupportedFolderViewMode(view_type))
         return E_INVALIDARG;
     *pVid = *FolderViewModeToShellViewId(view_type);
