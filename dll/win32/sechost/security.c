@@ -447,7 +447,12 @@ static BOOL print_acl(ACL *pacl, WCHAR **pwptr, ULONG *plen, SECURITY_DESCRIPTOR
         print_string(L"AI", -1, pwptr, plen);
 
     if (pacl == NULL)
+    {
+#ifdef __REACTOS__
+        print_string(L"NO_ACCESS_CONTROL", -1, pwptr, plen);
+#endif
         return TRUE;
+    }
 
     if (!IsValidAcl(pacl))
         return FALSE;
@@ -538,6 +543,9 @@ static BOOL print_sacl(PSECURITY_DESCRIPTOR sd, WCHAR **pwptr, ULONG *plen)
         return TRUE;
 
     print_string(L"S:", -1, pwptr, plen);
+#ifdef __REACTOS__
+    control = (control & (SE_SACL_PROTECTED | SE_SACL_AUTO_INHERIT_REQ | SE_SACL_AUTO_INHERITED)) >> 1;
+#endif
     if (!print_acl(pacl, pwptr, plen, control))
         return FALSE;
     return TRUE;
@@ -1025,6 +1033,58 @@ BOOL WINAPI DECLSPEC_HOTPATCH ConvertStringSidToSidW( const WCHAR *string, PSID 
     return TRUE;
 }
 
+#ifdef __REACTOS__
+static BOOL parse_acl_flags( const WCHAR **string_ptr, DWORD *flags, BOOL *null_acl )
+{
+    const WCHAR *string = *string_ptr;
+
+    *flags = 0;
+    *null_acl = FALSE;
+
+    while (*string && *string != '(')
+    {
+        if (*string == ' ')
+        {
+            string++;
+        }
+        else if (*string == 'P' || *string == 'p')
+        {
+            *flags |= SE_DACL_PROTECTED;
+            string++;
+        }
+        else if (!wcsnicmp( string, L"AR", 2 ))
+        {
+            *flags |= SE_DACL_AUTO_INHERIT_REQ;
+            string += 2;
+        }
+        else if (!wcsnicmp( string, L"AI", 2 ))
+        {
+            *flags |= SE_DACL_AUTO_INHERITED;
+            string += 2;
+        }
+        else if (!wcsnicmp( string, L"NO_ACCESS_CONTROL", 17 ))
+        {
+            *null_acl = TRUE;
+            string += 17;
+            while (*string == ' ')
+                string++;
+            if (*string)
+            {
+                SetLastError( ERROR_INVALID_PARAMETER );
+                return FALSE;
+            }
+        }
+        else
+        {
+            SetLastError( ERROR_INVALID_PARAMETER );
+            return FALSE;
+        }
+    }
+
+    *string_ptr = string;
+    return TRUE;
+}
+#else
 static DWORD parse_acl_flags( const WCHAR **string_ptr )
 {
     DWORD flags = 0;
@@ -1050,6 +1110,7 @@ static DWORD parse_acl_flags( const WCHAR **string_ptr )
     *string_ptr = string;
     return flags;
 }
+#endif
 
 static BYTE parse_ace_type( const WCHAR **string_ptr )
 {
@@ -1190,6 +1251,9 @@ static BOOL parse_acl( const WCHAR *string, DWORD *flags, ACL *acl, DWORD *ret_s
     DWORD acesize = 0;
     DWORD acecount = 0;
     ACCESS_ALLOWED_ACE *ace = NULL; /* pointer to current ACE */
+#ifdef __REACTOS__
+    BOOL null_acl;
+#endif
 
     TRACE("%s\n", debugstr_w(string));
 
@@ -1197,7 +1261,18 @@ static BOOL parse_acl( const WCHAR *string, DWORD *flags, ACL *acl, DWORD *ret_s
         ace = (ACCESS_ALLOWED_ACE *)(acl + 1);
 
     /* Parse ACL flags */
+#ifdef __REACTOS__
+    if (!parse_acl_flags( &string, flags, &null_acl ))
+        return FALSE;
+
+    if (null_acl)
+    {
+        *ret_size = 0;
+        return TRUE;
+    }
+#else
     *flags = parse_acl_flags( &string );
+#endif
 
     /* Parse ACE */
     while (*string == '(')
@@ -1424,7 +1499,11 @@ static BOOL parse_sd( const WCHAR *string, SECURITY_DESCRIPTOR_RELATIVE *sd, DWO
                 if (sd)
                 {
                     sd->Control |= SE_DACL_PRESENT | flags;
+#ifdef __REACTOS__
+                    sd->Dacl = bytes ? next - (BYTE *)sd : 0;
+#else
                     sd->Dacl = next - (BYTE *)sd;
+#endif
                     next += bytes; /* Advance to next token */
                 }
 
@@ -1452,7 +1531,11 @@ static BOOL parse_sd( const WCHAR *string, SECURITY_DESCRIPTOR_RELATIVE *sd, DWO
 #else
                     sd->Control |= SE_SACL_PRESENT | flags;
 #endif
+#ifdef __REACTOS__
+                    sd->Sacl = bytes ? next - (BYTE *)sd : 0;
+#else
                     sd->Sacl = next - (BYTE *)sd;
+#endif
                     next += bytes; /* Advance to next token */
                 }
 
