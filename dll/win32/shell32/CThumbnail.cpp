@@ -139,6 +139,82 @@ static THUMBNAIL_REQUEST *Take(THUMBNAIL_WORKER *pW)
     return pReq;
 }
 
+/*
+ * The contract promises a 32bpp top-down DIB section with premultiplied alpha
+ * (opaque pixels 0xFF). The cache and the in-tree providers deliver that, but
+ * a third-party provider may hand back anything: convert the rest, and treat
+ * a 32bpp bitmap whose alpha bytes are all zero as opaque.
+ */
+static HBITMAP Normalize(HBITMAP hbm)
+{
+    DIBSECTION ds;
+    BITMAP bm;
+    BITMAPINFO bmi;
+    HBITMAP hbmNew;
+    RGBQUAD *pBits = NULL;
+    HDC hdcSrc, hdcDst;
+    HGDIOBJ hOldSrc, hOldDst;
+    UINT i, cPixels;
+    BOOL bOk;
+
+    if (GetObjectW(hbm, sizeof(ds), &ds) == sizeof(ds) && ds.dsBm.bmBitsPixel == 32 &&
+        ds.dsBmih.biHeight < 0 && ds.dsBmih.biCompression == BI_RGB && ds.dsBm.bmBits)
+    {
+        pBits = (RGBQUAD *)ds.dsBm.bmBits;
+        cPixels = ds.dsBm.bmWidth * -ds.dsBmih.biHeight;
+        GdiFlush();
+        for (i = 0; i < cPixels; i++)
+            if (pBits[i].rgbReserved)
+                return hbm;
+        for (i = 0; i < cPixels; i++)
+            pBits[i].rgbReserved = 0xFF;
+        return hbm;
+    }
+
+    if (!GetObjectW(hbm, sizeof(bm), &bm) || bm.bmWidth <= 0 || bm.bmHeight == 0)
+        return hbm;
+    ZeroMemory(&bmi, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+    bmi.bmiHeader.biWidth = bm.bmWidth;
+    bmi.bmiHeader.biHeight = -abs(bm.bmHeight);
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    hbmNew = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, (void **)&pBits, NULL, 0);
+    if (!hbmNew || !pBits)
+    {
+        if (hbmNew)
+            DeleteObject(hbmNew);
+        return hbm;
+    }
+    hdcSrc = CreateCompatibleDC(NULL);
+    hdcDst = CreateCompatibleDC(NULL);
+    bOk = hdcSrc && hdcDst;
+    if (bOk)
+    {
+        hOldSrc = SelectObject(hdcSrc, hbm);
+        hOldDst = SelectObject(hdcDst, hbmNew);
+        bOk = BitBlt(hdcDst, 0, 0, bm.bmWidth, abs(bm.bmHeight), hdcSrc, 0, 0, SRCCOPY);
+        SelectObject(hdcDst, hOldDst);
+        SelectObject(hdcSrc, hOldSrc);
+        GdiFlush();
+    }
+    if (hdcSrc)
+        DeleteDC(hdcSrc);
+    if (hdcDst)
+        DeleteDC(hdcDst);
+    if (!bOk)
+    {
+        DeleteObject(hbmNew);
+        return hbm;
+    }
+    cPixels = bm.bmWidth * abs(bm.bmHeight);
+    for (i = 0; i < cPixels; i++)
+        pBits[i].rgbReserved = 0xFF; /* no alpha in the source: opaque */
+    DeleteObject(hbm);
+    return hbmNew;
+}
+
 static HBITMAP Extract(const THUMBNAIL_REQUEST *pReq)
 {
     CComPtr<IShellItemImageFactory> pFactory;
@@ -158,7 +234,7 @@ static HBITMAP Extract(const THUMBNAIL_REQUEST *pReq)
             DeleteObject(hbm);
         return NULL;
     }
-    return hbm;
+    return Normalize(hbm);
 }
 
 static void Deliver(THUMBNAIL_WORKER *pW, const THUMBNAIL_REQUEST *pReq, HBITMAP hbm)
