@@ -5,6 +5,18 @@ list(APPEND FONT_FILES
     arialbi.ttf
     ariali.ttf
     ariblk.ttf
+    Caladea-Regular.ttf
+    Caladea-Bold.ttf
+    Caladea-Italic.ttf
+    Caladea-BoldItalic.ttf
+    Carlito-Regular.ttf
+    Carlito-Bold.ttf
+    Carlito-Italic.ttf
+    Carlito-BoldItalic.ttf
+    CascadiaMono-Regular.ttf
+    CascadiaMono-Bold.ttf
+    CascadiaMono-Italic.ttf
+    CascadiaMono-BoldItalic.ttf
     comic.ttf
     comicbd.ttf
     cour.ttf
