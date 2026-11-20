@@ -161,6 +161,9 @@ KiSpeculationBarrier(VOID)
                           ".popsection" ::: "memory");
 #elif defined(_M_AMD64)
     if (KiSpeculationIndexMaskOff == 0) _mm_lfence();
+#elif defined(__GNUC__) || defined(__clang__)
+    /* i386 is built without SSE2, so the lfence intrinsic is unavailable */
+    if (KiSpeculationFenceEnabled) __asm__ __volatile__ ("lfence" ::: "memory");
 #else
     if (KiSpeculationFenceEnabled) _mm_lfence();
 #endif
