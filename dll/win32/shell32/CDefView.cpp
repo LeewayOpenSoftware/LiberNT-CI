@@ -2626,6 +2626,25 @@ void CDefView::MoveItemsIntoView()
         if (!dx && !dy)
             continue;
 
+        if (_GetSnapToGrid() == S_OK)
+        {
+            const INT cx = rcItem.right - rcItem.left, cy = rcItem.bottom - rcItem.top;
+            if (cx > 0 && cy > 0)
+            {
+                INT x = ((rcItem.left + dx + cx / 2) / cx) * cx;
+                INT y = ((rcItem.top + dy + cy / 2) / cy) * cy;
+                if (x + cx > rcClient.right)
+                    x -= cx;
+                if (y + cy > rcClient.bottom)
+                    y -= cy;
+                if (x >= rcClient.left && y >= rcClient.top)
+                {
+                    dx = x - rcItem.left;
+                    dy = y - rcItem.top;
+                }
+            }
+        }
+
         pt.x += dx;
         pt.y += dy;
         m_ListView.SetItemPosition(i, &pt);
