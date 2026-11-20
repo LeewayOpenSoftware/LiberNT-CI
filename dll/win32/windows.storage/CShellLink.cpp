@@ -2953,6 +2953,47 @@ HRESULT STDMETHODCALLTYPE CShellLink::GetDateStamp(FILETIME *pDateStamp)
     return pExtractImage2->GetDateStamp(pDateStamp);
 }
 
+/*
+ * A shortcut shows the thumbnail of its target (Vista+ IThumbnailProvider path,
+ * registered under lnkfile\shellex). Only the target's own thumbnail is
+ * forwarded: a shortcut to a shortcut, a folder or a program has none, the
+ * caller then keeps the icon.
+ */
+HRESULT STDMETHODCALLTYPE CShellLink::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE *pdwAlpha)
+{
+    CComPtr<IShellItemImageFactory> pFactory;
+    WCHAR szTarget[MAX_PATH];
+    HBITMAP hbm = NULL;
+    BITMAP bm;
+    SIZE size;
+    HRESULT hr;
+
+    if (pdwAlpha)
+        *pdwAlpha = WTSAT_UNKNOWN;
+    if (!phbmp)
+        return E_POINTER;
+    *phbmp = NULL;
+    if (!cx || !m_pPidl)
+        return E_FAIL;
+    if (SHGetPathFromIDListW(m_pPidl, szTarget) &&
+        !StrCmpIW(PathFindExtensionW(szTarget), L".lnk"))
+        return E_FAIL;
+
+    hr = SHCreateItemFromIDList(m_pPidl, IID_PPV_ARG(IShellItemImageFactory, &pFactory));
+    if (FAILED(hr))
+        return hr;
+    size.cx = size.cy = cx;
+    hr = pFactory->GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &hbm);
+    if (FAILED(hr))
+        return hr;
+    if (!hbm)
+        return E_FAIL;
+    if (pdwAlpha)
+        *pdwAlpha = (GetObjectW(hbm, sizeof(bm), &bm) && bm.bmBitsPixel == 32) ? WTSAT_ARGB : WTSAT_RGB;
+    *phbmp = hbm;
+    return S_OK;
+}
+
 HRESULT STDMETHODCALLTYPE CShellLink::InitNew()
 {
     return S_OK;

@@ -17,6 +17,7 @@ static WCHAR g_Dir[MAX_PATH];
 static WCHAR g_Bmp[MAX_PATH];
 static WCHAR g_Png[MAX_PATH];
 static WCHAR g_Txt[MAX_PATH];
+static WCHAR g_Lnk[MAX_PATH];
 
 #define RED   RGB(255, 0, 0)
 #define BLUE  RGB(0, 0, 255)
@@ -679,6 +680,109 @@ TestIconsOnly(void)
     SHGetSetSettings(&State, SSF_ICONSONLY, TRUE);
 }
 
+/* Shortcut thumbnails: lnkfile\shellex\{IThumbnailProvider} -> CLSID_ShellLink, which forwards to the target */
+static void
+TestLinkThumbnail(void)
+{
+    static const WCHAR szKey[] = L"lnkfile\\shellex\\{e357fccd-a995-4576-b01f-234630154e96}";
+    static const WCHAR szClsid[] = L"{00021401-0000-0000-C000-000000000046}";
+    CComPtr<IShellLinkW> Link;
+    CComPtr<IPersistFile> File;
+    CComPtr<IShellItem> Item;
+    CComPtr<IThumbnailProvider> Provider;
+    CComPtr<IShellItemImageFactory> Factory;
+    WTS_ALPHATYPE Alpha = WTSAT_UNKNOWN;
+    HBITMAP Bitmap = NULL;
+    LONG Width, Height;
+    WORD Bpp;
+    HKEY hKey;
+    BOOL CreatedKey = FALSE;
+    HRESULT hr;
+    SIZE Size;
+
+    /* The install hive registers the handler; an image updated in place may lack it */
+    if (RegOpenKeyExW(HKEY_CLASSES_ROOT, szKey, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        RegCloseKey(hKey);
+    }
+    else if (RegCreateKeyExW(HKEY_CLASSES_ROOT, szKey, 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+    {
+        RegSetValueExW(hKey, NULL, 0, REG_SZ, (const BYTE *)szClsid, sizeof(szClsid));
+        RegCloseKey(hKey);
+        CreatedKey = TRUE;
+        trace("registered lnkfile thumbnail handler for the test\n");
+    }
+    else
+    {
+        skip("cannot register the lnkfile thumbnail handler: %lu\n", GetLastError());
+        return;
+    }
+
+    hr = CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARG(IShellLinkW, &Link));
+    ok_hr(hr, S_OK);
+    if (SUCCEEDED(hr))
+    {
+        ok_hr(Link->SetPath(g_Bmp), S_OK);
+        hr = Link->QueryInterface(IID_PPV_ARG(IPersistFile, &File));
+        ok_hr(hr, S_OK);
+        if (SUCCEEDED(hr))
+            ok_hr(File->Save(g_Lnk, TRUE), S_OK);
+        File.Release();
+        Link.Release();
+    }
+
+    if (GetFileAttributesW(g_Lnk) != INVALID_FILE_ATTRIBUTES)
+    {
+        hr = SHCreateItemFromParsingName(g_Lnk, NULL, IID_PPV_ARG(IShellItem, &Item));
+        ok_hr(hr, S_OK);
+        if (SUCCEEDED(hr))
+        {
+            hr = Item->BindToHandler(NULL, BHID_ThumbnailHandler, IID_PPV_ARG(IThumbnailProvider, &Provider));
+            ok_hr(hr, S_OK);
+            if (SUCCEEDED(hr))
+            {
+                hr = Provider->GetThumbnail(32, &Bitmap, &Alpha);
+                ok_hr(hr, S_OK);
+                if (SUCCEEDED(hr) && Bitmap)
+                {
+                    BitmapSize(Bitmap, &Width, &Height, &Bpp);
+                    ok(max(Width, Height) == 32, "link provider size %ldx%ld\n", Width, Height);
+                    ok(Width * 48 == Height * 64, "link provider aspect %ldx%ld\n", Width, Height);
+                    DeleteObject(Bitmap);
+                    Bitmap = NULL;
+                }
+            }
+
+            hr = Item->QueryInterface(IID_PPV_ARG(IShellItemImageFactory, &Factory));
+            ok_hr(hr, S_OK);
+            if (SUCCEEDED(hr))
+            {
+                Size.cx = Size.cy = 32;
+                hr = Factory->GetImage(Size, SIIGBF_THUMBNAILONLY, &Bitmap);
+                ok_hr(hr, S_OK);
+                if (SUCCEEDED(hr) && Bitmap)
+                {
+                    BitmapSize(Bitmap, &Width, &Height, &Bpp);
+                    ok_long(Width, 32);
+                    ok_long(Height, 24);
+                    ok(IsNear(SamplePixel(Bitmap, Width / 4, Height / 2), RED), "link left %06lx\n", SamplePixel(Bitmap, Width / 4, Height / 2));
+                    ok(IsNear(SamplePixel(Bitmap, Width * 3 / 4, Height / 2), BLUE), "link right %06lx\n", SamplePixel(Bitmap, Width * 3 / 4, Height / 2));
+                    DeleteObject(Bitmap);
+                    Bitmap = NULL;
+                }
+            }
+        }
+        DeleteFileW(g_Lnk);
+    }
+    else
+    {
+        ok(FALSE, "shortcut was not saved: %lu\n", GetLastError());
+    }
+
+    if (CreatedKey)
+        RegDeleteKeyW(HKEY_CLASSES_ROOT, szKey);
+}
+
 START_TEST(Thumbnails)
 {
     WCHAR Temp[MAX_PATH];
@@ -690,6 +794,7 @@ START_TEST(Thumbnails)
     wsprintfW(g_Bmp, L"%s\\image.bmp", g_Dir);
     wsprintfW(g_Png, L"%s\\image.png", g_Dir);
     wsprintfW(g_Txt, L"%s\\note.txt", g_Dir);
+    wsprintfW(g_Lnk, L"%s\\image.lnk", g_Dir);
     if (!WriteBmp(g_Bmp, 64, 48) || !WritePng(g_Png, 64, 48) || !WriteBytes(g_Txt, "text", 4))
     {
         skip("cannot create test files: %lu\n", GetLastError());
@@ -703,6 +808,7 @@ START_TEST(Thumbnails)
     TestSharedBitmap();
     TestThumbnailGenerator();
     TestIconsOnly();
+    TestLinkThumbnail();
 
     DeleteFileW(g_Bmp);
     DeleteFileW(g_Png);
