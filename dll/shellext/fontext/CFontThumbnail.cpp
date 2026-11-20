@@ -63,18 +63,24 @@ STDMETHODIMP CFontThumbnail::Initialize(LPCWSTR pszFilePath, DWORD grfMode)
  * removable or network storage does not pass) that carry no Zone.Identifier
  * stream. Anything that cannot be verified keeps its icon.
  */
-static BOOL IsTrustedFontLocation(LPCWSTR pszPath)
+static BOOL IsTrustedFontLocation(LPCWSTR pszGivenPath)
 {
+    WCHAR szPath[MAX_PATH];
     WCHAR szFonts[MAX_PATH];
+    LPCWSTR pszPath = szPath;
     UINT cch;
     HANDLE hFile, hStream;
     IO_STATUS_BLOCK Iosb;
-    FONTEXT_FS_DEVICE_INFORMATION Device;
+    FONTEXT_FS_DEVICE_INFORMATION Device = { 0, 0 };
     NTSTATUS Status;
     DWORD dwError;
     CStringW strStream;
 
-    if (!pszPath || !*pszPath || PathIsUNCW(pszPath))
+    if (!pszGivenPath || !*pszGivenPath)
+        return FALSE;
+    /* An in-process caller may hand in a relative path or one with ..\: compare the real one */
+    cch = GetFullPathNameW(pszGivenPath, _countof(szPath), szPath, NULL);
+    if (!cch || cch >= _countof(szPath) || PathIsUNCW(pszPath))
         return FALSE;
 
     cch = GetWindowsDirectoryW(szFonts, _countof(szFonts));
