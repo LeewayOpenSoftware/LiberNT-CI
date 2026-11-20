@@ -1513,8 +1513,9 @@ DECLARE_INTERFACE_(IFadeTask, IUnknown) // {FADB55B4-D382-4FC4-81D7-ABB325C7F12A
  * with PostMessage(hwnd, uMsg, (WPARAM)hbmThumbnail, (LPARAM)dwItemID) to the
  * window given to Init().
  * hbmThumbnail is always a 32bpp top-down DIB section with premultiplied alpha
- * (opaque pixels carry 0xFF; the generator converts what a provider returns),
- * at most lWidth x lHeight with the aspect kept.
+ * (opaque pixels carry 0xFF; the generator converts what a provider returns).
+ * The aspect of the picture is kept; the receiver may shrink the bitmap to
+ * its cell.
  * Once posted, the receiver owns it; if PostMessage fails the generator
  * deletes it. Nothing is posted for an item without thumbnail. Only the newest
  * request per dwItemID is delivered.

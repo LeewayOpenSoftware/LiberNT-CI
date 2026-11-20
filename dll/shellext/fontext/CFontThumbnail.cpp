@@ -7,6 +7,37 @@
 
 #include "precomp.h"
 #include "undocgdi.h" // for GetFontResourceInfoW
+#include <winternl.h>
+
+/* The NDK I/O headers clash with the ATL status macros, so the little of
+ * FileFsDeviceInformation that is needed here is declared locally. */
+typedef enum _FONTEXT_FS_INFORMATION_CLASS
+{
+    FontextFileFsDeviceInformation = 4
+} FONTEXT_FS_INFORMATION_CLASS;
+
+typedef struct _FONTEXT_FS_DEVICE_INFORMATION
+{
+    ULONG DeviceType;
+    ULONG Characteristics;
+} FONTEXT_FS_DEVICE_INFORMATION;
+
+extern "C" NTSTATUS NTAPI
+NtQueryVolumeInformationFile(HANDLE FileHandle, PIO_STATUS_BLOCK IoStatusBlock, PVOID FsInformation,
+                             ULONG Length, FONTEXT_FS_INFORMATION_CLASS FsInformationClass);
+
+#ifndef FILE_DEVICE_DISK
+#define FILE_DEVICE_DISK 0x00000007
+#endif
+#ifndef FILE_REMOVABLE_MEDIA
+#define FILE_REMOVABLE_MEDIA 0x00000001
+#endif
+#ifndef FILE_FLOPPY_DISKETTE
+#define FILE_FLOPPY_DISKETTE 0x00000004
+#endif
+#ifndef FILE_REMOTE_DEVICE
+#define FILE_REMOTE_DEVICE 0x00000010
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(fontext);
 
@@ -20,37 +51,53 @@ STDMETHODIMP CFontThumbnail::Initialize(LPCWSTR pszFilePath, DWORD grfMode)
     return S_OK;
 }
 
+#ifndef FILE_PORTABLE_DEVICE
+#define FILE_PORTABLE_DEVICE 0x00004000
+#endif
+
 /*
  * A thumbnail parses the font in the kernel font engine without any click, so
- * only files from trusted locations get one: the system directory (the Fonts
- * folder lives there) and local fixed drives, and never a file that carries a
- * Zone.Identifier stream (downloaded). Removable and network files keep their
- * icon.
+ * only files from trusted locations get one: the installed fonts under
+ * SystemRoot\Fonts, and otherwise files on a local fixed disk (judged on the
+ * opened file's own volume, so a junction, a mount point or a SUBST drive onto
+ * removable or network storage does not pass) that carry no Zone.Identifier
+ * stream. Anything that cannot be verified keeps its icon.
  */
 static BOOL IsTrustedFontLocation(LPCWSTR pszPath)
 {
-    WCHAR szRoot[MAX_PATH];
-    WCHAR szDrive[4];
+    WCHAR szFonts[MAX_PATH];
     UINT cch;
-    HANDLE hStream;
+    HANDLE hFile, hStream;
+    IO_STATUS_BLOCK Iosb;
+    FONTEXT_FS_DEVICE_INFORMATION Device;
+    NTSTATUS Status;
+    DWORD dwError;
     CStringW strStream;
 
     if (!pszPath || !*pszPath || PathIsUNCW(pszPath))
         return FALSE;
 
-    cch = GetWindowsDirectoryW(szRoot, _countof(szRoot));
-    if (cch && cch < _countof(szRoot) && StrCmpNIW(pszPath, szRoot, cch) == 0 &&
-        (pszPath[cch] == L'\\' || pszPath[cch] == UNICODE_NULL))
-        return TRUE;
+    cch = GetWindowsDirectoryW(szFonts, _countof(szFonts));
+    if (cch && cch < _countof(szFonts) && PathAppendW(szFonts, L"Fonts"))
+    {
+        cch = lstrlenW(szFonts);
+        if (StrCmpNIW(pszPath, szFonts, cch) == 0 && pszPath[cch] == L'\\')
+            return TRUE;
+    }
 
-    if (!pszPath[0] || pszPath[1] != L':')
+    hFile = CreateFileW(pszPath, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        NULL, OPEN_EXISTING, 0, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
         return FALSE;
-    szDrive[0] = pszPath[0];
-    szDrive[1] = L':';
-    szDrive[2] = L'\\';
-    szDrive[3] = UNICODE_NULL;
-    if (GetDriveTypeW(szDrive) != DRIVE_FIXED)
+    Status = NtQueryVolumeInformationFile(hFile, &Iosb, &Device, sizeof(Device), FontextFileFsDeviceInformation);
+    CloseHandle(hFile);
+    if (!NT_SUCCESS(Status) || Device.DeviceType != FILE_DEVICE_DISK ||
+        (Device.Characteristics & (FILE_REMOVABLE_MEDIA | FILE_REMOTE_DEVICE | FILE_FLOPPY_DISKETTE | FILE_PORTABLE_DEVICE)))
+    {
+        TRACE("'%S' is not on a local fixed disk (status 0x%08lx type %lu char 0x%lx): no thumbnail\n",
+              pszPath, Status, Device.DeviceType, Device.Characteristics);
         return FALSE;
+    }
 
     strStream = pszPath;
     strStream += L":Zone.Identifier";
@@ -60,6 +107,13 @@ static BOOL IsTrustedFontLocation(LPCWSTR pszPath)
     {
         CloseHandle(hStream);
         TRACE("'%S' carries a Zone.Identifier stream: no thumbnail\n", pszPath);
+        return FALSE;
+    }
+    dwError = GetLastError();
+    if (dwError != ERROR_FILE_NOT_FOUND && dwError != ERROR_PATH_NOT_FOUND)
+    {
+        /* Cannot tell whether the file was downloaded: do not trust it */
+        TRACE("'%S': Zone.Identifier check failed with %lu: no thumbnail\n", pszPath, dwError);
         return FALSE;
     }
     return TRUE;

@@ -891,40 +891,55 @@ TestFontThumbnail(void)
 
     Factory.Release();
 
-    /* A downloaded font (Zone.Identifier stream) is not a trusted location: no thumbnail, icon stays */
+    /* A downloaded font (Zone.Identifier stream) is not a trusted location: no
+     * thumbnail, icon stays. Checked in the test directory and in SystemRoot\Temp,
+     * which is writable and must not inherit the trust of SystemRoot\Fonts. */
+    for (int Where = 0; Where < 2; Where++)
     {
         static const char ZoneData[] = "[ZoneTransfer]\r\nZoneId=3\r\n";
         WCHAR szZoned[MAX_PATH], szStream[MAX_PATH + 32];
         HANDLE hStream;
 
-        wsprintfW(szZoned, L"%s\\downloaded.ttf", g_Dir);
-        wsprintfW(szStream, L"%s:Zone.Identifier", szZoned);
-        if (CopyFileW(szFont, szZoned, FALSE))
+        if (Where == 0)
         {
-            hStream = CreateFileW(szStream, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-            if (hStream != INVALID_HANDLE_VALUE)
-            {
-                DWORD Written;
-                WriteFile(hStream, ZoneData, sizeof(ZoneData) - 1, &Written, NULL);
-                CloseHandle(hStream);
-                hr = SHCreateItemFromParsingName(szZoned, NULL, IID_PPV_ARG(IShellItemImageFactory, &Factory));
-                ok_hr(hr, S_OK);
-                if (SUCCEEDED(hr))
-                {
-                    Bitmap = NULL;
-                    hr = Factory->GetImage(Size, SIIGBF_THUMBNAILONLY, &Bitmap);
-                    ok(FAILED(hr), "zone-marked font got a thumbnail: %#lx\n", hr);
-                    if (Bitmap)
-                        DeleteObject(Bitmap);
-                    Factory.Release();
-                }
-            }
-            else
-            {
-                skip("no alternate data streams here: %lu\n", GetLastError());
-            }
-            DeleteFileW(szZoned);
+            wsprintfW(szZoned, L"%s\\downloaded.ttf", g_Dir);
         }
+        else
+        {
+            GetWindowsDirectoryW(szZoned, _countof(szZoned));
+            PathAppendW(szZoned, L"Temp");
+            CreateDirectoryW(szZoned, NULL);
+            wsprintfW(szZoned, L"%s\\thumbtest%lu.ttf", szZoned, GetCurrentProcessId());
+        }
+        wsprintfW(szStream, L"%s:Zone.Identifier", szZoned);
+        if (!CopyFileW(szFont, szZoned, FALSE))
+        {
+            skip("cannot copy the font to %ls: %lu\n", szZoned, GetLastError());
+            continue;
+        }
+        hStream = CreateFileW(szStream, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hStream != INVALID_HANDLE_VALUE)
+        {
+            DWORD Written;
+            WriteFile(hStream, ZoneData, sizeof(ZoneData) - 1, &Written, NULL);
+            CloseHandle(hStream);
+            hr = SHCreateItemFromParsingName(szZoned, NULL, IID_PPV_ARG(IShellItemImageFactory, &Factory));
+            ok_hr(hr, S_OK);
+            if (SUCCEEDED(hr))
+            {
+                Bitmap = NULL;
+                hr = Factory->GetImage(Size, SIIGBF_THUMBNAILONLY, &Bitmap);
+                ok(FAILED(hr), "zone-marked font in %ls got a thumbnail: %#lx\n", szZoned, hr);
+                if (Bitmap)
+                    DeleteObject(Bitmap);
+                Factory.Release();
+            }
+        }
+        else
+        {
+            skip("no alternate data streams at %ls: %lu\n", szZoned, GetLastError());
+        }
+        DeleteFileW(szZoned);
     }
 
     DeleteFileW(szCopy);

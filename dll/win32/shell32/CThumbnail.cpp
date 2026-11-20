@@ -208,9 +208,15 @@ static HBITMAP Normalize(HBITMAP hbm)
         DeleteObject(hbmNew);
         return hbm;
     }
+    /* A 32bpp source keeps its alpha through the copy; a source without alpha
+     * (or with none set) is opaque */
     cPixels = bm.bmWidth * abs(bm.bmHeight);
     for (i = 0; i < cPixels; i++)
-        pBits[i].rgbReserved = 0xFF; /* no alpha in the source: opaque */
+        if (pBits[i].rgbReserved)
+            break;
+    if (i == cPixels)
+        for (i = 0; i < cPixels; i++)
+            pBits[i].rgbReserved = 0xFF;
     DeleteObject(hbm);
     return hbmNew;
 }
