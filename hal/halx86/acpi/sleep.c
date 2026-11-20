@@ -84,6 +84,7 @@ typedef struct _HALP_SLEEP_PROCESSOR
     ULONG64 Sysenter[3];
     ULONG64 SpecCtrl;
     ULONG64 VirtSpecCtrl;
+    ULONG64 SpecCtrlResumed;
     ULONG64 MtrrDefType;
     ULONG64 MtrrFixed[MTRR_FIXED_COUNT];
     ULONG64 MtrrVariable[2 * MTRR_MAX_VARIABLE];
@@ -523,9 +524,13 @@ HalpSleepRestoreProcessor(
 #ifdef _M_AMD64
     __writemsr(MSR_EFER, Save->Efer);
 #endif
-    if (Save->SpecCtrl != 0)
+    /* Written even when zero: some firmware leaves SSBD or other bits set on wake */
+    if (HalpSleepSpecCtrl)
+    {
         __writemsr(MSR_IA32_SPEC_CTRL, Save->SpecCtrl);
-    if (Save->VirtSpecCtrl != 0)
+        Save->SpecCtrlResumed = __readmsr(MSR_IA32_SPEC_CTRL);
+    }
+    if (HalpSleepVirtSpecCtrl)
         __writemsr(MSR_AMD64_VIRT_SPEC_CTRL, Save->VirtSpecCtrl);
     HalpSleepRestoreMtrrs(Save);
     if (HalpSleepPat)
@@ -665,6 +670,8 @@ HalpSleepRestartProcessors(VOID)
 
         if (!Save->Resumed)
             DPRINT1("Processor %lu did not resume after sleep\n", Processor);
+        else if (HalpSleepSpecCtrl)
+            DPRINT1("Resume: SPEC_CTRL 0x%I64x restored on processor %lu\n", Save->SpecCtrlResumed, Processor);
     }
 }
 
@@ -786,7 +793,7 @@ HalpAcpiSleepHandler(
     HalpSleepTscOffset = (LONG64)(HalpSleepTsc - __rdtsc());
     HalpSleepRestoreProcessor(0, Save);
     if (HalpSleepSpecCtrl)
-        DPRINT1("Resume: SPEC_CTRL 0x%I64x restored on the boot processor\n", __readmsr(MSR_IA32_SPEC_CTRL));
+        DPRINT1("Resume: SPEC_CTRL 0x%I64x restored on processor 0\n", Save->SpecCtrlResumed);
     HalpSleepClearWakeStatus();
     HalpRestoreInterruptControllers();
     HalpRestoreClock();

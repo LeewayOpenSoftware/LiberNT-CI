@@ -514,10 +514,12 @@ KiSpeculationIdle(
     __writemsr(MSR_IA32_SPEC_CTRL, KiSpecCtrlUserCpu[Number]);
 #if defined(__GNUC__) || defined(__clang__)
     __asm__ __volatile__ ("monitor" :: "a"(Line), "c"(0), "d"(0));
-    __asm__ __volatile__ ("mwait" :: "a"(0), "c"(1) : "memory");
+    if (Prcb->NextThread == NULL && Prcb->DpcData[DPC_NORMAL].DpcQueueDepth == 0)
+        __asm__ __volatile__ ("mwait" :: "a"(0), "c"(1) : "memory");
 #else
     _mm_monitor((const void *)Line, 0, 0);
-    _mm_mwait(1, 0);
+    if (Prcb->NextThread == NULL && Prcb->DpcData[DPC_NORMAL].DpcQueueDepth == 0)
+        _mm_mwait(1, 0);
 #endif
     __writemsr(MSR_IA32_SPEC_CTRL, KiSpecCtrlKernelCpu[Number]);
     _enable();
