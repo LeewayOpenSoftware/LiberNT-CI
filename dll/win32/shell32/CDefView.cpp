@@ -406,6 +406,8 @@ private:
 
     HICON                     m_hMyComputerIcon;
     INT                       m_IconSize;
+    INT                       m_cTileColumns;         // -1 until known
+    UINT                      m_TileColumns[2];       // list columns shown under the name in Tiles
     INT                       m_himlViewSize;
     HIMAGELIST                m_himlView;
     BOOL                      m_himlViewOwned;
@@ -449,6 +451,8 @@ private:
     BOOL IsAddedDuringFill(PCUITEMID_CHILD pidl);
     void ClearAddedDuringFill();
     bool IsComputerTileView() const;
+    void ApplyListViewMode();
+    void InitTileColumns();
     UINT ComputerViewDpi() const;
     SIZED_VIEW_LIST *GetSizedViewImageList(INT cx);
     BOOL EnsureViewIcon(INT index);
@@ -555,7 +559,7 @@ public:
 
     static inline bool IsSupportedFolderViewMode(int Mode)
     {
-        return Mode >= FVM_FIRST && Mode <= FVM_DETAILS; // We don't support Tile nor Thumbstrip
+        return (Mode >= FVM_FIRST && Mode <= FVM_DETAILS) || Mode == FVM_TILE; // No Thumbnail nor Thumbstrip yet
     }
     /* Modes the list view can show (Content is shown as report) */
     static inline bool IsShowableFolderViewMode(int Mode)
@@ -868,6 +872,7 @@ CDefView::CDefView() :
     m_dwPositionCookie(0),
     m_hMyComputerIcon(NULL),
     m_IconSize(0),
+    m_cTileColumns(-1),
     m_himlViewSize(0),
     m_himlView(NULL),
     m_himlViewOwned(FALSE),
@@ -938,6 +943,58 @@ HRESULT WINAPI CDefView::Initialize(IShellFolder *shellFolder)
 bool CDefView::IsComputerTileView() const
 {
     return m_IsComputerFolder && m_FolderSettings.ViewMode == FVM_ICON;
+}
+
+/* Puts the list view in the view of m_FolderSettings.ViewMode (the style bits
+   cannot express Tiles, and leaving Tiles needs LVM_SETVIEW too) */
+void CDefView::ApplyListViewMode()
+{
+    DWORD dwView;
+
+    /* This PC draws its own tiles in icon mode */
+    if (m_IsComputerFolder && m_FolderSettings.ViewMode == FVM_TILE)
+        m_FolderSettings.ViewMode = FVM_ICON;
+
+    switch (m_FolderSettings.ViewMode)
+    {
+        case FVM_ICON:      dwView = LV_VIEW_ICON;      break;
+        case FVM_SMALLICON: dwView = LV_VIEW_SMALLICON; break;
+        case FVM_LIST:      dwView = LV_VIEW_LIST;      break;
+        case FVM_TILE:      dwView = LV_VIEW_TILE;      break;
+        default:            dwView = LV_VIEW_DETAILS;   break;
+    }
+    if (dwView == LV_VIEW_TILE)
+    {
+        LVTILEVIEWINFO tvi = { sizeof(tvi) };
+        tvi.dwMask = LVTVIM_COLUMNS;
+        tvi.dwFlags = LVTVIF_AUTOSIZE;
+        tvi.cLines = _countof(m_TileColumns);
+        m_ListView.SendMessageW(LVM_SETTILEVIEWINFO, 0, (LPARAM)&tvi);
+    }
+    m_ListView.SendMessageW(LVM_SETVIEW, dwView, 0);
+}
+
+/* Tiles show two detail columns under the name: Type and Size in a file system
+   folder (as Windows), else the first two detail columns */
+void CDefView::InitTileColumns()
+{
+    HWND hHeader = ListView_GetHeader(m_ListView);
+    INT cColumns = hHeader ? Header_GetItemCount(hHeader) : 0;
+
+    m_cTileColumns = 0;
+    if (cColumns < 3)
+        return;
+    if (m_SpecialFolder == -1)
+    {
+        m_TileColumns[0] = 2;
+        m_TileColumns[1] = 1;
+    }
+    else
+    {
+        m_TileColumns[0] = 1;
+        m_TileColumns[1] = 2;
+    }
+    m_cTileColumns = _countof(m_TileColumns);
 }
 
 static bool IsComputerDriveItem(PCUITEMID_CHILD pidl)
@@ -1700,6 +1757,9 @@ BOOL CDefView::CreateList()
         case FVM_CONTENT:
             dwStyle |= LVS_REPORT;
             break;
+        case FVM_TILE:
+            dwStyle |= LVS_ICON; /* LVM_SETVIEW below */
+            break;
         default:
             dwStyle |= LVS_LIST;
             break;
@@ -1753,6 +1813,7 @@ BOOL CDefView::CreateList()
     SetWindowTheme(m_ListView, L"Explorer", NULL);
 
     m_ListView.SetExtendedListViewStyle(ListExStyle);
+    ApplyListViewMode();
 
     /* Enumeration finishes asynchronously, after the desktop can be shown.
      * Make its list view transparent before the first paint instead of
@@ -2251,6 +2312,15 @@ int CDefView::LV_AddItem(PCUITEMID_CHILD pidl)
     {
         lvItem.mask |= LVIF_STATE;
         lvItem.state = GetItemAttributes(pidl, SFGAO_HIDDEN | SFGAO_GHOSTED) ? LVIS_CUT : 0;
+    }
+
+    if (m_cTileColumns < 0)
+        InitTileColumns();
+    if (m_cTileColumns > 0)
+    {
+        lvItem.mask |= LVIF_COLUMNS;
+        lvItem.cColumns = m_cTileColumns;
+        lvItem.puColumns = m_TileColumns;
     }
 
     int nItem = m_ListView.InsertItem(&lvItem);
@@ -5373,6 +5443,9 @@ HRESULT STDMETHODCALLTYPE CDefView::SetCurrentViewMode(UINT ViewMode)
     /* Do not show a mode we cannot draw as List, nor save it for the folder */
     if (!IsShowableFolderViewMode(ViewMode))
         return E_NOTIMPL;
+    /* This PC draws its own tiles in icon mode */
+    if (m_IsComputerFolder && ViewMode == FVM_TILE)
+        ViewMode = FVM_ICON;
 
     /* Windows before Vista uses LVM_SETVIEW and possibly
        LVM_SETEXTENDEDLISTVIEWSTYLE to set the style of the listview,
@@ -5385,6 +5458,7 @@ HRESULT STDMETHODCALLTYPE CDefView::SetCurrentViewMode(UINT ViewMode)
         case FVM_LIST:      dwStyle = LVS_LIST;      break;
         case FVM_DETAILS:   dwStyle = LVS_REPORT;    break;
         case FVM_CONTENT:   dwStyle = LVS_REPORT;    break;
+        case FVM_TILE:      dwStyle = LVS_ICON;      break;
         default:
             FIXME("ViewMode %d not implemented\n", ViewMode);
             dwStyle = LVS_LIST;
@@ -5397,6 +5471,7 @@ HRESULT STDMETHODCALLTYPE CDefView::SetCurrentViewMode(UINT ViewMode)
        This mimics the behavior of Windows XP. */
     m_FolderSettings.ViewMode = ViewMode;
     m_ListView.ModifyStyle(LVS_TYPEMASK, dwStyle);
+    ApplyListViewMode();
     if (IsComputerTileView())
     {
         m_ComputerNeedsFinalArrange = true;
