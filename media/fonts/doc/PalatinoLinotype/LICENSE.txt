@@ -1,11 +1,11 @@
-This is a preliminary version (2006-09-30), barring acceptance from
-the LaTeX Project Team and other feedback, of the GUST Font License.
+This work is under the GUST Font License 1.0 (final version).
 (GUST is the Polish TeX Users Group, http://www.gust.org.pl)
 
-For the most recent version of this license see
+TeX Gyre Pagella Fonts
+Copyright (c) 1999 B. Jackowski and J.M. Nowacki (on behalf of the TeX users groups)
+
+For the GUST Font License 1.0 (final version), see:
 http://www.gust.org.pl/fonts/licenses/GUST-FONT-LICENSE.txt
-or
-http://tug.org/fonts/licenses/GUST-FONT-LICENSE.txt
 
 This work may be distributed and/or modified under the conditions
 of the LaTeX Project Public License, either version 1.3c of this

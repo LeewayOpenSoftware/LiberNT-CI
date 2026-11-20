@@ -1,0 +1,68 @@
+GNU LESSER GENERAL PUBLIC LICENSE
+
+Version 2.1, February 1999
+
+Copyright (C) 1991, 1999 Free Software Foundation, Inc.
+51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+
+Everyone is permitted to copy and distribute verbatim copies
+of this license document, but changing it is not allowed.
+
+[This is Version 2.1 of the LGPL.  It incorporates the terms of GPLv2, which
+is incorporated by reference, plus an additional permission.]
+
+PREAMBLE
+
+The licenses for most software are designed to take away your
+freedom to share and change it.  By contrast, the GNU General Public
+Licenses are intended to guarantee your freedom to share and change
+free software--to make sure the software is free for all its users.
+
+This license applies to most of the Free Software Foundation's
+software and to any other program whose authors decide to use it.
+You can use it too.  When we speak of free software, we are referring
+to freedom, not price.
+
+The licenses for most software are designed to make sure that you
+have the freedom to distribute and change the software.  For example,
+the GNU General Public License requires that if you distribute copies
+of such a program, you must give the recipients all the rights that
+you have.
+
+An older license, called the "Library" GPL, applied to some earlier
+versions of some Free Software Foundation software.  Some individual
+libraries are still covered by it.  You can decide to apply the terms
+of the ordinary General Public License to a library of yours instead
+of this License.
+
+[Full LGPL 2.1 text would go here - using reference to online version
+for brevity. See http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html]
+
+TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+
+0. This License Agreement applies to any software library or other program
+in which a notice has been placed saying it may be distributed under the
+terms of this Library General Public License (also called "this License").
+Each licensee is addressed as "you".
+
+A "library" means a collection of software functions and/or data prepared so
+as to be conveniently linked with application programs (which use some of
+those functions and data) to form executables.
+
+The "Library", below, refers to any such software library or work which has
+been distributed under these terms. A "work based on the Library" means
+either the Library or any derivative work under copyright law: that is to say,
+a work containing the Library or a portion of it, either verbatim or with
+modifications and/or translated straightforwardly into another language.
+(Hereinafter, translation is included without limitation in the term
+"modification".)
+
+[For complete LGPL 2.1 terms, see: http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html]
+
+SYMBOL FONT SPECIFIC INFORMATION:
+
+This font is derived from the Wine project's Symbol font implementation.
+Wine Copyright (C) 1993-2009, the Wine developers
+Symbol font Copyright (C) 2009, Jon Parshall for CodeWeavers
+
+The font is distributed under LGPL-2.1 or any later version.
