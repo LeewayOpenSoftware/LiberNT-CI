@@ -440,6 +440,7 @@ private:
     void CaptureItemPositions();
     void ApplySavedItemPositions();
     void MoveItemToFreeSlot(INT nItem);
+    void MoveItemsIntoView();
     HRESULT LoadItemPositions(IStream *pStream);
     HRESULT SaveItemPositions(IStream *pStream);
     void FireFolderViewEvent(DISPID dispid);
@@ -1717,6 +1718,11 @@ BOOL CDefView::CreateList()
     if (m_FolderSettings.fFlags & FWF_NOCOLUMNHEADER)
         dwStyle |= LVS_NOCOLUMNHEADER;
 
+    /* The desktop (FWF_NOSCROLL) must not grow scroll bars when an icon is
+       placed beyond the work area */
+    if (m_FolderSettings.fFlags & FWF_NOSCROLL)
+        dwStyle |= LVS_NOSCROLL;
+
 #if 0
     // FIXME: Because this is a negative, everyone gets the new flag by default unless they
     // opt out. This code should be enabled when shell looks like Vista instead of 2003
@@ -2456,6 +2462,8 @@ void CDefView::FinishFillList()
     _DoFolderViewCB(SFVM_LISTREFRESHED, 0, 0);
 
     ApplySavedItemPositions();
+    if (IsDesktop())
+        MoveItemsIntoView();
     ArrangeComputerView();
     if (m_ListView.GetItemCount() > 0 && m_ListView.GetNextItem(-1, LVNI_FOCUSED) < 0)
         m_ListView.SetItemState(0, LVIS_FOCUSED, LVIS_FOCUSED);
@@ -2581,6 +2589,66 @@ void CDefView::MoveItemToFreeSlot(INT nItem)
             m_ListView.SetItemPosition(nItem, &pt);
             return;
         }
+    }
+}
+
+void CDefView::MoveItemsIntoView()
+{
+    if (!m_ListView || GetAutoArrange() == S_OK || IsComputerTileView())
+        return;
+    if (m_FolderSettings.ViewMode != FVM_ICON && m_FolderSettings.ViewMode != FVM_SMALLICON)
+        return;
+
+    RECT rcClient;
+    if (!m_ListView.GetClientRect(&rcClient) || IsRectEmpty(&rcClient))
+        return;
+
+    const INT nCount = m_ListView.GetItemCount();
+    for (INT i = 0; i < nCount; ++i)
+    {
+        RECT rcItem;
+        POINT pt;
+        if (!ListView_GetItemRect(m_ListView, i, &rcItem, LVIR_BOUNDS) ||
+            !ListView_GetItemPosition(m_ListView, i, &pt))
+        {
+            continue;
+        }
+
+        INT dx = 0, dy = 0;
+        if (rcItem.right > rcClient.right)
+            dx = rcClient.right - rcItem.right;
+        if (rcItem.left + dx < rcClient.left)
+            dx = rcClient.left - rcItem.left;
+        if (rcItem.bottom > rcClient.bottom)
+            dy = rcClient.bottom - rcItem.bottom;
+        if (rcItem.top + dy < rcClient.top)
+            dy = rcClient.top - rcItem.top;
+        if (!dx && !dy)
+            continue;
+
+        if (_GetSnapToGrid() == S_OK)
+        {
+            const INT cx = rcItem.right - rcItem.left, cy = rcItem.bottom - rcItem.top;
+            if (cx > 0 && cy > 0)
+            {
+                INT x = ((rcItem.left + dx + cx / 2) / cx) * cx;
+                INT y = ((rcItem.top + dy + cy / 2) / cy) * cy;
+                if (x + cx > rcClient.right)
+                    x -= cx;
+                if (y + cy > rcClient.bottom)
+                    y -= cy;
+                if (x >= rcClient.left && y >= rcClient.top)
+                {
+                    dx = x - rcItem.left;
+                    dy = y - rcItem.top;
+                }
+            }
+        }
+
+        pt.x += dx;
+        pt.y += dy;
+        m_ListView.SetItemPosition(i, &pt);
+        MoveItemToFreeSlot(i);
     }
 }
 
@@ -3650,6 +3718,8 @@ LRESULT CDefView::OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled
 
     /* Resize the ListView to fit our window */
     ::MoveWindow(m_ListView, 0, 0, wWidth, wHeight, TRUE);
+    if (IsDesktop())
+        MoveItemsIntoView();
     ArrangeComputerView();
 
     _DoFolderViewCB(SFVM_SIZE, 0, 0);

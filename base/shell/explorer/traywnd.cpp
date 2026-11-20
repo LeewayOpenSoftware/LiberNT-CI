@@ -3096,7 +3096,13 @@ ChangePos:
             else
             {
                 /* No taskbar part in the style: paint what the class background would */
-                if (FAILED(DrawThemeBackground(m_Theme, hdc, iSBkgndPart[m_Position], 0, &rect, 0)))
+                int iPart = iSBkgndPart[m_Position], iBgType;
+
+                /* The right edge part can resolve to the border fill default (a white box) where the left
+                   one draws the image; both carry the same artwork, so fall back to the left one */
+                if (iPart == TBP_BACKGROUNDRIGHT && FAILED(GetThemeEnumValue(m_Theme, iPart, 0, TMT_BGTYPE, &iBgType)))
+                    iPart = TBP_BACKGROUNDLEFT;
+                if (FAILED(DrawThemeBackground(m_Theme, hdc, iPart, 0, &rect, 0)))
                     FillRect(hdc, &rect, GetSysColorBrush(COLOR_3DFACE));
             }
         }
