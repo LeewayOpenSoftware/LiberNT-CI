@@ -1044,6 +1044,33 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Console\TrueTypeFont","0",2,"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\drivers.desc",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper",,0x00000012
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","@MS Gothic",0x00010001,0x0000A080
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","@MS PGothic",0x00010001,0x00002080
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","@NSimSun",0x00010001,0x0000A086
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","@SimSun",0x00010001,0x00002086
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","ARIAL",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","COURIER",0x00010001,0x00008800
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","COURIER NEW",0x00010001,0x00008000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","FIXEDSYS",0x00010001,0x00009000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","MS Gothic",0x00010001,0x00008080
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","MS PGothic",0x00010001,0x00000080
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","MS SANS SERIF",0x00010001,0x00001000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","MS SERIF",0x00010001,0x00005000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","NSimSun",0x00010001,0x00008086
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","SimSun",0x00010001,0x00000086
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","SMALL FONTS",0x00010001,0x00000800
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","SYMBOL",0x00010001,0x00004002
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","SYMBOL1",0x00010001,0x0000A002
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","TIMES NEW ROMAN",0x00010001,0x00004000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","WINGDINGS",0x00010001,0x00000002
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","DEFAULT",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults",,0x00000012
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults",,0x00000000,"Arial"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults","Decorative",0x00000000,"Impact"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults","Modern",0x00000000,"Courier New"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults","Roman",0x00000000,"Times New Roman"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults","Script",0x00000000,"Segoe Script"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults","Swiss",0x00000000,"Arial"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\HotFix",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IME Compatibility",,0x00000012
 
