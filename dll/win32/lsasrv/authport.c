@@ -143,10 +143,8 @@ LsapCheckLogonProcess(PLSA_API_MSG RequestMsg,
             Context->TrustedCaller = FALSE;
             break;
 
+        /* YES and CHECK are both verified */
         case YES:
-            Context->TrustedCaller = TRUE;
-            break;
-
         case CHECK:
         default:
             Context->TrustedCaller = LsapIsTrustedClient(ProcessHandle);
@@ -158,6 +156,13 @@ LsapCheckLogonProcess(PLSA_API_MSG RequestMsg,
     *LogonContext = Context;
 
     return STATUS_SUCCESS;
+}
+
+
+HANDLE
+LsapGetAuthPortHandle(VOID)
+{
+    return AuthPortHandle;
 }
 
 
