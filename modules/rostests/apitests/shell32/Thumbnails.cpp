@@ -18,6 +18,7 @@ static WCHAR g_Bmp[MAX_PATH];
 static WCHAR g_Png[MAX_PATH];
 static WCHAR g_Txt[MAX_PATH];
 static WCHAR g_Lnk[MAX_PATH];
+static WCHAR g_Big[MAX_PATH];
 
 #define RED   RGB(255, 0, 0)
 #define BLUE  RGB(0, 0, 255)
@@ -624,12 +625,36 @@ TestThumbnailGenerator(void)
         ok(!PumpUntil(1, 500), "message after cancel (item %lu)\n", g_ResultCount ? g_Results[0].Id : 0);
         ClearResults();
 
-        /* Release() joins the worker; must not hang with work queued */
+        /* Release() must not wait for the extraction in flight: a slow provider
+         * would freeze the view that navigates away. A big picture keeps the
+         * worker busy; Release() has to come back at once. */
         ok_hr(Gen->Init(Sink, THUMB_SINK_MSG), S_OK);
-        ok_hr(Gen->GetBitmap(g_Bmp, 6, 48, 48), S_OK);
-        Gen.Release();
-        PumpSink();
-        ClearResults();
+        if (WriteBmp(g_Big, 2400, 2400))
+        {
+            DWORD Start, Elapsed;
+            int Tries;
+
+            ok_hr(Gen->GetBitmap(g_Big, 6, 256, 256), S_OK);
+            Sleep(30);
+            Start = GetTickCount();
+            Gen.Release();
+            Elapsed = GetTickCount() - Start;
+            ok(Elapsed < 1000, "Release waited %lu ms for the extraction in flight\n", Elapsed);
+            trace("Release with a 2400x2400 extraction in flight: %lu ms\n", Elapsed);
+            PumpSink();
+            ClearResults();
+            /* the worker may still hold the file for a moment */
+            for (Tries = 0; Tries < 100 && !DeleteFileW(g_Big) && GetLastError() == ERROR_SHARING_VIOLATION; Tries++)
+                Sleep(50);
+        }
+        else
+        {
+            skip("cannot write the big bitmap: %lu\n", GetLastError());
+            ok_hr(Gen->GetBitmap(g_Bmp, 6, 48, 48), S_OK);
+            Gen.Release();
+            PumpSink();
+            ClearResults();
+        }
     }
 
     DestroyWindow(Sink);
@@ -882,6 +907,7 @@ START_TEST(Thumbnails)
     wsprintfW(g_Png, L"%s\\image.png", g_Dir);
     wsprintfW(g_Txt, L"%s\\note.txt", g_Dir);
     wsprintfW(g_Lnk, L"%s\\image.lnk", g_Dir);
+    wsprintfW(g_Big, L"%s\\big.bmp", g_Dir);
     if (!WriteBmp(g_Bmp, 64, 48) || !WritePng(g_Png, 64, 48) || !WriteBytes(g_Txt, "text", 4))
     {
         skip("cannot create test files: %lu\n", GetLastError());

@@ -18,13 +18,20 @@ WINE_DEFAULT_DEBUG_CHANNEL(shell);
  * The receiver owns hbmThumbnail. Nothing is posted when the item has no
  * thumbnail (no handler for the type, extraction failed, or "Always show
  * icons, never thumbnails" is on), so the view keeps its icon. The image
- * comes from IShellItemImageFactory::GetImage,
- * so the thumbnail cache and every registered IThumbnailProvider are shared
- * with the other consumers. A request whose dwItemID is still queued replaces
- * the queued one; a request whose dwItemID is being extracted makes that
- * result stale, so only the newest request per item is delivered. Init(NULL,
- * 0), a new Init() and the final Release() drop all pending work and nothing
- * is posted for it afterwards.
+ * comes from IShellItemImageFactory::GetImage, so the thumbnail cache and
+ * every registered IThumbnailProvider are shared with the other consumers.
+ * A request whose dwItemID is still queued replaces the queued one; a request
+ * whose dwItemID is being extracted makes that result stale, so only the
+ * newest request per item is delivered. Init(NULL, 0), a new Init() and the
+ * final Release() drop all pending work and nothing is posted for it
+ * afterwards.
+ *
+ * The object and its worker thread share a reference-counted state block:
+ * the final Release() only signals the worker and returns, it never waits for
+ * the extraction in flight (a slow provider must not freeze the view that
+ * navigates away). The worker finishes that extraction, drops the result,
+ * frees the block if it holds the last reference, and leaves through
+ * FreeLibraryAndExitThread so shell32 stays loaded as long as it runs.
  */
 
 struct THUMBNAIL_REQUEST
@@ -37,70 +44,227 @@ struct THUMBNAIL_REQUEST
     ULONG uGeneration;
 };
 
+struct THUMBNAIL_WORKER
+{
+    LONG cRef;               /* the object and, once started, the worker thread */
+    CRITICAL_SECTION cs;
+    HANDLE hWake;
+    HMODULE hModule;         /* shell32, held by the worker thread */
+    BOOL bThread;            /* worker thread started */
+    HWND hwnd;
+    UINT uMsg;
+    THUMBNAIL_REQUEST *pHead;
+    THUMBNAIL_REQUEST *pTail;
+    ULONG uGeneration;       /* bumped by Init(); results of an older generation are dropped */
+    BOOL bQuit;
+    BOOL bActive;            /* the worker is extracting dwActiveItemID */
+    DWORD dwActiveItemID;
+    BOOL bActiveStale;       /* a newer request for the active item arrived */
+};
+
+static void FreeRequest(THUMBNAIL_REQUEST *pReq)
+{
+    ILFree(pReq->pidl);
+    HeapFree(GetProcessHeap(), 0, pReq);
+}
+
+/* cs held */
+static void DropQueue(THUMBNAIL_WORKER *pW)
+{
+    while (pW->pHead)
+    {
+        THUMBNAIL_REQUEST *pReq = pW->pHead;
+        pW->pHead = pReq->pNext;
+        FreeRequest(pReq);
+    }
+    pW->pTail = NULL;
+    if (pW->bActive)
+        pW->bActiveStale = TRUE;
+}
+
+/* cs held */
+static void RemoveQueued(THUMBNAIL_WORKER *pW, DWORD dwItemID)
+{
+    THUMBNAIL_REQUEST **ppLink = &pW->pHead;
+    THUMBNAIL_REQUEST *pPrev = NULL;
+
+    while (*ppLink)
+    {
+        THUMBNAIL_REQUEST *pReq = *ppLink;
+        if (pReq->dwItemID == dwItemID)
+        {
+            *ppLink = pReq->pNext;
+            if (pW->pTail == pReq)
+                pW->pTail = pPrev;
+            FreeRequest(pReq);
+            continue;
+        }
+        pPrev = pReq;
+        ppLink = &pReq->pNext;
+    }
+}
+
+static void WorkerRelease(THUMBNAIL_WORKER *pW)
+{
+    if (InterlockedDecrement(&pW->cRef) != 0)
+        return;
+    DropQueue(pW);
+    DeleteCriticalSection(&pW->cs);
+    CloseHandle(pW->hWake);
+    HeapFree(GetProcessHeap(), 0, pW);
+}
+
+/* Worker side */
+static THUMBNAIL_REQUEST *Take(THUMBNAIL_WORKER *pW)
+{
+    THUMBNAIL_REQUEST *pReq = NULL;
+
+    EnterCriticalSection(&pW->cs);
+    if (!pW->bQuit && pW->pHead)
+    {
+        pReq = pW->pHead;
+        pW->pHead = pReq->pNext;
+        if (!pW->pHead)
+            pW->pTail = NULL;
+        pReq->pNext = NULL;
+        pW->bActive = TRUE;
+        pW->dwActiveItemID = pReq->dwItemID;
+        pW->bActiveStale = FALSE;
+    }
+    else
+    {
+        pW->bActive = FALSE;
+    }
+    LeaveCriticalSection(&pW->cs);
+    return pReq;
+}
+
+static HBITMAP Extract(const THUMBNAIL_REQUEST *pReq)
+{
+    CComPtr<IShellItemImageFactory> pFactory;
+    HBITMAP hbm = NULL;
+    SIZE size;
+    HRESULT hr;
+
+    size.cx = pReq->cx;
+    size.cy = pReq->cy;
+    hr = SHCreateItemFromIDList(pReq->pidl, IID_PPV_ARG(IShellItemImageFactory, &pFactory));
+    if (SUCCEEDED(hr))
+        hr = pFactory->GetImage(size, SIIGBF_THUMBNAILONLY, &hbm);
+    if (FAILED(hr))
+    {
+        TRACE("No thumbnail for item %lu: 0x%08lx\n", pReq->dwItemID, hr);
+        if (hbm)
+            DeleteObject(hbm);
+        return NULL;
+    }
+    return hbm;
+}
+
+static void Deliver(THUMBNAIL_WORKER *pW, const THUMBNAIL_REQUEST *pReq, HBITMAP hbm)
+{
+    BOOL bPosted = FALSE;
+
+    EnterCriticalSection(&pW->cs);
+    if (hbm && !pW->bQuit && pW->hwnd && !pW->bActiveStale && pReq->uGeneration == pW->uGeneration)
+        bPosted = PostMessageW(pW->hwnd, pW->uMsg, (WPARAM)hbm, (LPARAM)pReq->dwItemID);
+    pW->bActive = FALSE;
+    LeaveCriticalSection(&pW->cs);
+    /* Posted: the window owns the bitmap. Not posted (cancelled, stale, no window,
+     * or PostMessage failed because the queue is full or the window is gone): ours to delete. */
+    if (!bPosted && hbm)
+        DeleteObject(hbm);
+}
+
+static DWORD WINAPI ThumbnailThreadProc(LPVOID pParam)
+{
+    THUMBNAIL_WORKER *pW = static_cast<THUMBNAIL_WORKER *>(pParam);
+    HMODULE hModule = pW->hModule;
+    HRESULT hrInit = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+
+    for (;;)
+    {
+        THUMBNAIL_REQUEST *pReq;
+        BOOL bQuit;
+
+        WaitForSingleObject(pW->hWake, INFINITE);
+        while ((pReq = Take(pW)) != NULL)
+        {
+            HBITMAP hbm = Extract(pReq);
+            Deliver(pW, pReq, hbm);
+            FreeRequest(pReq);
+        }
+        EnterCriticalSection(&pW->cs);
+        bQuit = pW->bQuit;
+        LeaveCriticalSection(&pW->cs);
+        if (bQuit)
+            break;
+    }
+    if (SUCCEEDED(hrInit))
+        CoUninitialize();
+    WorkerRelease(pW);
+    FreeLibraryAndExitThread(hModule, 0);
+    return 0;
+}
+
 class CThumbnail :
     public CComCoClass<CThumbnail, &CLSID_Thumbnail>,
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
     public IThumbnail3,
     public CObjectWithSiteBase
 {
-    HWND m_hwnd;
-    UINT m_uMsg;
-    CRITICAL_SECTION m_cs;
-    THUMBNAIL_REQUEST *m_pHead;
-    THUMBNAIL_REQUEST *m_pTail;
-    HANDLE m_hThread;
-    HANDLE m_hWake;
-    ULONG m_uGeneration;     /* bumped by Init(); results of an older generation are dropped */
-    BOOL m_bQuit;
-    BOOL m_bActive;          /* the worker is extracting m_dwActiveItemID */
-    DWORD m_dwActiveItemID;
-    BOOL m_bActiveStale;     /* a newer request for the active item arrived */
+    THUMBNAIL_WORKER *m_pWorker;
 
 public:
-    CThumbnail() :
-        m_hwnd(NULL), m_uMsg(0), m_pHead(NULL), m_pTail(NULL), m_hThread(NULL), m_hWake(NULL),
-        m_uGeneration(0), m_bQuit(FALSE), m_bActive(FALSE), m_dwActiveItemID(0), m_bActiveStale(FALSE)
-    {
-        InitializeCriticalSection(&m_cs);
-    }
+    CThumbnail() : m_pWorker(NULL) {}
 
     HRESULT FinalConstruct()
     {
-        m_hWake = CreateEventW(NULL, FALSE, FALSE, NULL);
-        return m_hWake ? S_OK : HRESULT_FROM_WIN32(GetLastError());
+        THUMBNAIL_WORKER *pW;
+
+        pW = (THUMBNAIL_WORKER *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*pW));
+        if (!pW)
+            return E_OUTOFMEMORY;
+        pW->hWake = CreateEventW(NULL, FALSE, FALSE, NULL);
+        if (!pW->hWake)
+        {
+            DWORD dwError = GetLastError();
+            HeapFree(GetProcessHeap(), 0, pW);
+            return HRESULT_FROM_WIN32(dwError);
+        }
+        InitializeCriticalSection(&pW->cs);
+        pW->cRef = 1;
+        m_pWorker = pW;
+        return S_OK;
     }
 
     void FinalRelease()
     {
-        EnterCriticalSection(&m_cs);
-        m_bQuit = TRUE;
-        m_hwnd = NULL;
-        DropQueue();
-        LeaveCriticalSection(&m_cs);
-        if (m_hThread)
-        {
-            /* The worker holds no reference; it only finishes the extraction in flight. */
-            SetEvent(m_hWake);
-            WaitForSingleObject(m_hThread, INFINITE);
-            CloseHandle(m_hThread);
-            m_hThread = NULL;
-        }
-        if (m_hWake)
-        {
-            CloseHandle(m_hWake);
-            m_hWake = NULL;
-        }
-        DeleteCriticalSection(&m_cs);
+        THUMBNAIL_WORKER *pW = m_pWorker;
+
+        if (!pW)
+            return;
+        m_pWorker = NULL;
+        EnterCriticalSection(&pW->cs);
+        pW->bQuit = TRUE;
+        pW->hwnd = NULL;
+        DropQueue(pW);
+        LeaveCriticalSection(&pW->cs);
+        /* The worker finishes its current extraction on its own time and drops the result. */
+        SetEvent(pW->hWake);
+        WorkerRelease(pW);
     }
 
     STDMETHOD(Init)(HWND hwnd, UINT uMsg) override
     {
-        EnterCriticalSection(&m_cs);
-        m_hwnd = hwnd;
-        m_uMsg = uMsg;
-        m_uGeneration++;
-        DropQueue();
-        LeaveCriticalSection(&m_cs);
+        THUMBNAIL_WORKER *pW = m_pWorker;
+
+        EnterCriticalSection(&pW->cs);
+        pW->hwnd = hwnd;
+        pW->uMsg = uMsg;
+        pW->uGeneration++;
+        DropQueue(pW);
+        LeaveCriticalSection(&pW->cs);
         return S_OK;
     }
 
@@ -153,61 +317,33 @@ public:
     END_COM_MAP()
 
 private:
-    static void FreeRequest(THUMBNAIL_REQUEST *pReq)
+    /* cs held */
+    HRESULT StartWorker(THUMBNAIL_WORKER *pW)
     {
-        ILFree(pReq->pidl);
-        HeapFree(GetProcessHeap(), 0, pReq);
-    }
+        HANDLE hThread;
 
-    /* m_cs held */
-    void DropQueue()
-    {
-        while (m_pHead)
-        {
-            THUMBNAIL_REQUEST *pReq = m_pHead;
-            m_pHead = pReq->pNext;
-            FreeRequest(pReq);
-        }
-        m_pTail = NULL;
-        if (m_bActive)
-            m_bActiveStale = TRUE;
-    }
-
-    /* m_cs held */
-    void RemoveQueued(DWORD dwItemID)
-    {
-        THUMBNAIL_REQUEST **ppLink = &m_pHead;
-        THUMBNAIL_REQUEST *pPrev = NULL;
-
-        while (*ppLink)
-        {
-            THUMBNAIL_REQUEST *pReq = *ppLink;
-            if (pReq->dwItemID == dwItemID)
-            {
-                *ppLink = pReq->pNext;
-                if (m_pTail == pReq)
-                    m_pTail = pPrev;
-                FreeRequest(pReq);
-                continue;
-            }
-            pPrev = pReq;
-            ppLink = &pReq->pNext;
-        }
-    }
-
-    /* m_cs held */
-    HRESULT StartWorker()
-    {
-        if (m_hThread)
+        if (pW->bThread)
             return S_OK;
-        m_hThread = CreateThread(NULL, 0, ThreadProc, this, 0, NULL);
-        if (!m_hThread)
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)ThumbnailThreadProc, &pW->hModule))
             return HRESULT_FROM_WIN32(GetLastError());
+        InterlockedIncrement(&pW->cRef);
+        hThread = CreateThread(NULL, 0, ThumbnailThreadProc, pW, 0, NULL);
+        if (!hThread)
+        {
+            DWORD dwError = GetLastError();
+            InterlockedDecrement(&pW->cRef);
+            FreeLibrary(pW->hModule);
+            pW->hModule = NULL;
+            return HRESULT_FROM_WIN32(dwError);
+        }
+        CloseHandle(hThread);
+        pW->bThread = TRUE;
         return S_OK;
     }
 
     HRESULT Queue(PCIDLIST_ABSOLUTE pidl, DWORD dwItemID, LONG cx, LONG cy)
     {
+        THUMBNAIL_WORKER *pW = m_pWorker;
         THUMBNAIL_REQUEST *pReq;
         HRESULT hr;
 
@@ -224,128 +360,33 @@ private:
         pReq->cx = cx;
         pReq->cy = cy;
 
-        EnterCriticalSection(&m_cs);
-        if (!m_hwnd || m_bQuit)
+        EnterCriticalSection(&pW->cs);
+        if (!pW->hwnd || pW->bQuit)
         {
             /* Nowhere to deliver: Init() was not called or the sink was dropped. */
-            LeaveCriticalSection(&m_cs);
+            LeaveCriticalSection(&pW->cs);
             FreeRequest(pReq);
             return E_FAIL;
         }
-        pReq->uGeneration = m_uGeneration;
-        RemoveQueued(dwItemID);
-        if (m_bActive && m_dwActiveItemID == dwItemID)
-            m_bActiveStale = TRUE;
-        if (m_pTail)
-            m_pTail->pNext = pReq;
+        pReq->uGeneration = pW->uGeneration;
+        RemoveQueued(pW, dwItemID);
+        if (pW->bActive && pW->dwActiveItemID == dwItemID)
+            pW->bActiveStale = TRUE;
+        if (pW->pTail)
+            pW->pTail->pNext = pReq;
         else
-            m_pHead = pReq;
-        m_pTail = pReq;
-        hr = StartWorker();
+            pW->pHead = pReq;
+        pW->pTail = pReq;
+        hr = StartWorker(pW);
         if (FAILED(hr))
         {
-            RemoveQueued(dwItemID);
-            LeaveCriticalSection(&m_cs);
+            RemoveQueued(pW, dwItemID);
+            LeaveCriticalSection(&pW->cs);
             return hr;
         }
-        LeaveCriticalSection(&m_cs);
-        SetEvent(m_hWake);
+        LeaveCriticalSection(&pW->cs);
+        SetEvent(pW->hWake);
         return S_OK;
-    }
-
-    /* Worker side */
-    THUMBNAIL_REQUEST *Take()
-    {
-        THUMBNAIL_REQUEST *pReq = NULL;
-
-        EnterCriticalSection(&m_cs);
-        if (!m_bQuit && m_pHead)
-        {
-            pReq = m_pHead;
-            m_pHead = pReq->pNext;
-            if (!m_pHead)
-                m_pTail = NULL;
-            pReq->pNext = NULL;
-            m_bActive = TRUE;
-            m_dwActiveItemID = pReq->dwItemID;
-            m_bActiveStale = FALSE;
-        }
-        else
-        {
-            m_bActive = FALSE;
-        }
-        LeaveCriticalSection(&m_cs);
-        return pReq;
-    }
-
-    HBITMAP Extract(const THUMBNAIL_REQUEST *pReq)
-    {
-        CComPtr<IShellItemImageFactory> pFactory;
-        HBITMAP hbm = NULL;
-        SIZE size;
-        HRESULT hr;
-
-        size.cx = pReq->cx;
-        size.cy = pReq->cy;
-        hr = SHCreateItemFromIDList(pReq->pidl, IID_PPV_ARG(IShellItemImageFactory, &pFactory));
-        if (SUCCEEDED(hr))
-            hr = pFactory->GetImage(size, SIIGBF_THUMBNAILONLY, &hbm);
-        if (FAILED(hr))
-        {
-            TRACE("No thumbnail for item %lu: 0x%08lx\n", pReq->dwItemID, hr);
-            if (hbm)
-                DeleteObject(hbm);
-            return NULL;
-        }
-        return hbm;
-    }
-
-    void Deliver(const THUMBNAIL_REQUEST *pReq, HBITMAP hbm)
-    {
-        BOOL bPosted = FALSE;
-
-        EnterCriticalSection(&m_cs);
-        if (hbm && !m_bQuit && m_hwnd && !m_bActiveStale && pReq->uGeneration == m_uGeneration)
-            bPosted = PostMessageW(m_hwnd, m_uMsg, (WPARAM)hbm, (LPARAM)pReq->dwItemID);
-        m_bActive = FALSE;
-        LeaveCriticalSection(&m_cs);
-        /* Posted: the window owns the bitmap. Not posted (cancelled, stale, no window,
-         * or PostMessage failed because the queue is full or the window is gone): ours to delete. */
-        if (!bPosted && hbm)
-            DeleteObject(hbm);
-    }
-
-    void Run()
-    {
-        for (;;)
-        {
-            THUMBNAIL_REQUEST *pReq;
-            BOOL bQuit;
-
-            WaitForSingleObject(m_hWake, INFINITE);
-            while ((pReq = Take()) != NULL)
-            {
-                HBITMAP hbm = Extract(pReq);
-                Deliver(pReq, hbm);
-                FreeRequest(pReq);
-            }
-            EnterCriticalSection(&m_cs);
-            bQuit = m_bQuit;
-            LeaveCriticalSection(&m_cs);
-            if (bQuit)
-                break;
-        }
-    }
-
-    static DWORD WINAPI ThreadProc(LPVOID pParam)
-    {
-        CThumbnail *pThis = static_cast<CThumbnail *>(pParam);
-        HRESULT hrInit = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-
-        pThis->Run();
-        if (SUCCEEDED(hrInit))
-            CoUninitialize();
-        return 0;
     }
 };
 

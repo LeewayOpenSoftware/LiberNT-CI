@@ -1520,6 +1520,8 @@ DECLARE_INTERFACE_(IFadeTask, IUnknown) // {FADB55B4-D382-4FC4-81D7-ABB325C7F12A
  * Init(NULL, 0) and Release() cancel everything still pending, and nothing is
  * posted after Init(NULL, 0) returns: the cancel and the post are serialized on
  * the same lock, so a result that did not make it before the cancel is dropped.
+ * Release() never waits for an extraction in flight; the worker thread finishes
+ * it on its own, drops the result and exits.
  */
 #define INTERFACE IThumbnail3
 DECLARE_INTERFACE_(IThumbnail3, IUnknown)
