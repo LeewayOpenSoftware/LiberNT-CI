@@ -391,29 +391,92 @@ static DWORD
 ScmCheckAccess(SC_HANDLE Handle,
                DWORD dwDesiredAccess)
 {
-    PMANAGER_HANDLE hMgr;
+    PMANAGER_HANDLE hMgr = (PMANAGER_HANDLE)Handle;
+    PSECURITY_DESCRIPTOR pSD;
+    PGENERIC_MAPPING pMapping;
+    DWORD dwGranted;
+    DWORD dwError;
 
-    hMgr = (PMANAGER_HANDLE)Handle;
     if (hMgr->Handle.Tag == MANAGER_TAG)
     {
-        RtlMapGenericMask(&dwDesiredAccess,
-                          &ScmManagerMapping);
-
-        hMgr->Handle.DesiredAccess = dwDesiredAccess;
-
-        return ERROR_SUCCESS;
+        pSD = pManagerSD;
+        pMapping = &ScmManagerMapping;
     }
     else if (hMgr->Handle.Tag == SERVICE_TAG)
     {
-        RtlMapGenericMask(&dwDesiredAccess,
-                          &ScmServiceMapping);
-
-        hMgr->Handle.DesiredAccess = dwDesiredAccess;
-
-        return ERROR_SUCCESS;
+        pSD = ((PSERVICE_HANDLE)Handle)->ServiceEntry->pSecurityDescriptor;
+        if (pSD == NULL)
+            pSD = pDefaultSD;
+        pMapping = &ScmServiceMapping;
+    }
+    else
+    {
+        return ERROR_INVALID_HANDLE;
     }
 
-    return ERROR_INVALID_HANDLE;
+    hMgr->Handle.DesiredAccess = 0;
+
+    RtlMapGenericMask(&dwDesiredAccess, pMapping);
+    if (dwDesiredAccess == 0)
+        return ERROR_SUCCESS;
+
+    dwError = ScmAccessCheckCaller(pSD, dwDesiredAccess, pMapping, &dwGranted);
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
+
+    hMgr->Handle.DesiredAccess = dwGranted;
+
+    return ERROR_SUCCESS;
+}
+
+
+/* The creator of a service gets the access it asked for. */
+static VOID
+ScmGrantCreatorAccess(SC_HANDLE Handle,
+                      DWORD dwDesiredAccess)
+{
+    PSERVICE_HANDLE hSvc = (PSERVICE_HANDLE)Handle;
+
+    if (dwDesiredAccess & MAXIMUM_ALLOWED)
+        dwDesiredAccess = (dwDesiredAccess & ~MAXIMUM_ALLOWED) | SERVICE_ALL_ACCESS;
+
+    RtlMapGenericMask(&dwDesiredAccess, &ScmServiceMapping);
+
+    /* ACCESS_SYSTEM_SECURITY still needs SeSecurityPrivilege, as for any object */
+    if (dwDesiredAccess & ACCESS_SYSTEM_SECURITY)
+    {
+        PSECURITY_DESCRIPTOR pSD = hSvc->ServiceEntry->pSecurityDescriptor;
+        DWORD dwGranted;
+
+        if (ScmAccessCheckCaller(pSD ? pSD : pDefaultSD,
+                                 ACCESS_SYSTEM_SECURITY,
+                                 &ScmServiceMapping,
+                                 &dwGranted) != ERROR_SUCCESS)
+        {
+            dwDesiredAccess &= ~ACCESS_SYSTEM_SECURITY;
+        }
+    }
+
+    hSvc->Handle.DesiredAccess = dwDesiredAccess & (SERVICE_ALL_ACCESS | ACCESS_SYSTEM_SECURITY);
+}
+
+
+/* A status handle may only be used by the process that runs the service. */
+static BOOL
+ScmIsCallerServiceProcess(PSERVICE lpService)
+{
+    ULONG ulPid;
+
+    /* Only ncalrpc reports the client process; over the named pipe the caller must run
+     * as the account of the service's process, or as LocalSystem */
+    if (I_RpcBindingInqLocalClientPID(NULL, &ulPid) != RPC_S_OK)
+        return ScmIsCallerAccount(lpService->lpImage != NULL ? lpService->lpImage->hToken : NULL);
+
+    if (ulPid == GetCurrentProcessId())
+        return TRUE;
+
+    return lpService->lpImage != NULL &&
+           lpService->lpImage->dwProcessId == ulPid;
 }
 
 
@@ -1348,7 +1411,7 @@ ScmSendControl(
         dwError = ScmControlService(lpService->lpImage->hControlPipe,
                                     lpService->lpServiceName,
                                     dwControl,
-                                    lpService->dwResumeCount);
+                                    lpService->dwStatusHandle);
 
         /* Return service status information */
         RtlCopyMemory(lpServiceStatus,
@@ -1664,6 +1727,10 @@ RSetServiceObjectSecurity(
     RpcRevertToSelf();
 #endif
 
+    /* Lock the service database exclusive */
+    ScmLockDatabaseExclusive();
+    bDatabaseLocked = TRUE;
+
     /* Build the new security descriptor */
     Status = RtlSetSecurityObject(dwSecurityInformation,
                                   (PSECURITY_DESCRIPTOR)lpSecurityDescriptor,
@@ -1675,10 +1742,6 @@ RSetServiceObjectSecurity(
         dwError = RtlNtStatusToDosError(Status);
         goto Done;
     }
-
-    /* Lock the service database exclusive */
-    ScmLockDatabaseExclusive();
-    bDatabaseLocked = TRUE;
 
     /* Open the service key */
     dwError = ScmOpenServiceKey(lpService->lpServiceName,
@@ -1813,7 +1876,7 @@ ScmStopThread(PVOID pParam)
         ScmControlService(lpImage->hControlPipe,
                           L"",
                           SERVICE_CONTROL_STOP,
-                          lpService->dwResumeCount);
+                          lpService->dwStatusHandle);
     }
 
     /* Lock the service database exclusively */
@@ -1904,6 +1967,8 @@ RSetServiceStatus(
 
     ScmLockDatabaseShared();
     lpService = ScmGetServiceEntryByStatusHandle(hServiceStatus);
+    if (lpService != NULL && !ScmIsCallerServiceProcess(lpService))
+        lpService = NULL;
     ScmUnlockDatabase();
     if (lpService == NULL)
         return ERROR_INVALID_HANDLE;
@@ -2095,8 +2160,18 @@ RNotifyBootConfigStatus(
     SVCCTL_HANDLEW lpMachineName,
     DWORD BootAcceptable)
 {
+    DWORD dwGranted;
+    DWORD dwError;
+
     DPRINT("RNotifyBootConfigStatus(%p %lu)\n",
            lpMachineName, BootAcceptable);
+
+    dwError = ScmAccessCheckCaller(pManagerSD,
+                                   SC_MANAGER_MODIFY_BOOT_CONFIG,
+                                   &ScmManagerMapping,
+                                   &dwGranted);
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
 
     if (BootAcceptable)
         return ScmAcceptBoot();
@@ -2135,6 +2210,8 @@ RI_ScSetServiceBitsW(
 
     ScmLockDatabaseShared();
     pService = ScmGetServiceEntryByStatusHandle(hServiceStatus);
+    if (pService != NULL && !ScmIsCallerServiceProcess(pService))
+        pService = NULL;
     ScmUnlockDatabase();
     if (pService == NULL)
         return ERROR_INVALID_HANDLE;
@@ -2574,6 +2651,16 @@ RCreateServiceW(
         return ERROR_ACCESS_DENIED;
     }
 
+    /* ACCESS_SYSTEM_SECURITY on the new handle needs SeSecurityPrivilege: fail before anything is created */
+    if (dwDesiredAccess & ACCESS_SYSTEM_SECURITY)
+    {
+        DWORD dwGranted;
+
+        dwError = ScmAccessCheckCaller(pDefaultSD, ACCESS_SYSTEM_SECURITY, &ScmServiceMapping, &dwGranted);
+        if (dwError != ERROR_SUCCESS)
+            return dwError;
+    }
+
     if (*lpServiceName == 0)
         return ERROR_INVALID_NAME;
 
@@ -2891,10 +2978,8 @@ RCreateServiceW(
     if (dwError != ERROR_SUCCESS)
         goto done;
 
-    dwError = ScmCheckAccess(hServiceHandle,
-                             dwDesiredAccess);
-    if (dwError != ERROR_SUCCESS)
-        goto done;
+    ScmGrantCreatorAccess(hServiceHandle,
+                          dwDesiredAccess);
 
     ScmReferenceService(lpService);
 
@@ -7368,6 +7453,10 @@ RI_ScSendPnPMessage(
     DPRINT("RI_ScSendPnPMessage(%lu %lx %lu %lu %p)\n",
            hServiceStatus, dwControl, dwEventType, dwEventSize, pEventData);
 
+    /* Only the Plug and Play service sends these */
+    if (!ScmIsCallerLocalSystem())
+        return ERROR_ACCESS_DENIED;
+
     ScmLockDatabaseShared();
     pService = ScmGetServiceEntryByStatusHandle(hServiceStatus);
     ScmUnlockDatabase();
@@ -7426,7 +7515,7 @@ RI_ScSendPnPMessage(
 
     ControlPacket->dwSize = PacketSize;
     ControlPacket->dwControl = dwControl;
-    ControlPacket->hServiceStatus = pService->dwResumeCount;
+    ControlPacket->hServiceStatus = pService->dwStatusHandle;
     ControlPacket->dwServiceTag = pService->dwServiceTag;
 
     /* Copy the event type and event data into the control packet */
@@ -7477,8 +7566,6 @@ RI_ScValidatePnPService(
         return ERROR_INVALID_HANDLE;
     }
 
-    /* FIXME: should check whether client is local */
-
     /* Check access rights */
     if (!RtlAreAllAccessesGranted(hManager->Handle.DesiredAccess,
                                   SC_MANAGER_CONNECT))
@@ -7487,12 +7574,16 @@ RI_ScValidatePnPService(
         return ERROR_ACCESS_DENIED;
     }
 
+    /* Only the Plug and Play service hands out status handles */
+    if (!ScmIsCallerLocalSystem())
+        return ERROR_ACCESS_DENIED;
+
     pService = ScmGetServiceEntryByName(pszServiceName);
     DPRINT("pService: %p\n", pService);
     if (pService == NULL)
         return ERROR_SERVICE_DOES_NOT_EXIST;
 
-    *phServiceStatus = pService->dwResumeCount;
+    *phServiceStatus = pService->dwStatusHandle;
 
     return ERROR_SUCCESS;
 }

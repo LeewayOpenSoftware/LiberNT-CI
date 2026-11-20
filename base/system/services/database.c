@@ -17,6 +17,7 @@
 #include <winbase_undoc.h>
 #include <userenv.h>
 #include <strsafe.h>
+#include <ntsecapi.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -1185,7 +1186,7 @@ ScmGetServiceEntryByStatusHandle(DWORD hServiceStatus)
         CurrentService = CONTAINING_RECORD(ServiceEntry,
                                            SERVICE,
                                            ServiceListEntry);
-        if (CurrentService->dwResumeCount == hServiceStatus)
+        if (CurrentService->dwStatusHandle == hServiceStatus)
             return CurrentService;
     }
 
@@ -1245,6 +1246,40 @@ ScmGenerateServiceTag(PSERVICE lpServiceRecord)
 }
 
 
+/* A status handle that cannot be guessed: random, never 0, not used by another service.
+ * Called with the database locked exclusively. */
+static DWORD
+ScmNewStatusHandle(VOID)
+{
+    static DWORD dwFallback;
+    PLIST_ENTRY ServiceEntry;
+    DWORD dwHandle;
+
+    for (;;)
+    {
+        if (!RtlGenRandom(&dwHandle, sizeof(dwHandle)))
+        {
+            /* No random source: still not the plain resume count */
+            DPRINT1("RtlGenRandom failed (Error %lu)\n", GetLastError());
+            dwFallback = (dwFallback ^ (DWORD)GetTickCount64()) * 2654435761u + ResumeCount;
+            dwHandle = dwFallback;
+        }
+        if (dwHandle == 0)
+            continue;
+
+        for (ServiceEntry = ServiceListHead.Flink;
+             ServiceEntry != &ServiceListHead;
+             ServiceEntry = ServiceEntry->Flink)
+        {
+            if (CONTAINING_RECORD(ServiceEntry, SERVICE, ServiceListEntry)->dwStatusHandle == dwHandle)
+                break;
+        }
+        if (ServiceEntry == &ServiceListHead)
+            return dwHandle;
+    }
+}
+
+
 DWORD
 ScmCreateNewServiceRecord(LPCWSTR lpServiceName,
                           PSERVICE *lpServiceRecord,
@@ -1274,6 +1309,9 @@ ScmCreateNewServiceRecord(LPCWSTR lpServiceName,
 
     /* Set the resume count */
     lpService->dwResumeCount = ResumeCount++;
+
+    /* Set the status handle */
+    lpService->dwStatusHandle = ScmNewStatusHandle();
 
     InitializeListHead(&lpService->HandleListHead);
 
@@ -2722,7 +2760,7 @@ Quit:
                                   Service->lpServiceName,
                                   (Service->Status.dwServiceType & SERVICE_WIN32_OWN_PROCESS)
                                      ? SERVICE_CONTROL_START_OWN : SERVICE_CONTROL_START_SHARE,
-                                  Service->dwResumeCount,
+                                  Service->dwStatusHandle,
                                   Service->dwServiceTag,
                                   argc, argv);
     return dwError;
@@ -3316,7 +3354,7 @@ ScmPreshutdownServices(VOID)
 
             DPRINT("Preshutdown service: %S\n", CurrentService->lpServiceName);
             hControlPipe = CurrentService->lpImage->hControlPipe;
-            dwResumeCount = CurrentService->dwResumeCount;
+            dwResumeCount = CurrentService->dwStatusHandle;
             pDeadlines[Count] = GetTickCount64() + ScmGetPreshutdownTimeout(CurrentService);
             if (pDeadlines[Count] > ullBudgetEnd)
                 pDeadlines[Count] = ullBudgetEnd;
@@ -3477,7 +3515,7 @@ ScmAutoShutdownServices(VOID)
             /* Send the shutdown notification */
             DPRINT("Shutdown service: %S\n", CurrentService->lpServiceName);
             hControlPipe = CurrentService->lpImage->hControlPipe;
-            dwResumeCount = CurrentService->dwResumeCount;
+            dwResumeCount = CurrentService->dwStatusHandle;
             ScmReferenceService(CurrentService);
             ScmUnlockDatabase();
             ScmControlService(hControlPipe,

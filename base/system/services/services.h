@@ -71,6 +71,7 @@ typedef struct _SERVICE
     PSERVICE_IMAGE lpImage;
     BOOL bDeleted;
     DWORD dwResumeCount;
+    DWORD dwStatusHandle;   /* random, unique, never 0 */
     LONG RefCount;
 
     SERVICE_STATUS Status;
@@ -330,6 +331,22 @@ DWORD ScmReadFailureActions(HKEY hServiceKey,
 
 DWORD ScmInitializeSecurity(VOID);
 VOID ScmShutdownSecurity(VOID);
+
+extern PSECURITY_DESCRIPTOR pDefaultSD;
+extern PSECURITY_DESCRIPTOR pManagerSD;
+
+DWORD
+ScmAccessCheckCaller(
+    _In_ PSECURITY_DESCRIPTOR pSecurityDescriptor,
+    _In_ DWORD dwDesiredAccess,
+    _In_ PGENERIC_MAPPING pMapping,
+    _Out_ PDWORD pdwGrantedAccess);
+
+BOOL
+ScmIsCallerLocalSystem(VOID);
+
+BOOL
+ScmIsCallerAccount(HANDLE hAccountToken);
 
 DWORD
 ScmCreateDefaultServiceSD(
