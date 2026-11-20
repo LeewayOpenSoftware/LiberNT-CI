@@ -98,18 +98,24 @@ static void TestParse(const PARSE_CASE *Case)
     Ret = GetSecurityDescriptorDacl(Sd, &Present, &Acl, &Defaulted);
     ok(Ret, "'%ls': GetSecurityDescriptorDacl failed: %lu\n", Case->String, GetLastError());
     ok(Present == Case->DaclPresent, "'%ls': DACL present %d, expected %d\n", Case->String, Present, Case->DaclPresent);
-    ok((Acl == NULL) == Case->DaclNull, "'%ls': DACL %p, expected %s\n", Case->String, Acl, Case->DaclNull ? "NULL" : "an ACL");
-    if (Acl)
-        ok(IsValidAcl(Acl), "'%ls': DACL is not valid\n", Case->String);
+    if (Present)
+    {
+        ok((Acl == NULL) == Case->DaclNull, "'%ls': DACL %p, expected %s\n", Case->String, Acl, Case->DaclNull ? "NULL" : "an ACL");
+        if (Acl)
+            ok(IsValidAcl(Acl), "'%ls': DACL is not valid\n", Case->String);
+    }
 
     Present = !Case->SaclPresent;
     Acl = (PACL)(ULONG_PTR)-1;
     Ret = GetSecurityDescriptorSacl(Sd, &Present, &Acl, &Defaulted);
     ok(Ret, "'%ls': GetSecurityDescriptorSacl failed: %lu\n", Case->String, GetLastError());
     ok(Present == Case->SaclPresent, "'%ls': SACL present %d, expected %d\n", Case->String, Present, Case->SaclPresent);
-    ok((Acl == NULL) == Case->SaclNull, "'%ls': SACL %p, expected %s\n", Case->String, Acl, Case->SaclNull ? "NULL" : "an ACL");
-    if (Acl)
-        ok(IsValidAcl(Acl), "'%ls': SACL is not valid\n", Case->String);
+    if (Present)
+    {
+        ok((Acl == NULL) == Case->SaclNull, "'%ls': SACL %p, expected %s\n", Case->String, Acl, Case->SaclNull ? "NULL" : "an ACL");
+        if (Acl)
+            ok(IsValidAcl(Acl), "'%ls': SACL is not valid\n", Case->String);
+    }
 
     String = ReverseString(Sd);
     if (String)
