@@ -941,7 +941,7 @@ BOOL PidlToSicIndex (
       if (SUCCEEDED(ei->GetIconLocation(uFlags &~ GIL_FORSHORTCUT, szIconFile, MAX_PATH, &iSourceIndex, &dwFlags)))
       {
         *pIndex = SIC_GetIconIndex(szIconFile, iSourceIndex, uFlags);
-        if (INVALID_INDEX == *pIndex && (dwFlags & GIL_NOTFILENAME))
+        if (INVALID_INDEX == *pIndex && (dwFlags & GIL_NOTFILENAME) && !(dwFlags & GIL_DONTCACHE))
         {
             /* The icon does not live in a file: let the provider draw it (fonts, thumbnails) */
             HICON hLarge = NULL, hSmall = NULL;

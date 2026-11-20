@@ -631,6 +631,9 @@ STDMETHODIMP CFontExt::BindToObject(PCUIDLIST_RELATIVE pidl, LPBC pbcReserved, R
         hr = sub->InitFamily(m_Folder, self, family->FileName());
         if (FAILED(hr))
             return hr;
+        PCUIDLIST_RELATIVE rest = ILGetNext(pidl);
+        if (rest && rest->mkid.cb)
+            return sub->BindToObject(rest, pbcReserved, riid, ppvOut);
         return sub->QueryInterface(riid, ppvOut);
     }
 
