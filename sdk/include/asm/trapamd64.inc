@@ -452,9 +452,11 @@ MACRO(ExitTrap, Flags)
     RESTORE_PICO_FS_BASE
     RESTORE_USER_DEBUG_REGISTERS rbp
 
+    /* The exit stub finds this processor through gs, so it runs before the swap */
+    SPEC_SITE HEX(58) /* kernel exit */
+
     /* Swap gs to user mode */
     swapgs
-    SPEC_SITE HEX(58) /* kernel exit */
 #ifdef _USE_ML
     jmp debug_registers_restored
 #else
