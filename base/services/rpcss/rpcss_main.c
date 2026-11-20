@@ -288,6 +288,33 @@ HRESULT __cdecl irpcss_start_local_service(handle_t h, const GUID *clsid)
 }
 #endif
 
+#ifdef __REACTOS__
+/* As on Windows, low integrity processes reach the COM endpoints; the class table
+ * and the ROT keep each integrity level apart */
+static PSECURITY_DESCRIPTOR rpcss_low_label_sd(void)
+{
+    static SID_IDENTIFIER_AUTHORITY label_authority = {SECURITY_MANDATORY_LABEL_AUTHORITY};
+    static struct
+    {
+        SECURITY_DESCRIPTOR sd;
+        BYTE acl[sizeof(ACL) + sizeof(SYSTEM_MANDATORY_LABEL_ACE) + SECURITY_MAX_SID_SIZE];
+    } low;
+    PSID sid;
+    BOOL ok;
+
+    if (!AllocateAndInitializeSid(&label_authority, 1, SECURITY_MANDATORY_LOW_RID, 0, 0, 0, 0, 0, 0, 0, &sid))
+        return NULL;
+    ok = InitializeSecurityDescriptor(&low.sd, SECURITY_DESCRIPTOR_REVISION) &&
+         InitializeAcl((PACL)low.acl, sizeof(low.acl), ACL_REVISION) &&
+         AddMandatoryAce((PACL)low.acl, ACL_REVISION, 0, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, sid) &&
+         SetSecurityDescriptorSacl(&low.sd, TRUE, (PACL)low.acl, FALSE);
+    FreeSid(sid);
+    if (!ok)
+        WINE_ERR("low label failed, error %lu\n", GetLastError());
+    return ok ? &low.sd : NULL;
+}
+#endif
+
 static RPC_STATUS RPCSS_Initialize(void)
 {
     static unsigned short irot_protseq[] = IROT_PROTSEQ;
@@ -317,6 +344,9 @@ static RPC_STATUS RPCSS_Initialize(void)
     };
     RPC_STATUS status;
     int i, j;
+#ifdef __REACTOS__
+    PSECURITY_DESCRIPTOR low_sd = rpcss_low_label_sd();
+#endif
 
     WINE_TRACE("\n");
 
@@ -336,8 +366,13 @@ static RPC_STATUS RPCSS_Initialize(void)
 
     for (i = 0; i < ARRAY_SIZE(protseqs); ++i)
     {
+#ifdef __REACTOS__
+        status = RpcServerUseProtseqEpW(protseqs[i].protseq, RPC_C_PROTSEQ_MAX_REQS_DEFAULT, protseqs[i].endpoint,
+                protseqs[i].endpoint == irpcss_endpoint || protseqs[i].endpoint == irot_endpoint ? low_sd : NULL);
+#else
         status = RpcServerUseProtseqEpW(protseqs[i].protseq, RPC_C_PROTSEQ_MAX_REQS_DEFAULT,
                 protseqs[i].endpoint, NULL);
+#endif
         if (status != RPC_S_OK)
             goto fail;
     }

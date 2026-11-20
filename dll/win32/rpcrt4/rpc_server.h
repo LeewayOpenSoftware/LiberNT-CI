@@ -43,6 +43,10 @@ typedef struct _RpcServerProtseq
   HANDLE mgr_mutex;
   /* set when server thread has finished opening connections */
   HANDLE server_ready_event;
+#ifdef __REACTOS__
+  /* the security descriptor of the endpoint being opened; CS cs */
+  PSECURITY_DESCRIPTOR endpoint_sd;
+#endif
 } RpcServerProtseq;
 
 struct protseq_ops
