@@ -414,7 +414,8 @@ static BOOL NtlmSessionResponse(PNegoHelper Context, const BYTE *Blob, ULONG Blo
     const BYTE *Base;
     BOOL Ok = FALSE;
 
-    if (BlobLength > 0xFFFF)
+    /* Inside lsass the LSA would be calling itself, possibly on its only port thread */
+    if (BlobLength > 0xFFFF - NTLM_KEY_SIZE || GetModuleHandleW(L"lsasrv.dll"))
         return FALSE;
     if (!NT_SUCCESS(LsaConnectUntrusted(&Lsa)))
         return FALSE;
