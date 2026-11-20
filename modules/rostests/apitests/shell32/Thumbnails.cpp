@@ -783,6 +783,93 @@ TestLinkThumbnail(void)
         RegDeleteKeyW(HKEY_CLASSES_ROOT, szKey);
 }
 
+/* Font thumbnails: ttffile\shellex\{IThumbnailProvider} -> fontext CFontThumbnail ("Abc" in the face) */
+static void
+TestFontThumbnail(void)
+{
+    static const WCHAR szKey[] = L"ttffile\\shellex\\{e357fccd-a995-4576-b01f-234630154e96}";
+    static const WCHAR szClsid[] = L"{E2537D60-39C7-4E40-9560-B3386D4BB207}";
+    CComPtr<IShellItemImageFactory> Factory;
+    CComPtr<IUnknown> Probe;
+    WCHAR szFont[MAX_PATH], szCopy[MAX_PATH];
+    HBITMAP Bitmap = NULL;
+    LONG Width, Height, Dark = 0;
+    WORD Bpp;
+    HKEY hKey;
+    BOOL CreatedKey = FALSE;
+    CLSID clsid;
+    HRESULT hr;
+    SIZE Size;
+
+    /* The Fonts folder is a namespace extension that parses font titles, not file names:
+     * test a font file in a plain directory, as a downloaded font would be */
+    GetWindowsDirectoryW(szFont, _countof(szFont));
+    PathAppendW(szFont, L"Fonts\\arial.ttf");
+    wsprintfW(szCopy, L"%s\\sample.ttf", g_Dir);
+    if (GetFileAttributesW(szFont) == INVALID_FILE_ATTRIBUTES || !CopyFileW(szFont, szCopy, FALSE))
+    {
+        skip("no %ls (%lu)\n", szFont, GetLastError());
+        return;
+    }
+
+    /* An image updated in place may predate the class registration: register fontext.dll */
+    CLSIDFromString((LPOLESTR)szClsid, &clsid);
+    hr = CoCreateInstance(clsid, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARG(IUnknown, &Probe));
+    if (FAILED(hr))
+    {
+        HMODULE hFontExt = LoadLibraryW(L"fontext.dll");
+        typedef HRESULT (STDAPICALLTYPE *REGPROC)(void);
+        REGPROC pReg = hFontExt ? (REGPROC)GetProcAddress(hFontExt, "DllRegisterServer") : NULL;
+        trace("font thumbnail class not registered (%#lx), DllRegisterServer: %#lx\n", hr, pReg ? pReg() : E_FAIL);
+    }
+    Probe.Release();
+
+    if (RegOpenKeyExW(HKEY_CLASSES_ROOT, szKey, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        RegCloseKey(hKey);
+    }
+    else if (RegCreateKeyExW(HKEY_CLASSES_ROOT, szKey, 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS)
+    {
+        RegSetValueExW(hKey, NULL, 0, REG_SZ, (const BYTE *)szClsid, sizeof(szClsid));
+        RegCloseKey(hKey);
+        CreatedKey = TRUE;
+        trace("registered ttffile thumbnail handler for the test\n");
+    }
+    else
+    {
+        skip("cannot register the ttffile thumbnail handler: %lu\n", GetLastError());
+        return;
+    }
+
+    hr = SHCreateItemFromParsingName(szCopy, NULL, IID_PPV_ARG(IShellItemImageFactory, &Factory));
+    ok_hr(hr, S_OK);
+    if (SUCCEEDED(hr))
+    {
+        Size.cx = Size.cy = 64;
+        hr = Factory->GetImage(Size, SIIGBF_THUMBNAILONLY, &Bitmap);
+        ok_hr(hr, S_OK);
+        if (SUCCEEDED(hr) && Bitmap)
+        {
+            BitmapSize(Bitmap, &Width, &Height, &Bpp);
+            ok_long(Width, 64);
+            ok_long(Height, 64);
+            ok(IsNear(SamplePixel(Bitmap, 1, 1), RGB(255, 255, 255)), "corner %06lx\n", SamplePixel(Bitmap, 1, 1));
+            for (LONG y = 0; y < Height; y += 2)
+                for (LONG x = 0; x < Width; x += 2)
+                    if (GetRValue(SamplePixel(Bitmap, x, y)) < 128)
+                        Dark++;
+            ok(Dark > 0, "no glyph pixels in the font thumbnail\n");
+            trace("font thumbnail dark samples: %ld\n", Dark);
+            DeleteObject(Bitmap);
+        }
+    }
+
+    Factory.Release();
+    DeleteFileW(szCopy);
+    if (CreatedKey)
+        RegDeleteKeyW(HKEY_CLASSES_ROOT, szKey);
+}
+
 START_TEST(Thumbnails)
 {
     WCHAR Temp[MAX_PATH];
@@ -809,6 +896,7 @@ START_TEST(Thumbnails)
     TestThumbnailGenerator();
     TestIconsOnly();
     TestLinkThumbnail();
+    TestFontThumbnail();
 
     DeleteFileW(g_Bmp);
     DeleteFileW(g_Png);

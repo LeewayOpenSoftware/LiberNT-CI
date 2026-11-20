@@ -10,6 +10,7 @@
 #include <reactos/version.rc>
 
 IDR_FONTEXT REGISTRY "res/fontext.rgs"
+IDR_FONTTHUMB REGISTRY "res/fontthumb.rgs"
 
 /* UTF-8 */
 #pragma code_page(65001)

@@ -257,6 +257,11 @@ HKCR,"otffile","",0x00000000,"OpenType Font File"
 HKCR,"otffile","FriendlyTypeName",0x00020000,"@%SystemRoot%\system32\shell32.dll,-211"
 HKCR,"otffile\DefaultIcon","",0x00020000,"%SystemRoot%\system32\shell32.dll,-156"
 HKCR,"otffile\shell\open\command","",0x00020000,"%SystemRoot%\system32\fontview.exe ""%1"""
+; Font thumbnails (fontext.dll)
+HKCR,"fonfile\shellex\{e357fccd-a995-4576-b01f-234630154e96}","",0x00000000,"{E2537D60-39C7-4E40-9560-B3386D4BB207}"
+HKCR,"ttffile\shellex\{e357fccd-a995-4576-b01f-234630154e96}","",0x00000000,"{E2537D60-39C7-4E40-9560-B3386D4BB207}"
+HKCR,"ttcfile\shellex\{e357fccd-a995-4576-b01f-234630154e96}","",0x00000000,"{E2537D60-39C7-4E40-9560-B3386D4BB207}"
+HKCR,"otffile\shellex\{e357fccd-a995-4576-b01f-234630154e96}","",0x00000000,"{E2537D60-39C7-4E40-9560-B3386D4BB207}"
 
 HKCR,".otc","",0x00000000,"otcfile"
 HKCR,"otcfile","",0x00000000,"OpenType Font Collection File"

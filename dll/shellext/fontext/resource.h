@@ -20,3 +20,4 @@
 #define IDS_FONT_PREVIEW        401
 
 #define IDR_FONTEXT             8000
+#define IDR_FONTTHUMB 8001
