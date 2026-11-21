@@ -322,6 +322,47 @@ static void output_file_streams(const WCHAR *dir, const WCHAR *filename)
 }
 
 /*****************************************************************************
+ * WCMD_dir_parent_is_root
+ *
+ * Check whether the parent of the directory in dirName (which ends in a
+ * backslash) is a drive root or the root of a UNC share. Windows' DIR
+ * does not display ".." in that case (e.g. "dir C:\Windows" lists only ".").
+ */
+static BOOL WCMD_dir_parent_is_root(const WCHAR *dirName)
+{
+  WCHAR full[MAX_PATH];
+  WCHAR *lastSlash;
+  DWORD len;
+
+  len = GetFullPathNameW(dirName, ARRAY_SIZE(full), full, NULL);
+  if (len == 0 || len >= ARRAY_SIZE(full)) return FALSE;
+
+  /* Strip the trailing backslash */
+  lastSlash = full + lstrlenW(full) - 1;
+  if (lastSlash > full && *lastSlash == L'\\') *lastSlash = L'\0';
+
+  /* Find the start of the final (child) component */
+  lastSlash = wcsrchr(full, L'\\');
+  if (!lastSlash) return FALSE;           /* relative name without a parent */
+
+  /* Parent is a drive root: C:\ */
+  if (lastSlash - full == 2 && full[1] == L':') return TRUE;
+
+  /* UNC: parent is the share root when the child sits directly under
+     \\server\share */
+  if (full[0] == L'\\' && full[1] == L'\\') {
+    WCHAR *p = full + 2;
+    while (*p && *p != L'\\') p++;        /* skip server */
+    if (*p == L'\\') {
+      WCHAR *q = p + 1;
+      while (*q && *q != L'\\') q++;      /* skip share */
+      if (q == lastSlash) return TRUE;    /* parent == \\server\share */
+    }
+  }
+  return FALSE;
+}
+
+/*****************************************************************************
  * WCMD_list_directory
  *
  * List a single file directory. This function (and those below it) can be called
@@ -380,6 +421,10 @@ static RETURN_CODE WCMD_list_directory (DIRECTORY_STACK *inputparms, int level, 
         /* Skip any which are filtered out by attribute */
         if ((fd[entry_count].dwFileAttributes & attrsbits) != showattrs) continue;
 
+        /* Windows does not display ".." when the parent of the listed
+           directory is a drive root (e.g. dir C:\Windows shows only ".") */
+        if (!lstrcmpW(fd[entry_count].cFileName, L"..") && WCMD_dir_parent_is_root(parms->dirName)) continue;
+
         entry_count++;
 
         /* Keep running track of longest filename for wide output */
@@ -414,8 +459,10 @@ static RETURN_CODE WCMD_list_directory (DIRECTORY_STACK *inputparms, int level, 
   /* Handle case where everything is filtered out */
   if (entry_count > 0) {
 
-    /* Sort the list of files */
-    qsort (fd, entry_count, sizeof(WIN32_FIND_DATAW), WCMD_dir_sort);
+    /* Sort the list of files. With no ordering options Windows leaves the
+       entries in find-first order, so skip the sort to preserve it. */
+    if (dirOrder != Unspecified || orderGroupDirs)
+      qsort (fd, entry_count, sizeof(WIN32_FIND_DATAW), WCMD_dir_sort);
 
     /* Work out the number of columns */
     WINE_TRACE("%d entries, maxwidth=%d, widest=%d\n", entry_count, max_width, widest);
