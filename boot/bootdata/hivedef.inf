@@ -2136,7 +2136,7 @@ HKCU,"AppEvents\Schemes\Apps\Explorer\Navigating",,0x00000012
 HKCU,"AppEvents\Schemes\Apps\Explorer\Navigating\.Current","",0x00020000,""
 HKCU,"AppEvents\Schemes\Apps\Explorer\Navigating\.Default","",0x00020000,""
 HKCU,"AppEvents\Schemes\Names",,0x00000012
-HKCU,"AppEvents\Schemes\Names\.Default","",0x00000002,"LiberNT Default"
+HKCU,"AppEvents\Schemes\Names\.Default","",0x00000002,"Orosi Default"
 HKCU,"AppEvents\Schemes\Names\.None","",0x00000002,"No sounds"
 
 HKCU,"AppEvents\EventLabels",,0x00000012

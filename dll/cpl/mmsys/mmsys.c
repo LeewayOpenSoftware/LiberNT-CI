@@ -68,7 +68,7 @@ static SYSTEM_SCHEME_ITEM SystemSchemes[] =
 {
     {
         L".Default",
-        L"LiberNT Standard",
+        L"Orosi Default",
         IDS_REACTOS_DEFAULT_SCHEME
     },
     {
