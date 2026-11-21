@@ -107,6 +107,7 @@ static HRESULT WINAPI factory_CreateInstance(IClassFactory *iface,
 
     TRACE("(%p,%p,%s,%p)\n", iface, punkouter, wine_dbgstr_guid(iid), ppv);
 
+    if (ppv) *ppv = NULL;
     if (!factory->dll_factory)
         return E_UNEXPECTED;
     return IClassFactory_CreateInstance(factory->dll_factory, punkouter, iid, ppv);
