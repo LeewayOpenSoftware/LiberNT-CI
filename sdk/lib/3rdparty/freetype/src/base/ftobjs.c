@@ -5344,6 +5344,9 @@
     const FT_String*  set_name  = "FT_Property_Set";
     const FT_String*  get_name  = "FT_Property_Get";
     const FT_String*  func_name = set ? set_name : get_name;
+#ifdef __REACTOS__ /* FT_ERROR is empty without FT_DEBUG_LEVEL_TRACE */
+    FT_UNUSED( func_name );
+#endif
 #endif
 
     FT_Bool  missing_func;
