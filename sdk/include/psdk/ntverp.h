@@ -152,7 +152,7 @@
 // Company and Trademarks
 //
 #define VER_COMPANYNAME_STR                 \
-    "ReactOS Project"
+    "Leeway Open Software"
 #define VER_PRODUCTNAME_STR                 \
     "Orosi"
 #define VER_LEGALTRADEMARKS_STR             \
