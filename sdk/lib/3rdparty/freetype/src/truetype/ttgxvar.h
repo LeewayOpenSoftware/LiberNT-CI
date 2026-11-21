@@ -453,8 +453,10 @@ FT_BEGIN_HEADER
                     FT_Fixed*   *normalizedcoords,
                     FT_MM_Var*  *mm_var );
 
+#ifdef TT_CONFIG_OPTION_VARC
   FT_LOCAL( FT_Error )
   tt_var_init_gvar( FT_Face  face );
+#endif
 
   FT_LOCAL( FT_Error )
   tt_var_init_blend( FT_Face  face,

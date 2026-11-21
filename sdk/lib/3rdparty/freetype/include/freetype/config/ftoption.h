@@ -797,7 +797,9 @@ FT_BEGIN_HEADER
    * by allowing glyphs to be composed from other glyphs with variable
    * transformations and axis value overrides.
    */
+#ifndef __REACTOS__ /* tt_varc_get_item_deltas needs a 9 KB frame; too much for the kernel stack */
 #define TT_CONFIG_OPTION_VARC
+#endif
 
 
   /**************************************************************************
