@@ -1409,6 +1409,7 @@ static BOOL CURSORICON_GetCursorDataFromANI(
     const unsigned char *icon_chunk;
     const unsigned char *icon_data;
     const unsigned char *fram_end;
+    LONG cxCommon = 0, cyCommon = 0;
 
     /* Find the root chunk */
     riff_find_chunk( ANI_ACON_ID, ANI_RIFF_ID, &root_chunk, &ACON_chunk );
@@ -1475,6 +1476,18 @@ static BOOL CURSORICON_GetCursorDataFromANI(
         pCurData->ajifRate = (INT*)(pCurData->aicur + pHeader->num_steps);
     }
 
+    /* Every frame is drawn at one size: the header's, else the requested one, else frame 0's */
+    if (pHeader->width && pHeader->height)
+    {
+        cxCommon = pHeader->width;
+        cyCommon = pHeader->height;
+    }
+    else if (pCurData->cx > 0 && pCurData->cy > 0)
+    {
+        cxCommon = pCurData->cx;
+        cyCommon = pCurData->cy;
+    }
+
     for(i=0; i < pHeader->num_frames; i++)
     {
         CURSORDATA* pFrameData;
@@ -1514,16 +1527,13 @@ static BOOL CURSORICON_GetCursorDataFromANI(
             }
             pFrameData->xHotspot = pDirEntry->xHotspot;
             pFrameData->yHotspot = pDirEntry->yHotspot;
-            if(!pHeader->width || !pHeader->height)
+            if (!cxCommon || !cyCommon)
             {
-                pFrameData->cx = pDirEntry->bWidth;
-                pFrameData->cy = pDirEntry->bHeight;
+                cxCommon = pDirEntry->bWidth ? pDirEntry->bWidth : 256;
+                cyCommon = pDirEntry->bHeight ? pDirEntry->bHeight : 256;
             }
-            else
-            {
-                pFrameData->cx = pHeader->width;
-                pFrameData->cy = pHeader->height;
-            }
+            pFrameData->cx = cxCommon;
+            pFrameData->cy = cyCommon;
             pbImage = icon_data + pDirEntry->dwDIBOffset;
             cbImage = pDirEntry->dwDIBSize;
         }
@@ -1533,6 +1543,8 @@ static BOOL CURSORICON_GetCursorDataFromANI(
             pbImage = icon_data;
             cbImage = chunk_size;
             pFrameData->xHotspot = pFrameData->yHotspot = 0;
+            pFrameData->cx = cxCommon;
+            pFrameData->cy = cyCommon;
         }
 
         /* Do the real work */
@@ -1540,6 +1552,11 @@ static BOOL CURSORICON_GetCursorDataFromANI(
         {
             ERR("Unable to load frame %d.\n", i);
             goto error;
+        }
+        if (!cxCommon || !cyCommon)
+        {
+            cxCommon = pFrameData->cx;
+            cyCommon = pFrameData->cy;
         }
 
         if(pHeader->num_frames > 1)
