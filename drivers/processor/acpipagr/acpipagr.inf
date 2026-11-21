@@ -38,6 +38,6 @@ ServiceBinary = %12%\acpipagr.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 AcpiPagr.DeviceDesc = "ACPI Processor Aggregator"
-AcpiPagr.ServiceDesc = "LiberNT ACPI Processor Aggregator Driver"
+AcpiPagr.ServiceDesc = "Orosi ACPI Processor Aggregator Driver"

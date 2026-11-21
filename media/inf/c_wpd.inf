@@ -16,7 +16,7 @@ HKR, , Installer32, 0, "wpd_ci.dll,WpdClassInstaller"
 
 [Strings]
 ; Non-localizable
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 
 ; Localizable
 WpdClassName = "Portable Devices"

@@ -48,6 +48,6 @@ ServiceBinary  = %12%\vmx3.sys
 LoadOrderGroup = NDIS
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 VMwareMfg = "VMware, Inc."
 VMXNET3.DeviceDesc = "VMXNET3 Ethernet Adapter"

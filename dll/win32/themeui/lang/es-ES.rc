@@ -16,7 +16,7 @@ BEGIN
     IDS_PUMPKIN "Calabaza"
     IDS_RAIN "Días de lluvia"
     IDS_RWB "Rojo, Blanco y Azul"
-    IDS_CLASSIC "LiberNT clásico"
+    IDS_CLASSIC "Orosi clásico"
     IDS_STANDARD "Orosi estándar"
     IDS_ROSE "Rosa"
     IDS_SAND "Arenisca" //Desert

@@ -43,6 +43,6 @@ ServiceBinary = %12%\amdgpio.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 AmdGpio.DeviceDesc = "AMD GPIO controller"
-AmdGpio.ServiceDesc = "LiberNT AMD GPIO Driver"
+AmdGpio.ServiceDesc = "Orosi AMD GPIO Driver"

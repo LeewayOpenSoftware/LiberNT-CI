@@ -36,6 +36,6 @@ ErrorControl  = 1
 ServiceBinary = %12%\usbccid.sys
 
 [Strings]
-ReactOS = "LiberNT Project"
+ReactOS = "Orosi Project"
 GenericMfg = "(Generic smart card readers)"
 UsbCcid.DeviceDesc = "USB Smart Card Reader"

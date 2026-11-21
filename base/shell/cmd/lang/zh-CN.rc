@@ -261,8 +261,8 @@ EXIT\t\t退出 CMD\n\
     WCMD_ANYKEY, "请按任意键继续..."
     WCMD_CONSTITLE, "Wine 命令提示符"
     WCMD_VERSION, "Microsoft Windows [版本 %1!S!]\n"
-    WCMD_BANNER, "LiberNT [版本 %1!S! %2!S!]\n\
-(C) 版权所有 %3!S! LiberNT 团队。\n"
+    WCMD_BANNER, "Orosi [版本 %1!S! %2!S!]\n\
+(C) 版权所有 %3!S! Orosi 团队。\n"
     WCMD_MOREPROMPT, "更多?"
     WCMD_LINETOOLONG, "输入过长。\n"
     WCMD_VOLUMELABEL, "驱动器 %1!c! 的卷标为 %2\n"

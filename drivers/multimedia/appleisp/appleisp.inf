@@ -51,7 +51,7 @@ ServiceBinary = %12%\appleisp.sys
 LoadOrderGroup = Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 MediaCategories = "SYSTEM\CurrentControlSet\Control\MediaCategories"
 ClassName = "Cameras"
 CapturePinName = "Capture"

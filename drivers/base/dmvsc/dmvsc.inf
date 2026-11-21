@@ -31,6 +31,6 @@ ErrorControl  = 1
 ServiceBinary = %12%\dmvsc.sys
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 MicrosoftMfg = "Microsoft"
 DynamicMemory.DeviceDesc = "Microsoft Hyper-V Dynamic Memory"

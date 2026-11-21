@@ -63,7 +63,7 @@ iofilterrequirements_drv.sys,,,0x10
 iofilterrequirements_drv.sys=1
 
 [Strings]
-Provider="LiberNT kernel tests"
+Provider="Orosi kernel tests"
 Device="Kmtest filter requirements fixture"
 NullDevice="Kmtest null driver child"
 Disk="Kmtest driver package"

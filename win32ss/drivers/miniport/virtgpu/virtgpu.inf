@@ -53,7 +53,7 @@ ServiceBinary = %12%\virtgpu.sys
 LoadOrderGroup = Video
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 VirtIO = "VirtIO"
 VirtGpu.DeviceDesc = "VirtIO GPU Adapter"
 

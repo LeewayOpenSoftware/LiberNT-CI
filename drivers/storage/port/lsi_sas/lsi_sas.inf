@@ -71,7 +71,7 @@ HKR,,EventMessageFile,%REG_EXPAND_SZ%,"%%SystemRoot%%\System32\IoLogMsg.dll"
 HKR,,TypesSupported,%REG_DWORD%,7
 
 [Strings]
-ROS          = "LiberNT"
+ROS          = "Orosi"
 LSI          = "LSI"
 DevDesc1064  = "LSI Adapter, SAS 3000 series, 4-port with 1064"
 DevDesc1068  = "LSI Adapter, SAS 3000 series, 8-port with 1068"

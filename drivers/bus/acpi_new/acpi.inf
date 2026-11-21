@@ -43,7 +43,7 @@ LoadOrderGroup = Boot Bus Extender
 
 [Strings]
 ; Non-localizable
-ReactOS = "LiberNT Project"
+ReactOS = "Orosi Project"
 
 ; Localizable
 GenericMfg = "(Generic system devices)"

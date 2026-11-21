@@ -95,10 +95,10 @@ HKR, , TypesSupported,   0x00010001, 7
 cyw43455.sys = 1
 
 [Strings]
-LiberNT         = "LiberNT Team"
+LiberNT         = "Orosi Team"
 cyw43430.DeviceDesc = "Broadcom BCM43430 802.11n SDIO WiFi Adapter"
 cyw.DeviceDesc  = "Broadcom CYW43455 802.11ac SDIO WiFi Adapter"
 cyw4387.DeviceDesc = "Broadcom BCM4387 802.11ax PCIe WiFi Adapter"
 cyw4388.DeviceDesc = "Broadcom BCM4388 802.11ax PCIe WiFi Adapter"
-cyw.ServiceDesc = "LiberNT CYW43xx WiFi Driver"
-DiskName        = "LiberNT CYW43xx WiFi Driver Installation Disk"
+cyw.ServiceDesc = "Orosi CYW43xx WiFi Driver"
+DiskName        = "Orosi CYW43xx WiFi Driver Installation Disk"

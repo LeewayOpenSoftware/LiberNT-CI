@@ -175,7 +175,7 @@ END
 STRINGTABLE
 BEGIN
 /* Please note that explicit TAB characters '\t' are used to fix the alignment of the message in the MessageBox */
-    IDS_USAGE "LiberNT イベント ビューアー\n\
+    IDS_USAGE "Orosi イベント ビューアー\n\
 \n\
 EventVwr [コンピューター名] [/L:<イベント ログ ファイル>] [/?]\n\
 \n\

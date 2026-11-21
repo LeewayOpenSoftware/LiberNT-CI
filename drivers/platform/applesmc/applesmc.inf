@@ -43,7 +43,7 @@ ServiceBinary = %12%\applesmc.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard system devices)"
 AppleSmc.DeviceDesc = "Apple System Management Controller"
 AppleSmc.ServiceDesc = "Apple SMC Driver"

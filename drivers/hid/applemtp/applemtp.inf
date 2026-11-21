@@ -38,7 +38,7 @@ ServiceBinary = %12%\applemtp.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard system devices)"
 AppleMtp.DeviceDesc = "Apple Internal Keyboard and Trackpad"
 AppleMtp.ServiceDesc = "Apple MTP HID Transport Driver"

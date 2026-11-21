@@ -46,7 +46,7 @@ ServiceBinary  = %12%\wpdmtp.sys
 
 [Strings]
 ; Non-localizable
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 
 ; Localizable
 GenericMfg            = "(Standard MTP Device)"

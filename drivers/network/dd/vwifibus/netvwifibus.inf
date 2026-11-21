@@ -72,7 +72,7 @@ CopyFiles = VWiFiBus.CopyFilesInternal
 vwifibus.sys = 1
 
 [Strings]
-LiberNT               = "LiberNT Team"
+LiberNT               = "Orosi Team"
 vwifibus.DeviceDesc   = "Virtual WiFi Bus Device"
-vwifibus.ServiceDesc  = "LiberNT Virtual WiFi Bus Driver"
-DiskName              = "LiberNT Virtual WiFi Bus Driver Installation Disk"
+vwifibus.ServiceDesc  = "Orosi Virtual WiFi Bus Driver"
+DiskName              = "Orosi Virtual WiFi Bus Driver Installation Disk"

@@ -43,10 +43,10 @@ ServiceBinary=%12%\BasicDisplay.sys
 LoadOrderGroup=Video
 
 [Strings]
-LiberNT="LiberNT"
+LiberNT="Orosi"
 StdMfg="(Standard display types)"
-BasicDisplay.DeviceDesc="LiberNT Basic Display Adapter"
-BasicDisplay.ServiceDesc="LiberNT Basic Display Driver"
+BasicDisplay.DeviceDesc="Orosi Basic Display Adapter"
+BasicDisplay.ServiceDesc="Orosi Basic Display Driver"
 REG_MULTI_SZ=0x00010000
 REG_DWORD=0x00010001
 REG_SZ=0x00000000

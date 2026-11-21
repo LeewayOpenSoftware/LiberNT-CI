@@ -17,7 +17,7 @@ HKR, , IconPath, 0x00010000, "%%SystemRoot%%\System32\setupapi.dll,-25"
 
 [Strings]
 ; Non-localizable
-ReactOS = "LiberNT Project"
+ReactOS = "Orosi Project"
 
 ; Localizable
 SmartCardReaderClassName = "Smart card readers"

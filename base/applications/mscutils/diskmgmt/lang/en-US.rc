@@ -108,7 +108,7 @@ BEGIN
     IDS_SCHEME_GPT "GUID Partition Table"
     IDS_SCHEME_MBR "Master Boot Record"
     IDS_SCHEME_RAW "Not initialized"
-    IDS_SYSTEM_VOLUME "LiberNT system volume"
+    IDS_SYSTEM_VOLUME "Orosi system volume"
     IDS_BOOT_PARTITION "Used by the boot manager"
     IDS_CAPTION_PARTITIONS "%lu partitions"
     IDS_LOCATION "Disk %lu, partition %lu"

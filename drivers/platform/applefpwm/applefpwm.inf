@@ -37,7 +37,7 @@ ServiceBinary = %12%\applefpwm.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard system devices)"
 AppleFpwm.DeviceDesc = "Apple PWM Controller"
 PwmLeds.DeviceDesc = "PWM LEDs"

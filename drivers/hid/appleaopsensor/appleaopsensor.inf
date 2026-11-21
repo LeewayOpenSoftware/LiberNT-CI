@@ -39,7 +39,7 @@ ServiceBinary = %12%\appleaopsensor.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard system devices)"
 AmbientLight.DeviceDesc = "Apple Ambient Light Sensor"
 LidAngle.DeviceDesc = "Apple Lid Angle Sensor"

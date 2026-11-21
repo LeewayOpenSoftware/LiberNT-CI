@@ -35,6 +35,6 @@ ServiceBinary = %12%\genbtn.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 GenBtn.DeviceDesc = "ACPI Generic Buttons"
-GenBtn.ServiceDesc = "LiberNT ACPI Generic Button Driver"
+GenBtn.ServiceDesc = "Orosi ACPI Generic Button Driver"

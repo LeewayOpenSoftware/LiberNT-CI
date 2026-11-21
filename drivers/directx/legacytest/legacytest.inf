@@ -46,9 +46,9 @@ HKR,Parameters,PoisonTail,%REG_DWORD%,0
 HKR,Parameters,ChildCount,%REG_DWORD%,0
 
 [Strings]
-LiberNT="LiberNT"
-LtnMfg="(LiberNT test devices)"
-LegacyTest.DeviceDesc="LiberNT WDDM 1.x Synthetic Test Miniport"
-LegacyTest.ServiceDesc="LiberNT legacytest WDDM miniport"
+LiberNT="Orosi"
+LtnMfg="(Orosi test devices)"
+LegacyTest.DeviceDesc="Orosi WDDM 1.x Synthetic Test Miniport"
+LegacyTest.ServiceDesc="Orosi legacytest WDDM miniport"
 REG_DWORD=0x00010001
 REG_SZ=0x00000000

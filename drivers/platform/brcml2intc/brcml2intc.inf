@@ -45,7 +45,7 @@ LoadOrderGroup=Extended Base
 brcml2intc.sys=1
 
 [Strings]
-LiberNT="LiberNT Project"
+LiberNT="Orosi Project"
 BrcmL2.DeviceDesc="Broadcom Always-On L2 Interrupt Controller"
-BrcmL2.ServiceDesc="LiberNT Broadcom L2 Interrupt Controller Driver"
-DiskName="LiberNT Installation Media"
+BrcmL2.ServiceDesc="Orosi Broadcom L2 Interrupt Controller Driver"
+DiskName="Orosi Installation Media"

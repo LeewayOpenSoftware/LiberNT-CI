@@ -36,7 +36,7 @@ ServiceBinary = %12%\applepd.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard system devices)"
 ApplePd.DeviceDesc = "Apple USB-C Power Delivery Controllers"
 ApplePd.ServiceDesc = "Apple USB-C Power Delivery Driver"

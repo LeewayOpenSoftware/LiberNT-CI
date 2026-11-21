@@ -43,9 +43,9 @@ ServiceBinary=%12%\appledcp.sys
 LoadOrderGroup=Video
 
 [Strings]
-LiberNT="LiberNT"
+LiberNT="Orosi"
 AppleDcp.DeviceDesc="Apple Silicon Display (WDDM)"
-AppleDcp.ServiceDesc="LiberNT Apple Silicon WDDM Display Driver"
+AppleDcp.ServiceDesc="Orosi Apple Silicon WDDM Display Driver"
 REG_MULTI_SZ=0x00010000
 REG_DWORD=0x00010001
 REG_SZ=0x00000000

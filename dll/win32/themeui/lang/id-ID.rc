@@ -16,7 +16,7 @@ BEGIN
     IDS_PUMPKIN "Labu"
     IDS_RAIN "Hari Hujan"
     IDS_RWB "Merah, Putih, dan Biru"
-    IDS_CLASSIC "LiberNT Klasik"
+    IDS_CLASSIC "Orosi Klasik"
     IDS_STANDARD "Orosi Standar"
     IDS_ROSE "Mawar"
     IDS_SAND "Pasir" //Desert

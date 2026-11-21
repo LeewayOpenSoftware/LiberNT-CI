@@ -36,7 +36,7 @@ ServiceBinary = %12%\applecpufreq.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard system devices)"
 AppleCpufreq.DeviceDesc = "Apple CPU Cluster Performance Controller"
 AppleCpufreq.ServiceDesc = "Apple CPU Performance Driver"

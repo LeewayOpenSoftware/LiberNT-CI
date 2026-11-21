@@ -35,6 +35,6 @@ ServiceBinary = %12%\tpm2.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 Tpm2.DeviceDesc = "Trusted Platform Module 2.0"
-Tpm2.ServiceDesc = "LiberNT TPM 2.0 Driver"
+Tpm2.ServiceDesc = "Orosi TPM 2.0 Driver"
