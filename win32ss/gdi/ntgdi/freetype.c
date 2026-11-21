@@ -7196,8 +7196,7 @@ GetFontPenalty(const LOGFONTW *               LogFont,
                 !(TM->tmPitchAndFamily & (TMPF_VECTOR | TMPF_TRUETYPE)))
             {
                 /* OutputPrecision Penalty 19000 */
-                /* Requested OUT_STROKE_PRECIS, but the device can't do it
-                   or the candidate is not a vector font. */
+                /* Requested a device font, but the candidate is not a device vector font. */
                 GOT_PENALTY("OutputPrecision", 19000);
             }
             break;
@@ -7206,6 +7205,13 @@ GetFontPenalty(const LOGFONTW *               LogFont,
             {
                 /* Requested a vector font, but the candidate is a raster font. */
                 GOT_PENALTY("OutputPrecision", 19000);
+            }
+            break;
+        case OUT_RASTER_PRECIS:
+            if (TM->tmPitchAndFamily & (TMPF_VECTOR | TMPF_TRUETYPE))
+            {
+                /* Requested a raster font: prefer the raster face of a same-name pair. */
+                GOT_PENALTY("OutputPrecision", 4);
             }
             break;
         case OUT_TT_ONLY_PRECIS:
