@@ -25,7 +25,7 @@ static const PageInfo Pages[] =
     { PageId::Privacy, IDS_PAGE_PRIVACY, L"shield_20_regular", PageId::None, BuildPrivacy, L"privacy;windowsdefender" },
     { PageId::Legacy, IDS_PAGE_LEGACY, L"settings_20_regular", PageId::None, NULL, NULL },
     { PageId::Display, IDS_PAGE_DISPLAY, L"desktop_20_regular", PageId::System, BuildDisplay,
-      L"display;screenrotation;display-advanced" },
+      L"display;screenrotation;display-advanced;easeofaccess-display" },
     { PageId::Sound, IDS_PAGE_SOUND, L"speaker_2_20_regular", PageId::System, BuildSound,
       L"sound;sound-devices;apps-volume" },
     { PageId::Power, IDS_PAGE_POWER, L"power_20_regular", PageId::System, BuildPower, L"powersleep;batterysaver" },
