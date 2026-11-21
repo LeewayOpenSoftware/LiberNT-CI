@@ -1360,7 +1360,7 @@ OnPaint(HWND hWnd, WPARAM wParam, LPARAM lParam)
 
     /* Draw version information */
     StringCchCopy(szVersion, ARRAYSIZE(szVersion),
-                  TEXT("Orosi ") TEXT(KERNEL_VERSION_STR));
+                  TEXT("Orosi ") TEXT(OROSI_VERSION_STR) TEXT(" (") TEXT(OROSI_ARCH_CHANNEL_STR) TEXT(")"));
 
     /*
      * Compute the original rect (position & size) of the version info,
