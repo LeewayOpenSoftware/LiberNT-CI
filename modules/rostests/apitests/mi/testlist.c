@@ -10,10 +10,12 @@
 
 extern void func_MiEnumerate(void);
 extern void func_MiPush(void);
+extern void func_MiPushClose(void);
 
 const struct test winetest_testlist[] =
 {
     { "MiEnumerate", func_MiEnumerate },
     { "MiPush", func_MiPush },
+    { "MiPushClose", func_MiPushClose },
     { 0, 0 }
 };
