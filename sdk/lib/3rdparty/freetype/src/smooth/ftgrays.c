@@ -187,6 +187,7 @@ typedef ptrdiff_t  FT_PtrDist;
 
 #ifdef FT_DEBUG_LEVEL_TRACE
 
+#ifndef __REACTOS__ /* win32ss/drivers/font/ftfd/rosglue.c defines this */
   void
   FT_Message( const char*  fmt,
               ... )
@@ -198,6 +199,7 @@ typedef ptrdiff_t  FT_PtrDist;
     vfprintf( stderr, fmt, ap );
     va_end( ap );
   }
+#endif
 
 
   /* empty function useful for setting a breakpoint to catch errors */
@@ -1966,7 +1968,9 @@ typedef ptrdiff_t  FT_PtrDist;
     const FT_Outline*  outline    = (const FT_Outline*)params->source;
     const FT_Bitmap*   target_map = params->target;
 
-#ifndef FT_STATIC_RASTER
+#if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
+    gray_TWorker*  worker;  /* too large for the kernel stack */
+#elif !defined( FT_STATIC_RASTER )
     gray_TWorker  worker[1];
 #endif
 
@@ -1992,12 +1996,25 @@ typedef ptrdiff_t  FT_PtrDist;
            outline->contours[outline->n_contours - 1] + 1 )
       return FT_THROW( Invalid_Outline );
 
+#if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
+    worker = malloc( sizeof ( *worker ) );
+    if ( !worker )
+      return FT_THROW( Out_Of_Memory );
+#endif
+
     ras.outline = *outline;
 
     if ( params->flags & FT_RASTER_FLAG_DIRECT )
     {
       if ( !params->gray_spans )
+#if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
+      {
+        free( worker );
         return Smooth_Err_Ok;
+      }
+#else
+        return Smooth_Err_Ok;
+#endif
 
       ras.render_span      = (FT_Raster_Span_Func)params->gray_spans;
       ras.render_span_data = params->user;
@@ -2011,14 +2028,35 @@ typedef ptrdiff_t  FT_PtrDist;
     {
       /* if direct mode is not set, we must have a target bitmap */
       if ( !target_map )
+#if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
+      {
+        free( worker );
         return FT_THROW( Invalid_Argument );
+      }
+#else
+        return FT_THROW( Invalid_Argument );
+#endif
 
       /* nothing to do */
       if ( !target_map->width || !target_map->rows )
+#if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
+      {
+        free( worker );
         return Smooth_Err_Ok;
+      }
+#else
+        return Smooth_Err_Ok;
+#endif
 
       if ( !target_map->buffer )
+#if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
+      {
+        free( worker );
         return FT_THROW( Invalid_Argument );
+      }
+#else
+        return FT_THROW( Invalid_Argument );
+#endif
 
       if ( target_map->pitch < 0 )
         ras.target.origin = target_map->buffer;
@@ -2039,10 +2077,22 @@ typedef ptrdiff_t  FT_PtrDist;
 
     /* exit if nothing to do */
     if ( ras.min_ex >= ras.max_ex || ras.min_ey >= ras.max_ey )
+#if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
+    {
+      free( worker );
       return Smooth_Err_Ok;
+    }
+#else
+      return Smooth_Err_Ok;
+#endif
 
     /* allocate memory based on empirical estimate from CJK fonts */
     estimate = ( ras.max_ex - ras.min_ex + ras.max_ey - ras.min_ey ) * 10UL;
+#ifdef __REACTOS__
+    /* the stack pool below is too large for the kernel stack as well */
+    if ( estimate <= FT_MAX_GRAY_POOL )
+      estimate = FT_MAX_GRAY_POOL + 1;
+#endif
     if ( estimate > FT_MAX_GRAY_POOL )
     {
       FT_Error   error;
@@ -2069,6 +2119,9 @@ typedef ptrdiff_t  FT_PtrDist;
       ret = gray_convert_glyph( RAS_VAR );
     }
 
+#if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
+    free( worker );
+#endif
     return ret;
   }
 
@@ -2090,6 +2143,10 @@ typedef ptrdiff_t  FT_PtrDist;
     *araster = (FT_Raster)&the_raster;
     FT_ZERO( &the_raster );
 
+#ifdef __REACTOS__
+    free(buffer);
+    }
+#endif
     return 0;
   }
 

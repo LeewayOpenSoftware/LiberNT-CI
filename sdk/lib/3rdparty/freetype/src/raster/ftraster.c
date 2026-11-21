@@ -2679,7 +2679,9 @@
     FT_ULong  estimate;
     int       ret;
 
-#ifndef FT_STATIC_RASTER
+#if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
+    black_TWorker*  worker;  /* too large for the kernel stack */
+#elif !defined( FT_STATIC_RASTER )
     black_TWorker  worker[1];
 #endif
 
@@ -2716,6 +2718,12 @@
     if ( !target_map->buffer )
       return FT_THROW( Invalid_Argument );
 
+#if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
+    worker = malloc( sizeof ( *worker ) );
+    if ( !worker )
+      return FT_THROW( Out_Of_Memory );
+#endif
+
     ras.outline = *outline;
 
     ras.bTop    =   (Int)target_map->rows - 1;
@@ -2729,6 +2737,11 @@
     /* allocate memory based on empirical estimate from CJK fonts */
     estimate = ( ras.bTop + ras.bRight ) * 8UL +
                80UL * sizeof ( TProfile ) / sizeof ( Long );
+#ifdef __REACTOS__
+    /* the stack pool below is too large for the kernel stack as well */
+    if ( estimate <= FT_MAX_BLACK_POOL )
+      estimate = FT_MAX_BLACK_POOL + 1;
+#endif
     if ( estimate > FT_MAX_BLACK_POOL )
     {
       FT_Error   error;
@@ -2755,6 +2768,9 @@
       ret = Render_Glyph( RAS_VAR );
     }
 
+#if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
+    free( worker );
+#endif
     return ret;
   }
 
