@@ -2280,13 +2280,21 @@ ChangePos:
             /* Only the thickness of the docked edge is a tray size; the length
                along the screen edge must not become the other edge's thickness */
             if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
-                m_TraySize.cy = rcTray.bottom - rcTray.top;
+            {
+                if (rcTray.bottom - rcTray.top > 0)
+                    m_TraySize.cy = rcTray.bottom - rcTray.top;
+            }
             else if (m_Position == ABE_LEFT || m_Position == ABE_RIGHT)
-                m_TraySize.cx = rcTray.right - rcTray.left;
+            {
+                if (rcTray.right - rcTray.left > 0)
+                    m_TraySize.cx = rcTray.right - rcTray.left;
+            }
             else
             {
-                m_TraySize.cx = rcTray.right - rcTray.left;
-                m_TraySize.cy = rcTray.bottom - rcTray.top;
+                if (rcTray.right - rcTray.left > 0)
+                    m_TraySize.cx = rcTray.right - rcTray.left;
+                if (rcTray.bottom - rcTray.top > 0)
+                    m_TraySize.cy = rcTray.bottom - rcTray.top;
             }
 
             pwp->flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
@@ -2613,6 +2621,28 @@ ChangePos:
             }
         }
 
+        /* A transient or failed size query (a WM_SIZE during an unlocked re-fit,
+           an unconstrained ~SHRT_MAX extent minus margins) can hand us an empty,
+           inverted or absurd client rect. Laying the children out from it writes
+           garbage heights into the clock and the task band, so skip this pass;
+           a valid WM_SIZE / AlignControls(NULL) follows. */
+        {
+            LONG cxClient = rcClient.right - rcClient.left;
+            LONG cyClient = rcClient.bottom - rcClient.top;
+            LONG cxMax = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            LONG cyMax = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+            if (cxMax <= 0)
+                cxMax = GetSystemMetrics(SM_CXSCREEN);
+            if (cyMax <= 0)
+                cyMax = GetSystemMetrics(SM_CYSCREEN);
+            if (cxClient <= 0 || cyClient <= 0 || cxClient > cxMax || cyClient > cyMax)
+            {
+                ERR("AlignControls: skipping invalid client rect %ld,%ld,%ld,%ld\n",
+                    rcClient.left, rcClient.top, rcClient.right, rcClient.bottom);
+                return;
+            }
+        }
+
         Horizontal = IsPosHorizontal();
 
         /* We're about to resize/move the start button, the rebar control and
@@ -2786,6 +2816,14 @@ ChangePos:
 
     void FitToRebar(PRECT pRect)
     {
+        /* An empty or inverted rect (e.g. h<=0 at logon before the children
+           exist) must not drive the rebar sizing/row count. */
+        if (pRect->right - pRect->left <= 0 || pRect->bottom - pRect->top <= 0)
+        {
+            ERR("FitToRebar: skipping invalid rect %ld,%ld,%ld,%ld\n",
+                pRect->left, pRect->top, pRect->right, pRect->bottom);
+            return;
+        }
         /* Get the rect of the rebar */
         RECT rebarRect, taskbarRect, clientRect;
         ::GetWindowRect(m_Rebar, &rebarRect);
