@@ -9,9 +9,11 @@
 #include <apitest.h>
 
 extern void func_MiEnumerate(void);
+extern void func_MiPush(void);
 
 const struct test winetest_testlist[] =
 {
     { "MiEnumerate", func_MiEnumerate },
+    { "MiPush", func_MiPush },
     { 0, 0 }
 };

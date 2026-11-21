@@ -61,6 +61,25 @@ START_TEST(MiEnumerate)
             {
                 trace("OS Caption: %ls\n", val.string ? val.string : L"");
             }
+
+            /* Clone+read+Delete: MMI clones every instance it keeps, so Clone
+             * must deep-copy and survive the operation being closed. */
+            if (count == 1)
+            {
+                MI_Instance *clone = NULL;
+                const MI_Char *ccls = NULL;
+                MI_Uint32 celems = 0;
+                MI_Result cr = inst->ft->Clone(inst, &clone);
+                ok(cr == MI_RESULT_OK && clone != NULL, "Clone = %d\n", (int)cr);
+                if (clone)
+                {
+                    MI_Instance_GetClassName(clone, &ccls);
+                    MI_Instance_GetElementCount(clone, &celems);
+                    ok(ccls && wcscmp(ccls, L"Win32_OperatingSystem") == 0, "clone class = %ls\n", ccls ? ccls : L"(null)");
+                    ok(celems == elems, "clone element count %u vs %u\n", celems, elems);
+                    clone->ft->Delete(clone);
+                }
+            }
         }
         else
         {
