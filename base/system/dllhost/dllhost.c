@@ -162,9 +162,15 @@ static HRESULT WINAPI marshal_GetUnmarshalClass(IMarshal *iface, REFIID iid, voi
 static HRESULT WINAPI marshal_GetMarshalSizeMax(IMarshal *iface, REFIID iid, void *pv,
         DWORD dwDestContext, void *pvDestContext, DWORD mshlflags, DWORD *size)
 {
-    FIXME("(%p,%s,%p,%08lx,%p,%08lx,%p): stub\n", iface, wine_dbgstr_guid(iid), pv,
+    struct factory *factory = impl_from_IMarshal(iface);
+
+    TRACE("(%p,%s,%p,%08lx,%p,%08lx,%p)\n", iface, wine_dbgstr_guid(iid), pv,
           dwDestContext, pvDestContext, mshlflags, size);
-    return E_NOTIMPL;
+
+    /* MarshalInterface marshals the DLL's own class object, so that is the object to size */
+    if (!factory->dll_factory)
+        return E_UNEXPECTED;
+    return CoGetMarshalSizeMax(size, iid, (IUnknown *)factory->dll_factory, dwDestContext, pvDestContext, mshlflags);
 }
 
 static HRESULT WINAPI marshal_MarshalInterface(IMarshal *iface, IStream *stream, REFIID iid,
