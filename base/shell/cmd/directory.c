@@ -282,12 +282,11 @@ static void output_reparse_target(const WCHAR *dir, const WCHAR *filename)
  * output_file_streams
  *
  * Print the named data streams of a file or directory (dir /R), one per
- * line, aligned under the file size column like Windows. Files are shown
- * as "<size> <file>:<stream>:$DATA"; directories use their qualified path
- * ("<size> <dir>:<stream>:$DATA") as Windows does. The unnamed data stream
- * (name ending in "::$DATA") is skipped.
+ * line, aligned under the file size column like Windows:
+ * "<size> <entry>:<stream>:$DATA". The unnamed data stream (name ending in
+ * "::$DATA") is skipped.
  */
-static void output_file_streams(const WCHAR *dir, const WCHAR *filename, BOOL qualified)
+static void output_file_streams(const WCHAR *dir, const WCHAR *filename)
 {
   static const WCHAR default_stream[] = L"::$DATA";
   WCHAR full[MAX_PATH];
@@ -315,7 +314,7 @@ static void output_file_streams(const WCHAR *dir, const WCHAR *filename, BOOL qu
     WCMD_output(L"\r\n%1!24s!%2!14s! %3%4",
                 L"",
                 WCMD_filesize64(stream_size),
-                qualified ? full : filename,
+                filename,
                 fsd.cStreamName);
   } while (FindNextStreamW(hff, &fsd));
 
@@ -508,7 +507,7 @@ static RETURN_CODE WCMD_list_directory (DIRECTORY_STACK *inputparms, int level, 
            if (fd[i].dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
                 output_reparse_target(inputparms->dirName, fd[i].cFileName);
            if (show_streams)
-                output_file_streams(inputparms->dirName, fd[i].cFileName, TRUE);
+                output_file_streams(inputparms->dirName, fd[i].cFileName);
         } else {
            if (!((lstrcmpW(fd[i].cFileName, L".") == 0) ||
                  (lstrcmpW(fd[i].cFileName, L"..") == 0))) {
@@ -536,7 +535,7 @@ static RETURN_CODE WCMD_list_directory (DIRECTORY_STACK *inputparms, int level, 
            if (fd[i].dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
                 output_reparse_target(inputparms->dirName, fd[i].cFileName);
            if (show_streams)
-                output_file_streams(inputparms->dirName, fd[i].cFileName, FALSE);
+                output_file_streams(inputparms->dirName, fd[i].cFileName);
         } else {
            WCMD_output(L"%1%2", recurse ? inputparms->dirName : L"", fd[i].cFileName);
         }
