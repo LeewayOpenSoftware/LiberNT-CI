@@ -343,14 +343,8 @@ static HKEY get_classes_root_hkey(HKEY hkey, REGSAM access)
 }
 
 #ifdef __REACTOS__
-/*
- * A caller above Medium integrity (elevated, High, or SYSTEM) must not read
- * the per-user HKCU\Software\Classes COM registrations: a standard-user
- * process could otherwise plant a class that the privileged process loads.
- */
-static BOOL should_ignore_peruser_classes(void)
+static BOOL token_is_above_medium(HANDLE token)
 {
-    HANDLE token;
     union
     {
         TOKEN_MANDATORY_LABEL label;
@@ -359,20 +353,51 @@ static BOOL should_ignore_peruser_classes(void)
     DWORD length, rid = SECURITY_MANDATORY_MEDIUM_RID;
     PUCHAR count;
 
-    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token) &&
-        !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
-        return FALSE;
-
     if (GetTokenInformation(token, TokenIntegrityLevel, &il, sizeof(il), &length))
     {
         count = GetSidSubAuthorityCount(il.label.Label.Sid);
         if (count != NULL && *count != 0)
             rid = *GetSidSubAuthority(il.label.Label.Sid, *count - 1);
     }
-
-    CloseHandle(token);
-
     return rid > SECURITY_MANDATORY_MEDIUM_RID;
+}
+
+/*
+ * A caller above Medium integrity (elevated, High, or SYSTEM) must not read the
+ * per-user HKCU\Software\Classes COM registrations: a standard-user process
+ * could otherwise plant a class that the privileged process loads. This matches
+ * the Windows COM runtime, which drops per-user classes above Medium integrity.
+ * (The HKCR *registry* merged view keeps HKCU at every level, as on Windows;
+ * only this COM lookup is guarded.) The process-token integrity is read once and
+ * cached; only the thread (impersonation) token is consulted per call, so
+ * impersonation is honoured.
+ */
+static BOOL should_ignore_peruser_classes(void)
+{
+    static volatile LONG cached_process = -1; /* -1 unknown, 0 <= Medium, 1 above */
+    HANDLE token;
+    LONG cached;
+
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
+    {
+        BOOL above = token_is_above_medium(token);
+        CloseHandle(token);
+        return above;
+    }
+
+    cached = cached_process;
+    if (cached == -1)
+    {
+        cached = 0;
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        {
+            cached = token_is_above_medium(token) ? 1 : 0;
+            CloseHandle(token);
+        }
+        InterlockedExchange(&cached_process, cached);
+    }
+
+    return cached == 1;
 }
 #endif
 
