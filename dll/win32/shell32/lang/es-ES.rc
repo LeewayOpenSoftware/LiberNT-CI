@@ -1078,6 +1078,13 @@ BEGIN
     IDS_NSC_SHARING "Cambiar configuración de uso compartido avanzado"
     IDS_NSC_SEEALSO "Vea también"
     IDS_NSC_INETOPTIONS "Opciones de Internet"
+    IDS_CPL_ALLITEMS "Todos los elementos de Panel de control"
+    IDS_CPL_ADJUST "Ajustar la configuración del equipo"
+    IDS_CPL_VIEWBY "Ver por:"
+    IDS_CPL_VIEW_CATEGORY "Categoría"
+    IDS_CPL_VIEW_LARGE "Iconos grandes"
+    IDS_CPL_VIEW_SMALL "Iconos pequeños"
+    IDS_CPL_VIEW_CLASSIC "Lista clásica"
     IDS_SEARCHBAND_COMMAND "Search"
     IDS_FOLDERSHORTCUT_TYPE "Folder Shortcut"
 END
