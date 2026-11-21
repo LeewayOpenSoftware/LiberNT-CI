@@ -738,6 +738,32 @@ TestSplitUtf8(HANDLE Output)
     ok(Cell == L' ', "Stray character %04x after the text\n", Cell);
 }
 
+static VOID
+TestVtWithoutProcessedOutput(HANDLE Output)
+{
+    CONSOLE_SCREEN_BUFFER_INFO Info;
+    DWORD Mode;
+    WCHAR Cell;
+
+    if (!GetConsoleMode(Output, &Mode) ||
+        !SetConsoleMode(Output, ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_WRAP_AT_EOL_OUTPUT))
+    {
+        skip("Unable to clear ENABLE_PROCESSED_OUTPUT, error %lu\n", GetLastError());
+        return;
+    }
+    if (ClearScreen(Output, &Info))
+    {
+        WRITE_VT(Output, "\x1b[2;3HQ\x1b[1;1H");
+        Cell = ReadCell(Output, 2, 1);
+        ok(Cell == L'Q', "CUP without processed output put %04x at (2,1), expected Q\n", Cell);
+        Cell = ReadCell(Output, 0, 0);
+        ok(Cell == L' ', "Escape sequence was written as text: %04x at (0,0)\n", Cell);
+        Cell = ReadCell(Output, 1, 0);
+        ok(Cell == L' ', "Escape sequence was written as text: %04x at (1,0)\n", Cell);
+    }
+    SetConsoleMode(Output, Mode);
+}
+
 START_TEST(ConsoleVirtualTerminal)
 {
     PREAD_CONSOLE_INPUT_EX_W ReadConsoleInputExW_;
@@ -964,6 +990,7 @@ START_TEST(ConsoleVirtualTerminal)
     else
     {
         TestEditRendering(Output);
+        TestVtWithoutProcessedOutput(Output);
         TestSplitUtf8(Output);
         TestFaintItalic(Output);
         if (ReadConsoleInputExW_ != NULL)
