@@ -883,9 +883,11 @@ VOID CCplCategoryView::LayoutHome(HDC hdc, int width)
         SetRect(&rc, x, y, x + S(48), y + S(48));
         AddDeco(rc, DK_CATICON, c, NULL);
 
-        tw = TextWidth(hdc, m_fontCard, g_Categories[c].Name);
+        WCHAR name[100];
+        CplPaneString((int)c, name, _countof(name));
+        tw = TextWidth(hdc, m_fontCard, name);
         SetRect(&rc, x + S(64), y, x + S(64) + min(tw, colW - S(80)), y + S(26));
-        AddHit(rc, HK_CATEGORY, c, LS_CARDTITLE, g_Categories[c].Name);
+        AddHit(rc, HK_CATEGORY, c, LS_CARDTITLE, name);
 
         for (UINT t = 0; t < _countof(g_Tasks) && shown < CPL_MAX_TASKS; t++)
         {
@@ -953,8 +955,12 @@ VOID CCplCategoryView::LayoutPage(HDC hdc, int width, BOOL homeInPane)
         SetRect(&rc, margin, S(10), margin + tw, S(10) + S(22));
         AddHit(rc, HK_HOME, 0, LS_NORMAL, home);
     }
-    SetRect(&rc, margin, S(36), width - margin, S(36) + S(32));
-    AddDeco(rc, DK_TITLE, 0, category->Name);
+    {
+        WCHAR title[100];
+        CplPaneString(m_page, title, _countof(title));
+        SetRect(&rc, margin, S(36), width - margin, S(36) + S(32));
+        AddDeco(rc, DK_TITLE, 0, title);
+    }
 
     y = HeaderHeight() + S(36);
     for (int i = 0; i < m_itemCount; i++)
