@@ -490,6 +490,8 @@ system_fallback_config[] =
 
     { "1F800-1F8FF",            L"Noto Sans Symbols2, Noto Sans Symbols 2" },
 #ifdef __REACTOS__
+    /* Miscellaneous Technical emoji: watch, hourglass, keyboard, media keys */
+    { "231A-231B, 2328, 23CF, 23E9-23F3, 23F8-23FA", L"Twemoji Mozilla, Noto Emoji" },
     /* Regional indicators, pictographs, emoticons, transport, supplemental symbols, extended-A */
     { "1F1E6-1F1FF, 1F300-1F64F, 1F680-1F6FF, 1F900-1F9FF, 1FA70-1FAFF", L"Twemoji Mozilla, Noto Emoji" },
 #endif
