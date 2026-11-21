@@ -588,7 +588,10 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.bMouseCursorShadow = (gspv.dwUserPrefMask & UPM_CURSORSHADOW) != 0;
     gspv.bFontSmoothing = SpiLoadInt(KEY_DESKTOP, VAL_FONTSMOOTHING, 0) == 2;
     gspv.uiFontSmoothingType = SpiLoadDWord(KEY_DESKTOP, VAL_FONTSMOOTHINGTYPE, 1);
-    gspv.uiFontSmoothingContrast = SpiLoadDWord(KEY_DESKTOP, VAL_FONTSMOOTHINGCONTRAST, 1400);
+    /* Windows stores FontSmoothingGamma 0 for "default" and reports 1200. */
+    gspv.uiFontSmoothingContrast = SpiLoadDWord(KEY_DESKTOP, VAL_FONTSMOOTHINGCONTRAST, 1200);
+    if (gspv.uiFontSmoothingContrast == 0)
+        gspv.uiFontSmoothingContrast = 1200;
     gspv.uiFontSmoothingOrientation = SpiLoadDWord(KEY_DESKTOP, VAL_FONTSMOOTHINGORIENTATION, 1);
     gspv.uiWheelScrollChars = SpiLoadInt(KEY_DESKTOP, VAL_SCRLLCHARS, 3);
 
