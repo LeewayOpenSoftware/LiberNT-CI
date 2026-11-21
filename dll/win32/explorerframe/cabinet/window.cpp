@@ -2883,6 +2883,17 @@ CCabinetWindow::UpdateStatus(BOOL mouseIdle)
 
     if (!view)
         return;
+    if (FAILED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))))
+    {
+        /* a page, as the Control Panel ones: no items to count, as in Windows */
+        view->Release();
+        SendMessageW(m_Status, SB_SETTEXTW, 0, (LPARAM)L"");
+        SendMessageW(m_Status, SB_SETTEXTW, 1, (LPARAM)L"");
+        UpdateViewToggles();
+        return;
+    }
+    folderView->Release();
+    folderView = NULL;
     if (SUCCEEDED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))))
     {
         folderView->ItemCount(SVGIO_ALLVIEW, &count);
