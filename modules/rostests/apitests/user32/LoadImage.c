@@ -354,8 +354,11 @@ static void test_SystemParametersInfoA_SetCursors(void)
         }
         else
         {
-            ok(width == GetSystemMetrics(SM_CXCURSOR), "live arrow before: %ld, expected %d\n",
-               width, GetSystemMetrics(SM_CXCURSOR));
+            if (!hadOld || old == 32)
+                ok(width == GetSystemMetrics(SM_CXCURSOR), "live arrow before: %ld, expected %d\n",
+                   width, GetSystemMetrics(SM_CXCURSOR));
+            else
+                trace("CursorBaseSize is %lu here, live arrow before: %ld\n", old, width);
             RegSetValueExA(key, "CursorBaseSize", 0, REG_DWORD, (const BYTE *)&base, sizeof(base));
             ok(SystemParametersInfoA(SPI_SETCURSORS, 0, NULL, 0), "SystemParametersInfoA failed, error %lu\n", GetLastError());
             width = LiveArrowWidth(hwnd);
