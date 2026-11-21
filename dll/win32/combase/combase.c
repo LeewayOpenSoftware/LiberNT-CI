@@ -343,6 +343,72 @@ static HKEY get_classes_root_hkey(HKEY hkey, REGSAM access)
 }
 
 #ifdef __REACTOS__
+static BOOL token_is_above_medium(HANDLE token)
+{
+    union
+    {
+        TOKEN_MANDATORY_LABEL label;
+        BYTE buffer[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+    } il;
+    DWORD length, rid = SECURITY_MANDATORY_MEDIUM_RID;
+    PUCHAR count;
+
+    if (GetTokenInformation(token, TokenIntegrityLevel, &il, sizeof(il), &length))
+    {
+        count = GetSidSubAuthorityCount(il.label.Label.Sid);
+        if (count != NULL && *count != 0)
+            rid = *GetSidSubAuthority(il.label.Label.Sid, *count - 1);
+    }
+    return rid > SECURITY_MANDATORY_MEDIUM_RID;
+}
+
+/*
+ * A caller above Medium integrity (elevated, High, or SYSTEM) must not read the
+ * per-user HKCU\Software\Classes COM registrations: a standard-user process
+ * could otherwise plant a class that the privileged process loads. This matches
+ * the Windows COM runtime, which drops per-user classes above Medium integrity.
+ * (The HKCR *registry* merged view keeps HKCU at every level, as on Windows;
+ * only this COM lookup is guarded.) The process-token integrity is read once and
+ * cached; only the thread (impersonation) token is consulted per call, so
+ * impersonation is honoured.
+ */
+static BOOL should_ignore_peruser_classes(void)
+{
+    static volatile LONG cached_process = -1; /* -1 unknown, 0 <= Medium, 1 above */
+    HANDLE token;
+    LONG cached = cached_process;
+
+    /* The PROCESS integrity decides first and is cached: a privileged process
+       never takes the per-user path, even while it impersonates a lower-integrity
+       client (otherwise a SYSTEM/High service impersonating a Medium caller would
+       load that caller's per-user InprocServer32). */
+    if (cached == -1)
+    {
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        {
+            cached = token_is_above_medium(token) ? 1 : 0;
+            CloseHandle(token);
+            InterlockedExchange(&cached_process, cached);
+        }
+        /* else: leave the cache at -1 and retry on the next call */
+    }
+    if (cached == 1)
+        return TRUE;
+
+    /* Process is at/below Medium (or still unknown): also honour a higher
+       effective identity, e.g. a Medium process impersonating a High client. */
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
+    {
+        BOOL above = token_is_above_medium(token);
+        CloseHandle(token);
+        return above;
+    }
+
+    return FALSE;
+}
+#endif
+
+#ifdef __REACTOS__
 LSTATUS open_classes_key(HKEY hkey, const WCHAR *name, REGSAM access, HKEY *retkey)
 #else
 static LSTATUS open_classes_key(HKEY hkey, const WCHAR *name, REGSAM access, HKEY *retkey)
@@ -352,7 +418,7 @@ static LSTATUS open_classes_key(HKEY hkey, const WCHAR *name, REGSAM access, HKE
     UNICODE_STRING nameW;
 
 #ifdef __REACTOS__
-    if (!(access & (KEY_WOW64_32KEY | KEY_WOW64_64KEY)))
+    if (!(access & (KEY_WOW64_32KEY | KEY_WOW64_64KEY)) && !should_ignore_peruser_classes())
     {
         WCHAR *user_name;
         SIZE_T length;
