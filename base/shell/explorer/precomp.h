@@ -359,6 +359,7 @@ struct TaskbarSettings
     UINT uMMTaskbarMode;     // "Show taskbar buttons on" 0=all 1=where-open 2=main+where-open (reg MMTaskbarMode)
     TW_STRUCKRECTS2 sr;
 
+    static BOOL IsBroadcasting();
     BOOL Load();
     BOOL Save();
     inline BOOL UseCompactTrayIcons()

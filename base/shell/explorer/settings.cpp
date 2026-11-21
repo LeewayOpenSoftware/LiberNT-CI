@@ -22,6 +22,14 @@
 
 TaskbarSettings g_TaskbarSettings;
 
+/* Set while Save broadcasts "TraySettings", so the tray window does not re-apply its own write */
+static BOOL s_bBroadcasting = FALSE;
+
+BOOL TaskbarSettings::IsBroadcasting()
+{
+    return s_bBroadcasting;
+}
+
 BOOL TaskbarSettings::Save()
 {
     SHSetValueW(hkExplorer, NULL, L"EnableAutoTray", REG_DWORD, &bHideInactiveIcons, sizeof(bHideInactiveIcons));
@@ -33,6 +41,8 @@ BOOL TaskbarSettings::Save()
     SHSetValueW(hkExplorer, L"Advanced", L"TaskbarSizeMove", REG_DWORD, &bAllowSizeMove, sizeof(bAllowSizeMove));
     sr.cbSize = sizeof(sr);
     SHSetValueW(hkExplorer, L"Advanced", L"TaskbarSmallIcons", REG_DWORD, &bSmallIcons, sizeof(bSmallIcons));
+    DWORD dwCompact = eCompactTrayIcons;
+    SHSetValueW(hkExplorer, L"Advanced", L"CompactTrayIcons", REG_DWORD, &dwCompact, sizeof(dwCompact));
     SHSetValueW(hkExplorer, L"Advanced", L"TaskbarSd", REG_DWORD, &bShowDesktopButton, sizeof(bShowDesktopButton));
     SHSetValueW(hkExplorer, L"Advanced", L"MMTaskbarEnabled", REG_DWORD, &bMMTaskbarEnabled, sizeof(bMMTaskbarEnabled));
     DWORD dwMMMode = uMMTaskbarMode;
@@ -51,9 +61,15 @@ BOOL TaskbarSettings::Save()
 
     /* TODO: AutoHide writes something to HKEY_CURRENT_USER\Software\Microsoft\Internet Explorer\Desktop\Components\0 figure out what and why */
 
-    /* Let the Settings app and other readers refresh, as Windows does */
-    SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"TraySettings",
-                        SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG, 1000, NULL);
+    /* Let the Settings app and other readers refresh, as Windows does; the tray
+     * window itself receives this too and must not re-apply its own write */
+    if (!s_bBroadcasting)
+    {
+        s_bBroadcasting = TRUE;
+        SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"TraySettings",
+                            SMTO_ABORTIFHUNG, 1000, NULL);
+        s_bBroadcasting = FALSE;
+    }
     return TRUE;
 }
 
