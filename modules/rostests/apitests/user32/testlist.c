@@ -135,6 +135,7 @@ extern void func_ShellWindowQueries(void);
 extern void func_ShellWindowZOrder(void);
 extern void func_ShowWindow(void);
 extern void func_SwitchToThisWindow(void);
+extern void func_SpiCaptionAlignment(void);
 extern void func_SystemParametersInfo(void);
 extern void func_TopmostBand(void);
 extern void func_SystemMenu(void);
@@ -290,6 +291,7 @@ const struct test winetest_testlist[] =
     { "ShowWindow", func_ShowWindow },
     { "SwitchToThisWindow", func_SwitchToThisWindow },
     { "SystemMenu", func_SystemMenu },
+    { "SpiCaptionAlignment", func_SpiCaptionAlignment },
     { "SystemParametersInfo", func_SystemParametersInfo },
     { "TopmostBand", func_TopmostBand },
     { "TrackMouseEvent", func_TrackMouseEvent },
