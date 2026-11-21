@@ -73,6 +73,7 @@ list(APPEND SOURCE
     RealizePalette.c
     ScreenRows.c
     SelectObject.c
+    ScriptShape.c
     SetBoundsRect.c
     SetBrushOrgEx.c
     SetDCPenColor.c

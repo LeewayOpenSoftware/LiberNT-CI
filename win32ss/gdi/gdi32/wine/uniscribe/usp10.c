@@ -3156,27 +3156,35 @@ HRESULT WINAPI ScriptIsComplex(const WCHAR *chars, int len, DWORD flag)
  * Used to report USP_E_SCRIPT_NOT_IN_FONT so callers fall back to a covering
  * font instead of drawing .notdef boxes. */
 static BOOL
+usp10_char_is_default_ignorable(WCHAR ch)
+{
+    /* Format characters that must not decide whether a font "has" a script:
+       soft hyphen, BOM/ZWNBSP, ZWNJ/ZWJ, LRM/RLM, the embedding/override
+       controls, and the invisible operators. Missing glyphs for these are
+       not a coverage failure (Dwight review SHOULD). */
+    return ch == 0x00AD || ch == 0xFEFF ||
+           (ch >= 0x200C && ch <= 0x200F) ||
+           (ch >= 0x202A && ch <= 0x202E) ||
+           (ch >= 0x2060 && ch <= 0x2064);
+}
+
+static BOOL
 usp10_run_has_missing_glyphs(HDC hdc, SCRIPT_CACHE *psc, const WCHAR *pwcChars, int cChars)
 {
-    WORD *glyphs;
+    WORD glyph;
     int i;
-    BOOL missing = FALSE;
 
-    if (!(glyphs = calloc(cChars, sizeof(*glyphs))))
-        return FALSE;
     for (i = 0; i < cChars; i++)
     {
         WCHAR ch = pwcChars[i];
         if (ch >= 0xD800 && ch <= 0xDFFF)
             continue;   /* surrogate halves are decoded by the shaper */
-        if (ScriptGetCMap(hdc, psc, &ch, 1, 0, glyphs) == S_FALSE)
-        {
-            missing = TRUE;
-            break;
-        }
+        if (usp10_char_is_default_ignorable(ch))
+            continue;
+        if (ScriptGetCMap(hdc, psc, &ch, 1, 0, &glyph) == S_FALSE)
+            return TRUE;
     }
-    free(glyphs);
-    return missing;
+    return FALSE;
 }
 
 HRESULT WINAPI ScriptShapeOpenType( HDC hdc, SCRIPT_CACHE *psc,
