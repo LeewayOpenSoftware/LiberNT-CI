@@ -78,13 +78,6 @@ mi_element;
 #define INST_COUNT(i)  ((MI_Uint32)(i)->reserved[1])
 #define INST_CLASS(i)  ((MI_Char*)(i)->reserved[2])
 
-typedef struct _mi_session_priv
-{
-    IWbemServices *svc;     /* ROOT\CIMV2 */
-    MI_Boolean     com_init;
-}
-mi_session_priv;
-
 typedef struct _mi_operation_priv
 {
     MI_Instance **instances;
@@ -92,10 +85,10 @@ typedef struct _mi_operation_priv
     MI_Uint32     next;
     MI_Boolean    terminal_sent;
     MI_Result     status;
+    HANDLE        worker;   /* async push-delivery thread, joined in Close */
 }
 mi_operation_priv;
 
-#define SES_PRIV(s)  ((mi_session_priv*)(s)->reserved2)
 #define OP_PRIV(o)   ((mi_operation_priv*)(o)->reserved2)
 
 /* =====================================================================
@@ -118,6 +111,40 @@ static void mi_instance_free(MI_Instance *inst)
     mi_free(inst);
 }
 
+/* Parse a DMTF datetime "yyyymmddHHMMSS.ffffff+ooo" into MI_Datetime. */
+static MI_Boolean dmtf_to_datetime(const MI_Char *in, MI_Datetime *dt)
+{
+    MI_Char b[32];
+    int i, k, us;
+    memset(dt, 0, sizeof(*dt));
+    if (!in) return MI_FALSE;
+    for (i = 0; i < 25 && in[i]; i++) b[i] = in[i];
+    b[i] = 0;
+    if (i < 21) return MI_FALSE;
+    for (k = 0; k < 14; k++) if (b[k] < L'0' || b[k] > L'9') return MI_FALSE;
+    dt->isTimestamp = 1;
+#define D2(q) (((int)(b[q]-L'0'))*10 + (int)(b[q+1]-L'0'))
+    dt->u.timestamp.year   = (MI_Uint32)(D2(0)*100 + D2(2));
+    dt->u.timestamp.month  = (MI_Uint32)D2(4);
+    dt->u.timestamp.day    = (MI_Uint32)D2(6);
+    dt->u.timestamp.hour   = (MI_Uint32)D2(8);
+    dt->u.timestamp.minute = (MI_Uint32)D2(10);
+    dt->u.timestamp.second = (MI_Uint32)D2(12);
+    if (b[14] == L'.')
+    {
+        us = 0;
+        for (k = 15; k < 21 && b[k] >= L'0' && b[k] <= L'9'; k++) us = us*10 + (int)(b[k]-L'0');
+        dt->u.timestamp.microseconds = (MI_Uint32)us;
+    }
+    if (b[21] == L'+' || b[21] == L'-')
+    {
+        int off = D2(22)*10 + (int)(b[24]-L'0');
+        dt->u.timestamp.utc = (b[21] == L'-') ? -off : off;
+    }
+#undef D2
+    return MI_TRUE;
+}
+
 /* Convert one VARIANT + CIMTYPE into MI_Value/MI_Type (scalar subset v1). */
 static MI_Boolean variant_to_mi(const VARIANT *v, CIMTYPE cim, MI_Value *out, MI_Type *type)
 {
@@ -129,7 +156,10 @@ static MI_Boolean variant_to_mi(const VARIANT *v, CIMTYPE cim, MI_Value *out, MI
     }
     switch (cim & ~CIM_FLAG_ARRAY)
     {
-    case CIM_STRING: case CIM_REFERENCE: case CIM_DATETIME:
+    case CIM_DATETIME:
+        *type = MI_DATETIME;
+        return dmtf_to_datetime(V_BSTR(v), &out->datetime);
+    case CIM_STRING: case CIM_REFERENCE:
         *type = MI_STRING;
         out->string = mi_wcsdup(V_BSTR(v));
         return out->string != NULL;
@@ -140,8 +170,8 @@ static MI_Boolean variant_to_mi(const VARIANT *v, CIMTYPE cim, MI_Value *out, MI
     case CIM_SINT16:   *type = MI_SINT16;  out->sint16 = (MI_Sint16)V_I2(v);  return MI_TRUE;
     case CIM_UINT32:   *type = MI_UINT32;  out->uint32 = (MI_Uint32)V_UI4(v); return MI_TRUE;
     case CIM_SINT32:   *type = MI_SINT32;  out->sint32 = (MI_Sint32)V_I4(v);  return MI_TRUE;
-    case CIM_UINT64:   *type = MI_UINT64;  out->uint64 = _wtoi64(V_BSTR(v));  return MI_TRUE; /* WMI returns 64-bit as BSTR */
-    case CIM_SINT64:   *type = MI_SINT64;  out->sint64 = _wtoi64(V_BSTR(v));  return MI_TRUE;
+    case CIM_UINT64:   *type = MI_UINT64;  out->uint64 = (MI_Uint64)_wcstoui64(V_BSTR(v), NULL, 10); return MI_TRUE; /* WMI returns 64-bit as BSTR */
+    case CIM_SINT64:   *type = MI_SINT64;  out->sint64 = (MI_Sint64)_wcstoi64(V_BSTR(v), NULL, 10); return MI_TRUE;
     case CIM_REAL32:   *type = MI_REAL32;  out->real32 = (MI_Real32)V_R4(v);  return MI_TRUE;
     case CIM_REAL64:   *type = MI_REAL64;  out->real64 = (MI_Real64)V_R8(v);  return MI_TRUE;
     default:
@@ -204,7 +234,33 @@ static MI_Instance *build_instance(IWbemClassObject *obj)
 
 static MI_Result MI_CALL inst_Clone(const MI_Instance *self, MI_Instance **newInstance)
 {
-    (void)self; (void)newInstance; return MI_RESULT_NOT_SUPPORTED;
+    MI_Instance *c;
+    mi_element *se = INST_ELEMS(self), *de = NULL;
+    MI_Uint32 n = INST_COUNT(self), i;
+    if (!newInstance) return MI_RESULT_INVALID_PARAMETER;
+    c = mi_alloc(sizeof(*c));
+    if (!c) return MI_RESULT_FAILED;
+    c->ft = &g_instance_ft;
+    c->reserved[2] = (ptrdiff_t)mi_wcsdup(INST_CLASS(self));
+    if (n)
+    {
+        de = mi_alloc(n * sizeof(mi_element));
+        if (!de) { mi_free(INST_CLASS(c)); mi_free(c); return MI_RESULT_FAILED; }
+        for (i = 0; i < n; i++)
+        {
+            de[i].name  = mi_wcsdup(se[i].name);
+            de[i].type  = se[i].type;
+            de[i].flags = se[i].flags;
+            if (se[i].type == MI_STRING && se[i].value.string)
+                de[i].value.string = mi_wcsdup(se[i].value.string);
+            else
+                de[i].value = se[i].value;  /* scalar / datetime: by value */
+        }
+    }
+    c->reserved[0] = (ptrdiff_t)de;
+    c->reserved[1] = (ptrdiff_t)n;
+    *newInstance = c;
+    return MI_RESULT_OK;
 }
 static MI_Result MI_CALL inst_Destruct(MI_Instance *self) { mi_instance_free(self); return MI_RESULT_OK; }
 static MI_Result MI_CALL inst_Delete(MI_Instance *self)   { mi_instance_free(self); return MI_RESULT_OK; }
@@ -277,6 +333,7 @@ static MI_Result MI_CALL op_Close(MI_Operation *operation)
     MI_Uint32 i;
     if (p)
     {
+        if (p->worker) { WaitForSingleObject(p->worker, INFINITE); CloseHandle(p->worker); p->worker = NULL; }
         for (i = 0; i < p->count; i++)
             if (p->instances[i]) mi_instance_free(p->instances[i]);
         mi_free(p->instances);
@@ -289,7 +346,7 @@ static MI_Result MI_CALL op_Cancel(MI_Operation *operation, MI_CancellationReaso
 {
     mi_operation_priv *p = OP_PRIV(operation);
     (void)reason;
-    if (p) p->next = p->count; /* no more instances; GetInstance will send terminal */
+    if (p) { p->status = MI_RESULT_FAILED; p->next = p->count; }
     return MI_RESULT_OK;
 }
 static MI_Result MI_CALL op_GetSession(MI_Operation *operation, MI_Session *session)
@@ -356,26 +413,60 @@ static const MI_OperationFT g_operation_ft =
 /* Deliver buffered results via a provided instanceResult callback (push). */
 static MI_Result MI_CALL ack_noop(MI_Operation *operation) { (void)operation; return MI_RESULT_OK; }
 
-static void push_results(MI_Operation *operation, MI_OperationCallbacks *cbs)
+/* Push delivery runs on a worker thread so instanceResult never fires
+ * re-entrantly inside the Session FT call (Windows delivers asynchronously).
+ * Each instanceResult is a synchronous upcall, so MMI serializes us; we send
+ * every buffered instance, then exactly one terminal. */
+typedef struct _mi_push_ctx { MI_Operation *op; MI_OperationCallbacks cbs; } mi_push_ctx;
+
+static DWORD WINAPI push_worker(LPVOID arg)
+{
+    mi_push_ctx *pc = arg;
+    mi_operation_priv *p = OP_PRIV(pc->op);
+    MI_Uint32 i;
+    for (i = 0; p && i < p->count; i++)
+        pc->cbs.instanceResult(pc->op, pc->cbs.callbackContext, p->instances[i], MI_TRUE,
+                               MI_RESULT_OK, NULL, NULL, ack_noop);
+    pc->cbs.instanceResult(pc->op, pc->cbs.callbackContext, NULL, MI_FALSE,
+                           p ? p->status : MI_RESULT_FAILED, NULL, NULL, ack_noop);
+    if (p) { p->next = p->count; p->terminal_sent = MI_TRUE; }
+    mi_free(pc);
+    return 0;
+}
+
+/* Callbacks wired -> deliver asynchronously on a worker; otherwise leave the
+ * buffer for the pull path (MI_Operation_GetInstance). Exactly one terminal
+ * is sent on either path. */
+static void finish_operation(MI_Operation *operation, MI_OperationCallbacks *cbs)
 {
     mi_operation_priv *p = OP_PRIV(operation);
-    MI_Uint32 i;
+    mi_push_ctx *pc;
     if (!cbs || !cbs->instanceResult) return;
-    for (i = 0; p && i < p->count; i++)
-        cbs->instanceResult(operation, cbs->callbackContext, p->instances[i], MI_TRUE,
-                            MI_RESULT_OK, NULL, NULL, ack_noop);
-    /* exactly one terminal */
-    cbs->instanceResult(operation, cbs ? cbs->callbackContext : NULL, NULL, MI_FALSE,
-                        p ? p->status : MI_RESULT_FAILED, NULL, NULL, ack_noop);
-    if (p) p->next = p->count, p->terminal_sent = MI_TRUE;
+    pc = mi_alloc(sizeof(*pc));
+    if (!pc) return;
+    pc->op = operation; pc->cbs = *cbs;
+    if (p) p->worker = CreateThread(NULL, 0, push_worker, pc, 0, NULL);
+    if (!p || !p->worker) push_worker(pc);  /* fallback: synchronous */
+}
+
+static void normalize_namespace(const MI_Char *in, MI_Char *out, int cch)
+{
+    int i;
+    if (!in || !in[0]) { lstrcpynW(out, L"ROOT\\CIMV2", cch); return; }
+    for (i = 0; i < cch - 1 && in[i]; i++) out[i] = (in[i] == L'/') ? L'\\' : in[i];
+    out[i] = 0;
 }
 
 /* Fill an operation handle: run the WQL query on the session and buffer rows. */
-static void start_query(MI_Session *session, const MI_Char *wql, MI_OperationCallbacks *cbs, MI_Operation *operation)
+static void start_query(const MI_Char *namespaceName, const MI_Char *wql,
+                        MI_OperationCallbacks *cbs, MI_Operation *operation)
 {
-    mi_session_priv *sp = SES_PRIV(session);
     mi_operation_priv *p;
+    IWbemLocator *loc = NULL;
+    IWbemServices *svc = NULL;
     IEnumWbemClassObject *iter = NULL;
+    MI_Char ns[256];
+    MI_Boolean com_init = MI_FALSE;
     HRESULT hr;
 
     memset(operation, 0, sizeof(*operation));
@@ -385,9 +476,19 @@ static void start_query(MI_Session *session, const MI_Char *wql, MI_OperationCal
     if (!p) return;
     p->status = MI_RESULT_OK;
 
-    if (!sp || !sp->svc) { p->status = MI_RESULT_FAILED; goto done; }
+    /* COM is initialized and torn down within this one call/thread, so the
+     * apartment ref stays balanced regardless of which thread closes later. */
+    hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    if (SUCCEEDED(hr)) com_init = MI_TRUE;
 
-    hr = IWbemServices_ExecQuery(sp->svc, (BSTR)L"WQL", (BSTR)wql,
+    hr = CoCreateInstance(&CLSID_WbemLocator, NULL, CLSCTX_INPROC_SERVER, &IID_IWbemLocator, (void**)&loc);
+    if (FAILED(hr)) { p->status = MI_RESULT_FAILED; goto done; }
+    normalize_namespace(namespaceName, ns, 256);
+    hr = IWbemLocator_ConnectServer(loc, (BSTR)ns, NULL, NULL, NULL, 0, NULL, NULL, &svc);
+    IWbemLocator_Release(loc);
+    if (FAILED(hr)) { p->status = MI_RESULT_INVALID_NAMESPACE; goto done; }
+
+    hr = IWbemServices_ExecQuery(svc, (BSTR)L"WQL", (BSTR)wql,
                                  WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, NULL, &iter);
     if (FAILED(hr)) { p->status = MI_RESULT_INVALID_QUERY; goto done; }
 
@@ -412,7 +513,9 @@ static void start_query(MI_Session *session, const MI_Char *wql, MI_OperationCal
     IEnumWbemClassObject_Release(iter);
 
 done:
-    if (cbs && cbs->instanceResult) push_results(operation, cbs);
+    if (svc) IWbemServices_Release(svc);
+    if (com_init) CoUninitialize();
+    finish_operation(operation, cbs);
 }
 
 /* =====================================================================
@@ -421,14 +524,7 @@ done:
 
 static MI_Result MI_CALL ses_Close(MI_Session *session, void *completionContext, void (MI_CALL *completionCallback)(void*))
 {
-    mi_session_priv *sp = SES_PRIV(session);
-    if (sp)
-    {
-        if (sp->svc) IWbemServices_Release(sp->svc);
-        if (sp->com_init) CoUninitialize();
-        mi_free(sp);
-        session->reserved2 = 0;
-    }
+    if (session) session->reserved2 = 0;
     if (completionCallback) completionCallback(completionContext);
     return MI_RESULT_OK;
 }
@@ -446,13 +542,13 @@ static void MI_CALL ses_EnumerateInstances(MI_Session *session, MI_Uint32 flags,
     lstrcpynW(wql, L"SELECT * FROM ", 512);
     n = lstrlenW(wql);
     lstrcpynW(wql + n, className, 512 - n);
-    start_query(session, wql, callbacks, operation);
+    start_query(namespaceName, wql, callbacks, operation);
 }
 static void MI_CALL ses_QueryInstances(MI_Session *session, MI_Uint32 flags, MI_OperationOptions *options,
     const MI_Char *namespaceName, const MI_Char *queryDialect, const MI_Char *queryExpression, MI_OperationCallbacks *callbacks, MI_Operation *operation)
 {
-    (void)flags; (void)options; (void)namespaceName; (void)queryDialect;
-    start_query(session, queryExpression ? queryExpression : L"", callbacks, operation);
+    (void)flags; (void)options; (void)queryDialect;
+    start_query(namespaceName, queryExpression ? queryExpression : L"", callbacks, operation);
 }
 
 /* Operations we do not implement in v1 must still deliver one terminal result. */
@@ -464,8 +560,7 @@ static void deliver_not_supported(MI_OperationCallbacks *cbs, MI_Operation *oper
     p = mi_alloc(sizeof(*p));
     operation->reserved2 = (ptrdiff_t)p;
     if (p) p->status = MI_RESULT_NOT_SUPPORTED;
-    if (cbs && cbs->instanceResult)
-        cbs->instanceResult(operation, cbs->callbackContext, NULL, MI_FALSE, MI_RESULT_NOT_SUPPORTED, NULL, NULL, ack_noop);
+    finish_operation(operation, cbs);
 }
 #define STUB_OP(name, ...) static void MI_CALL name(__VA_ARGS__)
 
@@ -576,28 +671,13 @@ static MI_Result MI_CALL app_Close(MI_Application *application) { if (applicatio
 static MI_Result MI_CALL app_NewSession(MI_Application *application, const MI_Char *protocol, const MI_Char *destination,
     MI_DestinationOptions *options, MI_SessionCallbacks *callbacks, MI_Instance **extendedError, MI_Session *session)
 {
-    mi_session_priv *sp;
-    IWbemLocator *loc = NULL;
-    HRESULT hr;
     (void)application; (void)protocol; (void)destination; (void)options; (void)callbacks;
     if (extendedError) *extendedError = NULL;
     if (!session) return MI_RESULT_INVALID_PARAMETER;
-
+    /* Session holds no COM state; each operation connects wbemprox on its own
+     * thread (keeps the COM apartment ref balanced). */
     memset(session, 0, sizeof(*session));
     session->ft = &g_session_ft;
-    sp = mi_alloc(sizeof(*sp));
-    if (!sp) return MI_RESULT_FAILED;
-    session->reserved2 = (ptrdiff_t)sp;
-
-    hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
-    if (SUCCEEDED(hr)) sp->com_init = MI_TRUE;
-    else if (hr != RPC_E_CHANGED_MODE) { /* keep going; apartment may already exist */ }
-
-    hr = CoCreateInstance(&CLSID_WbemLocator, NULL, CLSCTX_INPROC_SERVER, &IID_IWbemLocator, (void**)&loc);
-    if (FAILED(hr)) return MI_RESULT_FAILED;
-    hr = IWbemLocator_ConnectServer(loc, (BSTR)L"ROOT\\CIMV2", NULL, NULL, NULL, 0, NULL, NULL, &sp->svc);
-    IWbemLocator_Release(loc);
-    if (FAILED(hr)) { sp->svc = NULL; return MI_RESULT_FAILED; }
     return MI_RESULT_OK;
 }
 
