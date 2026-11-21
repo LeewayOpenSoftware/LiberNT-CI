@@ -673,6 +673,38 @@ TestEditFrontendInput(HANDLE Input,
     FlushConsoleInputBuffer(Input);
 }
 
+static VOID
+TestFaintItalic(HANDLE Output)
+{
+    CONSOLE_SCREEN_BUFFER_INFO Info;
+    WORD Plain, Attribute;
+
+    if (!ClearScreen(Output, &Info))
+        return;
+
+    /* SGR 2/3 change the rendition only: no text, no legacy attribute change */
+    WRITE_VT(Output, "\x1b[0mA\x1b[2mB\x1b[3mC\x1b[2;3;31mD\x1b[22;23mE\x1b[1;2mF\x1b[22mG\x1b[0m");
+    Plain = ReadCellAttribute(Output, 0, 0);
+    ok(ReadCell(Output, 0, 0) == L'A', "Cell 0 is %04x\n", ReadCell(Output, 0, 0));
+    ok(ReadCell(Output, 1, 0) == L'B', "Faint wrote %04x, expected B\n", ReadCell(Output, 1, 0));
+    ok(ReadCell(Output, 2, 0) == L'C', "Italic wrote %04x, expected C\n", ReadCell(Output, 2, 0));
+    ok(ReadCell(Output, 3, 0) == L'D', "Faint italic red wrote %04x, expected D\n", ReadCell(Output, 3, 0));
+    ok(ReadCell(Output, 4, 0) == L'E', "Reset wrote %04x, expected E\n", ReadCell(Output, 4, 0));
+    ok(ReadCell(Output, 7, 0) == L' ', "Stray character %04x after the sequences\n", ReadCell(Output, 7, 0));
+    Attribute = ReadCellAttribute(Output, 1, 0);
+    ok(Attribute == Plain, "Faint attribute is %#x, expected %#x\n", Attribute, Plain);
+    Attribute = ReadCellAttribute(Output, 2, 0);
+    ok(Attribute == Plain, "Italic attribute is %#x, expected %#x\n", Attribute, Plain);
+    Attribute = ReadCellAttribute(Output, 3, 0);
+    ok((Attribute & 0x0f) == FOREGROUND_RED, "Faint italic red attribute is %#x\n", Attribute);
+    Attribute = ReadCellAttribute(Output, 4, 0);
+    ok(Attribute == Plain, "Attribute after SGR 22;23 is %#x, expected %#x\n", Attribute, Plain);
+    Attribute = ReadCellAttribute(Output, 5, 0);
+    ok(Attribute & FOREGROUND_INTENSITY, "Bold faint attribute is %#x, expected intensity\n", Attribute);
+    Attribute = ReadCellAttribute(Output, 6, 0);
+    ok(Attribute == Plain, "SGR 22 left attribute %#x, expected %#x\n", Attribute, Plain);
+}
+
 START_TEST(ConsoleVirtualTerminal)
 {
     PREAD_CONSOLE_INPUT_EX_W ReadConsoleInputExW_;
@@ -899,6 +931,7 @@ START_TEST(ConsoleVirtualTerminal)
     else
     {
         TestEditRendering(Output);
+        TestFaintItalic(Output);
         if (ReadConsoleInputExW_ != NULL)
             TestEditFrontendInput(Input,
                                   Output,

@@ -2629,7 +2629,8 @@ static BOOL reflow_cell_blank( struct screen_buffer *screen_buffer, unsigned int
     const struct cell_color *color = screen_buffer->colors ? &screen_buffer->colors[index] : NULL;
 
     return screen_buffer->data[index].ch == ' ' && screen_buffer->data[index].attr == screen_buffer->attr &&
-           (!color || (color->fg == CLR_INVALID && color->bg == CLR_INVALID && color->underline == CLR_INVALID));
+           (!color || (color->fg == CLR_INVALID && color->bg == CLR_INVALID && color->underline == CLR_INVALID &&
+                       color->style == CELL_STYLE_NONE));
 }
 
 static unsigned int reflow_row_length( struct screen_buffer *screen_buffer, unsigned int y )

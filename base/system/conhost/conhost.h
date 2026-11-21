@@ -158,7 +158,12 @@ struct cell_color
     COLORREF fg;
     COLORREF bg;
     COLORREF underline;
+    DWORD    style;     /* CELL_STYLE_NONE or CELL_STYLE_* flags */
 };
+
+#define CELL_STYLE_NONE   0xffffffff
+#define CELL_STYLE_FAINT  0x00000001
+#define CELL_STYLE_ITALIC 0x00000002
 #endif
 
 struct screen_buffer
