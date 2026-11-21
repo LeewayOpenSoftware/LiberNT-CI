@@ -3173,7 +3173,12 @@ usp10_run_has_missing_glyphs(HDC hdc, SCRIPT_CACHE *psc, const WCHAR *pwcChars, 
 {
     WORD glyph;
     int i;
+    int covered = 0;
 
+    /* Windows parity (Win11 probe, Consolas vs Nirmala UI): ScriptShape fails
+       with USP_E_SCRIPT_NOT_IN_FONT only when the font covers NO character of
+       the run at all; partial coverage returns S_OK and the missing characters
+       map to .notdef. Default-ignorable format characters do not count. */
     for (i = 0; i < cChars; i++)
     {
         WCHAR ch = pwcChars[i];
@@ -3181,10 +3186,10 @@ usp10_run_has_missing_glyphs(HDC hdc, SCRIPT_CACHE *psc, const WCHAR *pwcChars, 
             continue;   /* surrogate halves are decoded by the shaper */
         if (usp10_char_is_default_ignorable(ch))
             continue;
-        if (ScriptGetCMap(hdc, psc, &ch, 1, 0, &glyph) == S_FALSE)
-            return TRUE;
+        if (ScriptGetCMap(hdc, psc, &ch, 1, 0, &glyph) != S_FALSE)
+            covered++;
     }
-    return FALSE;
+    return covered == 0;
 }
 
 HRESULT WINAPI ScriptShapeOpenType( HDC hdc, SCRIPT_CACHE *psc,

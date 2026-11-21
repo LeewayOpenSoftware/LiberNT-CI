@@ -12,12 +12,10 @@
 #include <windows.h>
 #include <usp10.h>
 
-/* The LiberNT coverage check in ScriptShapeOpenType must ignore
- * default-ignorable format characters (ZWJ/ZWNJ, LRM/RLM, the embedding
- * controls, invisible operators, ZWNBSP, soft hyphen): a Devanagari run
- * containing ZWJ must still shape (S_OK) with a Devanagari font even when
- * that font has no ZWJ glyph, while a run with a genuinely uncovered
- * character must fail with USP_E_SCRIPT_NOT_IN_FONT. */
+/* Windows-parity coverage check (Win11 probe, Consolas vs Nirmala UI):
+ * ScriptShape returns USP_E_SCRIPT_NOT_IN_FONT only when the font covers NO
+ * character of the run; partial coverage returns S_OK with .notdef for the
+ * missing ones. Default-ignorable format characters never count. */
 
 static void test_scriptshape_coverage(void)
 {
@@ -35,7 +33,7 @@ static void test_scriptshape_coverage(void)
     HRESULT hr;
     /* ka + ZWJ + ssa */
     static const WCHAR runDevanagariZwj[] = { 0x0915, 0x200D, 0x0937, 0 };
-    /* ka + HEBREW ALEPH (not in a Devanagari font) + ssa */
+    /* ka + HEBREW ALEPH (not in a Devanagari font) + ssa; all-covered probes use items[0].iCharPos..items[1].iCharPos lengths */
     static const WCHAR runDevanagariMissing[] = { 0x0915, 0x05D0, 0x0937, 0 };
 
     memset(&lf, 0, sizeof(lf));
@@ -76,6 +74,25 @@ static void test_scriptshape_coverage(void)
     ok(hr == S_OK, "ScriptItemize failed 0x%lx\n", hr);
     if (hr != S_OK)
         goto done;
+
+    /* ZWJ discrimination (Dwight NIT): if the font HAS a ZWJ glyph this case
+     * cannot prove the skip, so probe it and trace instead of asserting. */
+    {
+        WORD zwjGlyph = 0xFFFF;
+        ScriptGetCMap(hdc, &cache, runDevanagariZwj + 1, 1, 0, &zwjGlyph);
+        if (zwjGlyph != 0)
+            trace("Noto Sans Devanagari has a ZWJ glyph; the ZWJ case does not discriminate\n");
+    }
+
+    /* Partial coverage: S_OK with .notdef (Windows behaviour) */
+    hr = ScriptItemize(runDevanagariMissing, 3, 4, &control, &state, items, &nItems);
+    ok(hr == S_OK, "ScriptItemize(3) failed 0x%lx\n", hr);
+    if (hr == S_OK)
+    {
+        hr = ScriptShape(hdc, &cache, runDevanagariMissing, 3, 16, &items[0].a,
+                         glyphs, logClust, sva, &cGlyphs);
+        ok(hr == S_OK, "ScriptShape(partial run) = 0x%lx, expected S_OK\n", hr);
+    }
 
     /* Run with ZWJ: shapes even though the font has no ZWJ glyph */
     hr = ScriptShape(hdc, &cache, runDevanagariZwj, 3, 16, &items[0].a,
