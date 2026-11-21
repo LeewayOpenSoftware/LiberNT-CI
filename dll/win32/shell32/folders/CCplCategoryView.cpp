@@ -352,7 +352,11 @@ public:
             CComPtr<CCplPaneCommand> pCommand;
             HRESULT hr = ShellObjectCreator(pCommand);
             if (FAILED(hr))
-                return hr;
+            {
+                if (!fetched)
+                    return hr;
+                break; /* the caller keeps what was fetched */
+            }
             pCommand->Initialize(m_hwndView, index, index >= 0 && index == m_page);
             pUICommand[fetched++] = pCommand.Detach();
             m_pos++;
@@ -553,6 +557,7 @@ public:
     LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnPaneGoto(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnPanePage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnPaneFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
 
     BEGIN_COM_MAP(CCplCategoryView)
     COM_INTERFACE_ENTRY_IID(IID_IShellView, IShellView)
@@ -580,6 +585,7 @@ public:
     MESSAGE_HANDLER(WM_THEMECHANGED, OnSettingChange)
     MESSAGE_HANDLER(WM_CPL_PANE_GOTO, OnPaneGoto)
     MESSAGE_HANDLER(WM_CPL_PANE_PAGE, OnPanePage)
+    MESSAGE_HANDLER(SHV_TASKPANE_FOCUS, OnPaneFocus)
     END_MSG_MAP()
 };
 
@@ -954,10 +960,17 @@ VOID CCplCategoryView::LayoutPage(HDC hdc, int width, BOOL homeInPane)
 /* The pane is shown on category pages only; returns the width it takes on the left */
 int CCplCategoryView::LayoutTaskPane(int width, int height)
 {
+    /* the pane may hide with the keyboard in it ("Control Panel Home", or the view
+       got too narrow): the focus then goes to the page instead of a hidden window */
+    BOOL paneFocused = m_hwndTasks && ::GetFocus() == m_hwndTasks;
+    int pane = 0;
+
     if (m_mode != MODE_PAGE)
     {
         if (m_hwndTasks)
             ::ShowWindow(m_hwndTasks, SW_HIDE);
+        if (paneFocused)
+            SetFocus();
         return 0;
     }
     if (!m_hwndTasks)
@@ -975,7 +988,10 @@ int CCplCategoryView::LayoutTaskPane(int width, int height)
         m_tasksPage = m_page;
         DefViewTasks_Refresh(m_hwndTasks);
     }
-    return DefViewTasks_Layout(m_hwndTasks, width, height);
+    pane = DefViewTasks_Layout(m_hwndTasks, width, height);
+    if (!pane && paneFocused)
+        SetFocus();
+    return pane;
 }
 
 VOID CCplCategoryView::Layout()
@@ -1548,6 +1564,14 @@ LRESULT CCplCategoryView::OnPaneGoto(UINT uMsg, WPARAM wParam, LPARAM lParam, BO
 LRESULT CCplCategoryView::OnPanePage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
 {
     return m_mode == MODE_PAGE ? m_page : -1;
+}
+
+/* A pane link has the focus: the view stays the active one for the browser, as CDefView does */
+LRESULT CCplCategoryView::OnPaneFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    if (m_psb)
+        m_psb->OnViewWindowActive(static_cast<IShellView *>(this));
+    return 0;
 }
 
 LRESULT CCplCategoryView::OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
