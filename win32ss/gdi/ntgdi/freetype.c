@@ -7884,6 +7884,18 @@ IntFaceNameInstalled(PPROCESSINFO Win32Process, const WCHAR *FaceName)
     return Found;
 }
 
+BOOL
+FASTCALL
+ftGdiFontHasFaceName(PFONTGDI FontGDI, PCWSTR FaceName)
+{
+    BOOL Found;
+
+    IntLockFreeType();
+    Found = MatchFontNames(FontGDI, (LPWSTR)FaceName);
+    IntUnLockFreeType();
+    return Found;
+}
+
 NTSTATUS
 FASTCALL
 TextIntRealizeFont(HFONT FontHandle, PTEXTOBJ pTextObj)

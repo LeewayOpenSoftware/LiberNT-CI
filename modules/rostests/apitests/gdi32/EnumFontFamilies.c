@@ -430,7 +430,7 @@ static
 void
 TestInstalledFaceNotSubstituted(HDC hdc)
 {
-    static const WCHAR *names[] = { L"Segoe UI" };
+    static const WCHAR *names[] = { L"Segoe UI", L"MS Sans Serif" };
     WCHAR srcPath[MAX_PATH], path[MAX_PATH], face[LF_FACESIZE];
     TEXTMETRICW tm;
     DWORD size;

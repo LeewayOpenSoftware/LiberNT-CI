@@ -50,7 +50,17 @@ IntTMWFixUp(
         (_wcsicmp(lf.lfFaceName, L"Terminal") == 0) ||
         (_wcsicmp(lf.lfFaceName, L"Tms Rmn") == 0))
     {
-        ptm->TextMetric.tmPitchAndFamily &= ~(TMPF_TRUETYPE | TMPF_VECTOR);
+        /* Report the real font when a face of that very name was realized. */
+        PTEXTOBJ TextObj = RealizeFontInit(hCurrentFont);
+        BOOL bSameName = FALSE;
+
+        if (TextObj)
+        {
+            bSameName = (_wcsicmp(TextObj->TextFace, lf.lfFaceName) == 0);
+            TEXTOBJ_UnlockText(TextObj);
+        }
+        if (!bSameName)
+            ptm->TextMetric.tmPitchAndFamily &= ~(TMPF_TRUETYPE | TMPF_VECTOR);
     }
 }
 
