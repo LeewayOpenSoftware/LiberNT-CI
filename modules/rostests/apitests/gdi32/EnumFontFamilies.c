@@ -180,6 +180,92 @@ TestEnumFontFamilies(
     }
 }
 
+static
+int
+CALLBACK
+SubstEnumProc(const LOGFONTW *lf, const TEXTMETRICW *tm, DWORD FontType, LPARAM lParam)
+{
+    const ENUMLOGFONTEXW *elf = (const ENUMLOGFONTEXW *)lf;
+
+    trace("alias entry: face='%ls' full='%ls' style='%ls' type=0x%lx\n", lf->lfFaceName, elf->elfFullName,
+          elf->elfStyle, FontType);
+    (*(int *)lParam)++;
+    return 1;
+}
+
+typedef struct { int Total; int Failed; WCHAR First[LF_FACESIZE]; } REALIZE_CTX;
+
+static
+int
+CALLBACK
+RealizeEnumProc(const LOGFONTW *lf, const TEXTMETRICW *tm, DWORD FontType, LPARAM lParam)
+{
+    REALIZE_CTX *ctx = (REALIZE_CTX *)lParam;
+    HDC hdc = CreateCompatibleDC(NULL);
+    HFONT hfont, old;
+    OUTLINETEXTMETRICW otm;
+
+    if (FontType == RASTER_FONTTYPE || lf->lfFaceName[0] == '@')
+    {
+        DeleteDC(hdc);
+        return 1;
+    }
+    /* GDI+ selects the enumerated logfont as is and needs the outline metrics of that font */
+    hfont = CreateFontIndirectW(lf);
+    old = SelectObject(hdc, hfont);
+    otm.otmSize = sizeof(otm);
+    ctx->Total++;
+    if (!GetOutlineTextMetricsW(hdc, sizeof(otm), &otm) || GetFontData(hdc, 0x61656868, 0, NULL, 0) == GDI_ERROR)
+    {
+        if (!ctx->Failed++)
+            wcscpy(ctx->First, lf->lfFaceName);
+    }
+    SelectObject(hdc, old);
+    DeleteObject(hfont);
+    DeleteDC(hdc);
+    return 1;
+}
+
+/* An enumerated logfont must realize as an outline font again */
+static
+void
+TestEnumeratedLogfontRealizes(HDC hdc)
+{
+    LOGFONTW lf = { 0 };
+    REALIZE_CTX ctx = { 0 };
+
+    lf.lfCharSet = DEFAULT_CHARSET;
+    EnumFontFamiliesExW(hdc, &lf, RealizeEnumProc, (LPARAM)&ctx, 0);
+    ok(ctx.Total > 0, "No outline fonts enumerated\n");
+    ok(ctx.Failed == 0, "%d of %d enumerated logfonts do not realize as an outline font, first '%ls'\n",
+       ctx.Failed, ctx.Total, ctx.First);
+}
+
+/* A FontSubstitutes alias is enumerated like the family it maps to */
+static
+void
+TestEnumFontSubstitute(HDC hdc)
+{
+    LOGFONTW lf = { 0 };
+    int count = 0;
+
+    lf.lfCharSet = DEFAULT_CHARSET;
+    wcscpy(lf.lfFaceName, L"Segoe UI");
+    EnumFontFamiliesExW(hdc, &lf, SubstEnumProc, (LPARAM)&count, 0);
+    ok(count >= 1, "EnumFontFamiliesExW(Segoe UI) enumerated %d fonts\n", count);
+
+    count = 0;
+    wcscpy(lf.lfFaceName, L"Selawik");
+    EnumFontFamiliesExW(hdc, &lf, SubstEnumProc, (LPARAM)&count, 0);
+    ok(count >= 1, "EnumFontFamiliesExW(Selawik) enumerated %d fonts\n", count);
+
+    count = 0;
+    lf.lfFaceName[0] = 0;
+    EnumFontFamiliesExW(hdc, &lf, SubstEnumProc, (LPARAM)&count, 0);
+    trace("all families: %d entries\n", count);
+    TestEnumeratedLogfontRealizes(hdc);
+}
+
 START_TEST(EnumFontFamilies)
 {
     HDC hdc;
@@ -192,6 +278,7 @@ START_TEST(EnumFontFamilies)
     }
 
     TestEnumFontFamilies(hdc, L"ThisFontDoesNotExist", FALSE);
+    TestEnumFontSubstitute(hdc);
     /* Basic fonts that should be installed */
     TestEnumFontFamilies(hdc, L"MS Sans Serif", TRUE);
     TestEnumFontFamilies(hdc, L"Tahoma", TRUE);
