@@ -1327,7 +1327,7 @@ private:
     BOOL Elevate(PCWSTR command)
     {
         SHELLEXECUTEINFOW sei = { sizeof(sei) };
-        WCHAR params[96];
+        WCHAR params[96], system[MAX_PATH], program[MAX_PATH];
 
         if (IsUserAnAdmin())
             return FALSE;
@@ -1335,11 +1335,28 @@ private:
         sei.fMask = SEE_MASK_NOCLOSEPROCESS;
         sei.hwnd = m_hWnd;
         sei.lpVerb = L"runas";
-        /* a program of its own, so the elevation prompt names "Orosi Firewall settings" */
-        sei.lpFile = L"fwsettings.exe";
+        /* a program of its own, so the elevation prompt names "Orosi Firewall settings"; started by
+           its full path from the system directory, so no search can pick up another one */
+        if (!GetSystemDirectoryW(system, _countof(system)) ||
+            FAILED(StringCchPrintfW(program, _countof(program), L"%s\\fwsettings.exe", system)))
+        {
+            FwReportError(m_hWnd, IDS_FW_FAILED, L"The settings could not be changed (error 0x%08lX).",
+                          HRESULT_FROM_WIN32(GetLastError()));
+            return TRUE;
+        }
+        sei.lpFile = program;
+        sei.lpDirectory = system;
         sei.lpParameters = params;
         sei.nShow = SW_SHOWNORMAL;
-        if (ShellExecuteExW(&sei) && sei.hProcess)
+        if (!ShellExecuteExW(&sei))
+        {
+            /* the user refused the prompt: nothing to say; any other failure is reported */
+            DWORD error = GetLastError();
+            if (error != ERROR_CANCELLED)
+                FwReportError(m_hWnd, IDS_FW_FAILED, L"The settings could not be changed (error 0x%08lX).",
+                              HRESULT_FROM_WIN32(error));
+        }
+        else if (sei.hProcess)
         {
             if (m_hHelper)
                 CloseHandle(m_hHelper);
