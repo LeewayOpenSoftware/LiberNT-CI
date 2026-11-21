@@ -7508,16 +7508,16 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_FIRMWARE_UPDATED
 Language=English
-LiberNT has detected that the system firmware (BIOS) was updated [previous firmware date = %2, current firmware date %3].
+Orosi has detected that the system firmware (BIOS) was updated [previous firmware date = %2, current firmware date %3].
 .
 Language=Russian
-LiberNT has detected that the system firmware (BIOS) was updated [previous firmware date = %2, current firmware date %3].
+Orosi has detected that the system firmware (BIOS) was updated [previous firmware date = %2, current firmware date %3].
 .
 Language=Polish
 System LiberNT wykrył, że oprogramowanie układowe systemu (BIOS) zostało zaktualizowane [poprzednia data oprogramowania układowego = %2, bieżąca data oprogramowania układowego %3].
 .
 Language=Romanian
-LiberNT has detected that the system firmware (BIOS) was updated [previous firmware date = %2, current firmware date %3].
+Orosi has detected that the system firmware (BIOS) was updated [previous firmware date = %2, current firmware date %3].
 .
 Language=Japanese
 LiberNT はシステムのファームウェア (BIOS)  が更新されたことを検出しました [以前のファームウェアの日付 = %2、現在のファームウェアの日付 %3]。
@@ -16192,16 +16192,16 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_INSTALL_SERVICE_FAILURE
 Language=English
-The ReactOS Installer service could not be accessed. This can occur if you are running LiberNT in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
+The ReactOS Installer service could not be accessed. This can occur if you are running Orosi in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
 .
 Language=Russian
-The ReactOS Installer service could not be accessed. This can occur if you are running LiberNT in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
+The ReactOS Installer service could not be accessed. This can occur if you are running Orosi in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
 .
 Language=Polish
 Nie można uzyskać dostępu do usługi Instalator LiberNT. Może mieć to miejsce, jeśli system LiberNT jest uruchomiony w trybie awaryjnym lub Instalator LiberNT jest niepoprawnie zainstalowany. Skontaktuj się z pomocą techniczną, aby uzyskać pomoc.
 .
 Language=Romanian
-The ReactOS Installer service could not be accessed. This can occur if you are running LiberNT in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
+The ReactOS Installer service could not be accessed. This can occur if you are running Orosi in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
 .
 Language=Japanese
 ReactOS Installer サービスにアクセスできませんでした。ReactOS Installerが正しくインストールされていない場合に発生する可能性があります。サポート担当者にお問い合わせください。
@@ -16432,16 +16432,16 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_INSTALL_PACKAGE_VERSION
 Language=English
-This installation package cannot be installed by the ReactOS Installer service. You must install a LiberNT service pack that contains a newer version of the ReactOS Installer service.
+This installation package cannot be installed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
 .
 Language=Russian
-This installation package cannot be installed by the ReactOS Installer service. You must install a LiberNT service pack that contains a newer version of the ReactOS Installer service.
+This installation package cannot be installed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
 .
 Language=Polish
 Usługa Instalator LiberNT nie może zainstalować tego pakietu instalacyjnego. Musisz zainstalować dodatek LiberNT Service Pack, zawierający nowszą wersję usługi Instalator LiberNT.
 .
 Language=Romanian
-This installation package cannot be installed by the ReactOS Installer service. You must install a LiberNT service pack that contains a newer version of the ReactOS Installer service.
+This installation package cannot be installed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
 .
 Language=Japanese
 このインストール パッケージは ReactOS Installer サービスではインストールできません。新しいバージョンのReactOS Installerサービスが含まれているLiberNTサービスパックをインストールする必要があります。
@@ -16912,16 +16912,16 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_PATCH_PACKAGE_UNSUPPORTED
 Language=English
-This patch package cannot be processed by the ReactOS Installer service. You must install a LiberNT service pack that contains a newer version of the ReactOS Installer service.
+This patch package cannot be processed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
 .
 Language=Russian
-This patch package cannot be processed by the ReactOS Installer service. You must install a LiberNT service pack that contains a newer version of the ReactOS Installer service.
+This patch package cannot be processed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
 .
 Language=Polish
 Usługa Instalator LiberNT nie może przetworzyć tego pakietu aktualizacji. Musisz zainstalować dodatek LiberNT Service Pack, zawierający nowszą wersję usługi Instalator LiberNT.
 .
 Language=Romanian
-This patch package cannot be processed by the ReactOS Installer service. You must install a LiberNT service pack that contains a newer version of the ReactOS Installer service.
+This patch package cannot be processed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
 .
 Language=Japanese
 この更新パッケージは ReactOS Installer サービスで処理できません。新しいバージョンの ReactOS Installer サービスが含まれている LiberNT サービス パックをインストールする必要があります。
