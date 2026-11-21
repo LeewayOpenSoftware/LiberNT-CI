@@ -2836,9 +2836,9 @@ BOOL WINAPI ShellAboutW( HWND hWnd, LPCWSTR szApp, LPCWSTR szOtherStuff,
 #ifdef __REACTOS__
     /* Output the version OS kernel strings */
     LoadStringW(shell32_hInstance, IDS_ABOUT_VERSION_STRING, szFormat, _countof(szFormat));
-    StringCchPrintfW(szVersionString, _countof(szVersionString), szFormat, KERNEL_VERSION_STR, KERNEL_VERSION_BUILD_STR);
-    /* Leeway cut number next to the version text */
-    StringCchCatW(szVersionString, _countof(szVersionString), L"  LBI " LIBERNT_LBI_BUILD_WSTR);
+    /* "<Orosi version> (<arch-channel>)" plus the OS build; the LBI is part of
+       the Orosi version now (5.0.<LBI>), not a separate suffix. */
+    StringCchPrintfW(szVersionString, _countof(szVersionString), szFormat, OROSI_VERSION_FULL_STR, KERNEL_VERSION_BUILD_STR);
 #endif
 
     info.szApp        = szApp;
