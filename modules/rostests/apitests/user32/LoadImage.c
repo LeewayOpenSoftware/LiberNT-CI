@@ -1,5 +1,6 @@
 
 #include "precomp.h"
+#include <winreg.h>
 #include "resource_1bpp.h"
 
 #define ROS_HGDI_ERROR (HANDLE)~(ULONG_PTR)0 // This makes MSVC compiler happy
@@ -296,6 +297,80 @@ static void test_LoadImage_SharedCursorSize(void)
     ok(h32 != h48, "the 48 px shared request returned the 32 px cursor %p\n", h32);
 }
 
+/* The live system cursor after a reload: SetCursor on our own window, then the object GetCursorInfo reports. */
+static LONG LiveArrowWidth(HWND hwnd)
+{
+    CURSORINFO ci;
+    ICONINFO ii;
+    BITMAP bm;
+    RECT rc;
+    MSG msg;
+    LONG width = -1;
+
+    GetWindowRect(hwnd, &rc);
+    SetCursorPos((rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2);
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+        DispatchMessageW(&msg);
+    SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_ARROW));
+    ci.cbSize = sizeof(ci);
+    if (!GetCursorInfo(&ci) || !ci.hCursor)
+        return -1;
+    memset(&ii, 0, sizeof(ii));
+    if (!GetIconInfo(ci.hCursor, &ii))
+        return -1;
+    if (ii.hbmMask && GetObjectW(ii.hbmMask, sizeof(bm), &bm))
+        width = bm.bmWidth;
+    if (ii.hbmMask) DeleteObject(ii.hbmMask);
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+    return width;
+}
+
+/* SystemParametersInfoA(SPI_SETCURSORS) must reload the system cursors at CursorBaseSize like the W entry point. */
+static void test_SystemParametersInfoA_SetCursors(void)
+{
+    HKEY key;
+    DWORD old = 0, size = sizeof(old), type = 0, base = 48;
+    BOOL hadOld;
+    HWND hwnd;
+    LONG width;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, "Control Panel\\Cursors", 0, NULL, 0,
+                        KEY_QUERY_VALUE | KEY_SET_VALUE, NULL, &key, NULL) != ERROR_SUCCESS)
+    {
+        skip("Cannot open HKCU\\Control Panel\\Cursors\n");
+        return;
+    }
+    hadOld = RegQueryValueExA(key, "CursorBaseSize", NULL, &type, (BYTE *)&old, &size) == ERROR_SUCCESS &&
+             type == REG_DWORD;
+    hwnd = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "STATIC", "SPI_SETCURSORS", WS_POPUP | WS_VISIBLE,
+                           0, 0, 160, 160, NULL, NULL, GetModuleHandleA(NULL), NULL);
+    ok(hwnd != NULL, "CreateWindowEx failed, error %lu\n", GetLastError());
+    if (hwnd)
+    {
+        width = LiveArrowWidth(hwnd);
+        if (width < 0)
+        {
+            skip("No live cursor to measure (GetCursorInfo gave none)\n");
+        }
+        else
+        {
+            ok(width == GetSystemMetrics(SM_CXCURSOR), "live arrow before: %ld, expected %d\n",
+               width, GetSystemMetrics(SM_CXCURSOR));
+            RegSetValueExA(key, "CursorBaseSize", 0, REG_DWORD, (const BYTE *)&base, sizeof(base));
+            ok(SystemParametersInfoA(SPI_SETCURSORS, 0, NULL, 0), "SystemParametersInfoA failed, error %lu\n", GetLastError());
+            width = LiveArrowWidth(hwnd);
+            ok(width == 48, "live arrow after SPI_SETCURSORS at base 48: %ld\n", width);
+        }
+        DestroyWindow(hwnd);
+    }
+    if (hadOld)
+        RegSetValueExA(key, "CursorBaseSize", 0, REG_DWORD, (const BYTE *)&old, sizeof(old));
+    else
+        RegDeleteValueA(key, "CursorBaseSize");
+    RegCloseKey(key);
+    ok(SystemParametersInfoA(SPI_SETCURSORS, 0, NULL, 0), "restore SystemParametersInfoA failed, error %lu\n", GetLastError());
+}
+
 static const BYTE PngCursorImage[] =
 {
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -492,5 +567,6 @@ START_TEST(LoadImage)
     test_LoadImage_1bpp();
     test_LoadImage_OemShared();
     test_LoadImage_SharedCursorSize();
+    test_SystemParametersInfoA_SetCursors();
     test_LoadImage_PngCursorFiles();
 }
