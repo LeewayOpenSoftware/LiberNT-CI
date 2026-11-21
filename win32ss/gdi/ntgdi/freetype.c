@@ -7203,10 +7203,23 @@ GetFontPenalty(const LOGFONTW *               LogFont,
                 GOT_PENALTY("OutputPrecision", 19000);
             }
             break;
+        case OUT_STROKE_PRECIS:
+            if (!(TM->tmPitchAndFamily & (TMPF_VECTOR | TMPF_TRUETYPE)))
+            {
+                /* Requested a vector font, but the candidate is a raster font. */
+                GOT_PENALTY("OutputPrecision", 19000);
+            }
+            break;
+        case OUT_TT_ONLY_PRECIS:
+            if (!(TM->tmPitchAndFamily & TMPF_TRUETYPE))
+            {
+                /* Requested TrueType only, but the candidate is not TrueType. */
+                GOT_PENALTY("OutputPrecision", 19000);
+            }
+            break;
         case OUT_OUTLINE_PRECIS:
         case OUT_SCREEN_OUTLINE_PRECIS:
-        case OUT_TT_ONLY_PRECIS:
-        case OUT_PS_ONLY_PRECIS:
+        case OUT_PS_ONLY_PRECIS: /* any outline font */
             if (!(TM->tmPitchAndFamily & (TMPF_VECTOR | TMPF_TRUETYPE)))
             {
                 /* Requested an outline font, but the candidate is a raster font. */
@@ -7214,7 +7227,7 @@ GetFontPenalty(const LOGFONTW *               LogFont,
             }
             break;
         default:
-            if (TM->tmPitchAndFamily & (TMPF_VECTOR | TMPF_TRUETYPE))
+            if ((TM->tmPitchAndFamily & TMPF_VECTOR) && !(TM->tmPitchAndFamily & TMPF_TRUETYPE))
             {
                 /* OutputPrecision Penalty 19000 */
                 /* Or OUT_STROKE_PRECIS not requested, and the candidate
