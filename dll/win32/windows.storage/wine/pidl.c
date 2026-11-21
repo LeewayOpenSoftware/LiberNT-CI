@@ -3179,7 +3179,7 @@ BOOL _ILHACKCompareSimpleIds(LPCITEMIDLIST pidltemp1, LPCITEMIDLIST pidltemp2)
     }
     else if (pDataW1 || pDataW2)
     {
-        if (!pDataW1 || !pDataW2 || wcsicmp(pDataW1->wszName, pDataW2->wszName))
+        if (!pDataW1 || !pDataW2 || wcsicmp(_ILGetFileStructWName(pDataW1), _ILGetFileStructWName(pDataW2)))
             return FALSE;
     }
     else if (_ILIsFolder(pidltemp1) || _ILIsFolder(pidltemp2))
@@ -3963,7 +3963,7 @@ HRESULT WINAPI SHGetDataFromIDListA(LPSHELLFOLDER psf, LPCITEMIDLIST pidl,
 
         if (pFileStructW)
         {
-            if (!WideCharToMultiByte(CP_ACP, 0, pFileStructW->wszName, -1, pfd->cFileName, sizeof(pfd->cFileName), NULL, NULL))
+            if (!WideCharToMultiByte(CP_ACP, 0, _ILGetFileStructWName(pFileStructW), -1, pfd->cFileName, sizeof(pfd->cFileName), NULL, NULL))
                 pfd->cFileName[sizeof(pfd->cFileName) - 1] = '\0';
             if (filename && strcmp(filename, pfd->cFileName))
                 lstrcpynA(pfd->cAlternateFileName, filename, sizeof(pfd->cAlternateFileName));
@@ -4036,7 +4036,7 @@ HRESULT WINAPI SHGetDataFromIDListW(LPSHELLFOLDER psf, LPCITEMIDLIST pidl,
 
         if (pFileStructW)
         {
-            lstrcpynW(pfd->cFileName, pFileStructW->wszName, MAX_PATH);
+            lstrcpynW(pfd->cFileName, _ILGetFileStructWName(pFileStructW), MAX_PATH);
             if (filename && !MultiByteToWideChar(CP_ACP, 0, filename, -1, pfd->cAlternateFileName, 14))
                 pfd->cAlternateFileName[0] = '\0';
             if (!wcscmp(pfd->cAlternateFileName, pfd->cFileName))
@@ -4914,8 +4914,8 @@ DWORD _ILSimpleGetTextW (LPCITEMIDLIST pidl, LPWSTR szOut, UINT uOutSize)
     TRACE("(%p %p %x)\n",pidl,szOut,uOutSize);
 
     if (pFileStructW) {
-        lstrcpynW(szOut, pFileStructW->wszName, uOutSize);
-        dwReturn = lstrlenW(pFileStructW->wszName);
+        lstrcpynW(szOut, _ILGetFileStructWName(pFileStructW), uOutSize);
+        dwReturn = lstrlenW(_ILGetFileStructWName(pFileStructW));
     } else {
         GUID const * riid;
         WCHAR szTemp[MAX_PATH];
@@ -5187,6 +5187,28 @@ FileStructW* _ILGetFileStructW(LPCITEMIDLIST pidl) {
     {
         WARN("Invalid pidl format (cbOffset = %d)!\n", cbOffset);
         return NULL;
+    }
+
+    /* The entry must be a version we know and hold its long name, terminated, before the
+     * trailing offset; otherwise the caller uses the primary name. Wine and ReactOS write
+     * the terminator too, so the check holds for every layout. */
+    {
+        UINT cbName = _ILFileStructWNameOffset(pFileStructW);
+        UINT cchMax;
+
+        if (!cbName)
+        {
+            WARN("Windows file entry of unknown version %u\n", ((const WORD *)pFileStructW)[1]);
+            return NULL;
+        }
+        if (cbName + sizeof(WCHAR) + sizeof(cbOffset) > pFileStructW->cbLen)
+            return NULL;
+        cchMax = (pFileStructW->cbLen - sizeof(cbOffset) - cbName) / sizeof(WCHAR);
+        if (wcsnlen(_ILGetFileStructWName(pFileStructW), cchMax) == cchMax)
+        {
+            WARN("File entry without a terminated long name\n");
+            return NULL;
+        }
     }
 
     return pFileStructW;
