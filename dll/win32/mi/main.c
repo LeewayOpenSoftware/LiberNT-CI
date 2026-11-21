@@ -111,31 +111,39 @@ static void mi_instance_free(MI_Instance *inst)
     mi_free(inst);
 }
 
-/* Parse a DMTF datetime "yyyymmddHHMMSS.ffffff+ooo" into MI_Datetime. */
+/* Parse a DMTF datetime into MI_Datetime: timestamp "yyyymmddHHMMSS.ffffff+ooo"
+ * or interval "ddddddddHHMMSS.ffffff:000" (colon at index 21). */
 static MI_Boolean dmtf_to_datetime(const MI_Char *in, MI_Datetime *dt)
 {
     MI_Char b[32];
-    int i, k, us;
+    int i, k, us = 0;
     memset(dt, 0, sizeof(*dt));
     if (!in) return MI_FALSE;
     for (i = 0; i < 25 && in[i]; i++) b[i] = in[i];
     b[i] = 0;
     if (i < 21) return MI_FALSE;
     for (k = 0; k < 14; k++) if (b[k] < L'0' || b[k] > L'9') return MI_FALSE;
-    dt->isTimestamp = 1;
-#define D2(q) (((int)(b[q]-L'0'))*10 + (int)(b[q+1]-L'0'))
-    dt->u.timestamp.year   = (MI_Uint32)(D2(0)*100 + D2(2));
-    dt->u.timestamp.month  = (MI_Uint32)D2(4);
-    dt->u.timestamp.day    = (MI_Uint32)D2(6);
-    dt->u.timestamp.hour   = (MI_Uint32)D2(8);
-    dt->u.timestamp.minute = (MI_Uint32)D2(10);
-    dt->u.timestamp.second = (MI_Uint32)D2(12);
     if (b[14] == L'.')
-    {
-        us = 0;
         for (k = 15; k < 21 && b[k] >= L'0' && b[k] <= L'9'; k++) us = us*10 + (int)(b[k]-L'0');
-        dt->u.timestamp.microseconds = (MI_Uint32)us;
+#define D2(q) (((int)(b[q]-L'0'))*10 + (int)(b[q+1]-L'0'))
+    if (b[21] == L':')
+    {
+        dt->isTimestamp = 0;
+        dt->u.interval.days         = (MI_Uint32)(D2(0)*1000000 + D2(2)*10000 + D2(4)*100 + D2(6));
+        dt->u.interval.hours        = (MI_Uint32)D2(8);
+        dt->u.interval.minutes      = (MI_Uint32)D2(10);
+        dt->u.interval.seconds      = (MI_Uint32)D2(12);
+        dt->u.interval.microseconds = (MI_Uint32)us;
+        return MI_TRUE;
     }
+    dt->isTimestamp = 1;
+    dt->u.timestamp.year         = (MI_Uint32)(D2(0)*100 + D2(2));
+    dt->u.timestamp.month        = (MI_Uint32)D2(4);
+    dt->u.timestamp.day          = (MI_Uint32)D2(6);
+    dt->u.timestamp.hour         = (MI_Uint32)D2(8);
+    dt->u.timestamp.minute       = (MI_Uint32)D2(10);
+    dt->u.timestamp.second       = (MI_Uint32)D2(12);
+    dt->u.timestamp.microseconds = (MI_Uint32)us;
     if (b[21] == L'+' || b[21] == L'-')
     {
         int off = D2(22)*10 + (int)(b[24]-L'0');
@@ -242,25 +250,33 @@ static MI_Result MI_CALL inst_Clone(const MI_Instance *self, MI_Instance **newIn
     if (!c) return MI_RESULT_FAILED;
     c->ft = &g_instance_ft;
     c->reserved[2] = (ptrdiff_t)mi_wcsdup(INST_CLASS(self));
+    if (INST_CLASS(self) && !INST_CLASS(c)) goto oom;
     if (n)
     {
         de = mi_alloc(n * sizeof(mi_element));
-        if (!de) { mi_free(INST_CLASS(c)); mi_free(c); return MI_RESULT_FAILED; }
+        if (!de) goto oom;
+        c->reserved[0] = (ptrdiff_t)de;
         for (i = 0; i < n; i++)
         {
+            c->reserved[1] = (ptrdiff_t)(i + 1);  /* so mi_instance_free releases a partial copy */
             de[i].name  = mi_wcsdup(se[i].name);
             de[i].type  = se[i].type;
             de[i].flags = se[i].flags;
+            if (se[i].name && !de[i].name) goto oom;
             if (se[i].type == MI_STRING && se[i].value.string)
+            {
                 de[i].value.string = mi_wcsdup(se[i].value.string);
+                if (!de[i].value.string) goto oom;
+            }
             else
                 de[i].value = se[i].value;  /* scalar / datetime: by value */
         }
     }
-    c->reserved[0] = (ptrdiff_t)de;
-    c->reserved[1] = (ptrdiff_t)n;
     *newInstance = c;
     return MI_RESULT_OK;
+oom:
+    mi_instance_free(c);
+    return MI_RESULT_FAILED;
 }
 static MI_Result MI_CALL inst_Destruct(MI_Instance *self) { mi_instance_free(self); return MI_RESULT_OK; }
 static MI_Result MI_CALL inst_Delete(MI_Instance *self)   { mi_instance_free(self); return MI_RESULT_OK; }
@@ -333,7 +349,14 @@ static MI_Result MI_CALL op_Close(MI_Operation *operation)
     MI_Uint32 i;
     if (p)
     {
-        if (p->worker) { WaitForSingleObject(p->worker, INFINITE); CloseHandle(p->worker); p->worker = NULL; }
+        if (p->worker)
+        {
+            /* Close from inside the terminal callback runs on the worker itself. */
+            if (GetThreadId(p->worker) != GetCurrentThreadId())
+                WaitForSingleObject(p->worker, INFINITE);
+            CloseHandle(p->worker);
+            p->worker = NULL;
+        }
         for (i = 0; i < p->count; i++)
             if (p->instances[i]) mi_instance_free(p->instances[i]);
         mi_free(p->instances);
@@ -422,15 +445,20 @@ typedef struct _mi_push_ctx { MI_Operation *op; MI_OperationCallbacks cbs; } mi_
 static DWORD WINAPI push_worker(LPVOID arg)
 {
     mi_push_ctx *pc = arg;
-    mi_operation_priv *p = OP_PRIV(pc->op);
+    MI_Operation *op = pc->op;
+    MI_OperationCallbacks cbs = pc->cbs;
+    mi_operation_priv *p = OP_PRIV(op);
+    MI_Result status;
     MI_Uint32 i;
-    for (i = 0; p && i < p->count; i++)
-        pc->cbs.instanceResult(pc->op, pc->cbs.callbackContext, p->instances[i], MI_TRUE,
-                               MI_RESULT_OK, NULL, NULL, ack_noop);
-    pc->cbs.instanceResult(pc->op, pc->cbs.callbackContext, NULL, MI_FALSE,
-                           p ? p->status : MI_RESULT_FAILED, NULL, NULL, ack_noop);
-    if (p) { p->next = p->count; p->terminal_sent = MI_TRUE; }
     mi_free(pc);
+    for (i = 0; p && i < p->count; i++)
+        cbs.instanceResult(op, cbs.callbackContext, p->instances[i], MI_TRUE,
+                           MI_RESULT_OK, NULL, NULL, ack_noop);
+    /* The client may MI_Operation_Close from inside the terminal upcall, so
+     * finish our bookkeeping first and touch neither p nor op afterwards. */
+    status = p ? p->status : MI_RESULT_FAILED;
+    if (p) { p->next = p->count; p->terminal_sent = MI_TRUE; }
+    cbs.instanceResult(op, cbs.callbackContext, NULL, MI_FALSE, status, NULL, NULL, ack_noop);
     return 0;
 }
 
@@ -445,8 +473,14 @@ static void finish_operation(MI_Operation *operation, MI_OperationCallbacks *cbs
     pc = mi_alloc(sizeof(*pc));
     if (!pc) return;
     pc->op = operation; pc->cbs = *cbs;
-    if (p) p->worker = CreateThread(NULL, 0, push_worker, pc, 0, NULL);
-    if (!p || !p->worker) push_worker(pc);  /* fallback: synchronous */
+    /* Start suspended so p->worker is set before the worker (and a Close
+     * issued from inside its terminal callback) can run. */
+    if (p)
+    {
+        p->worker = CreateThread(NULL, 0, push_worker, pc, CREATE_SUSPENDED, NULL);
+        if (p->worker) { ResumeThread(p->worker); return; }
+    }
+    push_worker(pc);  /* fallback: synchronous */
 }
 
 static void normalize_namespace(const MI_Char *in, MI_Char *out, int cch)
