@@ -390,6 +390,11 @@ CNetConnectionManager::EnumConnections(
     if (Flags != NCME_DEFAULT)
         return E_FAIL;
 
+    /* created by the class factory (CoCreateInstance) rather than by
+       CNetConnectionManager_CreateInstance: the list is filled on first use */
+    if (!m_pHead)
+        Initialize();
+
     *ppEnum = static_cast<IEnumNetConnection*>(this);
     AddRef();
     return S_OK;
