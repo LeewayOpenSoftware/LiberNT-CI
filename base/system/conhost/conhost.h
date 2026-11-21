@@ -158,7 +158,12 @@ struct cell_color
     COLORREF fg;
     COLORREF bg;
     COLORREF underline;
+    DWORD    style;     /* CELL_STYLE_NONE or CELL_STYLE_* flags */
 };
+
+#define CELL_STYLE_NONE   0xffffffff
+#define CELL_STYLE_FAINT  0x00000001
+#define CELL_STYLE_ITALIC 0x00000002
 #endif
 
 struct screen_buffer
@@ -187,6 +192,8 @@ struct screen_buffer
     unsigned int           vt_cursor_size;
     unsigned char         *wrapped;
     unsigned int           wrapped_rows;
+    unsigned char          utf8_pending[3];  /* incomplete UTF-8 sequence from the last WriteFile */
+    unsigned int           utf8_pending_len;
 #endif
 };
 

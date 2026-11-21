@@ -60,6 +60,9 @@ struct console_window
     unsigned int      ui_charset;      /* default UI charset */
     WCHAR            *config_key;      /* config registry key name */
     LONG              ext_leading;     /* external leading for font */
+#ifdef __REACTOS__
+    HFONT             italic_font;     /* italic variant of font, created on first use */
+#endif
 
     BOOL              quick_edit;      /* whether mouse ops are sent to app or used for content selection */
     unsigned int      menu_mask;       /* MK_CONTROL MK_SHIFT mask to drive submenu opening */
@@ -493,6 +496,7 @@ static void fill_mem_dc( struct console *console, const RECT *update )
     const struct cell_color *colors;
     COLORREF fg, bg;
     unsigned int first, last;
+    DWORD style;
 #endif
 
     if (!console->window->font || !console->window->bitmap)
@@ -529,11 +533,31 @@ static void fill_mem_dc( struct console *console, const RECT *update )
             bg = console->active->color_map[(attr >> 4) & 0x0F];
             if (colors && colors[i].fg != CLR_INVALID) fg = colors[i].fg;
             if (colors && colors[i].bg != CLR_INVALID) bg = colors[i].bg;
+            style = colors ? colors[i].style : CELL_STYLE_NONE;
+            if (style == CELL_STYLE_NONE) style = 0;
+            /* SGR 2: faint text is drawn halfway between the text and background colours */
+            if (style & CELL_STYLE_FAINT)
+                fg = RGB( (GetRValue( fg ) + GetRValue( bg )) / 2, (GetGValue( fg ) + GetGValue( bg )) / 2,
+                          (GetBValue( fg ) + GetBValue( bg )) / 2 );
+            /* SGR 3: italic text uses an italic variant of the console font */
+            if ((style & CELL_STYLE_ITALIC) && !console->window->italic_font)
+            {
+                LOGFONTW lf;
+
+                if (GetObjectW( console->window->font, sizeof(lf), &lf ))
+                {
+                    lf.lfItalic = TRUE;
+                    console->window->italic_font = CreateFontIndirectW( &lf );
+                }
+            }
+            SelectObject( console->window->mem_dc, (style & CELL_STYLE_ITALIC) && console->window->italic_font ?
+                                                   console->window->italic_font : console->window->font );
             SetBkColor( console->window->mem_dc, bg );
             SetTextColor( console->window->mem_dc, fg );
             for (k = i; k <= last && (cell[k].attr & ~CELL_WIDE_FLAGS) == attr &&
                         (!colors || (colors[k].fg == colors[i].fg && colors[k].bg == colors[i].bg &&
-                                     colors[k].underline == colors[i].underline)); k++)
+                                     colors[k].underline == colors[i].underline &&
+                                     colors[k].style == colors[i].style)); k++)
             {
                 if ((cell[k].attr & COMMON_LVB_TRAILING_BYTE) && k > i &&
                     (cell[k - 1].attr & COMMON_LVB_LEADING_BYTE))
@@ -970,6 +994,10 @@ static BOOL set_console_font( struct console *console, const LOGFONTW *logfont )
 
     if (console->window->font) DeleteObject( console->window->font );
     console->window->font = font;
+#ifdef __REACTOS__
+    if (console->window->italic_font) DeleteObject( console->window->italic_font );
+    console->window->italic_font = NULL;
+#endif
     console->window->ext_leading = tm.tmExternalLeading;
 
     if (console->window->bitmap)
@@ -2726,6 +2754,13 @@ static LRESULT WINAPI window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
     case WM_DESTROY:
         console->win = NULL;
+#ifdef __REACTOS__
+        if (console->window && console->window->italic_font)
+        {
+            DeleteObject( console->window->italic_font );
+            console->window->italic_font = NULL;
+        }
+#endif
         PostQuitMessage( 0 );
         break;
 

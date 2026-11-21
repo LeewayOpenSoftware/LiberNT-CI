@@ -31,6 +31,8 @@ struct vt_pen
     BOOL bold;
     BOOL reverse;
     BOOL underline;
+    BOOL faint;
+    BOOL italic;
     BOOL line_drawing;
 };
 
@@ -91,6 +93,7 @@ static struct vt_state *vt_get_state( struct screen_buffer *screen_buffer )
     vt->pen.bg = -1;
     vt->pen.fg_rgb = vt->pen.bg_rgb = CLR_INVALID;
     vt->cell.fg = vt->cell.bg = vt->cell.underline = CLR_INVALID;
+    vt->cell.style = CELL_STYLE_NONE;
     screen_buffer->vt = vt;
     return vt;
 }
@@ -134,7 +137,8 @@ static void vt_color_cells( struct screen_buffer *screen_buffer, unsigned int fi
     struct vt_state *vt = screen_buffer->vt;
     unsigned int size = screen_buffer->width * screen_buffer->height, i;
 
-    if (vt->cell.fg == CLR_INVALID && vt->cell.bg == CLR_INVALID && vt->cell.underline == CLR_INVALID)
+    if (vt->cell.fg == CLR_INVALID && vt->cell.bg == CLR_INVALID && vt->cell.underline == CLR_INVALID &&
+        vt->cell.style == CELL_STYLE_NONE)
     {
         reset_cell_colors( screen_buffer, first, count );
         return;
@@ -389,6 +393,8 @@ static void vt_apply_pen( struct screen_buffer *screen_buffer, struct vt_state *
         vt->cell.bg = vt->pen.fg_rgb;
     }
     vt->cell.underline = vt->pen.underline ? 0 : CLR_INVALID;
+    vt->cell.style = (vt->pen.faint ? CELL_STYLE_FAINT : 0) | (vt->pen.italic ? CELL_STYLE_ITALIC : 0);
+    if (!vt->cell.style) vt->cell.style = CELL_STYLE_NONE;
     screen_buffer->attr = fg | (bg << 4);
 }
 
@@ -430,9 +436,13 @@ static void vt_sgr( struct screen_buffer *screen_buffer, struct vt_state *vt )
             vt->pen.fg = vt->pen.bg = -1;
             vt->pen.fg_rgb = vt->pen.bg_rgb = CLR_INVALID;
             vt->pen.bold = vt->pen.reverse = vt->pen.underline = FALSE;
+            vt->pen.faint = vt->pen.italic = FALSE;
         }
         else if (param == 1) vt->pen.bold = TRUE;
-        else if (param == 22) vt->pen.bold = FALSE;
+        else if (param == 2) vt->pen.faint = TRUE;
+        else if (param == 3) vt->pen.italic = TRUE;
+        else if (param == 22) vt->pen.bold = vt->pen.faint = FALSE; /* normal intensity */
+        else if (param == 23) vt->pen.italic = FALSE;
         else if (param == 4) vt->pen.underline = TRUE;
         else if (param == 24) vt->pen.underline = FALSE;
         else if (param == 7) vt->pen.reverse = TRUE;
@@ -702,6 +712,7 @@ static void vt_soft_reset( struct screen_buffer *screen_buffer, struct vt_state 
     vt->pen.fg = vt->pen.bg = -1;
     vt->pen.fg_rgb = vt->pen.bg_rgb = CLR_INVALID;
     vt->pen.bold = vt->pen.reverse = vt->pen.underline = vt->pen.line_drawing = FALSE;
+    vt->pen.faint = vt->pen.italic = FALSE;
     vt->has_margins = FALSE;
     vt->cursor_saved = FALSE;
     vt->cursor_keys_application = FALSE;

@@ -2629,7 +2629,8 @@ static BOOL reflow_cell_blank( struct screen_buffer *screen_buffer, unsigned int
     const struct cell_color *color = screen_buffer->colors ? &screen_buffer->colors[index] : NULL;
 
     return screen_buffer->data[index].ch == ' ' && screen_buffer->data[index].attr == screen_buffer->attr &&
-           (!color || (color->fg == CLR_INVALID && color->bg == CLR_INVALID && color->underline == CLR_INVALID));
+           (!color || (color->fg == CLR_INVALID && color->bg == CLR_INVALID && color->underline == CLR_INVALID &&
+                       color->style == CELL_STYLE_NONE));
 }
 
 static unsigned int reflow_row_length( struct screen_buffer *screen_buffer, unsigned int y )
@@ -2975,6 +2976,7 @@ static NTSTATUS write_console( struct screen_buffer *screen_buffer, const WCHAR 
     empty_update_rect( screen_buffer, &update_rect );
 
 #ifdef __REACTOS__
+    /* As on Windows, escape sequences are parsed only with ENABLE_PROCESSED_OUTPUT too */
     if ((screen_buffer->mode & (ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) ==
         (ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
     {
@@ -3659,14 +3661,65 @@ static NTSTATUS screen_buffer_ioctl( struct screen_buffer *screen_buffer, unsign
             unsigned int len;
             WCHAR *buf;
             NTSTATUS status;
+#ifdef __REACTOS__
+            unsigned char *joined = NULL;
+
+            if (screen_buffer->console->output_cp != CP_UTF8)
+                screen_buffer->utf8_pending_len = 0;
+            else
+            {
+                /* A UTF-8 sequence may be split across writes: keep its first bytes for the next one */
+                const unsigned char *bytes = in_data;
+                size_t total = screen_buffer->utf8_pending_len + in_size, start, tail;
+
+                /* Only copy when bytes from the previous write must be prepended */
+                if (screen_buffer->utf8_pending_len)
+                {
+                    if (!(joined = malloc( total ))) return STATUS_NO_MEMORY;
+                    memcpy( joined, screen_buffer->utf8_pending, screen_buffer->utf8_pending_len );
+                    memcpy( joined + screen_buffer->utf8_pending_len, in_data, in_size );
+                    bytes = joined;
+                }
+                tail = 0;
+                for (start = total; start > 0 && total - start < 3; start--)
+                {
+                    unsigned char c = bytes[start - 1];
+                    size_t need;
+
+                    if ((c & 0xc0) == 0x80) continue;
+                    need = (c & 0xe0) == 0xc0 ? 2 : (c & 0xf0) == 0xe0 ? 3 : (c & 0xf8) == 0xf0 ? 4 : 1;
+                    if (need > total - start + 1) tail = total - start + 1;
+                    break;
+                }
+                memcpy( screen_buffer->utf8_pending, bytes + total - tail, tail );
+                screen_buffer->utf8_pending_len = tail;
+                in_data = bytes;
+                in_size = total - tail;
+            }
+#endif
 
             len = MultiByteToWideChar( screen_buffer->console->output_cp, 0, in_data, in_size,
                                        NULL, 0 );
-            if (!len) return STATUS_SUCCESS;
-            if (!(buf = malloc( len * sizeof(WCHAR) ))) return STATUS_NO_MEMORY;
+            if (!len)
+            {
+#ifdef __REACTOS__
+                free( joined );
+#endif
+                return STATUS_SUCCESS;
+            }
+            if (!(buf = malloc( len * sizeof(WCHAR) )))
+            {
+#ifdef __REACTOS__
+                free( joined );
+#endif
+                return STATUS_NO_MEMORY;
+            }
             MultiByteToWideChar( screen_buffer->console->output_cp, 0, in_data, in_size, buf, len );
             status = write_console( screen_buffer, buf, len );
             free( buf );
+#ifdef __REACTOS__
+            free( joined );
+#endif
             return status;
         }
 
