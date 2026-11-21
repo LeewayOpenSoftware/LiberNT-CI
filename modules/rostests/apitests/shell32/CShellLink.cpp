@@ -475,7 +475,7 @@ TestIconLocation(void)
 static BOOL WriteLinkInfoOnlyLink(PCWSTR pszLink, PCWSTR pszTarget)
 {
     CHAR szTargetA[MAX_PATH];
-    BYTE buffer[0x4C + 0x1C + 0x11 + MAX_PATH + 1];
+    BYTE buffer[0x4C + 0x1C + 0x11 + MAX_PATH + 1 + 4];
     BYTE *p = buffer;
     DWORD cbPath, cbInfo, written;
     HANDLE hFile;
@@ -512,6 +512,10 @@ static BOOL WriteLinkInfoOnlyLink(PCWSTR pszLink, PCWSTR pszTarget)
     memcpy(p + 0x2D, szTargetA, cbPath);
     p[0x2D + cbPath] = 0;
     p += cbInfo;
+
+    /* EXTRA_DATA: the terminal block (size below 4) */
+    *(DWORD *)p = 0;
+    p += 4;
 
     hFile = CreateFileW(pszLink, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE)
@@ -573,6 +577,38 @@ static void TestLinkInfoOnlyIcon(void)
     ok(_wcsicmp(sfi.szDisplayName, szTarget) == 0, "SHGFI_ICONLOCATION gave '%S', expected '%S'\n", sfi.szDisplayName, szTarget);
 
     DeleteFileW(szLink);
+
+    /* The same link with a network target: the LinkInfo path is not followed for the icon
+     * (no network access for a dropped .lnk), so there is no target icon and no long wait.
+     * Windows may behave differently here. */
+    {
+        PCWSTR pszUnc = L"\\\\nonexistent-host-a1b2c3d4\\share\\cmd.exe";
+        DWORD dwStart;
+
+        if (!WriteLinkInfoOnlyLink(szLink, pszUnc))
+        {
+            skip("Cannot write %S\n", szLink);
+            return;
+        }
+        hr = CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARG(IShellLinkW, &psl));
+        if (SUCCEEDED(hr))
+            hr = psl->QueryInterface(IID_PPV_ARG(IPersistFile, &ppf));
+        if (SUCCEEDED(hr))
+            hr = ppf->Load(szLink, STGM_READ);
+        ok(hr == S_OK, "IPersistFile::Load(UNC LinkInfo-only) hr = 0x%lx\n", hr);
+        if (SUCCEEDED(hr) && SUCCEEDED(psl->QueryInterface(IID_PPV_ARG(IExtractIconW, &pei))))
+        {
+            szPath[0] = 0;
+            dwStart = GetTickCount();
+            hr = pei->GetIconLocation(GIL_FORSHELL, szPath, _countof(szPath), &iIcon, &wFlags);
+            ok(FAILED(hr) || _wcsicmp(szPath, pszUnc) != 0, "UNC LinkInfo-only link gave the target icon '%S'\n", szPath);
+            ok(GetTickCount() - dwStart < 2000, "UNC LinkInfo-only GetIconLocation took %lu ms\n", GetTickCount() - dwStart);
+        }
+        psl.Release();
+        ppf.Release();
+        pei.Release();
+        DeleteFileW(szLink);
+    }
 }
 
 START_TEST(CShellLink)
