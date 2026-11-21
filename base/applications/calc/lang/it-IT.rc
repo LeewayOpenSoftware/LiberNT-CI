@@ -329,7 +329,7 @@ BEGIN
     BEGIN
         MENUITEM "Guida in linea", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "Informazioni su Orosi Calc", IDM_HELP_ABOUT
+        MENUITEM "Informazioni su Calc", IDM_HELP_ABOUT
     END
 END
 
@@ -362,7 +362,7 @@ BEGIN
     BEGIN
         MENUITEM "Guida in linea", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "Informazioni su Orosi Calc", IDM_HELP_ABOUT
+        MENUITEM "Informazioni su Calc", IDM_HELP_ABOUT
     END
 END
 
@@ -385,7 +385,7 @@ BEGIN
     BEGIN
         MENUITEM "Guida in linea", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "Informazioni su Orosi Calc", IDM_HELP_ABOUT
+        MENUITEM "Informazioni su Calc", IDM_HELP_ABOUT
     END
 END
 

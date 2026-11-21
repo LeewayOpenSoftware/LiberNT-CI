@@ -329,7 +329,7 @@ BEGIN
     BEGIN
         MENUITEM "ข้อมูลช่วยเหลือ", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "เกี่ยวกับ Orosi Calc", IDM_HELP_ABOUT
+        MENUITEM "เกี่ยวกับ Calc", IDM_HELP_ABOUT
     END
 END
 
@@ -362,7 +362,7 @@ BEGIN
     BEGIN
         MENUITEM "ข้อมูลช่วยเหลือ", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "เกี่ยวกับ Orosi Calc", IDM_HELP_ABOUT
+        MENUITEM "เกี่ยวกับ Calc", IDM_HELP_ABOUT
     END
 END
 
@@ -385,7 +385,7 @@ BEGIN
     BEGIN
         MENUITEM "ข้อมูลช่วยเหลือ", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "เกี่ยวกับ Orosi Calc", IDM_HELP_ABOUT
+        MENUITEM "เกี่ยวกับ Calc", IDM_HELP_ABOUT
     END
 END
 

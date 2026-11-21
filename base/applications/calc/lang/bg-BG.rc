@@ -333,7 +333,7 @@ BEGIN
     BEGIN
         MENUITEM "Помощ", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "За Orosi Calculator", IDM_HELP_ABOUT
+        MENUITEM "За Calculator", IDM_HELP_ABOUT
     END
 END
 
@@ -366,7 +366,7 @@ BEGIN
     BEGIN
         MENUITEM "Помощ", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "За Orosi Calculator", IDM_HELP_ABOUT
+        MENUITEM "За Calculator", IDM_HELP_ABOUT
     END
 END
 
@@ -389,7 +389,7 @@ BEGIN
     BEGIN
         MENUITEM "Помощ", IDM_HELP_HELP
         MENUITEM SEPARATOR
-        MENUITEM "За Orosi Calculator", IDM_HELP_ABOUT
+        MENUITEM "За Calculator", IDM_HELP_ABOUT
     END
 END
 

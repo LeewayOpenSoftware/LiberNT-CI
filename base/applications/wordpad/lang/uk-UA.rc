@@ -91,7 +91,7 @@ BEGIN
     END
     POPUP "&Довідка"
     BEGIN
-        MENUITEM "&Про Orosi WordPad",        ID_ABOUT
+        MENUITEM "&Про WordPad",        ID_ABOUT
     END
 END
 

@@ -936,7 +936,7 @@ MP4FILE="MP4 Video"
 ;; Misc file types without friendly (localized in .dll resources) name
 CSSFILE="Cascading Style Sheet"
 MSCFILE="Management Console Document"
-SCFFILE="Orosi Explorer Command"
+SCFFILE="File Explorer Command"
 WMZFILE="Compressed Enhanced Metafile"
 WSFFILE="Windows Script File"
 
@@ -1290,7 +1290,7 @@ MP4FILE="MP4 視訊"
 
 ;; Misc file types without friendly (localized in .dll resources) name
 CSSFILE="階層式樣式表"
-SCFFILE="Orosi Explorer 命令"
+SCFFILE="File Explorer 命令"
 ;WMZFILE="Compressed Enhanced Metafile"
 
 ;; For .reg files, right-click menu
@@ -1368,7 +1368,7 @@ MP4FILE="MP4 視訊"
 
 ;; Misc file types without friendly (localized in .dll resources) name
 CSSFILE="階層式樣式表"
-SCFFILE="Orosi Explorer 命令"
+SCFFILE="File Explorer 命令"
 ;WMZFILE="Compressed Enhanced Metafile"
 
 ;; For .reg files, right-click menu
@@ -1447,7 +1447,7 @@ MP4FILE="MP4 视频"
 
 ;; Misc file types without friendly (localized in .dll resources) name
 CSSFILE="层叠样式表文档"
-SCFFILE="Orosi Explorer Command"
+SCFFILE="File Explorer Command"
 ;WMZFILE="Compressed Enhanced Metafile"
 
 ;; For .reg files, right-click menu

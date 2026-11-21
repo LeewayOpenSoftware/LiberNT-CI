@@ -275,7 +275,7 @@ BEGIN
     5851 "Nabídka Start"
     IDS_REACTOS_LOGOFF "Odhlášení od systému Orosi"
     IDS_REACTOS_LOGON "Přihlášení k systému Orosi"
-    5854 "Orosi Explorer"
+    5854 "File Explorer"
     IDS_BROWSE_FOR_SOUND "Search for new sounds"
     IDS_WAVE_FILES_FILTER "Wave Files (*.wav)|*.wav|"
 END

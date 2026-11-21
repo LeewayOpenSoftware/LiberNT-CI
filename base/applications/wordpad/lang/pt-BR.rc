@@ -90,7 +90,7 @@ BEGIN
     END
     POPUP "&Ajuda"
     BEGIN
-        MENUITEM "&Sobre Orosi WordPad",      ID_ABOUT
+        MENUITEM "&Sobre WordPad",      ID_ABOUT
     END
 END
 

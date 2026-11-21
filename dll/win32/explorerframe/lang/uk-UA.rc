@@ -335,8 +335,8 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "Orosi Explorer"
-    IDS_PARSE_ADDR_ERR_TEXT "Orosi Explorer не може знайти '%1'. Перевірте правильність написання та спробуйте ще раз."
+    IDS_PARSE_ADDR_ERR_TITLE "File Explorer"
+    IDS_PARSE_ADDR_ERR_TEXT "File Explorer не може знайти '%1'. Перевірте правильність написання та спробуйте ще раз."
 END
 
 STRINGTABLE

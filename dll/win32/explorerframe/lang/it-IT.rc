@@ -326,8 +326,8 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "Orosi Explorer"
-    IDS_PARSE_ADDR_ERR_TEXT "Orosi Explorer non è in grado di trovare '%1'. Controlla la digitazione e riprova."
+    IDS_PARSE_ADDR_ERR_TITLE "File Explorer"
+    IDS_PARSE_ADDR_ERR_TEXT "File Explorer non è in grado di trovare '%1'. Controlla la digitazione e riprova."
 END
 
 STRINGTABLE
