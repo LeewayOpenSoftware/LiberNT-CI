@@ -1663,6 +1663,14 @@ static INT CALLBACK add_font_proc(const LOGFONTW *lfw, const TEXTMETRICW *ntm,
         DeleteObject(hfont);
 
         free(family);
+#ifdef __REACTOS__
+        /* One unreadable font must not discard the whole installed collection */
+        if (param->is_system)
+        {
+            WARN("skipping family %s, no metrics\n", debugstr_w(lfw->lfFaceName));
+            return 1;
+        }
+#endif
         param->stat = OutOfMemory;
         return 0;
     }

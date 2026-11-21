@@ -7201,6 +7201,16 @@ GetFontPenalty(const LOGFONTW *               LogFont,
                 GOT_PENALTY("OutputPrecision", 19000);
             }
             break;
+        case OUT_OUTLINE_PRECIS:
+        case OUT_SCREEN_OUTLINE_PRECIS:
+        case OUT_TT_ONLY_PRECIS:
+        case OUT_PS_ONLY_PRECIS:
+            if (!(TM->tmPitchAndFamily & (TMPF_VECTOR | TMPF_TRUETYPE)))
+            {
+                /* Requested an outline font, but the candidate is a raster font. */
+                GOT_PENALTY("OutputPrecision", 19000);
+            }
+            break;
         default:
             if (TM->tmPitchAndFamily & (TMPF_VECTOR | TMPF_TRUETYPE))
             {
