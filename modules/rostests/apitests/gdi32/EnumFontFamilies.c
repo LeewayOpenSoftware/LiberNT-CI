@@ -226,6 +226,49 @@ RealizeEnumProc(const LOGFONTW *lf, const TEXTMETRICW *tm, DWORD FontType, LPARA
     return 1;
 }
 
+/* The output precision decides between raster and TrueType candidates of the same family */
+static
+void
+TestOutputPrecision(HDC hdc)
+{
+    static const BYTE precisions[] = { OUT_DEFAULT_PRECIS, OUT_TT_PRECIS, OUT_STROKE_PRECIS, OUT_TT_ONLY_PRECIS,
+                                       OUT_OUTLINE_PRECIS, OUT_SCREEN_OUTLINE_PRECIS };
+    LOGFONTW lf = { 0 };
+    TEXTMETRICW tm;
+    WCHAR face[LF_FACESIZE] = L"";
+    HFONT hfont, old;
+    UINT i;
+
+    for (i = 0; i < _countof(precisions); i++)
+    {
+        lf.lfHeight = -12;
+        lf.lfCharSet = DEFAULT_CHARSET;
+        lf.lfOutPrecision = precisions[i];
+        wcscpy(lf.lfFaceName, L"Arial");
+        hfont = CreateFontIndirectW(&lf);
+        old = SelectObject(hdc, hfont);
+        ok(GetTextMetricsW(hdc, &tm) && (tm.tmPitchAndFamily & TMPF_TRUETYPE),
+           "Arial with precision %u is not TrueType\n", precisions[i]);
+        ok(GetFontData(hdc, 0x61656868, 0, NULL, 0) != GDI_ERROR, "Arial with precision %u has no font data\n", precisions[i]);
+        SelectObject(hdc, old);
+        DeleteObject(hfont);
+    }
+
+    /* A raster precision keeps the raster face of a family that has one */
+    lf.lfOutPrecision = OUT_RASTER_PRECIS;
+    wcscpy(lf.lfFaceName, L"MS Sans Serif");
+    hfont = CreateFontIndirectW(&lf);
+    old = SelectObject(hdc, hfont);
+    GetTextFaceW(hdc, _countof(face), face);
+    if (!_wcsicmp(face, L"MS Sans Serif"))
+        ok(GetTextMetricsW(hdc, &tm) && !(tm.tmPitchAndFamily & TMPF_TRUETYPE),
+           "MS Sans Serif with OUT_RASTER_PRECIS is not a raster font\n");
+    else
+        skip("MS Sans Serif is not installed\n");
+    SelectObject(hdc, old);
+    DeleteObject(hfont);
+}
+
 /* An enumerated logfont must realize as an outline font again */
 static
 void
@@ -264,6 +307,7 @@ TestEnumFontSubstitute(HDC hdc)
     EnumFontFamiliesExW(hdc, &lf, SubstEnumProc, (LPARAM)&count, 0);
     trace("all families: %d entries\n", count);
     TestEnumeratedLogfontRealizes(hdc);
+    TestOutputPrecision(hdc);
 }
 
 START_TEST(EnumFontFamilies)
