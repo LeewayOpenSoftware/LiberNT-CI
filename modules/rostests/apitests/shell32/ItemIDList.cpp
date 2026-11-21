@@ -384,7 +384,7 @@ START_TEST(WindowsFileIDList)
 
     /* A damaged long name in the last entry must not be read: the primary name "cmd.exe"
      * is used instead, so a long name read past its block would show up in the path. */
-    for (UINT Case = 0; Case < 3; ++Case)
+    for (UINT Case = 0; Case < 4; ++Case)
     {
         BYTE Buf[sizeof(g_WindowsCmdIDList)];
         const UINT cbLast = 86, cbItemHead = 22, cbBlockName = 46;
@@ -400,6 +400,20 @@ START_TEST(WindowsFileIDList)
         else if (Case == 1) /* the long name loses its terminator: "cmd.exeX" fills the block */
         {
             pBlock[cbBlockName + 14] = 'X';
+        }
+        else if (Case == 3) /* a version 8 block, long name at 42, with another primary name */
+        {
+            const WORD cbBlock = 42 + 8 * sizeof(WCHAR) + sizeof(WORD);
+            const WORD cbItem = cbItemHead + cbBlock;
+
+            memmove(pBlock + 42, pBlock + cbBlockName, 8 * sizeof(WCHAR));
+            pBlock[2] = 8;
+            *(WORD *)pBlock = cbBlock;
+            *(WORD *)(pBlock + cbBlock - sizeof(WORD)) = cbItemHead;
+            *(WORD *)(Buf + LastItem) = cbItem;
+            *(WORD *)(Buf + LastItem + cbItem) = 0;
+            memcpy(Buf + LastItem + 14, "xyz", 3); /* primary name xyz.exe: only the long name gives cmd.exe */
+            cbTotal = LastItem + cbItem + sizeof(WORD);
         }
         else /* the block ends two characters into the long name */
         {
