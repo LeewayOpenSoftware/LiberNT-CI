@@ -28,7 +28,7 @@ efecto en Windows y se conserva para los archivos por lotes de DOS.\n"
     WCMD_COPY, "COPY <archivo> copia un archivo.\n"
     WCMD_DATE, "DATE muestra o cambia la fecha del sistema.\n"
     WCMD_DEL, "DEL <archivo> borra un archivo o grupo de archivos.\n"
-    WCMD_DIR, "DIR muestra el contenido de un directorio.\n"
+    WCMD_DIR, "DIR muestra el contenido de un directorio.\n\n/R también muestra las secuencias de datos alternativas de cada archivo.\n"
     WCMD_ECHO, "ECHO <cadena> muestra la <cadena> suministrada en el terminal actual.\n\
 \n\
 ECHO ON muestra en pantalla los comandos de un archivo de lotes previamente\n\

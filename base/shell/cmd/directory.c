@@ -57,6 +57,7 @@ static DISPLAYTIME dirTime;
 static DISPLAYORDER dirOrder;
 static BOOL orderReverse, orderGroupDirs, orderGroupDirsReverse, orderByCol;
 static BOOL paged_mode, recurse, wide, bare, lower, shortname, usernames, separator;
+static BOOL show_streams;
 static ULONG showattrs, attrsbits;
 
 /*****************************************************************************
@@ -278,6 +279,48 @@ static void output_reparse_target(const WCHAR *dir, const WCHAR *filename)
 }
 
 /*****************************************************************************
+ * output_file_streams
+ *
+ * Print the named data streams of a file (dir /R), one per line, aligned
+ * under the file size column like Windows: "<size> <file>:<stream>:$DATA".
+ * The unnamed data stream (name ending in "::$DATA") is skipped.
+ */
+static void output_file_streams(const WCHAR *dir, const WCHAR *filename)
+{
+  static const WCHAR default_stream[] = L"::$DATA";
+  WCHAR full[MAX_PATH];
+  WIN32_FIND_STREAM_DATA fsd;
+  HANDLE hff;
+
+  if (lstrlenW(dir) + lstrlenW(filename) + 1 > ARRAY_SIZE(full)) return;
+  lstrcpyW(full, dir);
+  lstrcatW(full, filename);
+
+  hff = FindFirstStreamW(full, FindStreamInfoStandard, &fsd, 0);
+  if (hff == INVALID_HANDLE_VALUE) return;
+
+  do
+  {
+    SIZE_T stream_len = lstrlenW(fsd.cStreamName);
+    ULONGLONG stream_size = fsd.StreamSize.QuadPart;
+
+    /* Skip the unnamed data stream */
+    if (stream_len >= ARRAY_SIZE(default_stream) - 1 &&
+        wcsicmp(fsd.cStreamName + stream_len - (ARRAY_SIZE(default_stream) - 1),
+                default_stream) == 0)
+      continue;
+
+    WCMD_output(L"\r\n%1!24s!%2!14s! %3%4",
+                L"",
+                WCMD_filesize64(stream_size),
+                filename,
+                fsd.cStreamName);
+  } while (FindNextStreamW(hff, &fsd));
+
+  FindClose(hff);
+}
+
+/*****************************************************************************
  * WCMD_list_directory
  *
  * List a single file directory. This function (and those below it) can be called
@@ -488,6 +531,8 @@ static RETURN_CODE WCMD_list_directory (DIRECTORY_STACK *inputparms, int level, 
            WCMD_output(L"%1",fd[i].cFileName);
            if (fd[i].dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
                 output_reparse_target(inputparms->dirName, fd[i].cFileName);
+           if (show_streams)
+                output_file_streams(inputparms->dirName, fd[i].cFileName);
         } else {
            WCMD_output(L"%1%2", recurse ? inputparms->dirName : L"", fd[i].cFileName);
         }
@@ -770,6 +815,7 @@ RETURN_CODE WCMD_directory(WCHAR *args)
   usernames  = FALSE;
   orderByCol = FALSE;
   separator  = TRUE;
+  show_streams = FALSE;
   dirTime = Written;
   dirOrder = Unspecified;
   orderReverse = FALSE;
@@ -819,6 +865,9 @@ RETURN_CODE WCMD_directory(WCHAR *args)
               break;
     case 'C': if (negate) separator = !separator;
               else separator = TRUE;
+              break;
+    case 'R': if (negate) show_streams = !show_streams;
+              else show_streams = TRUE;
               break;
     case 'T': p = p + 1;
               if (*p==':') p++;  /* Skip optional : */

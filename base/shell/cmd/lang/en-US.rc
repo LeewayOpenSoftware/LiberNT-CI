@@ -26,7 +26,7 @@ Windows and is kept for DOS batch files.\n"
     WCMD_COPY, "COPY <filename> copies a file.\n"
     WCMD_DATE, "DATE shows or changes the system date.\n"
     WCMD_DEL, "DEL <filename> deletes a file or set of files.\n"
-    WCMD_DIR, "DIR lists the contents of a directory.\n"
+    WCMD_DIR, "DIR lists the contents of a directory.\n\n/R also displays the alternate data streams of each file.\n"
     WCMD_ECHO, "ECHO <string> displays <string> on the current terminal device.\n\
 \n\
 ECHO ON causes all subsequent commands in a batch file to be displayed on\n\
