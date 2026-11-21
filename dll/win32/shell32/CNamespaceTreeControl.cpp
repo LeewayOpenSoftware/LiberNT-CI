@@ -9,6 +9,7 @@
 
 #include <commoncontrols.h>
 #include <uxtheme.h>
+#include <vssym32.h>
 
 #define NAMESPACE_TREE_CLASS L"ReactOS Namespace Tree Control"
 
@@ -202,6 +203,7 @@ private:
     };
 
     HWND m_Tree;
+    HFONT m_TreeFont;
     CComPtr<IImageList> m_ImageList;
     CComPtr<IContextMenu> m_ContextMenu;
     CAtlList<RootEntry *> m_Roots;
@@ -916,7 +918,44 @@ private:
 
         if (SUCCEEDED(SHGetImageList(SHIL_SMALL, IID_PPV_ARG(IImageList, &m_ImageList))))
             TreeView_SetImageList(m_Tree, reinterpret_cast<HIMAGELIST>(m_ImageList.p), TVSIL_NORMAL);
+        UpdateTreeFont();
 
+        return 0;
+    }
+
+    /* The navigation pane of Windows uses the icon title font (Segoe UI 9), not the dialog font */
+    void UpdateTreeFont()
+    {
+        LOGFONTW Font;
+        HFONT NewFont, OldFont = m_TreeFont;
+        HDC Screen;
+        INT SystemDpi = 96;
+
+        if (!m_Tree || !SystemParametersInfoW(SPI_GETICONTITLELOGFONT, sizeof(Font), &Font, 0))
+            return;
+        if ((Screen = ::GetDC(NULL)) != NULL)
+        {
+            SystemDpi = GetDeviceCaps(Screen, LOGPIXELSY);
+            ::ReleaseDC(NULL, Screen);
+        }
+        Font.lfHeight = MulDiv(Font.lfHeight, GetDpiForWindow(m_Tree), SystemDpi);
+        NewFont = CreateFontIndirectW(&Font);
+        if (!NewFont)
+            return;
+        m_TreeFont = NewFont;
+        ::SendMessageW(m_Tree, WM_SETFONT, (WPARAM)m_TreeFont, TRUE);
+        if (OldFont)
+            DeleteObject(OldFont);
+    }
+
+    LRESULT OnFontSettingsChanged(UINT Msg, WPARAM wParam, LPARAM lParam, BOOL &Handled)
+    {
+        if (Msg != WM_SETTINGCHANGE || wParam == SPI_SETICONTITLELOGFONT ||
+            wParam == SPI_SETNONCLIENTMETRICS || wParam == 0)
+            UpdateTreeFont();
+        if (m_Tree)
+            ::SendMessageW(m_Tree, Msg, wParam, lParam);
+        Handled = FALSE;
         return 0;
     }
 
@@ -928,6 +967,11 @@ private:
         {
             ::DestroyWindow(m_Tree);
             m_Tree = NULL;
+            if (m_TreeFont)
+            {
+                DeleteObject(m_TreeFont);
+                m_TreeFont = NULL;
+            }
         }
         m_ImageList.Release();
         m_Destroying = FALSE;
@@ -960,60 +1004,43 @@ private:
         return Color == (COLORREF)-1 ? GetSysColor(COLOR_WINDOWTEXT) : Color;
     }
 
-    UINT TreeHighlightAmount(UINT State) const
+    /* Rows get our flat fill only with a theme that has no tree item states. With TVP_TREEITEM
+     * comctl32 draws them from the theme; unthemed (classic) and high contrast keep its solid
+     * COLOR_HIGHLIGHT selection, as Windows does. */
+    BOOL TreeUsesFlatFill() const
     {
-        BOOL Focus = ::GetFocus() == m_Tree;
+        HIGHCONTRASTW Contrast = { sizeof(Contrast) };
+        HTHEME Theme = GetWindowTheme(m_Tree);
 
-        if ((State & CDIS_SELECTED) && (State & CDIS_HOT))
-            return 0x2C;
-        if (State & CDIS_SELECTED)
-            return Focus ? 0x24 : 0x1C;
-        if (State & CDIS_HOT)
-            return 0x14;
-        return 0;
+        if (!Theme || IsThemePartDefined(Theme, TVP_TREEITEM, 0))
+            return FALSE;
+        if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(Contrast), &Contrast, 0) &&
+            (Contrast.dwFlags & HCF_HIGHCONTRASTON))
+            return FALSE;
+        return TRUE;
     }
 
-    void RoundTreeHighlight(HDC Dc, const RECT &Item, COLORREF Fill, COLORREF Back)
+    /* The Windows 10 navigation pane fills: hot E5F3FF and selected CCE8FF (the highlight colour
+     * at 0x1A and 0x33 over the window colour), a selection without focus in neutral grey D9D9D9 */
+    COLORREF TreeStateFill(UINT State) const
     {
-        UINT Dpi = GetDpiForWindow(m_Tree);
-        INT InsetX = MulDiv(4, Dpi, 96), InsetY = MulDiv(2, Dpi, 96), Radius = MulDiv(4, Dpi, 96);
-        RECT Box = { Item.left + InsetX, Item.top + InsetY, Item.right - InsetX, Item.bottom - InsetY };
-        RECT Strip;
-        HBRUSH Brush = CreateSolidBrush(Back);
+        COLORREF Back = TreeBackColor(), Accent = GetSysColor(COLOR_HIGHLIGHT);
 
-        Strip = Item; Strip.right = Box.left; FillRect(Dc, &Strip, Brush);
-        Strip = Item; Strip.left = Box.right; FillRect(Dc, &Strip, Brush);
-        Strip = Item; Strip.bottom = Box.top; FillRect(Dc, &Strip, Brush);
-        Strip = Item; Strip.top = Box.bottom; FillRect(Dc, &Strip, Brush);
-        DeleteObject(Brush);
-        if (Box.right - Box.left < Radius * 2 || Box.bottom - Box.top < Radius * 2)
-            return;
-        for (INT y = 0; y < Radius; y++)
-        {
-            for (INT x = 0; x < Radius; x++)
-            {
-                UINT Inside = 0;
-                COLORREF Color;
+        if (State & CDIS_SELECTED)
+            return ::GetFocus() == m_Tree ? BlendTreeColor(Back, Accent, 0x33) :
+                                            BlendTreeColor(Back, GetSysColor(COLOR_WINDOWTEXT), 0x26);
+        if (State & CDIS_HOT)
+            return BlendTreeColor(Back, Accent, 0x1A);
+        return CLR_INVALID;
+    }
 
-                for (INT sy = 0; sy < 4; sy++)
-                {
-                    for (INT sx = 0; sx < 4; sx++)
-                    {
-                        INT dx = Radius * 8 - (x * 8 + sx * 2 + 1);
-                        INT dy = Radius * 8 - (y * 8 + sy * 2 + 1);
-                        if (dx * dx + dy * dy <= Radius * 8 * Radius * 8)
-                            Inside++;
-                    }
-                }
-                if (Inside == 16)
-                    continue;
-                Color = BlendTreeColor(Back, Fill, Inside * 255 / 16);
-                SetPixel(Dc, Box.left + x, Box.top + y, Color);
-                SetPixel(Dc, Box.right - 1 - x, Box.top + y, Color);
-                SetPixel(Dc, Box.left + x, Box.bottom - 1 - y, Color);
-                SetPixel(Dc, Box.right - 1 - x, Box.bottom - 1 - y, Color);
-            }
-        }
+    /* A focused selection also gets a 1 px border, 99D1FF over a white window */
+    BOOL TreeStateBorder(UINT State, COLORREF *Border) const
+    {
+        if (!(State & CDIS_SELECTED) || ::GetFocus() != m_Tree)
+            return FALSE;
+        *Border = BlendTreeColor(TreeBackColor(), GetSysColor(COLOR_HIGHLIGHT), 0x66);
+        return TRUE;
     }
 
     BOOL FillCustomDrawItem(NMTVCUSTOMDRAW *Draw, NSTCCUSTOMDRAW *Item, PWSTR Text, UINT TextLength)
@@ -1047,8 +1074,7 @@ private:
 
     LRESULT OnTreeCustomDraw(NMTVCUSTOMDRAW *Draw)
     {
-        UINT Amount;
-        COLORREF Fill;
+        COLORREF Fill, Border;
         LRESULT Result;
         NSTCCUSTOMDRAW Item;
         WCHAR Text[MAX_PATH];
@@ -1079,13 +1105,14 @@ private:
                 return CDRF_DODEFAULT;
 
             case CDDS_ITEMPREPAINT:
-                Amount = TreeHighlightAmount(Draw->nmcd.uItemState);
                 Result = CDRF_NOTIFYPOSTPAINT;
-                if (Amount)
+                Fill = TreeUsesFlatFill() ? TreeStateFill(Draw->nmcd.uItemState) : CLR_INVALID;
+                if (Fill != CLR_INVALID)
                 {
+                    /* comctl32 would draw selected text in HIGHLIGHTTEXT, unreadable on a light fill */
                     SelectObject(Draw->nmcd.hdc, (HFONT)::SendMessageW(m_Tree, WM_GETFONT, 0, 0));
                     Draw->clrText = TreeTextColor();
-                    Draw->clrTextBk = BlendTreeColor(TreeBackColor(), Draw->clrText, Amount);
+                    Draw->clrTextBk = Fill;
                     Result |= CDRF_NEWFONT;
                 }
                 for (Position = m_Events.GetHeadPosition(); Position;)
@@ -1102,11 +1129,16 @@ private:
                 return Result;
 
             case CDDS_ITEMPOSTPAINT:
-                Amount = TreeHighlightAmount(Draw->nmcd.uItemState);
-                Fill = Amount && (::GetWindowLongPtrW(m_Tree, GWL_STYLE) & TVS_FULLROWSELECT) ?
-                       BlendTreeColor(TreeBackColor(), TreeTextColor(), Amount) : TreeBackColor();
-                if (Amount && (::GetWindowLongPtrW(m_Tree, GWL_STYLE) & TVS_FULLROWSELECT))
-                    RoundTreeHighlight(Draw->nmcd.hdc, Draw->nmcd.rc, Fill, TreeBackColor());
+                if (TreeUsesFlatFill() && TreeStateBorder(Draw->nmcd.uItemState, &Border))
+                {
+                    HBRUSH Brush = CreateSolidBrush(Border);
+
+                    if (Brush)
+                    {
+                        FrameRect(Draw->nmcd.hdc, &Draw->nmcd.rc, Brush);
+                        DeleteObject(Brush);
+                    }
+                }
                 for (Position = m_Events.GetHeadPosition(); Position;)
                 {
                     EventEntry &Entry = m_Events.GetNext(Position);
@@ -1259,6 +1291,7 @@ private:
 public:
     CNamespaceTreeControl() :
         m_Tree(NULL),
+        m_TreeFont(NULL),
         m_NextCookie(0),
         m_Style((NSTCSTYLE)0),
         m_Style2(NSTCS2_DEFAULT),
@@ -1306,6 +1339,9 @@ public:
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
         MESSAGE_HANDLER(WM_SIZE, OnSize)
         MESSAGE_HANDLER(WM_NOTIFY, OnNotify)
+        MESSAGE_HANDLER(WM_SETTINGCHANGE, OnFontSettingsChanged)
+        MESSAGE_HANDLER(WM_THEMECHANGED, OnFontSettingsChanged)
+        MESSAGE_HANDLER(WM_DPICHANGED_AFTERPARENT, OnFontSettingsChanged)
         MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
         MESSAGE_HANDLER(WM_INITMENUPOPUP, OnMenuMessage)
         MESSAGE_HANDLER(WM_DRAWITEM, OnMenuMessage)
