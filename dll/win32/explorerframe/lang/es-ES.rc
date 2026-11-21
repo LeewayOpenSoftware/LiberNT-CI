@@ -336,7 +336,7 @@ END
 STRINGTABLE
 BEGIN
     IDS_PARSE_ADDR_ERR_TITLE "Explorador de archivos"
-    IDS_PARSE_ADDR_ERR_TEXT "Explorador de archivos cannot find '%1'. Check the spelling and try again."
+    IDS_PARSE_ADDR_ERR_TEXT "El Explorador de archivos no encuentra '%1'. Compruebe la ortografía e inténtelo de nuevo."
 END
 
 STRINGTABLE
