@@ -1915,9 +1915,10 @@ static HRESULT WINAPI dwritefontface3_AreGlyphsLocal(IDWriteFontFace5 *iface, UI
 static HRESULT WINAPI dwritefontface4_GetGlyphImageFormats_(IDWriteFontFace5 *iface, UINT16 glyph,
     UINT32 ppem_first, UINT32 ppem_last, DWRITE_GLYPH_IMAGE_FORMATS *formats)
 {
-    FIXME("%p, %u, %u, %u, %p: stub\n", iface, glyph, ppem_first, ppem_last, formats);
+    TRACE("%p, %u, %u, %u, %p.\n", iface, glyph, ppem_first, ppem_last, formats);
 
-    return E_NOTIMPL;
+    *formats = opentype_get_glyph_formats(iface, glyph, ppem_first, ppem_last);
+    return S_OK;
 }
 
 static DWRITE_GLYPH_IMAGE_FORMATS WINAPI dwritefontface4_GetGlyphImageFormats(IDWriteFontFace5 *iface)
@@ -1932,14 +1933,16 @@ static DWRITE_GLYPH_IMAGE_FORMATS WINAPI dwritefontface4_GetGlyphImageFormats(ID
 static HRESULT WINAPI dwritefontface4_GetGlyphImageData(IDWriteFontFace5 *iface, UINT16 glyph,
     UINT32 ppem, DWRITE_GLYPH_IMAGE_FORMATS format, DWRITE_GLYPH_IMAGE_DATA *data, void **context)
 {
-    FIXME("%p, %u, %u, %d, %p, %p: stub\n", iface, glyph, ppem, format, data, context);
+    TRACE("%p, %u, %u, %d, %p, %p.\n", iface, glyph, ppem, format, data, context);
 
-    return E_NOTIMPL;
+    return opentype_get_glyph_image(iface, glyph, ppem, format, data, context);
 }
 
 static void WINAPI dwritefontface4_ReleaseGlyphImageData(IDWriteFontFace5 *iface, void *context)
 {
-    FIXME("%p, %p: stub\n", iface, context);
+    TRACE("%p, %p.\n", iface, context);
+
+    opentype_release_glyph_image(context);
 }
 
 static UINT32 WINAPI dwritefontface5_GetFontAxisValueCount(IDWriteFontFace5 *iface)

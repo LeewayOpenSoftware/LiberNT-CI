@@ -6,6 +6,7 @@ extern void func_ColorGlyphRender(void);
 extern void func_EmojiFallback(void);
 extern void func_FontFallbackLocale(void);
 extern void func_FontFallbackSource(void);
+extern void func_GlyphImageData(void);
 extern void func_GlyphJustification(void);
 extern void func_HasVariations(void);
 extern void func_SystemFontFallback(void);
@@ -18,6 +19,7 @@ const struct test winetest_testlist[] =
     { "EmojiFallback", func_EmojiFallback },
     { "FontFallbackLocale", func_FontFallbackLocale },
     { "FontFallbackSource", func_FontFallbackSource },
+    { "GlyphImageData", func_GlyphImageData },
     { "GlyphJustification", func_GlyphJustification },
     { "HasVariations", func_HasVariations },
     { "SystemFontFallback", func_SystemFontFallback },
