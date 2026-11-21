@@ -393,8 +393,10 @@ Test_GetFontResourceInfoW_case5(LPCWSTR pszFilePath, const GFRI_ENTRY *Entry)
     ok_int(Data, 0);
 }
 
+/* fl: 0 for AddFontResourceW, else the AddFontResourceExW flags (FR_PRIVATE...):
+   Windows describes a font the calling process loaded privately too */
 static void
-DoEntry(const GFRI_ENTRY *Entry)
+DoEntryEx(const GFRI_ENTRY *Entry, DWORD fl)
 {
     WCHAR szPath[MAX_PATH], szTempPath[MAX_PATH];
     BOOL Installed = FALSE;
@@ -438,11 +440,10 @@ DoEntry(const GFRI_ENTRY *Entry)
         }
 
         /* install */
-        Installed = !!AddFontResourceW(szPath);
+        Installed = fl ? !!AddFontResourceExW(szPath, fl, NULL) : !!AddFontResourceW(szPath);
         if (!Installed)
         {
-            skip("Font file \"%S\" was not installed\n", szPath);
-            RemoveFontResourceW(szPath);
+            skip("Font file \"%S\" was not installed (flags 0x%lx)\n", szPath, fl);
             DeleteFileW(szPath);
             return;
         }
@@ -459,9 +460,28 @@ DoEntry(const GFRI_ENTRY *Entry)
     {
         if (Installed)
         {
-            RemoveFontResourceW(szPath);
+            DWORD Size = sizeof(DWORD), Count = 0xdeadbeef;
+
+            if (fl)
+                RemoveFontResourceExW(szPath, fl, NULL);
+            else
+                RemoveFontResourceW(szPath);
+            /* not loaded any more: not described */
+            ok(!GetFontResourceInfoW(szPath, &Size, &Count, 0),
+               "flags 0x%lx: removed font still described (count %lu)\n", fl, Count);
             DeleteFileW(szPath);
         }
+    }
+}
+
+static void
+DoEntry(const GFRI_ENTRY *Entry)
+{
+    DoEntryEx(Entry, 0);
+    if (!Entry->Preinstalled)
+    {
+        DoEntryEx(Entry, FR_PRIVATE);
+        DoEntryEx(Entry, FR_PRIVATE | FR_NOT_ENUM);
     }
 }
 

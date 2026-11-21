@@ -7574,6 +7574,63 @@ TextIntRealizeFont(HFONT FontHandle, PTEXTOBJ pTextObj)
     return Status;
 }
 
+/* Adds a family entry (and its full name) for every face of ListHead loaded
+   from the file FullPath, skipping families already in FamInfo. The caller
+   holds the FreeType lock and the list's lock. */
+static VOID
+IntFindFontFamiliesByPath(
+    PLIST_ENTRY ListHead,
+    PCUNICODE_STRING FullPath,
+    POBJECT_NAME_INFORMATION NameInfo,
+    ULONG NameInfoSize,
+    FONTFAMILYINFO *FamInfo,
+    PUNICODE_STRING FullNames,
+    ULONG MaxFamInfo,
+    PULONG pCount)
+{
+    UNICODE_STRING EntryFileName;
+    PLIST_ENTRY ListEntry;
+    PFONT_ENTRY FontEntry;
+    ULONG i, Count = *pCount;
+    BOOL IsEqual;
+
+    for (ListEntry = ListHead->Flink; ListEntry != ListHead && Count < MaxFamInfo;
+         ListEntry = ListEntry->Flink)
+    {
+        FontEntry = CONTAINING_RECORD(ListEntry, FONT_ENTRY, ListEntry);
+        if (FontEntry->Font->Filename == NULL)
+            continue;
+
+        RtlInitUnicodeString(&EntryFileName , FontEntry->Font->Filename);
+        if (!IntGetFullFileName(NameInfo, NameInfoSize, &EntryFileName))
+            continue;
+
+        if (!RtlEqualUnicodeString(FullPath, &NameInfo->Name, FALSE))
+            continue;
+
+        IsEqual = FALSE;
+        FontFamilyFillInfo(&FamInfo[Count], FontEntry->FaceName.Buffer,
+                           NULL, FontEntry->Font);
+        for (i = 0; i < Count; ++i)
+        {
+            if (EqualFamilyInfo(&FamInfo[i], &FamInfo[Count]))
+            {
+                IsEqual = TRUE;
+                break;
+            }
+        }
+        if (!IsEqual)
+        {
+            /* Found */
+            RtlInitUnicodeString(&FullNames[Count], NULL);
+            IntGetFontLocalizedName(&FullNames[Count], FontEntry->Font->SharedFace,
+                                    TT_NAME_ID_FULL_NAME, gusLanguageID);
+            ++Count;
+        }
+    }
+    *pCount = Count;
+}
+
 BOOL
 FASTCALL
 IntGdiGetFontResourceInfo(
@@ -7582,13 +7639,11 @@ IntGdiGetFontResourceInfo(
     DWORD *pdwBytes,
     DWORD dwType)
 {
-    UNICODE_STRING EntryFileName;
     POBJECT_NAME_INFORMATION NameInfo1 = NULL, NameInfo2 = NULL;
-    PLIST_ENTRY ListEntry;
-    PFONT_ENTRY FontEntry;
+    PPROCESSINFO Win32Process;
     ULONG Size, i, Count;
     LPBYTE pbBuffer;
-    BOOL IsEqual, bFirst;
+    BOOL bFirst;
     FONTFAMILYINFO *FamInfo = NULL;
     PUNICODE_STRING FullNames = NULL;
     const ULONG MaxFamInfo = 64;
@@ -7638,44 +7693,19 @@ IntGdiGetFontResourceInfo(
 
     Count = 0;
 
-    /* Try to find the pathname in the global font list */
+    /* Find the pathname among the fonts the calling process loaded with
+       FR_PRIVATE, then in the global font list */
+    Win32Process = PsGetCurrentProcessWin32Process();
     IntLockFreeType();
-    for (ListEntry = g_FontListHead.Flink; ListEntry != &g_FontListHead;
-         ListEntry = ListEntry->Flink)
+    if (Win32Process)
     {
-        FontEntry = CONTAINING_RECORD(ListEntry, FONT_ENTRY, ListEntry);
-        if (FontEntry->Font->Filename == NULL)
-            continue;
-
-        RtlInitUnicodeString(&EntryFileName , FontEntry->Font->Filename);
-        if (!IntGetFullFileName(NameInfo2, NAMEINFO_SIZE, &EntryFileName))
-            continue;
-
-        if (!RtlEqualUnicodeString(&NameInfo1->Name, &NameInfo2->Name, FALSE))
-            continue;
-
-        IsEqual = FALSE;
-        FontFamilyFillInfo(&FamInfo[Count], FontEntry->FaceName.Buffer,
-                           NULL, FontEntry->Font);
-        for (i = 0; i < Count; ++i)
-        {
-            if (EqualFamilyInfo(&FamInfo[i], &FamInfo[Count]))
-            {
-                IsEqual = TRUE;
-                break;
-            }
-        }
-        if (!IsEqual)
-        {
-            /* Found */
-            RtlInitUnicodeString(&FullNames[Count], NULL);
-            IntGetFontLocalizedName(&FullNames[Count], FontEntry->Font->SharedFace,
-                                    TT_NAME_ID_FULL_NAME, gusLanguageID);
-            ++Count;
-            if (Count >= MaxFamInfo)
-                break;
-        }
+        IntLockProcessPrivateFonts(Win32Process);
+        IntFindFontFamiliesByPath(&Win32Process->PrivateFontListHead, &NameInfo1->Name, NameInfo2,
+                                  NAMEINFO_SIZE, FamInfo, FullNames, MaxFamInfo, &Count);
+        IntUnLockProcessPrivateFonts(Win32Process);
     }
+    IntFindFontFamiliesByPath(&g_FontListHead, &NameInfo1->Name, NameInfo2,
+                              NAMEINFO_SIZE, FamInfo, FullNames, MaxFamInfo, &Count);
     IntUnLockFreeType();
 
     /* Free the buffers */
