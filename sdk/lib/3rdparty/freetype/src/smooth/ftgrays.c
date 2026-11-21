@@ -2088,12 +2088,9 @@ typedef ptrdiff_t  FT_PtrDist;
 
     /* allocate memory based on empirical estimate from CJK fonts */
     estimate = ( ras.max_ex - ras.min_ex + ras.max_ey - ras.min_ey ) * 10UL;
-#ifdef __REACTOS__
-    /* the stack pool below is too large for the kernel stack as well */
-    if ( estimate <= FT_MAX_GRAY_POOL )
-      estimate = FT_MAX_GRAY_POOL + 1;
-#endif
+#ifndef __REACTOS__ /* the stack pool is too large for the kernel stack */
     if ( estimate > FT_MAX_GRAY_POOL )
+#endif
     {
       FT_Error   error;
       FT_Memory  memory = (FT_Memory)((gray_PRaster)raster)->memory;
@@ -2108,6 +2105,7 @@ typedef ptrdiff_t  FT_PtrDist;
         FT_FREE( ras.buffer );
       }
     }
+#ifndef __REACTOS__
     else
     {
       TCell  buffer[FT_MAX_GRAY_POOL];  /* stack allocation */
@@ -2118,6 +2116,7 @@ typedef ptrdiff_t  FT_PtrDist;
 
       ret = gray_convert_glyph( RAS_VAR );
     }
+#endif
 
 #if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
     free( worker );

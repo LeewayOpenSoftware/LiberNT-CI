@@ -2737,12 +2737,9 @@
     /* allocate memory based on empirical estimate from CJK fonts */
     estimate = ( ras.bTop + ras.bRight ) * 8UL +
                80UL * sizeof ( TProfile ) / sizeof ( Long );
-#ifdef __REACTOS__
-    /* the stack pool below is too large for the kernel stack as well */
-    if ( estimate <= FT_MAX_BLACK_POOL )
-      estimate = FT_MAX_BLACK_POOL + 1;
-#endif
+#ifndef __REACTOS__ /* the stack pool is too large for the kernel stack */
     if ( estimate > FT_MAX_BLACK_POOL )
+#endif
     {
       FT_Error   error;
       FT_Memory  memory = (FT_Memory)((black_PRaster)raster)->memory;
@@ -2757,6 +2754,7 @@
         FT_FREE( ras.buff );
       }
     }
+#ifndef __REACTOS__
     else
     {
       Long  buffer[FT_MAX_BLACK_POOL];  /* stack allocation */
@@ -2767,6 +2765,7 @@
 
       ret = Render_Glyph( RAS_VAR );
     }
+#endif
 
 #if defined( __REACTOS__ ) && !defined( FT_STATIC_RASTER )
     free( worker );
