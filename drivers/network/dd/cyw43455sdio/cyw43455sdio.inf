@@ -61,7 +61,7 @@ ServiceBinary = %12%\cyw43455sdio.sys
 cyw43455sdio.sys = 1
 
 [Strings]
-LiberNT       = "Orosi Team"
+LiberNT       = "Leeway Open Software"
 Control43430Desc = "Broadcom BCM43430 SDIO Control Function"
 ControlDesc   = "Broadcom CYW43455 SDIO Control Function"
 CompanionDesc = "Broadcom CYW43455 SDIO Companion Function"
