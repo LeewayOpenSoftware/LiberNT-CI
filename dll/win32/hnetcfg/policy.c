@@ -231,6 +231,12 @@ static HRESULT rule_update( fw_rule *rule, const WCHAR *const *keys, unsigned in
     HRESULT hr = fwrule_set_values( rule->text, keys, count, key, values, list, &text );
 
     if (FAILED(hr)) return hr;
+    /* a rule removed from the store meanwhile is not written back, as Windows */
+    if (rule->id && !fwstore_rule_exists( rule->id ))
+    {
+        free( text );
+        return HRESULT_FROM_WIN32( ERROR_FILE_NOT_FOUND );
+    }
     if (rule->id && FAILED(hr = fwstore_rule_write( rule->id, text )))
     {
         free( text );
@@ -260,7 +266,7 @@ static HRESULT WINAPI netfw_rule_put_Name(
     BSTR name)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-    if (!name || !*name) return E_INVALIDARG;
+    if (!name || !*name || wcslen( name ) > FW_MAX_NAME) return E_INVALIDARG;
     return rule_put_bstr( This, key_name, ARRAY_SIZE(key_name), name );
 }
 
@@ -959,7 +965,7 @@ static HRESULT WINAPI enumvar_Next(IEnumVARIANT *iface, ULONG celt, VARIANT *var
     TRACE("%p,%lu,%p,%p\n", iface, celt, var, fetched);
 
     if (!var) return E_POINTER;
-    while (got < celt && enumvar->pos < fwstore_rule_count())
+    while (got < celt && enumvar->pos < fwstore_value_count())
     {
         WCHAR *id, *text;
         INetFwRule *rule;
@@ -978,12 +984,21 @@ static HRESULT WINAPI enumvar_Next(IEnumVARIANT *iface, ULONG celt, VARIANT *var
 static HRESULT WINAPI enumvar_Skip(IEnumVARIANT *iface, ULONG celt)
 {
     EnumVARIANT *enumvar = impl_from_IEnumVARIANT(iface);
-    LONG count = fwstore_rule_count();
+    LONG count = fwstore_value_count();
 
     TRACE("%p,%lu\n", iface, celt);
 
-    enumvar->pos = min( enumvar->pos + (LONG)celt, count );
-    return enumvar->pos < count ? S_OK : S_FALSE;
+    /* rules are skipped, not the other values of the store */
+    while (celt && enumvar->pos < count)
+    {
+        WCHAR *id, *text;
+
+        if (fwstore_rule_at( enumvar->pos++, &id, &text ) != S_OK) continue;
+        free( id );
+        free( text );
+        celt--;
+    }
+    return celt ? S_FALSE : S_OK;
 }
 
 static HRESULT WINAPI enumvar_Reset(IEnumVARIANT *iface)

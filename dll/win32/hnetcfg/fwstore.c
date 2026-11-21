@@ -116,14 +116,21 @@ LONG fwstore_current_profiles( void )
     return mask ? mask : NET_FW_PROFILE2_PUBLIC;
 }
 
-/* No policy is the default here (the profiles off, no rules), so restoring it removes the
-   policy; a later Windows-default policy will write its profiles and rules instead */
+/* No policy is the default here (the profiles off, no rules), so restoring it removes what the
+   policy holds; a later Windows-default policy will write its profiles and rules instead. The key
+   itself stays: its access control, and the firewall service watching it */
 HRESULT fwstore_restore_defaults( void )
 {
-    LSTATUS err = RegDeleteTreeW( HKEY_LOCAL_MACHINE, FW_POLICY_KEY );
+    LSTATUS err;
+    HKEY key;
 
-    if (err && err != ERROR_FILE_NOT_FOUND) return HRESULT_FROM_WIN32( err );
-    return S_OK;
+    err = RegOpenKeyExW( HKEY_LOCAL_MACHINE, FW_POLICY_KEY, 0,
+                         DELETE | KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE | KEY_SET_VALUE, &key );
+    if (err == ERROR_FILE_NOT_FOUND) return S_OK;
+    if (err) return HRESULT_FROM_WIN32( err );
+    err = RegDeleteTreeW( key, NULL );
+    RegCloseKey( key );
+    return HRESULT_FROM_WIN32( err );
 }
 
 /* ---- rule strings -------------------------------------------------------------------------- */
@@ -306,7 +313,8 @@ HRESULT fwstore_rule_at( LONG index, WCHAR **id, WCHAR **text )
     return S_OK;
 }
 
-LONG fwstore_rule_count( void )
+/* the values of the store, rules or not: the bound of an index for fwstore_rule_at */
+LONG fwstore_value_count( void )
 {
     DWORD count = 0;
     HKEY key;
@@ -317,14 +325,49 @@ LONG fwstore_rule_count( void )
     return count;
 }
 
+/* the rules of the store: its string values, the ones fwstore_rule_at returns */
+LONG fwstore_rule_count( void )
+{
+    WCHAR name[256];
+    DWORD namelen, type, i;
+    LONG count = 0;
+    HKEY key;
+
+    if (open_rules( KEY_QUERY_VALUE, FALSE, &key )) return 0;
+    for (i = 0; ; i++)
+    {
+        LSTATUS err;
+
+        namelen = ARRAY_SIZE(name);
+        err = RegEnumValueW( key, i, name, &namelen, NULL, &type, NULL, NULL );
+        if (err == ERROR_NO_MORE_ITEMS) break;
+        if (!err && type == REG_SZ) count++;
+    }
+    RegCloseKey( key );
+    return count;
+}
+
+/* the rule is still in the store (it may have been removed since it was read) */
+BOOL fwstore_rule_exists( const WCHAR *id )
+{
+    DWORD type;
+    LSTATUS err;
+    HKEY key;
+
+    if (open_rules( KEY_QUERY_VALUE, FALSE, &key )) return FALSE;
+    err = RegQueryValueExW( key, id, NULL, &type, NULL, NULL );
+    RegCloseKey( key );
+    return !err && type == REG_SZ;
+}
+
 /* the first rule whose Name= is the name */
 HRESULT fwstore_rule_find( const WCHAR *rulename, WCHAR **id, WCHAR **text )
 {
-    LONG i, count = fwstore_rule_count();
+    LONG i, count = fwstore_value_count();
 
     for (i = 0; i < count; i++)
     {
-        WCHAR value[256];
+        WCHAR value[FW_MAX_NAME + 1];
         if (fwstore_rule_at( i, id, text ) != S_OK) continue;
         if (fwrule_get_value( *text, L"Name", value, ARRAY_SIZE(value) ) == S_OK && !lstrcmpiW( value, rulename ))
             return S_OK;

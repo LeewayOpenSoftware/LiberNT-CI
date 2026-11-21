@@ -5,7 +5,8 @@
  * COPYRIGHT:   Copyright 2026 LeewayOpenSoftware
  *
  * Writes the machine firewall policy: run as an administrator. The settings the test changes
- * are put back as they were.
+ * are put back as they were, except by the restore test: it clears the policy, as "Restore
+ * defaults" does.
  */
 
 #define COBJMACROS
@@ -14,6 +15,7 @@
 #include <netfw.h>
 
 #define TEST_RULE L"LiberNT apitest rule"
+#define POLICY_KEY L"SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Parameters\\FirewallPolicy"
 
 static void test_profiles(INetFwPolicy2 *policy)
 {
@@ -192,6 +194,85 @@ static void test_rules(INetFwPolicy2 *policy)
     INetFwRules_Release(rules);
 }
 
+/* Restore clears the policy but keeps its key (its ACL, the service watching it); a rule object
+   whose stored rule was removed is not written back; a name too long to be found is refused */
+static void test_restore(INetFwPolicy2 *policy)
+{
+    WCHAR longname[300];
+    INetFwRules *rules = NULL;
+    INetFwRule *rule = NULL, *item = NULL;
+    VARIANT_BOOL enabled = VARIANT_TRUE;
+    LONG count = -1;
+    HKEY key;
+    HRESULT hr;
+    int i;
+
+    hr = INetFwPolicy2_put_FirewallEnabled(policy, NET_FW_PROFILE2_PUBLIC, VARIANT_TRUE);
+    ok(hr == S_OK, "put_FirewallEnabled returned 0x%08lx\n", hr);
+    hr = INetFwPolicy2_RestoreLocalFirewallDefaults(policy);
+    ok(hr == S_OK, "RestoreLocalFirewallDefaults returned 0x%08lx\n", hr);
+    ok(RegOpenKeyExW(HKEY_LOCAL_MACHINE, POLICY_KEY, 0, KEY_READ, &key) == ERROR_SUCCESS,
+       "The policy key is gone after the restore\n");
+    RegCloseKey(key);
+    hr = INetFwPolicy2_get_FirewallEnabled(policy, NET_FW_PROFILE2_PUBLIC, &enabled);
+    ok(hr == S_OK && enabled == VARIANT_FALSE, "After the restore: 0x%08lx, enabled %d\n", hr, enabled);
+
+    hr = INetFwPolicy2_get_Rules(policy, &rules);
+    ok(hr == S_OK, "get_Rules returned 0x%08lx\n", hr);
+    if (FAILED(hr)) return;
+    hr = INetFwRules_get_Count(rules, &count);
+    ok(hr == S_OK && count == 0, "After the restore: 0x%08lx, %ld rules\n", hr, count);
+
+    /* a value that is not a string is not a rule */
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, POLICY_KEY L"\\FirewallRules", 0, NULL, 0, KEY_SET_VALUE, NULL,
+                        &key, NULL) == ERROR_SUCCESS)
+    {
+        DWORD dword = 1;
+        RegSetValueExW(key, L"NotARule", 0, REG_DWORD, (const BYTE *)&dword, sizeof(dword));
+        RegCloseKey(key);
+    }
+    hr = INetFwRules_get_Count(rules, &count);
+    ok(hr == S_OK && count == 0, "With a DWORD value: 0x%08lx, %ld rules\n", hr, count);
+
+    hr = CoCreateInstance(&CLSID_NetFwRule, NULL, CLSCTX_INPROC_SERVER, &IID_INetFwRule, (void **)&rule);
+    ok(hr == S_OK, "CoCreateInstance(NetFwRule) returned 0x%08lx\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        for (i = 0; i < 256; i++) longname[i] = L'n';
+        longname[i] = 0;
+        hr = INetFwRule_put_Name(rule, longname);
+        ok(hr == E_INVALIDARG, "put_Name of 256 characters returned 0x%08lx\n", hr);
+        longname[255] = 0;
+        hr = INetFwRule_put_Name(rule, longname);
+        ok(hr == S_OK, "put_Name of 255 characters returned 0x%08lx\n", hr);
+
+        hr = INetFwRule_put_Name(rule, (BSTR)TEST_RULE);
+        ok(hr == S_OK, "put_Name returned 0x%08lx\n", hr);
+        hr = INetFwRules_Add(rules, rule);
+        ok(hr == S_OK, "Add returned 0x%08lx\n", hr);
+        hr = INetFwRules_get_Count(rules, &count);
+        ok(hr == S_OK && count == 1, "After Add: 0x%08lx, %ld rules\n", hr, count);
+        hr = INetFwRules_Item(rules, (BSTR)TEST_RULE, &item);
+        ok(hr == S_OK && item, "Item returned 0x%08lx\n", hr);
+        hr = INetFwRules_Remove(rules, (BSTR)TEST_RULE);
+        ok(hr == S_OK, "Remove returned 0x%08lx\n", hr);
+        if (item)
+        {
+            hr = INetFwRule_put_Description(item, (BSTR)L"stale");
+            ok(hr != S_OK, "A put on a removed rule returned S_OK\n");
+            INetFwRule_Release(item);
+        }
+        item = NULL;
+        ok(INetFwRules_Item(rules, (BSTR)TEST_RULE, &item) != S_OK && !item, "A removed rule came back\n");
+        if (item) INetFwRule_Release(item);
+        INetFwRule_Release(rule);
+    }
+
+    hr = INetFwPolicy2_RestoreLocalFirewallDefaults(policy);
+    ok(hr == S_OK, "RestoreLocalFirewallDefaults returned 0x%08lx\n", hr);
+    INetFwRules_Release(rules);
+}
+
 START_TEST(netfwpolicy2)
 {
     INetFwPolicy2 *policy = NULL;
@@ -204,6 +285,7 @@ START_TEST(netfwpolicy2)
     {
         test_profiles(policy);
         test_rules(policy);
+        test_restore(policy);
         INetFwPolicy2_Release(policy);
     }
     CoUninitialize();

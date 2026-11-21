@@ -61,6 +61,10 @@ BOOL fwrule_is_valid(const WCHAR *);
 const WCHAR *fwrule_default_text(void);
 HRESULT fwstore_rule_at(LONG, WCHAR **, WCHAR **);
 LONG fwstore_rule_count(void);
+LONG fwstore_value_count(void);
+BOOL fwstore_rule_exists(const WCHAR *);
+/* a longer name could be added but never found */
+#define FW_MAX_NAME 255
 HRESULT fwstore_rule_find(const WCHAR *, WCHAR **, WCHAR **);
 HRESULT fwstore_rule_write(const WCHAR *, const WCHAR *);
 HRESULT fwstore_rule_remove(const WCHAR *);
