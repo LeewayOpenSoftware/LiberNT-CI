@@ -1,0 +1,11 @@
+ReactOS Marlett font licence (the notice embedded in Marlett.ttf, name IDs 0 and 13)
+
+Copyright (c) 2007 Ged Murphy
+Copyright (c) 2007 Wierd_W
+Copyright (c) TransGaming Technologies. All rights reserved.
+Copyright (c) 2019 Katayama Hirofumi MZ
+
+Permission to use, copy, modify and distribute this font or for any purpose with or without fee is hereby granted, provided that the attached copyright notice appears in all copies.
+THIS FONT IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT WITHOUT LIMIMTATION, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE> THE AUTHORS AND CONTRIBUTORS ACCEPT NO RESPONSIBILITY IN ANY CONCEIVABLE MANNAR.
+
+[sic: the typos "LIMIMTATION" and "MANNAR" above are verbatim from the font's own notice and are kept as is]
