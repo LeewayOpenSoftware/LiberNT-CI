@@ -10,27 +10,79 @@
 
 static const CHAR * const g_exports[] =
 {
-    "GetCLRVersionForPSVersion",
-    "PerformWSManPluginReportCompletion",
-    "WSManPluginCommand",
-    "WSManPluginConnect",
-    "WSManPluginReceive",
-    "WSManPluginReleaseCommandContext",
-    "WSManPluginReleaseShellContext",
-    "WSManPluginSend",
-    "WSManPluginShell",
-    "WSManPluginShutdown",
-    "WSManPluginSignal",
     "WSManPluginStartup",
+    "WSManPluginShutdown",
+    "WSManPluginShell",
+    "WSManPluginCommand",
+    "WSManPluginSend",
+    "WSManPluginReceive",
+    "WSManPluginSignal",
+    "WSManPluginConnect",
+    "WSManPluginReleaseShellContext",
+    "WSManPluginReleaseCommandContext",
 };
 
-typedef DWORD (WINAPI *WSManPluginStartupFn)(DWORD, PCWSTR, PVOID);
-typedef BOOL (WINAPI *GetCLRVersionForPSVersionFn)(PCWSTR, PWSTR, DWORD);
+/* The two undocumented Windows exports must stay absent. */
+static const CHAR * const g_notExported[] =
+{
+    "GetCLRVersionForPSVersion",
+    "PerformWSManPluginReportCompletion",
+};
+
+typedef DWORD (WINAPI *WSManPluginStartupFn)(DWORD, PCWSTR, PVOID, PVOID *);
+typedef LONG (WINAPI *RtlGetVersionFn)(PVOID);
+
+typedef struct _TEST_OSVERSIONINFOW
+{
+    ULONG dwOSVersionInfoSize;
+    ULONG dwMajorVersion;
+    ULONG dwMinorVersion;
+    ULONG dwBuildNumber;
+    ULONG dwPlatformId;
+    WCHAR szCSDVersion[128];
+} TEST_OSVERSIONINFOW;
+
+static BOOL
+GetFileVersion(
+    _In_ LPCSTR FileName,
+    _Out_ DWORD *pVersion)
+{
+    DWORD dwHandle, dwSize;
+    LPBYTE pData;
+    BOOL bRet = FALSE;
+
+    dwSize = GetFileVersionInfoSizeA(FileName, &dwHandle);
+    if (!dwSize)
+        return FALSE;
+
+    pData = HeapAlloc(GetProcessHeap(), 0, dwSize);
+    if (!pData)
+        return FALSE;
+
+    if (GetFileVersionInfoA(FileName, 0, dwSize, pData))
+    {
+        VS_FIXEDFILEINFO *pFfi;
+        UINT uLen;
+        if (VerQueryValueA(pData, "\\", (PVOID *)&pFfi, &uLen) && pFfi)
+        {
+            pVersion[0] = HIWORD(pFfi->dwFileVersionMS);
+            pVersion[1] = LOWORD(pFfi->dwFileVersionMS);
+            pVersion[2] = HIWORD(pFfi->dwFileVersionLS);
+            pVersion[3] = LOWORD(pFfi->dwFileVersionLS);
+            bRet = TRUE;
+        }
+    }
+
+    HeapFree(GetProcessHeap(), 0, pData);
+    return bRet;
+}
 
 void func_pwrshplugin(void)
 {
-    HMODULE hMod;
+    HMODULE hMod, hNtdll;
     unsigned int i;
+    DWORD dwVersion[4];
+    static const DWORD dwMinVersion[4] = { 6, 3, 9600, 16383 };
 
     hMod = LoadLibraryA("pwrshplugin.dll");
     ok(hMod != NULL, "LoadLibraryA(pwrshplugin.dll) failed: %lu\n", GetLastError());
@@ -43,28 +95,52 @@ void func_pwrshplugin(void)
         ok(proc != NULL, "export %s missing\n", g_exports[i]);
     }
 
+    for (i = 0; i < _countof(g_notExported); i++)
+    {
+        FARPROC proc = GetProcAddress(hMod, g_notExported[i]);
+        ok(proc == NULL, "undocumented export %s unexpectedly present\n", g_notExported[i]);
+    }
+
     {
         WSManPluginStartupFn pStartup = (WSManPluginStartupFn)(VOID*)GetProcAddress(hMod, "WSManPluginStartup");
-        GetCLRVersionForPSVersionFn pGetClr = (GetCLRVersionForPSVersionFn)(VOID*)GetProcAddress(hMod, "GetCLRVersionForPSVersion");
+        PVOID pContext = (PVOID)(ULONG_PTR)0x1;
         DWORD dwRet;
-        WCHAR szBuffer[32];
-        BOOL bRet;
 
         ok(pStartup != NULL, "WSManPluginStartup unresolved\n");
         if (pStartup)
         {
-            dwRet = pStartup(0, L"apitest", NULL);
+            dwRet = pStartup(0, L"apitest", NULL, &pContext);
             ok(dwRet == ERROR_NOT_SUPPORTED,
                "WSManPluginStartup returned %lu, expected ERROR_NOT_SUPPORTED\n", dwRet);
+            ok(pContext == NULL, "WSManPluginStartup did not clear *pluginContext\n");
         }
+    }
 
-        ok(pGetClr != NULL, "GetCLRVersionForPSVersion unresolved\n");
-        if (pGetClr)
+    ok(GetFileVersion("pwrshplugin.dll", dwVersion), "no version resource\n");
+    if (dwVersion[0] || dwVersion[1] || dwVersion[2] || dwVersion[3])
+    {
+        ok(memcmp(dwVersion, dwMinVersion, sizeof(dwVersion)) >= 0,
+           "FileVersion %lu.%lu.%lu.%lu below 6.3.9600.16383\n",
+           dwVersion[0], dwVersion[1], dwVersion[2], dwVersion[3]);
+
+        hNtdll = GetModuleHandleA("ntdll.dll");
+        if (hNtdll)
         {
-            szBuffer[0] = L'x';
-            bRet = pGetClr(L"7.4", szBuffer, _countof(szBuffer));
-            ok(bRet == FALSE, "GetCLRVersionForPSVersion returned %d, expected FALSE\n", bRet);
-            ok(szBuffer[0] == L'\0', "GetCLRVersionForPSVersion buffer not cleared\n");
+            RtlGetVersionFn pRtlGetVersion = (RtlGetVersionFn)(VOID*)GetProcAddress(hNtdll, "RtlGetVersion");
+            if (pRtlGetVersion)
+            {
+                TEST_OSVERSIONINFOW osvi;
+                osvi.dwOSVersionInfoSize = sizeof(osvi);
+                if (pRtlGetVersion(&osvi) == 0)
+                {
+                    ok(dwVersion[0] == osvi.dwMajorVersion &&
+                       dwVersion[1] == osvi.dwMinorVersion &&
+                       dwVersion[2] == osvi.dwBuildNumber,
+                       "FileVersion %lu.%lu.%lu.%lu != OS version %lu.%lu.%lu\n",
+                       dwVersion[0], dwVersion[1], dwVersion[2], dwVersion[3],
+                       osvi.dwMajorVersion, osvi.dwMinorVersion, osvi.dwBuildNumber);
+                }
+            }
         }
     }
 
