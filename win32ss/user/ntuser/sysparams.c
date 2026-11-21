@@ -1287,6 +1287,38 @@ SpiSetBootScreenWallpaper(VOID)
 }
 
 static BOOL
+SpiRedrawAllFrames(VOID)
+{
+    PWND pwndDesktop, pwndCurrent;
+    HWND *ahwnd;
+    USER_REFERENCE_ENTRY Ref;
+    int i;
+
+    pwndDesktop = UserGetDesktopWindow();
+    if (!pwndDesktop)
+        return FALSE;
+
+    ahwnd = IntWinListChildren(pwndDesktop);
+    if (!ahwnd)
+        return FALSE;
+
+    for (i = 0; ahwnd[i]; i++)
+    {
+        pwndCurrent = UserGetWindowObject(ahwnd[i]);
+        if (!pwndCurrent)
+            continue;
+
+        UserRefObjectCo(pwndCurrent, &Ref);
+        co_UserRedrawWindow(pwndCurrent, NULL, NULL,
+                            RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
+        UserDerefObjectCo(pwndCurrent);
+    }
+
+    ExFreePoolWithTag(ahwnd, USERTAG_WINDOWLIST);
+    return TRUE;
+}
+
+static BOOL
 SpiNotifyNCMetricsChanged(VOID)
 {
     PWND pwndDesktop, pwndCurrent;
@@ -2391,7 +2423,12 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
                                      uiParam ? CAPTIONALIGN_CENTER : CAPTIONALIGN_LEFT,
                                      KEY_METRIC, VAL_CAPTIONALIGN, fl);
             if (ret)
+            {
                 SpiNotifyNCMetricsChanged();
+                /* Caption alignment is paint-only (frame geometry unchanged), so the SWP_NOREDRAW
+                   frame-change above never repaints; force an NC redraw so it shows live. */
+                SpiRedrawAllFrames();
+            }
             return ret;
         }
 
