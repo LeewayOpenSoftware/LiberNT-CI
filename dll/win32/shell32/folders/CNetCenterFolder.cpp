@@ -407,18 +407,19 @@ private:
                         HMENU hMenu = CreatePopupMenu();
                         if (hMenu && SUCCEEDED(pcm->QueryContextMenu(hMenu, 0, 1, 0x7FFF, CMF_NORMAL)))
                         {
-                            /* "Status" is the third command of a connection's menu (netshell
-                               shfldr_netconnect.cpp); when it is not there or greyed, the default one */
-                            MENUITEMINFOW mii = { sizeof(mii), MIIM_STATE };
-                            UINT id = (GetMenuItemInfoW(hMenu, 1 + 2, FALSE, &mii) && !(mii.fState & MFS_GRAYED))
-                                      ? 1 + 2 : GetMenuDefaultItem(hMenu, FALSE, 0);
-                            if (id != (UINT)-1 && id >= 1)
+                            /* the "status" verb of the connection; else its default command */
+                            CMINVOKECOMMANDINFO cmi = { sizeof(cmi) };
+                            cmi.hwnd = NULL; /* as in Windows, the status window has no owner */
+                            cmi.lpVerb = "status";
+                            cmi.nShow = SW_SHOWNORMAL;
+                            if (FAILED(pcm->InvokeCommand(&cmi)))
                             {
-                                CMINVOKECOMMANDINFO cmi = { sizeof(cmi) };
-                                cmi.hwnd = NULL; /* as in Windows, the status window has no owner */
-                                cmi.lpVerb = MAKEINTRESOURCEA(id - 1);
-                                cmi.nShow = SW_SHOWNORMAL;
-                                pcm->InvokeCommand(&cmi);
+                                UINT id = GetMenuDefaultItem(hMenu, FALSE, 0);
+                                if (id != (UINT)-1 && id >= 1)
+                                {
+                                    cmi.lpVerb = MAKEINTRESOURCEA(id - 1);
+                                    pcm->InvokeCommand(&cmi);
+                                }
                             }
                         }
                         if (hMenu)

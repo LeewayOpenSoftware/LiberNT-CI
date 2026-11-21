@@ -667,6 +667,10 @@ HRESULT WINAPI CNetConUiObject::InvokeCommand(LPCMINVOKECOMMANDINFO lpcmi)
     {
         CmdId = IDS_NET_PROPERTIES;
     }
+    else if (!IS_INTRESOURCE(lpcmi->lpVerb) && !strcmp(lpcmi->lpVerb, "status"))
+    {
+        CmdId = IDS_NET_STATUS;
+    }
     else if (!IS_INTRESOURCE(lpcmi->lpVerb) || LOWORD(lpcmi->lpVerb) > 7)
     {
         FIXME("Got invalid command\n");
@@ -731,7 +735,28 @@ HRESULT WINAPI CNetConUiObject::GetCommandString(
 	LPSTR lpszName,
 	UINT uMaxNameLen)
 {
-	return E_FAIL;
+    /* the language-neutral verbs of the menu commands, as InvokeCommand takes them */
+    PCSTR pszVerb = NULL;
+
+    switch (idCommand)
+    {
+        case IDS_NET_STATUS - IDS_NET_ACTIVATE:     pszVerb = "status"; break;
+        case IDS_NET_RENAME - IDS_NET_ACTIVATE:     pszVerb = "rename"; break;
+        case IDS_NET_PROPERTIES - IDS_NET_ACTIVATE: pszVerb = "properties"; break;
+    }
+    if (!pszVerb)
+        return E_FAIL;
+    switch (uFlags)
+    {
+        case GCS_VALIDATEA:
+        case GCS_VALIDATEW:
+            return S_OK;
+        case GCS_VERBA:
+            return StringCchCopyA(lpszName, uMaxNameLen, pszVerb);
+        case GCS_VERBW:
+            return MultiByteToWideChar(CP_ACP, 0, pszVerb, -1, (LPWSTR)lpszName, uMaxNameLen) ? S_OK : E_FAIL;
+    }
+    return E_NOTIMPL;
 }
 
 /**************************************************************************
