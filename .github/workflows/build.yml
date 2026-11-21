@@ -72,6 +72,14 @@ jobs:
     - name: Source checkout
       uses: actions/checkout@v6
 
+    - name: Reproducible hive timestamp
+      run: |
+        # mkhive stamps registry key LastWriteTime from SOURCE_DATE_EPOCH
+        # (sdk/tools/mkhive); keep hives identical across CI reruns of the
+        # same commit. safe.directory guards odd container ownership.
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
     - name: Install host build tools
       run: |
         sudo apt-get update
@@ -317,6 +325,14 @@ jobs:
 
     - name: Source checkout
       uses: actions/checkout@v6
+
+    - name: Reproducible hive timestamp
+      run: |
+        # mkhive stamps registry key LastWriteTime from SOURCE_DATE_EPOCH
+        # (sdk/tools/mkhive); keep hives identical across CI reruns of the
+        # same commit. safe.directory guards odd container ownership.
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
 
     - name: Install host build tools
       run: |
@@ -823,6 +839,16 @@ jobs:
     steps:
     - name: Source checkout
       uses: actions/checkout@v6
+
+    - name: Reproducible hive timestamp
+      shell: pwsh
+      run: |
+        # mkhive stamps registry key LastWriteTime from SOURCE_DATE_EPOCH
+        # (sdk/tools/mkhive); keep hives identical across CI reruns of the
+        # same commit.
+        $epoch = (git log -1 --format=%ct).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $epoch) { throw "git log failed; cannot set SOURCE_DATE_EPOCH" }
+        "SOURCE_DATE_EPOCH=$epoch" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
     - name: Install host build tools
       shell: pwsh

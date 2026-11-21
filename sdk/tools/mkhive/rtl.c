@@ -94,8 +94,10 @@ RtlUpcaseUnicodeChar(
 }
 
 /* Registry key LastWriteTime stamp, in seconds since 1970, used when the
- * SOURCE_DATE_EPOCH environment variable is not set. CMake normally passes
- * the source commit date here; this default matches the CMake fallback. */
+ * SOURCE_DATE_EPOCH environment variable is not set. The run-time
+ * SOURCE_DATE_EPOCH always wins over this compiled-in constant; nothing
+ * reads the environment at configure time. CI exports SOURCE_DATE_EPOCH
+ * (git commit date) so rebuilt hives stay identical for one revision. */
 #ifndef MKHIVE_BUILD_EPOCH
 #define MKHIVE_BUILD_EPOCH 1767225600ULL /* 2026-01-01T00:00:00Z */
 #endif
@@ -112,10 +114,10 @@ KeQuerySystemTime(
         ULONGLONG EpochSeconds = 0;
         const char *SourceDateEpoch = getenv("SOURCE_DATE_EPOCH");
 
-        /* Reproducible builds: never the wall clock. Prefer SOURCE_DATE_EPOCH,
-         * then the MKHIVE_BUILD_EPOCH constant CMake passes in (derived from
-         * the source commit date), so the built hives are byte-identical for
-         * a given source revision and keys stop carrying a bogus 1601 date. */
+        /* Reproducible builds: never the wall clock. Prefer the run-time
+         * SOURCE_DATE_EPOCH, then the MKHIVE_BUILD_EPOCH compiled-in
+         * constant, so the built hives are byte-identical for a given
+         * source revision and keys stop carrying a bogus 1601 date. */
         if (SourceDateEpoch != NULL && *SourceDateEpoch != '\0')
         {
             char *End = NULL;
