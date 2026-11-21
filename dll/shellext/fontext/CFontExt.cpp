@@ -750,6 +750,10 @@ STDMETHODIMP CFontExt::CreateViewObject(HWND hwndOwner, REFIID riid, LPVOID *ppv
     {
         return _CFontCommandProvider_Create(riid, ppvOut);
     }
+    else if (IsEqualIID(riid, IID_IExplorerPaneVisibility))
+    {
+        return _CFontPaneVisibility_Create(riid, ppvOut);
+    }
     else if (IsEqualIID(riid, IID_IContextMenu))
     {
         TRACE("IContextMenu\n");

@@ -56,6 +56,7 @@ list(APPEND SOURCE
     folders/CControlPanelFolder.cpp
     folders/CCplCategoryView.cpp
     folders/CPersonalizationFolder.cpp
+    folders/CNetCenterFolder.cpp
     folders/CRecycleBin.cpp
     folders/CRecycleBinFolderViewCB.cpp
     droptargets/CexeDropHandler.cpp
@@ -65,6 +66,7 @@ list(APPEND SOURCE
     shlexec.cpp
     shlfileop.cpp
     CDefView.cpp
+    CDefViewTasks.cpp
     CDefViewUtil.cpp
     CDefViewDual.cpp
     CDefViewBckgrndMenu.cpp

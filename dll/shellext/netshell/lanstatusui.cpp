@@ -1199,11 +1199,12 @@ ShowStatusPropertyDialog(
     HPROPSHEETPAGE hppages[2];
     PROPSHEETHEADERW pinfo;
     NETCON_PROPERTIES * pProperties = NULL;
+    WCHAR szFormat[64], szCaption[MAX_PATH];
 
     ZeroMemory(&pinfo, sizeof(PROPSHEETHEADERW));
     ZeroMemory(hppages, sizeof(hppages));
     pinfo.dwSize = sizeof(PROPSHEETHEADERW);
-    pinfo.dwFlags = PSH_NOCONTEXTHELP | PSH_PROPTITLE | PSH_NOAPPLYNOW |
+    pinfo.dwFlags = PSH_NOCONTEXTHELP | PSH_NOAPPLYNOW |
                     PSH_USEICONID | PSH_USECALLBACK;
     pinfo.phpage = hppages;
     pinfo.hwndParent = hwndDlg;
@@ -1215,8 +1216,11 @@ ShowStatusPropertyDialog(
     {
         if (pProperties->pszwName)
         {
-            pinfo.pszCaption = pProperties->pszwName;
-            pinfo.dwFlags |= PSH_PROPTITLE;
+            /* "Ethernet Status", as Windows titles the status window */
+            if (!LoadStringW(netshell_hInstance, IDS_NET_STATUS_TITLE, szFormat, _countof(szFormat)))
+                StringCchCopyW(szFormat, _countof(szFormat), L"%s Status");
+            StringCchPrintfW(szCaption, _countof(szCaption), szFormat, pProperties->pszwName);
+            pinfo.pszCaption = szCaption;
         }
         InitializePropertyDialog(pContext, pProperties);
         if (pProperties->MediaType == NCM_LAN && pProperties->Status == NCS_CONNECTED)

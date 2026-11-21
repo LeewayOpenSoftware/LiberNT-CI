@@ -248,6 +248,200 @@ struct CplDeco
     WCHAR Text[200];
 };
 
+/* The left pane of a category page, as in Windows: "Control Panel Home", then every
+   category with the current one in bold. The commands post to the view window, so they
+   never outlive it in a way that matters. */
+#define WM_CPL_PANE_GOTO  (WM_USER + 0x200) /* wParam: category index, or CPL_PANE_HOME */
+#define WM_CPL_PANE_PAGE  (WM_USER + 0x201) /* returns the category index of the page shown */
+#define CPL_PANE_HOME     ((WPARAM)-1)
+#define CPL_PANE_GAP      (-2)
+
+/* Titles of the left pane, in the order of g_Categories */
+static const UINT g_CategoryTitleIds[] =
+{
+    IDS_CPL_CAT_SYSTEM, IDS_CPL_CAT_NETWORK, IDS_CPL_CAT_HARDWARE, IDS_CPL_CAT_PROGRAMS,
+    IDS_CPL_CAT_ACCOUNTS, IDS_CPL_CAT_APPEARANCE, IDS_CPL_CAT_CLOCK, IDS_CPL_CAT_ACCESS
+};
+C_ASSERT(_countof(g_CategoryTitleIds) == _countof(g_Categories));
+
+/* A pane string from the resources, or the English one */
+static VOID CplPaneString(int index, PWSTR buffer, int cch)
+{
+    UINT id = index < 0 ? IDS_CPL_HOME : g_CategoryTitleIds[index];
+    if (!LoadStringW(shell32_hInstance, id, buffer, cch))
+        StringCchCopyW(buffer, cch, index < 0 ? L"Control Panel Home" : g_Categories[index].Name);
+}
+
+class CCplPaneCommand :
+    public CComObjectRootEx<CComMultiThreadModelNoCS>,
+    public IExplorerCommand
+{
+    HWND m_hwndView = NULL;
+    int m_index = CPL_PANE_GAP; /* category index, CPL_PANE_HOME as int, or CPL_PANE_GAP */
+    BOOL m_current = FALSE;
+
+public:
+    HRESULT Initialize(HWND hwndView, int index, BOOL current)
+    {
+        m_hwndView = hwndView;
+        m_index = index;
+        m_current = current;
+        return S_OK;
+    }
+
+    STDMETHODIMP GetTitle(IShellItemArray *psiItemArray, PWSTR *ppszName) override
+    {
+        WCHAR title[128];
+
+        if (m_index == CPL_PANE_GAP)
+            return SHStrDupW(L"", ppszName);
+        CplPaneString(m_index, title, _countof(title));
+        return SHStrDupW(title, ppszName);
+    }
+    STDMETHODIMP GetIcon(IShellItemArray *psiItemArray, PWSTR *ppszIcon) override
+    {
+        *ppszIcon = NULL;
+        return E_NOTIMPL;
+    }
+    STDMETHODIMP GetToolTip(IShellItemArray *psiItemArray, PWSTR *ppszInfotip) override
+    {
+        *ppszInfotip = NULL;
+        return E_NOTIMPL;
+    }
+    STDMETHODIMP GetCanonicalName(GUID *pguidCommandName) override
+    {
+        *pguidCommandName = GUID_NULL;
+        return E_NOTIMPL;
+    }
+    STDMETHODIMP GetState(IShellItemArray *psiItemArray, BOOL fOkToBeSlow, EXPCMDSTATE *pCmdState) override
+    {
+        *pCmdState = m_current ? ECS_CHECKED : ECS_ENABLED;
+        return S_OK;
+    }
+    STDMETHODIMP Invoke(IShellItemArray *psiItemArray, IBindCtx *pbc) override
+    {
+        if (m_index == CPL_PANE_GAP || !IsWindow(m_hwndView))
+            return E_FAIL;
+        return PostMessageW(m_hwndView, WM_CPL_PANE_GOTO, (WPARAM)(INT_PTR)m_index, 0) ? S_OK : E_FAIL;
+    }
+    STDMETHODIMP GetFlags(EXPCMDFLAGS *pFlags) override
+    {
+        *pFlags = m_index == CPL_PANE_GAP ? ECF_ISSEPARATOR : ECF_DEFAULT;
+        return S_OK;
+    }
+    STDMETHODIMP EnumSubCommands(IEnumExplorerCommand **ppEnum) override
+    {
+        *ppEnum = NULL;
+        return E_NOTIMPL;
+    }
+
+    DECLARE_NOT_AGGREGATABLE(CCplPaneCommand)
+    DECLARE_PROTECT_FINAL_CONSTRUCT()
+    BEGIN_COM_MAP(CCplPaneCommand)
+        COM_INTERFACE_ENTRY_IID(IID_IExplorerCommand, IExplorerCommand)
+    END_COM_MAP()
+};
+
+/* Home, a gap, then the categories */
+class CCplPaneEnum :
+    public CComObjectRootEx<CComMultiThreadModelNoCS>,
+    public IEnumExplorerCommand
+{
+    HWND m_hwndView = NULL;
+    int m_page = -1;
+    UINT m_pos = 0;
+
+public:
+    HRESULT Initialize(HWND hwndView, int page)
+    {
+        m_hwndView = hwndView;
+        m_page = page;
+        return S_OK;
+    }
+
+    STDMETHODIMP Next(ULONG celt, IExplorerCommand **pUICommand, ULONG *pceltFetched) override
+    {
+        ULONG fetched = 0;
+
+        if (!pUICommand)
+            return E_POINTER;
+        while (fetched < celt && m_pos < 2 + _countof(g_Categories))
+        {
+            int index = m_pos == 0 ? (int)CPL_PANE_HOME : (m_pos == 1 ? CPL_PANE_GAP : (int)m_pos - 2);
+            CComPtr<CCplPaneCommand> pCommand;
+            HRESULT hr = ShellObjectCreator(pCommand);
+            if (FAILED(hr))
+            {
+                if (!fetched)
+                    return hr;
+                break; /* the caller keeps what was fetched */
+            }
+            pCommand->Initialize(m_hwndView, index, index >= 0 && index == m_page);
+            pUICommand[fetched++] = pCommand.Detach();
+            m_pos++;
+        }
+        if (pceltFetched)
+            *pceltFetched = fetched;
+        return fetched == celt ? S_OK : S_FALSE;
+    }
+    STDMETHODIMP Skip(ULONG celt) override
+    {
+        m_pos = min(m_pos + celt, 2 + _countof(g_Categories));
+        return m_pos < 2 + _countof(g_Categories) ? S_OK : S_FALSE;
+    }
+    STDMETHODIMP Reset() override
+    {
+        m_pos = 0;
+        return S_OK;
+    }
+    STDMETHODIMP Clone(IEnumExplorerCommand **ppenum) override
+    {
+        return E_NOTIMPL;
+    }
+
+    DECLARE_NOT_AGGREGATABLE(CCplPaneEnum)
+    DECLARE_PROTECT_FINAL_CONSTRUCT()
+    BEGIN_COM_MAP(CCplPaneEnum)
+        COM_INTERFACE_ENTRY_IID(IID_IEnumExplorerCommand, IEnumExplorerCommand)
+    END_COM_MAP()
+};
+
+class CCplPaneProvider :
+    public CComObjectRootEx<CComMultiThreadModelNoCS>,
+    public IExplorerCommandProvider
+{
+    HWND m_hwndView = NULL;
+
+public:
+    HRESULT Initialize(HWND hwndView)
+    {
+        m_hwndView = hwndView;
+        return S_OK;
+    }
+
+    STDMETHODIMP GetCommands(IUnknown *punkSite, REFIID riid, void **ppv) override
+    {
+        int page = IsWindow(m_hwndView) ? (int)SendMessageW(m_hwndView, WM_CPL_PANE_PAGE, 0, 0) : -1;
+        CComPtr<CCplPaneEnum> pEnum;
+        HRESULT hr = ShellObjectCreator(pEnum);
+        if (FAILED(hr))
+            return hr;
+        pEnum->Initialize(m_hwndView, page);
+        return pEnum->QueryInterface(riid, ppv);
+    }
+    STDMETHODIMP GetCommand(REFGUID rguidCommandId, REFIID riid, void **ppv) override
+    {
+        *ppv = NULL;
+        return E_NOTIMPL;
+    }
+
+    DECLARE_NOT_AGGREGATABLE(CCplPaneProvider)
+    DECLARE_PROTECT_FINAL_CONSTRUCT()
+    BEGIN_COM_MAP(CCplPaneProvider)
+        COM_INTERFACE_ENTRY_IID(IID_IExplorerCommandProvider, IExplorerCommandProvider)
+    END_COM_MAP()
+};
+
 class CCplCategoryView :
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
     public CWindowImpl<CCplCategoryView, CWindow, CControlWinTraits>,
@@ -290,6 +484,8 @@ private:
     int m_hitCount;
     CplDeco *m_deco;
     int m_decoCount;
+    HWND m_hwndTasks;       /* the left pane of a category page (CDefViewTasks.cpp) */
+    int m_tasksPage;        /* page whose links the pane shows, -1 before the first */
 
     int S(int value) { return MulDiv(value, m_dpi, 96); }
     BOOL IsClassic() { return m_mode == MODE_CLASSIC; }
@@ -306,7 +502,8 @@ private:
     VOID Layout();
     VOID LayoutViewBy(HDC hdc, int width);
     VOID LayoutHome(HDC hdc, int width);
-    VOID LayoutPage(HDC hdc, int width);
+    VOID LayoutPage(HDC hdc, int width, BOOL homeInPane);
+    int LayoutTaskPane(int width, int height);
     VOID LayoutGrid(HDC hdc, int width);
     int HeaderHeight() { return S(48); }
     VOID InnerRect(RECT *prc);
@@ -377,6 +574,9 @@ public:
     LRESULT OnSetCursor(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnPaneGoto(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnPanePage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnPaneFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
 
     BEGIN_COM_MAP(CCplCategoryView)
     COM_INTERFACE_ENTRY_IID(IID_IShellView, IShellView)
@@ -402,6 +602,9 @@ public:
     MESSAGE_HANDLER(WM_KILLFOCUS, OnFocus)
     MESSAGE_HANDLER(WM_SETTINGCHANGE, OnSettingChange)
     MESSAGE_HANDLER(WM_THEMECHANGED, OnSettingChange)
+    MESSAGE_HANDLER(WM_CPL_PANE_GOTO, OnPaneGoto)
+    MESSAGE_HANDLER(WM_CPL_PANE_PAGE, OnPanePage)
+    MESSAGE_HANDLER(SHV_TASKPANE_FOCUS, OnPaneFocus)
     END_MSG_MAP()
 };
 
@@ -428,7 +631,9 @@ CCplCategoryView::CCplCategoryView() :
     m_hits(NULL),
     m_hitCount(0),
     m_deco(NULL),
-    m_decoCount(0)
+    m_decoCount(0),
+    m_hwndTasks(NULL),
+    m_tasksPage(-1)
 {
     ZeroMemory(&m_fs, sizeof(m_fs));
     ZeroMemory(m_catIcons, sizeof(m_catIcons));
@@ -678,9 +883,11 @@ VOID CCplCategoryView::LayoutHome(HDC hdc, int width)
         SetRect(&rc, x, y, x + S(48), y + S(48));
         AddDeco(rc, DK_CATICON, c, NULL);
 
-        tw = TextWidth(hdc, m_fontCard, g_Categories[c].Name);
+        WCHAR name[100];
+        CplPaneString((int)c, name, _countof(name));
+        tw = TextWidth(hdc, m_fontCard, name);
         SetRect(&rc, x + S(64), y, x + S(64) + min(tw, colW - S(80)), y + S(26));
-        AddHit(rc, HK_CATEGORY, c, LS_CARDTITLE, g_Categories[c].Name);
+        AddHit(rc, HK_CATEGORY, c, LS_CARDTITLE, name);
 
         for (UINT t = 0; t < _countof(g_Tasks) && shown < CPL_MAX_TASKS; t++)
         {
@@ -732,17 +939,28 @@ VOID CCplCategoryView::LayoutGrid(HDC hdc, int width)
     m_contentHeight = top + ((m_itemCount + columns - 1) / columns) * cellH + margin;
 }
 
-VOID CCplCategoryView::LayoutPage(HDC hdc, int width)
+VOID CCplCategoryView::LayoutPage(HDC hdc, int width, BOOL homeInPane)
 {
     int margin = S(24), rowH = S(60), y;
     const CplCategory *category = &g_Categories[m_page];
     RECT rc;
-    int tw = TextWidth(hdc, m_fontNormal, L"Control Panel Home");
+    WCHAR home[100];
+    int tw;
 
-    SetRect(&rc, margin, S(10), margin + tw, S(10) + S(22));
-    AddHit(rc, HK_HOME, 0, LS_NORMAL, L"Control Panel Home");
-    SetRect(&rc, margin, S(36), width - margin, S(36) + S(32));
-    AddDeco(rc, DK_TITLE, 0, category->Name);
+    CplPaneString(-1, home, _countof(home));
+    tw = TextWidth(hdc, m_fontNormal, home);
+    /* the left pane has the link; when the view is too narrow for it, it stays here */
+    if (!homeInPane)
+    {
+        SetRect(&rc, margin, S(10), margin + tw, S(10) + S(22));
+        AddHit(rc, HK_HOME, 0, LS_NORMAL, home);
+    }
+    {
+        WCHAR title[100];
+        CplPaneString(m_page, title, _countof(title));
+        SetRect(&rc, margin, S(36), width - margin, S(36) + S(32));
+        AddDeco(rc, DK_TITLE, 0, title);
+    }
 
     y = HeaderHeight() + S(36);
     for (int i = 0; i < m_itemCount; i++)
@@ -767,6 +985,43 @@ VOID CCplCategoryView::LayoutPage(HDC hdc, int width)
     m_contentHeight = y + S(8) + S(22) + margin;
 }
 
+/* The pane is shown on category pages only; returns the width it takes on the left */
+int CCplCategoryView::LayoutTaskPane(int width, int height)
+{
+    /* the pane may hide with the keyboard in it ("Control Panel Home", or the view
+       got too narrow): the focus then goes to the page instead of a hidden window */
+    BOOL paneFocused = m_hwndTasks && ::GetFocus() == m_hwndTasks;
+    int pane = 0;
+
+    if (m_mode != MODE_PAGE)
+    {
+        if (m_hwndTasks)
+            ::ShowWindow(m_hwndTasks, SW_HIDE);
+        if (paneFocused)
+            SetFocus();
+        return 0;
+    }
+    if (!m_hwndTasks)
+    {
+        CComPtr<CCplPaneProvider> pProvider;
+        if (SUCCEEDED(ShellObjectCreator(pProvider)))
+        {
+            pProvider->Initialize(m_hWnd);
+            m_hwndTasks = DefViewTasks_CreateFromProvider(m_hWnd, pProvider, static_cast<IShellView *>(this));
+        }
+        m_tasksPage = m_page;
+    }
+    else if (m_tasksPage != m_page)
+    {
+        m_tasksPage = m_page;
+        DefViewTasks_Refresh(m_hwndTasks);
+    }
+    pane = DefViewTasks_Layout(m_hwndTasks, width, height);
+    if (!pane && paneFocused)
+        SetFocus();
+    return pane;
+}
+
 VOID CCplCategoryView::Layout()
 {
     RECT rc;
@@ -787,6 +1042,8 @@ VOID CCplCategoryView::Layout()
         if (m_dpi <= 0)
             m_dpi = 96;
         LayoutViewBy(hdc, width);
+        if (m_mode != MODE_PAGE)
+            LayoutTaskPane(width, rc.bottom);
         if (IsClassic())
         {
             WCHAR title[] = L"All Control Panel Items";
@@ -799,7 +1056,14 @@ VOID CCplCategoryView::Layout()
         }
         else if (m_mode == MODE_PAGE)
         {
-            LayoutPage(hdc, width);
+            int firstHit = m_hitCount, firstDeco = m_decoCount;
+            int pane = LayoutTaskPane(width, rc.bottom);
+
+            LayoutPage(hdc, width - pane, pane > 0);
+            for (int i = firstHit; i < m_hitCount; i++)
+                OffsetRect(&m_hits[i].Rect, pane, 0);
+            for (int i = firstDeco; i < m_decoCount; i++)
+                OffsetRect(&m_deco[i].Rect, pane, 0);
         }
         else
         {
@@ -1125,6 +1389,7 @@ LRESULT CCplCategoryView::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL
 
 LRESULT CCplCategoryView::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
 {
+    m_hwndTasks = NULL; /* a child: destroyed with us */
     DeleteFonts();
     return 0;
 }
@@ -1300,6 +1565,40 @@ LRESULT CCplCategoryView::OnFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL 
     if (uMsg == WM_SETFOCUS && m_focus < 0 && m_hitCount > 1)
         m_focus = 1;
     InvalidateRect(NULL, FALSE);
+    return 0;
+}
+
+/* A link of the left pane */
+LRESULT CCplCategoryView::OnPaneGoto(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    int index = (int)(INT_PTR)wParam;
+
+    if (index < 0)
+    {
+        SetView(CPL_STARTUP_CATEGORY, m_smallIcons);
+        return 0;
+    }
+    if (index >= (int)_countof(g_Categories))
+        return 0;
+    m_mode = MODE_PAGE;
+    m_page = index;
+    m_scroll = 0;
+    m_hot = m_focus = -1;
+    Layout();
+    InvalidateRect(NULL, TRUE);
+    return 0;
+}
+
+LRESULT CCplCategoryView::OnPanePage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    return m_mode == MODE_PAGE ? m_page : -1;
+}
+
+/* A pane link has the focus: the view stays the active one for the browser, as CDefView does */
+LRESULT CCplCategoryView::OnPaneFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    if (m_psb)
+        m_psb->OnViewWindowActive(static_cast<IShellView *>(this));
     return 0;
 }
 

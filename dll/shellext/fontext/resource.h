@@ -41,6 +41,8 @@
 #define IDS_TASK_SETTINGS       330
 #define IDS_TASK_CLEARTYPE      331
 #define IDS_TASK_CHARMAP        332
+#define IDS_TASK_FONTINFO       333
+#define IDS_TASK_FONTSIZE       334
 
 #define IDS_FONT_HIDE_VERB      402
 #define IDS_FONT_SHOW_VERB      403

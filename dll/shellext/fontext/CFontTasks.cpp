@@ -27,10 +27,14 @@ static const FontTask g_Tasks[] =
 {
     { IDS_TASK_SETTINGS, L"ms-settings:fonts", NULL,
       { 0x3c1a7e50, 0x5b2d, 0x4a0e, { 0x8f, 0x13, 0x2d, 0x6e, 0x91, 0xb4, 0x07, 0xa1 } } },
+    { IDS_TASK_FONTINFO, L"https://learn.microsoft.com/typography/", NULL,
+      { 0x3c1a7e53, 0x5b2d, 0x4a0e, { 0x8f, 0x13, 0x2d, 0x6e, 0x91, 0xb4, 0x07, 0xa1 } } },
     { IDS_TASK_CLEARTYPE, L"%SystemRoot%\\System32\\cttune.exe", L"cttune.exe",
       { 0x3c1a7e51, 0x5b2d, 0x4a0e, { 0x8f, 0x13, 0x2d, 0x6e, 0x91, 0xb4, 0x07, 0xa1 } } },
     { IDS_TASK_CHARMAP, L"%SystemRoot%\\System32\\charmap.exe", L"charmap.exe",
       { 0x3c1a7e52, 0x5b2d, 0x4a0e, { 0x8f, 0x13, 0x2d, 0x6e, 0x91, 0xb4, 0x07, 0xa1 } } },
+    { IDS_TASK_FONTSIZE, L"ms-settings:easeofaccess-display", NULL,
+      { 0x3c1a7e54, 0x5b2d, 0x4a0e, { 0x8f, 0x13, 0x2d, 0x6e, 0x91, 0xb4, 0x07, 0xa1 } } },
 };
 
 UINT FontTask_Count()
@@ -200,6 +204,33 @@ public:
 HRESULT _CFontCommandProvider_Create(REFIID riid, LPVOID* ppvOut)
 {
     return ShellObjectCreator<CFontCommandProvider>(riid, ppvOut);
+}
+
+// Like the Windows Fonts folder: its links take the place of the navigation pane,
+// which the user can still show from the View menu
+class CFontPaneVisibility :
+    public CComObjectRootEx<CComMultiThreadModelNoCS>,
+    public IExplorerPaneVisibility
+{
+public:
+    STDMETHODIMP GetPaneState(REFEXPLORERPANE ep, EXPLORERPANESTATE *peps) override
+    {
+        if (!peps)
+            return E_POINTER;
+        *peps = (ep && IsEqualGUID(*ep, EP_NavPane)) ? EPS_DEFAULT_OFF : EPS_DONTCARE;
+        return S_OK;
+    }
+
+    DECLARE_NOT_AGGREGATABLE(CFontPaneVisibility)
+    DECLARE_PROTECT_FINAL_CONSTRUCT()
+    BEGIN_COM_MAP(CFontPaneVisibility)
+        COM_INTERFACE_ENTRY_IID(IID_IExplorerPaneVisibility, IExplorerPaneVisibility)
+    END_COM_MAP()
+};
+
+HRESULT _CFontPaneVisibility_Create(REFIID riid, LPVOID* ppvOut)
+{
+    return ShellObjectCreator<CFontPaneVisibility>(riid, ppvOut);
 }
 
 // The thumbnail provider lives in its own class (registered for the font file types);

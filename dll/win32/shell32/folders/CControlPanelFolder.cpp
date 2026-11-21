@@ -563,6 +563,9 @@ HRESULT WINAPI CControlPanelFolder::CreateViewObject(HWND hwndOwner, REFIID riid
         } else if (IsEqualIID(riid, IID_IContextMenu)) {
             WARN("IContextMenu not implemented\n");
             hr = E_NOTIMPL;
+        } else if (IsEqualIID(riid, IID_IExplorerPaneVisibility)) {
+            /* Control Panel shows no navigation pane by default, as in Windows */
+            hr = CPaneVisibility_CreateInstance(EPS_DEFAULT_OFF, riid, ppvOut);
         } else if (IsEqualIID(riid, IID_IShellView)) {
             CComPtr<CControlPanelFolderViewCB> sfviewcb;
             hr = ShellObjectCreator(sfviewcb);

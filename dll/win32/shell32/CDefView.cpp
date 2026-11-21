@@ -408,6 +408,7 @@ private:
     COLORREF                  m_ExplorerMaterialBack;
     INT                       m_ExplorerMaterialOpacity;
     HWND                      m_ExplorerBackdropWindow;
+    HWND                      m_hWndTasks; // folder task pane (CDefViewTasks.cpp), or NULL
     RECT                      m_ComputerFoldersHeader;
     RECT                      m_ComputerDrivesHeader;
     RECT                      m_ComputerLocationsHeader;
@@ -799,6 +800,7 @@ public:
     LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnArrangeComputer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnThumbnail(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnTaskPaneFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnMenuMessage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnInitMenuPopup(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
@@ -853,6 +855,7 @@ public:
     MESSAGE_HANDLER(WM_TIMER, OnTimer)
     MESSAGE_HANDLER(SHV_ARRANGE_COMPUTER, OnArrangeComputer)
     MESSAGE_HANDLER(SHV_THUMBNAIL, OnThumbnail)
+    MESSAGE_HANDLER(SHV_TASKPANE_FOCUS, OnTaskPaneFocus)
     MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
     MESSAGE_HANDLER(WM_DRAWITEM, OnMenuMessage)
     MESSAGE_HANDLER(WM_MEASUREITEM, OnMenuMessage)
@@ -893,6 +896,7 @@ public:
 
 #define ID_LISTVIEW     1
 
+
 // windowsx.h
 #define GET_WM_COMMAND_ID(wp, lp)       LOWORD(wp)
 #define GET_WM_COMMAND_HWND(wp, lp)     (HWND)(lp)
@@ -931,6 +935,7 @@ CDefView::CDefView() :
     m_ExplorerMaterialBack(0),
     m_ExplorerMaterialOpacity(255),
     m_ExplorerBackdropWindow(NULL),
+    m_hWndTasks(NULL),
     m_Destroyed(FALSE),
     m_FillListIsRefresh(FALSE),
     m_FillListGeneration(0),
@@ -3133,6 +3138,7 @@ LRESULT CDefView::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHand
         ClearExplorerContentBackdrop(true);
         CancelFillList();
         ClearComputerTiles();
+        m_hWndTasks = NULL; // a child: destroyed with us
         RevokeDragDrop(m_hWnd);
         SHChangeNotifyDeregister(m_hNotify);
         m_hNotify = NULL;
@@ -3266,6 +3272,15 @@ LRESULT CDefView::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             if (!PostMessage(SHV_FILL_LIST, FALSE, 0))
                 FillList(FALSE);
         }
+    }
+
+    /* Folder links (Fonts...): only in an Explorer file window (SID_SCabinetFrame),
+       not on the desktop or in file dialogs */
+    CComPtr<IOleCommandTarget> pCabinet;
+    if (!IsDesktop() &&
+        SUCCEEDED(IUnknown_QueryService(m_pShellBrowser, SID_SCabinetFrame, IID_PPV_ARG(IOleCommandTarget, &pCabinet))))
+    {
+        m_hWndTasks = DefViewTasks_Create(m_hWnd, m_pSFParent, m_hWndParent, static_cast<IShellView *>(this));
     }
 
     RefreshExplorerContentAppearance();
@@ -3917,8 +3932,11 @@ LRESULT CDefView::OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled
     if (!m_ListView)
         return 0;
 
-    /* Resize the ListView to fit our window */
-    ::MoveWindow(m_ListView, 0, 0, wWidth, wHeight, TRUE);
+    /* Resize the ListView to fit our window, right of the task pane if there is one */
+    int xList = DefViewTasks_Layout(m_hWndTasks, wWidth, wHeight);
+    ::MoveWindow(m_ListView, xList, 0, wWidth - xList, wHeight, TRUE);
+    if (!xList && m_hWndTasks && ::GetFocus() == m_hWndTasks) // the pane just hid
+        m_ListView.SetFocus();
     if (IsDesktop())
         MoveItemsIntoView();
     ArrangeComputerView();
@@ -4048,6 +4066,18 @@ LRESULT CDefView::OnSetFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHan
     /* Notify the ICommDlgBrowser interface */
     OnStateChange(CDBOSC_SETFOCUS);
 
+    return 0;
+}
+
+/* A task pane link has the focus: the view is still the active one (menus,
+   accelerator routing), but the list view must not take the focus back */
+LRESULT CDefView::OnTaskPaneFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    if (m_pShellBrowser)
+        m_pShellBrowser->OnViewWindowActive(this);
+    if (!m_bmenuBarInitialized)
+        _MergeMenus();
+    m_uState = SVUIA_ACTIVATE_FOCUS;
     return 0;
 }
 
@@ -4843,7 +4873,9 @@ HRESULT WINAPI CDefView::TranslateAccelerator(LPMSG lpmsg)
     if (m_isEditing)
         return S_FALSE;
 
-    if (lpmsg->message >= WM_KEYFIRST && lpmsg->message <= WM_KEYLAST)
+    /* The view's keys (Del, F2, Ctrl+X...) act on the list's selection: not while a task link has the focus */
+    BOOL bTaskPaneFocus = m_hWndTasks && ::GetFocus() == m_hWndTasks;
+    if (lpmsg->message >= WM_KEYFIRST && lpmsg->message <= WM_KEYLAST && !bTaskPaneFocus)
     {
         if (::TranslateAcceleratorW(m_hWnd, m_hAccel, lpmsg) != 0)
             return S_OK;
@@ -4900,6 +4932,7 @@ HRESULT WINAPI CDefView::Refresh()
 
     m_ListView.DeleteAllItems();
     FillList();
+    DefViewTasks_Refresh(m_hWndTasks);
 
     if (m_bmenuBarInitialized)
     {
