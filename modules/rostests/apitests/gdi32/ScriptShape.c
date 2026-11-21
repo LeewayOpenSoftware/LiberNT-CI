@@ -78,11 +78,15 @@ static void test_scriptshape_coverage(void)
     /* ZWJ discrimination (Dwight NIT): if the font HAS a ZWJ glyph this case
      * cannot prove the skip, so probe it and trace instead of asserting. */
     {
-        WORD zwjGlyph = 0xFFFF;
-        ScriptGetCMap(hdc, &cache, runDevanagariZwj + 1, 1, 0, &zwjGlyph);
-        if (zwjGlyph != 0)
+        WORD zwjGlyph = 0;
+        if (ScriptGetCMap(hdc, &cache, runDevanagariZwj + 1, 1, 0, &zwjGlyph) != S_FALSE)
             trace("Noto Sans Devanagari has a ZWJ glyph; the ZWJ case does not discriminate\n");
     }
+
+    /* Run with ZWJ: shapes even though the font has no ZWJ glyph */
+    hr = ScriptShape(hdc, &cache, runDevanagariZwj, 3, 16, &items[0].a,
+                     glyphs, logClust, sva, &cGlyphs);
+    ok(hr == S_OK, "ScriptShape(ZWJ run) = 0x%lx, expected S_OK\n", hr);
 
     /* Partial coverage: S_OK with .notdef (Windows behaviour) */
     hr = ScriptItemize(runDevanagariMissing, 3, 4, &control, &state, items, &nItems);
@@ -94,20 +98,19 @@ static void test_scriptshape_coverage(void)
         ok(hr == S_OK, "ScriptShape(partial run) = 0x%lx, expected S_OK\n", hr);
     }
 
-    /* Run with ZWJ: shapes even though the font has no ZWJ glyph */
-    hr = ScriptShape(hdc, &cache, runDevanagariZwj, 3, 16, &items[0].a,
-                     glyphs, logClust, sva, &cGlyphs);
-    ok(hr == S_OK, "ScriptShape(ZWJ run) = 0x%lx, expected S_OK\n", hr);
-
-    /* Run with an uncovered character: must fail with NOT_IN_FONT */
-    hr = ScriptItemize(runDevanagariMissing, 3, 4, &control, &state, items, &nItems);
-    ok(hr == S_OK, "ScriptItemize(2) failed 0x%lx\n", hr);
-    if (hr != S_OK)
-        goto done;
-    hr = ScriptShape(hdc, &cache, runDevanagariMissing, 3, 16, &items[0].a,
-                     glyphs, logClust, sva, &cGlyphs);
-    ok(hr == USP_E_SCRIPT_NOT_IN_FONT,
-       "ScriptShape(missing glyph run) = 0x%lx, expected USP_E_SCRIPT_NOT_IN_FONT\n", hr);
+    /* Zero coverage: a Hebrew-only run under a Devanagari-only font must fail */
+    {
+        static const WCHAR heRun[] = { 0x05D0, 0x05D1, 0 };
+        hr = ScriptItemize(heRun, 2, 4, &control, &state, items, &nItems);
+        ok(hr == S_OK, "ScriptItemize(he) failed 0x%lx\n", hr);
+        if (hr == S_OK)
+        {
+            hr = ScriptShape(hdc, &cache, heRun, 2, 16, &items[0].a,
+                             glyphs, logClust, sva, &cGlyphs);
+            ok(hr == USP_E_SCRIPT_NOT_IN_FONT,
+               "ScriptShape(zero coverage) = 0x%lx, expected USP_E_SCRIPT_NOT_IN_FONT\n", hr);
+        }
+    }
 
 done:
     ScriptFreeCache(&cache);
