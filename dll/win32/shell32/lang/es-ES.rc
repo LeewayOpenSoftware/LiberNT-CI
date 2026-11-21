@@ -158,7 +158,7 @@ BEGIN
     LTEXT "", IDC_YESTOALL_MESSAGE, 40, 10, 238, 52, 0
 END
 
-IDD_ABOUT DIALOGEX 20, 20, 300, 212
+IDD_ABOUT DIALOGEX 20, 20, 300, 223
 STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Acerca de %s"
 FONT 9, "Segoe UI", 400, 0, 0x0
@@ -166,16 +166,16 @@ BEGIN
     LTEXT "", IDC_ABOUT_SEPARATOR, 14, 46, 272, 1, SS_ETCHEDHORZ
     ICON "", IDC_ABOUT_ICON, 10, 55, 21, 20
     LTEXT "", IDC_ABOUT_APPNAME, 34, 56, 252, 10, SS_NOPREFIX
-    LTEXT "", IDC_ABOUT_VERSION, 34, 67, 252, 10, SS_NOPREFIX
-    LTEXT "© 2026 Leeway Open Software", IDC_STATIC, 34, 78, 252, 10, SS_NOPREFIX
-    LTEXT "Basado en ReactOS © 1996–2026", IDC_STATIC, 34, 89, 252, 10, SS_NOPREFIX
-    LTEXT "", IDC_ABOUT_OTHERSTUFF, 34, 101, 252, 18, SS_NOPREFIX
-    CONTROL "Orosi es software libre: puede usarlo, copiarlo, compartirlo y modificarlo según los <A>términos de licencia de Orosi</A>. Se entrega sin ninguna garantía.", IDC_ABOUT_LICENSE, "SysLink", WS_TABSTOP, 34, 122, 252, 26
-    LTEXT "Este producto está licenciado a:", IDC_ABOUT_REG_TO, 34, 152, 252, 10
-    LTEXT "", IDC_ABOUT_REG_USERNAME, 44, 163, 242, 10, SS_NOPREFIX
-    LTEXT "", IDC_ABOUT_REG_ORGNAME, 44, 174, 242, 10, SS_NOPREFIX
-    PUSHBUTTON "", IDC_ABOUT_AUTHORS, 14, 191, 60, 14
-    DEFPUSHBUTTON "Aceptar", IDOK, 236, 191, 50, 14
+    LTEXT "", IDC_ABOUT_VERSION, 34, 67, 252, 20, SS_NOPREFIX
+    LTEXT "© 2026 Leeway Open Software", IDC_STATIC, 34, 89, 252, 10, SS_NOPREFIX
+    LTEXT "Basado en ReactOS © 1996–2026", IDC_STATIC, 34, 100, 252, 10, SS_NOPREFIX
+    LTEXT "", IDC_ABOUT_OTHERSTUFF, 34, 112, 252, 18, SS_NOPREFIX
+    CONTROL "Orosi es software libre: puede usarlo, copiarlo, compartirlo y modificarlo según los <A>términos de licencia de Orosi</A>. Se entrega sin ninguna garantía.", IDC_ABOUT_LICENSE, "SysLink", WS_TABSTOP, 34, 133, 252, 26
+    LTEXT "Este producto está licenciado a:", IDC_ABOUT_REG_TO, 34, 163, 252, 10
+    LTEXT "", IDC_ABOUT_REG_USERNAME, 44, 174, 242, 10, SS_NOPREFIX
+    LTEXT "", IDC_ABOUT_REG_ORGNAME, 44, 185, 242, 10, SS_NOPREFIX
+    PUSHBUTTON "", IDC_ABOUT_AUTHORS, 14, 202, 60, 14
+    DEFPUSHBUTTON "Aceptar", IDOK, 236, 202, 50, 14
 END
 
 IDD_ABOUT_AUTHORS DIALOGEX 34, 101, 252, 86
@@ -756,7 +756,7 @@ BEGIN
     IDS_PRINTERS_DESCRIPTION "Muestra impresoras y faxes instalados y le ayuda a configurar nuevos."
 
     /* About shell dialog version string */
-    IDS_ABOUT_VERSION_STRING "Versión %S (compilación del SO %S)"
+    IDS_ABOUT_VERSION_STRING "Versión %S\r\nCompilación del SO %S"
 
     /* context menus */
     IDS_VIEW_LARGE "Iconos &grandes"

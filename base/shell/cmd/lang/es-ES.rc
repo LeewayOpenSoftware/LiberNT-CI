@@ -312,8 +312,8 @@ comandos superiores.\n"
     WCMD_VOLUMEPROMPT, "¿Etiqueta del volumen (11 caracteres, <Return> para ninguno)?"
     WCMD_ANYKEY, "Pulse cualquier tecla para continuar... "
     WCMD_CONSTITLE, "Símbolo del sistema de Wine"
-    WCMD_VERSION, "Microsoft Windows [Versión %1!S!]\n"
-    WCMD_BANNER, "Orosi [Versión %1!S! %2!S!]\n\
+    WCMD_VERSION, "Orosi OS [Versión %1!S!]\n"
+    WCMD_BANNER, "Orosi [Versión %1!S! (%2!S!)]\n\
 (C) Copyright %3!S! El equipo de Orosi.\n"
     WCMD_MOREPROMPT, "¿Más? "
     WCMD_LINETOOLONG, "La línea de entrada es demasiado larga.\n"
