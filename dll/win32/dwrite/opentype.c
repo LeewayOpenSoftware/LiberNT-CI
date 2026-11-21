@@ -3104,6 +3104,20 @@ static BOOL opentype_has_font_table(IDWriteFontFace5 *fontface, UINT32 tag)
     return exists;
 }
 
+static const struct sbix_header *sbix_read_header(const struct dwrite_fonttable *table, unsigned int *num_strikes)
+{
+    *num_strikes = 0;
+    if (table->size < FIELD_OFFSET(struct sbix_header, strike_offset))
+        return NULL;
+    *num_strikes = table_read_be_dword(table, FIELD_OFFSET(struct sbix_header, num_strikes));
+    if (*num_strikes > (table->size - FIELD_OFFSET(struct sbix_header, strike_offset)) / sizeof(uint32_t))
+    {
+        *num_strikes = 0;
+        return NULL;
+    }
+    return table_read_ensure(table, 0, FIELD_OFFSET(struct sbix_header, strike_offset[*num_strikes]));
+}
+
 static unsigned int opentype_get_sbix_formats(IDWriteFontFace5 *fontface)
 {
     unsigned int num_strikes, num_glyphs, i, j, ret = 0;
@@ -3126,8 +3140,7 @@ static unsigned int opentype_get_sbix_formats(IDWriteFontFace5 *fontface)
     if (!get_fontface_table(fontface, MS_SBIX_TAG, &table))
         return 0;
 
-    num_strikes = table_read_be_dword(&table, FIELD_OFFSET(struct sbix_header, num_strikes));
-    sbix_header = table_read_ensure(&table, 0, FIELD_OFFSET(struct sbix_header, strike_offset[num_strikes]));
+    sbix_header = sbix_read_header(&table, &num_strikes);
 
     if (sbix_header)
     {
