@@ -22,7 +22,7 @@ HKCR
         {
             InprocServer32 = s '%MODULE%'
             {
-                val ThreadingModel = s 'Both'
+                val ThreadingModel = s 'Apartment'
             }
         }
         ForceRemove {7007ACC5-3202-11D1-AAD2-00805FC1270E} = s 'LAN Connection UI'
