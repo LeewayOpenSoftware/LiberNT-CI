@@ -1832,7 +1832,17 @@ HRESULT STDMETHODCALLTYPE CShellLink::GetIconLocation(UINT uFlags, PWSTR pszIcon
         }
         else
         {
-            hr = SHELL_GetUIObjectOfAbsoluteItem(NULL, m_pPidl, IID_PPV_ARG(IExtractIconW, &m_pTargetExtractIcon));
+            hr = m_pPidl ? SHELL_GetUIObjectOfAbsoluteItem(NULL, m_pPidl, IID_PPV_ARG(IExtractIconW, &m_pTargetExtractIcon))
+                         : E_FAIL;
+            if (FAILED(hr) && m_sPath && *m_sPath)
+            {
+                /* A link made elsewhere carries a pidl our folders may not resolve;
+                 * its LinkInfo path still names the target (Windows falls back the same way). */
+                CComHeapPtr<ITEMIDLIST> pidlPath;
+
+                if (SUCCEEDED(SHParseDisplayName(m_sPath, NULL, &pidlPath, 0, NULL)))
+                    hr = SHELL_GetUIObjectOfAbsoluteItem(NULL, pidlPath, IID_PPV_ARG(IExtractIconW, &m_pTargetExtractIcon));
+            }
             if (FAILED_UNEXPECTEDLY(hr))
                 return hr;
         }
