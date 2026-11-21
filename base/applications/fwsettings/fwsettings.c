@@ -22,8 +22,6 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCm
     FW_RUN run;
 
     if (!shell32)
-        shell32 = LoadLibraryW(L"shell32.dll");
-    if (!shell32)
         return 1;
     run = (FW_RUN)GetProcAddress(shell32, "OrosiFirewall_RunDLLW");
     if (run)
