@@ -36,7 +36,7 @@ ServiceBinary = %12%\applepcie.sys
 LoadOrderGroup = Boot Bus Extender
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard system devices)"
 ApplePcie.DeviceDesc = "Apple silicon PCIe controller"
 ApplePcie.ServiceDesc = "Apple Silicon PCIe Driver"

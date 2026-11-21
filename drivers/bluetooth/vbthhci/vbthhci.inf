@@ -41,5 +41,5 @@ ServiceBinary  = %12%\vbthhci.sys
 vbthhci.sys
 
 [Strings]
-LiberNT = "LiberNT Project"
-VBthHci.DeviceDesc = "LiberNT Virtual Bluetooth Controller"
+LiberNT = "Orosi Project"
+VBthHci.DeviceDesc = "Orosi Virtual Bluetooth Controller"

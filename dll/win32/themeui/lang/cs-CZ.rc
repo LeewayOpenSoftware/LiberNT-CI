@@ -24,7 +24,7 @@ BEGIN
     IDS_PUMPKIN "Dýně"
     IDS_RAIN "Deštivý den"
     IDS_RWB "Červená, bílá a modrá"
-    IDS_CLASSIC "LiberNT klasický"
+    IDS_CLASSIC "Orosi klasický"
     IDS_STANDARD "Orosi standardní"
     IDS_ROSE "Růže"
     IDS_SAND "Písek"

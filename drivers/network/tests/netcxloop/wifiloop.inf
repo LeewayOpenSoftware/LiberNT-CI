@@ -67,7 +67,7 @@ KmdfService = WifiLoop, WifiLoop_WdfSection
 KmdfLibraryVersion = 1.33
 
 [Strings]
-LiberNT = "LiberNT Project"
-DiskName = "LiberNT NetAdapterCx test disk"
-WifiLoop.DeviceDesc = "LiberNT WiFiCx Test Adapter"
-WifiLoop.ServiceDesc = "LiberNT WiFiCx Test Adapter Service"
+LiberNT = "Orosi Project"
+DiskName = "Orosi NetAdapterCx test disk"
+WifiLoop.DeviceDesc = "Orosi WiFiCx Test Adapter"
+WifiLoop.ServiceDesc = "Orosi WiFiCx Test Adapter Service"

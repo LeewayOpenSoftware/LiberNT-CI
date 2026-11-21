@@ -87,7 +87,7 @@ BEGIN
     END
     POPUP "&Справка"
     BEGIN
-        MENUITEM "&О LiberNT WordPad",      ID_ABOUT
+        MENUITEM "&О WordPad",      ID_ABOUT
     END
 END
 

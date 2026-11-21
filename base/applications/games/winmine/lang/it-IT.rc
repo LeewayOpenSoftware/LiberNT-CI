@@ -26,7 +26,7 @@ BEGIN
     POPUP "&Informazioni"
     BEGIN
         MENUITEM "&Tempi migliori", IDM_TIMES
-        MENUITEM "&Riguardo a LiberNT Mines", IDM_ABOUT
+        MENUITEM "&Riguardo a Orosi Mines", IDM_ABOUT
     END
 END
 

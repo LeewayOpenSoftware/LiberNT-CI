@@ -64,7 +64,7 @@ ServiceBinary = %12%\cmbatt.sys
 
 [Strings]
 ; Non-localizable
-ReactOS = "LiberNT Project"
+ReactOS = "Orosi Project"
 
 REG_BINARY = 1
 

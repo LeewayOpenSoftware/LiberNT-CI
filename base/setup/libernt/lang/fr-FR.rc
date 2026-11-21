@@ -4,7 +4,7 @@ LANGUAGE LANG_FRENCH, SUBLANG_NEUTRAL
 
 IDD_SETUPFRAME DIALOGEX 0, 0, 310, 240
 STYLE DS_SHELLFONT | WS_MINIMIZEBOX | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Installation de Orosi"
+CAPTION "Installation d'Orosi"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL "", IDC_FRAME_BACK, "Button", BS_OWNERDRAW | WS_TABSTOP, 8, 8, 16, 16
@@ -160,10 +160,10 @@ BEGIN
     IDS_EXTEND_BUTTON "É&tendre"
     IDS_RESIZE_PENDING "Des modifications de partitions sont en attente. La réduction et l'extension prennent effet immédiatement : faites-les avant de créer, supprimer ou formater des partitions."
     IDS_RESIZE_FAILED "La partition n'a pas pu être redimensionnée."
-    IDS_CAPTION "Installation de Orosi"
+    IDS_CAPTION "Installation d'Orosi"
     IDS_DRIVETITLE "Où voulez-vous installer Orosi ?"
-    IDS_PROCESSTITLE "Installation de Orosi"
-    IDS_PROCESSSUBTITLE "Préparation du disque, copie des fichiers, configuration de Orosi et du chargeur de démarrage. Cela peut prendre quelques minutes."
+    IDS_PROCESSTITLE "Installation d'Orosi"
+    IDS_PROCESSSUBTITLE "Préparation du disque, copie des fichiers, configuration d'Orosi et du chargeur de démarrage. Cela peut prendre quelques minutes."
     IDS_ABORTSETUP "Orosi n'est pas complètement installé sur votre ordinateur. Si vous quittez l'installation maintenant, vous devrez la relancer pour installer Orosi. Voulez-vous vraiment quitter ?"
     IDS_ABORTSETUP2 "Abandonner l'installation ?"
     IDS_NO_TXTSETUP_SIF "Impossible de trouver 'txtsetup.sif'.\nL'installation ne peut pas continuer."
@@ -222,10 +222,10 @@ BEGIN
     IDS_DISK_MBR_ON_UEFI "Orosi ne peut pas être installé sur ce disque. Le disque sélectionné possède une table de partitions MBR. Sur les systèmes EFI, Orosi ne peut être installé que sur des disques GPT."
     IDS_DISK_GPT_ON_BIOS "Orosi ne peut pas être installé sur ce disque. Le disque sélectionné utilise le style de partition GPT."
     IDS_DISK_NOT_FIRMWARE "Le microprogramme de cet ordinateur ne voit pas le disque sélectionné : Orosi risque de ne pas pouvoir démarrer à partir de celui-ci.\n\nCliquez sur OK pour l'utiliser quand même."
-    IDS_DISK_NEW_SYSTEM "Pour que toutes les fonctionnalités de Orosi fonctionnent correctement, l'installation crée aussi des partitions pour les fichiers système."
+    IDS_DISK_NEW_SYSTEM "Pour que toutes les fonctionnalités d'Orosi fonctionnent correctement, l'installation crée aussi des partitions pour les fichiers système."
     IDS_DISK_FORMAT_WARN "Si vous formatez cette partition, toutes les données qu'elle contient seront perdues. Sauvegardez d'abord les fichiers que vous voulez conserver."
     IDS_DISK_FORMAT_NTFS "Orosi s'installe sur NTFS. L'installation formate cette partition, et toutes les données qu'elle contient seront perdues."
-    IDS_DISK_FORMAT_EXISTING "Cette partition contient déjà une installation de Windows ou de Orosi. L'installation la formate, et toutes les données qu'elle contient seront perdues. Sélectionnez une autre partition pour la conserver."
+    IDS_DISK_FORMAT_EXISTING "Cette partition contient déjà une installation de Windows ou d'Orosi. L'installation la formate, et toutes les données qu'elle contient seront perdues. Sélectionnez une autre partition pour la conserver."
     IDS_DISK_ERASE_WARN "Toutes les partitions du disque %lu, ainsi que toutes leurs données, sont supprimées au début de l'installation."
     IDS_NEWPART_RANGE "&Taille en Mo (jusqu'à %I64u) :"
 END
@@ -267,7 +267,7 @@ BEGIN
     IDS_APPS_INSTALLED "%s (installé)"
     IDS_APPS_DRIVERS "Pilotes de vos périphériques"
     IDS_APPS_DRIVERS_NOTE "Pour trouver des pilotes, l'installation envoie au catalogue Microsoft Update les identifiants matériels des périphériques qui n'en ont pas."
-    IDS_OOBE_FINISHTITLE "Préparation de Orosi"
+    IDS_OOBE_FINISHTITLE "Préparation d'Orosi"
     IDS_OOBE_FINISHSUBTITLE "Cela peut prendre quelques minutes. Laissez votre ordinateur allumé."
     IDS_OOBE_APPLY_REGION "Application de votre langue et de votre clavier..."
     IDS_OOBE_APPLY_TIMEZONE "Réglage du fuseau horaire..."
@@ -278,7 +278,7 @@ BEGIN
     IDS_OOBE_APP_FAILED "%s: %s (%s)"
     IDS_OOBE_APPS_FAILED "Certains composants n'ont pas été installés"
     IDS_OOBE_ACCOUNT_FAILED "Orosi n'a pas pu créer votre compte (erreur %lu). Orosi ouvre une session sur le compte Utilisateur intégré à la place."
-    IDS_OOBE_ADMIN_FALLBACK "LiberNT could not confirm an active administrator account (reason %lu), so it enabled the built-in Administrator. Sign in to that account and set a password for it."
+    IDS_OOBE_ADMIN_FALLBACK "Orosi could not confirm an active administrator account (reason %lu), so it enabled the built-in Administrator. Sign in to that account and set a password for it."
     IDS_OOBE_UNKNOWN_ERROR "Erreur inconnue"
     IDS_OOBE_STORAGETITLE "Utiliser tout votre espace de stockage"
     IDS_OOBE_STORAGESUBTITLE "Orosi peut agrandir le lecteur C: jusqu'à remplir le périphérique de stockage d'où il s'exécute."
@@ -334,7 +334,7 @@ END
 STRINGTABLE
 BEGIN
     IDS_ACCOUNTTITLE "Nommez votre ordinateur et créez votre compte"
-    IDS_CONFIGURE_SYSTEM "Configuration de Orosi..."
+    IDS_CONFIGURE_SYSTEM "Configuration d'Orosi..."
     IDS_CONFIG_FOLDERS "Création des dossiers système et des dossiers de profil"
     IDS_CONFIG_DEVICES "Installation des classes de périphériques"
     IDS_CONFIG_NETWORK "Installation des protocoles réseau"
@@ -418,18 +418,18 @@ STRINGTABLE
 BEGIN
     IDS_UPGRADETITLE "Mettre à niveau Orosi"
     IDS_UPGRADESUBTITLE "Orosi est déjà installé sur cet ordinateur."
-    IDS_UPGRADE_NEW_INSTALL "&Nouvelle installation de Orosi (avancée)"
-    IDS_UPGRADE_NEW_COPY "&Ne pas mettre à niveau : configurer cette copie de Orosi"
+    IDS_UPGRADE_NEW_INSTALL "&Nouvelle installation d'Orosi (avancée)"
+    IDS_UPGRADE_NEW_COPY "&Ne pas mettre à niveau : configurer cette copie d'Orosi"
     IDS_UPGRADE_ENTRY "%s - %s"
-    IDS_UPGRADE_EARLIER "une version antérieure de Orosi"
-    IDS_UPGRADE_NOTE "La mise à niveau remplace les fichiers système de Orosi par cette version et conserve vos fichiers, les applications que vous avez installées, les comptes d'utilisateurs et les paramètres.\n\nCette version : %s"
+    IDS_UPGRADE_EARLIER "une version antérieure d'Orosi"
+    IDS_UPGRADE_NOTE "La mise à niveau remplace les fichiers système d'Orosi par cette version et conserve vos fichiers, les applications que vous avez installées, les comptes d'utilisateurs et les paramètres.\n\nCette version : %s"
     IDS_UPGRADE_HIBERNATED "Orosi sur %s est en veille prolongée : il ne peut pas être mis à niveau sans risque. Démarrez-le, arrêtez-le complètement, puis relancez l'installation."
     IDS_UPGRADE_READYTITLE "Prêt pour la mise à niveau"
-    IDS_UPGRADE_READYSUBTITLE "Vérifiez votre choix. L'installation commence la mise à niveau de Orosi lorsque vous cliquez sur Mise à niveau."
+    IDS_UPGRADE_READYSUBTITLE "Vérifiez votre choix. L'installation commence la mise à niveau d'Orosi lorsque vous cliquez sur Mise à niveau."
     IDS_UPGRADEBTN "&Mise à niveau"
     IDS_READY_UPGRADE "Orosi sur %s passe de %s à %s."
-    IDS_READY_UPGRADE_KEEP "Vos fichiers, applications, comptes d'utilisateurs et paramètres sont conservés. Les fichiers système de Orosi, les entrées de registre du système et le chargeur de démarrage sont remplacés. Aucune partition n'est créée, supprimée ou formatée."
-    IDS_UPGRADE_PROCESSTITLE "Mise à niveau de Orosi"
+    IDS_READY_UPGRADE_KEEP "Vos fichiers, applications, comptes d'utilisateurs et paramètres sont conservés. Les fichiers système d'Orosi, les entrées de registre du système et le chargeur de démarrage sont remplacés. Aucune partition n'est créée, supprimée ou formatée."
+    IDS_UPGRADE_PROCESSTITLE "Mise à niveau d'Orosi"
     IDS_UPGRADE_PROCESSSUBTITLE "L'installation remplace les fichiers système, met à jour le registre et installe le chargeur de démarrage. Vos fichiers, applications et paramètres sont conservés. Cela peut prendre quelques minutes."
     IDS_UPGRADE_DONETITLE "Orosi est mis à niveau"
 END

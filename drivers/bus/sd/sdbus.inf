@@ -161,8 +161,8 @@ HKR, , TypesSupported, %REG_DWORD%, 7
 ; Strings
 ;
 [Strings]
-ROS                     = "LiberNT"
-DiskName                = "LiberNT SD Bus Driver Installation Disk"
+ROS                     = "Orosi"
+DiskName                = "Orosi SD Bus Driver Installation Disk"
 SDHostClassName         = "SD Host Controllers"
 GenManufacturer         = "(Standard SD Host Controllers)"
 ServiceDesc             = "SD Bus Driver"

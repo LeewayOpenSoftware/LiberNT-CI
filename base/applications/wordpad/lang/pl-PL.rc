@@ -89,7 +89,7 @@ BEGIN
     END
     POPUP "Pomo&c"
     BEGIN
-        MENUITEM "LiberNT WordPad - &informacje",      ID_ABOUT
+        MENUITEM "WordPad - &informacje",      ID_ABOUT
     END
 END
 

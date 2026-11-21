@@ -34,6 +34,6 @@ ServiceBinary  = %12%\vmbus.sys
 LoadOrderGroup = System Bus Extender
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 MicrosoftMfg = "Microsoft"
 VMBus.DeviceDesc = "Microsoft Hyper-V Virtual Machine Bus"

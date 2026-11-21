@@ -32,6 +32,6 @@ ServiceBinary  = %12%\hyperkbd.sys
 LoadOrderGroup = Keyboard Port
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 MicrosoftMfg = "Microsoft"
 HyperKbd.DeviceDesc = "Microsoft Hyper-V Virtual Keyboard"

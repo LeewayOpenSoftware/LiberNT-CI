@@ -35,6 +35,6 @@ ServiceBinary = %12%\intelocwdt.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 IntelWdt.DeviceDesc = "Intel Watchdog Timer"
-IntelWdt.ServiceDesc = "LiberNT Intel Watchdog Timer Driver"
+IntelWdt.ServiceDesc = "Orosi Intel Watchdog Timer Driver"

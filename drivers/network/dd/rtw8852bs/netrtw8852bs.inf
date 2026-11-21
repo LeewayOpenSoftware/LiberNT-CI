@@ -74,7 +74,7 @@ HKR, , TypesSupported,   0x00010001, 7
 rtw8852bs.sys = 1
 
 [Strings]
-LiberNT         = "LiberNT Team"
+LiberNT         = "Orosi Team"
 rtw.DeviceDesc  = "Realtek RTL8852BS 802.11ax SDIO WiFi Adapter"
-rtw.ServiceDesc = "LiberNT Realtek RTL8852BS SDIO WiFi Driver"
-DiskName        = "LiberNT Realtek RTL8852BS SDIO WiFi Driver Installation Disk"
+rtw.ServiceDesc = "Orosi Realtek RTL8852BS SDIO WiFi Driver"
+DiskName        = "Orosi Realtek RTL8852BS SDIO WiFi Driver Installation Disk"

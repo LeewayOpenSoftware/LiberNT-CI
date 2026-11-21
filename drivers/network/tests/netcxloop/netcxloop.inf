@@ -67,7 +67,7 @@ KmdfService = NetCxLoop, NetCxLoop_WdfSection
 KmdfLibraryVersion = 1.33
 
 [Strings]
-LiberNT = "LiberNT Project"
-DiskName = "LiberNT NetAdapterCx test disk"
-NetCxLoop.DeviceDesc = "LiberNT NetAdapterCx Test Adapter"
-NetCxLoop.ServiceDesc = "LiberNT NetAdapterCx Test Adapter Service"
+LiberNT = "Orosi Project"
+DiskName = "Orosi NetAdapterCx test disk"
+NetCxLoop.DeviceDesc = "Orosi NetAdapterCx Test Adapter"
+NetCxLoop.ServiceDesc = "Orosi NetAdapterCx Test Adapter Service"

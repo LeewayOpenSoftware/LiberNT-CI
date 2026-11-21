@@ -9,7 +9,7 @@ STRINGTABLE
 BEGIN
     IDS_APPTITLE "Orosi - Üdvözlünk"
     IDS_DEFAULT_TOPIC_TITLE "Orosi"
-    IDS_DEFAULT_TOPIC_DESC "Üdvözlünk a Orosi Operációs Rendszerben.\n\n"
+    IDS_DEFAULT_TOPIC_DESC "Üdvözlünk az Orosi Operációs Rendszerben.\n\n"
     IDS_FONTNAME "Tahoma"
     IDS_CHECKTEXT "&Show this dialog again"
     IDS_CLOSETEXT "&Kilépés"
@@ -34,7 +34,7 @@ END
 /* Topic descriptions */
 STRINGTABLE
 BEGIN
-    IDS_TOPIC_DESC0 "A Orosi telepítése vagy frissítése."
+    IDS_TOPIC_DESC0 "Az Orosi telepítése vagy frissítése."
     IDS_TOPIC_DESC1 "A CD böngészése"
     IDS_TOPIC_DESC2 "Kilépés"
 END

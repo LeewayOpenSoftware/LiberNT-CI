@@ -62,7 +62,7 @@ ServiceBinary = %12%\mouclass.sys
 LoadOrderGroup = Pointer Class
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 SonyMfg = "Sony"
 
 HID\Vid_054C&Pid_0268.DeviceDesc = "Sony DualShock 3 Controller"

@@ -46,9 +46,9 @@ ServiceBinary=%12%\k1xdpu.sys
 LoadOrderGroup=Video
 
 [Strings]
-LiberNT="LiberNT"
+LiberNT="Orosi"
 K1xDpu.DeviceDesc="SpacemiT K1 Display (WDDM)"
-K1xDpu.ServiceDesc="LiberNT SpacemiT K1 WDDM Display Driver"
+K1xDpu.ServiceDesc="Orosi SpacemiT K1 WDDM Display Driver"
 REG_MULTI_SZ=0x00010000
 REG_DWORD=0x00010001
 REG_SZ=0x00000000

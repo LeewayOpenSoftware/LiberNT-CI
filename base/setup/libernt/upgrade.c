@@ -115,7 +115,8 @@ IsLiberNtKernel(
                                    Translation[0], Translation[1])) &&
         VerQueryValueW(Data, Key, (PVOID*)&Product, &Length) && Length)
     {
-        Found = (wcsstr(Product, L"LiberNT") != NULL);
+        Found = (wcsstr(Product, L"LiberNT") != NULL ||
+                 wcsstr(Product, L"Orosi") != NULL);
     }
 
     HeapFree(ProcessHeap, 0, Data);

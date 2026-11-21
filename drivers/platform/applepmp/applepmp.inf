@@ -36,7 +36,7 @@ ServiceBinary = %12%\applepmp.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard system devices)"
 ApplePmp.DeviceDesc = "Apple Power Management Processor"
 ApplePmp.ServiceDesc = "Apple Power Management Processor Driver"

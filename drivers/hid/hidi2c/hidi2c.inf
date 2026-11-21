@@ -38,7 +38,7 @@ ServiceBinary = %12%\hidi2c.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard system devices)"
 HidI2c.DeviceDesc = "I2C HID Device"
-HidI2c.ServiceDesc = "LiberNT HID over I2C Transport Driver"
+HidI2c.ServiceDesc = "Orosi HID over I2C Transport Driver"

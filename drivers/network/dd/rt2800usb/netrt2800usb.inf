@@ -78,7 +78,7 @@ HKR, , TypesSupported,   0x00010001, 7
 rt2800usb.sys = 1
 
 [Strings]
-LiberNT        = "LiberNT Team"
+LiberNT        = "Orosi Team"
 rt.DeviceDesc  = "Ralink RT2870/RT2770 802.11n USB WiFi Adapter"
-rt.ServiceDesc = "LiberNT Ralink RT2800 USB WiFi Driver"
-DiskName       = "LiberNT Ralink RT2800 USB WiFi Driver Installation Disk"
+rt.ServiceDesc = "Orosi Ralink RT2800 USB WiFi Driver"
+DiskName       = "Orosi Ralink RT2800 USB WiFi Driver Installation Disk"

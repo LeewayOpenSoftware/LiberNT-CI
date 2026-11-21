@@ -59,7 +59,7 @@ HKR,,EventMessageFile,%REG_EXPAND_SZ%,"%%SystemRoot%%\System32\IoLogMsg.dll"
 HKR,,TypesSupported,%REG_DWORD%,7
 
 [Strings]
-ROS                     = "LiberNT"
+ROS                     = "Orosi"
 UasMfg                  = "USB Attached SCSI (UAS) Compatible Device"
 DeviceDesc              = "USB Attached SCSI Driver"
 UAS.DeviceDesc          = "USB Attached SCSI (UAS) Mass Storage Device"

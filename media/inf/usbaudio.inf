@@ -48,7 +48,7 @@ LoadOrderGroup = Base
 
 [Strings]
 ; Non-localizable
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 
 ; Localizable
 GenericMfg = "(Generic USB Audio devices)"

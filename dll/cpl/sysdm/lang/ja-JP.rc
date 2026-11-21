@@ -21,7 +21,7 @@ BEGIN
     LTEXT "", IDC_MACHINELINE4, 130, 155, 118, 9
     LTEXT "", IDC_MACHINELINE5, 130, 164, 118, 9
     LTEXT "", IDC_MACHINELINE6, 130, 173, 118, 9
-    CONTROL "<A HREF=""https://libernt.com/"">LiberNT ホームページ</A>へ行く", IDC_ROSHOMEPAGE_LINK, "SysLink", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 10, 200, 150, 10
+    CONTROL "<A HREF=""https://libernt.com/"">Orosi ホームページ</A>へ行く", IDC_ROSHOMEPAGE_LINK, "SysLink", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 10, 200, 150, 10
     PUSHBUTTON "ライセンスを表示(&L)...", IDC_LICENCE, 170, 198, 78, 15
 END
 
@@ -70,7 +70,7 @@ CAPTION "システムの設定"
 FONT 9, "MS UI Gothic", 0, 0, 0x1
 BEGIN
     GROUPBOX "バージョン情報", IDC_STATIC, 6, 3, 210, 73
-    LTEXT "LiberNT はサーバー OS としてビルドされているため、サーバーとしてふるまいます。これを変更するにはこのボックスにチェックしてください。ただしアプリケーションに対してのみ有効です。", IDC_STATIC, 15, 15, 198, 41
+    LTEXT "Orosi はサーバー OS としてビルドされているため、サーバーとしてふるまいます。これを変更するにはこのボックスにチェックしてください。ただしアプリケーションに対してのみ有効です。", IDC_STATIC, 15, 15, 198, 41
     CONTROL "ワークステーションとしてふるまう", IDC_REPORTASWORKSTATION, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 57, 190, 10
     PUSHBUTTON "OK", IDOK, 166, 83, 50, 14
 END
@@ -80,7 +80,7 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "診断データ"
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
-    LTEXT "LiberNT は、必須の診断データ (ビルド、起動の結果と時間、ハードウェアとクラッシュの概要) を常にプロジェクトに送信します。これは無効にできません。", IDC_STATIC, 7, 7, 226, 33
+    LTEXT "Orosi は、必須の診断データ (ビルド、起動の結果と時間、ハードウェアとクラッシュの概要) を常にプロジェクトに送信します。これは無効にできません。", IDC_STATIC, 7, 7, 226, 33
     AUTOCHECKBOX "オプションの診断データ (システム イベント ログのエラー エントリ) も送信する(&O)", IDC_SENDOPTIONAL, 7, 46, 226, 20, BS_MULTILINE | BS_TOP | WS_TABSTOP
     LTEXT "オプションのデータは、オンにしない限り送信されません。ファイル、ドキュメント、ネットワーク アドレスは含まれません。詳しくは libernt.com/legal をご覧ください。", IDC_OPTIONALINFO, 7, 72, 226, 33
     DEFPUSHBUTTON "OK", IDOK, 129, 128, 50, 14
@@ -103,7 +103,7 @@ BEGIN
     PUSHBUTTON "名前の変更(&R)", IDC_HRDPROFRENAME, 118, 106, 50, 14, WS_DISABLED
     PUSHBUTTON "削除(&D)", IDC_HRDPROFDEL, 173, 106, 50, 14, WS_DISABLED
     GROUPBOX "ハードウェア プロファイルの選択", IDC_STATIC, 7, 130, 240, 75
-    LTEXT "LiberNT 起動時の動作:", IDC_STATIC, 14, 142, 210, 8
+    LTEXT "Orosi 起動時の動作:", IDC_STATIC, 14, 142, 210, 8
     AUTORADIOBUTTON "ハードウェア プロファイルが選択されるまで待つ(&W)", IDC_HRDPROFWAIT, 14, 158, 163, 8, WS_GROUP
     AUTORADIOBUTTON "次の時間内に選択されない場合、リストの一番上を選択する(&S):", IDC_HRDPROFSELECT, 14, 173, 190, 8
     LTEXT "秒", IDC_STATIC, 65, 187, 35, 8
@@ -131,7 +131,7 @@ BEGIN
     AUTORADIOBUTTON "コンピューターはドッキングされています(&D)", IDC_HWPPROP_DOCKED, 22, 97, 260, 10
     AUTORADIOBUTTON "コンピューターはドッキングされていません(&U)", IDC_HWPPROP_UNDOCKED, 22, 109, 280, 10
     GROUPBOX "ハードウェア プロファイルの選択", IDC_STATIC, 10, 138, 192, 42
-    AUTOCHECKBOX "常に LiberNT の起動時にオプションとしてこのプロファイルを含める", IDC_HWPPROP_INCLUDE, 17, 150, 264, 20, WS_GROUP | WS_TABSTOP | BS_MULTILINE
+    AUTOCHECKBOX "常に Orosi の起動時にオプションとしてこのプロファイルを含める", IDC_HWPPROP_INCLUDE, 17, 150, 264, 20, WS_GROUP | WS_TABSTOP | BS_MULTILINE
 END
 
 IDD_COPYPROFILE DIALOGEX 12, 26, 256, 52
@@ -342,7 +342,7 @@ CAPTION "視覚効果"
 FONT 8, "MS Shell Dlg"
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
 BEGIN
-   LTEXT "このコンピューターでの LiberNT の外観とパフォーマンスに使う設定を選んでください。", IDC_STATIC, 7, 6, 208, 18
+   LTEXT "このコンピューターでの Orosi の外観とパフォーマンスに使う設定を選んでください。", IDC_STATIC, 7, 6, 208, 18
    CONTROL "", IDC_TREE, "SysTreeView32", TVS_LINESATROOT | TVS_DISABLEDRAGDROP | WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, 7, 32, 213, 168
 END
 
@@ -356,7 +356,7 @@ BEGIN
    AUTORADIOBUTTON "プログラム(&P)", IDC_CPUCLIENT, 14, 36, 75, 12
    AUTORADIOBUTTON "バックグラウンド サービス(&S)", IDC_CPUSERVER, 96, 36, 117, 12
    GROUPBOX "仮想メモリ", IDC_STATIC, 7, 60, 213, 57
-   LTEXT "ページング ファイルは、LiberNT が RAM のように使うハード ディスク上の領域です。", IDC_STATIC, 14, 74, 199, 16
+   LTEXT "ページング ファイルは、Orosi が RAM のように使うハード ディスク上の領域です。", IDC_STATIC, 14, 74, 199, 16
    PUSHBUTTON "変更(&C)...", IDC_CHANGESWAP, 163, 97, 50, 14
 END
 

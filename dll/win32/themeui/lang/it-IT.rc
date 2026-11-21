@@ -16,7 +16,7 @@ BEGIN
     IDS_PUMPKIN "Giallo cromo scuro"
     IDS_RAIN "Grigio antracite"
     IDS_RWB "Red, White, and Blue"
-    IDS_CLASSIC "LiberNT classico"
+    IDS_CLASSIC "Orosi classico"
     IDS_STANDARD "Orosi Standard"
     IDS_ROSE "Rosa"
     IDS_SAND "Sabbia" //Desert

@@ -87,7 +87,7 @@ BEGIN
     END
     POPUP "&Hjelp"
     BEGIN
-        MENUITEM "&Om LiberNT WordPad",      ID_ABOUT
+        MENUITEM "&Om WordPad",      ID_ABOUT
     END
 END
 

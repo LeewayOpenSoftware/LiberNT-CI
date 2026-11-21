@@ -47,7 +47,7 @@ ErrorControl = 1
 ServiceBinary = %12%\applebatt.sys
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard system devices)"
 AppleBatt.DeviceDesc = "Apple silicon internal battery"
 AppleBatt.ServiceDesc = "Apple Silicon Battery Driver"

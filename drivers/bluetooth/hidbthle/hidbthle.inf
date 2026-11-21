@@ -52,7 +52,7 @@ ServiceBinary = %12%\hidbthle.sys
 LoadOrderGroup = Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard system devices)"
 HidBthLE.DeviceDesc = "Bluetooth Low Energy HID Device"
 HidBthLE.ServiceDesc = "Bluetooth Low Energy HID Miniport"

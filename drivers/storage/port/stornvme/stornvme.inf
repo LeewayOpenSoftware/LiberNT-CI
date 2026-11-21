@@ -70,7 +70,7 @@ HKR,,EventMessageFile,%REG_EXPAND_SZ%,"%%SystemRoot%%\System32\IoLogMsg.dll"
 HKR,,TypesSupported,%REG_DWORD%,7
 
 [Strings]
-ROS                     = "LiberNT"
+ROS                     = "Orosi"
 DeviceDesc              = "NVM Express Driver"
 NVME.DeviceDesc         = "Standard NVM Express Controller"
 ANS.DeviceDesc          = "Apple ANS NVM Express Controller"

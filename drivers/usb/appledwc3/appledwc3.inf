@@ -36,7 +36,7 @@ ServiceBinary = %12%\appledwc3.sys
 LoadOrderGroup = Boot Bus Extender
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard USB host controllers)"
 AppleDwc3.DeviceDesc = "Apple silicon USB Type-C controller"
 AppleDwc3.ServiceDesc = "Apple Silicon USB Glue Driver"

@@ -32,6 +32,6 @@ ServiceBinary  = %12%\hypermou.sys
 LoadOrderGroup = Pointer Port
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 MicrosoftMfg = "Microsoft"
 HyperMou.DeviceDesc = "Microsoft Hyper-V Mouse"

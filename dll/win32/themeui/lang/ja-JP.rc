@@ -16,7 +16,7 @@ BEGIN
     IDS_PUMPKIN "カボチャ"
     IDS_RAIN "雨の日"
     IDS_RWB "赤・白・青"
-    IDS_CLASSIC "LiberNT クラシック"
+    IDS_CLASSIC "Orosi クラシック"
     IDS_STANDARD "Orosi 標準"
     IDS_ROSE "バラ"
     IDS_SAND "砂漠" //Desert

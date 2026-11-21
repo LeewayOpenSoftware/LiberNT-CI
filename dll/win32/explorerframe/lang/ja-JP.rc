@@ -90,7 +90,7 @@ BEGIN
     END
     POPUP "ヘルプ(&H)", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "LiberNTについて(&A)", IDM_HELP_ABOUT
+        MENUITEM "Orosiについて(&A)", IDM_HELP_ABOUT
     END
 END
 
@@ -344,8 +344,8 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "LiberNT エクスプローラー"
-    IDS_PARSE_ADDR_ERR_TEXT "LiberNT エクスプローラーは '%1' を見つけられませんでした。スペルを確認してやり直して下さい。"
+    IDS_PARSE_ADDR_ERR_TITLE "Orosi エクスプローラー"
+    IDS_PARSE_ADDR_ERR_TEXT "Orosi エクスプローラーは '%1' を見つけられませんでした。スペルを確認してやり直して下さい。"
 END
 
 STRINGTABLE

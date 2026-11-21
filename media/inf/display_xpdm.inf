@@ -45,7 +45,7 @@ ServiceBinary  = %12%\vgapnp.sys
 LoadOrderGroup = Video Save
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard display adapters)"
 VGA.DeviceDesc = "VGA-compatible graphics card"
 

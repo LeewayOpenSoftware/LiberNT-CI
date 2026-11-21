@@ -51,12 +51,12 @@ ServiceBinary=%12%\hdgfx.sys
 LoadOrderGroup=Video
 
 [Strings]
-LiberNT="LiberNT"
+LiberNT="Orosi"
 IntelMfg="Intel Corporation"
 HdGfx.DeviceDesc="Intel HD Graphics (Ironlake)"
 HdGfx.Snb.DeviceDesc="Intel HD Graphics 3000"
 HdGfx.Ivb.DeviceDesc="Intel HD Graphics 4000"
-HdGfx.ServiceDesc="LiberNT Intel HD Graphics Display Driver"
+HdGfx.ServiceDesc="Orosi Intel HD Graphics Display Driver"
 REG_MULTI_SZ=0x00010000
 REG_DWORD=0x00010001
 REG_SZ=0x00000000

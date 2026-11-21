@@ -9,7 +9,7 @@ LANGUAGE LANG_JAPANESE, SUBLANG_DEFAULT
 
 STRINGTABLE
 BEGIN
-    IDS_USAGE "LiberNT Timeout ユーティリティ\n\
+    IDS_USAGE "Orosi Timeout ユーティリティ\n\
 \n\
 TIMEOUT [/?] [/T] delay [/NOBREAK]\n\
 \n\

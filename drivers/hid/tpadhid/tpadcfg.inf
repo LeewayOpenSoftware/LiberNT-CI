@@ -45,7 +45,7 @@ ServiceBinary = %12%\kbdclass.sys
 LoadOrderGroup = Keyboard Class
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard keyboards)"
 TpadCfg.DeviceDesc = "HID Touchpad Gesture Keys"
-TpadHid.ServiceDesc = "LiberNT HID Precision Touchpad Driver"
+TpadHid.ServiceDesc = "Orosi HID Precision Touchpad Driver"

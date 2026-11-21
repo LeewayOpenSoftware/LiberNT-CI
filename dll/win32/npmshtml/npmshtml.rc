@@ -25,13 +25,13 @@ BEGIN
     BEGIN
         BLOCK "040904E4"
         BEGIN
-            VALUE "CompanyName",        "LiberNT Project"
+            VALUE "CompanyName",        "Orosi Project"
             VALUE "FileDescription",    "Wine ActiveX plugin"
             VALUE "FileVersion",        VER_PRODUCTVERSION_STR
             VALUE "InternalName",       "npmshtml"
             VALUE "MIMEType",           "application/x-oleobject"
             VALUE "OriginalFilename",   "npmshtml.dll"
-            VALUE "ProductName",        "LiberNT Operating System"
+            VALUE "ProductName",        "Orosi Operating System"
             VALUE "ProductVersion",     VER_PRODUCTVERSION_STR
         END
     END

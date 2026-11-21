@@ -38,6 +38,6 @@ ServiceBinary = %12%\acpipmi.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 AcpiPmi.DeviceDesc = "ACPI Power Meter"
-AcpiPmi.ServiceDesc = "LiberNT ACPI Power Meter Driver"
+AcpiPmi.ServiceDesc = "Orosi ACPI Power Meter Driver"

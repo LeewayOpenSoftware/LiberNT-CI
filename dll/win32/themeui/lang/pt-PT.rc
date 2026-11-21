@@ -16,7 +16,7 @@ BEGIN
     IDS_PUMPKIN "Abóbora"
     IDS_RAIN "Dia chuvoso"
     IDS_RWB "Vermelho, branco e azul"
-    IDS_CLASSIC "LiberNT Classico"
+    IDS_CLASSIC "Orosi Classico"
     IDS_STANDARD "Orosi Standard"
     IDS_ROSE "Rosa"
     IDS_SAND "Deserto"
