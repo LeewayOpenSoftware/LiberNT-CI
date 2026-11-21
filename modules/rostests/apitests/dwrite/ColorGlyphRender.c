@@ -12,13 +12,13 @@
 
 #define SIZE 128
 
-static UINT CountColours(HDC hdc, UINT *pcPainted, UINT *pcSaturated)
+static UINT CountColours(HDC hdc, UINT *pcPainted, UINT *pcSaturated, UINT *pcYellow)
 {
     DIBSECTION ds;
     HGDIOBJ hbm = GetCurrentObject(hdc, OBJ_BITMAP);
     const UINT32 *bits;
     UINT32 seen[64];
-    UINT cSeen = 0, i, k, painted = 0, saturated = 0;
+    UINT cSeen = 0, i, k, painted = 0, saturated = 0, yellow = 0;
 
     if (!GetObjectW(hbm, sizeof(ds), &ds) || !ds.dsBm.bmBits || ds.dsBm.bmBitsPixel != 32)
         return 0;
@@ -34,6 +34,8 @@ static UINT CountColours(HDC hdc, UINT *pcPainted, UINT *pcSaturated)
             UINT hi = max(r, max(g, b)), lo = min(r, min(g, b));
             if (hi - lo > 80)
                 saturated++;
+            if (r > 200 && g > 150 && b < 120)
+                yellow++;
         }
         for (k = 0; k < cSeen && seen[k] != px; k++)
             ;
@@ -42,6 +44,7 @@ static UINT CountColours(HDC hdc, UINT *pcPainted, UINT *pcSaturated)
     }
     *pcPainted = painted;
     *pcSaturated = saturated;
+    *pcYellow = yellow;
     return cSeen;
 }
 
@@ -63,7 +66,7 @@ START_TEST(ColorGlyphRender)
     HDC hdc;
     RECT rc = { 0, 0, SIZE, SIZE };
     BOOL hasRun = FALSE;
-    UINT nLayers = 0, nColours, nPainted = 0, nSaturated = 0;
+    UINT nLayers = 0, nColours, nPainted = 0, nSaturated = 0, nYellow = 0;
 
     GetWindowsDirectoryW(path, ARRAYSIZE(path));
     lstrcatW(path, L"\\Fonts\\TwemojiMozilla.ttf");
@@ -116,10 +119,14 @@ START_TEST(ColorGlyphRender)
 
     hr = IDWriteFactory2_GetGdiInterop(factory, &interop);
     ok(hr == S_OK, "GetGdiInterop failed: 0x%lx\n", hr);
+    if (hr != S_OK)
+        goto done;
     hr = IDWriteGdiInterop_CreateBitmapRenderTarget(interop, NULL, SIZE, SIZE, &target);
     ok(hr == S_OK, "CreateBitmapRenderTarget failed: 0x%lx\n", hr);
-    hr = IDWriteFactory2_CreateRenderingParams(factory, &params);
-    ok(hr == S_OK, "CreateRenderingParams failed: 0x%lx\n", hr);
+    /* Aliased, so a coloured pixel can only come from a layer colour and not from ClearType fringes */
+    hr = IDWriteFactory_CreateCustomRenderingParams((IDWriteFactory *)factory, 1.0f, 0.0f, 0.0f, DWRITE_PIXEL_GEOMETRY_FLAT,
+                                                     DWRITE_RENDERING_MODE_ALIASED, &params);
+    ok(hr == S_OK, "CreateCustomRenderingParams failed: 0x%lx\n", hr);
     if (!target || !params)
         goto done;
 
@@ -155,10 +162,11 @@ START_TEST(ColorGlyphRender)
 
     ok(hasRun, "TranslateColorGlyphRun returned no layers for a COLR glyph\n");
     ok(nLayers > 1, "Expected more than one colour layer, got %u\n", nLayers);
-    nColours = CountColours(hdc, &nPainted, &nSaturated);
-    trace("layers=%u painted=%u distinct colours=%u saturated=%u\n", nLayers, nPainted, nColours, nSaturated);
+    nColours = CountColours(hdc, &nPainted, &nSaturated, &nYellow);
+    trace("layers=%u painted=%u distinct colours=%u saturated=%u yellow=%u\n", nLayers, nPainted, nColours, nSaturated, nYellow);
     ok(nPainted > 0, "Nothing was painted\n");
     ok(nSaturated > 100, "Expected coloured (non-grey) pixels, got %u\n", nSaturated);
+    ok(nYellow > 500, "Expected the yellow face of U+1F600, got %u yellow pixels\n", nYellow);
     ok(nColours > 1, "Expected more than one distinct non-background colour, got %u\n", nColours);
 
 done:
