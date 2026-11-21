@@ -731,18 +731,17 @@ HKCR,".plg","PerceivedType",0x00000000,"text"
 HKCR,".ps1xml","PerceivedType",0x00000000,"text"
 ;
 ; PowerShell script integration, Windows-identical defaults (Win11 host):
-; .ps1 -> Microsoft.PowerShellScript.1, Open with Notepad, and the
-; "Open PowerShell window here" background-folder verb.
+; .ps1 -> Microsoft.PowerShellScript.1, Open with Notepad. Type name and
+; icon come from shell32 (string 8509 + the generic icon) so nothing here
+; dangles at powershell.exe, which Orosi does not ship yet; the Windows
+; "Open PowerShell window here" folder verb is parked in
+; dotnet-powershell/PWSH-INTEGRATION.md until the powershell.exe provider
+; decision.
 HKCR,".ps1",,0x00000000,"Microsoft.PowerShellScript.1"
 HKCR,"Microsoft.PowerShellScript.1","EditFlags",0x00010001,0x00020000
-HKCR,"Microsoft.PowerShellScript.1","FriendlyTypeName",0x00020000,"@%systemroot%\system32\windowspowershell\v1.0\powershell.exe",-103
-HKCR,"Microsoft.PowerShellScript.1\DefaultIcon",,0x00020000,"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell_ise.exe",1
+HKCR,"Microsoft.PowerShellScript.1","FriendlyTypeName",0x00020000,"@shell32.dll,-8509"
+HKCR,"Microsoft.PowerShellScript.1\DefaultIcon",,0x00020000,"%SystemRoot%\System32\shell32.dll,-153"
 HKCR,"Microsoft.PowerShellScript.1\shell\Open\command",,0x00020000,"""%SystemRoot%\System32\notepad.exe"" ""%1"""
-HKCR,"Directory\Background\shell\Powershell",,0x00020000,"@shell32.dll,-8508"
-HKCR,"Directory\Background\shell\Powershell","Extended",0x00000000,""
-HKCR,"Directory\Background\shell\Powershell","NoWorkingDirectory",0x00000000,""
-HKCR,"Directory\Background\shell\Powershell","ShowBasedOnVelocityId",0x00010001,0x000639bc8
-HKCR,"Directory\Background\shell\Powershell\command",,0x00020000,"powershell.exe -noexit -WorkingDirectory ""%V"""
 HKCR,".sed","PerceivedType",0x00000000,"text"
 HKCR,".shtml","PerceivedType",0x00000000,"text"
 HKCR,".sql","PerceivedType",0x00000000,"text"

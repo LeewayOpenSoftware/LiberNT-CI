@@ -482,6 +482,7 @@
  * (HKCR\Directory\Background\shell\Powershell, @shell32.dll,-8508); same
  * string id Windows uses. */
 #define IDS_OPEN_POWERSHELL_WINDOW                  8508
+#define IDS_POWERSHELL_SCRIPT_TYPE                  8509
 
 
 /* Dialogs */
