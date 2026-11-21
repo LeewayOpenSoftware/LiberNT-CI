@@ -141,6 +141,18 @@ public:
             /* FIXME: We should query the height from the task bar object!!! */
             pdbi->ptActual.x = rcToolbar.right - rcToolbar.left;
             pdbi->ptActual.y = rcToolbar.bottom - rcToolbar.top;
+            /* The toolbar window can momentarily report a ~0x7FFF height during an
+               unlocked re-fit (FIXME above). The band is never taller than the
+               monitor, and never shorter than one button row. */
+            {
+                LONG cyMon = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+                if (cyMon <= 0)
+                    cyMon = GetSystemMetrics(SM_CYSCREEN);
+                if (cyMon > 0 && pdbi->ptActual.y > cyMon)
+                    pdbi->ptActual.y = cyMon;
+                if (pdbi->ptActual.y < pdbi->ptMinSize.y)
+                    pdbi->ptActual.y = pdbi->ptMinSize.y;
+            }
 
             TRACE("H: %d, Min: %d,%d, Integral.y: %d Actual: %d,%d\n", (dwViewMode & DBIF_VIEWMODE_VERTICAL) == 0,
                 pdbi->ptMinSize.x, pdbi->ptMinSize.y, pdbi->ptIntegral.y,

@@ -1822,23 +1822,37 @@ GetPrimaryRect:
                               IN const SIZE *pTraySize,
                               IN OUT RECT *pRect)
     {
+        /* Clamp the tray thickness to one row .. less than half the monitor, with a
+           default fall-back for an empty/inverted/~0x7FFF size. This is the funnel
+           for every tray rect, so a bad re-fit or a logon empty rect can neither
+           collapse the bar (boot -2 / 3 px) nor blow it up. */
+        SIZE sz = *pTraySize;
+        RECT rcMon = *pRect;
+        GetScreenRectFromRect(&rcMon, MONITOR_DEFAULTTONEAREST);
+        LONG cxMon = rcMon.right - rcMon.left;
+        LONG cyMon = rcMon.bottom - rcMon.top;
+        if (sz.cx <= 0 || (cxMon > 0 && sz.cx >= cxMon / 2))
+            sz.cx = GetMinimumVerticalWidth();
+        if (sz.cy <= 0 || (cyMon > 0 && sz.cy >= cyMon / 2))
+            sz.cy = GetDefaultTrayHeight();
+
         switch (Position)
         {
         case ABE_LEFT:
-            pRect->right = pRect->left + pTraySize->cx;
+            pRect->right = pRect->left + sz.cx;
             break;
 
         case ABE_TOP:
-            pRect->bottom = pRect->top + pTraySize->cy;
+            pRect->bottom = pRect->top + sz.cy;
             break;
 
         case ABE_RIGHT:
-            pRect->left = pRect->right - pTraySize->cx;
+            pRect->left = pRect->right - sz.cx;
             break;
 
         case ABE_BOTTOM:
         default:
-            pRect->top = pRect->bottom - pTraySize->cy;
+            pRect->top = pRect->bottom - sz.cy;
             break;
         }
     }
@@ -2881,6 +2895,37 @@ ChangePos:
             ::SendMessageW(m_Rebar, RB_SIZETORECT, RBSTR_CHANGERECT,  (LPARAM)&rebarRect);
             pRect->left = pRect->right - (rebarRect.right - rebarRect.left + margins.cx);
             break;
+        }
+
+        /* RB_SIZETORECT can hand back a bad (huge) rebar height; keep the docked
+           thickness within one row .. half the monitor, like MakeTrayRectWithSize. */
+        {
+            RECT rcMon2 = *pRect;
+            GetScreenRectFromRect(&rcMon2, MONITOR_DEFAULTTONEAREST);
+            LONG cyMon2 = rcMon2.bottom - rcMon2.top;
+            LONG cxMon2 = rcMon2.right - rcMon2.left;
+            if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
+            {
+                LONG cy = pRect->bottom - pRect->top;
+                if (cy <= 0 || (cyMon2 > 0 && cy >= cyMon2 / 2))
+                {
+                    if (m_Position == ABE_BOTTOM)
+                        pRect->top = pRect->bottom - GetDefaultTrayHeight();
+                    else
+                        pRect->bottom = pRect->top + GetDefaultTrayHeight();
+                }
+            }
+            else
+            {
+                LONG cx = pRect->right - pRect->left;
+                if (cx <= 0 || (cxMon2 > 0 && cx >= cxMon2 / 2))
+                {
+                    if (m_Position == ABE_RIGHT)
+                        pRect->left = pRect->right - GetMinimumVerticalWidth();
+                    else
+                        pRect->right = pRect->left + GetMinimumVerticalWidth();
+                }
+            }
         }
 
         CalculateValidSize(m_Position, pRect);
