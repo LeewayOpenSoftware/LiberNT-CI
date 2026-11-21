@@ -28,7 +28,7 @@ static LPCWSTR GetItemFileName(PCUITEMID_CHILD pidl, LPWSTR Buf, UINT cchMax)
     FileStructW* pDataW = _ILGetFileStructW(pidl);
     if (pDataW)
     {
-        lstrcpynW(Buf, pDataW->wszName, cchMax);
+        lstrcpynW(Buf, _ILGetFileStructWName(pDataW), cchMax);
         return Buf;
     }
     LPPIDLDATA pdata = _ILGetDataPointer(pidl);

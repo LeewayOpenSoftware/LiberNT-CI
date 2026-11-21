@@ -473,7 +473,7 @@ void AddFSClassKeysToArray(UINT cidl, PCUITEMID_CHILD_ARRAY apidl, HKEY* array, 
         FileStructW* pFileData = _ILGetFileStructW(pidl);
         if (pFileData)
         {
-            name = pFileData->wszName;
+            name = const_cast<PWSTR>(_ILGetFileStructWName(pFileData));
         }
         else
         {

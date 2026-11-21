@@ -31,6 +31,7 @@ extern void func_GetDisplayNameOf(void);
 extern void func_GUIDFromString(void);
 extern void func_IconPositions(void);
 extern void func_ILCreateFromPath(void);
+extern void func_WindowsFileIDList(void);
 extern void func_ILIsEqual(void);
 extern void func_Int64ToString(void);
 extern void func_IShellFolderViewCB(void);
@@ -134,6 +135,7 @@ const struct test winetest_testlist[] =
     { "GUIDFromString", func_GUIDFromString },
     { "IconPositions", func_IconPositions },
     { "ILCreateFromPath", func_ILCreateFromPath },
+    { "WindowsFileIDList", func_WindowsFileIDList },
     { "ILIsEqual", func_ILIsEqual },
     { "Int64ToString", func_Int64ToString },
     { "IShellFolderViewCB", func_IShellFolderViewCB },

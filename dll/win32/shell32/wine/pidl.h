@@ -223,6 +223,23 @@ typedef struct tagFileStructW {
     WCHAR wszName[1];
 } FileStructW;
 
+/* Windows Vista and later write this block as a BEEF0004 extension whose long name
+ * follows a file reference and other fields; Wine and ReactOS leave its version and
+ * signature zero, so their pidls keep the name at wszName. */
+static inline UINT _ILFileStructWNameOffset(const FileStructW *pFileStructW)
+{
+    const WORD *pWords = (const WORD *)pFileStructW;
+
+    if (pWords[2] != 0x0004 || pWords[3] != 0xBEEF || pWords[1] < 7)
+        return FIELD_OFFSET(FileStructW, wszName);
+    return pWords[1] == 7 ? 38 : pWords[1] == 8 ? 42 : 46;
+}
+
+static inline LPCWSTR _ILGetFileStructWName(const FileStructW *pFileStructW)
+{
+    return (LPCWSTR)((const BYTE *)pFileStructW + _ILFileStructWNameOffset(pFileStructW));
+}
+
 typedef struct tagValueW
 {
     WCHAR name[1];
