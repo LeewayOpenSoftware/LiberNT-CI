@@ -1,5 +1,5 @@
 /*
- * PROJECT:     ReactOS api tests
+ * PROJECT:     Orosi API tests
  * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
  * PURPOSE:     Tests for GetAddrInfoExW (synchronous and overlapped), GetAddrInfoExCancel
  *              and GetAddrInfoExOverlappedResult
@@ -242,7 +242,11 @@ TestInvalid(VOID)
 
     ok_dec(pGetAddrInfoExCancel(NULL), WSA_INVALID_HANDLE);
     ok_dec(pGetAddrInfoExCancel(&Null), WSA_INVALID_HANDLE);
-    ok_dec(pGetAddrInfoExCancel(&Bogus), WSA_INVALID_HANDLE);
+    /* Windows may dereference an unknown handle, so only probe that here */
+    if (is_reactos())
+        ok_dec(pGetAddrInfoExCancel(&Bogus), WSA_INVALID_HANDLE);
+    else
+        skip("bogus GetAddrInfoExCancel handle is only probed on Orosi\n");
 
     ok_dec(pGetAddrInfoExOverlappedResult(NULL), WSAEINVAL);
 }
