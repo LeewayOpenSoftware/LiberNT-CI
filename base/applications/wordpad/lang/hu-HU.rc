@@ -88,7 +88,7 @@ BEGIN
     END
     POPUP "&Súgó"
     BEGIN
-        MENUITEM "&A Orosi WordPad-ről",      ID_ABOUT
+        MENUITEM "&Az Orosi WordPad-ről",      ID_ABOUT
     END
 END
 

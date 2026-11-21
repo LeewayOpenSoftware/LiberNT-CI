@@ -418,7 +418,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_UPGRADETITLE "Upgrade Orosi"
+    IDS_UPGRADETITLE "Upgrad'Orosi"
     IDS_UPGRADESUBTITLE "Orosi is already installed on this computer."
     IDS_UPGRADE_NEW_INSTALL "&Custom: install a new copy of Orosi (advanced)"
     IDS_UPGRADE_NEW_COPY "&Don't upgrade: set up this copy of Orosi instead"
