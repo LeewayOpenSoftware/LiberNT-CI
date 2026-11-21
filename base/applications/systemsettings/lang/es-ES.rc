@@ -780,3 +780,10 @@ BEGIN
     IDS_DRIVER_HISTORY_EMPTY "No hay instalaciones recientes de controladores."
     IDS_DRIVER_STATUS_PENDING_START "Instalado, pendiente de inicio"
 END
+
+STRINGTABLE
+BEGIN
+    IDS_SECURITY_GROUP "Seguridad"
+    IDS_FIREWALL "Orosi Firewall"
+    IDS_FIREWALL_DESC "Activar o desactivar el firewall y elegir las aplicaciones que permite"
+END

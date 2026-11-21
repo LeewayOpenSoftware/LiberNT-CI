@@ -425,6 +425,9 @@
 #define IDS_CREATE_PASSWORD            904
 #define IDS_PASSWORD_HINT_CONTAINS     905
 #define IDS_WALLPAPER_FAILED           906
+#define IDS_SECURITY_GROUP             907
+#define IDS_FIREWALL                   908
+#define IDS_FIREWALL_DESC              909
 #define IDS_SIGNIN_EXTRA               511
 #define IDS_REQUIRE_SIGNIN             512
 #define IDS_REQUIRE_SIGNIN_DESC        513

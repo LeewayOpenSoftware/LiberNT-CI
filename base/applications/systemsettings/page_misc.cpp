@@ -575,4 +575,14 @@ BuildPrivacy(PageBuilder &page)
                         ShowError(host->Window(), ERROR_ACCESS_DENIED);
                 }).Enabled = admin && level != 0;
     page.Text(Str(IDS_DIAGNOSTICS_NOTE));
+
+    /* the firewall's own page in the Control Panel */
+    page.Group(Str(IDS_SECURITY_GROUP));
+    page.Link(Str(IDS_FIREWALL), Str(IDS_FIREWALL_DESC), L"shield_20_regular",
+              [](int)
+              {
+                  Launch(L"explorer.exe",
+                         L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\::{21EC2020-3AEA-1069-A2DD-08002B30309D}"
+                         L"\\::{4026492F-2F69-46B8-B9BF-5654FC07E423}");
+              });
 }

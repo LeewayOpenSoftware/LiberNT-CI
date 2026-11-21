@@ -749,3 +749,10 @@ BEGIN
     IDS_TARGET "Cible"
     IDS_TARGET_FORMAT "Windows 11 %s %s"
 END
+
+STRINGTABLE
+BEGIN
+    IDS_SECURITY_GROUP "Security"
+    IDS_FIREWALL "Orosi Firewall"
+    IDS_FIREWALL_DESC "Turn the firewall on or off and choose the apps it allows"
+END
