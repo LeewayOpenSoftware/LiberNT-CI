@@ -9,6 +9,7 @@
 
 #include "mmharness.h"
 #include <unistd.h>
+#include <time.h>
 
 #if defined(TEST_LIGHT)
 #define STRESS_THREADS     4
@@ -44,22 +45,45 @@ typedef struct _STRESS_THREAD
     ULONG64 Retries;
 } STRESS_THREAD;
 
+/* The kernel's fault entry waits in MiWaitForMemory; here the faulting thread reclaims a little itself, sleeps,
+ * and gives up only after a wall-clock bound, so a starved reclaimer thread cannot turn a slow run into a failure. */
+#define STRESS_WAIT_SECONDS 60
+
+static
+BOOLEAN
+StressWaitForMemory(STRESS_THREAD *Thread, ULONG *Attempts, struct timespec *Deadline)
+{
+    TEST_WORLD *World = Thread->Shared->World;
+    struct timespec Now = { 0, 100000 };
+
+    Thread->Retries++;
+    if ((*Attempts)++ == 0)
+    {
+        clock_gettime(CLOCK_MONOTONIC, Deadline);
+        Deadline->tv_sec += STRESS_WAIT_SECONDS;
+    }
+
+    MiWriteModifiedPages(&World->System, 64);
+    if ((*Attempts & 7) == 0)
+        MiTrimAddressSpace(&Thread->Space, 64, FALSE);
+
+    nanosleep(&Now, NULL);
+    clock_gettime(CLOCK_MONOTONIC, &Now);
+    return Now.tv_sec < Deadline->tv_sec || (Now.tv_sec == Deadline->tv_sec && Now.tv_nsec < Deadline->tv_nsec);
+}
+
 static
 NTSTATUS
 StressWrite(STRESS_THREAD *Thread, ULONG64 Va, ULONG64 Value)
 {
+    struct timespec Deadline;
+    ULONG Attempts = 0;
     NTSTATUS Status;
-    ULONG Attempt;
 
-    for (Attempt = 0; Attempt < 100000; Attempt++)
+    do
     {
         Status = UserWrite64(Thread->Shared->World, Thread->Index, Va, Value);
-        if (Status != STATUS_NO_MEMORY)
-            return Status;
-
-        Thread->Retries++;
-        sched_yield();
-    }
+    } while (Status == STATUS_NO_MEMORY && StressWaitForMemory(Thread, &Attempts, &Deadline));
 
     return Status;
 }
@@ -68,18 +92,14 @@ static
 ULONG64
 StressRead(STRESS_THREAD *Thread, ULONG64 Va, NTSTATUS *Status)
 {
-    ULONG64 Value = 0;
-    ULONG Attempt;
+    struct timespec Deadline;
+    ULONG Attempts = 0;
+    ULONG64 Value;
 
-    for (Attempt = 0; Attempt < 100000; Attempt++)
+    do
     {
         Value = UserRead64(Thread->Shared->World, Thread->Index, Va, Status);
-        if (*Status != STATUS_NO_MEMORY)
-            return Value;
-
-        Thread->Retries++;
-        sched_yield();
-    }
+    } while (*Status == STATUS_NO_MEMORY && StressWaitForMemory(Thread, &Attempts, &Deadline));
 
     return Value;
 }
