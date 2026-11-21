@@ -1,6 +1,6 @@
 # Font provenance
 
-One row per shipped file in media/fonts. Files added by the font cards carry the same fields in their own READMEs: F1 (segmdl2.ttf rebuilt from Fluent UI System Icons, SegoeIcons.ttf), F2 (Noto Sans KR, TC, Thai, Devanagari and the Bold CJK files), F3 (Carlito, Caladea, Cascadia Mono). The segmdl2.ttf of this base is the GPL-3 placeholder that F1 replaces. Licence texts are in doc/<Family>/.
+One row per shipped file in media/fonts. Files added by the font cards carry the same fields in their own READMEs: F1 (segmdl2.ttf rebuilt from Fluent UI System Icons, SegoeIcons.ttf), F2 (Noto Sans KR, TC, Thai, Devanagari and the Bold CJK files), F3 (Carlito, Caladea, Cascadia Mono), F10a (Twemoji Mozilla, Noto Emoji). The segmdl2.ttf of this base is the GPL-3 placeholder that F1 replaces. Licence texts are in doc/<Family>/.
 
 | File | Doc folder | Upstream | Version | Licence | SHA-256 |
 |---|---|---|---|---|---|
@@ -71,5 +71,7 @@ One row per shipped file in media/fonts. Files added by the font cards carry the
 | verdanaz.ttf | Verdana | DejaVu Sans | 2.37 | Bitstream Vera Fonts licence | 511e719cc2d75d2a1e6d8da3cb48c359e165e9d9d7f2884206ec4bf40e22673a |
 | vgaoem.fon | vgaoem | XFree86 VGA OEM bitmap font | XFree86 4.x | MIT | af453f9c06bd451596091a1100cf45ca9ba41029feb8bcdca0ac03f44ef7f7e7 |
 | wingding.ttf | Wingdings | Wine Wingdings (Dmitry Timoshkov) | 1.000 | GNU LGPL 2.1 or later | cf5784b53e365ecfad1661b8b23d133effa1d3b54fb7a51137c8a9548f0db08e |
+| TwemojiMozilla.ttf | TwemojiMozilla | Twemoji Mozilla (Mozilla, art by Twitter), COLR v0 | 0.7.0 | Apache 2.0 (code) + CC BY 4.0 (artwork) | 6d90152ee0d29e82fe2a87793af5aa4b7ad13e6538360889e141e81ed299ee8e |
+| NotoEmoji.ttf | NotoEmoji | Noto Emoji (Google), variable weight | 3.002 | SIL Open Font License 1.1 | de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551 |
 
 Not covered here: segmdl2.ttf.
