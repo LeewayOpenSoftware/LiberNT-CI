@@ -318,14 +318,15 @@ system_fallback_config[] =
     { "2190-21FF",              L"Noto Sans Symbols" },
 
     /* Miscellaneous Symbols - 2600-26FF */
-    { "2600-26FF",              L"Noto Sans Symbols2, Noto Sans Symbols 2, Noto Sans Symbols" },
+    { "2600-26FF",              L"Noto Sans Symbols2, Noto Sans Symbols 2, Noto Sans Symbols, Twemoji Mozilla, Noto Emoji" },
 
     /* Dingbats - 2700-27BF */
-    { "2700-27BF",              L"Noto Sans Symbols2, Noto Sans Symbols 2" },
+    { "2700-27BF",              L"Noto Sans Symbols2, Noto Sans Symbols 2, Twemoji Mozilla, Noto Emoji" },
 
     /* Misc Symbols and Arrows - 2B00-2BFF
        Supplemental Arrows-C   - 1F800-1F8FF */
-    { "2B00-2BFF, 1F800-1F8FF", L"Noto Sans Symbols2, Noto Sans Symbols 2" },
+    { "2B00-2BFF",              L"Noto Sans Symbols2, Noto Sans Symbols 2, Twemoji Mozilla, Noto Emoji" },
+    { "1F800-1F8FF",            L"Noto Sans Symbols2, Noto Sans Symbols 2" },
 
     { "2C80-2CFF",              L"Noto Sans Coptic" },
     { "2D30-2D7F",              L"Noto Sans Tifinagh" },
@@ -488,6 +489,12 @@ system_fallback_config[] =
 #endif
 
     { "1F800-1F8FF",            L"Noto Sans Symbols2, Noto Sans Symbols 2" },
+#ifdef __REACTOS__
+    /* Miscellaneous Technical emoji: watch, hourglass, keyboard, media keys */
+    { "231A-231B, 2328, 23CF, 23E9-23F3, 23F8-23FA", L"Twemoji Mozilla, Noto Emoji" },
+    /* Regional indicators, pictographs, emoticons, transport, supplemental symbols, extended-A */
+    { "1F1E6-1F1FF, 1F300-1F64F, 1F680-1F6FF, 1F900-1F9FF, 1FA70-1FAFF", L"Twemoji Mozilla, Noto Emoji" },
+#endif
 };
 
 struct text_source_context

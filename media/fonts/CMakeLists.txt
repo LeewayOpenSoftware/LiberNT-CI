@@ -38,6 +38,7 @@ list(APPEND FONT_FILES
     lucon.ttf
     Marlett.ttf
     micross.ttf
+    NotoEmoji.ttf
     NotoSansDevanagari-Regular.ttf
     NotoSansJP-Bold.otf
     NotoSansJP-Regular.otf
@@ -82,6 +83,7 @@ list(APPEND FONT_FILES
     trebucbd.ttf
     trebucbi.ttf
     trebucit.ttf
+    TwemojiMozilla.ttf
     UniVGA16.ttf
     verdanab.ttf
     verdanaz.ttf

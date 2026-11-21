@@ -1417,6 +1417,7 @@ static const WCHAR s_szzDefFontLink[] =
     L"mingliu.ttc,PMingLiU\0"
     L"simsun.ttc,SimSun\0"
     L"gulim.ttc,Gulim\0"
+    L"NotoEmoji.ttf,Noto Emoji\0"
     L"\0";
 // The default fixed-pitch FontLink data
 static const WCHAR s_szzDefFixedFontLink[] =
@@ -1425,6 +1426,7 @@ static const WCHAR s_szzDefFixedFontLink[] =
     L"mingliu.ttc,MingLiU\0"
     L"simsun.ttc,NSimSun\0"
     L"gulim.ttc,GulimChe\0"
+    L"NotoEmoji.ttf,Noto Emoji\0"
     L"\0";
 
 static inline PFONTLINK

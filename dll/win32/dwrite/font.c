@@ -3438,6 +3438,7 @@ static const WCHAR *reactos_family_substitute(const WCHAR *name)
     /* Consulted after the registry: rows the hive does not carry, and the whole set on a system without the key */
     static const struct { const WCHAR *from; const WCHAR *to; } fallback[] =
     {
+        { L"Twemoji Mozilla", L"Noto Emoji" },
         { L"Segoe UI", L"Selawik" },
         { L"Segoe UI Light", L"Selawik Light" },
         { L"Segoe UI Semilight", L"Selawik Semilight" },
@@ -3459,6 +3460,10 @@ static const WCHAR *reactos_family_substitute(const WCHAR *name)
     unsigned int i;
 
     InitOnceExecuteOnce(&reactos_substitutes_once, reactos_load_substitutes, NULL, NULL);
+
+    /* GDI cannot draw the COLR emoji font, so the registry points Segoe UI Emoji at the monochrome
+       one; DirectWrite draws the colour layers and asks for the colour font first */
+    if (!wcsicmp(name, L"Segoe UI Emoji")) return L"Twemoji Mozilla";
 
     for (i = 0; i < reactos_substitutes_count; i++)
     {

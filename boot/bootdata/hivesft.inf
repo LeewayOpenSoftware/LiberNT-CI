@@ -1310,8 +1310,11 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Terminal 8 (VGA res)",0x00000000,"vgaoem.fon"
 ; F1 file (icon font card)
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Segoe Fluent Icons (Leeway replacement) (TrueType)",0x00000000,"SegoeIcons.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Twemoji Mozilla (colour emoji for DirectWrite) (TrueType)",0x00000000,"TwemojiMozilla.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Emoji (Segoe UI Emoji replacement) (TrueType)",0x00000000,"NotoEmoji.ttf"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","System",0x00000000,"FreeSans"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Emoji",0x00000000,"Noto Emoji"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI",0x00000000,"Selawik"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Light",0x00000000,"Selawik Light"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Semilight",0x00000000,"Selawik Semilight"
@@ -1372,7 +1375,8 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Tahoma"
 	"NotoSansKR-Regular.otf,Noto Sans KR",\
 	"NotoSansTC-Regular.otf,Noto Sans TC",\
 	"NotoSansThai-Regular.ttf,Noto Sans Thai",\
-	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari"
+	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari",\
+	"NotoEmoji.ttf,Noto Emoji"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Microsoft Sans Serif",0x00010000,\
 	"NotoSansJP-Regular.otf,Noto Sans JP",\
 	"NotoSansTC-Regular.otf,Noto Sans TC",\
@@ -1380,7 +1384,8 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Microso
 	"NotoSansKR-Regular.otf,Noto Sans KR",\
 	"tahoma.ttf,Tahoma",\
 	"NotoSansThai-Regular.ttf,Noto Sans Thai",\
-	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari"
+	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari",\
+	"NotoEmoji.ttf,Noto Emoji"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Lucida Sans Unicode",0x00010000,\
 	"NotoSansJP-Regular.otf,Noto Sans JP",\
 	"NotoSansTC-Regular.otf,Noto Sans TC",\
@@ -1388,7 +1393,8 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Lucida 
 	"NotoSansKR-Regular.otf,Noto Sans KR",\
 	"tahoma.ttf,Tahoma",\
 	"NotoSansThai-Regular.ttf,Noto Sans Thai",\
-	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari"
+	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari",\
+	"NotoEmoji.ttf,Noto Emoji"
 
 ; FontLink (CJK faces to the other scripts)
 ; win32k substitutes the requested face before it looks up SystemLink (FontLink_FindEntry),
@@ -1427,7 +1433,8 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Noto Sa
 ; FontLink (F2 gap #4: Selawik is Latin-only; route UI fallback to Tahoma for Cyrillic/Greek)
 ; Segoe UI requests arrive here through the Segoe UI -> Selawik substitute.
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Selawik",0x00010000,\
-	"tahoma.ttf,Tahoma"
+	"tahoma.ttf,Tahoma",\
+	"NotoEmoji.ttf,Noto Emoji"
 
 ; Win32k GRE initialization
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\GRE_Initialize",,0x00000012
