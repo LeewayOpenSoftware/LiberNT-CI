@@ -272,22 +272,34 @@ static VOID CplPaneString(int index, PWSTR buffer, int cch)
         StringCchCopyW(buffer, cch, index < 0 ? L"Control Panel Home" : g_Categories[index].Name);
 }
 
-/* The other texts of the view, from the resources (UI thread only) */
+/* The other texts of the view, from the resources. Every Explorer window has its own UI
+   thread, so the table is filled once for the process (InitOnce) */
+static const PCWSTR g_CplTextEnglish[] =
+{
+    L"All Control Panel Items", L"Adjust your computer's settings", L"View by:",
+    L"Category", L"Large icons", L"Small icons", L"Classic list"
+};
+C_ASSERT(_countof(g_CplTextEnglish) == IDS_CPL_VIEW_CLASSIC - IDS_CPL_ALLITEMS + 1);
+static WCHAR g_CplText[_countof(g_CplTextEnglish)][80];
+static INIT_ONCE g_CplTextOnce = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK CplLoadTexts(PINIT_ONCE once, PVOID parameter, PVOID *context)
+{
+    for (UINT i = 0; i < _countof(g_CplText); i++)
+    {
+        if (!LoadStringW(shell32_hInstance, IDS_CPL_ALLITEMS + i, g_CplText[i], _countof(g_CplText[i])))
+            StringCchCopyW(g_CplText[i], _countof(g_CplText[i]), g_CplTextEnglish[i]);
+    }
+    return TRUE;
+}
+
 static PCWSTR CplText(UINT id, PCWSTR english)
 {
-    static WCHAR cache[IDS_CPL_VIEW_CLASSIC - IDS_CPL_ALLITEMS + 1][80];
-    static BOOL loaded[_countof(cache)];
     UINT i = id - IDS_CPL_ALLITEMS;
 
-    if (i >= _countof(cache))
+    if (i >= _countof(g_CplText) || !InitOnceExecuteOnce(&g_CplTextOnce, CplLoadTexts, NULL, NULL))
         return english;
-    if (!loaded[i])
-    {
-        if (!LoadStringW(shell32_hInstance, id, cache[i], _countof(cache[i])))
-            StringCchCopyW(cache[i], _countof(cache[i]), english);
-        loaded[i] = TRUE;
-    }
-    return cache[i];
+    return g_CplText[i];
 }
 
 class CCplPaneCommand :
