@@ -185,17 +185,20 @@ static VOID CplLaunchItem(HWND hwnd, IShellBrowser *psb, PCWSTR clsid)
     StringCchPrintfW(path, _countof(path), L"%s\\::%s", CPL_ROOT_PATH, clsid);
     if (FAILED(SHParseDisplayName(path, NULL, &pidl, 0, NULL)) || !pidl)
         return;
-    /* An item that is itself a shell folder (Personalization) is entered in this Explorer window,
-     * so that the address bar, Back and Forward keep working */
+    /* An item that is itself a shell folder (Personalization, Orosi Firewall) is entered in this
+     * Explorer window, so that the address bar, Back and Forward keep working. Not BrowseObject
+     * here: this runs in the view's own window procedure and the browser releases the last
+     * reference to the view while it navigates, so ATL's WindowProc would then run on freed
+     * memory. PersNavigateOutside navigates from a posted message and owns the pidl. */
     if (psb)
     {
         WCHAR key[160];
         DWORD attr = 0, cb = sizeof(attr);
         StringCchPrintfW(key, _countof(key), L"CLSID\\%s\\ShellFolder", clsid);
         if (RegGetValueW(HKEY_CLASSES_ROOT, key, L"Attributes", RRF_RT_REG_DWORD, NULL, &attr, &cb) == ERROR_SUCCESS &&
-            (attr & SFGAO_FOLDER) && SUCCEEDED(psb->BrowseObject(pidl, SBSP_SAMEBROWSER | SBSP_ABSOLUTE)))
+            (attr & SFGAO_FOLDER))
         {
-            ILFree(pidl);
+            PersNavigateOutside(psb, pidl);
             return;
         }
     }
@@ -614,6 +617,14 @@ public:
     COM_INTERFACE_ENTRY_IID(IID_IOleWindow, IShellView)
     COM_INTERFACE_ENTRY_FUNC_BLIND(0, ForwardInterface)
     END_COM_MAP()
+
+    /* The window holds a reference to the view from Create to its final message, as CDefView does:
+     * a navigation started in the view's own window procedure makes the browser release its
+     * reference while ATL's WindowProc still uses the object. */
+    void OnFinalMessage(HWND) override
+    {
+        static_cast<IShellView *>(this)->Release();
+    }
 
     BEGIN_MSG_MAP(CCplCategoryView)
     MESSAGE_HANDLER(WM_CREATE, OnCreate)
@@ -1724,6 +1735,8 @@ STDMETHODIMP CCplCategoryView::CreateViewWindow(IShellView *lpPrevView, LPCFOLDE
     }
     LoadCatalog();
     Create(hParent, rc, NULL, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_TABSTOP);
+    if (m_hWnd)
+        static_cast<IShellView *>(this)->AddRef(); /* the window's reference, see OnFinalMessage */
     if (!m_hWnd)
         return E_FAIL;
     Layout();

@@ -1528,6 +1528,14 @@ public:
     COM_INTERFACE_ENTRY_IID(IID_IOleWindow, IShellView)
     END_COM_MAP()
 
+    /* The window holds a reference to the view from Create to its final message, as CDefView does:
+     * a navigation started in the view's own window procedure makes the browser release its
+     * reference while ATL's WindowProc still uses the object. */
+    void OnFinalMessage(HWND) override
+    {
+        static_cast<IShellView *>(this)->Release();
+    }
+
     BEGIN_MSG_MAP(CFirewallView)
     MESSAGE_HANDLER(WM_CREATE, OnCreate)
     MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
@@ -1585,6 +1593,8 @@ public:
         m_psb = psb;
         LoadState();
         Create(hParent, rc, NULL, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_TABSTOP);
+        if (m_hWnd)
+            static_cast<IShellView *>(this)->AddRef(); /* the window's reference, see OnFinalMessage */
         if (!m_hWnd)
             return E_FAIL;
         Relayout();
