@@ -1822,23 +1822,37 @@ GetPrimaryRect:
                               IN const SIZE *pTraySize,
                               IN OUT RECT *pRect)
     {
+        /* Clamp the tray thickness to one row .. less than half the monitor, with a
+           default fall-back for an empty/inverted/~0x7FFF size. This is the funnel
+           for every tray rect, so a bad re-fit or a logon empty rect can neither
+           collapse the bar (boot -2 / 3 px) nor blow it up. */
+        SIZE sz = *pTraySize;
+        RECT rcMon = *pRect;
+        GetScreenRectFromRect(&rcMon, MONITOR_DEFAULTTONEAREST);
+        LONG cxMon = rcMon.right - rcMon.left;
+        LONG cyMon = rcMon.bottom - rcMon.top;
+        if (sz.cx <= 0 || (cxMon > 0 && sz.cx >= cxMon / 2))
+            sz.cx = GetMinimumVerticalWidth();
+        if (sz.cy <= 0 || (cyMon > 0 && sz.cy >= cyMon / 2))
+            sz.cy = GetDefaultTrayHeight();
+
         switch (Position)
         {
         case ABE_LEFT:
-            pRect->right = pRect->left + pTraySize->cx;
+            pRect->right = pRect->left + sz.cx;
             break;
 
         case ABE_TOP:
-            pRect->bottom = pRect->top + pTraySize->cy;
+            pRect->bottom = pRect->top + sz.cy;
             break;
 
         case ABE_RIGHT:
-            pRect->left = pRect->right - pTraySize->cx;
+            pRect->left = pRect->right - sz.cx;
             break;
 
         case ABE_BOTTOM:
         default:
-            pRect->top = pRect->bottom - pTraySize->cy;
+            pRect->top = pRect->bottom - sz.cy;
             break;
         }
     }
@@ -2279,15 +2293,50 @@ GetPrimaryScreenRect:
 ChangePos:
             /* Only the thickness of the docked edge is a tray size; the length
                along the screen edge must not become the other edge's thickness */
-            if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
-                m_TraySize.cy = rcTray.bottom - rcTray.top;
-            else if (m_Position == ABE_LEFT || m_Position == ABE_RIGHT)
-                m_TraySize.cx = rcTray.right - rcTray.left;
-            else
             {
-                m_TraySize.cx = rcTray.right - rcTray.left;
-                m_TraySize.cy = rcTray.bottom - rcTray.top;
+                /* Clamp the tray thickness to the valid range (one row .. less than
+                   half the screen), exactly as the saved-size validation does. A
+                   re-fit that reports an inverted/empty rect (a few px, or a
+                   negative size wrapped to ~32768) must not collapse or blow up the
+                   bar; fall back to the default row height instead. */
+                RECT rcMon = rcTray;
+                GetScreenRectFromRect(&rcMon, MONITOR_DEFAULTTONEAREST);
+                LONG cxMon = rcMon.right - rcMon.left;
+                LONG cyMon = rcMon.bottom - rcMon.top;
+                LONG cxMin = GetMinimumVerticalWidth();
+                LONG cyMin = GetDefaultTrayHeight();
+
+                if (m_Position == ABE_LEFT || m_Position == ABE_RIGHT)
+                {
+                    LONG cx = rcTray.right - rcTray.left;
+                    if (cx <= 0 || (cxMon > 0 && cx >= cxMon / 2))
+                        cx = cxMin;
+                    m_TraySize.cx = cx;
+                }
+                else if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
+                {
+                    LONG cy = rcTray.bottom - rcTray.top;
+                    if (cy <= 0 || (cyMon > 0 && cy >= cyMon / 2))
+                        cy = cyMin;
+                    m_TraySize.cy = cy;
+                }
+                else
+                {
+                    LONG cx = rcTray.right - rcTray.left;
+                    LONG cy = rcTray.bottom - rcTray.top;
+                    if (cx <= 0 || (cxMon > 0 && cx >= cxMon / 2))
+                        cx = cxMin;
+                    if (cy <= 0 || (cyMon > 0 && cy >= cyMon / 2))
+                        cy = cyMin;
+                    m_TraySize.cx = cx;
+                    m_TraySize.cy = cy;
+                }
             }
+
+            /* Size the window from the clamped thickness, not the raw rcTray: a
+               re-fit (or the empty boot rect) otherwise applies a 3 px / ~32768
+               window size through pwp even though m_TraySize is already clamped. */
+            MakeTrayRectWithSize(m_Position, &m_TraySize, &rcTray);
 
             pwp->flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
             pwp->x = rcTray.left;
@@ -2613,6 +2662,28 @@ ChangePos:
             }
         }
 
+        /* A transient or failed size query (a WM_SIZE during an unlocked re-fit,
+           an unconstrained ~SHRT_MAX extent minus margins) can hand us an empty,
+           inverted or absurd client rect. Laying the children out from it writes
+           garbage heights into the clock and the task band, so skip this pass;
+           a valid WM_SIZE / AlignControls(NULL) follows. */
+        {
+            LONG cxClient = rcClient.right - rcClient.left;
+            LONG cyClient = rcClient.bottom - rcClient.top;
+            LONG cxMax = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            LONG cyMax = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+            if (cxMax <= 0)
+                cxMax = GetSystemMetrics(SM_CXSCREEN);
+            if (cyMax <= 0)
+                cyMax = GetSystemMetrics(SM_CYSCREEN);
+            if (cxClient <= 0 || cyClient <= 0 || cxClient > cxMax || cyClient > cyMax)
+            {
+                ERR("AlignControls: skipping invalid client rect %ld,%ld,%ld,%ld\n",
+                    rcClient.left, rcClient.top, rcClient.right, rcClient.bottom);
+                return;
+            }
+        }
+
         Horizontal = IsPosHorizontal();
 
         /* We're about to resize/move the start button, the rebar control and
@@ -2786,6 +2857,20 @@ ChangePos:
 
     void FitToRebar(PRECT pRect)
     {
+        /* At logon FitToRebar can be handed the stale inverted rect (h<=0) before
+           the children exist. Rebuild a valid docked rect from the clamped tray
+           size and run the fit anyway, so RB_SIZETORECT shrinks the bar to the
+           band at boot; only give up if even that is not valid. */
+        if (pRect->right - pRect->left <= 0 || pRect->bottom - pRect->top <= 0)
+        {
+            MakeTrayRectWithSize(m_Position, &m_TraySize, pRect);
+            if (pRect->right - pRect->left <= 0 || pRect->bottom - pRect->top <= 0)
+            {
+                ERR("FitToRebar: skipping invalid rect %ld,%ld,%ld,%ld\n",
+                    pRect->left, pRect->top, pRect->right, pRect->bottom);
+                return;
+            }
+        }
         /* Get the rect of the rebar */
         RECT rebarRect, taskbarRect, clientRect;
         ::GetWindowRect(m_Rebar, &rebarRect);
@@ -2821,6 +2906,37 @@ ChangePos:
             ::SendMessageW(m_Rebar, RB_SIZETORECT, RBSTR_CHANGERECT,  (LPARAM)&rebarRect);
             pRect->left = pRect->right - (rebarRect.right - rebarRect.left + margins.cx);
             break;
+        }
+
+        /* RB_SIZETORECT can hand back a bad (huge) rebar height; keep the docked
+           thickness within one row .. half the monitor, like MakeTrayRectWithSize. */
+        {
+            RECT rcMon2 = *pRect;
+            GetScreenRectFromRect(&rcMon2, MONITOR_DEFAULTTONEAREST);
+            LONG cyMon2 = rcMon2.bottom - rcMon2.top;
+            LONG cxMon2 = rcMon2.right - rcMon2.left;
+            if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
+            {
+                LONG cy = pRect->bottom - pRect->top;
+                if (cy <= 0 || (cyMon2 > 0 && cy >= cyMon2 / 2))
+                {
+                    if (m_Position == ABE_BOTTOM)
+                        pRect->top = pRect->bottom - GetDefaultTrayHeight();
+                    else
+                        pRect->bottom = pRect->top + GetDefaultTrayHeight();
+                }
+            }
+            else
+            {
+                LONG cx = pRect->right - pRect->left;
+                if (cx <= 0 || (cxMon2 > 0 && cx >= cxMon2 / 2))
+                {
+                    if (m_Position == ABE_RIGHT)
+                        pRect->left = pRect->right - GetMinimumVerticalWidth();
+                    else
+                        pRect->right = pRect->left + GetMinimumVerticalWidth();
+                }
+            }
         }
 
         CalculateValidSize(m_Position, pRect);
@@ -3851,9 +3967,18 @@ ChangePos:
         }
         else
         {
+            /* The size is signed: an unlocked bar mid-re-fit can report a
+               negative client (the sizing strip exceeds the window), which
+               LOWORD/HIWORD would wrap to ~63534. Read it signed and, if the
+               client is empty, re-read the real client rect. */
             rcClient.left = rcClient.top = 0;
-            rcClient.right = LOWORD(lParam);
-            rcClient.bottom = HIWORD(lParam);
+            rcClient.right = (SHORT)LOWORD(lParam);
+            rcClient.bottom = (SHORT)HIWORD(lParam);
+            if (rcClient.right <= 0 || rcClient.bottom <= 0)
+            {
+                if (!GetClientRect(&rcClient))
+                    return FALSE;
+            }
         }
 
         AlignControls(&rcClient);
