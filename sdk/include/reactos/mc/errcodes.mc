@@ -4649,7 +4649,7 @@ Language=Romanian
 The SAM database on a Windows Server is significantly out of synchronization with the copy on the Domain Controller. A complete synchronization is required.
 .
 Language=Japanese
-Orosi Server上のSAMデータベースがドメイン コントローラー上のコピーと同期していません。完全な同期が必要です。
+Windows Server上のSAMデータベースがドメイン コントローラー上のコピーと同期していません。完全な同期が必要です。
 .
 
 MessageId=570
@@ -12023,7 +12023,7 @@ Language=Romanian
 This operation is not supported on a computer running Windows Server 2003 for Small Business Server.
 .
 Language=Japanese
-この操作は、Orosi Server を実行しているコンピュータではサポートされていません。
+この操作は、Windows Server 2003 for Small Business Server を実行しているコンピュータではサポートされていません。
 .
 
 MessageId=1255
