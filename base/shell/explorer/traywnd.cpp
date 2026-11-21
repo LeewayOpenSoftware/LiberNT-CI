@@ -3572,7 +3572,8 @@ ChangePos:
             }
         }
 
-        if (m_StartMenuPopup && lstrcmpiW((LPCWSTR)lParam, L"TraySettings") == 0)
+        if (m_StartMenuPopup && lParam && lstrcmpiW((LPCWSTR)lParam, L"TraySettings") == 0 &&
+            !TaskbarSettings::IsBroadcasting())
         {
             HideStartMenu();
 
