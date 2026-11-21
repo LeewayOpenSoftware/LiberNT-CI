@@ -9,7 +9,9 @@
 
 #pragma once
 
-#define UPGRADE_INVENTORY_PATH  L"servicing\\LiberNT.files"
+#define UPGRADE_INVENTORY_PATH      L"servicing\\Orosi.files"
+/* Name written by images before Orosi 5.0; still read so they can upgrade */
+#define UPGRADE_INVENTORY_PATH_OLD  L"servicing\\LiberNT.files"
 
 typedef enum _FILE_COPY_STATUS
 {

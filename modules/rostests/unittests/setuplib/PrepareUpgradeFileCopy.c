@@ -61,7 +61,7 @@ static const PCSTR TestSif =
     "RemovedState,dir\r\n";
 
 static const PCSTR NewInventory =
-    "; LiberNT new\n"
+    "; Orosi new\n"
     "; Build 12\n"
     "; Image preinstall\n"
     "Other\\outside.txt\n"
@@ -72,28 +72,34 @@ static const PCSTR NewInventory =
     "Windows\\keep.ini\n"
     "Windows\\newdir\\b.dll\n"
     "Windows\\servicing\\\n"
-    "Windows\\servicing\\LiberNT.files\n"
+    "Windows\\servicing\\Orosi.files\n"
     "Windows\\system32\\config\\system\n";
 
-#define OLD_INVENTORY_ENTRIES \
+#define OLD_INVENTORY_ENTRIES(_inventory) \
     "WINDOWS\\A.DLL\r\n" \
     "Windows\\keep.ini\r\n" \
     "Windows\\obsolete.dll\r\n" \
     "Windows\\olddir\\\r\n" \
     "Windows\\olddir2\\\r\n" \
     "Windows\\olddir2\\gone.txt\r\n" \
-    "Windows\\servicing\\LiberNT.files\r\n" \
+    "Windows\\servicing\\" _inventory "\r\n" \
     "Windows\\system32\\config\\system\r\n"
 
 static const PCSTR OldInventory =
-    "; LiberNT old\r\n"
+    "; Orosi old\r\n"
     "; Image preinstall\r\n"
-    OLD_INVENTORY_ENTRIES;
+    OLD_INVENTORY_ENTRIES("Orosi.files");
 
 static const PCSTR OtherImageInventory =
-    "; LiberNT old\r\n"
+    "; Orosi old\r\n"
     "; Image bootcd\r\n"
-    OLD_INVENTORY_ENTRIES;
+    OLD_INVENTORY_ENTRIES("Orosi.files");
+
+/* Written by an image before Orosi 5.0, which named the inventory LiberNT.files */
+static const PCSTR LegacyInventory =
+    "; LiberNT old\r\n"
+    "; Image preinstall\r\n"
+    OLD_INVENTORY_ENTRIES("LiberNT.files");
 
 static HINF
 WINAPI
@@ -339,7 +345,8 @@ DeleteTree(
 
 static VOID
 BuildTestTrees(
-    _In_opt_ PCSTR Inventory)
+    _In_opt_ PCSTR Inventory,
+    _In_ PCWSTR InventoryFile)
 {
     static const PCWSTR SourceFiles[] =
     {
@@ -359,7 +366,7 @@ BuildTestTrees(
 
     for (Index = 0; Index < ARRAYSIZE(SourceFiles); Index++)
         ok(WriteTestFile(SourceFiles[Index], "new"), "%S not written\n", SourceFiles[Index]);
-    ok(WriteTestFile(L"src\\Windows\\servicing\\LiberNT.files", NewInventory), "new inventory not written\n");
+    ok(WriteTestFile(L"src\\Windows\\servicing\\Orosi.files", NewInventory), "new inventory not written\n");
 
     ok(WriteTestFile(L"dst\\Windows\\a.dll", "old"), "old a.dll not written\n");
     ok(WriteTestFile(L"dst\\Windows\\keep.ini", "user"), "keep.ini not written\n");
@@ -374,7 +381,7 @@ BuildTestTrees(
     ok(WriteTestFile(L"dst\\Windows\\olddir2\\gone.txt", "old"), "gone.txt not written\n");
     ok(WriteTestFile(L"dst\\Windows\\olddir2\\data.txt", "user"), "data.txt not written\n");
     if (Inventory)
-        ok(WriteTestFile(L"dst\\Windows\\servicing\\LiberNT.files", Inventory), "old inventory not written\n");
+        ok(WriteTestFile(InventoryFile, Inventory), "old inventory not written\n");
 }
 
 static BOOL
@@ -423,7 +430,7 @@ START_TEST(PrepareUpgradeFileCopy)
     GetTempPathW(ARRAYSIZE(TestRoot), TestRoot);
     StringCchCatW(TestRoot, ARRAYSIZE(TestRoot), L"upgplan");
 
-    BuildTestTrees(OldInventory);
+    BuildTestTrees(OldInventory, L"dst\\Windows\\servicing\\Orosi.files");
     if (!RunUpgradePlan())
     {
         DeleteTree(TestRoot);
@@ -438,7 +445,7 @@ START_TEST(PrepareUpgradeFileCopy)
     ok(TestFileStartsWith(L"dst\\Windows\\system32\\config\\system", "hive"), "excluded file overwritten\n");
     ok(TestFileStartsWith(L"dst\\Windows\\user.txt", "user"), "file outside the inventories touched\n");
     ok(TestFileStartsWith(L"dst\\Windows\\olddir2\\data.txt", "user"), "file in an obsolete directory touched\n");
-    ok(TestFileStartsWith(L"dst\\Windows\\servicing\\LiberNT.files", "; LiberNT new"), "inventory not replaced\n");
+    ok(TestFileStartsWith(L"dst\\Windows\\servicing\\Orosi.files", "; Orosi new"), "inventory not replaced\n");
     ok(GetTestAttributes(L"dst\\Windows\\obsolete.dll") == INVALID_FILE_ATTRIBUTES, "obsolete file kept\n");
     ok(GetTestAttributes(L"dst\\Windows\\olddir2\\gone.txt") == INVALID_FILE_ATTRIBUTES, "obsolete file in a directory kept\n");
     ok(GetTestAttributes(L"dst\\Windows\\olddir") == INVALID_FILE_ATTRIBUTES, "empty obsolete directory kept\n");
@@ -452,27 +459,39 @@ START_TEST(PrepareUpgradeFileCopy)
     ok(GetTestAttributes(L"dst\\Windows\\RemovedState") == INVALID_FILE_ATTRIBUTES,
        "the directory of a removed component was kept\n");
 
-    BuildTestTrees(NULL);
+    BuildTestTrees(NULL, L"dst\\Windows\\servicing\\Orosi.files");
     if (RunUpgradePlan())
     {
         ok(TestFileStartsWith(L"dst\\Windows\\a.dll", "new"), "a.dll not replaced without an old inventory\n");
         ok(TestFileStartsWith(L"dst\\Windows\\obsolete.dll", "old"), "unlisted file dropped without an old inventory\n");
-        ok(TestFileStartsWith(L"dst\\Windows\\servicing\\LiberNT.files", "; LiberNT new"),
+        ok(TestFileStartsWith(L"dst\\Windows\\servicing\\Orosi.files", "; Orosi new"),
            "inventory not written without an old inventory\n");
         ok(GetTestAttributes(L"dst\\Windows\\removed.dll") == INVALID_FILE_ATTRIBUTES,
            "a file of a removed component was kept without an old inventory\n");
     }
 
-    BuildTestTrees(OtherImageInventory);
+    BuildTestTrees(OtherImageInventory, L"dst\\Windows\\servicing\\Orosi.files");
     if (RunUpgradePlan())
     {
         ok(TestFileStartsWith(L"dst\\Windows\\a.dll", "new"), "a.dll not replaced from another image\n");
         ok(TestFileStartsWith(L"dst\\Windows\\obsolete.dll", "old"), "file of another image dropped\n");
         ok(GetTestAttributes(L"dst\\Windows\\olddir") != INVALID_FILE_ATTRIBUTES, "directory of another image dropped\n");
-        ok(TestFileStartsWith(L"dst\\Windows\\servicing\\LiberNT.files", "; LiberNT new"),
+        ok(TestFileStartsWith(L"dst\\Windows\\servicing\\Orosi.files", "; Orosi new"),
            "inventory not written from another image\n");
         ok(GetTestAttributes(L"dst\\Windows\\RemovedState") == INVALID_FILE_ATTRIBUTES,
            "the directory of a removed component was kept from another image\n");
+    }
+
+    BuildTestTrees(LegacyInventory, L"dst\\Windows\\servicing\\LiberNT.files");
+    if (RunUpgradePlan())
+    {
+        ok(TestFileStartsWith(L"dst\\Windows\\a.dll", "new"), "a.dll not replaced from a LiberNT.files inventory\n");
+        ok(GetTestAttributes(L"dst\\Windows\\obsolete.dll") == INVALID_FILE_ATTRIBUTES,
+           "obsolete file kept: the LiberNT.files inventory was not read\n");
+        ok(TestFileStartsWith(L"dst\\Windows\\servicing\\Orosi.files", "; Orosi new"),
+           "inventory not written under its new name\n");
+        ok(GetTestAttributes(L"dst\\Windows\\servicing\\LiberNT.files") == INVALID_FILE_ATTRIBUTES,
+           "inventory under its old name kept\n");
     }
 
     DeleteTree(TestRoot);
