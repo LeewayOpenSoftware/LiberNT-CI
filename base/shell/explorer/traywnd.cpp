@@ -2279,22 +2279,44 @@ GetPrimaryScreenRect:
 ChangePos:
             /* Only the thickness of the docked edge is a tray size; the length
                along the screen edge must not become the other edge's thickness */
-            if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
             {
-                if (rcTray.bottom - rcTray.top > 0)
-                    m_TraySize.cy = rcTray.bottom - rcTray.top;
-            }
-            else if (m_Position == ABE_LEFT || m_Position == ABE_RIGHT)
-            {
-                if (rcTray.right - rcTray.left > 0)
-                    m_TraySize.cx = rcTray.right - rcTray.left;
-            }
-            else
-            {
-                if (rcTray.right - rcTray.left > 0)
-                    m_TraySize.cx = rcTray.right - rcTray.left;
-                if (rcTray.bottom - rcTray.top > 0)
-                    m_TraySize.cy = rcTray.bottom - rcTray.top;
+                /* Clamp the tray thickness to the valid range (one row .. less than
+                   half the screen), exactly as the saved-size validation does. A
+                   re-fit that reports an inverted/empty rect (a few px, or a
+                   negative size wrapped to ~32768) must not collapse or blow up the
+                   bar; fall back to the default row height instead. */
+                RECT rcMon = rcTray;
+                GetScreenRectFromRect(&rcMon, MONITOR_DEFAULTTONEAREST);
+                LONG cxMon = rcMon.right - rcMon.left;
+                LONG cyMon = rcMon.bottom - rcMon.top;
+                LONG cxMin = GetMinimumVerticalWidth();
+                LONG cyMin = GetDefaultTrayHeight();
+
+                if (m_Position == ABE_LEFT || m_Position == ABE_RIGHT)
+                {
+                    LONG cx = rcTray.right - rcTray.left;
+                    if (cx < cxMin || (cxMon > 0 && cx >= cxMon / 2))
+                        cx = cxMin;
+                    m_TraySize.cx = cx;
+                }
+                else if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
+                {
+                    LONG cy = rcTray.bottom - rcTray.top;
+                    if (cy < cyMin || (cyMon > 0 && cy >= cyMon / 2))
+                        cy = cyMin;
+                    m_TraySize.cy = cy;
+                }
+                else
+                {
+                    LONG cx = rcTray.right - rcTray.left;
+                    LONG cy = rcTray.bottom - rcTray.top;
+                    if (cx < cxMin || (cxMon > 0 && cx >= cxMon / 2))
+                        cx = cxMin;
+                    if (cy < cyMin || (cyMon > 0 && cy >= cyMon / 2))
+                        cy = cyMin;
+                    m_TraySize.cx = cx;
+                    m_TraySize.cy = cy;
+                }
             }
 
             pwp->flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
