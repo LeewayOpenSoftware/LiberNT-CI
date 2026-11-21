@@ -88,6 +88,7 @@ extern void func_SetSysColors(void);
 extern void func_SetWindowExtEx(void);
 extern void func_SetWorldTransform(void);
 extern void func_StretchBlt(void);
+extern void func_TextAntialias(void);
 extern void func_TextTransform(void);
 extern void func_TypoMetrics(void);
 
@@ -179,6 +180,7 @@ const struct test winetest_testlist[] =
     { "SetWindowExtEx", func_SetWindowExtEx },
     { "SetWorldTransform", func_SetWorldTransform },
     { "StretchBlt", func_StretchBlt },
+    { "TextAntialias", func_TextAntialias },
     { "TextTransform", func_TextTransform },
     { "TypoMetrics", func_TypoMetrics },
 
