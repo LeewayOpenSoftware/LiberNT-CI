@@ -16564,7 +16564,7 @@ Language=Romanian
 This installation package could not be opened. Verify that the package exists and that you can access it, or contact the application vendor to verify that this is a valid Windows Installer package.
 .
 Language=Japanese
-このインストール パッケージを開けませんでした。パッケージが存在し、アクセスできることを確認するか、アプリケーション ベンダーに問い合わせて、このパッケージが有効な ReactOS Installer パッケージであることを確認してください。
+このインストール パッケージを開けませんでした。パッケージが存在し、アクセスできることを確認するか、アプリケーション ベンダーに問い合わせて、このパッケージが有効な Orosi Installer パッケージであることを確認してください。
 .
 
 MessageId=1620
@@ -16584,7 +16584,7 @@ Language=Romanian
 This installation package could not be opened. Contact the application vendor to verify that this is a valid Windows Installer package.
 .
 Language=Japanese
-このインストール パッケージを開けませんでした。アプリケーション ベンダーに連絡して、これが有効な ReactOS Installer パッケージであることを確認してください。
+このインストール パッケージを開けませんでした。アプリケーション ベンダーに連絡して、これが有効な Orosi Installer パッケージであることを確認してください。
 .
 
 MessageId=1621
@@ -16592,19 +16592,19 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_INSTALL_UI_FAILURE
 Language=English
-There was an error starting the ReactOS Installer service user interface. Contact your support personnel.
+There was an error starting the Orosi Installer service user interface. Contact your support personnel.
 .
 Language=Russian
-There was an error starting the ReactOS Installer service user interface. Contact your support personnel.
+There was an error starting the Orosi Installer service user interface. Contact your support personnel.
 .
 Language=Polish
 Podczas uruchamiania interfejsu użytkownika usługi Instalator LiberNT wystąpił błąd. Skontaktuj się z personelem technicznym.
 .
 Language=Romanian
-There was an error starting the ReactOS Installer service user interface. Contact your support personnel.
+There was an error starting the Orosi Installer service user interface. Contact your support personnel.
 .
 Language=Japanese
-ReactOS Installerサービスのユーザーインターフェイスの起動にエラーが発生しました。サポート担当者にお問い合わせください。
+Orosi Installerサービスのユーザーインターフェイスの起動にエラーが発生しました。サポート担当者にお問い合わせください。
 .
 
 MessageId=1622
@@ -16792,19 +16792,19 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_CREATE_FAILED
 Language=English
-The ReactOS Installer service failed to start. Contact your support personnel.
+The Orosi Installer service failed to start. Contact your support personnel.
 .
 Language=Russian
-The ReactOS Installer service failed to start. Contact your support personnel.
+The Orosi Installer service failed to start. Contact your support personnel.
 .
 Language=Polish
 Nie można uruchomić usługi Instalator LiberNT. Skontaktuj się z działem Pomocy technicznej.
 .
 Language=Romanian
-The ReactOS Installer service failed to start. Contact your support personnel.
+The Orosi Installer service failed to start. Contact your support personnel.
 .
 Language=Japanese
-ReactOS Installer サービスの起動に失敗しました。サポート担当者にお問い合わせください。
+Orosi Installer サービスの起動に失敗しました。サポート担当者にお問い合わせください。
 .
 
 MessageId=1632
@@ -16884,7 +16884,7 @@ Language=Romanian
 This patch package could not be opened. Verify that the patch package exists and that you can access it, or contact the application vendor to verify that this is a valid Windows Installer patch package.
 .
 Language=Japanese
-この更新パッケージを開けませんでした。更新パッケージが存在し、アクセスできることを確認するか、アプリケーション ベンダーに連絡して、この更新パッケージが有効な ReactOS Installer 更新パッケージであることを確認してください。
+この更新パッケージを開けませんでした。更新パッケージが存在し、アクセスできることを確認するか、アプリケーション ベンダーに連絡して、この更新パッケージが有効な Orosi Installer 更新パッケージであることを確認してください。
 .
 
 MessageId=1636
@@ -16904,7 +16904,7 @@ Language=Romanian
 This patch package could not be opened. Contact the application vendor to verify that this is a valid Windows Installer patch package.
 .
 Language=Japanese
-この更新パッケージを開けませんでした。アプリケーション ベンダーに連絡して、これが有効な ReactOS Installer 更新パッケージであることを確認してください。
+この更新パッケージを開けませんでした。アプリケーション ベンダーに連絡して、これが有効な Orosi Installer 更新パッケージであることを確認してください。
 .
 
 MessageId=1637
@@ -16964,7 +16964,7 @@ Language=Romanian
 Invalid command line argument. Consult the Windows Installer SDK for detailed command line help.
 .
 Language=Japanese
-コマンド ライン引数が無効です。コマンド ライン ヘルプの詳細については、ReactOS Installer SDK を参照してください。
+コマンド ライン引数が無効です。コマンド ライン ヘルプの詳細については、Orosi Installer SDK を参照してください。
 .
 
 MessageId=1640
@@ -17012,19 +17012,19 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_PATCH_TARGET_NOT_FOUND
 Language=English
-The upgrade patch cannot be installed by the ReactOS Installer service because the program to be upgraded may be missing, or the upgrade patch may update a different version of the program. Verify that the program to be upgraded exists on your computer and that you have the correct upgrade patch.
+The upgrade patch cannot be installed by the Orosi Installer service because the program to be upgraded may be missing, or the upgrade patch may update a different version of the program. Verify that the program to be upgraded exists on your computer and that you have the correct upgrade patch.
 .
 Language=Russian
-The upgrade patch cannot be installed by the ReactOS Installer service because the program to be upgraded may be missing, or the upgrade patch may update a different version of the program. Verify that the program to be upgraded exists on your computer and that you have the correct upgrade patch.
+The upgrade patch cannot be installed by the Orosi Installer service because the program to be upgraded may be missing, or the upgrade patch may update a different version of the program. Verify that the program to be upgraded exists on your computer and that you have the correct upgrade patch.
 .
 Language=Polish
 Uaktualnienia nie można zainstalować przez usługę Instalator LiberNT, ponieważ nie ma programu do uaktualnienia albo uaktualnienie jest przeznaczone do innej wersji tego programu. Sprawdź, czy program, który ma być uaktualniony, znajduje się na dysku i czy masz prawidłowe uaktualnienie.
 .
 Language=Romanian
-The upgrade patch cannot be installed by the ReactOS Installer service because the program to be upgraded may be missing, or the upgrade patch may update a different version of the program. Verify that the program to be upgraded exists on your computer and that you have the correct upgrade patch.
+The upgrade patch cannot be installed by the Orosi Installer service because the program to be upgraded may be missing, or the upgrade patch may update a different version of the program. Verify that the program to be upgraded exists on your computer and that you have the correct upgrade patch.
 .
 Language=Japanese
-アップグレード対象のプログラムが存在しないか、アップグレードによって異なるバージョンのプログラムが更新される可能性があるため、ReactOS Installerサービスによってアップグレードをインストールできません。アップグレードするプログラムがコンピュータに存在すること、および正しいアップグレードがあることを確認してください。
+アップグレード対象のプログラムが存在しないか、アップグレードによって異なるバージョンのプログラムが更新される可能性があるため、Orosi Installerサービスによってアップグレードをインストールできません。アップグレードするプログラムがコンピュータに存在すること、および正しいアップグレードがあることを確認してください。
 .
 
 MessageId=1643
@@ -17072,16 +17072,16 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_INSTALL_REMOTE_PROHIBITED
 Language=English
-The ReactOS Installer does not permit installation from a Remote Desktop Connection.
+The Orosi Installer does not permit installation from a Remote Desktop Connection.
 .
 Language=Russian
-The ReactOS Installer does not permit installation from a Remote Desktop Connection.
+The Orosi Installer does not permit installation from a Remote Desktop Connection.
 .
 Language=Polish
 Instalator LiberNT nie zezwala na instalację przy użyciu podłączania pulpitu zdalnego.
 .
 Language=Romanian
-The ReactOS Installer does not permit installation from a Remote Desktop Connection.
+The Orosi Installer does not permit installation from a Remote Desktop Connection.
 .
 Language=Japanese
 LiberNT インストーラは、リモート デスクトップ接続からのインストールを許可しません。
