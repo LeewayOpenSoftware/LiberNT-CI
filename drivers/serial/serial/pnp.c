@@ -62,9 +62,16 @@ SerialAddDeviceInternal(
 
 	DeviceExtension->SerialPortNumber = IoGetConfigurationInformation()->SerialCount++;
 	if (pComPortNumber == NULL)
+	{
+		/* Provisional; SerialPnpStartDevice names the port by its I/O base */
 		DeviceExtension->ComPort = DeviceExtension->SerialPortNumber + 1;
+		DeviceExtension->ComPortFromRegistry = FALSE;
+	}
 	else
+	{
 		DeviceExtension->ComPort = *pComPortNumber;
+		DeviceExtension->ComPortFromRegistry = TRUE;
+	}
 	DeviceExtension->Pdo = Pdo;
 	DeviceExtension->PnpState = dsStopped;
 	DeviceExtension->HandFlow.ControlHandShake = SERIAL_DTR_CONTROL;
@@ -319,6 +326,20 @@ SerialPnpStartDevice(
 			SR_FCR_CLEAR_RCVR | SR_FCR_CLEAR_XMIT);
 	}
 
+	/* Without a PortName from the class installer, name the port by its
+	 * standard I/O base like Windows does (0x3F8 = COM1, 0x2F8 = COM2,
+	 * 0x3E8 = COM3, 0x2E8 = COM4), not by the order AddDevice ran in */
+	if (!DeviceExtension->ComPortFromRegistry)
+	{
+		switch (DeviceExtension->BaseAddress)
+		{
+			case 0x3F8: DeviceExtension->ComPort = 1; break;
+			case 0x2F8: DeviceExtension->ComPort = 2; break;
+			case 0x3E8: DeviceExtension->ComPort = 3; break;
+			case 0x2E8: DeviceExtension->ComPort = 4; break;
+		}
+	}
+
 	/* Create link \DosDevices\COMX -> \Device\SerialX */
 	_swprintf(DeviceNameBuffer, L"\\Device\\Serial%lu", DeviceExtension->SerialPortNumber);
 	_swprintf(LinkNameBuffer, L"\\DosDevices\\COM%lu", DeviceExtension->ComPort);
@@ -327,6 +348,26 @@ SerialPnpStartDevice(
 	RtlInitUnicodeString(&LinkName, LinkNameBuffer);
 	RtlInitUnicodeString(&ComPort, ComPortBuffer);
 	Status = IoCreateSymbolicLink(&LinkName, &DeviceName);
+	if (Status == STATUS_OBJECT_NAME_COLLISION && !DeviceExtension->ComPortFromRegistry)
+	{
+		/* The name from the I/O base (or the provisional one) is already taken,
+		 * e.g. by a port that got it through PortName: use the first free one */
+		ULONG Candidate;
+		for (Candidate = 1; Candidate <= 256 && Status == STATUS_OBJECT_NAME_COLLISION; Candidate++)
+		{
+			_swprintf(LinkNameBuffer, L"\\DosDevices\\COM%lu", Candidate);
+			RtlInitUnicodeString(&LinkName, LinkNameBuffer);
+			Status = IoCreateSymbolicLink(&LinkName, &DeviceName);
+			if (NT_SUCCESS(Status))
+			{
+				WARN_(SERIAL, "COM%lu is taken; port at 0x%lx is COM%lu\n",
+				      DeviceExtension->ComPort, DeviceExtension->BaseAddress, Candidate);
+				DeviceExtension->ComPort = Candidate;
+				_swprintf(ComPortBuffer, L"COM%lu", Candidate);
+				RtlInitUnicodeString(&ComPort, ComPortBuffer);
+			}
+		}
+	}
 	if (!NT_SUCCESS(Status))
 	{
 		WARN_(SERIAL, "IoCreateSymbolicLink() failed with status 0x%08x\n", Status);
