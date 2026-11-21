@@ -3452,11 +3452,17 @@ CCabinetWindow::UpdateFolderPanes()
         if (SUCCEEDED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))) &&
             SUCCEEDED(folderView->GetFolder(IID_PPV_ARG(IShellFolder, &folder))))
         {
+            /* a failed call may leave the pointer set: it is not ours then */
             if (FAILED(folder->QueryInterface(IID_PPV_ARG(IExplorerPaneVisibility, &visibility))))
-                folder->CreateViewObject(m_hwnd, IID_PPV_ARG(IExplorerPaneVisibility, &visibility));
+            {
+                visibility = NULL;
+                if (FAILED(folder->CreateViewObject(m_hwnd, IID_PPV_ARG(IExplorerPaneVisibility, &visibility))))
+                    visibility = NULL;
+            }
         }
-        if (!visibility)
-            IUnknown_QueryService(view, SID_ExplorerPaneVisibility, IID_PPV_ARG(IExplorerPaneVisibility, &visibility));
+        if (!visibility &&
+            FAILED(IUnknown_QueryService(view, SID_ExplorerPaneVisibility, IID_PPV_ARG(IExplorerPaneVisibility, &visibility))))
+            visibility = NULL;
     }
     if (visibility && FAILED(visibility->GetPaneState((REFEXPLORERPANE)&EP_NavPane, &state)))
         state = EPS_DONTCARE;
