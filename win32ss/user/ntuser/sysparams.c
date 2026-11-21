@@ -2403,7 +2403,16 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             return SpiGetInt(pvParam, &gspv.uiFontSmoothingContrast, fl);
 
         case SPI_SETFONTSMOOTHINGCONTRAST:
-            return SpiSetDWord(&gspv.uiFontSmoothingContrast, PtrToUlong(pvParam), KEY_DESKTOP, VAL_FONTSMOOTHINGCONTRAST, fl);
+        {
+            UINT uiContrast = PtrToUlong(pvParam);
+            /* Windows rejects contrast outside 1000-2200 and leaves the value unchanged. */
+            if (uiContrast < 1000 || uiContrast > 2200)
+            {
+                EngSetLastError(ERROR_INVALID_PARAMETER);
+                return 0;
+            }
+            return SpiSetDWord(&gspv.uiFontSmoothingContrast, uiContrast, KEY_DESKTOP, VAL_FONTSMOOTHINGCONTRAST, fl);
+        }
 
         case SPI_GETFOCUSBORDERWIDTH:
             return SpiGetInt(pvParam, &gspv.uiFocusBorderWidth, fl);

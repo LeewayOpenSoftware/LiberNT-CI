@@ -137,6 +137,7 @@ list(APPEND SOURCE
     SystemMenu.c
     TopmostBand.c
     SpiCaptionAlignment.c
+    SpiFontSmoothingContrast.c
     SystemParametersInfo.c
     TrackMouseEvent.c
     TrackPopupMenuEx.c
