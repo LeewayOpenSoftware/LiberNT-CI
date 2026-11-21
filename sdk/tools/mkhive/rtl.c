@@ -93,11 +93,51 @@ RtlUpcaseUnicodeChar(
     return Source + (SHORT)Offset;
 }
 
+/* Registry key LastWriteTime stamp, in seconds since 1970, used when the
+ * SOURCE_DATE_EPOCH environment variable is not set. The run-time
+ * SOURCE_DATE_EPOCH always wins over this compiled-in constant; nothing
+ * reads the environment at configure time. CI exports SOURCE_DATE_EPOCH
+ * (git commit date) so rebuilt hives stay identical for one revision. */
+#ifndef MKHIVE_BUILD_EPOCH
+#define MKHIVE_BUILD_EPOCH 1767225600ULL /* 2026-01-01T00:00:00Z */
+#endif
+
 VOID NTAPI
 KeQuerySystemTime(
     OUT PLARGE_INTEGER CurrentTime)
 {
-    CurrentTime->QuadPart = 0;
+    static LARGE_INTEGER ReproducibleTime;
+    static int Initialized;
+
+    if (!Initialized)
+    {
+        ULONGLONG EpochSeconds = 0;
+        const char *SourceDateEpoch = getenv("SOURCE_DATE_EPOCH");
+
+        /* Reproducible builds: never the wall clock. Prefer the run-time
+         * SOURCE_DATE_EPOCH, then the MKHIVE_BUILD_EPOCH compiled-in
+         * constant, so the built hives are byte-identical for a given
+         * source revision and keys stop carrying a bogus 1601 date. */
+        if (SourceDateEpoch != NULL && *SourceDateEpoch != '\0')
+        {
+            char *End = NULL;
+            unsigned long long Parsed = strtoull(SourceDateEpoch, &End, 10);
+
+            if (End != SourceDateEpoch && End != NULL && *End == '\0' && Parsed > 0)
+                EpochSeconds = Parsed;
+        }
+
+        if (EpochSeconds == 0)
+            EpochSeconds = MKHIVE_BUILD_EPOCH;
+
+        /* Seconds since 1970 -> 100ns intervals since 1601. */
+        ReproducibleTime.QuadPart =
+            (LONGLONG)((EpochSeconds + 11644473600ULL) * 10000000ULL);
+
+        Initialized = 1;
+    }
+
+    *CurrentTime = ReproducibleTime;
 }
 
 PVOID NTAPI
