@@ -781,6 +781,9 @@ HRESULT WINAPI CPersonalizationFolder::CreateViewObject(HWND hwndOwner, REFIID r
     if (!ppvOut)
         return E_INVALIDARG;
     *ppvOut = NULL;
+    /* a Control Panel page: no navigation pane by default, as in Windows */
+    if (IsEqualIID(riid, IID_IExplorerPaneVisibility))
+        return CPaneVisibility_CreateInstance(EPS_DEFAULT_OFF, riid, ppvOut);
     if (!IsEqualIID(riid, IID_IShellView))
         return E_NOINTERFACE;
 
