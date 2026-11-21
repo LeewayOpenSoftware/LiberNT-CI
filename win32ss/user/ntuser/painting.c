@@ -2244,8 +2244,15 @@ UserDrawCaptionText(
 
    if (Ret)
    {  // Faster while in setup.
+      LONG xText = lpRc->left;
+      if (gspv.uiCaptionAlignment == CAPTIONALIGN_CENTER)
+      {
+         LONG avail = (lpRc->right - lpRc->left) - Size.cx;
+         if (avail > 0)
+            xText = lpRc->left + avail / 2;
+      }
       UserExtTextOutW( hDc,
-                      lpRc->left,
+                      xText,
                       lpRc->top + (lpRc->bottom - lpRc->top - Size.cy) / 2, // DT_SINGLELINE && DT_VCENTER
                       ETO_CLIPPED,
                      (RECTL *)lpRc,
@@ -2258,7 +2265,8 @@ UserDrawCaptionText(
                  Text->Buffer,
                  Text->Length/sizeof(WCHAR),
                 (RECTL *)&r,
-                 DT_END_ELLIPSIS|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_LEFT);
+                 DT_END_ELLIPSIS|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|
+                 (gspv.uiCaptionAlignment == CAPTIONALIGN_CENTER ? DT_CENTER : DT_LEFT));
    }
 
    IntGdiSetTextColor(hDc, OldTextColor);

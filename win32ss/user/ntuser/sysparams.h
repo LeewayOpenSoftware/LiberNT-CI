@@ -58,6 +58,7 @@ typedef struct _SPIVALUES
     ICONMETRICSW im;
     UINT uiFocusBorderWidth;
     UINT uiFocusBorderHeight;
+    UINT uiCaptionAlignment; /* 0 = left (default), 1 = centre */
 
     /* Accessibility */
     ACCESSTIMEOUT accesstimeout;

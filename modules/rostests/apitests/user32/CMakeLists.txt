@@ -136,6 +136,7 @@ list(APPEND SOURCE
     SwitchToThisWindow.c
     SystemMenu.c
     TopmostBand.c
+    SpiCaptionAlignment.c
     SystemParametersInfo.c
     TrackMouseEvent.c
     TrackPopupMenuEx.c

@@ -780,6 +780,11 @@ BEGIN
     IDS_DRIVER_STATUS_ROLLBACK_PROBLEM "Rolled back, but the device still reports a problem (code %lu)"
     IDS_DRIVER_HISTORY_EMPTY "No recent driver installations."
     IDS_DRIVER_STATUS_PENDING_START "Installed, waiting to start"
+    IDS_CAPTION_ALIGN "Title bar text alignment"
+    IDS_CAPTION_ALIGN_DESC "Choose whether window title text is aligned to the left or centred"
+    IDS_CAPTION_ALIGN_LEFT "Left"
+    IDS_CAPTION_ALIGN_CENTER "Center"
+    IDS_CAPTION_ALIGN_KEYWORDS "title bar caption alignment center centre left window title text"
 END
 
 STRINGTABLE
