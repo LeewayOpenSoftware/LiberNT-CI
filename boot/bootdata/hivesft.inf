@@ -378,7 +378,10 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Propertie
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","wined3dcfg.cpl",0x00010001,1
 
 ; Cursors Schemes
-HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cursors\Schemes","LiberNT Default",0x00020000,""",,,,,,,,,,,,,"""
+; Orosi Default: the built-in pointers as a file scheme (media/cursors). Field order: Arrow, Help, AppStarting, Wait,
+; Crosshair, IBeam, NWPen, No, SizeNS, SizeWE, SizeNWSE, SizeNESW, SizeAll, UpArrow, Hand. The Mouse control panel
+; shows it as "Orosi Default (system scheme)".
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cursors\Schemes","Orosi Default",0x00020000,"%SystemRoot%\Cursors\orosi_arrow.cur,%SystemRoot%\Cursors\orosi_helpsel.cur,%SystemRoot%\Cursors\orosi_busy.ani,%SystemRoot%\Cursors\orosi_wait.ani,%SystemRoot%\Cursors\orosi_cross.cur,%SystemRoot%\Cursors\orosi_ibeam.cur,%SystemRoot%\Cursors\orosi_pen.cur,%SystemRoot%\Cursors\orosi_unavail.cur,%SystemRoot%\Cursors\orosi_ns.cur,%SystemRoot%\Cursors\orosi_ew.cur,%SystemRoot%\Cursors\orosi_nwse.cur,%SystemRoot%\Cursors\orosi_nesw.cur,%SystemRoot%\Cursors\orosi_move.cur,%SystemRoot%\Cursors\orosi_up.cur,%SystemRoot%\Cursors\orosi_link.cur"
 
 ; Advanced
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\KindMap",".3ds",0x00000000,"picture"

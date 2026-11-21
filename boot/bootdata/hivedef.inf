@@ -193,7 +193,7 @@ HKCU,"Control Panel\International\Geo",,0x00000012
 HKCU,"Control Panel\International\Geo","Nation",0x00000000,"244"
 
 ; Cursors Schemes
-HKCU,"Control Panel\Cursors",,,"LiberNT Default"
+HKCU,"Control Panel\Cursors",,,"Orosi Default"
 HKCU,"Control Panel\Cursors","Scheme Source",0x00010001,0x00000002
 HKCU,"Control Panel\Cursors","CursorBaseSize",0x00010001,0x00000020
 
