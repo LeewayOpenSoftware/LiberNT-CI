@@ -341,6 +341,22 @@ FreeAddrInfoExW(
 #define FreeAddrInfoEx FreeAddrInfoExW
 #endif
 
+#if (_WIN32_WINNT >= 0x0602)
+
+WINSOCK_API_LINKAGE
+INT
+WSAAPI
+GetAddrInfoExCancel(
+  _In_ LPHANDLE lpHandle);
+
+WINSOCK_API_LINKAGE
+INT
+WSAAPI
+GetAddrInfoExOverlappedResult(
+  _In_ LPOVERLAPPED lpOverlapped);
+
+#endif /* (_WIN32_WINNT >= 0x0602) */
+
 #ifdef INCL_WINSOCK_API_TYPEDEFS
 
 typedef void
