@@ -122,6 +122,27 @@ HRESULT WINAPI CNetworkConnections::CompareIDs(
     return ShellFolderImpl_CompareItemIDs<colcount, -1>(psf, lParam, (PCUITEMID_CHILD)pidl1, (PCUITEMID_CHILD)pidl2);
 }
 
+/* Network Connections is a Control Panel page: no navigation pane by default, as in Windows */
+class CNetConnectPaneVisibility :
+    public CComObjectRootEx<CComMultiThreadModelNoCS>,
+    public IExplorerPaneVisibility
+{
+public:
+    STDMETHODIMP GetPaneState(REFEXPLORERPANE ep, EXPLORERPANESTATE *peps) override
+    {
+        if (!peps)
+            return E_POINTER;
+        *peps = (ep && IsEqualGUID(*ep, EP_NavPane)) ? EPS_DEFAULT_OFF : EPS_DONTCARE;
+        return S_OK;
+    }
+
+    DECLARE_NOT_AGGREGATABLE(CNetConnectPaneVisibility)
+    DECLARE_PROTECT_FINAL_CONSTRUCT()
+    BEGIN_COM_MAP(CNetConnectPaneVisibility)
+        COM_INTERFACE_ENTRY_IID(IID_IExplorerPaneVisibility, IExplorerPaneVisibility)
+    END_COM_MAP()
+};
+
 /**************************************************************************
 *	ISF_NetConnect_fnCreateViewObject
 */
@@ -134,6 +155,9 @@ HRESULT WINAPI CNetworkConnections::CreateViewObject(
         return hr;
 
     *ppvOut = NULL;
+
+    if (IsEqualIID(riid, IID_IExplorerPaneVisibility))
+        return ShellObjectCreator<CNetConnectPaneVisibility>(riid, ppvOut);
 
     if (IsEqualIID(riid, IID_IShellView))
     {
