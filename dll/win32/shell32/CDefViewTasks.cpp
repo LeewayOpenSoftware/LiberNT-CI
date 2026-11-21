@@ -14,7 +14,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(shell);
 #define TASKPANE_CLASS L"LiberNT_DefViewTaskPane"
 #define TASKPANE_MAX_LINKS 32
 #define TASKPANE_RELOAD (WM_USER + 0x100)
-#define SHV_TASKPANE_FOCUS (WM_USER + 0x1117) /* to the view (CDefView.cpp): the pane got the focus */
 
 class CDefViewTaskPane :
     public CWindowImpl<CDefViewTaskPane, CWindow, CControlWinTraits>

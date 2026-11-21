@@ -40,7 +40,6 @@ TODO:
 #ifndef SHV_THUMBNAIL
 #define SHV_THUMBNAIL (WM_USER + 0x1115)
 #endif
-#define SHV_TASKPANE_FOCUS (WM_USER + 0x1117) /* the task pane (CDefViewTasks.cpp) got the focus */
 
 #include <atlwin.h>
 #include <ui/rosctrls.h>

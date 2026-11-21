@@ -143,6 +143,7 @@ extern const GUID SHELL32_AdvtShortcutComponent;
 #define SHV_FILL_LIST       (WM_USER + 0x1113)
 #define SHV_ARRANGE_COMPUTER (WM_USER + 0x1114)
 #define SHV_THUMBNAIL (WM_USER + 0x1115) /* CLSID_Thumbnail result: wParam HBITMAP, lParam item id */
+#define SHV_TASKPANE_FOCUS (WM_USER + 0x1117) /* CDefViewTasks.cpp: the task pane got the focus */
 
 extern inline
 BOOL
