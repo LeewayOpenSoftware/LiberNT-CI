@@ -62,9 +62,16 @@ SerialAddDeviceInternal(
 
 	DeviceExtension->SerialPortNumber = IoGetConfigurationInformation()->SerialCount++;
 	if (pComPortNumber == NULL)
+	{
+		/* Provisional; SerialPnpStartDevice names the port by its I/O base */
 		DeviceExtension->ComPort = DeviceExtension->SerialPortNumber + 1;
+		DeviceExtension->ComPortFromRegistry = FALSE;
+	}
 	else
+	{
 		DeviceExtension->ComPort = *pComPortNumber;
+		DeviceExtension->ComPortFromRegistry = TRUE;
+	}
 	DeviceExtension->Pdo = Pdo;
 	DeviceExtension->PnpState = dsStopped;
 	DeviceExtension->HandFlow.ControlHandShake = SERIAL_DTR_CONTROL;
@@ -317,6 +324,20 @@ SerialPnpStartDevice(
 		/* 16550 UARTs also have FIFO queues, but they are unusable due to a bug */
 		WRITE_PORT_UCHAR(SER_FCR(ComPortBase),
 			SR_FCR_CLEAR_RCVR | SR_FCR_CLEAR_XMIT);
+	}
+
+	/* Without a PortName from the class installer, name the port by its
+	 * standard I/O base like Windows does (0x3F8 = COM1, 0x2F8 = COM2,
+	 * 0x3E8 = COM3, 0x2E8 = COM4), not by the order AddDevice ran in */
+	if (!DeviceExtension->ComPortFromRegistry)
+	{
+		switch (DeviceExtension->BaseAddress)
+		{
+			case 0x3F8: DeviceExtension->ComPort = 1; break;
+			case 0x2F8: DeviceExtension->ComPort = 2; break;
+			case 0x3E8: DeviceExtension->ComPort = 3; break;
+			case 0x2E8: DeviceExtension->ComPort = 4; break;
+		}
 	}
 
 	/* Create link \DosDevices\COMX -> \Device\SerialX */

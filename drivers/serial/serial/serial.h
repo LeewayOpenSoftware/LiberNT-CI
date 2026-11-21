@@ -59,6 +59,7 @@ typedef struct _SERIAL_DEVICE_EXTENSION
 	ULONG SerialPortNumber;
 
 	ULONG ComPort;
+	BOOLEAN ComPortFromRegistry; /* ComPort came from PortName */
 	ULONG BaudRate;
 	ULONG BaseAddress;
 	PKINTERRUPT Interrupt;
