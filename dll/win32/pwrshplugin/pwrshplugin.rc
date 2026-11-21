@@ -1,0 +1,22 @@
+/*
+ * PROJECT:     Orosi PowerShell WSMan remoting plugin stub
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+/* The MSI file signature (PWRSHPLUGIN_VERSION AppSearch) requires a numeric
+ * FileVersion >= 6.3.9600.16383. The tree default numeric product version
+ * (VER_PRODUCTVERSION from ntverp.h, the 5.x Orosi scheme) is below that
+ * threshold, so this DLL carries its own NT-compatible 10.0.26100.x numbers,
+ * the same shape Windows uses for this component. */
+#define REACTOS_FILEVERSION         10,0,26100,0
+#define REACTOS_PRODUCTVERSION      10,0,26100,0
+#define REACTOS_STR_FILE_VERSION    "10.0.26100.0\0"
+#define REACTOS_STR_PRODUCT_VERSION "10.0.26100.0\0"
+#define REACTOS_VERSION_DLL
+
+#define REACTOS_STR_FILE_DESCRIPTION  "Orosi PowerShell WSMan Remoting Plugin"
+#define REACTOS_STR_INTERNAL_NAME     "pwrshplugin"
+#define REACTOS_STR_ORIGINAL_FILENAME "pwrshplugin.dll"
+
+#include <reactos/version.rc>
