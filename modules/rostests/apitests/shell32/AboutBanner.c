@@ -25,6 +25,23 @@ static void check_bitmap(HMODULE module, int id, int cx, int cy)
     ok(info.dsBm.bmHeight == cy, "bitmap %d height %ld, expected %d\n", id, info.dsBm.bmHeight, cy);
     ok(info.dsBm.bmBitsPixel == 32, "bitmap %d is %u bpp, expected 32 (alpha)\n", id, info.dsBm.bmBitsPixel);
     ok(info.dsBm.bmBits != NULL, "bitmap %d has no DIB bits\n", id);
+    if (info.dsBm.bmBits && info.dsBm.bmBitsPixel == 32)
+    {
+        /* Premultiplied art: some pixel is visible and no channel exceeds its alpha */
+        const BYTE *p = info.dsBm.bmBits;
+        LONG n = (LONG)info.dsBm.bmWidthBytes * info.dsBm.bmHeight / 4;
+        LONG visible = 0, over = 0;
+
+        for (; n > 0; n--, p += 4)
+        {
+            if (p[3])
+                visible++;
+            if (p[0] > p[3] || p[1] > p[3] || p[2] > p[3])
+                over++;
+        }
+        ok(visible > 0, "bitmap %d has no visible pixel\n", id);
+        ok(over == 0, "bitmap %d has %ld pixels with a channel above alpha (not premultiplied)\n", id, over);
+    }
     DeleteObject(bitmap);
 }
 

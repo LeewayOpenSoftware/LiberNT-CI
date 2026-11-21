@@ -2369,10 +2369,28 @@ static BOOL SHELL_IsDarkSysColor(int nIndex)
     return (GetRValue(c) * 299 + GetGValue(c) * 587 + GetBValue(c) * 114) / 1000 < 128;
 }
 
+static BOOL SHELL_GetAboutWordmarkTint(COLORREF *pcrTint)
+{
+    HIGHCONTRASTW hc = { sizeof(hc) };
+
+    if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(hc), &hc, 0) && (hc.dwFlags & HCF_HIGHCONTRASTON))
+    {
+        *pcrTint = GetSysColor(COLOR_WINDOWTEXT);
+        return TRUE;
+    }
+    if (SHELL_IsDarkSysColor(COLOR_WINDOW))
+    {
+        *pcrTint = RGB(255, 255, 255);
+        return TRUE;
+    }
+    return FALSE;
+}
+
 static void SHELL_LoadAboutWordmark(ABOUT_STATE *state, int dpi)
 {
     UINT id = dpi >= 192 ? IDB_OROSI_WORDMARK_200 : dpi >= 144 ? IDB_OROSI_WORDMARK_150 : IDB_OROSI_WORDMARK;
     DIBSECTION ds;
+    COLORREF crTint;
 
     state->hbmWordmark = (HBITMAP)LoadImageW(shell32_hInstance, MAKEINTRESOURCEW(id), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
     if (!state->hbmWordmark)
@@ -2391,15 +2409,20 @@ static void SHELL_LoadAboutWordmark(ABOUT_STATE *state, int dpi)
     state->cxDest = MulDiv(ABOUT_WORDMARK_CX, dpi, 96);
     state->cyDest = MulDiv(ABOUT_WORDMARK_CY, dpi, 96);
 
-    /* The art is brand blue with premultiplied alpha. On a dark window
-       colour (high contrast black) make it white and keep the alpha. */
-    if (SHELL_IsDarkSysColor(COLOR_WINDOW))
+    /* The art is brand blue with premultiplied alpha. High contrast draws
+       in system colours, so tint it to the window text colour there; on any
+       other dark window colour make it white. The alpha is kept. */
+    if (SHELL_GetAboutWordmarkTint(&crTint))
     {
         BYTE *p = ds.dsBm.bmBits;
         LONG n = (LONG)ds.dsBm.bmWidthBytes * ds.dsBm.bmHeight / 4;
 
         for (; n > 0; n--, p += 4)
-            p[0] = p[1] = p[2] = p[3];
+        {
+            p[0] = (BYTE)(GetBValue(crTint) * p[3] / 255);
+            p[1] = (BYTE)(GetGValue(crTint) * p[3] / 255);
+            p[2] = (BYTE)(GetRValue(crTint) * p[3] / 255);
+        }
     }
 }
 
