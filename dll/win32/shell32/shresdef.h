@@ -425,6 +425,15 @@
 #define IDS_NSC_SHARING                             60063
 #define IDS_NSC_SEEALSO                             60064
 #define IDS_NSC_INETOPTIONS                         60065
+
+/* Control Panel view: other texts */
+#define IDS_CPL_ALLITEMS                            60070
+#define IDS_CPL_ADJUST                              60071
+#define IDS_CPL_VIEWBY                              60072
+#define IDS_CPL_VIEW_CATEGORY                       60073
+#define IDS_CPL_VIEW_LARGE                          60074
+#define IDS_CPL_VIEW_SMALL                          60075
+#define IDS_CPL_VIEW_CLASSIC                        60076
 #define IDS_SEARCHBAND_COMMAND                      12708
 #define IDS_FOLDERSHORTCUT_TYPE                     10540
 
