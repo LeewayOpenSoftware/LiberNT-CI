@@ -2333,6 +2333,11 @@ ChangePos:
                 }
             }
 
+            /* Size the window from the clamped thickness, not the raw rcTray: a
+               re-fit (or the empty boot rect) otherwise applies a 3 px / ~32768
+               window size through pwp even though m_TraySize is already clamped. */
+            MakeTrayRectWithSize(m_Position, &m_TraySize, &rcTray);
+
             pwp->flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
             pwp->x = rcTray.left;
             pwp->y = rcTray.top;
