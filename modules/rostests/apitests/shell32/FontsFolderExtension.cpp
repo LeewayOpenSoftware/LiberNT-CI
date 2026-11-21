@@ -8,8 +8,9 @@
 #include <debug.h>
 #include <wchar.h>
 #include <shlobj.h>
+#include <shellutils.h>
 
-void func_FontsFolderExtension(void)
+static void TestFontsFolder(void)
 {
     CComPtr<IShellFolder> psfDsk;
     HRESULT hr = SHGetDesktopFolder(&psfDsk);
@@ -93,4 +94,11 @@ void func_FontsFolderExtension(void)
             ok(hr == S_OK, "GetDetailsOf col %d: 0x%lx\n", col, hr);
         }
     }
+}
+
+START_TEST(FontsFolderExtension)
+{
+    CoInitialize(NULL); // the Fonts folder handler is a COM class
+    TestFontsFolder();
+    CoUninitialize();
 }
