@@ -1939,6 +1939,9 @@ LoadAndBootWindowsCommon(
 #endif
 #endif
 
+    /* Always printed: a serial log that ends here has handed off, not hung */
+    DbgPrint("(freeldr) transferring control to the kernel\n");
+
 #if defined(_M_ARM64)
     Arm64JumpToKernel((ULONGLONG)(ULONG_PTR)KiSystemStartup,
                       (ULONGLONG)(ULONG_PTR)LoaderBlockVA,
