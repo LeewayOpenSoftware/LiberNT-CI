@@ -167,7 +167,7 @@ BEGIN
     ICON "", IDC_ABOUT_ICON, 10, 55, 21, 20
     LTEXT "", IDC_ABOUT_APPNAME, 34, 56, 252, 10, SS_NOPREFIX
     LTEXT "", IDC_ABOUT_VERSION, 34, 67, 252, 10, SS_NOPREFIX
-    LTEXT "© 2027 Leeway Open Software", IDC_STATIC, 34, 78, 252, 10, SS_NOPREFIX
+    LTEXT "© 2026 Leeway Open Software", IDC_STATIC, 34, 78, 252, 10, SS_NOPREFIX
     LTEXT "Basado en ReactOS © 1996–2026", IDC_STATIC, 34, 89, 252, 10, SS_NOPREFIX
     LTEXT "", IDC_ABOUT_OTHERSTUFF, 34, 101, 252, 18, SS_NOPREFIX
     CONTROL "Orosi es software libre: puede usarlo, copiarlo, compartirlo y modificarlo según los <A>términos de licencia de Orosi</A>. Se entrega sin ninguna garantía.", IDC_ABOUT_LICENSE, "SysLink", WS_TABSTOP, 34, 122, 252, 26
