@@ -1657,6 +1657,13 @@ CLanStatus::EnumerateTrayConnections()
         if (FAILED(pNetCon->GetProperties(&pProps)))
             continue;
 
+        /* a disabled adapter has no status to show in the notification area */
+        if (pProps->Status == NCS_HARDWARE_DISABLED)
+        {
+            NcFreeNetconProperties(pProps);
+            continue;
+        }
+
         pItem = FindTrayConnection(&pProps->guidId);
         if (pItem)
         {
