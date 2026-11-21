@@ -1,9 +1,6 @@
-IDB_REACTOS BITMAP "res/bitmaps/reactos.bmp"
-IDB_REACTOS_125 BITMAP "res/bitmaps/reactos-125.bmp"
-IDB_REACTOS_150 BITMAP "res/bitmaps/reactos-150.bmp"
-IDB_REACTOS_175 BITMAP "res/bitmaps/reactos-175.bmp"
-IDB_REACTOS_200 BITMAP "res/bitmaps/reactos-200.bmp"
-IDB_LINEBAR BITMAP "res/bitmaps/line.bmp"
+IDB_OROSI_WORDMARK BITMAP "res/bitmaps/orosi-wordmark.bmp"
+IDB_OROSI_WORDMARK_150 BITMAP "res/bitmaps/orosi-wordmark-150.bmp"
+IDB_OROSI_WORDMARK_200 BITMAP "res/bitmaps/orosi-wordmark-200.bmp"
 
 IDB_SHELL_IEXPLORE_LG        BITMAP "res/bitmaps/204.bmp"
 IDB_SHELL_IEXPLORE_LG_HOT    BITMAP "res/bitmaps/205.bmp"

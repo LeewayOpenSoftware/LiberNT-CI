@@ -77,6 +77,9 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/readme.txt DESTINATION reactos FOR 
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/system.ini DESTINATION reactos FOR all)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/win.ini DESTINATION reactos FOR all)
 
+# The licence text, opened by the About dialog
+add_cd_file(FILE ${REACTOS_SOURCE_DIR}/COPYING DESTINATION reactos NAME_ON_CD LICENSE.txt NO_CAB FOR all)
+
 ## NOTE: The root setup.exe file is a renamed welcome.exe for BootCD purposes.
 # welcome.exe optional custom configuration (only for LiveImage)
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/)

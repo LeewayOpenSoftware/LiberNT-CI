@@ -27,12 +27,9 @@
 #define IDA_DESKBROWSER 3
 
 /* Bitmaps */
-#define IDB_REACTOS                 131
-#define IDB_REACTOS_125             132
-#define IDB_REACTOS_150             133
-#define IDB_REACTOS_175             134
-#define IDB_REACTOS_200             135
-#define IDB_LINEBAR                 138
+#define IDB_OROSI_WORDMARK          131
+#define IDB_OROSI_WORDMARK_150      133
+#define IDB_OROSI_WORDMARK_200      135
 #define IDB_SHELL_IEXPLORE_LG       204
 #define IDB_SHELL_IEXPLORE_LG_HOT   205
 #define IDB_SHELL_IEXPLORE_SM       206
@@ -512,7 +509,8 @@
 #define IDC_ABOUT_REG_TO              0x3506
 #define IDC_ABOUT_REG_USERNAME        0x3507
 #define IDC_ABOUT_REG_ORGNAME         0x3508
-#define IDC_ABOUT_PHYSMEM             0x3503
+#define IDC_ABOUT_LICENSE             0x3509
+#define IDC_ABOUT_SEPARATOR           0x350A
 
 /* About authors dialog */
 #define IDD_ABOUT_AUTHORS         3
