@@ -920,9 +920,22 @@ TestFontThumbnail(void)
         hStream = CreateFileW(szStream, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hStream != INVALID_HANDLE_VALUE)
         {
+            WIN32_FILE_ATTRIBUTE_DATA Before, After;
             DWORD Written;
+
             WriteFile(hStream, ZoneData, sizeof(ZoneData) - 1, &Written, NULL);
             CloseHandle(hStream);
+            /* A volume without real streams may have opened the font itself: then the
+             * "no thumbnail" below would prove nothing, so check the file is intact */
+            if (!GetFileAttributesExW(szFont, GetFileExInfoStandard, &Before) ||
+                !GetFileAttributesExW(szZoned, GetFileExInfoStandard, &After) ||
+                Before.nFileSizeLow != After.nFileSizeLow || Before.nFileSizeHigh != After.nFileSizeHigh)
+            {
+                skip("writing %ls changed the file itself (no real alternate streams here)\n", szStream);
+                DeleteFileW(szZoned);
+                continue;
+            }
+            trace("%ls holds a real Zone.Identifier stream\n", szZoned);
             hr = SHCreateItemFromParsingName(szZoned, NULL, IID_PPV_ARG(IShellItemImageFactory, &Factory));
             ok_hr(hr, S_OK);
             if (SUCCEEDED(hr))
