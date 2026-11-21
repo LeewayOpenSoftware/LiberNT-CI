@@ -2857,13 +2857,19 @@ ChangePos:
 
     void FitToRebar(PRECT pRect)
     {
-        /* An empty or inverted rect (e.g. h<=0 at logon before the children
-           exist) must not drive the rebar sizing/row count. */
+        /* At logon FitToRebar can be handed the stale inverted rect (h<=0) before
+           the children exist. Rebuild a valid docked rect from the clamped tray
+           size and run the fit anyway, so RB_SIZETORECT shrinks the bar to the
+           band at boot; only give up if even that is not valid. */
         if (pRect->right - pRect->left <= 0 || pRect->bottom - pRect->top <= 0)
         {
-            ERR("FitToRebar: skipping invalid rect %ld,%ld,%ld,%ld\n",
-                pRect->left, pRect->top, pRect->right, pRect->bottom);
-            return;
+            MakeTrayRectWithSize(m_Position, &m_TraySize, pRect);
+            if (pRect->right - pRect->left <= 0 || pRect->bottom - pRect->top <= 0)
+            {
+                ERR("FitToRebar: skipping invalid rect %ld,%ld,%ld,%ld\n",
+                    pRect->left, pRect->top, pRect->right, pRect->bottom);
+                return;
+            }
         }
         /* Get the rect of the rebar */
         RECT rebarRect, taskbarRect, clientRect;
