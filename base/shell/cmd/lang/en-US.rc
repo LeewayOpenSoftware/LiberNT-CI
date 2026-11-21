@@ -287,7 +287,7 @@ Enter HELP <command> for further information on any of the above commands.\n"
     WCMD_VOLUMEPROMPT, "Volume label (11 characters, <Enter> for none)?"
     WCMD_ANYKEY, "Press any key to continue... "
     WCMD_CONSTITLE, "Wine Command Prompt"
-    WCMD_VERSION, "Microsoft Windows [Version %1!S!]\n"
+    WCMD_VERSION, "Orosi [Version %1!S!]\n"
     WCMD_BANNER, "Orosi [Version %1!S! (%2!S!)]\n\
 (C) Copyright %3!S! Orosi Team.\n"
     WCMD_MOREPROMPT, "More? "
