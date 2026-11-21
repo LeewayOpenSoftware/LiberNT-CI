@@ -95,7 +95,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT nu poate accesa acest dispozitiv deoarece informația cheii din registru fie lipsește, fie a fost înregistrată incorect."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT a încărcat driverul dispozitivului cu succes, însă nu poate găsi dispozitivul."
     IDS_DEV_DUPLICATE_DEVICE "LiberNT nu poate încărca driverul deoarece în sistem deja exista un dispozitiv în funcțiune de acest fel."
-    IDS_DEV_FAILED_POST_START "LiberNT a oprit acest dispozitiv deoarece au fost depistate probleme cu el."
+    IDS_DEV_FAILED_POST_START "Orosi a oprit acest dispozitiv deoarece au fost depistate probleme cu el."
     IDS_DEV_HALTED "O aplicație sau un serviciu a oprit acest dispozitiv."
     IDS_DEV_PHANTOM "La moment, acest dispozitiv nu este conectat la calculator."
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT nu poate obține acces la acest dispozitiv deoarece sistemul de operare este în curs de închidere."

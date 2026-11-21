@@ -99,7 +99,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT nie mógł uzyskać dostępu do sprzętu, ponieważ brakuje klucza w rejestrze lub klucz nie jest zapisany prawidłowo."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT pomyślnie uruchomił sterownik urządzenia, ale nie odnalazł go fizycznie."
     IDS_DEV_DUPLICATE_DEVICE "LiberNT nie mógł uruchomić sterownika dla tego urządzenia, ponieważ identyczne urządzenie pracuje obecnie w systemie."
-    IDS_DEV_FAILED_POST_START "LiberNT przerwał pracę urządzenia, ponieważ zostały zgłoszone problemy."
+    IDS_DEV_FAILED_POST_START "Orosi przerwał pracę urządzenia, ponieważ zostały zgłoszone problemy."
     IDS_DEV_HALTED "Program lub usługa przerwała działanie urządzenia."
     IDS_DEV_PHANTOM "Obecnie urządzenie nie jest podłączone do komputera."
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT nie może uzyskać dostępu do urządzenia, ponieważ trwa zamykanie systemu."

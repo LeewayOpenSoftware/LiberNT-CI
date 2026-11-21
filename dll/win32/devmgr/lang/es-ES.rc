@@ -95,7 +95,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT no puede tener acceso a este hardware porque su información en la clave del servicio del Registro falta o está registrada incorrectamente."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT cargó con éxito el controlador del dispositivo pero no puede encontrar el dispositivo."
     IDS_DEV_DUPLICATE_DEVICE "LiberNT no puede cargar el controlador de dispositivo para este hardware porque hay un dispositivo duplicado que ya funciona en el sistema."
-    IDS_DEV_FAILED_POST_START "LiberNT ha deshabilitado este dispositivo tras informar de problemas en su inicio."
+    IDS_DEV_FAILED_POST_START "Orosi ha deshabilitado este dispositivo tras informar de problemas en su inicio."
     IDS_DEV_HALTED "Una aplicación o un servicio han detenido este dispositivo de hardware."
     IDS_DEV_PHANTOM "El dispositivo no está conectado al equipo."
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT no puede acceder a este dispositivo de hardware porque el sistema operativo está apagándose."

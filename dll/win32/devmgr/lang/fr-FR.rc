@@ -87,7 +87,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT ne peut pas accéder à ce matériel parce que la clé de registre de son service est manquante ou incorrectement inscrite."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT a chargé avec succès le pilote pour ce matériel mais n'a pas pu trouver le périphérique matériel."
     IDS_DEV_DUPLICATE_DEVICE "LiberNT ne peut pas charger le pilote pour ce périphérique matériel parce qu'un matériel en double tourne déjà dans le système."
-    IDS_DEV_FAILED_POST_START "LiberNT a arrêté ce périphérique car il a signalé des problèmes."
+    IDS_DEV_FAILED_POST_START "Orosi a arrêté ce périphérique car il a signalé des problèmes."
     IDS_DEV_HALTED "Une application ou un service a arrêté ce périphérique matériel."
     IDS_DEV_PHANTOM "Ce périphérique matériel n'est pas connecté à l'ordinateur actuellement."
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT ne peut pas accéder à ce matériel parce que le système est en train de s'arrêter."

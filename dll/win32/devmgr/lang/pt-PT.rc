@@ -95,7 +95,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "O LiberNT não pode acessar este hardware porque as informações sobre a chave do serviço não estão no registo ou estão registadas incorrectamente."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "O LiberNT carregou o controlador do dispositivo para este hardware correctamente mas não consegue encontrar o dispositivo de hardware."
     IDS_DEV_DUPLICATE_DEVICE "O LiberNT não pode carregar o controlador do dispositivo para este hardware porque já existe uma instância deste dispositivo em execução no sistema."
-    IDS_DEV_FAILED_POST_START "O LiberNT parou este dispositivo porque ele reportou problemas."
+    IDS_DEV_FAILED_POST_START "O Orosi parou este dispositivo porque ele reportou problemas."
     IDS_DEV_HALTED "Uma aplicação ou serviço desligou este dispositivo de hardware."
     IDS_DEV_PHANTOM "No momento, este dispositivo de hardware não está ligado ao computador."
     IDS_DEV_SYSTEM_SHUTDOWN "O LiberNT não pode obter acesso a este dispositivo de hardware porque o sistema operativo está em processo de desligamento."

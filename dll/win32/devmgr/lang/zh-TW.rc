@@ -94,7 +94,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT 無法存取這個硬體，因為它在登錄中的服務機碼資訊已丟失或記錄不正確。"
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT 成功載入這個硬體的裝置驅動程式，但找不到硬體裝置。"
     IDS_DEV_DUPLICATE_DEVICE "LiberNT 無法載入這個硬體的裝置驅動程式，因為已經有相同的裝置在系統上執行。"
-    IDS_DEV_FAILED_POST_START "LiberNT 已停止這個裝置，因為它發生了問題。"
+    IDS_DEV_FAILED_POST_START "Orosi 已停止這個裝置，因為它發生了問題。"
     IDS_DEV_HALTED "有應用程式或服務關閉了這個硬體裝置。"
     IDS_DEV_PHANTOM "這個硬體裝置目前未連接到電腦。"
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT 無法存取這個硬體裝置，因為作業系統正在關閉。"

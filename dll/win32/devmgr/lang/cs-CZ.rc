@@ -91,7 +91,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT nemůže získat přístup k tomuto zařízení, protože jeho service key informace v registru chybí nebo je zapsána nesprávně."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT úspěšně načetl ovladač zařízení, ale nemůže najít zařízení."
     IDS_DEV_DUPLICATE_DEVICE "LiberNT nemůže načíst ovladač tohoto zařízení, protože v systému už je spuštěno duplicitní zařízení."
-    IDS_DEV_FAILED_POST_START "LiberNT zastavil toto zařízení, protože způsobovalo problémy."
+    IDS_DEV_FAILED_POST_START "Orosi zastavil toto zařízení, protože způsobovalo problémy."
     IDS_DEV_HALTED "Aplikace nebo služba zastavila toto zařízení."
     IDS_DEV_PHANTOM "Toto zařízení nyní není připojeno k počítači."
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT nemohl získat přístup k tomuto zařízení, protože operační systém se právě vypíná."
