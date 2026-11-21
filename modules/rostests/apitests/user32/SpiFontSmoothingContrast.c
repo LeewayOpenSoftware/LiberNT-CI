@@ -1,8 +1,8 @@
 /*
  * PROJECT:     LiberNT API tests
- * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
  * PURPOSE:     Range validation for the SPI_SETFONTSMOOTHINGCONTRAST system parameter
- * COPYRIGHT:   Copyright 2026 LeewayOpenSoftware
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
 #include "precomp.h"
@@ -25,7 +25,7 @@ ExpectReject(UINT contrast, UINT before)
     BOOL ret;
 
     SetLastError(0xdeadbeef);
-    ret = SystemParametersInfoW(SPI_SETFONTSMOOTHINGCONTRAST, contrast, NULL, 0);
+    ret = SystemParametersInfoW(SPI_SETFONTSMOOTHINGCONTRAST, 0, UlongToPtr(contrast), 0);
     ok(!ret, "SPI_SETFONTSMOOTHINGCONTRAST(%u) should have failed\n", contrast);
     ok(GetLastError() == ERROR_INVALID_PARAMETER,
        "expected ERROR_INVALID_PARAMETER for %u, got %lu\n", contrast, GetLastError());
@@ -38,7 +38,7 @@ void
 ExpectAccept(UINT contrast)
 {
     UINT value;
-    BOOL ret = SystemParametersInfoW(SPI_SETFONTSMOOTHINGCONTRAST, contrast, NULL, 0);
+    BOOL ret = SystemParametersInfoW(SPI_SETFONTSMOOTHINGCONTRAST, 0, UlongToPtr(contrast), 0);
     ok(ret, "SPI_SETFONTSMOOTHINGCONTRAST(%u) failed, error %lu\n", contrast, GetLastError());
     value = GetContrast();
     ok(value == contrast, "expected %u, got %u\n", contrast, value);
@@ -68,6 +68,6 @@ START_TEST(SpiFontSmoothingContrast)
     /* Restore the original value (default/out-of-range stored values clamp to 1200). */
     if (original < 1000 || original > 2200)
         original = 1200;
-    ret = SystemParametersInfoW(SPI_SETFONTSMOOTHINGCONTRAST, original, NULL, 0);
+    ret = SystemParametersInfoW(SPI_SETFONTSMOOTHINGCONTRAST, 0, UlongToPtr(original), 0);
     ok(ret, "restore SPI_SETFONTSMOOTHINGCONTRAST failed, error %lu\n", GetLastError());
 }
