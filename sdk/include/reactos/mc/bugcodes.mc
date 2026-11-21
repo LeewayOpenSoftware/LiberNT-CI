@@ -20,7 +20,7 @@ Severity=Informational
 Facility=System
 SymbolicName=WINDOWS_NT_BANNER
 Language=English
-LiberNT Version %s
+Orosi Version %s
 Build %s
 Reporting NT %s (Build %u%s)
 .
@@ -70,9 +70,9 @@ Severity=Informational
 Facility=System
 SymbolicName=REACTOS_COPYRIGHT_NOTICE
 Language=English
-\n\nLiberNT is free software, covered by the GNU General Public License,
+\n\nOrosi is free software, covered by the GNU General Public License,
  and you\n are welcome to change it and/or distribute copies of it under
- certain\n conditions. There is absolutely no warranty for LiberNT.\n
+ certain\n conditions. There is absolutely no warranty for Orosi.\n
 .
 
 MessageId=0x7F
@@ -111,7 +111,7 @@ SymbolicName=BUGCODE_PSS_MESSAGE
 Language=English
 Check to make sure any new hardware or software is properly installed.
 If this is a new installation, ask your hardware or software manufacturer
-for any LiberNT updates you might need.
+for any Orosi updates you might need.
 
 If problems continue, disable or remove any newly installed hardware
 or software. Disable BIOS memory options such as caching or shadowing.
@@ -1352,7 +1352,7 @@ Severity=Success
 Facility=System
 SymbolicName=BUGCODE_PSS_MESSAGE_SIGNATURE
 Language=English
-A system file that is owned by LiberNT was replaced by an application
+A system file that is owned by Orosi was replaced by an application
 running on your system.  The operating system detected this and tried to
 verify the validity of the file's signature.  The operating system found that
 the file signature is not valid and put the original, correct file back
@@ -1376,7 +1376,7 @@ A device driver has pool.
 
 Check to make sure any new hardware or software is properly installed.
 If this is a new installation, ask your hardware or software manufacturer
-for any LiberNT updates you might need.
+for any Orosi updates you might need.
 
 Run the driver verifier against any new (or suspect) drivers.
 If that doesn't reveal the corrupting driver, try enabling special pool.
@@ -1585,12 +1585,12 @@ SymbolicName=ACPI_BIOS_FATAL_ERROR
 Language=English
 
 Your computer (BIOS) has reported that a component in your system is faulty and
-has prevented LiberNT from operating.  You can determine which component is
+has prevented Orosi from operating.  You can determine which component is
 faulty by running the diagnostic disk or tool that came with your computer.
 
 If you do not have this tool, you must contact your system vendor and report
 this error message to them.  They will be able to assist you in correcting this
-hardware problem thereby allowing LiberNT to operate.
+hardware problem thereby allowing Orosi to operate.
 .
 
 MessageId=0xE1

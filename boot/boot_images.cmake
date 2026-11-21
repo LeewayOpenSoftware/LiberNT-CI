@@ -266,7 +266,7 @@ endif()
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort ${ISO_SORT_FILE_DATA})
 
 # ISO image identifier names
-set(ISO_MANUFACTURER "LiberNT Project") # For both the publisher and the preparer
+set(ISO_MANUFACTURER "Leeway Open Software") # For both the publisher and the preparer
 set(ISO_VOLNAME      "ReactOS")         # For both the Volume ID and the Volume set ID
 
 # ISO image options
