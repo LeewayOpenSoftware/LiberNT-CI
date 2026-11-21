@@ -314,7 +314,7 @@ comandos superiores.\n"
     WCMD_CONSTITLE, "Símbolo del sistema de Wine"
     WCMD_VERSION, "Orosi OS [Versión %1!S!]\n"
     WCMD_BANNER, "Orosi [Versión %1!S! (%2!S!)]\n\
-(C) Copyright %3!S! El equipo de Orosi.\n"
+(c) Leeway Open Software. Todos los derechos reservados.\n"
     WCMD_MOREPROMPT, "¿Más? "
     WCMD_LINETOOLONG, "La línea de entrada es demasiado larga.\n"
     WCMD_VOLUMELABEL, "El volumen en la unidad %1!c! es %2\n"

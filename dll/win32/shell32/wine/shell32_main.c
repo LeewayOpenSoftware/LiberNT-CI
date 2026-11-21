@@ -1328,7 +1328,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
 const char * const SHELL_Authors[] =
 {
-    "Copyright 2026 Orosi Team",
+    "Copyright 2026 Leeway Open Software",
     "Copyright 1993-"COPYRIGHT_YEAR" WINE team",
     "Copyright 1998-"COPYRIGHT_YEAR" ReactOS Team",
 #ifdef ENABLE_FEX_ARM64EC
