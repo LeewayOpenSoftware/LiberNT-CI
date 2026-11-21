@@ -1551,7 +1551,7 @@ static LONG WINAPI CrashReport(EXCEPTION_POINTERS *ep)
     printf("\nCRASH code 0x%08lx at %p (image base %p)", (unsigned long)ep->ExceptionRecord->ExceptionCode,
            ep->ExceptionRecord->ExceptionAddress, (void *)GetModuleHandleW(NULL));
     if (ep->ExceptionRecord->NumberParameters >= 2)
-        printf(", access type %Iu address %p", ep->ExceptionRecord->ExceptionInformation[0],
+        printf(", access type %Iu address %p", (size_t)ep->ExceptionRecord->ExceptionInformation[0],
                (void *)ep->ExceptionRecord->ExceptionInformation[1]);
     {
         HMODULE mod = NULL;
