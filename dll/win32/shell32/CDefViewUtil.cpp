@@ -33,7 +33,8 @@ const SHELLVIEWID *
 FolderViewModeToShellViewId(UINT FVM)
 {
     static const SHELLVIEWID *vids[] = {
-        &VID_LargeIcons, &VID_SmallIcons,
+        /* In FOLDERVIEWMODE order, from FVM_ICON */
+        &VID_LargeIcons, &VID_SmallIcons, &VID_List,
         &VID_Details, &VID_Thumbnails,
         &VID_Tile, &VID_ThumbStrip,
     };

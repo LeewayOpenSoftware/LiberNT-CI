@@ -381,6 +381,27 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Propertie
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cursors\Schemes","LiberNT Default",0x00020000,""",,,,,,,,,,,,,"""
 
 ; Advanced
+; Folder types: the default view of a folder of each type (as Windows)
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{5c4f28b5-f869-4e84-8e60-f11db97c5cc7}","CanonicalName",0x00000000,"Generic"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{5c4f28b5-f869-4e84-8e60-f11db97c5cc7}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{7d49d726-3c21-4f05-99aa-fdc2c9474656}","CanonicalName",0x00000000,"Documents"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{7d49d726-3c21-4f05-99aa-fdc2c9474656}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{7d49d726-3c21-4f05-99aa-fdc2c9474656}\TopViews\{00000000-0000-0000-0000-000000000000}","SortByList",0x00000000,"prop:System.ItemNameDisplay"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{885a186e-a440-4ada-812b-db871b942259}","CanonicalName",0x00000000,"Downloads"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{885a186e-a440-4ada-812b-db871b942259}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{885a186e-a440-4ada-812b-db871b942259}\TopViews\{00000000-0000-0000-0000-000000000000}","GroupBy",0x00000000,"System.DateModified"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{885a186e-a440-4ada-812b-db871b942259}\TopViews\{00000000-0000-0000-0000-000000000000}","GroupAscending",0x00010001,0
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{885a186e-a440-4ada-812b-db871b942259}\TopViews\{00000000-0000-0000-0000-000000000000}","SortByList",0x00000000,"prop:System.DateModified"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{94d6ddcc-4a68-4175-a374-bd584a510b78}","CanonicalName",0x00000000,"Music"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{94d6ddcc-4a68-4175-a374-bd584a510b78}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{94d6ddcc-4a68-4175-a374-bd584a510b78}\TopViews\{00000000-0000-0000-0000-000000000000}","SortByList",0x00000000,"prop:System.ItemNameDisplay"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{b3690e58-e961-423b-b687-386ebfd83239}","CanonicalName",0x00000000,"Pictures"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{b3690e58-e961-423b-b687-386ebfd83239}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,3
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{b3690e58-e961-423b-b687-386ebfd83239}\TopViews\{00000000-0000-0000-0000-000000000000}","IconSize",0x00010001,96
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{5fa96407-7e77-483c-ac93-691d05850de8}","CanonicalName",0x00000000,"Videos"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{5fa96407-7e77-483c-ac93-691d05850de8}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,3
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{5fa96407-7e77-483c-ac93-691d05850de8}\TopViews\{00000000-0000-0000-0000-000000000000}","IconSize",0x00010001,96
+
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\KindMap",".3ds",0x00000000,"picture"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\KindMap",".3g2",0x00000000,"video"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\KindMap",".3gp",0x00000000,"video"
