@@ -6,6 +6,7 @@ list(APPEND SOURCE
     config.c
     cordebug.c
     corruntimehost.c
+    forward.c
     metadata.c
     metahost.c
     mscoree_main.c
@@ -13,6 +14,7 @@ list(APPEND SOURCE
 
 add_library(mscoree MODULE
     ${SOURCE}
+    mscoree.rc
     ${CMAKE_CURRENT_BINARY_DIR}/mscoree.def)
 
 set_source_files_properties(metahost.c PROPERTIES COMPILE_DEFINITIONS "INSTALL_DATADIR=\"/usr/share\"")

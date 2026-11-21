@@ -201,12 +201,17 @@ HRESULT WINAPI CorBindToRuntimeHost(LPCWSTR pwszVersion, LPCWSTR pwszBuildFlavor
                                     DWORD startupFlags, REFCLSID rclsid,
                                     REFIID riid, LPVOID *ppv)
 {
+    FARPROC forward = mscoree_get_real_export("CorBindToRuntimeHost");
     HRESULT ret;
     ICLRRuntimeInfo *info;
 
     TRACE("(%s, %s, %s, %p, %ld, %s, %s, %p)\n", debugstr_w(pwszVersion),
           debugstr_w(pwszBuildFlavor), debugstr_w(pwszHostConfigFile), pReserved,
           startupFlags, debugstr_guid(rclsid), debugstr_guid(riid), ppv);
+
+    if (forward)
+        return ((HRESULT (WINAPI *)(LPCWSTR, LPCWSTR, LPCWSTR, VOID *, DWORD, REFCLSID, REFIID, LPVOID *))forward)(
+            pwszVersion, pwszBuildFlavor, pwszHostConfigFile, pReserved, startupFlags, rclsid, riid, ppv);
 
     *ppv = NULL;
 
@@ -321,7 +326,12 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 
 __int32 WINAPI _CorExeMain2(PBYTE ptrMemory, DWORD cntMemory, LPWSTR imageName, LPWSTR loaderName, LPWSTR cmdLine)
 {
+    FARPROC forward = mscoree_get_real_export("_CorExeMain2");
+
     TRACE("(%p, %lu, %s, %s, %s)\n", ptrMemory, cntMemory, debugstr_w(imageName), debugstr_w(loaderName), debugstr_w(cmdLine));
+
+    if (forward)
+        return ((__int32 (WINAPI *)(PBYTE, DWORD, LPWSTR, LPWSTR, LPWSTR))forward)(ptrMemory, cntMemory, imageName, loaderName, cmdLine);
     FIXME("Directly running .NET applications not supported.\n");
     return -1;
 }
@@ -334,12 +344,23 @@ void WINAPI CorExitProcess(int exitCode)
 
 VOID WINAPI _CorImageUnloading(PVOID imageBase)
 {
+    FARPROC forward = mscoree_get_real_export("_CorImageUnloading");
+
     TRACE("(%p): stub\n", imageBase);
+
+    if (forward)
+        ((VOID (WINAPI *)(PVOID))forward)(imageBase);
 }
 
 HRESULT WINAPI _CorValidateImage(PVOID* imageBase, LPCWSTR imageName)
 {
+    FARPROC forward = mscoree_get_real_export("_CorValidateImage");
+
     TRACE("(%p, %s): stub\n", imageBase, debugstr_w(imageName));
+
+    if (forward)
+        return ((HRESULT (WINAPI *)(PVOID*, LPCWSTR))forward)(imageBase, imageName);
+
     return E_FAIL;
 }
 
@@ -368,10 +389,14 @@ HRESULT WINAPI GetCORSystemDirectory(LPWSTR pbuffer, DWORD cchBuffer, DWORD *dwL
 
 HRESULT WINAPI GetCORVersion(LPWSTR pbuffer, DWORD cchBuffer, DWORD *dwLength)
 {
+    FARPROC forward = mscoree_get_real_export("GetCORVersion");
     ICLRRuntimeInfo *info;
     HRESULT ret;
 
     TRACE("(%p, %ld, %p)!\n", pbuffer, cchBuffer, dwLength);
+
+    if (forward)
+        return ((HRESULT (WINAPI *)(LPWSTR, DWORD, DWORD *))forward)(pbuffer, cchBuffer, dwLength);
 
     if (!dwLength || !pbuffer)
         return E_POINTER;
@@ -473,12 +498,16 @@ HRESULT WINAPI GetFileVersion(LPCWSTR szFilename, LPWSTR szBuffer, DWORD cchBuff
 
 HRESULT WINAPI LoadLibraryShim( LPCWSTR szDllName, LPCWSTR szVersion, LPVOID pvReserved, HMODULE * phModDll)
 {
+    FARPROC forward = mscoree_get_real_export("LoadLibraryShim");
     HRESULT ret=S_OK;
     WCHAR dll_filename[MAX_PATH];
     WCHAR version[MAX_PATH];
     static const WCHAR default_version[] = {'v','1','.','1','.','4','3','2','2',0};
     static const WCHAR slash[] = {'\\',0};
     DWORD dummy;
+
+    if (forward)
+        return ((HRESULT (WINAPI *)(LPCWSTR, LPCWSTR, LPVOID, HMODULE *))forward)(szDllName, szVersion, pvReserved, phModDll);
 
     TRACE("(%p %s, %p, %p, %p)\n", szDllName, debugstr_w(szDllName), szVersion, pvReserved, phModDll);
 
@@ -560,11 +589,16 @@ HRESULT WINAPI LoadStringRC(UINT resId, LPWSTR pBuffer, int iBufLen, int bQuiet)
 HRESULT WINAPI CorBindToRuntimeEx(LPWSTR szVersion, LPWSTR szBuildFlavor, DWORD nflags, REFCLSID rslsid,
                                   REFIID riid, LPVOID *ppv)
 {
+    FARPROC forward = mscoree_get_real_export("CorBindToRuntimeEx");
     HRESULT ret;
     ICLRRuntimeInfo *info;
 
     TRACE("%s %s %ld %s %s %p\n", debugstr_w(szVersion), debugstr_w(szBuildFlavor), nflags, debugstr_guid( rslsid ),
           debugstr_guid( riid ), ppv);
+
+    if (forward)
+        return ((HRESULT (WINAPI *)(LPWSTR, LPWSTR, DWORD, REFCLSID, REFIID, LPVOID *))forward)(
+            szVersion, szBuildFlavor, nflags, rslsid, riid, ppv);
 
     *ppv = NULL;
 
@@ -588,10 +622,14 @@ HRESULT WINAPI CorBindToRuntimeEx(LPWSTR szVersion, LPWSTR szBuildFlavor, DWORD 
 
 HRESULT WINAPI CorBindToCurrentRuntime(LPCWSTR filename, REFCLSID rclsid, REFIID riid, LPVOID *ppv)
 {
+    FARPROC forward = mscoree_get_real_export("CorBindToCurrentRuntime");
     HRESULT ret;
     ICLRRuntimeInfo *info;
 
     TRACE("(%s, %s, %s, %p)\n", debugstr_w(filename), debugstr_guid(rclsid), debugstr_guid(riid), ppv);
+
+    if (forward)
+        return ((HRESULT (WINAPI *)(LPCWSTR, REFCLSID, REFIID, LPVOID *))forward)(filename, rclsid, riid, ppv);
 
     *ppv = NULL;
 
@@ -698,7 +736,12 @@ HRESULT WINAPI CreateDebuggingInterfaceFromVersion(int nDebugVersion, LPCWSTR ve
 
 HRESULT WINAPI CLRCreateInstance(REFCLSID clsid, REFIID riid, LPVOID *ppInterface)
 {
+    FARPROC forward = mscoree_get_real_export("CLRCreateInstance");
+
     TRACE("(%s,%s,%p)\n", debugstr_guid(clsid), debugstr_guid(riid), ppInterface);
+
+    if (forward)
+        return ((HRESULT (WINAPI *)(REFCLSID, REFIID, LPVOID *))forward)(clsid, riid, ppInterface);
 
     if (IsEqualGUID(clsid, &CLSID_CLRMetaHost))
         return CLRMetaHost_CreateInstance(riid, ppInterface);
@@ -712,17 +755,26 @@ HRESULT WINAPI CLRCreateInstance(REFCLSID clsid, REFIID riid, LPVOID *ppInterfac
 
 HRESULT WINAPI CreateInterface(REFCLSID clsid, REFIID riid, LPVOID *ppInterface)
 {
+    FARPROC forward = mscoree_get_real_export("CreateInterface");
+
     TRACE("(%s,%s,%p)\n", debugstr_guid(clsid), debugstr_guid(riid), ppInterface);
+
+    if (forward)
+        return ((HRESULT (WINAPI *)(REFCLSID, REFIID, LPVOID *))forward)(clsid, riid, ppInterface);
 
     return CLRCreateInstance(clsid, riid, ppInterface);
 }
 
 HRESULT WINAPI DllGetClassObject(REFCLSID rclsid, REFIID riid, LPVOID* ppv)
 {
+    FARPROC forward = mscoree_get_real_export("DllGetClassObject");
     mscorecf *This;
     HRESULT hr;
 
     TRACE("(%s, %s, %p): stub\n", debugstr_guid(rclsid), debugstr_guid(riid), ppv);
+
+    if (forward)
+        return ((HRESULT (WINAPI *)(REFCLSID, REFIID, LPVOID *))forward)(rclsid, riid, ppv);
 
     if(!ppv)
         return E_INVALIDARG;
