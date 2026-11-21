@@ -5,6 +5,9 @@
  *              (pwsh Get-CimInstance). Clean-room declarations authored from the
  *              public MI API reference; ABI (member order/types) matches the
  *              documented mi.h so the stock MMI native bridge binds mi_clientFT_V1.
+ *              No text is copied from the Windows SDK mi.h; the layout was
+ *              cross-checked against the Apache-2.0 OMI MI.h (one-way compatible
+ *              into GPL). See dotnet-powershell/MI-ABI.md.
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -19,11 +22,17 @@
 # define MI_EXTERN_C extern
 #endif
 
-/* The real mi.dll uses the default (cdecl) convention on both arches; the
- * exported names are undecorated (see mi.spec). Keep these empty; revisit only
- * if an i386 build shows a decoration mismatch against the stock MMI bridge. */
-#define MI_CALL
-#define MI_MAIN_CALL
+/* Calling convention: __stdcall on i386 (the stock MMI bridge calls the FT
+ * members as __stdcall; a function-pointer call bypasses the link-time arity
+ * check, so a mismatch corrupts the i386 stack silently). Ignored on x64.
+ * Exported names stay undecorated via mi.spec. */
+#if defined(_M_IX86) || defined(__i386__)
+# define MI_CALL      __stdcall
+# define MI_MAIN_CALL __stdcall
+#else
+# define MI_CALL
+# define MI_MAIN_CALL
+#endif
 
 #if defined(__GNUC__) || defined(__clang__)
 # define MI_INLINE static __inline__
