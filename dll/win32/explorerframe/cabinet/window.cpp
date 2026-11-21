@@ -3417,7 +3417,8 @@ CCabinetWindow::NavigationShown() const
 
     if (m_FolderNavigationState & EPS_FORCE)
         return state == EPS_DEFAULT_ON || (state != EPS_DEFAULT_OFF && m_NavigationVisible);
-    if (state == EPS_DEFAULT_OFF)
+    /* the folder's default (on or off) holds for this visit, until the user changes it */
+    if (state == EPS_DEFAULT_OFF || state == EPS_DEFAULT_ON)
         return m_FolderNavigationShown;
     return m_NavigationVisible;
 }
@@ -3425,9 +3426,11 @@ CCabinetWindow::NavigationShown() const
 void
 CCabinetWindow::ToggleNavigationPane()
 {
+    DWORD state = m_FolderNavigationState & EPS_STATE_MASK;
+
     if (m_FolderNavigationState & EPS_FORCE)
         return;
-    if ((m_FolderNavigationState & EPS_STATE_MASK) == EPS_DEFAULT_OFF)
+    if (state == EPS_DEFAULT_OFF || state == EPS_DEFAULT_ON)
         m_FolderNavigationShown = !m_FolderNavigationShown; // for this folder only
     else
         m_NavigationVisible = !m_NavigationVisible;
@@ -3476,9 +3479,18 @@ CCabinetWindow::UpdateFolderPanes()
         view->Release();
 
     m_FolderNavigationState = state;
-    m_FolderNavigationShown = FALSE;
+    m_FolderNavigationShown = (state & EPS_STATE_MASK) == EPS_DEFAULT_ON;
     if (NavigationShown() != before)
+    {
+        /* the tree is about to hide with the keyboard in it (Fonts chosen in the tree):
+           the focus goes to the view instead of staying on a hidden window */
+        HWND focus = GetFocus();
+        BOOL treeFocused = before && m_NavigationWindow && focus &&
+                           (focus == m_NavigationWindow || IsChild(m_NavigationWindow, focus));
         OnSize();
+        if (treeFocused)
+            PostMessageW(m_hwnd, WM_CABINET_FOCUSVIEW, 0, 0);
+    }
 }
 
 void
