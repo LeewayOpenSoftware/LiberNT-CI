@@ -28,6 +28,7 @@ class CDefViewTaskPane :
         BOOL bEnabled;
         BOOL bChecked;  // the current place: bold text, not a link
         BOOL bHeader;   // ECF_ISSEPARATOR: a gap, or a section header with its title
+        HICON hIcon;    // IExplorerCommand::GetIcon (a shield), drawn before the link
         RECT rc;
     };
 
@@ -54,6 +55,16 @@ class CDefViewTaskPane :
         if (m_hFontBold)
             DeleteObject(m_hFontBold);
         m_hFont = m_hFontHot = m_hFontBold = NULL;
+    }
+
+    void FreeIcons()
+    {
+        for (size_t i = 0; i < m_Links.GetCount(); ++i)
+        {
+            if (m_Links[i].hIcon)
+                DestroyIcon(m_Links[i].hIcon);
+            m_Links[i].hIcon = NULL;
+        }
     }
 
     void CreateFonts()
@@ -100,6 +111,7 @@ public:
         CComPtr<IEnumExplorerCommand> pEnum;
         CComPtr<IExplorerCommand> pCommand;
 
+        FreeIcons();
         m_Links.SetCount(0);
         m_Hot = -1;
         m_Focus = 0;
@@ -126,6 +138,15 @@ public:
                 link.bEnabled = !(state & ECS_DISABLED);
                 link.bChecked = !!(state & ECS_CHECKED);
                 link.bHeader = bHeader;
+                link.hIcon = NULL;
+                CComHeapPtr<WCHAR> pszIcon;
+                if (!bHeader && SUCCEEDED(pCommand->GetIcon(NULL, &pszIcon)) && pszIcon && *pszIcon)
+                {
+                    WCHAR location[MAX_PATH];
+                    StringCchCopyW(location, _countof(location), pszIcon);
+                    int index = PathParseIconLocationW(location);
+                    ExtractIconExW(location, index, NULL, &link.hIcon, 1);
+                }
                 SetRectEmpty(&link.rc);
                 m_Links.Add(link);
             }
@@ -155,7 +176,8 @@ public:
         int x = Scale(16), y = Scale(16), cx = max(rcClient.right - x - Scale(12), Scale(40));
         for (size_t i = 0; i < m_Links.GetCount(); ++i)
         {
-            RECT rc = { 0, 0, cx, 0 };
+            int ix = m_Links[i].hIcon ? Scale(20) : 0;
+            RECT rc = { 0, 0, cx - ix, 0 };
             if (m_Links[i].bHeader && m_Links[i].strTitle.IsEmpty())
             {
                 SetRect(&m_Links[i].rc, x, y, x, y + Scale(6)); // a gap
@@ -166,7 +188,8 @@ public:
                 y += Scale(10); // a section starts
             SelectObject(hdc, m_Links[i].bChecked ? m_hFontBold : m_hFont);
             DrawTextW(hdc, m_Links[i].strTitle, -1, &rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-            SetRect(&m_Links[i].rc, x, y, x + min((int)(rc.right - rc.left), cx), y + (rc.bottom - rc.top));
+            SetRect(&m_Links[i].rc, x + ix, y, x + ix + min((int)(rc.right - rc.left), cx - ix),
+                    y + max((int)(rc.bottom - rc.top), ix ? Scale(16) : 0));
             y = m_Links[i].rc.bottom + Scale(10);
         }
         SelectObject(hdc, hOld);
@@ -237,6 +260,8 @@ public:
                 DrawTextW(hdc, link.strTitle, -1, &rc, DT_WORDBREAK | DT_NOPREFIX);
                 continue;
             }
+            if (link.hIcon)
+                DrawIconEx(hdc, rc.left - Scale(20), rc.top, link.hIcon, Scale(16), Scale(16), 0, NULL, DI_NORMAL);
             SelectObject(hdc, ((int)i == m_Hot && link.bEnabled) ? m_hFontHot : m_hFont);
             SetTextColor(hdc, GetSysColor(link.bEnabled ? COLOR_HOTLIGHT : COLOR_GRAYTEXT));
             DrawTextW(hdc, link.strTitle, -1, &rc, DT_WORDBREAK | DT_NOPREFIX);
@@ -258,6 +283,7 @@ public:
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL &bHandled)
     {
         FreeFonts();
+        FreeIcons();
         m_Links.SetCount(0);
         m_pProvider.Release();
         m_pSite.Release();

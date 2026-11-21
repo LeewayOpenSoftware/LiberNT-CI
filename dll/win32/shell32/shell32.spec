@@ -424,6 +424,7 @@
 @ stdcall Control_RunDLLA(ptr ptr str long) # 2k3:114, Vista:229
 @ stdcall Control_RunDLLAsUserW(ptr ptr wstr long) # 2k3:115, Vista:238
 @ stdcall Control_RunDLLW(ptr ptr wstr long) # 2k3:116, Vista:255
+@ stdcall OrosiFirewall_RunDLLW(ptr ptr wstr long) # LiberNT: the Orosi Firewall page, elevated
 @ stdcall -private DllCanUnloadNow() # 2k3:117, Vista:263
 @ stdcall -private DllGetClassObject(ptr ptr ptr) # 2k3:118, Vista:267
 @ stdcall -private DllGetVersion(ptr) # 2k3:120, Vista:268
