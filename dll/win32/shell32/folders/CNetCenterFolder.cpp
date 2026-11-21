@@ -41,6 +41,7 @@ enum
     NSC_PANE_SHARING,
     NSC_PANE_SEEALSO,       /* section header */
     NSC_PANE_INETOPTIONS,
+    NSC_PANE_FIREWALL,
     NSC_PANE_COUNT
 };
 
@@ -63,6 +64,7 @@ static VOID NscPaneTitle(int index, PWSTR buffer, int cch)
         case NSC_PANE_SHARING:     NscString(IDS_NSC_SHARING, buffer, cch, L"Change advanced sharing settings"); break;
         case NSC_PANE_SEEALSO:     NscString(IDS_NSC_SEEALSO, buffer, cch, L"See also"); break;
         case NSC_PANE_INETOPTIONS: NscString(IDS_NSC_INETOPTIONS, buffer, cch, L"Internet Options"); break;
+        case NSC_PANE_FIREWALL:    NscString(IDS_FW_NAME, buffer, cch, L"Orosi Firewall"); break;
         default:                   buffer[0] = UNICODE_NULL; break;
     }
 }
@@ -1014,6 +1016,9 @@ public:
                 break;
             case NSC_PANE_INETOPTIONS:
                 ShellExecuteW(m_hWnd, NULL, L"rundll32.exe", L"shell32.dll,Control_RunDLL inetcpl.cpl", NULL, SW_SHOWNORMAL);
+                break;
+            case NSC_PANE_FIREWALL:
+                NavigateTo(NSC_CPL_PARSE L"\\::{4026492F-2F69-46B8-B9BF-5654FC07E423}");
                 break;
         }
         return 0;
