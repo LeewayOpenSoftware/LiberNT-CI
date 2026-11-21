@@ -545,7 +545,11 @@
     CF2_HintMaskRec   hintMask;
 #ifdef __REACTOS__
     CF2_GlyphPathRec *glyphPath_allocated = malloc(sizeof(*glyphPath_allocated));
-    if (!glyphPath_allocated) return;
+    if (!glyphPath_allocated)
+    {
+      CF2_SET_ERROR( error, Out_Of_Memory );
+      return;
+    }
 /* Ugly but it allows us to reduce the diff */
 #define glyphPath (*glyphPath_allocated)
 #else
