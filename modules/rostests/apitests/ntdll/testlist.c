@@ -189,6 +189,7 @@ extern void func_RtlEnumerateGenericTableLikeADirectory(void);
 extern void func_RtlMemIoResource(void);
 extern void func_RtlMultipleAllocateHeap(void);
 extern void func_RtlNtPathNameToDosPathName(void);
+extern void func_RtlPlaceholderCompatibilityMode(void);
 extern void func_RtlPortableOperatingSystem(void);
 extern void func_PortableWorkspaceHibernate(void);
 extern void func_RtlpApplyLengthFunction(void);
@@ -426,6 +427,7 @@ const struct test winetest_testlist[] =
     { "RtlMemIoResource", func_RtlMemIoResource },
     { "RtlMultipleAllocateHeap",        func_RtlMultipleAllocateHeap },
     { "RtlNtPathNameToDosPathName",     func_RtlNtPathNameToDosPathName },
+    { "RtlPlaceholderCompatibilityMode", func_RtlPlaceholderCompatibilityMode },
     { "RtlPortableOperatingSystem",     func_RtlPortableOperatingSystem },
     { "PortableWorkspaceHibernate",     func_PortableWorkspaceHibernate },
     { "RtlpApplyLengthFunction",        func_RtlpApplyLengthFunction },

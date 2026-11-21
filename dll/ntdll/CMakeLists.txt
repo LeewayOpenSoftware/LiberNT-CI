@@ -52,6 +52,7 @@ list(APPEND SOURCE
     rtl/exit.c
     rtl/mui.c
     rtl/nls.c
+    rtl/placeholder.c
     rtl/secmem.c
     rtl/telemetry.c
     rtl/transaction.c
