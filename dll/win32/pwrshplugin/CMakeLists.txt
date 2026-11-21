@@ -8,5 +8,5 @@ list(APPEND SOURCE
 add_library(pwrshplugin MODULE ${SOURCE} pwrshplugin.rc)
 set_module_type(pwrshplugin win32dll)
 target_link_libraries(pwrshplugin oldnames)
-add_importlibs(pwrshplugin msvcrt kernel32 ntdll)
+add_importlibs(pwrshplugin kernel32 ntdll)
 add_cd_file(TARGET pwrshplugin DESTINATION reactos/system32 FOR all)
