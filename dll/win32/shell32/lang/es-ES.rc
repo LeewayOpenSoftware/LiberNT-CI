@@ -1129,4 +1129,6 @@ BEGIN
     IDS_FW_INFOTIP "Impedir que lleguen a este equipo las conexiones entrantes que el firewall no permite."
     IDS_SEARCHBAND_COMMAND "Search"
     IDS_FOLDERSHORTCUT_TYPE "Folder Shortcut"
+    IDS_OPEN_POWERSHELL_WINDOW "Abrir la ventana de PowerShell aquí"
+    IDS_POWERSHELL_SCRIPT_TYPE "Script de Windows PowerShell"
 END

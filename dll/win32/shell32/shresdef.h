@@ -478,6 +478,11 @@
 #define IDS_FW_INFOTIP                              60122
 #define IDS_SEARCHBAND_COMMAND                      12708
 #define IDS_FOLDERSHORTCUT_TYPE                     10540
+/* Displayed by the "Open PowerShell window here" background-folder verb
+ * (HKCR\Directory\Background\shell\Powershell, @shell32.dll,-8508); same
+ * string id Windows uses. */
+#define IDS_OPEN_POWERSHELL_WINDOW                  8508
+#define IDS_POWERSHELL_SCRIPT_TYPE                  8509
 
 
 /* Dialogs */
