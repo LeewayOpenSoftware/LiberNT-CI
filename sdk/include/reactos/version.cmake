@@ -69,7 +69,8 @@ if(NOT LIBERNT_BUILD_NUMBER MATCHES "^[0-9]+$")
     set(LIBERNT_BUILD_NUMBER 0)
 endif()
 
-# Get Git revision through "git describe"
+# Build id: the short commit hash of HEAD. Deterministic and independent of
+# tags (git describe would prepend a reachable tag, e.g. integration-1061-...).
 set(COMMIT_HASH "unknown-hash")
 set(REVISION "unknown-revision")
 
@@ -88,7 +89,7 @@ if((EXISTS "${REACTOS_SOURCE_DIR}/.git") AND (NOT NO_REACTOS_BUILDNO))
         endif()
 
         execute_process(
-            COMMAND "${GIT_EXECUTABLE}" describe --abbrev=7 --long --always
+            COMMAND "${GIT_EXECUTABLE}" rev-parse --short=7 HEAD
             WORKING_DIRECTORY ${REACTOS_SOURCE_DIR}
             OUTPUT_VARIABLE GIT_DESCRIBE_REVISION
             RESULT_VARIABLE GIT_CALL_RESULT
