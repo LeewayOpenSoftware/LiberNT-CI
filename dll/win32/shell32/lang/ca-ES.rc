@@ -159,10 +159,10 @@ BEGIN
     LTEXT "", IDC_ABOUT_APPNAME, 34, 56, 252, 10, SS_NOPREFIX
     LTEXT "", IDC_ABOUT_VERSION, 34, 67, 252, 10, SS_NOPREFIX
     LTEXT "© 2027 Leeway Open Software", IDC_STATIC, 34, 78, 252, 10, SS_NOPREFIX
-    LTEXT "Based on LiberNT © 2026 and ReactOS © 1996–2026", IDC_STATIC, 34, 89, 252, 10, SS_NOPREFIX
+    LTEXT "Based on ReactOS © 1996–2026", IDC_STATIC, 34, 89, 252, 10, SS_NOPREFIX
     LTEXT "", IDC_ABOUT_OTHERSTUFF, 34, 101, 252, 18, SS_NOPREFIX
     CONTROL "Orosi is free software: you may use, copy, share and change it under the <A>Orosi licence terms</A>. It comes without any warranty.", IDC_ABOUT_LICENSE, "SysLink", WS_TABSTOP, 34, 122, 252, 26
-    LTEXT "This LiberNT version is registered to:", IDC_ABOUT_REG_TO, 34, 152, 252, 10
+    LTEXT "This Orosi version is registered to:", IDC_ABOUT_REG_TO, 34, 152, 252, 10
     LTEXT "", IDC_ABOUT_REG_USERNAME, 44, 163, 242, 10, SS_NOPREFIX
     LTEXT "", IDC_ABOUT_REG_ORGNAME, 44, 174, 242, 10, SS_NOPREFIX
     PUSHBUTTON "", IDC_ABOUT_AUTHORS, 14, 191, 60, 14
@@ -173,7 +173,7 @@ IDD_ABOUT_AUTHORS DIALOGEX 34, 101, 252, 86
 STYLE DS_SETFONT | WS_CHILD
 FONT 9, "Segoe UI", 400, 0, 0x0
 BEGIN
-    LTEXT "LiberNT ha estat construit per:", IDC_STATIC, 0, 0, 252, 10
+    LTEXT "Orosi ha estat construit per:", IDC_STATIC, 0, 0, 252, 10
     LISTBOX IDC_ABOUT_AUTHORS_LISTBOX, 0, 11, 165, 75
 END
 
