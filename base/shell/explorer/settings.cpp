@@ -24,7 +24,7 @@ TaskbarSettings g_TaskbarSettings;
 
 BOOL TaskbarSettings::Save()
 {
-    SHSetValueW(hkExplorer, NULL, L"EnableAutotray", REG_DWORD, &bHideInactiveIcons, sizeof(bHideInactiveIcons));
+    SHSetValueW(hkExplorer, NULL, L"EnableAutoTray", REG_DWORD, &bHideInactiveIcons, sizeof(bHideInactiveIcons));
     SHSetValueW(hkExplorer, L"Advanced", L"PreferDateOverWeekday", REG_DWORD, &bPreferDate, sizeof(bPreferDate));
     SHSetValueW(hkExplorer, L"Advanced", L"ShowSeconds", REG_DWORD, &bShowSeconds, sizeof(bShowSeconds));
     SHSetValueW(hkExplorer, L"Advanced", L"TaskbarGlomming", REG_DWORD, &bGroupButtons, sizeof(bGroupButtons));
@@ -39,7 +39,21 @@ BOOL TaskbarSettings::Save()
     SHSetValueW(hkExplorer, L"Advanced", L"MMTaskbarMode", REG_DWORD, &dwMMMode, sizeof(dwMMMode));
     SHSetValueW(hkExplorer, L"StuckRects2", L"Settings", REG_BINARY, &sr, sizeof(sr));
 
+    /* Windows 10 keeps the same blob, 8 bytes longer, under StuckRects3 */
+    {
+        TW_STUCKRECTS3 sr3;
+
+        ZeroMemory(&sr3, sizeof(sr3));
+        CopyMemory(&sr3, &sr, sizeof(sr));
+        sr3.cbSize = sizeof(sr3);
+        SHSetValueW(hkExplorer, L"StuckRects3", L"Settings", REG_BINARY, &sr3, sizeof(sr3));
+    }
+
     /* TODO: AutoHide writes something to HKEY_CURRENT_USER\Software\Microsoft\Internet Explorer\Desktop\Components\0 figure out what and why */
+
+    /* Let the Settings app and other readers refresh, as Windows does */
+    SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, (LPARAM)L"TraySettings",
+                        SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG, 1000, NULL);
     return TRUE;
 }
 
@@ -73,7 +87,7 @@ BOOL TaskbarSettings::Load()
     }
 
     cbSize = sizeof(dwValue);
-    dwRet = SHGetValueW(hkExplorer, NULL, L"EnableAutotray", NULL, &dwValue, &cbSize);
+    dwRet = SHGetValueW(hkExplorer, NULL, L"EnableAutoTray", NULL, &dwValue, &cbSize);
     bHideInactiveIcons = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : TRUE;
 
     dwRet = SHGetValueW(hkExplorer, L"Advanced", L"TaskbarSmallIcons", NULL, &dwValue, &cbSize);
@@ -97,8 +111,24 @@ BOOL TaskbarSettings::Load()
     dwRet = SHGetValueW(hkExplorer, L"Advanced", L"MMTaskbarMode", NULL, &dwValue, &cbSize);
     uMMTaskbarMode = (dwRet == ERROR_SUCCESS && dwValue <= 2) ? dwValue : 0;
 
-    cbSize = sizeof(sr);
-    dwRet = SHGetValueW(hkExplorer, L"StuckRects2", L"Settings", NULL, &sr, &cbSize);
+    /* A profile written by Windows 10 has StuckRects3; ours has both */
+    {
+        TW_STUCKRECTS3 sr3;
+
+        cbSize = sizeof(sr3);
+        dwRet = SHGetValueW(hkExplorer, L"StuckRects3", L"Settings", NULL, &sr3, &cbSize);
+        if (dwRet == ERROR_SUCCESS && sr3.cbSize == sizeof(sr3) && cbSize == sizeof(sr3))
+        {
+            CopyMemory(&sr, &sr3, sizeof(sr));
+            sr.cbSize = sizeof(sr);
+            cbSize = sizeof(sr);
+        }
+        else
+        {
+            cbSize = sizeof(sr);
+            dwRet = SHGetValueW(hkExplorer, L"StuckRects2", L"Settings", NULL, &sr, &cbSize);
+        }
+    }
 
     /* Make sure we have correct values here */
     if (dwRet != ERROR_SUCCESS || sr.cbSize != sizeof(sr) || cbSize != sizeof(sr))

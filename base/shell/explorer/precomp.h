@@ -328,6 +328,18 @@ typedef struct _TW_STUCKRECTS2
     RECT Rect;
 } TW_STRUCKRECTS2, *PTW_STUCKRECTS2;
 
+/* Windows 10: StuckRects3\Settings, the same layout followed by 8 unknown bytes */
+typedef struct _TW_STUCKRECTS3
+{
+    DWORD cbSize;
+    LONG Unknown;
+    DWORD dwFlags;
+    DWORD Position;
+    SIZE Size;
+    RECT Rect;
+    DWORD Reserved[2];
+} TW_STUCKRECTS3, *PTW_STUCKRECTS3;
+
 #define TASKBAR_GLOM_ALWAYS 0
 #define TASKBAR_GLOM_WHEN_FULL 1
 #define TASKBAR_GLOM_NEVER 2
