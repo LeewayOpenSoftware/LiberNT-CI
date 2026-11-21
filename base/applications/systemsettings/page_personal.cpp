@@ -604,7 +604,7 @@ BuildTaskbar(PageBuilder &page)
     page.Group(Str(IDS_SYSTEM_TRAY));
     AddTaskbarToggle(page, IDS_SHOW_SECONDS, 0, L"clock_20_regular", ADVANCED_KEY, L"ShowSeconds", 0, false);
     AddTaskbarToggle(page, IDS_HIDE_INACTIVE_ICONS, IDS_HIDE_INACTIVE_ICONS_DESC, L"apps_list_20_regular", EXPLORER_KEY,
-                     L"EnableAutotray", 1, false);
+                     L"EnableAutoTray", 1, false);
 }
 
 static int CALLBACK

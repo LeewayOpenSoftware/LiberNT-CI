@@ -3535,18 +3535,45 @@ ChangePos:
             CheckTrayWndPosition();
         }
 
-        if (lParam && lstrcmpiW((LPCWSTR)lParam, L"TraySettings") == 0)
+        if (lParam && lstrcmpiW((LPCWSTR)lParam, L"TraySettings") == 0 && !TaskbarSettings::IsBroadcasting())
         {
+            /* Another program (Settings, a control panel) wrote the values: read them
+             * back and apply them as the properties dialog does. Our own save also
+             * broadcasts; IsBroadcasting keeps that from coming back here. */
             TaskbarSettings newSettings = g_TaskbarSettings;
             if (newSettings.Load())
             {
-                SendMessageW(TWM_SETTINGSCHANGED, 0, (LPARAM)&newSettings);
-                g_TaskbarSettings = newSettings;
-                g_TaskbarSettings.Save();
+                /* The position and size are ours; a stale blob must not move the bar */
+                newSettings.sr.Position = g_TaskbarSettings.sr.Position;
+                newSettings.sr.Size = g_TaskbarSettings.sr.Size;
+                newSettings.sr.Rect = g_TaskbarSettings.sr.Rect;
+                if (newSettings.bLock != g_TaskbarSettings.bLock ||
+                    newSettings.bGroupButtons != g_TaskbarSettings.bGroupButtons ||
+                    newSettings.dwTaskbarGlomLevel != g_TaskbarSettings.dwTaskbarGlomLevel ||
+                    newSettings.bShowSeconds != g_TaskbarSettings.bShowSeconds ||
+                    newSettings.bPreferDate != g_TaskbarSettings.bPreferDate ||
+                    newSettings.bHideInactiveIcons != g_TaskbarSettings.bHideInactiveIcons ||
+                    newSettings.bSmallIcons != g_TaskbarSettings.bSmallIcons ||
+                    newSettings.eCompactTrayIcons != g_TaskbarSettings.eCompactTrayIcons ||
+                    newSettings.bShowDesktopButton != g_TaskbarSettings.bShowDesktopButton ||
+                    newSettings.bMMTaskbarEnabled != g_TaskbarSettings.bMMTaskbarEnabled ||
+                    newSettings.uMMTaskbarMode != g_TaskbarSettings.uMMTaskbarMode ||
+                    newSettings.sr.AutoHide != g_TaskbarSettings.sr.AutoHide ||
+                    newSettings.sr.AlwaysOnTop != g_TaskbarSettings.sr.AlwaysOnTop)
+                {
+                    ERR("TraySettings broadcast: applying lock=%d small=%d glom=%lu sd=%d seconds=%d autotray=%d autohide=%d\n",
+                        newSettings.bLock, newSettings.bSmallIcons, newSettings.dwTaskbarGlomLevel,
+                        newSettings.bShowDesktopButton, newSettings.bShowSeconds, newSettings.bHideInactiveIcons,
+                        (int)newSettings.sr.AutoHide);
+                    SendMessageW(TWM_SETTINGSCHANGED, 0, (LPARAM)&newSettings);
+                    g_TaskbarSettings = newSettings;
+                    g_TaskbarSettings.Save();
+                }
             }
         }
 
-        if (m_StartMenuPopup && lstrcmpiW((LPCWSTR)lParam, L"TraySettings") == 0)
+        if (m_StartMenuPopup && lParam && lstrcmpiW((LPCWSTR)lParam, L"TraySettings") == 0 &&
+            !TaskbarSettings::IsBroadcasting())
         {
             HideStartMenu();
 
