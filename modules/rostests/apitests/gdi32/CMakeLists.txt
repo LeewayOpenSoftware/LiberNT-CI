@@ -86,6 +86,7 @@ list(APPEND SOURCE
     SetWindowExtEx.c
     SetWorldTransform.c
     StretchBlt.c
+    TextAntialias.c
     TextTransform.c
     TypoMetrics.c)
 

@@ -29,7 +29,7 @@ One row per shipped file in media/fonts. Files added by the font cards carry the
 | georgiaz.ttf | Georgia | Gelasio (Sorkin Type Co) | 1.005 | SIL Open Font License 1.1, Reserved Font Name Gelasio | dd70a4cc8ed5589f67a77c58aa80fdcf7ff3bbb1a9dd6b66b7f75c8a5a4638ac |
 | lucon.ttf | LucidaConsole | DejaVu Sans Mono | 2.37 | Bitstream Vera Fonts licence | 4b0f2e74055b214a8db781f04eb876f45336641ff1d320ee46b1d56f1ff48c0f |
 | Marlett.ttf | Marlett | ReactOS Marlett (Ged Murphy, Wierd_W; glyphs contributed by TransGaming Technologies) | 0.32 | Permissive notice embedded in the font | b955762302a8d51ac4a5640f30fa78bb1aabb93825e9ab3ca962d3b8eb277828 |
-| micross.ttf | MicrosoftSansSerif | Noto Sans (Google), renamed | Noto Sans 2017-09-15 source build, renamed Microsoft Sans Serif | SIL Open Font License 1.1 | b75afb0a82f0a9caad8711314be2bb78a3fa550126bbf5f088d734eba6236ffe |
+| micross.ttf | MicrosoftSansSerif | Noto Sans (Google), renamed | Noto Sans 2017-09-15 source build, renamed Microsoft Sans Serif | SIL Open Font License 1.1 | 02ea542303db6c645d6867198ae127e12611ac8e25c0e262c882831bcb0de92d |
 | NotoSansJP-Regular.otf | NotoSansJP | Noto Sans JP (Noto CJK) | 2.004, unmodified | SIL Open Font License 1.1 | dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073 |
 | NotoSansSC-Regular.otf | NotoSansSC | Noto Sans SC (Noto CJK) | 2.004, unmodified | SIL Open Font License 1.1 | faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9 |
 | pala.ttf | PalatinoLinotype | TeX Gyre Pagella (GUST e-foundry, from URW Palladio L) | TeX Gyre Pagella 2.x | GUST Font License 1.0 | 73916c05f7c40ab74135d2c2d476ce30d2c296e3a48e2a87d6a69ad984a4bb96 |
@@ -54,8 +54,8 @@ One row per shipped file in media/fonts. Files added by the font cards carry the
 | sserifer.fon | MSSansSerif | ReactOS bitmap MS Sans Serif (Katayama Hirofumi MZ) | ReactOS tree | MIT | 136b0beae518404f32086a88bb70344cb817a29dea14f2b50d49acf082e3f165 |
 | sserifet.fon | MSSansSerif | ReactOS bitmap MS Sans Serif (Katayama Hirofumi MZ) | ReactOS tree | MIT | 84c76d639a9ffab50e7fb4910cfe88c48d253195c1c51d3c3f86b916ab23f55e |
 | symbol.ttf | Symbol | Wine Symbol (Jon Parshall for CodeWeavers) | 1.1 | GNU LGPL 2.1 or later | d79da0fbd9a9f3cf806059bb1f2c9d7ce43dd9e3e4c7d4dcc5d9f2759b81196f |
-| tahoma.ttf | Tahoma | Wine Tahoma (Larry Snyder), based on Bitstream Vera Sans | 0.020 / 0.021 | Bitstream Vera Fonts licence for the base design + GNU LGPL 2.1 or later for Wine's changes | 08796ee7769c6a5f4a182d3f9b696184bed56c6bfd542dede75a4915789f16e4 |
-| tahomabd.ttf | Tahoma | Wine Tahoma (Larry Snyder), based on Bitstream Vera Sans | 0.020 / 0.021 | Bitstream Vera Fonts licence for the base design + GNU LGPL 2.1 or later for Wine's changes | 9ebca12d00d3722d92150a4089c1e44a79e6764425fa250835f67b3db3115b0e |
+| tahoma.ttf | Tahoma | Wine Tahoma (Larry Snyder), based on Bitstream Vera Sans | 0.020 / 0.021 | Bitstream Vera Fonts licence for the base design + GNU LGPL 2.1 or later for Wine's changes | c309540db72381f185f3cfd802ac23ae8c3a015c1b4f2367500e4bb0ff9cd837 |
+| tahomabd.ttf | Tahoma | Wine Tahoma (Larry Snyder), based on Bitstream Vera Sans | 0.020 / 0.021 | Bitstream Vera Fonts licence for the base design + GNU LGPL 2.1 or later for Wine's changes | bab15e710be2e2ac45a53810fdc062dc657d4a4cf06e249e3fed3898bdd3241f |
 | times.ttf | TimesNewRoman | Liberation Serif 2.00.1 | 2.00.1 | SIL Open Font License 1.1 | 2fc0ca1fde4755ed1149f10ab11f3e60611b4188ef3d35181959006a4439cd4c |
 | timesbd.ttf | TimesNewRoman | Liberation Serif 2.00.1 | 2.00.1 | SIL Open Font License 1.1 | a68d23e9823122dda559660f766a481355a33ce83fe62e660a4f9e161146b2a4 |
 | timesbi.ttf | TimesNewRoman | Liberation Serif 2.00.1 | 2.00.1 | SIL Open Font License 1.1 | 4cf48b2f24b1aa9a7e46dab6589353760413ec4cfebc3840c310a7d44db10861 |

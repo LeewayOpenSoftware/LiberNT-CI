@@ -6,5 +6,5 @@ Licence: Bitstream Vera Fonts licence for the base design; GNU LGPL 2.1 or later
 Note:    Target of MS Shell Dlg 2.
 
 Files and SHA-256:
-  08796ee7769c6a5f4a182d3f9b696184bed56c6bfd542dede75a4915789f16e4  tahoma.ttf
-  9ebca12d00d3722d92150a4089c1e44a79e6764425fa250835f67b3db3115b0e  tahomabd.ttf
+  c309540db72381f185f3cfd802ac23ae8c3a015c1b4f2367500e4bb0ff9cd837  tahoma.ttf
+  bab15e710be2e2ac45a53810fdc062dc657d4a4cf06e249e3fed3898bdd3241f  tahomabd.ttf

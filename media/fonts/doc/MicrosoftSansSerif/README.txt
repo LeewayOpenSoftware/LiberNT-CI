@@ -6,4 +6,4 @@ Licence: SIL Open Font License 1.1 (see LICENSE_OFL.txt)
 Note:    Target of MS Shell Dlg and MS Sans Serif.
 
 Files and SHA-256:
-  b75afb0a82f0a9caad8711314be2bb78a3fa550126bbf5f088d734eba6236ffe  micross.ttf
+  02ea542303db6c645d6867198ae127e12611ac8e25c0e262c882831bcb0de92d  micross.ttf
