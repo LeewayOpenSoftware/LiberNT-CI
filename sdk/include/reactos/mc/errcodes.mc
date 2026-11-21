@@ -16192,19 +16192,19 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_INSTALL_SERVICE_FAILURE
 Language=English
-The ReactOS Installer service could not be accessed. This can occur if you are running Orosi in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
+The Orosi Installer service could not be accessed. This can occur if you are running Orosi in safe mode, or if the Orosi Installer is not correctly installed. Contact your support personnel for assistance.
 .
 Language=Russian
-The ReactOS Installer service could not be accessed. This can occur if you are running Orosi in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
+The Orosi Installer service could not be accessed. This can occur if you are running Orosi in safe mode, or if the Orosi Installer is not correctly installed. Contact your support personnel for assistance.
 .
 Language=Polish
 Nie można uzyskać dostępu do usługi Instalator LiberNT. Może mieć to miejsce, jeśli system LiberNT jest uruchomiony w trybie awaryjnym lub Instalator LiberNT jest niepoprawnie zainstalowany. Skontaktuj się z pomocą techniczną, aby uzyskać pomoc.
 .
 Language=Romanian
-The ReactOS Installer service could not be accessed. This can occur if you are running Orosi in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
+The Orosi Installer service could not be accessed. This can occur if you are running Orosi in safe mode, or if the Orosi Installer is not correctly installed. Contact your support personnel for assistance.
 .
 Language=Japanese
-ReactOS Installer サービスにアクセスできませんでした。ReactOS Installerが正しくインストールされていない場合に発生する可能性があります。サポート担当者にお問い合わせください。
+Orosi Installer サービスにアクセスできませんでした。Orosi Installerが正しくインストールされていない場合に発生する可能性があります。サポート担当者にお問い合わせください。
 .
 
 MessageId=1602
@@ -16432,19 +16432,19 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_INSTALL_PACKAGE_VERSION
 Language=English
-This installation package cannot be installed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
+This installation package cannot be installed by the Orosi Installer service. You must install an Orosi service pack that contains a newer version of the Orosi Installer service.
 .
 Language=Russian
-This installation package cannot be installed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
+This installation package cannot be installed by the Orosi Installer service. You must install an Orosi service pack that contains a newer version of the Orosi Installer service.
 .
 Language=Polish
 Usługa Instalator LiberNT nie może zainstalować tego pakietu instalacyjnego. Musisz zainstalować dodatek LiberNT Service Pack, zawierający nowszą wersję usługi Instalator LiberNT.
 .
 Language=Romanian
-This installation package cannot be installed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
+This installation package cannot be installed by the Orosi Installer service. You must install an Orosi service pack that contains a newer version of the Orosi Installer service.
 .
 Language=Japanese
-このインストール パッケージは ReactOS Installer サービスではインストールできません。新しいバージョンのReactOS Installerサービスが含まれているLiberNTサービスパックをインストールする必要があります。
+このインストール パッケージは Orosi Installer サービスではインストールできません。新しいバージョンのOrosi Installerサービスが含まれているLiberNTサービスパックをインストールする必要があります。
 .
 
 MessageId=1614
@@ -16912,19 +16912,19 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_PATCH_PACKAGE_UNSUPPORTED
 Language=English
-This patch package cannot be processed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
+This patch package cannot be processed by the Orosi Installer service. You must install an Orosi service pack that contains a newer version of the Orosi Installer service.
 .
 Language=Russian
-This patch package cannot be processed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
+This patch package cannot be processed by the Orosi Installer service. You must install an Orosi service pack that contains a newer version of the Orosi Installer service.
 .
 Language=Polish
 Usługa Instalator LiberNT nie może przetworzyć tego pakietu aktualizacji. Musisz zainstalować dodatek LiberNT Service Pack, zawierający nowszą wersję usługi Instalator LiberNT.
 .
 Language=Romanian
-This patch package cannot be processed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
+This patch package cannot be processed by the Orosi Installer service. You must install an Orosi service pack that contains a newer version of the Orosi Installer service.
 .
 Language=Japanese
-この更新パッケージは ReactOS Installer サービスで処理できません。新しいバージョンの ReactOS Installer サービスが含まれている LiberNT サービス パックをインストールする必要があります。
+この更新パッケージは Orosi Installer サービスで処理できません。新しいバージョンの Orosi Installer サービスが含まれている LiberNT サービス パックをインストールする必要があります。
 .
 
 MessageId=1638
