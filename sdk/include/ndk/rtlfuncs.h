@@ -781,6 +781,45 @@ RtlGetThreadErrorMode(
     VOID
 );
 
+#ifndef PHCM_MAX
+#define PHCM_APPLICATION_DEFAULT        ((CHAR)0)
+#define PHCM_DISGUISE_PLACEHOLDER       ((CHAR)1)
+#define PHCM_EXPOSE_PLACEHOLDERS        ((CHAR)2)
+#define PHCM_DISGUISE_FULL_PLACEHOLDERS ((CHAR)3)
+#define PHCM_MAX                        ((CHAR)3)
+#define PHCM_ERROR_INVALID_PARAMETER    ((CHAR)-1)
+#define PHCM_ERROR_NO_TEB               ((CHAR)-2)
+#define PHCM_ERROR_NO_PEB               ((CHAR)-3)
+#endif
+
+NTSYSAPI
+CHAR
+NTAPI
+RtlQueryProcessPlaceholderCompatibilityMode(
+    VOID
+);
+
+NTSYSAPI
+CHAR
+NTAPI
+RtlSetProcessPlaceholderCompatibilityMode(
+    _In_ CHAR Mode
+);
+
+NTSYSAPI
+CHAR
+NTAPI
+RtlQueryThreadPlaceholderCompatibilityMode(
+    VOID
+);
+
+NTSYSAPI
+CHAR
+NTAPI
+RtlSetThreadPlaceholderCompatibilityMode(
+    _In_ CHAR Mode
+);
+
 NTSYSAPI
 HANDLE
 NTAPI

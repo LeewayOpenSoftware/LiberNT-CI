@@ -213,6 +213,7 @@ list(APPEND SOURCE
     RtlMemIoResource.c
     RtlMultipleAllocateHeap.c
     RtlNtPathNameToDosPathName.c
+    RtlPlaceholderCompatibilityMode.c
     RtlPortableOperatingSystem.c
     RtlpApplyLengthFunction.c
     RtlpEnsureBufferSize.c
