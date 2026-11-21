@@ -3889,9 +3889,18 @@ ChangePos:
         }
         else
         {
+            /* The size is signed: an unlocked bar mid-re-fit can report a
+               negative client (the sizing strip exceeds the window), which
+               LOWORD/HIWORD would wrap to ~63534. Read it signed and, if the
+               client is empty, re-read the real client rect. */
             rcClient.left = rcClient.top = 0;
-            rcClient.right = LOWORD(lParam);
-            rcClient.bottom = HIWORD(lParam);
+            rcClient.right = (SHORT)LOWORD(lParam);
+            rcClient.bottom = (SHORT)HIWORD(lParam);
+            if (rcClient.right <= 0 || rcClient.bottom <= 0)
+            {
+                if (!GetClientRect(&rcClient))
+                    return FALSE;
+            }
         }
 
         AlignControls(&rcClient);
