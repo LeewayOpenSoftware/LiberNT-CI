@@ -14,6 +14,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(shell);
 #define TASKPANE_CLASS L"LiberNT_DefViewTaskPane"
 #define TASKPANE_MAX_LINKS 32
 #define TASKPANE_RELOAD (WM_USER + 0x100)
+#define SHV_TASKPANE_FOCUS (WM_USER + 0x1117) /* to the view (CDefView.cpp): the pane got the focus */
 
 class CDefViewTaskPane :
     public CWindowImpl<CDefViewTaskPane, CWindow, CControlWinTraits>
@@ -35,6 +36,7 @@ class CDefViewTaskPane :
     int m_Hot = -1;
     int m_Focus = 0;
     BOOL m_bTracking = FALSE;
+    BOOL m_bOwnedByWindow = FALSE; // set once Create succeeded: from then on OnFinalMessage deletes
 
     int Scale(int px) const { return MulDiv(px, m_Dpi, 96); }
 
@@ -311,9 +313,11 @@ public:
         return 0;
     }
 
-    LRESULT OnFocusChange(UINT, WPARAM, LPARAM, BOOL &)
+    LRESULT OnFocusChange(UINT uMsg, WPARAM, LPARAM, BOOL &)
     {
         InvalidateLink(m_Focus);
+        if (uMsg == WM_SETFOCUS)
+            ::SendMessageW(GetParent(), SHV_TASKPANE_FOCUS, 0, 0);
         return 0;
     }
 
@@ -340,8 +344,11 @@ public:
 
     void OnFinalMessage(HWND) override
     {
-        delete this;
+        if (m_bOwnedByWindow)
+            delete this;
     }
+
+    void SetOwnedByWindow() { m_bOwnedByWindow = TRUE; }
 
     DECLARE_WND_CLASS_EX(TASKPANE_CLASS, CS_DBLCLKS, COLOR_WINDOW)
 
@@ -385,11 +392,14 @@ HWND DefViewTasks_Create(HWND hwndParent, IShellFolder *psf, HWND hwndOwner, IUn
         return NULL;
     }
     RECT rc = { 0, 0, 0, 0 };
+    /* until Create succeeds the pane is ours to delete, even if a half-created window
+       already went through WM_NCDESTROY and OnFinalMessage */
     if (!pPane->Create(hwndParent, rc, NULL, WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS, 0))
     {
         delete pPane;
         return NULL;
     }
+    pPane->SetOwnedByWindow();
     pPane->Layout();
     return pPane->m_hWnd;
 }
@@ -401,7 +411,7 @@ int DefViewTasks_Layout(HWND hwndPane, int cx, int cy)
     if (!hwndPane || !IsWindow(hwndPane))
         return 0;
     HDC hdc = GetDC(hwndPane);
-    int dpi = hdc ? GetDeviceCaps(hdc, LOGPIXELSX) : 96;
+    int dpi = hdc ? GetDeviceCaps(hdc, LOGPIXELSY) : 96; // same as the pane's own scale
     if (hdc)
         ReleaseDC(hwndPane, hdc);
     int cxPane = MulDiv(210, dpi, 96);

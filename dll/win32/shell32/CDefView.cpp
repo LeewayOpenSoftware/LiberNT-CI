@@ -40,6 +40,7 @@ TODO:
 #ifndef SHV_THUMBNAIL
 #define SHV_THUMBNAIL (WM_USER + 0x1115)
 #endif
+#define SHV_TASKPANE_FOCUS (WM_USER + 0x1117) /* the task pane (CDefViewTasks.cpp) got the focus */
 
 #include <atlwin.h>
 #include <ui/rosctrls.h>
@@ -800,6 +801,7 @@ public:
     LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnArrangeComputer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnThumbnail(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnTaskPaneFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnMenuMessage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnInitMenuPopup(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
@@ -854,6 +856,7 @@ public:
     MESSAGE_HANDLER(WM_TIMER, OnTimer)
     MESSAGE_HANDLER(SHV_ARRANGE_COMPUTER, OnArrangeComputer)
     MESSAGE_HANDLER(SHV_THUMBNAIL, OnThumbnail)
+    MESSAGE_HANDLER(SHV_TASKPANE_FOCUS, OnTaskPaneFocus)
     MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
     MESSAGE_HANDLER(WM_DRAWITEM, OnMenuMessage)
     MESSAGE_HANDLER(WM_MEASUREITEM, OnMenuMessage)
@@ -3937,6 +3940,8 @@ LRESULT CDefView::OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled
     /* Resize the ListView to fit our window, right of the task pane if there is one */
     int xList = DefViewTasks_Layout(m_hWndTasks, wWidth, wHeight);
     ::MoveWindow(m_ListView, xList, 0, wWidth - xList, wHeight, TRUE);
+    if (!xList && m_hWndTasks && ::GetFocus() == m_hWndTasks) // the pane just hid
+        m_ListView.SetFocus();
     if (IsDesktop())
         MoveItemsIntoView();
     ArrangeComputerView();
@@ -4066,6 +4071,18 @@ LRESULT CDefView::OnSetFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHan
     /* Notify the ICommDlgBrowser interface */
     OnStateChange(CDBOSC_SETFOCUS);
 
+    return 0;
+}
+
+/* A task pane link has the focus: the view is still the active one (menus,
+   accelerator routing), but the list view must not take the focus back */
+LRESULT CDefView::OnTaskPaneFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    if (m_pShellBrowser)
+        m_pShellBrowser->OnViewWindowActive(this);
+    if (!m_bmenuBarInitialized)
+        _MergeMenus();
+    m_uState = SVUIA_ACTIVATE_FOCUS;
     return 0;
 }
 
@@ -4861,7 +4878,9 @@ HRESULT WINAPI CDefView::TranslateAccelerator(LPMSG lpmsg)
     if (m_isEditing)
         return S_FALSE;
 
-    if (lpmsg->message >= WM_KEYFIRST && lpmsg->message <= WM_KEYLAST)
+    /* The view's keys (Del, F2, Ctrl+X...) act on the list's selection: not while a task link has the focus */
+    BOOL bTaskPaneFocus = m_hWndTasks && ::GetFocus() == m_hWndTasks;
+    if (lpmsg->message >= WM_KEYFIRST && lpmsg->message <= WM_KEYLAST && !bTaskPaneFocus)
     {
         if (::TranslateAcceleratorW(m_hWnd, m_hAccel, lpmsg) != 0)
             return S_OK;
