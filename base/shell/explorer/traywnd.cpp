@@ -2309,14 +2309,14 @@ ChangePos:
                 if (m_Position == ABE_LEFT || m_Position == ABE_RIGHT)
                 {
                     LONG cx = rcTray.right - rcTray.left;
-                    if (cx < cxMin || (cxMon > 0 && cx >= cxMon / 2))
+                    if (cx <= 0 || (cxMon > 0 && cx >= cxMon / 2))
                         cx = cxMin;
                     m_TraySize.cx = cx;
                 }
                 else if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
                 {
                     LONG cy = rcTray.bottom - rcTray.top;
-                    if (cy < cyMin || (cyMon > 0 && cy >= cyMon / 2))
+                    if (cy <= 0 || (cyMon > 0 && cy >= cyMon / 2))
                         cy = cyMin;
                     m_TraySize.cy = cy;
                 }
@@ -2324,9 +2324,9 @@ ChangePos:
                 {
                     LONG cx = rcTray.right - rcTray.left;
                     LONG cy = rcTray.bottom - rcTray.top;
-                    if (cx < cxMin || (cxMon > 0 && cx >= cxMon / 2))
+                    if (cx <= 0 || (cxMon > 0 && cx >= cxMon / 2))
                         cx = cxMin;
-                    if (cy < cyMin || (cyMon > 0 && cy >= cyMon / 2))
+                    if (cy <= 0 || (cyMon > 0 && cy >= cyMon / 2))
                         cy = cyMin;
                     m_TraySize.cx = cx;
                     m_TraySize.cy = cy;
