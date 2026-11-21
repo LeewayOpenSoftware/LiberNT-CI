@@ -13,7 +13,7 @@ static const PageInfo Pages[] =
 {
     { PageId::System, IDS_PAGE_SYSTEM, L"desktop_20_regular", PageId::None, BuildSystem, L"system" },
     { PageId::Devices, IDS_PAGE_DEVICES, L"bluetooth_20_regular", PageId::None, BuildDevices, L"devices;connecteddevices" },
-    { PageId::Network, IDS_PAGE_NETWORK, L"wifi_1_20_regular", PageId::None, BuildNetwork, L"network;network-status" },
+    { PageId::Network, IDS_PAGE_NETWORK, L"wifi_1_20_regular", PageId::None, BuildNetwork, L"network;network-status;network-advancedsharing" },
     { PageId::Personalization, IDS_PAGE_PERSONALIZE, L"paint_brush_20_regular", PageId::None, BuildPersonalization,
       L"personalization;themes" },
     { PageId::Apps, IDS_PAGE_APPS, L"apps_20_regular", PageId::None, BuildApps, L"apps" },
