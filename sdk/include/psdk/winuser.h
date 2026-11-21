@@ -1620,6 +1620,13 @@ typedef enum tagHANDEDNESS
 } HANDEDNESS, *PHANDEDNESS;
 #endif // (NTDDI_VERSION >= NTDDI_WIN10_RS4)
 
+/* Leeway extension: window caption (title bar) text alignment.
+   Value is 0 = left (Windows 10/11 default), 1 = centre (Windows 8 look). */
+#define SPI_GETCAPTIONALIGNMENT 0x2100
+#define SPI_SETCAPTIONALIGNMENT 0x2101
+#define CAPTIONALIGN_LEFT 0
+#define CAPTIONALIGN_CENTER 1
+
 #define SPIF_UPDATEINIFILE 1
 #define SPIF_SENDCHANGE 2
 #define SPIF_SENDWININICHANGE SPIF_SENDCHANGE

@@ -65,6 +65,7 @@ static const WCHAR* KEY_SYSTEM_DPI =
     L"\\Registry\\Machine\\System\\CurrentControlSet\\Hardware Profiles\\Current\\Software\\Fonts";
 static const WCHAR* KEY_METRIC = L"Control Panel\\Desktop\\WindowMetrics";
 static const WCHAR* VAL_BORDER = L"BorderWidth";
+static const WCHAR* VAL_CAPTIONALIGN = L"CaptionAlignment";
 static const WCHAR* VAL_ICONSPC = L"IconSpacing";
 static const WCHAR* VAL_ICONVSPC = L"IconVerticalspacing";
 static const WCHAR* VAL_ITWRAP = L"IconTitleWrap";
@@ -597,6 +598,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.bBeep = TRUE;
     gspv.uiFocusBorderWidth = SpiLoadDWord(KEY_DESKTOP, L"FocusBorderWidth", 1);
     gspv.uiFocusBorderHeight = SpiLoadDWord(KEY_DESKTOP, L"FocusBorderHeight", 1);
+    gspv.uiCaptionAlignment = SpiLoadInt(KEY_METRIC, VAL_CAPTIONALIGN, CAPTIONALIGN_LEFT);
     gspv.bMenuDropAlign = 0;
     gspv.dwMenuShowDelay = SpiLoadInt(KEY_DESKTOP, L"MenuShowDelay", 400);
     gspv.dwForegroundFlashCount = 3;
@@ -2380,6 +2382,19 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
         case SPI_SETFOCUSBORDERHEIGHT:
             return SpiSetDWord(&gspv.uiFocusBorderHeight, uiParam, KEY_DESKTOP, L"FocusBorderHeight", fl);
 
+        case SPI_GETCAPTIONALIGNMENT:
+            return SpiGetInt(pvParam, &gspv.uiCaptionAlignment, fl);
+
+        case SPI_SETCAPTIONALIGNMENT:
+        {
+            UINT_PTR ret = SpiSetInt(&gspv.uiCaptionAlignment,
+                                     uiParam ? CAPTIONALIGN_CENTER : CAPTIONALIGN_LEFT,
+                                     KEY_METRIC, VAL_CAPTIONALIGN, fl);
+            if (ret)
+                SpiNotifyNCMetricsChanged();
+            return ret;
+        }
+
         case SPI_GETFONTSMOOTHINGORIENTATION:
             return SpiGetInt(pvParam, &gspv.uiFontSmoothingOrientation, fl);
 
@@ -2507,6 +2522,7 @@ SpiGetSetProbeBuffer(UINT uiAction, UINT uiParam, PVOID pvParam)
         case SPI_GETFONTSMOOTHINGCONTRAST:
         case SPI_GETFOCUSBORDERWIDTH:
         case SPI_GETFOCUSBORDERHEIGHT:
+        case SPI_GETCAPTIONALIGNMENT:
         case SPI_GETFONTSMOOTHINGORIENTATION:
         case SPI_GETWINARRANGING:
         case SPI_GETDOCKMOVING:
