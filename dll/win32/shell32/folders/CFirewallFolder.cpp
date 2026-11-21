@@ -119,6 +119,15 @@ public:
     STDMETHODIMP GetIcon(IShellItemArray *psiItemArray, PWSTR *ppszIcon) override
     {
         *ppszIcon = NULL;
+        /* the links that change the policy elevate, as in Windows: the shield when not elevated */
+        if ((m_index == FW_PANE_ALLOW || m_index == FW_PANE_ONOFF || m_index == FW_PANE_RESTORE) && !IsUserAnAdmin())
+        {
+            SHSTOCKICONINFO sii = { sizeof(sii) };
+            WCHAR location[MAX_PATH + 16];
+            if (SUCCEEDED(SHGetStockIconInfo(SIID_SHIELD, 0, &sii)) &&
+                SUCCEEDED(StringCchPrintfW(location, _countof(location), L"%s,%d", sii.szPath, sii.iIcon)))
+                return SHStrDupW(location, ppszIcon);
+        }
         return E_NOTIMPL;
     }
     STDMETHODIMP GetToolTip(IShellItemArray *psiItemArray, PWSTR *ppszInfotip) override
@@ -296,7 +305,8 @@ struct FwDlgBuilder
         DLGTEMPLATE *dlg = (DLGTEMPLATE *)Storage;
 
         ZeroMemory(Storage, sizeof(Storage));
-        dlg->style = DS_SETFONT | DS_MODALFRAME | DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU;
+        /* DS_SHELLFONT needs a DLGTEMPLATEEX: the font is named instead */
+        dlg->style = DS_SETFONT | DS_MODALFRAME | DS_CENTER | DS_SETFOREGROUND | WS_POPUP | WS_CAPTION | WS_SYSMENU;
         dlg->cx = cx;
         dlg->cy = cy;
         Count = &dlg->cdit;
@@ -428,14 +438,15 @@ static BOOL FwCustomizeDialog(HWND hwndOwner, FwCustomize *settings)
     for (UINT i = 0; i < FW_PROFILES; i++)
     {
         FwString(g_FwProfiles[i].Settings, text, _countof(text), g_FwProfiles[i].SettingsEnglish);
-        b->Item(IDC_FW_HEADER(i), 0x0082, SS_LEFT, 7, y, 256, 10, text);
+        b->Item(IDC_FW_HEADER(i), 0x0082, SS_LEFT | WS_GROUP, 7, y, 256, 10, text);
         FwString(IDS_FW_TURN_ON, text, _countof(text), L"Turn on Orosi Firewall");
         b->Item(IDC_FW_ON(i), 0x0080, BS_RADIOBUTTON | WS_GROUP | WS_TABSTOP, 16, y + 13, 246, 10, text);
         FwString(IDS_FW_IN_BLOCKALL, text, _countof(text),
                  L"Block all incoming connections, including those in the list of allowed apps");
-        b->Item(IDC_FW_BLOCK(i), 0x0080, BS_AUTOCHECKBOX | BS_MULTILINE | WS_GROUP | WS_TABSTOP, 28, y + 25, 234, 18, text);
+        b->Item(IDC_FW_BLOCK(i), 0x0080, BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP, 28, y + 25, 234, 18, text);
         FwString(IDS_FW_TURN_OFF, text, _countof(text), L"Turn off Orosi Firewall (not recommended)");
-        b->Item(IDC_FW_OFF(i), 0x0080, BS_RADIOBUTTON | WS_GROUP | WS_TABSTOP, 16, y + 45, 246, 10, text);
+        /* one group per type of network, started by its first radio button */
+        b->Item(IDC_FW_OFF(i), 0x0080, BS_RADIOBUTTON, 16, y + 45, 246, 10, text);
         y += 66;
     }
     y += 4;
@@ -600,11 +611,12 @@ static HRESULT FwAppsApply(FwApps *apps)
         }
         else if (app->Changed)
         {
-            /* a rule for neither type is off; its other types stay as they were */
-            if (app->Profiles & FW_APP_PROFILES)
+            /* the boxes change Private and Public only: the rule's other types (Domain) stay. A rule
+               left for no type at all is turned off, its types kept */
+            if (app->Profiles)
                 hr = app->Rule->put_Profiles(app->Profiles);
             if (SUCCEEDED(hr))
-                hr = app->Rule->put_Enabled(app->Enabled && (app->Profiles & FW_APP_PROFILES) ? VARIANT_TRUE : VARIANT_FALSE);
+                hr = app->Rule->put_Enabled(app->Enabled && app->Profiles ? VARIANT_TRUE : VARIANT_FALSE);
         }
         if (FAILED(hr) && SUCCEEDED(result))
             result = hr;
@@ -666,7 +678,19 @@ static VOID FwAppsSyncButtons(HWND hDlg, FwApps *apps)
     EnableWindow(GetDlgItem(hDlg, IDC_FW_APPS_REMOVE), app != NULL);
 }
 
-/* An app the user picks: allowed on private and public networks, named after its file */
+/* A name a rule of the list has: Remove takes every rule of a name */
+static BOOL FwAppsNameTaken(const FwApps *apps, PCWSTR name)
+{
+    for (UINT i = 0; i < apps->Count; i++)
+    {
+        if (!lstrcmpiW(apps->Items[i].Name, name))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* An app the user picks: allowed on private and public networks, named after its file, and apart
+   from the rules already there */
 static VOID FwAppsAdd(HWND hDlg, FwApps *apps)
 {
     WCHAR path[MAX_PATH] = L"", filter[128], title[128];
@@ -696,6 +720,12 @@ static VOID FwAppsAdd(HWND hDlg, FwApps *apps)
     StringCchCopyW(app->Path, _countof(app->Path), path);
     StringCchCopyW(app->Name, _countof(app->Name), PathFindFileNameW(path));
     PathRemoveExtensionW(app->Name);
+    {
+        WCHAR base[240];
+        StringCchCopyW(base, _countof(base), app->Name);
+        for (UINT n = 2; FwAppsNameTaken(apps, app->Name) && n < 1000; n++)
+            StringCchPrintfW(app->Name, _countof(app->Name), L"%s (%u)", base, n);
+    }
     app->Enabled = TRUE;
     app->Profiles = FW_APP_PROFILES;
     app->Changed = TRUE;
@@ -800,8 +830,21 @@ static INT_PTR CALLBACK FwAppsProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM l
                     FwApp *app = FwAppsSelected(hDlg, apps, &row);
                     if (app)
                     {
-                        app->Removed = TRUE;
-                        ListView_DeleteItem(GetDlgItem(hDlg, IDC_FW_APPS_LIST), row);
+                        /* Remove takes every rule of that name (INetFwRules::Remove): all its rows go */
+                        HWND hList = GetDlgItem(hDlg, IDC_FW_APPS_LIST);
+                        WCHAR name[256];
+                        StringCchCopyW(name, _countof(name), app->Name);
+                        for (row = ListView_GetItemCount(hList) - 1; row >= 0; row--)
+                        {
+                            LVITEMW item = { LVIF_PARAM };
+                            item.iItem = row;
+                            if (ListView_GetItem(hList, &item) && (UINT)item.lParam < apps->Count &&
+                                !lstrcmpiW(apps->Items[item.lParam].Name, name))
+                            {
+                                apps->Items[item.lParam].Removed = TRUE;
+                                ListView_DeleteItem(hList, row);
+                            }
+                        }
                         FwAppsSyncButtons(hDlg, apps);
                     }
                     return TRUE;
@@ -873,6 +916,104 @@ static VOID FwAllowedAppsDialog(HWND hwndOwner)
     HeapFree(GetProcessHeap(), 0, b);
 }
 
+/* ---- the actions, run by the page or, elevated, by OrosiFirewall_RunDLLW ---------------------- */
+
+/* Turn on or off: the settings of each type of network, written through INetFwPolicy2 */
+static VOID FwCustomizeRun(HWND hwnd)
+{
+    CComPtr<INetFwPolicy2> pPolicy;
+    FwCustomize settings, before;
+    HRESULT hr = FwPolicy(&pPolicy);
+
+    ZeroMemory(&settings, sizeof(settings));
+    for (UINT i = 0; i < FW_PROFILES && SUCCEEDED(hr); i++)
+    {
+        NET_FW_PROFILE_TYPE2 bit = (NET_FW_PROFILE_TYPE2)g_FwProfiles[i].Bit;
+        VARIANT_BOOL on = VARIANT_FALSE, block = VARIANT_FALSE;
+
+        hr = pPolicy->get_FirewallEnabled(bit, &on);
+        if (SUCCEEDED(hr))
+            hr = pPolicy->get_BlockAllInboundTraffic(bit, &block);
+        settings.On[i] = on != VARIANT_FALSE;
+        settings.Block[i] = block != VARIANT_FALSE;
+    }
+    if (FAILED(hr))
+    {
+        FwReportError(hwnd, IDS_FW_UNAVAILABLE, L"The Orosi Firewall settings cannot be read (error 0x%08lX).", hr);
+        return;
+    }
+    before = settings;
+    if (!FwCustomizeDialog(hwnd, &settings))
+        return;
+    for (UINT i = 0; i < FW_PROFILES && SUCCEEDED(hr); i++)
+    {
+        NET_FW_PROFILE_TYPE2 bit = (NET_FW_PROFILE_TYPE2)g_FwProfiles[i].Bit;
+
+        if (settings.On[i] && settings.Block[i] != before.Block[i])
+            hr = pPolicy->put_BlockAllInboundTraffic(bit, settings.Block[i] ? VARIANT_TRUE : VARIANT_FALSE);
+        if (SUCCEEDED(hr) && settings.On[i] != before.On[i])
+            hr = pPolicy->put_FirewallEnabled(bit, settings.On[i] ? VARIANT_TRUE : VARIANT_FALSE);
+    }
+    if (FAILED(hr))
+        FwReportError(hwnd, IDS_FW_FAILED, L"The settings could not be changed (error 0x%08lX).", hr);
+}
+
+static VOID FwRestoreRun(HWND hwnd)
+{
+    CComPtr<INetFwPolicy2> pPolicy;
+    WCHAR text[400], title[64];
+    HRESULT hr;
+
+    FwString(IDS_FW_RESTORE_ASK, text, _countof(text),
+             L"Restoring the defaults removes all the Orosi Firewall settings you have configured for all network types. Do you want to restore the defaults?");
+    FwString(IDS_FW_NAME, title, _countof(title), L"Orosi Firewall");
+    if (::MessageBoxW(hwnd, text, title, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND) != IDYES)
+        return;
+    hr = FwPolicy(&pPolicy);
+    if (SUCCEEDED(hr))
+        hr = pPolicy->RestoreLocalFirewallDefaults();
+    if (FAILED(hr))
+        FwReportError(hwnd, IDS_FW_FAILED, L"The settings could not be changed (error 0x%08lX).", hr);
+}
+
+/* rundll32 shell32.dll,OrosiFirewall_RunDLL customize|restore|allowedapps: the page starts it with
+   "runas" when its caller is not elevated, as Windows elevates these pages */
+EXTERN_C VOID WINAPI OrosiFirewall_RunDLLW(HWND hwnd, HINSTANCE hinst, LPCWSTR cmdline, int nCmdShow)
+{
+    INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_LISTVIEW_CLASSES };
+    HRESULT hrInit = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+
+    InitCommonControlsEx(&icc);
+    WCHAR command[32] = L"";
+    int len;
+
+    /* the first word, without the spaces or quotes around it */
+    while (cmdline && (*cmdline == L' ' || *cmdline == L'"'))
+        cmdline++;
+    if (cmdline)
+        StringCchCopyW(command, _countof(command), cmdline);
+    for (len = 0; command[len] && command[len] != L' ' && command[len] != L'"' &&
+                  command[len] != L'\r' && command[len] != L'\n'; len++)
+        ;
+    command[len] = UNICODE_NULL;
+    if (!lstrcmpiW(command, L"customize"))
+        FwCustomizeRun(NULL);
+    else if (!lstrcmpiW(command, L"restore"))
+        FwRestoreRun(NULL);
+    else if (!lstrcmpiW(command, L"allowedapps"))
+        FwAllowedAppsDialog(NULL);
+    if (SUCCEEDED(hrInit))
+        CoUninitialize();
+}
+
+static BOOL FwHighContrast()
+{
+    HIGHCONTRASTW hc = { sizeof(hc) };
+    return SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(hc), &hc, 0) && (hc.dwFlags & HCF_HIGHCONTRASTON);
+}
+
+#define FW_HELPER_TIMER 1
+
 /* ---------------------------------------------------------------------------------------------- */
 
 struct FwProfileState
@@ -899,6 +1040,7 @@ private:
     HFONT m_fontText;
     FwProfileState m_state[FW_PROFILES];
     HRESULT m_loadError;
+    HANDLE m_hHelper;           /* the elevated helper running an action */
 
     int S(int value) { return MulDiv(value, m_dpi, 96); }
 
@@ -1091,12 +1233,15 @@ private:
             /* the header: a band marked green when the firewall is on, red when it is off */
             RECT band = { left, y, right, y + S(28) };
             RECT mark = { left, y, left + S(6), y + S(28) };
-            HBRUSH brush = CreateSolidBrush(state->Enabled ? RGB(0x10, 0x7C, 0x10) : RGB(0xC4, 0x2B, 0x1C));
+            BOOL highContrast = FwHighContrast();
+            HBRUSH brush = highContrast ? GetSysColorBrush(state->Enabled ? COLOR_HIGHLIGHT : COLOR_GRAYTEXT)
+                                        : CreateSolidBrush(state->Enabled ? RGB(0x10, 0x7C, 0x10) : RGB(0xC4, 0x2B, 0x1C));
             FillRect(hdc, &band, GetSysColorBrush(COLOR_3DFACE));
             if (brush)
             {
                 FillRect(hdc, &mark, brush);
-                DeleteObject(brush);
+                if (!highContrast)
+                    DeleteObject(brush);
             }
             FwString(g_FwProfiles[i].Name, text, _countof(text), g_FwProfiles[i].English);
             SetRect(&rc, left + S(14), y, right - S(120), y + S(28));
@@ -1177,53 +1322,35 @@ private:
             PersNavigateOutside(m_psb, pidl);
     }
 
-    /* Turn on or off: the settings of each type of network, written through INetFwPolicy2 */
-    VOID Customize()
+    /* Not elevated: the action runs in an elevated helper; the page reloads when it ends */
+    BOOL Elevate(PCWSTR command)
     {
-        CComPtr<INetFwPolicy2> pPolicy;
-        FwCustomize settings;
-        HRESULT hr;
+        SHELLEXECUTEINFOW sei = { sizeof(sei) };
+        WCHAR params[96];
 
-        LoadState();
-        for (UINT i = 0; i < FW_PROFILES; i++)
+        if (IsUserAnAdmin())
+            return FALSE;
+        StringCchPrintfW(params, _countof(params), L"shell32.dll,OrosiFirewall_RunDLL %s", command);
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+        sei.hwnd = m_hWnd;
+        sei.lpVerb = L"runas";
+        sei.lpFile = L"rundll32.exe";
+        sei.lpParameters = params;
+        sei.nShow = SW_SHOWNORMAL;
+        if (ShellExecuteExW(&sei) && sei.hProcess)
         {
-            settings.On[i] = m_state[i].Enabled;
-            settings.Block[i] = m_state[i].BlockAll;
+            if (m_hHelper)
+                CloseHandle(m_hHelper);
+            m_hHelper = sei.hProcess;
+            SetTimer(FW_HELPER_TIMER, 500, NULL);
         }
-        if (!FwCustomizeDialog(m_hWnd, &settings))
-            return;
-        hr = FwPolicy(&pPolicy);
-        for (UINT i = 0; i < FW_PROFILES && SUCCEEDED(hr); i++)
-        {
-            NET_FW_PROFILE_TYPE2 bit = (NET_FW_PROFILE_TYPE2)g_FwProfiles[i].Bit;
-
-            if (settings.On[i] && settings.Block[i] != m_state[i].BlockAll)
-                hr = pPolicy->put_BlockAllInboundTraffic(bit, settings.Block[i] ? VARIANT_TRUE : VARIANT_FALSE);
-            if (SUCCEEDED(hr) && settings.On[i] != m_state[i].Enabled)
-                hr = pPolicy->put_FirewallEnabled(bit, settings.On[i] ? VARIANT_TRUE : VARIANT_FALSE);
-        }
-        if (FAILED(hr))
-            FwReportError(m_hWnd, IDS_FW_FAILED, L"The settings could not be changed (error 0x%08lX).", hr);
-        LoadState();
-        Relayout();
+        return TRUE;
     }
 
-    VOID RestoreDefaults()
+    VOID Run(PCWSTR command, VOID (*action)(HWND))
     {
-        CComPtr<INetFwPolicy2> pPolicy;
-        WCHAR text[400], title[64];
-        HRESULT hr;
-
-        FwString(IDS_FW_RESTORE_ASK, text, _countof(text),
-                 L"Restoring the defaults removes all the Orosi Firewall settings you have configured for all network types. Do you want to restore the defaults?");
-        FwString(IDS_FW_NAME, title, _countof(title), L"Orosi Firewall");
-        if (::MessageBoxW(m_hWnd, text, title, MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
-            return;
-        hr = FwPolicy(&pPolicy);
-        if (SUCCEEDED(hr))
-            hr = pPolicy->RestoreLocalFirewallDefaults();
-        if (FAILED(hr))
-            FwReportError(m_hWnd, IDS_FW_FAILED, L"The settings could not be changed (error 0x%08lX).", hr);
+        if (!Elevate(command))
+            action(m_hWnd);
         LoadState();
         Relayout();
     }
@@ -1235,7 +1362,8 @@ public:
         m_fontTitle(NULL),
         m_fontBold(NULL),
         m_fontText(NULL),
-        m_loadError(S_OK)
+        m_loadError(S_OK),
+        m_hHelper(NULL)
     {
         ZeroMemory(&m_fs, sizeof(m_fs));
         ZeroMemory(m_state, sizeof(m_state));
@@ -1255,7 +1383,30 @@ public:
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL &)
     {
         m_hwndTasks = NULL; /* a child: destroyed with us */
+        KillTimer(FW_HELPER_TIMER);
+        if (m_hHelper)
+            CloseHandle(m_hHelper);
+        m_hHelper = NULL;
         FreeFonts();
+        return 0;
+    }
+
+    LRESULT OnTimer(UINT, WPARAM wParam, LPARAM, BOOL &bHandled)
+    {
+        if (wParam != FW_HELPER_TIMER)
+        {
+            bHandled = FALSE;
+            return 0;
+        }
+        if (!m_hHelper || WaitForSingleObject(m_hHelper, 0) == WAIT_OBJECT_0)
+        {
+            KillTimer(FW_HELPER_TIMER);
+            if (m_hHelper)
+                CloseHandle(m_hHelper);
+            m_hHelper = NULL;
+            LoadState();
+            Relayout();
+        }
         return 0;
     }
 
@@ -1336,15 +1487,13 @@ public:
                 NavigateTo(FW_CPL_PARSE);
                 break;
             case FW_PANE_ALLOW:
-                FwAllowedAppsDialog(m_hWnd);
-                LoadState();
-                Relayout();
+                Run(L"allowedapps", FwAllowedAppsDialog);
                 break;
             case FW_PANE_ONOFF:
-                Customize();
+                Run(L"customize", FwCustomizeRun);
                 break;
             case FW_PANE_RESTORE:
-                RestoreDefaults();
+                Run(L"restore", FwRestoreRun);
                 break;
             case FW_PANE_NSC:
                 NavigateTo(FW_NSC_PARSE);
@@ -1371,6 +1520,7 @@ public:
     MESSAGE_HANDLER(WM_THEMECHANGED, OnSettingChange)
     MESSAGE_HANDLER(SHV_TASKPANE_FOCUS, OnPaneFocus)
     MESSAGE_HANDLER(WM_FW_PANE_GOTO, OnPaneGoto)
+    MESSAGE_HANDLER(WM_TIMER, OnTimer)
     END_MSG_MAP()
 
     // IOleWindow

@@ -478,6 +478,7 @@
 #define IDS_FW_ADD                                  60119
 #define IDS_FW_REMOVE                               60120
 #define IDS_FW_ADD_FILTER                           60121
+#define IDS_FW_INFOTIP                              60122
 #define IDS_SEARCHBAND_COMMAND                      12708
 #define IDS_FOLDERSHORTCUT_TYPE                     10540
 

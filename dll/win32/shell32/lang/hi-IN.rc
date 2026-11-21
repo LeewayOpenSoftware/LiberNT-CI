@@ -1120,6 +1120,7 @@ BEGIN
     IDS_FW_ADD "Allow another app..."
     IDS_FW_REMOVE "Remove"
     IDS_FW_ADD_FILTER "Programs (*.exe)"
+    IDS_FW_INFOTIP "Keep incoming connections that the firewall does not allow from reaching this PC."
     IDS_SEARCHBAND_COMMAND "Search"
     IDS_FOLDERSHORTCUT_TYPE "Folder Shortcut"
 END
