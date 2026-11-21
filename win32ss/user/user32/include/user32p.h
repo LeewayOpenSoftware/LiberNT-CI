@@ -160,7 +160,7 @@ HRESULT User32GetSystemFilePath(_Out_writes_(cchBuffer) PWSTR lpBuffer, _In_ SIZ
 BOOL WINAPI UpdatePerUserImmEnabling(VOID);
 VOID APIENTRY CliImmInitializeHotKeys(DWORD dwAction, HKL hKL);
 VOID IntLoadPreloadKeyboardLayouts(VOID);
-VOID LoadUserCursors(VOID);
+BOOL LoadUserCursors(VOID);
 HBITMAP UserLoadWallpaperBitmap(PCWSTR Source, UINT WinIni);
 
 /* EOF */

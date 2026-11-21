@@ -1244,6 +1244,41 @@ leave:
 }
 
 
+/* The size a shared lookup compares against: an animated cursor has it on its first frame. */
+static VOID
+IntGetCurIconLookupSize(
+    _In_ PCURICON_OBJECT CurIcon,
+    _Out_ PLONG pcx,
+    _Out_ PLONG pcy)
+{
+    if (CurIcon->CURSORF_flags & CURSORF_ACON)
+    {
+        PACON pacon = (PACON)CurIcon;
+
+        if (pacon->cpcur && pacon->aspcur && pacon->aspcur[0])
+            CurIcon = pacon->aspcur[0];
+    }
+    *pcx = (LONG)CurIcon->cx;
+    *pcy = (LONG)CurIcon->cy;
+}
+
+/* LR_SHARED images are cached per size: a cursor of another size is not the one asked for.
+ * No requested size, or an object of unknown size, keeps the name-only match. */
+static BOOL
+IntCurIconSizeMatches(
+    _In_ PCURICON_OBJECT CurIcon,
+    _In_ const FINDEXISTINGCURICONPARAM *param)
+{
+    LONG cx, cy;
+
+    if (param->cx <= 0 && param->cy <= 0)
+        return TRUE;
+    IntGetCurIconLookupSize(CurIcon, &cx, &cy);
+    if (cx <= 0 || cy <= 0)
+        return TRUE;
+    return (param->cx <= 0 || cx == param->cx) && (param->cy <= 0 || cy == param->cy);
+}
+
 /*
  * @implemented
  */
@@ -1261,6 +1296,7 @@ NtUserFindExistingCursorIcon(
     NTSTATUS Status;
     PPROCESSINFO pProcInfo = PsGetCurrentProcessWin32Process();
     RTL_ATOM atomModName;
+    BOOL bSystemCursor = FALSE;
 
     TRACE("Enter NtUserFindExistingCursorIcon\n");
 
@@ -1291,11 +1327,42 @@ NtUserFindExistingCursorIcon(
     }
 
     UserEnterShared();
-    CurIcon = pProcInfo->pCursorCache;
-    while (CurIcon)
+    CurIcon = NULL;
+    if (paramSafe.cx <= 0 && paramSafe.cy <= 0)
+    {
+        /* No size asked (LoadCursor, LR_DEFAULTSIZE): the system cursor of that name comes
+         * first, at whatever size the pointer scheme loaded it. */
+        PCURICON_OBJECT pcurGlobal;
+
+        for (pcurGlobal = gcurFirst; pcurGlobal; pcurGlobal = pcurGlobal->pcurNext)
+        {
+            if (!(pcurGlobal->CURSORF_flags & CURSORF_GLOBAL) ||
+                paramSafe.bIcon != is_icon(pcurGlobal) ||
+                atomModName != pcurGlobal->atomModName ||
+                IS_INTRESOURCE(pcurGlobal->strName.Buffer) != IS_INTRESOURCE(ustrRsrcSafe.Buffer))
+                continue;
+            if (IS_INTRESOURCE(pcurGlobal->strName.Buffer)
+                    ? pcurGlobal->strName.Buffer == ustrRsrcSafe.Buffer
+                    : RtlCompareUnicodeString(&ustrRsrcSafe, &pcurGlobal->strName, TRUE) == 0)
+            {
+                CurIcon = pcurGlobal;
+                bSystemCursor = TRUE;
+                break;
+            }
+        }
+    }
+    if (!bSystemCursor)
+        CurIcon = pProcInfo->pCursorCache;
+    while (!bSystemCursor && CurIcon)
     {
         /* Icon/cursor */
         if (paramSafe.bIcon != is_icon(CurIcon))
+        {
+            CurIcon = CurIcon->pcurNext;
+            continue;
+        }
+        /* Size */
+        if (!IntCurIconSizeMatches(CurIcon, &paramSafe))
         {
             CurIcon = CurIcon->pcurNext;
             continue;
@@ -1336,6 +1403,12 @@ NtUserFindExistingCursorIcon(
         {
             /* Icon/cursor */
             if (paramSafe.bIcon != is_icon(CurIcon))
+            {
+                CurIcon = CurIcon->pcurNext;
+                continue;
+            }
+            /* Size */
+            if (!IntCurIconSizeMatches(CurIcon, &paramSafe))
             {
                 CurIcon = CurIcon->pcurNext;
                 continue;

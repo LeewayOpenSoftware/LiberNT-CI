@@ -17,7 +17,7 @@ BEGIN
     IDS_RAIN "Дождливый день"
     IDS_RWB "Красный, белый, и голубой"
     IDS_CLASSIC "LiberNT классическая"
-    IDS_STANDARD "LiberNT стандартная"
+    IDS_STANDARD "Orosi стандартная"
     IDS_ROSE "Роза"
     IDS_SAND "Песок" //Desert
     IDS_SLATE "Шифер"

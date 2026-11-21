@@ -334,12 +334,13 @@ static const struct
     { L"Help", IDC_HELP, OCR_HELP },
 };
 
-VOID LoadUserCursors(VOID)
+BOOL LoadUserCursors(VOID)
 {
     WCHAR Path[MAX_PATH], Expanded[MAX_PATH];
     DWORD BaseSize = 0, BaseSizeLength = sizeof(BaseSize), Type;
     HKEY Key = NULL;
     UINT i;
+    BOOL Ret = TRUE;
     ULONG Previous = User32BeginSystemDpiContext();
 
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\Cursors", 0, KEY_QUERY_VALUE, &Key) != ERROR_SUCCESS)
@@ -367,12 +368,25 @@ VOID LoadUserCursors(VOID)
         }
         if (!Cursor)
             Cursor = User32LoadOemImage(UserCursorScheme[i].Resource, IMAGE_CURSOR, BaseSize, BaseSize, LR_DEFAULTSIZE);
-        if (Cursor && !NtUserSetSystemCursor(Cursor, UserCursorScheme[i].Id))
+        if (!Cursor)
+        {
+            ERR("LoadUserCursors: no image for %S (OCR %lu), error %lu\n",
+                UserCursorScheme[i].Name, UserCursorScheme[i].Id, GetLastError());
+            Ret = FALSE;
+        }
+        else if (!NtUserSetSystemCursor(Cursor, UserCursorScheme[i].Id))
+        {
+            /* No interactive window station access, or the slot is not set yet. */
+            ERR("LoadUserCursors: NtUserSetSystemCursor(%S, OCR %lu) failed, error %lu\n",
+                UserCursorScheme[i].Name, UserCursorScheme[i].Id, GetLastError());
             DestroyCursor(Cursor);
+            Ret = FALSE;
+        }
     }
     if (Key)
         RegCloseKey(Key);
     User32EndSystemDpiContext(Previous);
+    return Ret;
 }
 
 /* This callback routine is called directly after switching to gui mode */
@@ -2035,6 +2049,7 @@ CURSORICON_LoadImageW(
     UNICODE_STRING ustrRsrc;
     UNICODE_STRING ustrModule = {0, 0, NULL};
     LPCWSTR lpszResourceName = lpszName;
+    int cxRequested = cxDesired, cyRequested = cyDesired;
 
     /* Fix width/height */
     if(fuLoad & LR_DEFAULTSIZE)
@@ -2136,10 +2151,11 @@ CURSORICON_LoadImageW(
         FINDEXISTINGCURICONPARAM param;
 
         TRACE("Checking for an LR_SHARED cursor/icon.\n");
-        /* Ask win32k */
+        /* Ask win32k with the size the caller asked for: 0 (the default size) means the
+         * system cursor of that name, whatever size the pointer scheme gave it. */
         param.bIcon = bIcon;
-        param.cx = cxDesired;
-        param.cy = cyDesired;
+        param.cx = cxRequested;
+        param.cy = cyRequested;
         hCurIcon = NtUserFindExistingCursorIcon(&ustrModule, &ustrRsrc, &param);
         if(hCurIcon)
         {

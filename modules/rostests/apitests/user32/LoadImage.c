@@ -1,5 +1,6 @@
 
 #include "precomp.h"
+#include <winreg.h>
 #include "resource_1bpp.h"
 
 #define ROS_HGDI_ERROR (HANDLE)~(ULONG_PTR)0 // This makes MSVC compiler happy
@@ -261,6 +262,125 @@ static void test_LoadImage_OemShared(void)
         DeleteObject(Image);
 }
 
+static void check_SharedCursorSize(const char *label, HCURSOR cursor, LONG expected)
+{
+    ICONINFO ii;
+    BITMAP bm;
+
+    ok(cursor != NULL, "%s: LoadImage failed, error %lu\n", label, GetLastError());
+    if (!cursor)
+        return;
+    memset(&ii, 0, sizeof(ii));
+    ok(GetIconInfo(cursor, &ii), "%s: GetIconInfo failed, error %lu\n", label, GetLastError());
+    if (ii.hbmMask && GetObjectW(ii.hbmMask, sizeof(bm), &bm))
+        ok(bm.bmWidth == expected, "%s: mask width %ld, expected %ld\n", label, bm.bmWidth, expected);
+    else
+        ok(0, "%s: no mask bitmap\n", label);
+    if (ii.hbmMask) DeleteObject(ii.hbmMask);
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+}
+
+/* LR_SHARED caches one image per requested size: a 48 px request must not return the 32 px cursor. */
+static void test_LoadImage_SharedCursorSize(void)
+{
+    HCURSOR h32, h48, h32b, h48b;
+
+    h32 = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 32, 32, LR_SHARED);
+    h48 = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 48, 48, LR_SHARED);
+    h32b = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 32, 32, LR_SHARED);
+    h48b = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 48, 48, LR_SHARED);
+
+    check_SharedCursorSize("arrow 32", h32, 32);
+    check_SharedCursorSize("arrow 48", h48, 48);
+    ok(h32 == h32b, "the same 32 px shared request gave another handle (%p, %p)\n", h32, h32b);
+    ok(h48 == h48b, "the same 48 px shared request gave another handle (%p, %p)\n", h48, h48b);
+    ok(h32 != h48, "the 48 px shared request returned the 32 px cursor %p\n", h32);
+}
+
+/* The live system cursor after a reload: SetCursor on our own window, then the object GetCursorInfo reports. */
+static LONG LiveArrowWidth(HWND hwnd, HCURSOR *phLive)
+{
+    CURSORINFO ci;
+    ICONINFO ii;
+    BITMAP bm;
+    RECT rc;
+    MSG msg;
+    LONG width = -1;
+
+    GetWindowRect(hwnd, &rc);
+    SetCursorPos((rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2);
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+        DispatchMessageW(&msg);
+    SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_ARROW));
+    ci.cbSize = sizeof(ci);
+    if (!GetCursorInfo(&ci) || !ci.hCursor)
+        return -1;
+    if (phLive)
+        *phLive = ci.hCursor;
+    memset(&ii, 0, sizeof(ii));
+    if (!GetIconInfo(ci.hCursor, &ii))
+        return -1;
+    if (ii.hbmMask && GetObjectW(ii.hbmMask, sizeof(bm), &bm))
+        width = bm.bmWidth;
+    if (ii.hbmMask) DeleteObject(ii.hbmMask);
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+    return width;
+}
+
+/* SystemParametersInfoA(SPI_SETCURSORS) must reload the system cursors at CursorBaseSize like the W entry point. */
+static void test_SystemParametersInfoA_SetCursors(void)
+{
+    HKEY key;
+    DWORD old = 0, size = sizeof(old), type = 0, base = 48;
+    BOOL hadOld;
+    HWND hwnd;
+    HCURSOR live = NULL, shared;
+    LONG width;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, "Control Panel\\Cursors", 0, NULL, 0,
+                        KEY_QUERY_VALUE | KEY_SET_VALUE, NULL, &key, NULL) != ERROR_SUCCESS)
+    {
+        skip("Cannot open HKCU\\Control Panel\\Cursors\n");
+        return;
+    }
+    hadOld = RegQueryValueExA(key, "CursorBaseSize", NULL, &type, (BYTE *)&old, &size) == ERROR_SUCCESS &&
+             type == REG_DWORD;
+    hwnd = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "STATIC", "SPI_SETCURSORS", WS_POPUP | WS_VISIBLE,
+                           0, 0, 160, 160, NULL, NULL, GetModuleHandleA(NULL), NULL);
+    ok(hwnd != NULL, "CreateWindowEx failed, error %lu\n", GetLastError());
+    if (hwnd)
+    {
+        width = LiveArrowWidth(hwnd, NULL);
+        if (width < 0)
+        {
+            skip("No live cursor to measure (GetCursorInfo gave none)\n");
+        }
+        else
+        {
+            if (!hadOld || old == 32)
+                ok(width == GetSystemMetrics(SM_CXCURSOR), "live arrow before: %ld, expected %d\n",
+                   width, GetSystemMetrics(SM_CXCURSOR));
+            else
+                trace("CursorBaseSize is %lu here, live arrow before: %ld\n", old, width);
+            RegSetValueExA(key, "CursorBaseSize", 0, REG_DWORD, (const BYTE *)&base, sizeof(base));
+            ok(SystemParametersInfoA(SPI_SETCURSORS, 0, NULL, 0), "SystemParametersInfoA failed, error %lu\n", GetLastError());
+            width = LiveArrowWidth(hwnd, &live);
+            ok(width == 48, "live arrow after SPI_SETCURSORS at base 48: %ld\n", width);
+            /* An app loading the default arrow gets the resized system cursor, as on Windows */
+            shared = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+            ok(shared == live, "LoadCursor(IDC_ARROW) %p is not the live system cursor %p\n", shared, live);
+            check_SharedCursorSize("arrow via LoadCursor after reload", shared, 48);
+        }
+        DestroyWindow(hwnd);
+    }
+    if (hadOld)
+        RegSetValueExA(key, "CursorBaseSize", 0, REG_DWORD, (const BYTE *)&old, sizeof(old));
+    else
+        RegDeleteValueA(key, "CursorBaseSize");
+    RegCloseKey(key);
+    ok(SystemParametersInfoA(SPI_SETCURSORS, 0, NULL, 0), "restore SystemParametersInfoA failed, error %lu\n", GetLastError());
+}
+
 static const BYTE PngCursorImage[] =
 {
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -456,5 +576,7 @@ START_TEST(LoadImage)
     test_LoadIcon_SystemIds();
     test_LoadImage_1bpp();
     test_LoadImage_OemShared();
+    test_LoadImage_SharedCursorSize();
+    test_SystemParametersInfoA_SetCursors();
     test_LoadImage_PngCursorFiles();
 }

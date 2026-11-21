@@ -662,6 +662,12 @@ RealSystemParametersInfoA(UINT uiAction,
           return Ret;
       }
 
+      case SPI_SETCURSORS:
+      /* Same as the Unicode path: reload the pointer scheme here, the kernel only answers. */
+      if (!LoadUserCursors())
+        ERR("SPI_SETCURSORS: the pointer scheme was not fully applied\n");
+      break;
+
       case SPI_SETDESKWALLPAPER:
       {
           UNICODE_STRING ustrWallpaper;
@@ -701,7 +707,9 @@ RealSystemParametersInfoW(UINT uiAction,
       return GetHighContrastW(uiParam, pvParam, fWinIni);
 
     case SPI_SETCURSORS:
-      LoadUserCursors();
+      /* Windows reports success here whatever happened to the cursors; the log says. */
+      if (!LoadUserCursors())
+        ERR("SPI_SETCURSORS: the pointer scheme was not fully applied\n");
       break;
 
     case SPI_SETDESKWALLPAPER:

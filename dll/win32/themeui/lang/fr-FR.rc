@@ -17,7 +17,7 @@ BEGIN
     IDS_RAIN "Jour pluvieux"
     IDS_RWB "Bleu, blanc, rouge"
     IDS_CLASSIC "LiberNT Classique"
-    IDS_STANDARD "LiberNT Standard"
+    IDS_STANDARD "Orosi Standard"
     IDS_ROSE "Rose saumon"
     IDS_SAND "Désert"
     IDS_SLATE "Ardoise"

@@ -9,12 +9,12 @@ LANGUAGE LANG_JAPANESE, SUBLANG_DEFAULT
 
 STRINGTABLE
 {
-1000, "LiberNT 既定"
+1000, "Orosi 既定"
 }
 
 STRINGTABLE
 {
-2000, "LiberNT 既定"
+2000, "Orosi 既定"
 }
 
 STRINGTABLE
@@ -33,7 +33,7 @@ STRINGTABLE
 
 STRINGTABLE
 {
-5000, "LiberNT 既定"
+5000, "Orosi 既定"
 5001, "ビジュアル スタイル"
 5002, "ReactOS Project"
 5003, "フラットな Windows 8 スタイルのテーマ"
