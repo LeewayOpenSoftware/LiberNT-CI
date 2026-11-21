@@ -18,6 +18,7 @@ list(APPEND SOURCE
     dualstack.c
     dualstack_mapped.c
     getaddrinfo.c
+    getaddrinfoex.c
     gethostname.c
     getnameinfo.c
     getservbyname.c
