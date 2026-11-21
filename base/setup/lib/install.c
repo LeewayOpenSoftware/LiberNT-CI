@@ -627,24 +627,37 @@ RemoveEmptyDirectory(
     OBJECT_ATTRIBUTES ObjectAttributes;
     IO_STATUS_BLOCK IoStatusBlock;
     UNICODE_STRING Name;
+    LARGE_INTEGER Delay;
     HANDLE Handle;
     NTSTATUS Status;
+    ULONG Attempt;
 
     RtlInitUnicodeString(&Name, Path);
     InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    Status = NtOpenFile(&Handle,
-                        DELETE | SYNCHRONIZE,
-                        &ObjectAttributes,
-                        &IoStatusBlock,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                        FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT);
-    if (!NT_SUCCESS(Status))
-        return Status;
+    for (Attempt = 0; ; Attempt++)
+    {
+        Status = NtOpenFile(&Handle,
+                            DELETE | SYNCHRONIZE,
+                            &ObjectAttributes,
+                            &IoStatusBlock,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT);
+        if (!NT_SUCCESS(Status))
+            return Status;
 
-    Status = NtSetInformationFile(Handle, &IoStatusBlock, &Disposition, sizeof(Disposition),
-                                  FileDispositionInformation);
-    NtClose(Handle);
-    return Status;
+        Status = NtSetInformationFile(Handle, &IoStatusBlock, &Disposition, sizeof(Disposition),
+                                      FileDispositionInformation);
+        NtClose(Handle);
+
+        /*
+         * A child deleted without POSIX semantics stays listed until the last
+         * handle on it closes, which another process may hold for a moment.
+         */
+        if (Status != STATUS_DIRECTORY_NOT_EMPTY || Attempt > 0)
+            return Status;
+        Delay.QuadPart = -100 * 10000; /* 100 ms */
+        NtDelayExecution(FALSE, &Delay);
+    }
 }
 
 static NTSTATUS

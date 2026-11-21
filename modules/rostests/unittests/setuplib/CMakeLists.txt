@@ -12,7 +12,7 @@ list(APPEND SOURCE
     testlist.c
     precomp.h)
 
-add_executable(setuplib_unittest ${SOURCE})
+add_executable(setuplib_unittest ${SOURCE} setuplib_unittest.rc)
 target_link_libraries(setuplib_unittest setuplib_static ${PSEH_LIB})
 set_module_type(setuplib_unittest win32cui)
 add_importlibs(setuplib_unittest setupapi msvcrt kernel32 ntdll)

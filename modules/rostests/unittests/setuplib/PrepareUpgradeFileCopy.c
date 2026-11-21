@@ -17,6 +17,8 @@
 #include <strsafe.h>
 
 #define NTOS_MODE_USER
+#include <ndk/iofuncs.h>
+#include <ndk/obfuncs.h>
 #include <ndk/rtlfuncs.h>
 
 #include <setuplib.h>
@@ -296,6 +298,67 @@ GetTestAttributes(
     return GetFileAttributesW(Path);
 }
 
+/*
+ * Lists what survives under a path the upgrade should have removed, with the
+ * status a delete-open gets: STATUS_DELETE_PENDING names a file another handle
+ * still keeps alive, STATUS_SHARING_VIOLATION one that is in use.
+ */
+static VOID
+TraceLeftovers(
+    _In_ PCWSTR Relative,
+    _In_ ULONG Depth)
+{
+    WCHAR Path[MAX_PATH], Child[MAX_PATH], NtPath[MAX_PATH + 4];
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    WIN32_FIND_DATAW Data;
+    UNICODE_STRING Name;
+    HANDLE Find, Handle;
+    DWORD Attributes;
+    NTSTATUS Status;
+
+    if (!BuildPath(Relative, Path, ARRAYSIZE(Path)))
+        return;
+    Attributes = GetFileAttributesW(Path);
+    if (Attributes == INVALID_FILE_ATTRIBUTES)
+        return;
+
+    StringCchPrintfW(NtPath, ARRAYSIZE(NtPath), L"\\??\\%s", Path);
+    RtlInitUnicodeString(&Name, NtPath);
+    InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = NtOpenFile(&Handle, DELETE | SYNCHRONIZE, &ObjectAttributes, &IoStatusBlock,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT);
+    if (NT_SUCCESS(Status))
+        NtClose(Handle);
+    trace("%*sleft behind: %S (attributes 0x%lx, open for delete 0x%08lx)\n",
+          (int)(Depth * 2), "", Relative, Attributes, Status);
+
+    if (!(Attributes & FILE_ATTRIBUTE_DIRECTORY) || Depth >= 8)
+        return;
+    StringCchPrintfW(Child, ARRAYSIZE(Child), L"%s\\*", Path);
+    Find = FindFirstFileW(Child, &Data);
+    if (Find == INVALID_HANDLE_VALUE)
+        return;
+    do
+    {
+        if (wcscmp(Data.cFileName, L".") == 0 || wcscmp(Data.cFileName, L"..") == 0)
+            continue;
+        StringCchPrintfW(Child, ARRAYSIZE(Child), L"%s\\%s", Relative, Data.cFileName);
+        TraceLeftovers(Child, Depth + 1);
+    } while (FindNextFileW(Find, &Data));
+    FindClose(Find);
+}
+
+/* A removed path must be gone; when it is not, say what is left and why */
+#define ok_removed(_relative, _message) \
+    do { \
+        DWORD _attributes = GetTestAttributes(_relative); \
+        if (_attributes != INVALID_FILE_ATTRIBUTES) \
+            TraceLeftovers(_relative, 0); \
+        ok(_attributes == INVALID_FILE_ATTRIBUTES, _message); \
+    } while (0)
+
 static BOOL
 TestFileStartsWith(
     _In_ PCWSTR Relative,
@@ -454,10 +517,8 @@ START_TEST(PrepareUpgradeFileCopy)
     ok(Attributes != INVALID_FILE_ATTRIBUTES && (Attributes & FILE_ATTRIBUTE_DIRECTORY), "obsolete directory with data removed\n");
     Attributes = GetTestAttributes(L"dst\\Windows\\emptydir");
     ok(Attributes != INVALID_FILE_ATTRIBUTES && (Attributes & FILE_ATTRIBUTE_DIRECTORY), "listed directory not created\n");
-    ok(GetTestAttributes(L"dst\\Windows\\removed.dll") == INVALID_FILE_ATTRIBUTES,
-       "a file of a removed component was kept\n");
-    ok(GetTestAttributes(L"dst\\Windows\\RemovedState") == INVALID_FILE_ATTRIBUTES,
-       "the directory of a removed component was kept\n");
+    ok_removed(L"dst\\Windows\\removed.dll", "a file of a removed component was kept\n");
+    ok_removed(L"dst\\Windows\\RemovedState", "the directory of a removed component was kept\n");
 
     BuildTestTrees(NULL, L"dst\\Windows\\servicing\\Orosi.files");
     if (RunUpgradePlan())
@@ -466,8 +527,7 @@ START_TEST(PrepareUpgradeFileCopy)
         ok(TestFileStartsWith(L"dst\\Windows\\obsolete.dll", "old"), "unlisted file dropped without an old inventory\n");
         ok(TestFileStartsWith(L"dst\\Windows\\servicing\\Orosi.files", "; Orosi new"),
            "inventory not written without an old inventory\n");
-        ok(GetTestAttributes(L"dst\\Windows\\removed.dll") == INVALID_FILE_ATTRIBUTES,
-           "a file of a removed component was kept without an old inventory\n");
+        ok_removed(L"dst\\Windows\\removed.dll", "a file of a removed component was kept without an old inventory\n");
     }
 
     BuildTestTrees(OtherImageInventory, L"dst\\Windows\\servicing\\Orosi.files");
@@ -478,8 +538,7 @@ START_TEST(PrepareUpgradeFileCopy)
         ok(GetTestAttributes(L"dst\\Windows\\olddir") != INVALID_FILE_ATTRIBUTES, "directory of another image dropped\n");
         ok(TestFileStartsWith(L"dst\\Windows\\servicing\\Orosi.files", "; Orosi new"),
            "inventory not written from another image\n");
-        ok(GetTestAttributes(L"dst\\Windows\\RemovedState") == INVALID_FILE_ATTRIBUTES,
-           "the directory of a removed component was kept from another image\n");
+        ok_removed(L"dst\\Windows\\RemovedState", "the directory of a removed component was kept from another image\n");
     }
 
     BuildTestTrees(LegacyInventory, L"dst\\Windows\\servicing\\LiberNT.files");

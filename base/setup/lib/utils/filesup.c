@@ -17,6 +17,16 @@
 #define NDEBUG
 #include <debug.h>
 
+/* FileDispositionInformationEx is not in the user-mode NDK headers yet */
+#ifndef FILE_DISPOSITION_POSIX_SEMANTICS
+#define FILE_DISPOSITION_DELETE             0x00000001
+#define FILE_DISPOSITION_POSIX_SEMANTICS    0x00000002
+typedef struct _FILE_DISPOSITION_INFORMATION_EX
+{
+    ULONG Flags;
+} FILE_DISPOSITION_INFORMATION_EX, *PFILE_DISPOSITION_INFORMATION_EX;
+#endif
+
 /* FUNCTIONS ****************************************************************/
 
 static
@@ -213,6 +223,7 @@ SetupDeleteFile(
     IO_STATUS_BLOCK IoStatusBlock;
     HANDLE FileHandle;
     FILE_DISPOSITION_INFORMATION FileDispInfo;
+    FILE_DISPOSITION_INFORMATION_EX FileDispInfoEx;
     BOOLEAN RetryOnce = FALSE;
 
     /* Open the directory name that was passed in */
@@ -264,13 +275,29 @@ Retry: // We go back there once if RetryOnce == TRUE
         }
     }
 
-    /* Ask for the file to be deleted */
-    FileDispInfo.DeleteFile = TRUE;
+    /*
+     * Ask for the file to be deleted. As DeleteFile does on Windows 10 1809
+     * and later, unlink the name at once (POSIX semantics) so a handle some
+     * other process still holds cannot keep the name in its directory; a
+     * file system without that information class gets the classic request.
+     */
+    FileDispInfoEx.Flags = FILE_DISPOSITION_DELETE | FILE_DISPOSITION_POSIX_SEMANTICS;
     Status = NtSetInformationFile(FileHandle,
                                   &IoStatusBlock,
-                                  &FileDispInfo,
-                                  sizeof(FILE_DISPOSITION_INFORMATION),
-                                  FileDispositionInformation);
+                                  &FileDispInfoEx,
+                                  sizeof(FileDispInfoEx),
+                                  FileDispositionInformationEx);
+    if (Status == STATUS_INVALID_INFO_CLASS || Status == STATUS_NOT_SUPPORTED ||
+        Status == STATUS_NOT_IMPLEMENTED || Status == STATUS_INVALID_PARAMETER ||
+        Status == STATUS_INVALID_DEVICE_REQUEST)
+    {
+        FileDispInfo.DeleteFile = TRUE;
+        Status = NtSetInformationFile(FileHandle,
+                                      &IoStatusBlock,
+                                      &FileDispInfo,
+                                      sizeof(FILE_DISPOSITION_INFORMATION),
+                                      FileDispositionInformation);
+    }
     NtClose(FileHandle);
 
     if (!NT_SUCCESS(Status))
