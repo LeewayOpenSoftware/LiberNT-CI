@@ -191,6 +191,13 @@ struct volume_info
 
 static HRESULT ShellLink_UpdatePath(LPCWSTR sPathRel, LPCWSTR path, LPCWSTR sWorkDir, LPWSTR* psPath);
 
+/* A LinkInfo path is followed for an icon or a thumbnail only when it is local:
+ * a dropped .lnk must not make a folder view reach out over the network. */
+static BOOL IsLocalLinkPath(LPCWSTR pszPath)
+{
+    return pszPath && *pszPath && !PathIsUNCW(pszPath) && !PathIsNetworkPathW(pszPath);
+}
+
 /* strdup on the process heap */
 static LPWSTR __inline HEAP_strdupAtoW(HANDLE heap, DWORD flags, LPCSTR str)
 {
@@ -1834,12 +1841,10 @@ HRESULT STDMETHODCALLTYPE CShellLink::GetIconLocation(UINT uFlags, PWSTR pszIcon
         {
             hr = m_pPidl ? SHELL_GetUIObjectOfAbsoluteItem(NULL, m_pPidl, IID_PPV_ARG(IExtractIconW, &m_pTargetExtractIcon))
                          : E_FAIL;
-            if (FAILED(hr) && m_sPath && *m_sPath && !PathIsUNCW(m_sPath) && !PathIsNetworkPathW(m_sPath))
+            if (FAILED(hr) && IsLocalLinkPath(m_sPath))
             {
                 /* A link made elsewhere carries a pidl our folders may not resolve;
-                 * its LinkInfo path still names the target (Windows falls back the same way).
-                 * Local paths only: a dropped .lnk must not make a folder view reach out
-                 * over the network for an icon. */
+                 * its LinkInfo path still names the target (Windows falls back the same way). */
                 CComHeapPtr<ITEMIDLIST> pidlPath;
 
                 if (SUCCEEDED(SHParseDisplayName(m_sPath, NULL, &pidlPath, 0, NULL)))
@@ -2989,8 +2994,8 @@ HRESULT STDMETHODCALLTYPE CShellLink::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_
     *phbmp = NULL;
     if (!cx)
         return E_FAIL;
-    /* A link saved with a path only: resolve it now */
-    if (!pidl && m_sPath && *m_sPath &&
+    /* A link saved with a path only: resolve it now, local paths only */
+    if (!pidl && IsLocalLinkPath(m_sPath) &&
         SUCCEEDED(SHParseDisplayName(m_sPath, NULL, &pidlParsed, 0, NULL)))
         pidl = pidlParsed;
     if (!pidl)

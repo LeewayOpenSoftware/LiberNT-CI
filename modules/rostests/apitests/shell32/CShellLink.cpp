@@ -11,6 +11,7 @@
 #include <debug.h>
 #include <stdio.h>
 #include <shellutils.h>
+#include <thumbcache.h>
 
 /* Test IShellLink::SetPath with environment-variables, existing, non-existing, ...*/
 typedef struct
@@ -603,6 +604,26 @@ static void TestLinkInfoOnlyIcon(void)
             hr = pei->GetIconLocation(GIL_FORSHELL, szPath, _countof(szPath), &iIcon, &wFlags);
             ok(FAILED(hr) || _wcsicmp(szPath, pszUnc) != 0, "UNC LinkInfo-only link gave the target icon '%S'\n", szPath);
             ok(GetTickCount() - dwStart < 2000, "UNC LinkInfo-only GetIconLocation took %lu ms\n", GetTickCount() - dwStart);
+        }
+        /* The thumbnail path follows the same rule */
+        if (SUCCEEDED(hr))
+        {
+            CComPtr<IThumbnailProvider> ptp;
+
+            if (SUCCEEDED(psl->QueryInterface(IID_PPV_ARG(IThumbnailProvider, &ptp))))
+            {
+                HBITMAP hbm = (HBITMAP)(ULONG_PTR)0xdeadbeef;
+                WTS_ALPHATYPE alpha = WTSAT_UNKNOWN;
+                HRESULT hrThumb;
+
+                dwStart = GetTickCount();
+                hrThumb = ptp->GetThumbnail(96, &hbm, &alpha);
+                ok(FAILED(hrThumb), "UNC LinkInfo-only GetThumbnail hr = 0x%lx\n", hrThumb);
+                ok(hbm == NULL, "UNC LinkInfo-only GetThumbnail gave a bitmap %p\n", hbm);
+                ok(GetTickCount() - dwStart < 2000, "UNC LinkInfo-only GetThumbnail took %lu ms\n", GetTickCount() - dwStart);
+                if (hbm && hbm != (HBITMAP)(ULONG_PTR)0xdeadbeef)
+                    DeleteObject(hbm);
+            }
         }
         psl.Release();
         ppf.Release();
