@@ -62,7 +62,8 @@ mkdir host cross
     --enable-static --disable-shared --with-data-packaging=static --disable-renaming \
     --disable-tests --disable-samples --disable-extras --disable-tools \
     CC="$TRIPLE-clang" CXX="$TRIPLE-clang++" >/dev/null && make -j"$(nproc)" >/dev/null)
-LIBS="cross/lib/libsicuin.a cross/lib/libsicuuc.a cross/lib/sicudt.a"
+# ICU names the data library sicudt.a on x86_64 mingw and libsicudt.a on i686.
+LIBS="cross/lib/libsicuin.a cross/lib/libsicuuc.a $(echo cross/lib/*sicudt.a)"
 # Only i386 decorates C names with a leading underscore; on x64 and ARM64 a leading underscore is
 # part of the name (ICU's internal _isUnicodeLocaleTypeSubtag), so stripping it there exports a missing symbol.
 strip_cdecl_underscore() {
