@@ -65,6 +65,7 @@ list(APPEND SOURCE
     shlexec.cpp
     shlfileop.cpp
     CDefView.cpp
+    CDefViewTasks.cpp
     CDefViewUtil.cpp
     CDefViewDual.cpp
     CDefViewBckgrndMenu.cpp

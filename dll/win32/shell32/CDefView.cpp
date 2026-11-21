@@ -408,6 +408,7 @@ private:
     COLORREF                  m_ExplorerMaterialBack;
     INT                       m_ExplorerMaterialOpacity;
     HWND                      m_ExplorerBackdropWindow;
+    HWND                      m_hWndTasks; // folder task pane (CDefViewTasks.cpp), or NULL
     RECT                      m_ComputerFoldersHeader;
     RECT                      m_ComputerDrivesHeader;
     RECT                      m_ComputerLocationsHeader;
@@ -893,6 +894,11 @@ public:
 
 #define ID_LISTVIEW     1
 
+// CDefViewTasks.cpp: the task pane of a folder that publishes IExplorerCommandProvider
+HWND DefViewTasks_Create(HWND hwndParent, IShellFolder *psf, HWND hwndOwner, IUnknown *pSite);
+int DefViewTasks_Layout(HWND hwndPane, int cx, int cy);
+void DefViewTasks_Refresh(HWND hwndPane);
+
 // windowsx.h
 #define GET_WM_COMMAND_ID(wp, lp)       LOWORD(wp)
 #define GET_WM_COMMAND_HWND(wp, lp)     (HWND)(lp)
@@ -931,6 +937,7 @@ CDefView::CDefView() :
     m_ExplorerMaterialBack(0),
     m_ExplorerMaterialOpacity(255),
     m_ExplorerBackdropWindow(NULL),
+    m_hWndTasks(NULL),
     m_Destroyed(FALSE),
     m_FillListIsRefresh(FALSE),
     m_FillListGeneration(0),
@@ -3133,6 +3140,7 @@ LRESULT CDefView::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHand
         ClearExplorerContentBackdrop(true);
         CancelFillList();
         ClearComputerTiles();
+        m_hWndTasks = NULL; // a child: destroyed with us
         RevokeDragDrop(m_hWnd);
         SHChangeNotifyDeregister(m_hNotify);
         m_hNotify = NULL;
@@ -3266,6 +3274,15 @@ LRESULT CDefView::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             if (!PostMessage(SHV_FILL_LIST, FALSE, 0))
                 FillList(FALSE);
         }
+    }
+
+    /* Folder links (Fonts...): only in an Explorer file window (SID_SCabinetFrame),
+       not on the desktop or in file dialogs */
+    CComPtr<IOleCommandTarget> pCabinet;
+    if (!IsDesktop() &&
+        SUCCEEDED(IUnknown_QueryService(m_pShellBrowser, SID_SCabinetFrame, IID_PPV_ARG(IOleCommandTarget, &pCabinet))))
+    {
+        m_hWndTasks = DefViewTasks_Create(m_hWnd, m_pSFParent, m_hWndParent, static_cast<IShellView *>(this));
     }
 
     RefreshExplorerContentAppearance();
@@ -3917,8 +3934,9 @@ LRESULT CDefView::OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled
     if (!m_ListView)
         return 0;
 
-    /* Resize the ListView to fit our window */
-    ::MoveWindow(m_ListView, 0, 0, wWidth, wHeight, TRUE);
+    /* Resize the ListView to fit our window, right of the task pane if there is one */
+    int xList = DefViewTasks_Layout(m_hWndTasks, wWidth, wHeight);
+    ::MoveWindow(m_ListView, xList, 0, wWidth - xList, wHeight, TRUE);
     if (IsDesktop())
         MoveItemsIntoView();
     ArrangeComputerView();
@@ -4900,6 +4918,7 @@ HRESULT WINAPI CDefView::Refresh()
 
     m_ListView.DeleteAllItems();
     FillList();
+    DefViewTasks_Refresh(m_hWndTasks);
 
     if (m_bmenuBarInitialized)
     {
