@@ -69,7 +69,7 @@ HKR, , TypesSupported,   0x00010001, 7
 vwifi.sys = 1
 
 [Strings]
-LiberNT          = "Orosi Team"
+LiberNT          = "Leeway Open Software"
 vwifi.DeviceDesc = "Orosi Virtual Native 802.11 Adapter"
 vwifi.ServiceDesc = "Orosi Virtual WiFi Driver"
 DiskName         = "Orosi Virtual WiFi Driver Installation Disk"

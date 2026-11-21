@@ -47,7 +47,7 @@ ServiceBinary  = %12%\pnpcpu.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "Orosi Team"
+LiberNT = "Leeway Open Software"
 ProcessorClassName = "Processors"
 StdMfg = "(Standard processor types)"
 processor.DeviceDesc = "Processor"

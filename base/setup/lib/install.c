@@ -482,6 +482,35 @@ IsInInventory(
            bsearch(&Entry, Inventory->Entries, Inventory->Count, sizeof(PWSTR), CompareInventoryEntries) != NULL;
 }
 
+/* The inventory is Orosi.files since 5.0; a system installed by an older
+ * image still carries it as LiberNT.files, so both names are accepted. */
+static NTSTATUS
+LoadUpgradeInventory(
+    _Out_writes_(cchPath) PWSTR Path,
+    _In_ SIZE_T cchPath,
+    _In_ PCWSTR Root,
+    _In_opt_ PCWSTR Media,
+    _Out_ PINVENTORY Inventory)
+{
+    static const PCWSTR Names[] = { UPGRADE_INVENTORY_PATH, UPGRADE_INVENTORY_PATH_OLD };
+    NTSTATUS Status = STATUS_OBJECT_NAME_NOT_FOUND;
+    ULONG i;
+
+    for (i = 0; i < ARRAYSIZE(Names); i++)
+    {
+        if (Media)
+            CombinePaths(Path, cchPath, 3, Root, Media, Names[i]);
+        else
+            CombinePaths(Path, cchPath, 2, Root, Names[i]);
+        Status = LoadInventory(Path, Inventory);
+        if (Status != STATUS_OBJECT_NAME_NOT_FOUND &&
+            Status != STATUS_OBJECT_PATH_NOT_FOUND &&
+            Status != STATUS_NO_SUCH_FILE)
+            break;
+    }
+    return Status;
+}
+
 static BOOLEAN
 InitUpgradePlan(
     _In_ PUSETUP_DATA pSetupData,
@@ -841,9 +870,8 @@ EnumerateUpgradeTargets(
         return STATUS_NOT_FOUND;
     }
 
-    CombinePaths(Plan->Source, ARRAYSIZE(Plan->Source), 3, pSetupData->SourceRootPath.Buffer,
-                 Plan->Trees[Plan->SystemTree].Media, UPGRADE_INVENTORY_PATH);
-    Status = LoadInventory(Plan->Source, &New);
+    Status = LoadUpgradeInventory(Plan->Source, ARRAYSIZE(Plan->Source), pSetupData->SourceRootPath.Buffer,
+                                  Plan->Trees[Plan->SystemTree].Media, &New);
     if (!NT_SUCCESS(Status))
     {
         RtlFreeHeap(ProcessHeap, 0, Plan);
@@ -895,9 +923,8 @@ PrepareUpgradeFileCopy(
         return FALSE;
     }
 
-    CombinePaths(Plan->Source, ARRAYSIZE(Plan->Source), 3, pSetupData->SourceRootPath.Buffer,
-                 Plan->Trees[Plan->SystemTree].Media, UPGRADE_INVENTORY_PATH);
-    Status = LoadInventory(Plan->Source, &New);
+    Status = LoadUpgradeInventory(Plan->Source, ARRAYSIZE(Plan->Source), pSetupData->SourceRootPath.Buffer,
+                                  Plan->Trees[Plan->SystemTree].Media, &New);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Cannot read the file inventory '%S' (Status 0x%08lx)\n", Plan->Source, Status);
@@ -905,9 +932,8 @@ PrepareUpgradeFileCopy(
         return FALSE;
     }
 
-    CombinePaths(Plan->Target, ARRAYSIZE(Plan->Target), 2,
-                 Plan->Trees[Plan->SystemTree].Target, UPGRADE_INVENTORY_PATH);
-    Status = LoadInventory(Plan->Target, &Old);
+    Status = LoadUpgradeInventory(Plan->Target, ARRAYSIZE(Plan->Target),
+                                  Plan->Trees[Plan->SystemTree].Target, NULL, &Old);
     DPRINT1("Upgrade from %lu to %lu inventory entries (Status 0x%08lx)\n", Old.Count, New.Count, Status);
 
     /*

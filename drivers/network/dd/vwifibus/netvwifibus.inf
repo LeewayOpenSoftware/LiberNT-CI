@@ -72,7 +72,7 @@ CopyFiles = VWiFiBus.CopyFilesInternal
 vwifibus.sys = 1
 
 [Strings]
-LiberNT               = "Orosi Team"
+LiberNT               = "Leeway Open Software"
 vwifibus.DeviceDesc   = "Virtual WiFi Bus Device"
 vwifibus.ServiceDesc  = "Orosi Virtual WiFi Bus Driver"
 DiskName              = "Orosi Virtual WiFi Bus Driver Installation Disk"
