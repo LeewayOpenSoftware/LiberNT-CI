@@ -896,10 +896,6 @@ public:
 
 #define ID_LISTVIEW     1
 
-// CDefViewTasks.cpp: the task pane of a folder that publishes IExplorerCommandProvider
-HWND DefViewTasks_Create(HWND hwndParent, IShellFolder *psf, HWND hwndOwner, IUnknown *pSite);
-int DefViewTasks_Layout(HWND hwndPane, int cx, int cy);
-void DefViewTasks_Refresh(HWND hwndPane);
 
 // windowsx.h
 #define GET_WM_COMMAND_ID(wp, lp)       LOWORD(wp)

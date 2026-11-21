@@ -4,6 +4,9 @@
  * PURPOSE:     Folder task pane: the column of links on the left of a folder view.
  *              A folder publishes its links by returning an IExplorerCommandProvider
  *              from IShellFolder::CreateViewObject; each IExplorerCommand is one link.
+ *              A command with ECF_ISSEPARATOR is a gap, or a section header ("See also")
+ *              when it has a title; a command in ECS_CHECKED state is the current place,
+ *              shown in bold and not as a link.
  * COPYRIGHT:   Copyright 2026 LeewayOpenSoftware
  */
 
@@ -23,6 +26,8 @@ class CDefViewTaskPane :
         CComPtr<IExplorerCommand> pCommand;
         CStringW strTitle;
         BOOL bEnabled;
+        BOOL bChecked;  // the current place: bold text, not a link
+        BOOL bHeader;   // ECF_ISSEPARATOR: a gap, or a section header with its title
         RECT rc;
     };
 
@@ -31,6 +36,7 @@ class CDefViewTaskPane :
     CAtlArray<TASKLINK> m_Links;
     HFONT m_hFont = NULL;
     HFONT m_hFontHot = NULL;
+    HFONT m_hFontBold = NULL;
     int m_Dpi = 96;
     int m_Hot = -1;
     int m_Focus = 0;
@@ -45,7 +51,9 @@ class CDefViewTaskPane :
             DeleteObject(m_hFont);
         if (m_hFontHot)
             DeleteObject(m_hFontHot);
-        m_hFont = m_hFontHot = NULL;
+        if (m_hFontBold)
+            DeleteObject(m_hFontBold);
+        m_hFont = m_hFontHot = m_hFontBold = NULL;
     }
 
     void CreateFonts()
@@ -62,6 +70,27 @@ class CDefViewTaskPane :
         m_hFont = CreateFontIndirectW(&lf);
         lf.lfUnderline = TRUE;
         m_hFontHot = CreateFontIndirectW(&lf);
+        lf.lfUnderline = FALSE;
+        lf.lfWeight = FW_BOLD;
+        m_hFontBold = CreateFontIndirectW(&lf);
+    }
+
+    /* a link the user can focus and run */
+    BOOL IsLink(int i) const
+    {
+        return i >= 0 && i < (int)m_Links.GetCount() && !m_Links[i].bHeader && !m_Links[i].bChecked;
+    }
+
+    int NextLink(int from, int step) const
+    {
+        int count = (int)m_Links.GetCount();
+        for (int n = 0, i = from; n < count; n++)
+        {
+            i = (i + step + count) % count;
+            if (IsLink(i))
+                return i;
+        }
+        return -1;
     }
 
 public:
@@ -80,20 +109,31 @@ public:
         while (m_Links.GetCount() < TASKPANE_MAX_LINKS && pEnum->Next(1, &pCommand, NULL) == S_OK)
         {
             EXPCMDSTATE state = ECS_ENABLED;
+            EXPCMDFLAGS flags = ECF_DEFAULT;
             CComHeapPtr<WCHAR> pszTitle;
             if (FAILED(pCommand->GetState(NULL, TRUE, &state)))
                 state = ECS_ENABLED;
-            if (!(state & ECS_HIDDEN) && SUCCEEDED(pCommand->GetTitle(NULL, &pszTitle)) && pszTitle && *pszTitle)
+            if (FAILED(pCommand->GetFlags(&flags)))
+                flags = ECF_DEFAULT;
+            BOOL bHeader = !!(flags & ECF_ISSEPARATOR);
+            if (FAILED(pCommand->GetTitle(NULL, &pszTitle)))
+                pszTitle.Free();
+            if (!(state & ECS_HIDDEN) && (bHeader || (pszTitle && *pszTitle)))
             {
                 TASKLINK link;
                 link.pCommand = pCommand;
-                link.strTitle = pszTitle;
+                link.strTitle = pszTitle ? (PCWSTR)pszTitle : L"";
                 link.bEnabled = !(state & ECS_DISABLED);
+                link.bChecked = !!(state & ECS_CHECKED);
+                link.bHeader = bHeader;
                 SetRectEmpty(&link.rc);
                 m_Links.Add(link);
             }
             pCommand.Release();
         }
+        m_Focus = NextLink(-1, 1);
+        if (m_Focus < 0)
+            m_Focus = 0;
         return m_Links.GetCount() ? S_OK : S_FALSE;
     }
 
@@ -116,6 +156,15 @@ public:
         for (size_t i = 0; i < m_Links.GetCount(); ++i)
         {
             RECT rc = { 0, 0, cx, 0 };
+            if (m_Links[i].bHeader && m_Links[i].strTitle.IsEmpty())
+            {
+                SetRect(&m_Links[i].rc, x, y, x, y + Scale(6)); // a gap
+                y = m_Links[i].rc.bottom;
+                continue;
+            }
+            if (m_Links[i].bHeader && i)
+                y += Scale(10); // a section starts
+            SelectObject(hdc, m_Links[i].bChecked ? m_hFontBold : m_hFont);
             DrawTextW(hdc, m_Links[i].strTitle, -1, &rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
             SetRect(&m_Links[i].rc, x, y, x + min((int)(rc.right - rc.left), cx), y + (rc.bottom - rc.top));
             y = m_Links[i].rc.bottom + Scale(10);
@@ -130,7 +179,7 @@ public:
         {
             RECT rc = m_Links[i].rc;
             InflateRect(&rc, Scale(2), Scale(2));
-            if (PtInRect(&rc, pt))
+            if (IsLink((int)i) && PtInRect(&rc, pt))
                 return (int)i;
         }
         return -1;
@@ -157,7 +206,7 @@ public:
 
     void InvokeLink(int i)
     {
-        if (i < 0 || i >= (int)m_Links.GetCount() || !m_Links[i].bEnabled)
+        if (!IsLink(i) || !m_Links[i].bEnabled)
             return;
         CComPtr<IExplorerCommand> pCommand = m_Links[i].pCommand;
         IUnknown_SetSite(pCommand, m_pSite);
@@ -181,6 +230,13 @@ public:
         {
             const TASKLINK &link = m_Links[i];
             RECT rc = link.rc;
+            if (link.bHeader || link.bChecked)
+            {
+                SelectObject(hdc, link.bChecked ? m_hFontBold : m_hFont);
+                SetTextColor(hdc, GetSysColor(link.bChecked ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT));
+                DrawTextW(hdc, link.strTitle, -1, &rc, DT_WORDBREAK | DT_NOPREFIX);
+                continue;
+            }
             SelectObject(hdc, ((int)i == m_Hot && link.bEnabled) ? m_hFontHot : m_hFont);
             SetTextColor(hdc, GetSysColor(link.bEnabled ? COLOR_HOTLIGHT : COLOR_GRAYTEXT));
             DrawTextW(hdc, link.strTitle, -1, &rc, DT_WORDBREAK | DT_NOPREFIX);
@@ -258,7 +314,7 @@ public:
 
     LRESULT OnSetCursor(UINT, WPARAM, LPARAM, BOOL &bHandled)
     {
-        if (m_Hot >= 0 && m_Links[m_Hot].bEnabled)
+        if (IsLink(m_Hot) && m_Links[m_Hot].bEnabled)
         {
             SetCursor(LoadCursorW(NULL, IDC_HAND));
             return TRUE;
@@ -299,10 +355,15 @@ public:
         {
             case VK_UP:
             case VK_DOWN:
+            {
+                int next = NextLink(m_Focus, wParam == VK_DOWN ? 1 : -1);
+                if (next < 0)
+                    return 0;
                 InvalidateLink(m_Focus);
-                m_Focus = (m_Focus + (wParam == VK_DOWN ? 1 : count - 1)) % count;
+                m_Focus = next;
                 InvalidateLink(m_Focus);
                 return 0;
+            }
             case VK_RETURN:
             case VK_SPACE:
                 InvokeLink(m_Focus);
@@ -381,6 +442,14 @@ HWND DefViewTasks_Create(HWND hwndParent, IShellFolder *psf, HWND hwndOwner, IUn
 
     if (!psf || FAILED(psf->CreateViewObject(hwndOwner, IID_PPV_ARG(IExplorerCommandProvider, &pProvider))) || !pProvider)
         return NULL;
+    return DefViewTasks_CreateFromProvider(hwndParent, pProvider, pSite);
+}
+
+/* The pane window for a view that has its own links (Control Panel category pages), or NULL */
+HWND DefViewTasks_CreateFromProvider(HWND hwndParent, IExplorerCommandProvider *pProvider, IUnknown *pSite)
+{
+    if (!pProvider)
+        return NULL;
 
     CDefViewTaskPane *pPane = new CDefViewTaskPane();
     if (!pPane)
@@ -429,4 +498,38 @@ void DefViewTasks_Refresh(HWND hwndPane)
 {
     if (hwndPane && IsWindow(hwndPane))
         SendMessageW(hwndPane, TASKPANE_RELOAD, 0, 0);
+}
+
+/* IExplorerPaneVisibility for a folder that sets the navigation pane state (Control Panel) */
+class CPaneVisibility :
+    public CComObjectRootEx<CComMultiThreadModelNoCS>,
+    public IExplorerPaneVisibility
+{
+    EXPLORERPANESTATE m_NavPane = EPS_DONTCARE;
+
+public:
+    HRESULT Initialize(EXPLORERPANESTATE navPane)
+    {
+        m_NavPane = navPane;
+        return S_OK;
+    }
+
+    STDMETHODIMP GetPaneState(REFEXPLORERPANE ep, EXPLORERPANESTATE *peps) override
+    {
+        if (!peps)
+            return E_POINTER;
+        *peps = (ep && IsEqualGUID(*ep, EP_NavPane)) ? m_NavPane : EPS_DONTCARE;
+        return S_OK;
+    }
+
+    DECLARE_NOT_AGGREGATABLE(CPaneVisibility)
+    DECLARE_PROTECT_FINAL_CONSTRUCT()
+    BEGIN_COM_MAP(CPaneVisibility)
+        COM_INTERFACE_ENTRY_IID(IID_IExplorerPaneVisibility, IExplorerPaneVisibility)
+    END_COM_MAP()
+};
+
+HRESULT CPaneVisibility_CreateInstance(EXPLORERPANESTATE navPane, REFIID riid, void **ppv)
+{
+    return ShellObjectCreatorInit<CPaneVisibility>(navPane, riid, ppv);
 }

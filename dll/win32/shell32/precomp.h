@@ -145,6 +145,15 @@ extern const GUID SHELL32_AdvtShortcutComponent;
 #define SHV_THUMBNAIL (WM_USER + 0x1115) /* CLSID_Thumbnail result: wParam HBITMAP, lParam item id */
 #define SHV_TASKPANE_FOCUS (WM_USER + 0x1117) /* CDefViewTasks.cpp: the task pane got the focus */
 
+#ifdef __cplusplus
+/* CDefViewTasks.cpp: the task pane (links from an IExplorerCommandProvider) */
+HWND DefViewTasks_Create(HWND hwndParent, IShellFolder *psf, HWND hwndOwner, IUnknown *pSite);
+HWND DefViewTasks_CreateFromProvider(HWND hwndParent, IExplorerCommandProvider *pProvider, IUnknown *pSite);
+int DefViewTasks_Layout(HWND hwndPane, int cx, int cy);
+void DefViewTasks_Refresh(HWND hwndPane);
+HRESULT CPaneVisibility_CreateInstance(EXPLORERPANESTATE navPane, REFIID riid, void **ppv);
+#endif
+
 extern inline
 BOOL
 CALLBACK
