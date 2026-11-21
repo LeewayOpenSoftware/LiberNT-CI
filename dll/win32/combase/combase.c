@@ -180,7 +180,7 @@ IUnknown * com_get_registered_class_object(const struct apartment *apt, REFCLSID
             }
             if (!include_suspended && (clscontext & CLSCTX_LOCAL_SERVER) &&
                 (cur->clscontext & CLSCTX_LOCAL_SERVER) &&
-                !(cur->flags & (REGCLS_MULTIPLEUSE | REGCLS_MULTI_SEPARATE)))
+                !(cur->flags & (REGCLS_MULTIPLEUSE | REGCLS_MULTI_SEPARATE | REGCLS_SURROGATE)))
             {
                 cur->used = TRUE;
                 revoke = TRUE;
