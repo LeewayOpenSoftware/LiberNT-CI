@@ -256,6 +256,22 @@ struct CplDeco
 #define CPL_PANE_HOME     ((WPARAM)-1)
 #define CPL_PANE_GAP      (-2)
 
+/* Titles of the left pane, in the order of g_Categories */
+static const UINT g_CategoryTitleIds[] =
+{
+    IDS_CPL_CAT_SYSTEM, IDS_CPL_CAT_NETWORK, IDS_CPL_CAT_HARDWARE, IDS_CPL_CAT_PROGRAMS,
+    IDS_CPL_CAT_ACCOUNTS, IDS_CPL_CAT_APPEARANCE, IDS_CPL_CAT_CLOCK, IDS_CPL_CAT_ACCESS
+};
+C_ASSERT(_countof(g_CategoryTitleIds) == _countof(g_Categories));
+
+/* A pane string from the resources, or the English one */
+static VOID CplPaneString(int index, PWSTR buffer, int cch)
+{
+    UINT id = index < 0 ? IDS_CPL_HOME : g_CategoryTitleIds[index];
+    if (!LoadStringW(shell32_hInstance, id, buffer, cch))
+        StringCchCopyW(buffer, cch, index < 0 ? L"Control Panel Home" : g_Categories[index].Name);
+}
+
 class CCplPaneCommand :
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
     public IExplorerCommand
@@ -275,9 +291,12 @@ public:
 
     STDMETHODIMP GetTitle(IShellItemArray *psiItemArray, PWSTR *ppszName) override
     {
+        WCHAR title[128];
+
         if (m_index == CPL_PANE_GAP)
             return SHStrDupW(L"", ppszName);
-        return SHStrDupW(m_index < 0 ? L"Control Panel Home" : g_Categories[m_index].Name, ppszName);
+        CplPaneString(m_index, title, _countof(title));
+        return SHStrDupW(title, ppszName);
     }
     STDMETHODIMP GetIcon(IShellItemArray *psiItemArray, PWSTR *ppszIcon) override
     {
@@ -923,13 +942,16 @@ VOID CCplCategoryView::LayoutPage(HDC hdc, int width, BOOL homeInPane)
     int margin = S(24), rowH = S(60), y;
     const CplCategory *category = &g_Categories[m_page];
     RECT rc;
-    int tw = TextWidth(hdc, m_fontNormal, L"Control Panel Home");
+    WCHAR home[100];
+    int tw;
 
+    CplPaneString(-1, home, _countof(home));
+    tw = TextWidth(hdc, m_fontNormal, home);
     /* the left pane has the link; when the view is too narrow for it, it stays here */
     if (!homeInPane)
     {
         SetRect(&rc, margin, S(10), margin + tw, S(10) + S(22));
-        AddHit(rc, HK_HOME, 0, LS_NORMAL, L"Control Panel Home");
+        AddHit(rc, HK_HOME, 0, LS_NORMAL, home);
     }
     SetRect(&rc, margin, S(36), width - margin, S(36) + S(32));
     AddDeco(rc, DK_TITLE, 0, category->Name);

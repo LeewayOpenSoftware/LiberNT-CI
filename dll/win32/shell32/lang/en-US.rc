@@ -1050,6 +1050,15 @@ END
 STRINGTABLE
 BEGIN
     IDS_FILE_EXPLORER "File Explorer"
+    IDS_CPL_HOME "Control Panel Home"
+    IDS_CPL_CAT_SYSTEM "System and Security"
+    IDS_CPL_CAT_NETWORK "Network and Internet"
+    IDS_CPL_CAT_HARDWARE "Hardware and Sound"
+    IDS_CPL_CAT_PROGRAMS "Programs"
+    IDS_CPL_CAT_ACCOUNTS "User Accounts"
+    IDS_CPL_CAT_APPEARANCE "Appearance and Personalization"
+    IDS_CPL_CAT_CLOCK "Clock and Region"
+    IDS_CPL_CAT_ACCESS "Ease of Access"
     IDS_SEARCHBAND_COMMAND "Search"
     IDS_FOLDERSHORTCUT_TYPE "Folder Shortcut"
 END

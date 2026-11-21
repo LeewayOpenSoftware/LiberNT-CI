@@ -396,6 +396,17 @@
 #define IDS_COMPUTER_FREE_SPACE                     60022
 #define IDS_COMPUTER_FOLDERS                        60023
 #define IDS_FILE_EXPLORER                           60030
+
+/* Control Panel category pages: the left pane */
+#define IDS_CPL_HOME                                60040
+#define IDS_CPL_CAT_SYSTEM                          60041
+#define IDS_CPL_CAT_NETWORK                         60042
+#define IDS_CPL_CAT_HARDWARE                        60043
+#define IDS_CPL_CAT_PROGRAMS                        60044
+#define IDS_CPL_CAT_ACCOUNTS                        60045
+#define IDS_CPL_CAT_APPEARANCE                      60046
+#define IDS_CPL_CAT_CLOCK                           60047
+#define IDS_CPL_CAT_ACCESS                          60048
 #define IDS_SEARCHBAND_COMMAND                      12708
 #define IDS_FOLDERSHORTCUT_TYPE                     10540
 
