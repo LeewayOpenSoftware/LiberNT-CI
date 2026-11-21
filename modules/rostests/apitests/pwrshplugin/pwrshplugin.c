@@ -163,7 +163,13 @@ void func_pwrshplugin(void)
     ok(GetFileVersion("pwrshplugin.dll", dwVersion), "no version resource\n");
     if (dwVersion[0] || dwVersion[1] || dwVersion[2] || dwVersion[3])
     {
-        ok(memcmp(dwVersion, dwMinVersion, sizeof(dwVersion)) >= 0,
+        ok(dwVersion[0] > dwMinVersion[0] ||
+           (dwVersion[0] == dwMinVersion[0] &&
+            (dwVersion[1] > dwMinVersion[1] ||
+             (dwVersion[1] == dwMinVersion[1] &&
+              (dwVersion[2] > dwMinVersion[2] ||
+               (dwVersion[2] == dwMinVersion[2] &&
+                dwVersion[3] >= dwMinVersion[3]))))),
            "FileVersion %lu.%lu.%lu.%lu below 6.3.9600.16383\n",
            dwVersion[0], dwVersion[1], dwVersion[2], dwVersion[3]);
 
