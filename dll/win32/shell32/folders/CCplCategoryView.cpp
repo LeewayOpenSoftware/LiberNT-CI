@@ -272,6 +272,24 @@ static VOID CplPaneString(int index, PWSTR buffer, int cch)
         StringCchCopyW(buffer, cch, index < 0 ? L"Control Panel Home" : g_Categories[index].Name);
 }
 
+/* The other texts of the view, from the resources (UI thread only) */
+static PCWSTR CplText(UINT id, PCWSTR english)
+{
+    static WCHAR cache[IDS_CPL_VIEW_CLASSIC - IDS_CPL_ALLITEMS + 1][80];
+    static BOOL loaded[_countof(cache)];
+    UINT i = id - IDS_CPL_ALLITEMS;
+
+    if (i >= _countof(cache))
+        return english;
+    if (!loaded[i])
+    {
+        if (!LoadStringW(shell32_hInstance, id, cache[i], _countof(cache[i])))
+            StringCchCopyW(cache[i], _countof(cache[i]), english);
+        loaded[i] = TRUE;
+    }
+    return cache[i];
+}
+
 class CCplPaneCommand :
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
     public IExplorerCommand
@@ -847,7 +865,10 @@ VOID CCplCategoryView::AddDeco(RECT rc, int kind, int arg, PCWSTR text)
 VOID CCplCategoryView::LayoutViewBy(HDC hdc, int width)
 {
     WCHAR text[64];
-    PCWSTR current = IsClassic() ? L"Classic list" : (m_mode == MODE_ICONS ? (m_smallIcons ? L"Small icons" : L"Large icons") : L"Category");
+    PCWSTR current = IsClassic() ? CplText(IDS_CPL_VIEW_CLASSIC, L"Classic list") :
+                     (m_mode == MODE_ICONS ? (m_smallIcons ? CplText(IDS_CPL_VIEW_SMALL, L"Small icons") : CplText(IDS_CPL_VIEW_LARGE, L"Large icons"))
+                                           : CplText(IDS_CPL_VIEW_CATEGORY, L"Category"));
+    PCWSTR viewBy = CplText(IDS_CPL_VIEWBY, L"View by:");
     int w;
     RECT rc;
 
@@ -855,9 +876,9 @@ VOID CCplCategoryView::LayoutViewBy(HDC hdc, int width)
     w = TextWidth(hdc, m_fontNormal, text);
     SetRect(&rc, width - S(24) - w, S(14), width - S(24), S(14) + S(22));
     AddHit(rc, HK_VIEWBY, 0, LS_NORMAL, text);
-    w = TextWidth(hdc, m_fontNormal, L"View by:  ");
+    w = TextWidth(hdc, m_fontNormal, viewBy) + S(8);
     SetRect(&rc, width - S(24) - TextWidth(hdc, m_fontNormal, text) - w, S(14), width - S(24) - TextWidth(hdc, m_fontNormal, text), S(14) + S(22));
-    AddDeco(rc, DK_TEXT, 1, L"View by:");
+    AddDeco(rc, DK_TEXT, 1, viewBy);
 }
 
 VOID CCplCategoryView::LayoutHome(HDC hdc, int width)
@@ -869,7 +890,7 @@ VOID CCplCategoryView::LayoutHome(HDC hdc, int width)
     int lineH = S(20);
     int colY[2] = { top, top };
     RECT rc;
-    WCHAR title[] = L"Adjust your computer's settings";
+    PCWSTR title = CplText(IDS_CPL_ADJUST, L"Adjust your computer's settings");
 
     SetRect(&rc, margin, S(10), width / 2, S(10) + S(32));
     AddDeco(rc, DK_TITLE, 0, title);
@@ -909,9 +930,9 @@ VOID CCplCategoryView::LayoutHome(HDC hdc, int width)
     }
 
     int y = max(colY[0], colY[1]);
-    int tw = TextWidth(hdc, m_fontNormal, L"All Control Panel Items");
+    int tw = TextWidth(hdc, m_fontNormal, CplText(IDS_CPL_ALLITEMS, L"All Control Panel Items"));
     SetRect(&rc, margin, y, margin + tw, y + S(22));
-    AddHit(rc, HK_ALLITEMS, 0, LS_NORMAL, L"All Control Panel Items");
+    AddHit(rc, HK_ALLITEMS, 0, LS_NORMAL, CplText(IDS_CPL_ALLITEMS, L"All Control Panel Items"));
     m_contentHeight = y + S(22) + margin;
 }
 
@@ -923,7 +944,7 @@ VOID CCplCategoryView::LayoutGrid(HDC hdc, int width)
     int columns = max(1, (width - 2 * margin) / cellW);
     int top = HeaderHeight() + S(8);
     RECT rc;
-    WCHAR title[] = L"Adjust your computer's settings";
+    PCWSTR title = CplText(IDS_CPL_ADJUST, L"Adjust your computer's settings");
 
     SetRect(&rc, S(24), S(10), width / 2, S(10) + S(32));
     AddDeco(rc, DK_TITLE, 0, title);
@@ -979,9 +1000,9 @@ VOID CCplCategoryView::LayoutPage(HDC hdc, int width, BOOL homeInPane)
         }
         y += rowH;
     }
-    tw = TextWidth(hdc, m_fontNormal, L"All Control Panel Items");
+    tw = TextWidth(hdc, m_fontNormal, CplText(IDS_CPL_ALLITEMS, L"All Control Panel Items"));
     SetRect(&rc, margin, y + S(8), margin + tw, y + S(8) + S(22));
-    AddHit(rc, HK_ALLITEMS, 0, LS_NORMAL, L"All Control Panel Items");
+    AddHit(rc, HK_ALLITEMS, 0, LS_NORMAL, CplText(IDS_CPL_ALLITEMS, L"All Control Panel Items"));
     m_contentHeight = y + S(8) + S(22) + margin;
 }
 
@@ -1046,7 +1067,7 @@ VOID CCplCategoryView::Layout()
             LayoutTaskPane(width, rc.bottom);
         if (IsClassic())
         {
-            WCHAR title[] = L"All Control Panel Items";
+            PCWSTR title = CplText(IDS_CPL_ALLITEMS, L"All Control Panel Items");
             SetRect(&rc, S(24), S(10), width / 2, S(10) + S(32));
             AddDeco(rc, DK_TITLE, 0, title);
         }
@@ -1181,11 +1202,11 @@ VOID CCplCategoryView::ShowViewMenu()
 
     if (!hMenu || m_hot < 0)
         return;
-    AppendMenuW(hMenu, MF_STRING | (!grid && !IsClassic() ? MF_CHECKED : 0), 1, L"Category");
-    AppendMenuW(hMenu, MF_STRING | (grid && !m_smallIcons ? MF_CHECKED : 0), 2, L"Large icons");
-    AppendMenuW(hMenu, MF_STRING | (grid && m_smallIcons ? MF_CHECKED : 0), 3, L"Small icons");
+    AppendMenuW(hMenu, MF_STRING | (!grid && !IsClassic() ? MF_CHECKED : 0), 1, CplText(IDS_CPL_VIEW_CATEGORY, L"Category"));
+    AppendMenuW(hMenu, MF_STRING | (grid && !m_smallIcons ? MF_CHECKED : 0), 2, CplText(IDS_CPL_VIEW_LARGE, L"Large icons"));
+    AppendMenuW(hMenu, MF_STRING | (grid && m_smallIcons ? MF_CHECKED : 0), 3, CplText(IDS_CPL_VIEW_SMALL, L"Small icons"));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hMenu, MF_STRING | (IsClassic() ? MF_CHECKED : 0), 4, L"Classic list");
+    AppendMenuW(hMenu, MF_STRING | (IsClassic() ? MF_CHECKED : 0), 4, CplText(IDS_CPL_VIEW_CLASSIC, L"Classic list"));
     rc = m_hits[m_hot].Rect;
     pt.x = rc.left;
     pt.y = rc.bottom;
