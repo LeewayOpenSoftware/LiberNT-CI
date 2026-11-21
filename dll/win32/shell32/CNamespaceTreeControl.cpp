@@ -204,6 +204,7 @@ private:
 
     HWND m_Tree;
     HFONT m_TreeFont;
+    BOOL m_TreeFlatFill; // decided once per paint by TreeUsesFlatFill
     CComPtr<IImageList> m_ImageList;
     CComPtr<IContextMenu> m_ContextMenu;
     CAtlList<RootEntry *> m_Roots;
@@ -1084,6 +1085,7 @@ private:
         switch (Draw->nmcd.dwDrawStage)
         {
             case CDDS_PREPAINT:
+                m_TreeFlatFill = TreeUsesFlatFill();
                 ::GetClientRect(m_Tree, &Bounds);
                 for (Position = m_Events.GetHeadPosition(); Position;)
                 {
@@ -1106,7 +1108,7 @@ private:
 
             case CDDS_ITEMPREPAINT:
                 Result = CDRF_NOTIFYPOSTPAINT;
-                Fill = TreeUsesFlatFill() ? TreeStateFill(Draw->nmcd.uItemState) : CLR_INVALID;
+                Fill = m_TreeFlatFill ? TreeStateFill(Draw->nmcd.uItemState) : CLR_INVALID;
                 if (Fill != CLR_INVALID)
                 {
                     /* comctl32 would draw selected text in HIGHLIGHTTEXT, unreadable on a light fill */
@@ -1129,7 +1131,7 @@ private:
                 return Result;
 
             case CDDS_ITEMPOSTPAINT:
-                if (TreeUsesFlatFill() && TreeStateBorder(Draw->nmcd.uItemState, &Border))
+                if (m_TreeFlatFill && TreeStateBorder(Draw->nmcd.uItemState, &Border))
                 {
                     HBRUSH Brush = CreateSolidBrush(Border);
 
@@ -1292,6 +1294,7 @@ public:
     CNamespaceTreeControl() :
         m_Tree(NULL),
         m_TreeFont(NULL),
+        m_TreeFlatFill(FALSE),
         m_NextCookie(0),
         m_Style((NSTCSTYLE)0),
         m_Style2(NSTCS2_DEFAULT),
