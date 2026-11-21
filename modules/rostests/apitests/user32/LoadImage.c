@@ -261,6 +261,41 @@ static void test_LoadImage_OemShared(void)
         DeleteObject(Image);
 }
 
+static void check_SharedCursorSize(const char *label, HCURSOR cursor, LONG expected)
+{
+    ICONINFO ii;
+    BITMAP bm;
+
+    ok(cursor != NULL, "%s: LoadImage failed, error %lu\n", label, GetLastError());
+    if (!cursor)
+        return;
+    memset(&ii, 0, sizeof(ii));
+    ok(GetIconInfo(cursor, &ii), "%s: GetIconInfo failed, error %lu\n", label, GetLastError());
+    if (ii.hbmMask && GetObjectW(ii.hbmMask, sizeof(bm), &bm))
+        ok(bm.bmWidth == expected, "%s: mask width %ld, expected %ld\n", label, bm.bmWidth, expected);
+    else
+        ok(0, "%s: no mask bitmap\n", label);
+    if (ii.hbmMask) DeleteObject(ii.hbmMask);
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+}
+
+/* LR_SHARED caches one image per requested size: a 48 px request must not return the 32 px cursor. */
+static void test_LoadImage_SharedCursorSize(void)
+{
+    HCURSOR h32, h48, h32b, h48b;
+
+    h32 = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 32, 32, LR_SHARED);
+    h48 = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 48, 48, LR_SHARED);
+    h32b = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 32, 32, LR_SHARED);
+    h48b = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 48, 48, LR_SHARED);
+
+    check_SharedCursorSize("arrow 32", h32, 32);
+    check_SharedCursorSize("arrow 48", h48, 48);
+    ok(h32 == h32b, "the same 32 px shared request gave another handle (%p, %p)\n", h32, h32b);
+    ok(h48 == h48b, "the same 48 px shared request gave another handle (%p, %p)\n", h48, h48b);
+    ok(h32 != h48, "the 48 px shared request returned the 32 px cursor %p\n", h32);
+}
+
 static const BYTE PngCursorImage[] =
 {
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -456,5 +491,6 @@ START_TEST(LoadImage)
     test_LoadIcon_SystemIds();
     test_LoadImage_1bpp();
     test_LoadImage_OemShared();
+    test_LoadImage_SharedCursorSize();
     test_LoadImage_PngCursorFiles();
 }

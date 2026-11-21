@@ -1244,6 +1244,41 @@ leave:
 }
 
 
+/* The size a shared lookup compares against: an animated cursor has it on its first frame. */
+static VOID
+IntGetCurIconLookupSize(
+    _In_ PCURICON_OBJECT CurIcon,
+    _Out_ PLONG pcx,
+    _Out_ PLONG pcy)
+{
+    if (CurIcon->CURSORF_flags & CURSORF_ACON)
+    {
+        PACON pacon = (PACON)CurIcon;
+
+        if (pacon->cpcur && pacon->aspcur && pacon->aspcur[0])
+            CurIcon = pacon->aspcur[0];
+    }
+    *pcx = (LONG)CurIcon->cx;
+    *pcy = (LONG)CurIcon->cy;
+}
+
+/* LR_SHARED images are cached per size: a cursor of another size is not the one asked for.
+ * No requested size, or an object of unknown size, keeps the name-only match. */
+static BOOL
+IntCurIconSizeMatches(
+    _In_ PCURICON_OBJECT CurIcon,
+    _In_ const FINDEXISTINGCURICONPARAM *param)
+{
+    LONG cx, cy;
+
+    if (param->cx <= 0 && param->cy <= 0)
+        return TRUE;
+    IntGetCurIconLookupSize(CurIcon, &cx, &cy);
+    if (cx <= 0 || cy <= 0)
+        return TRUE;
+    return (param->cx <= 0 || cx == param->cx) && (param->cy <= 0 || cy == param->cy);
+}
+
 /*
  * @implemented
  */
@@ -1300,6 +1335,12 @@ NtUserFindExistingCursorIcon(
             CurIcon = CurIcon->pcurNext;
             continue;
         }
+        /* Size */
+        if (!IntCurIconSizeMatches(CurIcon, &paramSafe))
+        {
+            CurIcon = CurIcon->pcurNext;
+            continue;
+        }
         /* See if module names match */
         if (atomModName == CurIcon->atomModName)
         {
@@ -1336,6 +1377,12 @@ NtUserFindExistingCursorIcon(
         {
             /* Icon/cursor */
             if (paramSafe.bIcon != is_icon(CurIcon))
+            {
+                CurIcon = CurIcon->pcurNext;
+                continue;
+            }
+            /* Size */
+            if (!IntCurIconSizeMatches(CurIcon, &paramSafe))
             {
                 CurIcon = CurIcon->pcurNext;
                 continue;
