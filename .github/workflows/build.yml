@@ -78,7 +78,8 @@ jobs:
         # (sdk/tools/mkhive); keep hives identical across CI reruns of the
         # same commit. safe.directory guards odd container ownership.
         git config --global --add safe.directory "$GITHUB_WORKSPACE"
-        echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+        e=$(git log -1 --format=%ct) && [ -n "$e" ] || exit 1
+        echo "SOURCE_DATE_EPOCH=$e" >> "$GITHUB_ENV"
 
     - name: Install host build tools
       run: |
@@ -332,7 +333,8 @@ jobs:
         # (sdk/tools/mkhive); keep hives identical across CI reruns of the
         # same commit. safe.directory guards odd container ownership.
         git config --global --add safe.directory "$GITHUB_WORKSPACE"
-        echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+        e=$(git log -1 --format=%ct) && [ -n "$e" ] || exit 1
+        echo "SOURCE_DATE_EPOCH=$e" >> "$GITHUB_ENV"
 
     - name: Install host build tools
       run: |
