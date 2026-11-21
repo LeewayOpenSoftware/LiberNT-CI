@@ -7465,19 +7465,26 @@ GetFontPenalty(const LOGFONTW *               LogFont,
     /* Is the candidate a non-vector font? */
     if (!(TM->tmPitchAndFamily & (TMPF_TRUETYPE | TMPF_VECTOR)))
     {
-        if (LogFont->lfHeight != 0 && TM->tmHeight < LogFont->lfHeight)
+        if (LogFont->lfHeight != 0)
         {
-            /* VectorHeightSmaller Penalty 2 */
-            /* Candidate is a vector font that is smaller than the
-               requested height. Penalty * height difference */
-            GOT_PENALTY("VectorHeightSmaller", 2 * labs(TM->tmHeight - LogFont->lfHeight));
-        }
-        if (LogFont->lfHeight != 0 && TM->tmHeight > LogFont->lfHeight)
-        {
-            /* VectorHeightBigger Penalty 1 */
-            /* Candidate is a vector font that is bigger than the
-               requested height. Penalty * height difference */
-            GOT_PENALTY("VectorHeightBigger", 1 * labs(TM->tmHeight - LogFont->lfHeight));
+            /* A negative lfHeight is a character height, a positive one a cell height. */
+            LONG ReqHeight = labs(LogFont->lfHeight);
+            LONG CandHeight = (LogFont->lfHeight < 0) ? TM->tmHeight - TM->tmInternalLeading : TM->tmHeight;
+
+            if (CandHeight < ReqHeight)
+            {
+                /* VectorHeightSmaller Penalty 2 */
+                /* Candidate is a vector font that is smaller than the
+                   requested height. Penalty * height difference */
+                GOT_PENALTY("VectorHeightSmaller", 2 * (ReqHeight - CandHeight));
+            }
+            else if (CandHeight > ReqHeight)
+            {
+                /* VectorHeightBigger Penalty 1 */
+                /* Candidate is a vector font that is bigger than the
+                   requested height. Penalty * height difference */
+                GOT_PENALTY("VectorHeightBigger", 1 * (CandHeight - ReqHeight));
+            }
         }
     }
 
@@ -7843,6 +7850,54 @@ IntAddNameFromFamInfo(LPWSTR psz, const FONTFAMILYINFO *FamInfo, const UNICODE_S
     }
 }
 
+static BOOL
+IntFaceNameInList(PUNICODE_STRING Name, PLIST_ENTRY Head)
+{
+    PLIST_ENTRY Entry;
+
+    for (Entry = Head->Flink; Entry != Head; Entry = Entry->Flink)
+    {
+        PFONTGDI FontGDI = CONTAINING_RECORD(Entry, FONT_ENTRY, ListEntry)->Font;
+
+        if (MatchFontGdiName(FontGDI, Name, TT_NAME_ID_FONT_FAMILY, LANG_ENGLISH) ||
+            MatchFontGdiName(FontGDI, Name, TT_NAME_ID_FONT_FAMILY, gusLanguageID) ||
+            MatchFontGdiName(FontGDI, Name, TT_NAME_ID_FULL_NAME, LANG_ENGLISH) ||
+            MatchFontGdiName(FontGDI, Name, TT_NAME_ID_FULL_NAME, gusLanguageID))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* Windows applies FontSubstitutes only to a face that is not installed */
+static BOOL
+IntFaceNameInstalled(PPROCESSINFO Win32Process, const WCHAR *FaceName)
+{
+    UNICODE_STRING Name;
+    BOOL Found;
+
+    RtlInitUnicodeString(&Name, FaceName);
+    IntLockFreeType();
+    IntLockProcessPrivateFonts(Win32Process);
+    Found = IntFaceNameInList(&Name, &Win32Process->PrivateFontListHead);
+    IntUnLockProcessPrivateFonts(Win32Process);
+    if (!Found)
+        Found = IntFaceNameInList(&Name, &g_FontListHead);
+    IntUnLockFreeType();
+    return Found;
+}
+
+BOOL
+FASTCALL
+ftGdiFontHasFaceName(PFONTGDI FontGDI, PCWSTR FaceName)
+{
+    BOOL Found;
+
+    IntLockFreeType();
+    Found = MatchFontNames(FontGDI, (LPWSTR)FaceName);
+    IntUnLockFreeType();
+    return Found;
+}
+
 NTSTATUS
 FASTCALL
 TextIntRealizeFont(HFONT FontHandle, PTEXTOBJ pTextObj)
@@ -7881,15 +7936,15 @@ TextIntRealizeFont(HFONT FontHandle, PTEXTOBJ pTextObj)
     SubstitutedLogFont = *pLogFont;
     if (_wcsicmp(SubstitutedLogFont.lfFaceName, L"Symbol") == 0)
         SubstitutedLogFont.lfCharSet = SYMBOL_CHARSET;
-    SubstituteFontRecurse(&SubstitutedLogFont);
+    Win32Process = PsGetCurrentProcessWin32Process();
+    if (!IntFaceNameInstalled(Win32Process, SubstitutedLogFont.lfFaceName))
+        SubstituteFontRecurse(&SubstitutedLogFont);
     DPRINT("Font '%S,%u' is substituted by '%S,%u'.\n",
            pLogFont->lfFaceName, pLogFont->lfCharSet,
            SubstitutedLogFont.lfFaceName, SubstitutedLogFont.lfCharSet);
 
     MatchPenalty = 0xFFFFFFFF;
     TextObj->Font = NULL;
-
-    Win32Process = PsGetCurrentProcessWin32Process();
 
     /* Search private fonts */
     IntLockFreeType();
