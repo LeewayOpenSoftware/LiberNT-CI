@@ -25,6 +25,7 @@ set(SOURCES
     src/cff/cff.c
     src/cid/type1cid.c
     src/gzip/ftgzip.c
+    src/hvf/hvf.c
     src/lzw/ftlzw.c
     src/pcf/pcf.c
     src/pfr/pfr.c
@@ -32,8 +33,10 @@ set(SOURCES
     src/pshinter/pshinter.c
     src/psnames/psnames.c
     src/raster/raster.c
+    src/sdf/sdf.c
     src/sfnt/sfnt.c
     src/smooth/smooth.c
+    src/svg/svg.c
     src/truetype/truetype.c
     src/type1/type1.c
     src/type42/type42.c
