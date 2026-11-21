@@ -5189,11 +5189,17 @@ FileStructW* _ILGetFileStructW(LPCITEMIDLIST pidl) {
         return NULL;
     }
 
-    /* A Windows block must hold its long name, terminated, before the trailing offset */
+    /* A Windows block must be a version we know and hold its long name, terminated,
+     * before the trailing offset; otherwise the caller uses the primary name. */
     {
         UINT cbName = _ILFileStructWNameOffset(pFileStructW);
         UINT cchMax;
 
+        if (!cbName)
+        {
+            WARN("Windows file entry of unknown version %u\n", ((const WORD *)pFileStructW)[1]);
+            return NULL;
+        }
         if (cbName != FIELD_OFFSET(FileStructW, wszName))
         {
             if (cbName + sizeof(WCHAR) + sizeof(cbOffset) > pFileStructW->cbLen)

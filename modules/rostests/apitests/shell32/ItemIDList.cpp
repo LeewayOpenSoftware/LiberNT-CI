@@ -381,4 +381,40 @@ START_TEST(WindowsFileIDList)
     ok_hr(hr, S_OK);
     if (SUCCEEDED(hr))
         ok_wstr(szName, L"cmd.exe");
+
+    /* A damaged long name in the last entry must not be read: the primary name "cmd.exe"
+     * is used instead, so a long name read past its block would show up in the path. */
+    for (UINT Case = 0; Case < 3; ++Case)
+    {
+        BYTE Buf[sizeof(g_WindowsCmdIDList)];
+        const UINT cbLast = 86, cbItemHead = 22, cbBlockName = 46;
+        const UINT LastItem = sizeof(Buf) - sizeof(WORD) - cbLast;
+        BYTE *pBlock = Buf + LastItem + cbItemHead;
+        UINT cbTotal = sizeof(Buf);
+
+        memcpy(Buf, g_WindowsCmdIDList, sizeof(Buf));
+        if (Case == 0) /* a version we do not know */
+        {
+            pBlock[2] = 10;
+        }
+        else if (Case == 1) /* the long name loses its terminator: "cmd.exeX" fills the block */
+        {
+            pBlock[cbBlockName + 14] = 'X';
+        }
+        else /* the block ends two characters into the long name */
+        {
+            const WORD cbBlock = cbBlockName + 2 * sizeof(WCHAR) + sizeof(WORD);
+            const WORD cbItem = cbItemHead + cbBlock;
+
+            *(WORD *)pBlock = cbBlock;
+            *(WORD *)(pBlock + cbBlock - sizeof(WORD)) = cbItemHead;
+            *(WORD *)(Buf + LastItem) = cbItem;
+            *(WORD *)(Buf + LastItem + cbItem) = 0;
+            cbTotal = LastItem + cbItem + sizeof(WORD);
+        }
+        ok(ILGetSize((PCIDLIST_ABSOLUTE)Buf) == cbTotal, "case %u: size %u\n", Case, ILGetSize((PCIDLIST_ABSOLUTE)Buf));
+        szPath[0] = UNICODE_NULL;
+        ok(SHGetPathFromIDListW((PCIDLIST_ABSOLUTE)Buf, szPath), "case %u: no path\n", Case);
+        ok(!wcscmp(szPath, L"C:\\Windows\\System32\\cmd.exe"), "case %u: %ls\n", Case, szPath);
+    }
 }

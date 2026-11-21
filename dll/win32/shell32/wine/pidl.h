@@ -223,21 +223,31 @@ typedef struct tagFileStructW {
     WCHAR wszName[1];
 } FileStructW;
 
-/* Windows Vista and later write this block as a BEEF0004 extension whose long name
- * follows a file reference and other fields; Wine and ReactOS leave its version and
- * signature zero, so their pidls keep the name at wszName. */
+/* Windows writes this block as a BEEF0004 extension whose long name sits at an offset
+ * that depends on its version; Wine and ReactOS leave its version and signature zero,
+ * so their pidls keep the name at wszName. 0 means a Windows version we cannot read. */
 static inline UINT _ILFileStructWNameOffset(const FileStructW *pFileStructW)
 {
     const WORD *pWords = (const WORD *)pFileStructW;
 
-    if (pWords[2] != 0x0004 || pWords[3] != 0xBEEF || pWords[1] < 7)
+    if (pWords[2] != 0x0004 || pWords[3] != 0xBEEF)
         return FIELD_OFFSET(FileStructW, wszName);
-    return pWords[1] == 7 ? 38 : pWords[1] == 8 ? 42 : 46;
+    switch (pWords[1])
+    {
+        case 3: return 18;
+        case 7: return 38;
+        case 8: return 42;
+        case 9: return 46;
+        default: return 0;
+    }
 }
 
+/* Only for a block _ILGetFileStructW returned: it has checked the name is inside it */
 static inline LPCWSTR _ILGetFileStructWName(const FileStructW *pFileStructW)
 {
-    return (LPCWSTR)((const BYTE *)pFileStructW + _ILFileStructWNameOffset(pFileStructW));
+    UINT cbName = _ILFileStructWNameOffset(pFileStructW);
+
+    return cbName ? (LPCWSTR)((const BYTE *)pFileStructW + cbName) : pFileStructW->wszName;
 }
 
 typedef struct tagValueW
