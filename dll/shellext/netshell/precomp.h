@@ -25,6 +25,7 @@
 #include <ws2ipdef.h>
 #include <iphlpapi.h>
 #include <setupapi.h>
+#include <cfgmgr32.h>
 #include <devguid.h>
 #include <netcon.h>
 #include <shlguid_undoc.h>
