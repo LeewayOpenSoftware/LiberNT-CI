@@ -471,6 +471,110 @@ TestIconLocation(void)
 }
 
 
+/* A .lnk with LinkInfo but no IDList: the target is only known by its local path. */
+static BOOL WriteLinkInfoOnlyLink(PCWSTR pszLink, PCWSTR pszTarget)
+{
+    CHAR szTargetA[MAX_PATH];
+    BYTE buffer[0x4C + 0x1C + 0x11 + MAX_PATH + 1];
+    BYTE *p = buffer;
+    DWORD cbPath, cbInfo, written;
+    HANDLE hFile;
+    static const GUID CLSID_Link = { 0x00021401, 0x0000, 0x0000, { 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+
+    cbPath = WideCharToMultiByte(CP_ACP, 0, pszTarget, -1, szTargetA, sizeof(szTargetA), NULL, NULL);
+    if (!cbPath)
+        return FALSE;
+
+    /* SHELL_LINK_HEADER: size, CLSID, flags = HasLinkInfo | IsUnicode, attributes, 3 times, size, icon index, SW_SHOWNORMAL, hotkey, reserved */
+    ZeroMemory(buffer, sizeof(buffer));
+    *(DWORD *)p = 0x4C;
+    memcpy(p + 4, &CLSID_Link, sizeof(GUID));
+    *(DWORD *)(p + 0x14) = 0x00000002 | 0x00000080;
+    *(DWORD *)(p + 0x18) = FILE_ATTRIBUTE_ARCHIVE;
+    *(DWORD *)(p + 0x3C) = 1;
+    p += 0x4C;
+
+    /* LINK_INFO: total, header 0x1C, flags = VolumeIDAndLocalBasePath, volume at 0x1C, local path after the volume, no network volume, final path = "" */
+    cbInfo = 0x1C + 0x11 + cbPath + 1;
+    *(DWORD *)(p + 0x00) = cbInfo;
+    *(DWORD *)(p + 0x04) = 0x1C;
+    *(DWORD *)(p + 0x08) = 1;
+    *(DWORD *)(p + 0x0C) = 0x1C;
+    *(DWORD *)(p + 0x10) = 0x1C + 0x11;
+    *(DWORD *)(p + 0x14) = 0;
+    *(DWORD *)(p + 0x18) = 0x1C + 0x11 + cbPath;
+    /* VOLUME_ID: size 0x11, DRIVE_FIXED, serial, label at 0x10 = "" */
+    *(DWORD *)(p + 0x1C) = 0x11;
+    *(DWORD *)(p + 0x20) = DRIVE_FIXED;
+    *(DWORD *)(p + 0x24) = 0x12345678;
+    *(DWORD *)(p + 0x28) = 0x10;
+    p[0x2C] = 0;
+    memcpy(p + 0x2D, szTargetA, cbPath);
+    p[0x2D + cbPath] = 0;
+    p += cbInfo;
+
+    hFile = CreateFileW(pszLink, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return FALSE;
+    WriteFile(hFile, buffer, (DWORD)(p - buffer), &written, NULL);
+    CloseHandle(hFile);
+    return written == (DWORD)(p - buffer);
+}
+
+static void TestLinkInfoOnlyIcon(void)
+{
+    WCHAR szTarget[MAX_PATH], szLink[MAX_PATH], szPath[MAX_PATH];
+    CComPtr<IShellLinkW> psl;
+    CComPtr<IPersistFile> ppf;
+    CComPtr<IExtractIconW> pei;
+    SHFILEINFOW sfi;
+    INT iIcon = -1;
+    UINT wFlags = 0;
+    HRESULT hr;
+
+    ExpandEnvironmentStringsW(L"%SystemRoot%\\system32\\cmd.exe", szTarget, _countof(szTarget));
+    GetTempPathW(_countof(szLink), szLink);
+    wcscat(szLink, L"linkinfo-only-cmd.lnk");
+    if (!WriteLinkInfoOnlyLink(szLink, szTarget))
+    {
+        skip("Cannot write %S\n", szLink);
+        return;
+    }
+
+    hr = CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARG(IShellLinkW, &psl));
+    ok(hr == S_OK, "CoCreateInstance, hr = 0x%lx\n", hr);
+    if (SUCCEEDED(hr))
+        hr = psl->QueryInterface(IID_PPV_ARG(IPersistFile, &ppf));
+    if (SUCCEEDED(hr))
+        hr = ppf->Load(szLink, STGM_READ);
+    ok(hr == S_OK, "IPersistFile::Load(LinkInfo-only) hr = 0x%lx\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        hr = psl->GetPath(szPath, _countof(szPath), NULL, SLGP_RAWPATH);
+        ok(hr == S_OK && _wcsicmp(szPath, szTarget) == 0, "GetPath hr = 0x%lx, '%S'\n", hr, szPath);
+
+        hr = psl->QueryInterface(IID_PPV_ARG(IExtractIconW, &pei));
+        ok(hr == S_OK, "QueryInterface(IExtractIconW) hr = 0x%lx\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            szPath[0] = 0;
+            hr = pei->GetIconLocation(GIL_FORSHELL, szPath, _countof(szPath), &iIcon, &wFlags);
+            ok(hr == S_OK, "IExtractIcon::GetIconLocation(LinkInfo-only) hr = 0x%lx\n", hr);
+            ok(_wcsicmp(szPath, szTarget) == 0, "IExtractIcon::GetIconLocation returned '%S', expected '%S'\n", szPath, szTarget);
+        }
+    }
+    psl.Release();
+    ppf.Release();
+    pei.Release();
+
+    /* What the shell view asks for */
+    ZeroMemory(&sfi, sizeof(sfi));
+    ok(SHGetFileInfoW(szLink, 0, &sfi, sizeof(sfi), SHGFI_ICONLOCATION) != 0, "SHGetFileInfo(SHGFI_ICONLOCATION) failed\n");
+    ok(_wcsicmp(sfi.szDisplayName, szTarget) == 0, "SHGFI_ICONLOCATION gave '%S', expected '%S'\n", sfi.szDisplayName, szTarget);
+
+    DeleteFileW(szLink);
+}
+
 START_TEST(CShellLink)
 {
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
@@ -478,6 +582,7 @@ START_TEST(CShellLink)
     TestShellLink();
     TestDescription();
     TestIconLocation();
+    TestLinkInfoOnlyIcon();
 
     CoUninitialize();
 }
