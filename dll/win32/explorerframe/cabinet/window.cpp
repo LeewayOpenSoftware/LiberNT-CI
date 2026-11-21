@@ -3452,8 +3452,16 @@ CCabinetWindow::UpdateFolderPanes()
 
     if (tab && tab->Browser && SUCCEEDED(tab->Browser->GetCurrentView(IID_PPV_ARG(IShellView, &view))))
     {
-        if (SUCCEEDED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))) &&
-            SUCCEEDED(folderView->GetFolder(IID_PPV_ARG(IShellFolder, &folder))))
+        if (FAILED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))) ||
+            FAILED(folderView->GetFolder(IID_PPV_ARG(IShellFolder, &folder))))
+        {
+            /* a view of its own (the Control Panel pages) may not be an IFolderView:
+               the folder is then the one the tab shows */
+            folder = NULL;
+            if (!tab->Pidl || FAILED(SHBindToObject(NULL, tab->Pidl, NULL, IID_PPV_ARG(IShellFolder, &folder))))
+                folder = NULL;
+        }
+        if (folder)
         {
             /* a failed call may leave the pointer set: it is not ours then */
             if (FAILED(folder->QueryInterface(IID_PPV_ARG(IExplorerPaneVisibility, &visibility))))
