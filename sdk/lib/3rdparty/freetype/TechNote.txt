@@ -7,6 +7,20 @@ ReactOS FreeType is a slightly hacked version of FreeType. See also the original
 - https://freetype.org/
 - https://sourceforge.net/projects/freetype/files/freetype2/
 
+## ReactOS FreeType 2.15.0 (LiberNT)
+
+- Imported from the signed upstream release tarball with the same file selection as 2.10.4
+  (no make fragments, tools, gxvalid, otvalid or dlg).
+- The 2.10.4 changes were reapplied: large locals on the heap (autofit, cid, type1, psaux,
+  sfnt/ttsbit, raster, smooth), FT_Bitmap_Convert_ReactOS_Hack, the cmap format 4 check
+  (CORE-12549), the LCD geometry pointer signature, the ftdebug.c glue (FT_Message and FT_Panic
+  come from rosglue.c) and ftoption.h (FT_CONFIG_OPTION_SUBPIXEL_RENDERING on,
+  FT_CONFIG_OPTION_ENVIRONMENT_PROPERTIES off, FT_DEBUG_LEVEL_ERROR in debug builds).
+- ftraster.c and ftgrays.c: upstream keeps a 16 KB render pool on the stack whenever its size
+  estimate fits; under __REACTOS__ the heap path is always taken and the worker is on the heap too.
+- aflatin2.c no longer exists upstream (the warper went away in 2.11), so its change went with it.
+- New upstream modules are compiled because the stock ftmodule.h lists them: hvf, sdf, svg.
+
 ## ReactOS FreeType 2.10.4
 
 - Now woff/woff2 formats are supported (not handled yet).
