@@ -376,8 +376,27 @@ static BOOL should_ignore_peruser_classes(void)
 {
     static volatile LONG cached_process = -1; /* -1 unknown, 0 <= Medium, 1 above */
     HANDLE token;
-    LONG cached;
+    LONG cached = cached_process;
 
+    /* The PROCESS integrity decides first and is cached: a privileged process
+       never takes the per-user path, even while it impersonates a lower-integrity
+       client (otherwise a SYSTEM/High service impersonating a Medium caller would
+       load that caller's per-user InprocServer32). */
+    if (cached == -1)
+    {
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        {
+            cached = token_is_above_medium(token) ? 1 : 0;
+            CloseHandle(token);
+            InterlockedExchange(&cached_process, cached);
+        }
+        /* else: leave the cache at -1 and retry on the next call */
+    }
+    if (cached == 1)
+        return TRUE;
+
+    /* Process is at/below Medium (or still unknown): also honour a higher
+       effective identity, e.g. a Medium process impersonating a High client. */
     if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
     {
         BOOL above = token_is_above_medium(token);
@@ -385,19 +404,7 @@ static BOOL should_ignore_peruser_classes(void)
         return above;
     }
 
-    cached = cached_process;
-    if (cached == -1)
-    {
-        cached = 0;
-        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
-        {
-            cached = token_is_above_medium(token) ? 1 : 0;
-            CloseHandle(token);
-        }
-        InterlockedExchange(&cached_process, cached);
-    }
-
-    return cached == 1;
+    return FALSE;
 }
 #endif
 
