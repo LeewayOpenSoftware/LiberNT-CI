@@ -976,8 +976,9 @@ static VOID FwRestoreRun(HWND hwnd)
         FwReportError(hwnd, IDS_FW_FAILED, L"The settings could not be changed (error 0x%08lX).", hr);
 }
 
-/* rundll32 shell32.dll,OrosiFirewall_RunDLL customize|restore|allowedapps: the page starts it with
-   "runas" when its caller is not elevated, as Windows elevates these pages */
+/* customize|restore|allowedapps: run by fwsettings.exe, which the page starts with "runas" when its
+   caller is not elevated, as Windows elevates these pages (rundll32 shell32.dll,OrosiFirewall_RunDLL
+   works as well) */
 EXTERN_C VOID WINAPI OrosiFirewall_RunDLLW(HWND hwnd, HINSTANCE hinst, LPCWSTR cmdline, int nCmdShow)
 {
     INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_LISTVIEW_CLASSES };
@@ -1326,18 +1327,36 @@ private:
     BOOL Elevate(PCWSTR command)
     {
         SHELLEXECUTEINFOW sei = { sizeof(sei) };
-        WCHAR params[96];
+        WCHAR params[96], system[MAX_PATH], program[MAX_PATH];
 
         if (IsUserAnAdmin())
             return FALSE;
-        StringCchPrintfW(params, _countof(params), L"shell32.dll,OrosiFirewall_RunDLL %s", command);
+        StringCchCopyW(params, _countof(params), command);
         sei.fMask = SEE_MASK_NOCLOSEPROCESS;
         sei.hwnd = m_hWnd;
         sei.lpVerb = L"runas";
-        sei.lpFile = L"rundll32.exe";
+        /* a program of its own, so the elevation prompt names "Orosi Firewall settings"; started by
+           its full path from the system directory, so no search can pick up another one */
+        if (!GetSystemDirectoryW(system, _countof(system)) ||
+            FAILED(StringCchPrintfW(program, _countof(program), L"%s\\fwsettings.exe", system)))
+        {
+            FwReportError(m_hWnd, IDS_FW_FAILED, L"The settings could not be changed (error 0x%08lX).",
+                          HRESULT_FROM_WIN32(GetLastError()));
+            return TRUE;
+        }
+        sei.lpFile = program;
+        sei.lpDirectory = system;
         sei.lpParameters = params;
         sei.nShow = SW_SHOWNORMAL;
-        if (ShellExecuteExW(&sei) && sei.hProcess)
+        if (!ShellExecuteExW(&sei))
+        {
+            /* the user refused the prompt: nothing to say; any other failure is reported */
+            DWORD error = GetLastError();
+            if (error != ERROR_CANCELLED)
+                FwReportError(m_hWnd, IDS_FW_FAILED, L"The settings could not be changed (error 0x%08lX).",
+                              HRESULT_FROM_WIN32(error));
+        }
+        else if (sei.hProcess)
         {
             if (m_hHelper)
                 CloseHandle(m_hHelper);
