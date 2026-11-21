@@ -511,7 +511,7 @@ BEGIN
     IDS_OSK_DESC "Type with a pointer"
     IDS_ACTIVITY "Activity"
     IDS_TRACK_DOCS "Show recently opened items"
-    IDS_TRACK_DOCS_DESC "In Start, File Explorer and jump lists"
+    IDS_TRACK_DOCS_DESC "En Inicio, el Explorador de archivos y las listas de accesos directos"
     IDS_CLEAR_RECENT "Clear recent items"
     IDS_CLEAR_RECENT_DESC "Remove the list of recently opened files"
     IDS_CLEAR "Clear"
