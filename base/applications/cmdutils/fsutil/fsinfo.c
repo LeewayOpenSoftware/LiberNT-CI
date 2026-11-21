@@ -136,6 +136,10 @@ VolumeInfoMain(int argc, const TCHAR *argv[])
     _ftprintf(stdout, _T("Maximum component length: %u\n"), MaxComponentLen);
     _ftprintf(stdout, _T("File system name: %s\n"), FileSystem);
 
+    /* Windows prints Is ReadWrite when the volume is not read-only */
+    if (!(Flags & FILE_READ_ONLY_VOLUME))
+        _ftprintf(stdout, _T("Is ReadWrite\n"));
+
     /* Display specific flags */
     HANDLE_FLAG(Flags, FILE_CASE_SENSITIVE_SEARCH, _T("Supports case-sensitive file names\n"));
     HANDLE_FLAG(Flags, FILE_CASE_PRESERVED_NAMES, _T("Supports preserved case of file names\n"));
