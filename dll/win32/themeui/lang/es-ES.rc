@@ -17,7 +17,7 @@ BEGIN
     IDS_RAIN "Días de lluvia"
     IDS_RWB "Rojo, Blanco y Azul"
     IDS_CLASSIC "LiberNT clásico"
-    IDS_STANDARD "LiberNT estándar"
+    IDS_STANDARD "Orosi estándar"
     IDS_ROSE "Rosa"
     IDS_SAND "Arenisca" //Desert
     IDS_SLATE "Pizarra"
