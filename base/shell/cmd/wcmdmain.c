@@ -5303,7 +5303,7 @@ int __cdecl wmain(int argc, WCHAR *argvW[])
 #ifdef __REACTOS__
     else
     {
-        WCHAR *banner = WCMD_format_string(WCMD_LoadMessage(WCMD_BANNER), KERNEL_VERSION_STR, KERNEL_VERSION_BUILD_STR,
+        WCHAR *banner = WCMD_format_string(WCMD_LoadMessage(WCMD_BANNER), OROSI_VERSION_STR, OROSI_ARCH_CHANNEL_STR,
                                            COPYRIGHT_YEAR);
 
         WCMD_output_asis(banner);
