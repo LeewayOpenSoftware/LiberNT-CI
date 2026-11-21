@@ -631,7 +631,9 @@ FT_BEGIN_HEADER
    * outlines (from the 'COLR'/'CPAL' tables) in all formats using the 'sfnt'
    * module (namely TrueType~& OpenType).
    */
+#ifndef __REACTOS__ /* no consumer asks for FT_LOAD_COLOR; dwrite reads COLR/CPAL itself */
 #define TT_CONFIG_OPTION_COLOR_LAYERS
+#endif
 
 
   /**************************************************************************
