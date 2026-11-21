@@ -348,6 +348,26 @@ SerialPnpStartDevice(
 	RtlInitUnicodeString(&LinkName, LinkNameBuffer);
 	RtlInitUnicodeString(&ComPort, ComPortBuffer);
 	Status = IoCreateSymbolicLink(&LinkName, &DeviceName);
+	if (Status == STATUS_OBJECT_NAME_COLLISION && !DeviceExtension->ComPortFromRegistry)
+	{
+		/* The name from the I/O base (or the provisional one) is already taken,
+		 * e.g. by a port that got it through PortName: use the first free one */
+		ULONG Candidate;
+		for (Candidate = 1; Candidate <= 256 && Status == STATUS_OBJECT_NAME_COLLISION; Candidate++)
+		{
+			_swprintf(LinkNameBuffer, L"\\DosDevices\\COM%lu", Candidate);
+			RtlInitUnicodeString(&LinkName, LinkNameBuffer);
+			Status = IoCreateSymbolicLink(&LinkName, &DeviceName);
+			if (NT_SUCCESS(Status))
+			{
+				WARN_(SERIAL, "COM%lu is taken; port at 0x%lx is COM%lu\n",
+				      DeviceExtension->ComPort, DeviceExtension->BaseAddress, Candidate);
+				DeviceExtension->ComPort = Candidate;
+				_swprintf(ComPortBuffer, L"COM%lu", Candidate);
+				RtlInitUnicodeString(&ComPort, ComPortBuffer);
+			}
+		}
+	}
 	if (!NT_SUCCESS(Status))
 	{
 		WARN_(SERIAL, "IoCreateSymbolicLink() failed with status 0x%08x\n", Status);
