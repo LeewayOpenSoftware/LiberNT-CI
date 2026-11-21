@@ -7,6 +7,7 @@ list(APPEND SOURCE
     DismountRemount.c
     AppendAfterWrite.c
     ClearDirtyAfterCheck.c
+    NamedStreams.c
     testlist.c)
 
 add_executable(ntfs_apitest ${SOURCE})
