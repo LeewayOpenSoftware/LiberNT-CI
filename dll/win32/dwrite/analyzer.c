@@ -488,6 +488,10 @@ system_fallback_config[] =
 #endif
 
     { "1F800-1F8FF",            L"Noto Sans Symbols2, Noto Sans Symbols 2" },
+#ifdef __REACTOS__
+    /* Regional indicators, pictographs, emoticons, transport, supplemental symbols, extended-A */
+    { "1F1E6-1F1FF, 1F300-1F64F, 1F680-1F6FF, 1F900-1F9FF, 1FA70-1FAFF", L"Twemoji Mozilla, Noto Emoji" },
+#endif
 };
 
 struct text_source_context

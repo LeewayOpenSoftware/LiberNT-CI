@@ -3460,6 +3460,10 @@ static const WCHAR *reactos_family_substitute(const WCHAR *name)
 
     InitOnceExecuteOnce(&reactos_substitutes_once, reactos_load_substitutes, NULL, NULL);
 
+    /* GDI cannot draw the COLR emoji font, so the registry points Segoe UI Emoji at the monochrome
+       one; DirectWrite draws the colour layers and asks for the colour font first */
+    if (!wcsicmp(name, L"Segoe UI Emoji")) return L"Twemoji Mozilla";
+
     for (i = 0; i < reactos_substitutes_count; i++)
     {
         if (!wcsicmp(name, reactos_substitutes[i].from)) return reactos_substitutes[i].to;
