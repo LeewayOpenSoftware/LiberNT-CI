@@ -575,7 +575,7 @@ AddDisabledAdapters(PINetConnectionItem *ppHead, PINetConnectionItem *ppCurrent)
     {
         WCHAR szDriver[MAX_PATH], szPath[MAX_PATH], szGuid[64], szName[128], szDevice[128];
         ULONG ulStatus, ulProblem;
-        DWORD dwSize, dwType;
+        DWORD dwSize;
         HKEY hKey;
         GUID Guid;
         PINetConnectionItem pItem, pNew;
@@ -588,31 +588,25 @@ AddDisabledAdapters(PINetConnectionItem *ppHead, PINetConnectionItem *ppCurrent)
             ulProblem != CM_PROB_DISABLED)
             continue;
 
-        /* the connection of the adapter: NetCfgInstanceId, then its Connection key */
+        /* the connection of the adapter: NetCfgInstanceId, then its Connection key; RegGetValueW
+           NUL-terminates a REG_SZ even when it fills the buffer */
+        dwSize = sizeof(szGuid);
         if (!SetupDiGetDeviceRegistryPropertyW(hInfo, &DevInfo, SPDRP_DRIVER, NULL,
                                                (LPBYTE)szDriver, sizeof(szDriver), NULL) ||
             FAILED(StringCchPrintfW(szPath, _countof(szPath), L"SYSTEM\\CurrentControlSet\\Control\\Class\\%s", szDriver)) ||
-            RegOpenKeyExW(HKEY_LOCAL_MACHINE, szPath, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+            RegGetValueW(HKEY_LOCAL_MACHINE, szPath, L"NetCfgInstanceId", RRF_RT_REG_SZ, NULL, szGuid, &dwSize) != ERROR_SUCCESS)
             continue;
-        dwSize = sizeof(szGuid);
-        if (RegQueryValueExW(hKey, L"NetCfgInstanceId", NULL, &dwType, (LPBYTE)szGuid, &dwSize) != ERROR_SUCCESS ||
-            dwType != REG_SZ)
-        {
-            RegCloseKey(hKey);
-            continue;
-        }
-        RegCloseKey(hKey);
         if (FAILED(CLSIDFromString(szGuid, &Guid)) ||
             FAILED(StringCchPrintfW(szPath, _countof(szPath),
                                     L"SYSTEM\\CurrentControlSet\\Control\\Network\\{4D36E972-E325-11CE-BFC1-08002BE10318}\\%s\\Connection",
                                     szGuid)) ||
             RegOpenKeyExW(HKEY_LOCAL_MACHINE, szPath, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
             continue;
-        dwSize = sizeof(szName);
-        if (RegQueryValueExW(hKey, L"Name", NULL, &dwType, (LPBYTE)szName, &dwSize) != ERROR_SUCCESS ||
-            dwType != REG_SZ || !szName[0])
-            StringCchCopyW(szName, _countof(szName), L"Local Area Connection");
         RegCloseKey(hKey);
+        dwSize = sizeof(szName);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, szPath, L"Name", RRF_RT_REG_SZ, NULL, szName, &dwSize) != ERROR_SUCCESS ||
+            !szName[0])
+            StringCchCopyW(szName, _countof(szName), L"Local Area Connection");
 
         /* not when it is listed already */
         for (pItem = *ppHead; pItem; pItem = pItem->Next)
