@@ -192,6 +192,8 @@ struct screen_buffer
     unsigned int           vt_cursor_size;
     unsigned char         *wrapped;
     unsigned int           wrapped_rows;
+    unsigned char          utf8_pending[3];  /* incomplete UTF-8 sequence from the last WriteFile */
+    unsigned int           utf8_pending_len;
 #endif
 };
 

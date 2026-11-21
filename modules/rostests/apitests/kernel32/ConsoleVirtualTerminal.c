@@ -705,6 +705,39 @@ TestFaintItalic(HANDLE Output)
     ok(Attribute == Plain, "SGR 22 left attribute %#x, expected %#x\n", Attribute, Plain);
 }
 
+static VOID
+TestSplitUtf8(HANDLE Output)
+{
+    CONSOLE_SCREEN_BUFFER_INFO Info;
+    WCHAR Cell;
+
+    if (GetConsoleOutputCP() != CP_UTF8)
+    {
+        skip("The console output code page is not UTF-8\n");
+        return;
+    }
+    if (!ClearScreen(Output, &Info))
+        return;
+
+    /* U+2026 (E2 80 A6) split after the first and the second byte, then U+00E9 (C3 A9) split */
+    WRITE_VT(Output, "a\xe2");
+    WRITE_VT(Output, "\x80");
+    WRITE_VT(Output, "\xa6" "b\xc3");
+    WRITE_VT(Output, "\xa9" "c");
+    Cell = ReadCell(Output, 0, 0);
+    ok(Cell == L'a', "Cell 0 is %04x, expected a\n", Cell);
+    Cell = ReadCell(Output, 1, 0);
+    ok(Cell == 0x2026, "Split three-byte sequence gave %04x, expected 2026\n", Cell);
+    Cell = ReadCell(Output, 2, 0);
+    ok(Cell == L'b', "Cell 2 is %04x, expected b\n", Cell);
+    Cell = ReadCell(Output, 3, 0);
+    ok(Cell == 0x00e9, "Split two-byte sequence gave %04x, expected 00e9\n", Cell);
+    Cell = ReadCell(Output, 4, 0);
+    ok(Cell == L'c', "Cell 4 is %04x, expected c\n", Cell);
+    Cell = ReadCell(Output, 5, 0);
+    ok(Cell == L' ', "Stray character %04x after the text\n", Cell);
+}
+
 START_TEST(ConsoleVirtualTerminal)
 {
     PREAD_CONSOLE_INPUT_EX_W ReadConsoleInputExW_;
@@ -931,6 +964,7 @@ START_TEST(ConsoleVirtualTerminal)
     else
     {
         TestEditRendering(Output);
+        TestSplitUtf8(Output);
         TestFaintItalic(Output);
         if (ReadConsoleInputExW_ != NULL)
             TestEditFrontendInput(Input,
