@@ -1604,6 +1604,38 @@ static DWORD *proxy_manager_get_capabilities(struct proxy_manager *This, IUnknow
 }
 #endif
 
+#ifdef __REACTOS__
+WINBASEAPI BOOL WINAPI GetNamedPipeServerProcessId(HANDLE, PULONG);
+
+/* The user of the process serving this proxy's OXID pipe, or NULL. The pid comes from the pipe the system
+ * connected us to (GetNamedPipeServerProcessId), not from marshaled data, and is used at once, so pid reuse
+ * is limited to that window. The name is informational. */
+static WCHAR *proxy_manager_get_server_user(const struct proxy_manager *This)
+{
+    WCHAR name[80], *user = NULL;
+    HANDLE pipe, process, token;
+    ULONG pid;
+
+    wsprintfW(name, L"\\\\.\\pipe\\lrpc\\\\pipe\\OLE_%016I64x", This->oxid);
+    pipe = CreateFileW(name, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                       SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
+    if (pipe == INVALID_HANDLE_VALUE)
+        return NULL;
+    if (GetNamedPipeServerProcessId(pipe, &pid) && pid &&
+        (process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)))
+    {
+        if (OpenProcessToken(process, TOKEN_QUERY, &token))
+        {
+            user = com_security_token_user(token);
+            CloseHandle(token);
+        }
+        CloseHandle(process);
+    }
+    CloseHandle(pipe);
+    return user;
+}
+#endif
+
 static HRESULT WINAPI ProxyCliSec_QueryBlanket(IClientSecurity *iface,
                                                IUnknown *pProxy,
                                                DWORD *pAuthnSvc,
@@ -1630,27 +1662,14 @@ static HRESULT WINAPI ProxyCliSec_QueryBlanket(IClientSecurity *iface,
     if (pAuthzSvc)
         *pAuthzSvc = RPC_C_AUTHZ_NONE;
     /* An out-of-process proxy reports the user the server process runs as (Windows 11, NTLM); in-process it is NULL.
-     * The OXID resolution carries the server pid only, so the name comes from that process's token; a server
-     * that cannot be opened gives no name. */
+     * The OXID resolution gives no pid (rpc_resolve_oxid sets it to 0), and a pid in the OXID or in marshaled
+     * data is the server's own claim. The pipe the proxy talks to is the proof: ask the system which process
+     * serves it. A server that cannot be reached or opened gives no name. */
     if (ppServerPrincName)
     {
         *ppServerPrincName = NULL;
         if (com_call_security_enabled() && This->oxid_info.dwPid != GetCurrentProcessId())
-        {
-            HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, This->oxid_info.dwPid);
-
-            if (process)
-            {
-                HANDLE token;
-
-                if (OpenProcessToken(process, TOKEN_QUERY, &token))
-                {
-                    *ppServerPrincName = com_security_token_user(token);
-                    CloseHandle(token);
-                }
-                CloseHandle(process);
-            }
-        }
+            *ppServerPrincName = proxy_manager_get_server_user(This);
     }
     if (pAuthnLevel)
         *pAuthnLevel = RPC_C_AUTHN_LEVEL_PKT_PRIVACY;
