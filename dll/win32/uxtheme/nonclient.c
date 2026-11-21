@@ -366,6 +366,12 @@ HRESULT WINAPI ThemeDrawCaptionText(PDRAW_CONTEXT pcontext, RECT* pRect, int iPa
         textColor = GetThemeSysColor(pcontext->theme, pcontext->Active ? COLOR_CAPTIONTEXT : COLOR_INACTIVECAPTIONTEXT);
 
     GetThemeEnumValue(pcontext->theme, iPartId, iStateId, TMT_CONTENTALIGNMENT, &align);
+    {
+        /* Leeway: a user-selected caption alignment overrides the theme default. */
+        int captionAlign = CAPTIONALIGN_LEFT;
+        if (SystemParametersInfoW(SPI_GETCAPTIONALIGNMENT, 0, &captionAlign, 0))
+            align = (captionAlign == CAPTIONALIGN_CENTER) ? CA_CENTER : CA_LEFT;
+    }
     rcText = *pRect;
     if (align == CA_CENTER)
     {
