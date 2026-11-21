@@ -49,6 +49,19 @@ if(NOT LIBERNT_LBI_BUILD_EFFECTIVE MATCHES "^[A-Za-z0-9][A-Za-z0-9._-]*$")
 endif()
 message(STATUS "LBI build number: ${LIBERNT_LBI_BUILD_EFFECTIVE}")
 
+# Orosi product version shown to users: 5.0.<full LBI> (e.g. 5.0.1061.1), with the
+# architecture and channel as complementary info "(amd64-dev)". This is a display
+# version only: the NT compatibility version (10.0 / 26100), the PE ProductVersion
+# value ("6.00") and the numeric FileVersion are separate and unchanged.
+set(OROSI_VERSION_MAJOR "5")
+set(OROSI_VERSION_MINOR "0")
+set(OROSI_VERSION_STR "${OROSI_VERSION_MAJOR}.${OROSI_VERSION_MINOR}.${LIBERNT_LBI_BUILD_EFFECTIVE}")
+set(OROSI_ARCH_CHANNEL "${WINARCH}")
+if(NOT KERNEL_VERSION_BUILD_TYPE STREQUAL "")
+    set(OROSI_ARCH_CHANNEL "${OROSI_ARCH_CHANNEL}-${KERNEL_VERSION_BUILD_TYPE}")
+endif()
+set(OROSI_VERSION_FULL "${OROSI_VERSION_STR} (${OROSI_ARCH_CHANNEL})")
+
 if(NOT LIBERNT_BUILD_NUMBER)
     set(LIBERNT_BUILD_NUMBER "$ENV{GITHUB_RUN_NUMBER}")
 endif()
