@@ -103,14 +103,24 @@ static ULONG WINAPI factory_Release(IClassFactory *iface)
 static HRESULT WINAPI factory_CreateInstance(IClassFactory *iface,
     IUnknown *punkouter, REFIID iid, void **ppv)
 {
-    FIXME("(%p,%p,%s,%p): stub\n", iface, punkouter, wine_dbgstr_guid(iid), ppv);
-    return E_NOTIMPL;
+    struct factory *factory = impl_from_IClassFactory(iface);
+
+    TRACE("(%p,%p,%s,%p)\n", iface, punkouter, wine_dbgstr_guid(iid), ppv);
+
+    if (!factory->dll_factory)
+        return E_UNEXPECTED;
+    return IClassFactory_CreateInstance(factory->dll_factory, punkouter, iid, ppv);
 }
 
 static HRESULT WINAPI factory_LockServer(IClassFactory *iface, BOOL lock)
 {
+    struct factory *factory = impl_from_IClassFactory(iface);
+
     TRACE("(%p,%d)\n", iface, lock);
-    return S_OK;
+
+    if (!factory->dll_factory)
+        return S_OK;
+    return IClassFactory_LockServer(factory->dll_factory, lock);
 }
 
 static const IClassFactoryVtbl ClassFactory_Vtbl =
