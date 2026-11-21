@@ -22,17 +22,19 @@
 # define MI_EXTERN_C extern
 #endif
 
-/* Calling convention: __stdcall on i386 (the stock MMI bridge calls the FT
- * members as __stdcall; a function-pointer call bypasses the link-time arity
- * check, so a mismatch corrupts the i386 stack silently). Ignored on x64.
- * Exported names stay undecorated via mi.spec. */
-#if defined(_M_IX86) || defined(__i386__)
-# define MI_CALL      __stdcall
-# define MI_MAIN_CALL __stdcall
+/* Calling convention. The stock MMI bridge is MSVC-built; on x86 the SDK/OMI
+ * mi.h set MI_CALL to __stdcall under _MSC_VER. Our gcc/clang builds do not
+ * define _MSC_VER, so key MI_CALL on the x86 target itself (_X86_ in the
+ * LiberNT build, plus _M_IX86/__i386__). A function-pointer call through the
+ * wrong convention has no link-time arity check and corrupts the i386 stack
+ * silently. MI_MAIN_CALL (the MI_Application_InitializeV1 export) is cdecl on
+ * all arches. Both are no-ops on x64 (single convention). */
+#if defined(_X86_) || defined(_M_IX86) || defined(__i386__)
+# define MI_CALL __stdcall
 #else
 # define MI_CALL
-# define MI_MAIN_CALL
 #endif
+#define MI_MAIN_CALL
 
 #if defined(__GNUC__) || defined(__clang__)
 # define MI_INLINE static __inline__
