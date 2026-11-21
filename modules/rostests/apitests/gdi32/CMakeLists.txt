@@ -72,6 +72,7 @@ list(APPEND SOURCE
     Rectangle.c
     RealizePalette.c
     ScreenRows.c
+    ScriptShape.c
     SelectObject.c
     SetBoundsRect.c
     SetBrushOrgEx.c

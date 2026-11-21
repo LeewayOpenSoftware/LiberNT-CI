@@ -332,19 +332,19 @@ const scriptData scriptInformation[] = {
      0x00000000, L"Microsoft Sans Serif"},
     {{Script_Arabic, 1, 1, 0, 0, 0, 0, { 1,0,0,0,0,0,0,0,0,0,0}},
      {LANG_ARABIC, 0, 1, 0, 0, ARABIC_CHARSET, 0, 0, 0, 0, 0, 0, 1, 1, 0},
-     MS_MAKE_TAG('a','r','a','b'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('a','r','a','b'), L"Tahoma"},
     {{Script_Arabic_Numeric, 0, 1, 0, 0, 0, 0, { 2,0,0,0,0,0,0,0,0,0,0}},
      {LANG_ARABIC, 1, 1, 0, 0, ARABIC_CHARSET, 0, 0, 0, 0, 0, 0, 1, 0, 0},
-     MS_MAKE_TAG('a','r','a','b'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('a','r','a','b'), L"Tahoma"},
     {{Script_Hebrew, 1, 1, 0, 0, 0, 0, { 1,0,0,0,0,0,0,0,0,0,0}},
      {LANG_HEBREW, 0, 1, 0, 1, HEBREW_CHARSET, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-     MS_MAKE_TAG('h','e','b','r'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('h','e','b','r'), L"Tahoma"},
     {{Script_Syriac, 1, 1, 0, 0, 0, 0, { 1,0,0,0,0,0,0,0,0,0,0}},
      {LANG_SYRIAC, 0, 1, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, 1, 0, 0, 1, 0},
      MS_MAKE_TAG('s','y','r','c'), L"Estrangelo Edessa"},
     {{Script_Persian, 0, 1, 0, 0, 0, 0, { 2,0,0,0,0,0,0,0,0,0,0}},
      {LANG_PERSIAN, 1, 1, 0, 0, ARABIC_CHARSET, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-     MS_MAKE_TAG('a','r','a','b'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('a','r','a','b'), L"Tahoma"},
     {{Script_Thaana, 1, 1, 0, 0, 0, 0, { 1,0,0,0,0,0,0,0,0,0,0}},
      {LANG_DIVEHI, 0, 1, 0, 1, DEFAULT_CHARSET, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      MS_MAKE_TAG('t','h','a','a'), L"MV Boli"},
@@ -374,10 +374,10 @@ const scriptData scriptInformation[] = {
      MS_MAKE_TAG('p','h','a','g'), L"Microsoft PhagsPa"},
     {{Script_Thai, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_THAI, 0, 1, 1, 1, THAI_CHARSET, 0, 0, 1, 0, 1, 0, 0, 0, 1},
-     MS_MAKE_TAG('t','h','a','i'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('t','h','a','i'), L"Noto Sans Thai"},
     {{Script_Thai_Numeric, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_THAI, 1, 1, 0, 0, THAI_CHARSET, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-     MS_MAKE_TAG('t','h','a','i'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('t','h','a','i'), L"Noto Sans Thai"},
     {{Script_Lao, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_LAO, 0, 1, 1, 1, DEFAULT_CHARSET, 0, 0, 1, 0, 1, 0, 0, 0, 0},
      MS_MAKE_TAG('l','a','o',' '), L"DokChampa"},
@@ -386,10 +386,10 @@ const scriptData scriptInformation[] = {
      MS_MAKE_TAG('l','a','o',' '), L"DokChampa"},
     {{Script_Devanagari, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_HINDI, 0, 1, 0, 1, DEFAULT_CHARSET, 0, 0, 0, 0, 1, 0, 0, 0, 0},
-     MS_MAKE_TAG('d','e','v','a'), L"Mangal"},
+     MS_MAKE_TAG('d','e','v','a'), L"Noto Sans Devanagari"},
     {{Script_Devanagari_Numeric, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_HINDI, 1, 1, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-     MS_MAKE_TAG('d','e','v','a'), L"Mangal"},
+     MS_MAKE_TAG('d','e','v','a'), L"Noto Sans Devanagari"},
     {{Script_Bengali, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_BENGALI, 0, 1, 0, 1, DEFAULT_CHARSET, 0, 0, 0, 0, 1, 0, 0, 0, 0},
      MS_MAKE_TAG('b','e','n','g'), L"Vrinda"},
@@ -3151,6 +3151,42 @@ HRESULT WINAPI ScriptIsComplex(const WCHAR *chars, int len, DWORD flag)
  *  Success: S_OK
  *  Failure: Non-zero HRESULT value.
  */
+/* LiberNT: TRUE when the selected font has no glyph at all for at least one
+ * character of the run (surrogate halves excluded; the shaper decodes pairs).
+ * Used to report USP_E_SCRIPT_NOT_IN_FONT so callers fall back to a covering
+ * font instead of drawing .notdef boxes. */
+static BOOL
+usp10_char_is_default_ignorable(WCHAR ch)
+{
+    /* Format characters that must not decide whether a font "has" a script:
+       soft hyphen, BOM/ZWNBSP, ZWNJ/ZWJ, LRM/RLM, the embedding/override
+       controls, and the invisible operators. Missing glyphs for these are
+       not a coverage failure (Dwight review SHOULD). */
+    return ch == 0x00AD || ch == 0xFEFF ||
+           (ch >= 0x200C && ch <= 0x200F) ||
+           (ch >= 0x202A && ch <= 0x202E) ||
+           (ch >= 0x2060 && ch <= 0x2064);
+}
+
+static BOOL
+usp10_run_has_missing_glyphs(HDC hdc, SCRIPT_CACHE *psc, const WCHAR *pwcChars, int cChars)
+{
+    WORD glyph;
+    int i;
+
+    for (i = 0; i < cChars; i++)
+    {
+        WCHAR ch = pwcChars[i];
+        if (ch >= 0xD800 && ch <= 0xDFFF)
+            continue;   /* surrogate halves are decoded by the shaper */
+        if (usp10_char_is_default_ignorable(ch))
+            continue;
+        if (ScriptGetCMap(hdc, psc, &ch, 1, 0, &glyph) == S_FALSE)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 HRESULT WINAPI ScriptShapeOpenType( HDC hdc, SCRIPT_CACHE *psc,
                                     SCRIPT_ANALYSIS *psa, OPENTYPE_TAG tagScript,
                                     OPENTYPE_TAG tagLangSys, int *rcRangeChars,
@@ -3214,6 +3250,13 @@ HRESULT WINAPI ScriptShapeOpenType( HDC hdc, SCRIPT_CACHE *psc,
     {
         WCHAR *rChars;
         if ((hr = SHAPE_CheckFontForRequiredFeatures(hdc, (ScriptCache *)*psc, psa)) != S_OK) return hr;
+
+        /* LiberNT: no glyphs at all for the run -> not-in-font, let the caller
+           fall back to a covering face (Windows behaviour). */
+        if (psa->eScript != Script_Control && psa->eScript != Script_CR &&
+            psa->eScript != SCRIPT_UNDEFINED &&
+            usp10_run_has_missing_glyphs(hdc, psc, pwcChars, cChars))
+            return USP_E_SCRIPT_NOT_IN_FONT;
 
         if (!(rChars = calloc(cChars, sizeof(*rChars))))
             return E_OUTOFMEMORY;

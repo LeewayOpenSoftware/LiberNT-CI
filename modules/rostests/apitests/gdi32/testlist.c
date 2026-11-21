@@ -73,6 +73,7 @@ extern void func_RealizePalette(void);
 extern void func_ScreenRows(void);
 extern void func_ScriptGetFontTags(void);
 extern void func_ScriptGetLogicalWidths(void);
+extern void func_ScriptShape(void);
 extern void func_ScriptShapeCache(void);
 extern void func_SelectObject(void);
 extern void func_SetBoundsRect(void);
@@ -163,6 +164,7 @@ const struct test winetest_testlist[] =
     { "ScreenRows", func_ScreenRows },
     { "ScriptGetFontTags", func_ScriptGetFontTags },
     { "ScriptGetLogicalWidths", func_ScriptGetLogicalWidths },
+    { "ScriptShape", func_ScriptShape },
     { "ScriptShapeCache", func_ScriptShapeCache },
     { "SelectObject", func_SelectObject },
     { "SetBoundsRect", func_SetBoundsRect },
