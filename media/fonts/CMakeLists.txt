@@ -77,3 +77,20 @@ add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansJP/LICENSE.txt"
     DESTINATION reactos NAME_ON_CD NotoSansJP-LICENSE.txt NO_CAB FOR all)
 add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/NotoSansSC/LICENSE.txt"
     DESTINATION reactos NAME_ON_CD NotoSansSC-LICENSE.txt NO_CAB FOR all)
+
+# Licence texts and the provenance table of every shipped font go on the media next to the fonts
+add_cd_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/doc/PROVENANCE.md"
+    DESTINATION reactos/licenses/fonts NAME_ON_CD PROVENANCE.md NO_CAB FOR all)
+file(GLOB FONT_DOC_DIRS LIST_DIRECTORIES true CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/doc/*")
+foreach(font_doc_dir ${FONT_DOC_DIRS})
+    if(IS_DIRECTORY "${font_doc_dir}")
+        get_filename_component(font_family "${font_doc_dir}" NAME)
+        file(GLOB font_doc_files CONFIGURE_DEPENDS "${font_doc_dir}/*")
+        foreach(font_doc_file ${font_doc_files})
+            get_filename_component(font_doc_name "${font_doc_file}" NAME)
+            string(REPLACE " " "_" font_doc_cd_name "${font_family}-${font_doc_name}")
+            add_cd_file(FILE "${font_doc_file}"
+                DESTINATION reactos/licenses/fonts NAME_ON_CD "${font_doc_cd_name}" NO_CAB FOR all)
+        endforeach()
+    endif()
+endforeach()

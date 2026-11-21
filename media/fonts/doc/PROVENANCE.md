@@ -54,8 +54,8 @@ One row per shipped file in media/fonts. Files added by the font cards carry the
 | sserifer.fon | MSSansSerif | ReactOS bitmap MS Sans Serif (Katayama Hirofumi MZ) | ReactOS tree | MIT | 136b0beae518404f32086a88bb70344cb817a29dea14f2b50d49acf082e3f165 |
 | sserifet.fon | MSSansSerif | ReactOS bitmap MS Sans Serif (Katayama Hirofumi MZ) | ReactOS tree | MIT | 84c76d639a9ffab50e7fb4910cfe88c48d253195c1c51d3c3f86b916ab23f55e |
 | symbol.ttf | Symbol | Wine Symbol (Jon Parshall for CodeWeavers) | 1.1 | GNU LGPL 2.1 or later | d79da0fbd9a9f3cf806059bb1f2c9d7ce43dd9e3e4c7d4dcc5d9f2759b81196f |
-| tahoma.ttf | Tahoma | Wine Tahoma (Larry Snyder), based on Bitstream Vera Sans | 0.020 / 0.021 | Bitstream Vera Fonts licence for the base design | 08796ee7769c6a5f4a182d3f9b696184bed56c6bfd542dede75a4915789f16e4 |
-| tahomabd.ttf | Tahoma | Wine Tahoma (Larry Snyder), based on Bitstream Vera Sans | 0.020 / 0.021 | Bitstream Vera Fonts licence for the base design | 9ebca12d00d3722d92150a4089c1e44a79e6764425fa250835f67b3db3115b0e |
+| tahoma.ttf | Tahoma | Wine Tahoma (Larry Snyder), based on Bitstream Vera Sans | 0.020 / 0.021 | Bitstream Vera Fonts licence for the base design + GNU LGPL 2.1 or later for Wine's changes | 08796ee7769c6a5f4a182d3f9b696184bed56c6bfd542dede75a4915789f16e4 |
+| tahomabd.ttf | Tahoma | Wine Tahoma (Larry Snyder), based on Bitstream Vera Sans | 0.020 / 0.021 | Bitstream Vera Fonts licence for the base design + GNU LGPL 2.1 or later for Wine's changes | 9ebca12d00d3722d92150a4089c1e44a79e6764425fa250835f67b3db3115b0e |
 | times.ttf | TimesNewRoman | Liberation Serif 2.00.1 | 2.00.1 | SIL Open Font License 1.1 | 2fc0ca1fde4755ed1149f10ab11f3e60611b4188ef3d35181959006a4439cd4c |
 | timesbd.ttf | TimesNewRoman | Liberation Serif 2.00.1 | 2.00.1 | SIL Open Font License 1.1 | a68d23e9823122dda559660f766a481355a33ce83fe62e660a4f9e161146b2a4 |
 | timesbi.ttf | TimesNewRoman | Liberation Serif 2.00.1 | 2.00.1 | SIL Open Font License 1.1 | 4cf48b2f24b1aa9a7e46dab6589353760413ec4cfebc3840c310a7d44db10861 |
