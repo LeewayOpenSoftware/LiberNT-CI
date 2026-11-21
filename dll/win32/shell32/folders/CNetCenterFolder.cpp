@@ -45,6 +45,8 @@ enum
 };
 
 #define WM_NSC_PANE_GOTO (WM_USER + 0x210) /* wParam: NSC_PANE_* */
+#define WM_NSC_CHANGED   (WM_USER + 0x211) /* a network changed (INetworkEvents) */
+#define NSC_RELOAD_TIMER 1
 
 static VOID NscString(UINT id, PWSTR buffer, int cch, PCWSTR english)
 {
@@ -226,6 +228,42 @@ public:
 
 /* ---------------------------------------------------------------------------------------------- */
 
+/* Network List Manager events: the page reloads when a network comes, goes or changes.
+   They arrive on netprofm's notification thread, so the sink only posts to the window. */
+static const IID kIidNetworkEvents =
+    { 0xdcb00004, 0x570f, 0x4a9b, { 0x8d, 0x69, 0x19, 0x9f, 0xdb, 0xa5, 0x72, 0x3b } };
+
+class CNscNetworkEvents :
+    public CComObjectRootEx<CComMultiThreadModel>,
+    public INetworkEvents
+{
+    HWND m_hwndView = NULL;
+
+    VOID Changed()
+    {
+        if (IsWindow(m_hwndView))
+            PostMessageW(m_hwndView, WM_NSC_CHANGED, 0, 0);
+    }
+
+public:
+    HRESULT Initialize(HWND hwndView)
+    {
+        m_hwndView = hwndView;
+        return S_OK;
+    }
+
+    STDMETHODIMP NetworkAdded(GUID) override { Changed(); return S_OK; }
+    STDMETHODIMP NetworkDeleted(GUID) override { Changed(); return S_OK; }
+    STDMETHODIMP NetworkConnectivityChanged(GUID, NLM_CONNECTIVITY) override { Changed(); return S_OK; }
+    STDMETHODIMP NetworkPropertyChanged(GUID, NLM_NETWORK_PROPERTY_CHANGE) override { Changed(); return S_OK; }
+
+    DECLARE_NOT_AGGREGATABLE(CNscNetworkEvents)
+    DECLARE_PROTECT_FINAL_CONSTRUCT()
+    BEGIN_COM_MAP(CNscNetworkEvents)
+        COM_INTERFACE_ENTRY_IID(kIidNetworkEvents, INetworkEvents)
+    END_COM_MAP()
+};
+
 struct NscConnection
 {
     GUID Id;
@@ -256,6 +294,9 @@ class CNetCenterView :
 {
 private:
     CComPtr<IShellBrowser> m_psb;
+    CComPtr<INetworkListManager> m_pEventsSource; /* kept alive while advised */
+    CComPtr<IConnectionPoint> m_pEventsPoint;
+    DWORD m_eventsCookie;
     FOLDERSETTINGS m_fs;
     HWND m_hwndTasks;
     int m_dpi;
@@ -712,6 +753,7 @@ private:
 
 public:
     CNetCenterView() :
+        m_eventsCookie(0),
         m_hwndTasks(NULL),
         m_dpi(96),
         m_fontTitle(NULL),
@@ -743,6 +785,8 @@ public:
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL &)
     {
         m_hwndTasks = NULL; /* a child: destroyed with us */
+        UnadviseNetworkEvents();
+        KillTimer(NSC_RELOAD_TIMER);
         FreeFonts();
         return 0;
     }
@@ -902,6 +946,59 @@ public:
         return 0;
     }
 
+    VOID AdviseNetworkEvents()
+    {
+        CComPtr<IConnectionPointContainer> pContainer;
+        CComPtr<CNscNetworkEvents> pSink;
+
+        if (FAILED(CoCreateInstance(kClsidNetworkListManager, NULL, CLSCTX_INPROC_SERVER, kIidNetworkListManager,
+                                    (void **)&m_pEventsSource)) ||
+            FAILED(m_pEventsSource->QueryInterface(IID_PPV_ARG(IConnectionPointContainer, &pContainer))) ||
+            FAILED(pContainer->FindConnectionPoint(kIidNetworkEvents, &m_pEventsPoint)) ||
+            FAILED(ShellObjectCreator(pSink)))
+        {
+            m_pEventsPoint.Release();
+            m_pEventsSource.Release();
+            return;
+        }
+        pSink->Initialize(m_hWnd);
+        if (FAILED(m_pEventsPoint->Advise(static_cast<INetworkEvents *>(pSink), &m_eventsCookie)))
+        {
+            m_eventsCookie = 0;
+            m_pEventsPoint.Release();
+            m_pEventsSource.Release();
+        }
+    }
+
+    VOID UnadviseNetworkEvents()
+    {
+        if (m_pEventsPoint && m_eventsCookie)
+            m_pEventsPoint->Unadvise(m_eventsCookie);
+        m_eventsCookie = 0;
+        m_pEventsPoint.Release();
+        m_pEventsSource.Release();
+    }
+
+    /* several events come together (connectivity of the network, then of the machine): one reload */
+    LRESULT OnNetworkChanged(UINT, WPARAM, LPARAM, BOOL &)
+    {
+        SetTimer(NSC_RELOAD_TIMER, 500, NULL);
+        return 0;
+    }
+
+    LRESULT OnTimer(UINT, WPARAM wParam, LPARAM, BOOL &bHandled)
+    {
+        if (wParam != NSC_RELOAD_TIMER)
+        {
+            bHandled = FALSE;
+            return 0;
+        }
+        KillTimer(NSC_RELOAD_TIMER);
+        LoadNetworks();
+        Relayout();
+        return 0;
+    }
+
     LRESULT OnPaneGoto(UINT, WPARAM wParam, LPARAM, BOOL &)
     {
         switch ((int)wParam)
@@ -948,6 +1045,8 @@ public:
     MESSAGE_HANDLER(WM_THEMECHANGED, OnSettingChange)
     MESSAGE_HANDLER(SHV_TASKPANE_FOCUS, OnPaneFocus)
     MESSAGE_HANDLER(WM_NSC_PANE_GOTO, OnPaneGoto)
+    MESSAGE_HANDLER(WM_NSC_CHANGED, OnNetworkChanged)
+    MESSAGE_HANDLER(WM_TIMER, OnTimer)
     END_MSG_MAP()
 
     // IOleWindow
@@ -996,11 +1095,13 @@ public:
         if (!m_hWnd)
             return E_FAIL;
         Relayout();
+        AdviseNetworkEvents();
         *phWnd = m_hWnd;
         return S_OK;
     }
     STDMETHOD(DestroyViewWindow)() override
     {
+        UnadviseNetworkEvents();
         if (m_hWnd)
             DestroyWindow();
         m_psb.Release();
