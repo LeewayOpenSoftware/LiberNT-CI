@@ -6,6 +6,7 @@
  */
 
 #include "settings.h"
+#include <undocuser.h>
 extern "C"
 {
 #include "../../system/dwm/settings.h"
