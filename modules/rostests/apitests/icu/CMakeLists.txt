@@ -1,5 +1,6 @@
 list(APPEND SOURCE
     ustring.c
+    version.c
     testlist.c)
 
 add_executable(icu_apitest ${SOURCE})
