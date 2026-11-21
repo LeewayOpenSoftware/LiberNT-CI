@@ -98,6 +98,34 @@ static BOOL FamilyNameOf(IDWriteFont *font, WCHAR *name, UINT32 cch)
     return got;
 }
 
+/* BMP emoji reach an emoji font through the symbol rows of the fallback table */
+static void TestBmpEmoji(IDWriteFontFallback *fallback)
+{
+    static const WCHAR cps[] = { 0x2764, 0x2600, 0x2705, 0x2B50, 0x231A };
+    unsigned int i;
+
+    for (i = 0; i < ARRAYSIZE(cps); i++)
+    {
+        WCHAR text[2] = { cps[i], 0 }, name[64] = L"";
+        EMOJI_SOURCE source = { { &SourceVtbl }, text, 1 };
+        IDWriteFont *font = NULL;
+        UINT32 mapped = 0;
+        FLOAT scale = 0;
+        HRESULT hr;
+
+        hr = IDWriteFontFallback_MapCharacters(fallback, &source.IDWriteTextAnalysisSource_iface, 0, 1, NULL, NULL,
+                                               DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                                               DWRITE_FONT_STRETCH_NORMAL, &mapped, &font, &scale);
+        ok(hr == S_OK, "U+%04X: MapCharacters failed: 0x%lx\n", cps[i], hr);
+        ok(font != NULL, "U+%04X was not mapped to a font\n", cps[i]);
+        if (!font)
+            continue;
+        ok(FamilyNameOf(font, name, ARRAYSIZE(name)), "U+%04X: no family name\n", cps[i]);
+        ok(!wcscmp(name, L"Twemoji Mozilla") || !wcscmp(name, L"Noto Emoji"), "U+%04X mapped to %ls\n", cps[i], name);
+        IDWriteFont_Release(font);
+    }
+}
+
 START_TEST(EmojiFallback)
 {
     IDWriteFactory2 *factory = NULL;
@@ -171,6 +199,8 @@ START_TEST(EmojiFallback)
         ok(!wcscmp(name, L"Twemoji Mozilla"), "U+1F600 mapped to %ls\n", name);
         IDWriteFont_Release(font);
     }
+
+    TestBmpEmoji(fallback);
 
 done:
     if (fallback) IDWriteFontFallback_Release(fallback);
