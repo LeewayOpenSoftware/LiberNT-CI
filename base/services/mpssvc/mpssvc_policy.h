@@ -14,6 +14,26 @@
 #define MPS_MAX_APP_PATH 1024
 #define MPS_MAX_ADDRESSES 16
 
+/* Rule profile bits (Profile=Domain|Private|Public), as NET_FW_PROFILE2_* */
+#define MPS_PROFILE_DOMAIN  1
+#define MPS_PROFILE_PRIVATE 2
+#define MPS_PROFILE_PUBLIC  4
+#define MPS_PROFILE_ALL     7
+
+/* Filter weights in the MpsSvc sublayer: the higher one decides */
+#define MPS_WEIGHT_DEFAULT_BLOCK 0
+#define MPS_WEIGHT_ALLOW_RULE    4
+#define MPS_WEIGHT_BLOCK_RULE    8
+#define MPS_WEIGHT_LOOPBACK      15
+
+/* What the active profile asks for ({Domain,Standard,Public}Profile under FirewallPolicy) */
+typedef struct _MPS_PROFILE_SETTINGS
+{
+    BOOL Enabled;               /* EnableFirewall; absent: off */
+    BOOL BlockInbound;          /* DefaultInboundAction 1; absent: block, as Windows */
+    BOOL NoExceptions;          /* DoNotAllowExceptions: inbound allow rules do not apply */
+} MPS_PROFILE_SETTINGS;
+
 typedef struct _MPS_PORT_RANGE
 {
     USHORT First;
@@ -81,8 +101,27 @@ MpsAddLoopbackPermit(
     _In_ HANDLE Engine,
     _In_ const GUID *SubLayerKey);
 
+#define MPS_MAX_RULE_VALUES 4096
+
+BOOL
+MpsIsLayerAbsent(
+    _In_ DWORD Error);
+
+/* a line to the debugger output (DbgView, kernel debugger) */
+VOID
+MpsLog(
+    _In_ PCWSTR Format,
+    ...);
+
+DWORD
+MpsAddDefaultInboundBlock(
+    _In_ HANDLE Engine,
+    _In_ const GUID *SubLayerKey);
+
 DWORD
 MpsLoadFirewallRulesFromKey(
     _In_ HANDLE Engine,
     _In_ const GUID *SubLayerKey,
-    _In_ HKEY Key);
+    _In_ HKEY Key,
+    _In_ UINT32 ProfileBit,
+    _In_ BOOL AllowInboundExceptions);

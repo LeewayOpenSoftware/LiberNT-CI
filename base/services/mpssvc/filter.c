@@ -6,11 +6,21 @@
  */
 
 #include <windows.h>
+#include <stdarg.h>
+#include <strsafe.h>
 #include <initguid.h>
 #include <fwpmu.h>
 #include <fwpmk.h>
 
 #include "mpssvc_policy.h"
+
+/* the layer is not there (IPv6 not installed): not a failure of the policy */
+BOOL
+MpsIsLayerAbsent(
+    _In_ DWORD Error)
+{
+    return Error == (DWORD)FWP_E_LAYER_NOT_FOUND;
+}
 
 DWORD
 MpsApplyFirewallRule(
@@ -33,7 +43,7 @@ MpsApplyFirewallRule(
     if (!Rule->Active)
         return ERROR_SUCCESS;
 
-    if (Rule->Unsupported || Rule->ProfileMask != 7 ||
+    if (Rule->Unsupported ||
         Rule->Action == MpsRuleActionBypass ||
         Rule->LocalPortCount > MPS_MAX_PORTS ||
         Rule->RemotePortCount > MPS_MAX_PORTS ||
@@ -63,14 +73,15 @@ MpsApplyFirewallRule(
 
     ZeroMemory(&Filter, sizeof(Filter));
     ZeroMemory(Conditions, sizeof(Conditions));
-    Filter.displayData.name = L"LiberNT firewall rule";
+    Filter.displayData.name = L"Orosi Firewall rule";
     Filter.layerKey = Rule->Inbound ? FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4 :
                                       FWPM_LAYER_ALE_AUTH_CONNECT_V4;
     Filter.subLayerKey = *SubLayerKey;
     Filter.action.type = Rule->Action == MpsRuleActionBlock ? FWP_ACTION_BLOCK :
                                                               FWP_ACTION_PERMIT;
+    /* weights in the sublayer: default inbound block 0 < allow rules < block rules < loopback */
     Filter.weight.type = FWP_UINT8;
-    Filter.weight.uint8 = Rule->Action == MpsRuleActionBlock ? 1 : 0;
+    Filter.weight.uint8 = Rule->Action == MpsRuleActionBlock ? MPS_WEIGHT_BLOCK_RULE : MPS_WEIGHT_ALLOW_RULE;
     Filter.filterCondition = Conditions;
 
     ConditionCount = 0;
@@ -177,6 +188,26 @@ MpsApplyFirewallRule(
             Error = FwpmFilterAdd0(Engine, &Filter, NULL, &Id);
             if (Error != ERROR_SUCCESS)
                 goto Exit;
+
+            /* a rule without IPv4 addresses holds for IPv6 too. A missing IPv6 block would
+               let IPv6 through, so it is an error unless IPv6 is absent; a missing IPv6 allow
+               only keeps traffic out */
+            if (Rule->LocalAddressCount == 0 && Rule->RemoteAddressCount == 0)
+            {
+                DWORD V6Error;
+
+                Filter.layerKey = Rule->Inbound ? FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6 :
+                                                  FWPM_LAYER_ALE_AUTH_CONNECT_V6;
+                V6Error = FwpmFilterAdd0(Engine, &Filter, NULL, &Id);
+                Filter.layerKey = Rule->Inbound ? FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4 :
+                                                  FWPM_LAYER_ALE_AUTH_CONNECT_V4;
+                if (V6Error != ERROR_SUCCESS && !MpsIsLayerAbsent(V6Error) &&
+                    Rule->Action == MpsRuleActionBlock)
+                {
+                    Error = V6Error;
+                    goto Exit;
+                }
+            }
         }
     }
 
@@ -227,26 +258,87 @@ MpsAddLoopbackPermit(
     Condition.conditionValue.uint32 = FWP_CONDITION_FLAG_IS_LOOPBACK;
 
     ZeroMemory(&Filter, sizeof(Filter));
-    Filter.displayData.name = L"LiberNT firewall loopback";
+    Filter.displayData.name = L"Orosi Firewall loopback";
     Filter.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V4;
     Filter.subLayerKey = *SubLayerKey;
     Filter.action.type = FWP_ACTION_PERMIT;
     Filter.weight.type = FWP_UINT8;
-    Filter.weight.uint8 = 15;
+    Filter.weight.uint8 = MPS_WEIGHT_LOOPBACK;
     Filter.numFilterConditions = 1;
     Filter.filterCondition = &Condition;
     return FwpmFilterAdd0(Engine, &Filter, NULL, &Id);
 }
 
+/* The profile blocks the inbound connections no allow rule matches (DefaultInboundAction):
+   a block of the lowest weight, under a loopback permit so local traffic keeps working */
+DWORD
+MpsAddDefaultInboundBlock(
+    _In_ HANDLE Engine,
+    _In_ const GUID *SubLayerKey)
+{
+    static const GUID *const Layers[] = { &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6 };
+    FWPM_FILTER0 Filter;
+    FWPM_FILTER_CONDITION0 Condition;
+    UINT64 Id;
+    DWORD Error = ERROR_SUCCESS;
+    UINT Index;
+
+    if (Engine == NULL || SubLayerKey == NULL)
+        return ERROR_INVALID_PARAMETER;
+
+    for (Index = 0; Index < ARRAYSIZE(Layers); Index++)
+    {
+        DWORD LayerError;
+
+        ZeroMemory(&Condition, sizeof(Condition));
+        Condition.fieldKey = FWPM_CONDITION_FLAGS;
+        Condition.matchType = FWP_MATCH_FLAGS_ALL_SET;
+        Condition.conditionValue.type = FWP_UINT32;
+        Condition.conditionValue.uint32 = FWP_CONDITION_FLAG_IS_LOOPBACK;
+
+        ZeroMemory(&Filter, sizeof(Filter));
+        Filter.displayData.name = L"Orosi Firewall inbound loopback";
+        Filter.layerKey = *Layers[Index];
+        Filter.subLayerKey = *SubLayerKey;
+        Filter.action.type = FWP_ACTION_PERMIT;
+        Filter.weight.type = FWP_UINT8;
+        Filter.weight.uint8 = MPS_WEIGHT_LOOPBACK;
+        Filter.numFilterConditions = 1;
+        Filter.filterCondition = &Condition;
+        LayerError = FwpmFilterAdd0(Engine, &Filter, NULL, &Id);
+
+        /* never block a layer whose loopback could not be permitted */
+        if (LayerError == ERROR_SUCCESS)
+        {
+            Filter.displayData.name = L"Orosi Firewall default inbound block";
+            Filter.action.type = FWP_ACTION_BLOCK;
+            Filter.weight.uint8 = MPS_WEIGHT_DEFAULT_BLOCK;
+            Filter.numFilterConditions = 0;
+            Filter.filterCondition = NULL;
+            LayerError = FwpmFilterAdd0(Engine, &Filter, NULL, &Id);
+        }
+
+        /* both must hold: a failed IPv6 permit or block is an error, unless IPv6 is absent */
+        if (LayerError != ERROR_SUCCESS && (Index == 0 || !MpsIsLayerAbsent(LayerError)))
+            Error = LayerError;
+    }
+    return Error;
+}
+
+/* The rules of the active profile; with AllowInboundExceptions FALSE (DoNotAllowExceptions)
+   the inbound allow rules are left out */
 DWORD
 MpsLoadFirewallRulesFromKey(
     _In_ HANDLE Engine,
     _In_ const GUID *SubLayerKey,
-    _In_ HKEY Key)
+    _In_ HKEY Key,
+    _In_ UINT32 ProfileBit,
+    _In_ BOOL AllowInboundExceptions)
 {
     DWORD Error;
     DWORD ValueCount = 0;
     DWORD Index;
+    DWORD Applied = 0, Failed = 0;
 
     if (Engine == NULL || SubLayerKey == NULL || Key == NULL)
         return ERROR_INVALID_PARAMETER;
@@ -254,8 +346,12 @@ MpsLoadFirewallRulesFromKey(
     Error = RegQueryInfoKeyW(Key, NULL, NULL, NULL, NULL, NULL, NULL, &ValueCount, NULL, NULL, NULL, NULL);
     if (Error != ERROR_SUCCESS)
         return Error;
-    if (ValueCount > 4096)
-        return ERROR_BUFFER_OVERFLOW;
+    /* past the limit the first rules still apply: a policy too large never opens the firewall */
+    if (ValueCount > MPS_MAX_RULE_VALUES)
+    {
+        MpsLog(L"%lu rules, only the first %u are read\n", ValueCount, MPS_MAX_RULE_VALUES);
+        ValueCount = MPS_MAX_RULE_VALUES;
+    }
 
     Error = FwpmTransactionBegin0(Engine, 0);
     if (Error != ERROR_SUCCESS)
@@ -303,11 +399,20 @@ MpsLoadFirewallRulesFromKey(
         RuleError = MpsParseFirewallRule(Text, CharacterCount - 1, &Rule);
         if (RuleError != ERROR_SUCCESS)
             continue;
+        if (!(Rule.ProfileMask & ProfileBit))
+            continue;
+        if (!AllowInboundExceptions && Rule.Inbound && Rule.Action == MpsRuleActionAllow)
+            continue;
         RuleError = MpsApplyFirewallRule(Engine, SubLayerKey, &Rule);
-        if (RuleError != ERROR_SUCCESS && RuleError != ERROR_NOT_SUPPORTED)
+        if (RuleError == ERROR_SUCCESS)
         {
-            Error = RuleError;
-            break;
+            Applied++;
+        }
+        else if (RuleError != ERROR_NOT_SUPPORTED)
+        {
+            /* one rule that cannot be applied is left out, the others still apply */
+            if (!Failed++)
+                MpsLog(L"rule %s not applied, error %lu\n", ValueName, RuleError);
         }
     }
 
@@ -316,5 +421,21 @@ MpsLoadFirewallRulesFromKey(
     if (Error != ERROR_SUCCESS)
         FwpmTransactionAbort0(Engine);
 
+    MpsLog(L"profile %u: %lu rules applied, %lu failed, load error %lu\n", ProfileBit, Applied, Failed, Error);
     return Error;
+}
+
+VOID
+MpsLog(
+    _In_ PCWSTR Format,
+    ...)
+{
+    WCHAR Line[512];
+    va_list Args;
+
+    StringCchCopyW(Line, ARRAYSIZE(Line), L"MpsSvc: ");
+    va_start(Args, Format);
+    StringCchVPrintfW(Line + 8, ARRAYSIZE(Line) - 8, Format, Args);
+    va_end(Args);
+    OutputDebugStringW(Line);
 }
