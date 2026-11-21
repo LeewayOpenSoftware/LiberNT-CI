@@ -8,6 +8,9 @@
 
 set(ICU_PAYLOAD_RELEASE "72.1-1")
 set(ICU_PAYLOAD_SHA256_arm64 "9d5d74e3f85066116953d168303d0577e2a218bfc48ed12b003fb9339906e8c8")
+# amd64 and i386: provisional, from a local build; no release asset is published yet.
+set(ICU_PAYLOAD_SHA256_amd64 "67ee365167f9394e41354221a7499ea2cc52a545b5d0c1250a96cc1c1403e275")
+set(ICU_PAYLOAD_SHA256_i386 "bb2057ed660e78538afc28bb39904ec72ecf3279375840ff88f4751aacd5b2bc")
 set(ICU_PAYLOAD "" CACHE FILEPATH "Local ICU payload .zip used instead of downloading the release asset")
 
 include("${CMAKE_CURRENT_LIST_DIR}/payload-download.cmake")
