@@ -75,11 +75,11 @@ STDMETHODIMP CFontThumbnail::Initialize(LPCWSTR pszFilePath, DWORD grfMode)
  * SystemRoot\Fonts, and otherwise files on a local fixed disk (judged on the
  * opened file's own volume, so a junction, a mount point or a SUBST drive onto
  * removable or network storage does not pass) that carry no Zone.Identifier
- * stream. The stream is probed only on a volume that reports named streams:
- * a volume that cannot store one cannot carry a mark of the web. On such a
- * volume, "not found", "invalid name", "not supported" and "invalid parameter"
- * mean no stream; anything else (access denied, sharing) cannot be verified
- * and the file keeps its icon.
+ * stream. The probe is skipped only when the volume is known to lack named
+ * streams (it cannot carry a mark of the web then); when the volume cannot be
+ * asked, the probe runs. "Not found", "invalid name", "not supported" and
+ * "invalid parameter" mean no stream; anything else (access denied, sharing)
+ * cannot be verified and the file keeps its icon.
  */
 static BOOL IsTrustedFontLocation(LPCWSTR pszGivenPath)
 {
@@ -93,6 +93,7 @@ static BOOL IsTrustedFontLocation(LPCWSTR pszGivenPath)
     FONTEXT_FS_ATTRIBUTE_INFORMATION Attr;
     NTSTATUS Status;
     DWORD dwError, dwFsFlags = 0;
+    BOOL bFsKnown = FALSE;
     CStringW strStream;
 
     if (!pszGivenPath || !*pszGivenPath)
@@ -116,9 +117,13 @@ static BOOL IsTrustedFontLocation(LPCWSTR pszGivenPath)
         return FALSE;
     Status = NtQueryVolumeInformationFile(hFile, &Iosb, &Device, sizeof(Device), FontextFileFsDeviceInformation);
     ZeroMemory(&Attr, sizeof(Attr));
+    Iosb.Status = 0;
     if (NT_SUCCESS(NtQueryVolumeInformationFile(hFile, &Iosb, &Attr, sizeof(Attr), FontextFileFsAttributeInformation)) ||
         Iosb.Status == STATUS_BUFFER_OVERFLOW)
+    {
         dwFsFlags = Attr.FileSystemAttributes;
+        bFsKnown = TRUE;
+    }
     CloseHandle(hFile);
     if (!NT_SUCCESS(Status) || Device.DeviceType != FILE_DEVICE_DISK ||
         (Device.Characteristics & (FILE_REMOVABLE_MEDIA | FILE_REMOTE_DEVICE | FILE_FLOPPY_DISKETTE | FILE_PORTABLE_DEVICE)))
@@ -127,7 +132,7 @@ static BOOL IsTrustedFontLocation(LPCWSTR pszGivenPath)
               pszPath, Status, Device.DeviceType, Device.Characteristics, dwFsFlags);
         return FALSE;
     }
-    if (!(dwFsFlags & FILE_NAMED_STREAMS))
+    if (bFsKnown && !(dwFsFlags & FILE_NAMED_STREAMS))
     {
         /* No stream can exist here, so no mark of the web: the local fixed disk is enough */
         TRACE("'%S': volume without named streams (fsflags 0x%lx), trusted\n", pszPath, dwFsFlags);
@@ -149,7 +154,7 @@ static BOOL IsTrustedFontLocation(LPCWSTR pszGivenPath)
         dwError != ERROR_INVALID_NAME && dwError != ERROR_NOT_SUPPORTED && dwError != ERROR_INVALID_PARAMETER)
     {
         /* Cannot tell whether the file was downloaded: do not trust it */
-        TRACE("'%S': Zone.Identifier open failed with %lu (fsflags 0x%lx): no thumbnail\n", pszPath, dwError, dwFsFlags);
+        TRACE("'%S': Zone.Identifier open failed with %lu (fsflags 0x%lx known %d): no thumbnail\n", pszPath, dwError, dwFsFlags, bFsKnown);
         return FALSE;
     }
     return TRUE;
@@ -174,25 +179,55 @@ static BOOL ReadAt(HANDLE hFile, ULONGLONG Offset, void *pBuffer, DWORD cb)
     return SetFilePointerEx(hFile, li, NULL, FILE_BEGIN) && ReadFile(hFile, pBuffer, cb, &cbRead, NULL) && cbRead == cb;
 }
 
+/* Weight and slant from a style name (name ID 17, else 2) when the OS/2 table is missing */
+static void StyleFromName(LPCWSTR pszStyle, LONG *pWeight, BOOL *pItalic)
+{
+    static const struct { LPCWSTR Name; LONG Weight; } Weights[] =
+    {
+        { L"ExtraLight", FW_EXTRALIGHT }, { L"UltraLight", FW_EXTRALIGHT }, { L"ExtraBold", FW_EXTRABOLD },
+        { L"UltraBold", FW_EXTRABOLD }, { L"SemiBold", FW_SEMIBOLD }, { L"DemiBold", FW_SEMIBOLD },
+        { L"Semi Bold", FW_SEMIBOLD }, { L"Demi Bold", FW_SEMIBOLD }, { L"Thin", FW_THIN }, { L"Light", FW_LIGHT },
+        { L"Medium", FW_MEDIUM }, { L"Black", FW_BLACK }, { L"Heavy", FW_BLACK }, { L"Bold", FW_BOLD },
+    };
+    UINT i;
+
+    *pWeight = FW_NORMAL;
+    for (i = 0; i < _countof(Weights); i++)
+    {
+        if (StrStrIW(pszStyle, Weights[i].Name))
+        {
+            *pWeight = Weights[i].Weight;
+            break;
+        }
+    }
+    *pItalic = (StrStrIW(pszStyle, L"Italic") || StrStrIW(pszStyle, L"Oblique")) ? TRUE : FALSE;
+}
+
 /*
- * Family and style of the first face of a TrueType/OpenType file or
- * collection, from its own 'name' table: typographic family (16) before the
- * legacy family (1), as FreeType names the face, and the subfamily (2) for the
- * weight and slant. GetFontResourceInfoW cannot be used here because
- * win32k describes only globally installed fonts, not a private resource.
+ * Family, weight and slant of the first face of a TrueType/OpenType file or
+ * collection, from its own tables: the typographic family (name 16) before the
+ * legacy family (1), as FreeType names the face; the weight from OS/2
+ * usWeightClass and the slant from OS/2 fsSelection, with the typographic
+ * subfamily (17) and then the legacy subfamily (2) as fallbacks, so that a
+ * Semibold file asks for 600 and is not out-matched by an installed Regular.
+ * GetFontResourceInfoW cannot be used here because win32k describes only
+ * globally installed fonts, not a private resource.
  */
-static BOOL GetSfntNames(LPCWSTR pszPath, LPWSTR pszFamily, UINT cchFamily, LPWSTR pszStyle, UINT cchStyle)
+static BOOL GetSfntNames(LPCWSTR pszPath, LPWSTR pszFamily, UINT cchFamily, LONG *pWeight, BOOL *pItalic)
 {
     HANDLE hFile;
-    BYTE Header[12];
+    BYTE Header[12], Os2[64];
     BYTE *pDir = NULL, *pName = NULL;
     ULONGLONG Base = 0;
-    ULONG Tag, NameOffset = 0, NameLength = 0;
+    ULONG Tag, NameOffset = 0, NameLength = 0, Os2Offset = 0, Os2Length = 0;
     USHORT NumTables, Count, StringOffset, i;
+    WCHAR szStyle[64];
     int BestFamily = 0, BestStyle = 0;
-    BOOL bRet = FALSE;
+    BOOL bRet = FALSE, bHaveOs2 = FALSE;
 
-    pszFamily[0] = pszStyle[0] = UNICODE_NULL;
+    pszFamily[0] = szStyle[0] = UNICODE_NULL;
+    *pWeight = FW_NORMAL;
+    *pItalic = FALSE;
     hFile = CreateFileW(pszPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
     if (hFile == INVALID_HANDLE_VALUE)
         return FALSE;
@@ -216,11 +251,27 @@ static BOOL GetSfntNames(LPCWSTR pszPath, LPWSTR pszFamily, UINT cchFamily, LPWS
         goto done;
     for (i = 0; i < NumTables; i++)
     {
-        if (BE32(pDir + i * 16) == 0x6E616D65) /* 'name' */
+        Tag = BE32(pDir + i * 16);
+        if (Tag == 0x6E616D65) /* 'name' */
         {
             NameOffset = BE32(pDir + i * 16 + 8);
             NameLength = BE32(pDir + i * 16 + 12);
-            break;
+        }
+        else if (Tag == 0x4F532F32) /* 'OS/2' */
+        {
+            Os2Offset = BE32(pDir + i * 16 + 8);
+            Os2Length = BE32(pDir + i * 16 + 12);
+        }
+    }
+    if (Os2Length >= sizeof(Os2) && ReadAt(hFile, Os2Offset, Os2, sizeof(Os2)))
+    {
+        USHORT WeightClass = BE16(Os2 + 4), Selection = BE16(Os2 + 62);
+
+        if (WeightClass >= 1 && WeightClass <= 1000)
+        {
+            *pWeight = WeightClass;
+            *pItalic = (Selection & 0x0001) ? TRUE : FALSE;
+            bHaveOs2 = TRUE;
         }
     }
     if (NameLength < 6 || NameLength > (1 << 20))
@@ -241,7 +292,7 @@ static BOOL GetSfntNames(LPCWSTR pszPath, LPWSTR pszFamily, UINT cchFamily, LPWS
         LPWSTR pszOut;
         UINT cchOut, n, cch;
 
-        if (Id != 16 && Id != 1 && Id != 2)
+        if (Id != 16 && Id != 1 && Id != 2 && Id != 17)
             continue;
         if ((ULONG)StringOffset + Offset + Length > NameLength || !Length)
             continue;
@@ -264,15 +315,15 @@ static BOOL GetSfntNames(LPCWSTR pszPath, LPWSTR pszFamily, UINT cchFamily, LPWS
         {
             continue;
         }
-        if (Id == 16)
-            Score += 10; /* the typographic family wins over the legacy one */
-        if (Id == 2)
+        if (Id == 16 || Id == 17)
+            Score += 10; /* the typographic names win over the legacy ones */
+        if (Id == 2 || Id == 17)
         {
             if (Score <= BestStyle)
                 continue;
             BestStyle = Score;
-            pszOut = pszStyle;
-            cchOut = cchStyle;
+            pszOut = szStyle;
+            cchOut = _countof(szStyle);
         }
         else
         {
@@ -290,6 +341,8 @@ static BOOL GetSfntNames(LPCWSTR pszPath, LPWSTR pszFamily, UINT cchFamily, LPWS
         pszOut[cch] = UNICODE_NULL;
     }
     bRet = pszFamily[0] != UNICODE_NULL;
+    if (bRet && !bHaveOs2)
+        StyleFromName(szStyle, pWeight, pItalic);
 
 done:
     if (pName)
@@ -310,7 +363,9 @@ done:
  */
 STDMETHODIMP CFontThumbnail::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE *pdwAlpha)
 {
-    WCHAR szFamily[LF_FACESIZE], szStyle[64];
+    WCHAR szFamily[LF_FACESIZE];
+    LONG lWeight;
+    BOOL bItalic;
     BITMAPINFO bmi;
     RGBQUAD *pBits = NULL;
     HDC hdc;
@@ -331,7 +386,7 @@ STDMETHODIMP CFontThumbnail::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE
         return E_FAIL;
     if (!IsTrustedFontLocation(m_Path))
         return E_FAIL;
-    if (!GetSfntNames(m_Path, szFamily, _countof(szFamily), szStyle, _countof(szStyle)))
+    if (!GetSfntNames(m_Path, szFamily, _countof(szFamily), &lWeight, &bItalic))
     {
         TRACE("'%S' has no usable name table: no thumbnail\n", (LPCWSTR)m_Path);
         return E_FAIL;
@@ -368,8 +423,8 @@ STDMETHODIMP CFontThumbnail::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE
 
     ZeroMemory(&lf, sizeof(lf));
     lf.lfHeight = -(LONG)(cx * 9 / 20);
-    lf.lfWeight = StrStrIW(szStyle, L"Bold") ? FW_BOLD : FW_NORMAL;
-    lf.lfItalic = (StrStrIW(szStyle, L"Italic") || StrStrIW(szStyle, L"Oblique")) ? TRUE : FALSE;
+    lf.lfWeight = lWeight;
+    lf.lfItalic = (BYTE)bItalic;
     lf.lfCharSet = DEFAULT_CHARSET;
     lf.lfOutPrecision = OUT_TT_PRECIS;
     lf.lfQuality = ANTIALIASED_QUALITY;
