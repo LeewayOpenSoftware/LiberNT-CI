@@ -56,7 +56,7 @@ IntTMWFixUp(
 
         if (TextObj)
         {
-            bSameName = (_wcsicmp(TextObj->TextFace, lf.lfFaceName) == 0);
+            bSameName = TextObj->Font && ftGdiFontHasFaceName(ObjToGDI(TextObj->Font, FONT), lf.lfFaceName);
             TEXTOBJ_UnlockText(TextObj);
         }
         if (!bSameName)

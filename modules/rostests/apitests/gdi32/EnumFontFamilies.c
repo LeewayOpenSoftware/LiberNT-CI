@@ -431,6 +431,7 @@ void
 TestInstalledFaceNotSubstituted(HDC hdc)
 {
     static const WCHAR *names[] = { L"Segoe UI", L"MS Sans Serif" };
+    static const WCHAR *raster[] = { L"MS Sans Serif", L"System", L"Helv", L"Courier" };
     WCHAR srcPath[MAX_PATH], path[MAX_PATH], face[LF_FACESIZE];
     TEXTMETRICW tm;
     DWORD size;
@@ -439,6 +440,16 @@ TestInstalledFaceNotSubstituted(HDC hdc)
 
     GetWindowsDirectoryW(srcPath, _countof(srcPath));
     wcscat(srcPath, L"\\Fonts\\arial.ttf");
+    /* Windows realizes raster faces for these names; a stand-in must not report TrueType */
+    for (i = 0; i < _countof(raster); i++)
+    {
+        RealizeNamed(hdc, raster[i], face, &tm);
+        if (!_wcsicmp(face, raster[i]))
+            continue;
+        ok(!(tm.tmPitchAndFamily & TMPF_TRUETYPE), "Stand-in %ls for %ls reports pitch 0x%x\n", face, raster[i],
+           tm.tmPitchAndFamily);
+    }
+
     for (i = 0; i < _countof(names); i++)
     {
         char name[LF_FACESIZE];
