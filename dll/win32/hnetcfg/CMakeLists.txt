@@ -3,6 +3,7 @@ spec2def(hnetcfg.dll hnetcfg.spec)
 
 list(APPEND SOURCE
     apps.c
+    fwstore.c
     hnetcfg.c
     manager.c
     policy.c
@@ -12,11 +13,14 @@ list(APPEND SOURCE
 
 add_library(hnetcfg MODULE
     ${SOURCE}
+    $<TARGET_OBJECTS:mpssvc_rules>
     ${CMAKE_CURRENT_BINARY_DIR}/hnetcfg.def)
 
 add_idl_reg_scripts(hnetcfg registry hnetcfg.idl)
 add_idl_reg_scripts(hnetcfg regtypelib hnetcfg_tlb.idl)
 set_module_type(hnetcfg win32dll)
+# the rule parser of the firewall service, to check every rule written
+target_include_directories(hnetcfg PRIVATE ${REACTOS_SOURCE_DIR}/base/services/mpssvc)
 add_dependencies(hnetcfg stdole2)
 target_link_libraries(hnetcfg wine wine_dll_register wine_dll_canunload uuid)
 add_importlibs(hnetcfg ole32 oleaut32 advapi32 mpr msvcrt kernel32 ntdll)
