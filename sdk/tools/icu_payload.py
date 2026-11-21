@@ -11,6 +11,7 @@
 import argparse
 import hashlib
 import json
+import platform
 import shutil
 import subprocess
 import sys
@@ -23,9 +24,16 @@ from xml.sax.saxutils import quoteattr
 ICU_VERSION = "72.1"
 ICU_SOURCE = "https://github.com/unicode-org/icu/releases/download/release-72-1/icu4c-72_1-src.tgz"
 ICU_SHA256 = "a2d2d38217092a7ed56635e34467f92f976b370e20182ad325edea6681a71d68"
-LLVM_MINGW = "llvm-mingw-20260616-ucrt-ubuntu-22.04-aarch64"
-LLVM_MINGW_URL = f"https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/{LLVM_MINGW}.tar.xz"
-LLVM_MINGW_SHA256 = "e7e5d135d93d3f2a3beaaea633a5b0e66ac75391a53feae654391913dd76102b"
+# The llvm-mingw host build and the container platform follow the build machine; each one cross-builds every arch.
+LLVM_MINGW_RELEASE = "20260616"
+LLVM_MINGW_HOST = {
+    "aarch64": ("linux/arm64", "llvm-mingw-20260616-ucrt-ubuntu-22.04-aarch64",
+                "e7e5d135d93d3f2a3beaaea633a5b0e66ac75391a53feae654391913dd76102b"),
+    "x86_64": ("linux/amd64", "llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64",
+               "534b92e067b22a6b4441f48ae9240a3341b17825d04d577eab0cf85c44b4deda"),
+}
+LLVM_MINGW_HOST["arm64"] = LLVM_MINGW_HOST["aarch64"]
+LLVM_MINGW_HOST["AMD64"] = LLVM_MINGW_HOST["x86_64"]
 LICENSE = "ICU-LICENSE"
 TRIPLE = {"amd64": "x86_64-w64-mingw32", "arm64": "aarch64-w64-mingw32", "i386": "i686-w64-mingw32"}
 MSI_ARCH = {
@@ -105,12 +113,18 @@ def sha256(path):
 
 
 def build(arch, out):
+    host = platform.machine()
+    if host not in LLVM_MINGW_HOST:
+        sys.exit(f"no llvm-mingw host build for a {host} build machine")
+    container, llvm_mingw, llvm_mingw_sha256 = LLVM_MINGW_HOST[host]
     env = {
         "ICU_SOURCE": ICU_SOURCE, "ICU_SHA256": ICU_SHA256,
-        "LLVM_MINGW": LLVM_MINGW, "LLVM_MINGW_URL": LLVM_MINGW_URL, "LLVM_MINGW_SHA256": LLVM_MINGW_SHA256,
+        "LLVM_MINGW": llvm_mingw, "LLVM_MINGW_SHA256": llvm_mingw_sha256,
+        "LLVM_MINGW_URL": "https://github.com/mstorsjo/llvm-mingw/releases/download/"
+                          f"{LLVM_MINGW_RELEASE}/{llvm_mingw}.tar.xz",
         "TRIPLE": TRIPLE[arch],
     }
-    command = ["docker", "run", "--rm", "--platform", "linux/arm64", "-v", f"{out}:/out"]
+    command = ["docker", "run", "--rm", "--platform", container, "-v", f"{out}:/out"]
     for key, value in env.items():
         command += ["-e", f"{key}={value}"]
     command += ["debian:bookworm", "bash", "-c", "mkdir -p /build && " + BUILD]
