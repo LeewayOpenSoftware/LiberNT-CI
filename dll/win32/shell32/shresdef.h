@@ -467,6 +467,17 @@
 #define IDS_FW_OK                                   60108
 #define IDS_FW_CANCEL                               60109
 #define IDS_FW_PANE_NSC                             60110
+#define IDS_FW_PANE_ALLOW                           60111
+#define IDS_FW_ALLOWED_TITLE                        60112
+#define IDS_FW_ALLOWED_INTRO                        60113
+#define IDS_FW_COL_NAME                             60114
+#define IDS_FW_COL_PRIVATE                          60115
+#define IDS_FW_COL_PUBLIC                           60116
+#define IDS_FW_YES                                  60117
+#define IDS_FW_NO                                   60118
+#define IDS_FW_ADD                                  60119
+#define IDS_FW_REMOVE                               60120
+#define IDS_FW_ADD_FILTER                           60121
 #define IDS_SEARCHBAND_COMMAND                      12708
 #define IDS_FOLDERSHORTCUT_TYPE                     10540
 

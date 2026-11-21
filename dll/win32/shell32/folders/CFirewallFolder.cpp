@@ -33,6 +33,7 @@ static const IID kIidNetworkListManager =
 enum
 {
     FW_PANE_HOME,
+    FW_PANE_ALLOW,
     FW_PANE_ONOFF,
     FW_PANE_RESTORE,
     FW_PANE_SEEALSO,        /* section header */
@@ -70,6 +71,7 @@ static VOID FwPaneTitle(int index, PWSTR buffer, int cch)
     switch (index)
     {
         case FW_PANE_HOME:    FwString(IDS_CPL_HOME, buffer, cch, L"Control Panel Home"); break;
+        case FW_PANE_ALLOW:   FwString(IDS_FW_PANE_ALLOW, buffer, cch, L"Allow an app or feature through Orosi Firewall"); break;
         case FW_PANE_ONOFF:   FwString(IDS_FW_PANE_ONOFF, buffer, cch, L"Turn Orosi Firewall on or off"); break;
         case FW_PANE_RESTORE: FwString(IDS_FW_PANE_RESTORE, buffer, cch, L"Restore defaults"); break;
         case FW_PANE_SEEALSO: FwString(IDS_NSC_SEEALSO, buffer, cch, L"See also"); break;
@@ -326,6 +328,27 @@ struct FwDlgBuilder
         *Pos++ = 0;                 /* no creation data */
         (*Count)++;
     }
+    /* a control of a registered class (a list view) */
+    VOID ItemClass(WORD id, PCWSTR cls, DWORD style, short x, short y, short cx, short cy)
+    {
+        DLGITEMTEMPLATE *item;
+
+        Pos = Align(Pos);
+        if (!Fits(sizeof(*item) / sizeof(WORD) + wcslen(cls) + 4))
+            return;
+        item = (DLGITEMTEMPLATE *)Pos;
+        item->style = style | WS_CHILD | WS_VISIBLE;
+        item->x = x;
+        item->y = y;
+        item->cx = cx;
+        item->cy = cy;
+        item->id = id;
+        Pos = (WORD *)(item + 1);
+        String(cls);
+        *Pos++ = 0;                 /* no text */
+        *Pos++ = 0;                 /* no creation data */
+        (*Count)++;
+    }
 };
 
 static VOID FwCustomizeSync(HWND hDlg, UINT profile)
@@ -425,6 +448,429 @@ static BOOL FwCustomizeDialog(HWND hwndOwner, FwCustomize *settings)
                                      FwCustomizeProc, (LPARAM)settings);
     HeapFree(GetProcessHeap(), 0, b);
     return result == IDOK;
+}
+
+/* ---- Allowed apps: the inbound allow rules, on or off and for which types of network ---------- */
+
+static const CLSID kClsidFwRule =
+    { 0x2c5bc43e, 0x3369, 0x4c33, { 0xab, 0x0c, 0xbe, 0x94, 0x69, 0x67, 0x7a, 0xf4 } };
+static const IID kIidFwRule =
+    { 0xaf230d27, 0xbaba, 0x4e42, { 0xac, 0xed, 0xf5, 0x24, 0xf2, 0x2c, 0xfc, 0xe2 } };
+
+#define IDC_FW_APPS_INTRO   200
+#define IDC_FW_APPS_LIST    201
+#define IDC_FW_APPS_PRIVATE 210
+#define IDC_FW_APPS_PUBLIC  211
+#define IDC_FW_APPS_ADD     212
+#define IDC_FW_APPS_REMOVE  213
+#define FW_MAX_APPS         512
+#define FW_APP_PROFILES     (NET_FW_PROFILE2_PRIVATE | NET_FW_PROFILE2_PUBLIC)
+
+struct FwApp
+{
+    INetFwRule *Rule;       /* NULL: added in the dialog */
+    WCHAR Name[256];
+    WCHAR Path[MAX_PATH];   /* an added app */
+    BOOL Enabled;
+    LONG Profiles;
+    BOOL Changed;
+    BOOL Removed;
+};
+
+struct FwApps
+{
+    FwApp Items[FW_MAX_APPS];
+    UINT Count;
+    BOOL Filling;           /* the list is being filled: its check boxes are not changes */
+};
+
+/* The rules the page lists, as Windows' Allowed apps does: inbound, allow */
+static HRESULT FwAppsLoad(FwApps *apps)
+{
+    CComPtr<INetFwPolicy2> pPolicy;
+    CComPtr<INetFwRules> pRules;
+    CComPtr<IUnknown> pUnk;
+    CComPtr<IEnumVARIANT> pEnum;
+    VARIANT var;
+    ULONG fetched;
+    HRESULT hr;
+
+    apps->Count = 0;
+    hr = FwPolicy(&pPolicy);
+    if (SUCCEEDED(hr))
+        hr = pPolicy->get_Rules(&pRules);
+    if (SUCCEEDED(hr))
+        hr = pRules->get__NewEnum(&pUnk);
+    if (SUCCEEDED(hr))
+        hr = pUnk->QueryInterface(IID_PPV_ARG(IEnumVARIANT, &pEnum));
+    if (FAILED(hr))
+        return hr;
+    VariantInit(&var);
+    while (apps->Count < FW_MAX_APPS && pEnum->Next(1, &var, &fetched) == S_OK && fetched)
+    {
+        INetFwRule *rule = NULL;
+        if (V_VT(&var) == VT_DISPATCH && V_DISPATCH(&var) &&
+            SUCCEEDED(V_DISPATCH(&var)->QueryInterface(kIidFwRule, (void **)&rule)))
+        {
+            NET_FW_RULE_DIRECTION dir = NET_FW_RULE_DIR_OUT;
+            NET_FW_ACTION action = NET_FW_ACTION_BLOCK;
+            VARIANT_BOOL enabled = VARIANT_FALSE;
+            BSTR name = NULL;
+            LONG profiles = 0;
+
+            rule->get_Direction(&dir);
+            rule->get_Action(&action);
+            if (dir == NET_FW_RULE_DIR_IN && action == NET_FW_ACTION_ALLOW &&
+                SUCCEEDED(rule->get_Name(&name)) && name)
+            {
+                FwApp *app = &apps->Items[apps->Count++];
+                ZeroMemory(app, sizeof(*app));
+                StringCchCopyW(app->Name, _countof(app->Name), name);
+                rule->get_Enabled(&enabled);
+                rule->get_Profiles(&profiles);
+                app->Enabled = enabled != VARIANT_FALSE;
+                app->Profiles = profiles;
+                app->Rule = rule;
+                rule = NULL;
+            }
+            SysFreeString(name);
+            if (rule)
+                rule->Release();
+        }
+        VariantClear(&var);
+    }
+    return S_OK;
+}
+
+static VOID FwAppsFree(FwApps *apps)
+{
+    for (UINT i = 0; i < apps->Count; i++)
+    {
+        if (apps->Items[i].Rule)
+            apps->Items[i].Rule->Release();
+    }
+    apps->Count = 0;
+}
+
+/* Writes the changes, removals and additions; the first failure is returned */
+static HRESULT FwAppsApply(FwApps *apps)
+{
+    CComPtr<INetFwPolicy2> pPolicy;
+    CComPtr<INetFwRules> pRules;
+    HRESULT hr = FwPolicy(&pPolicy), result = S_OK;
+
+    if (SUCCEEDED(hr))
+        hr = pPolicy->get_Rules(&pRules);
+    if (FAILED(hr))
+        return hr;
+    for (UINT i = 0; i < apps->Count; i++)
+    {
+        FwApp *app = &apps->Items[i];
+
+        hr = S_OK;
+        if (app->Removed)
+        {
+            if (app->Rule)
+            {
+                CComBSTR name(app->Name);
+                hr = pRules->Remove(name);
+            }
+        }
+        else if (!app->Rule)
+        {
+            CComPtr<INetFwRule> pRule;
+            hr = CoCreateInstance(kClsidFwRule, NULL, CLSCTX_INPROC_SERVER, kIidFwRule, (void **)&pRule);
+            if (SUCCEEDED(hr))
+            {
+                CComBSTR name(app->Name), path(app->Path);
+                hr = pRule->put_Name(name);
+                if (SUCCEEDED(hr))
+                    hr = pRule->put_ApplicationName(path);
+                if (SUCCEEDED(hr))
+                    hr = pRule->put_Direction(NET_FW_RULE_DIR_IN);
+                if (SUCCEEDED(hr))
+                    hr = pRule->put_Action(NET_FW_ACTION_ALLOW);
+                if (SUCCEEDED(hr) && (app->Profiles & FW_APP_PROFILES))
+                    hr = pRule->put_Profiles(app->Profiles);
+                if (SUCCEEDED(hr))
+                    hr = pRule->put_Enabled(app->Enabled && (app->Profiles & FW_APP_PROFILES) ? VARIANT_TRUE : VARIANT_FALSE);
+                if (SUCCEEDED(hr))
+                    hr = pRules->Add(pRule);
+            }
+        }
+        else if (app->Changed)
+        {
+            /* a rule for neither type is off; its other types stay as they were */
+            if (app->Profiles & FW_APP_PROFILES)
+                hr = app->Rule->put_Profiles(app->Profiles);
+            if (SUCCEEDED(hr))
+                hr = app->Rule->put_Enabled(app->Enabled && (app->Profiles & FW_APP_PROFILES) ? VARIANT_TRUE : VARIANT_FALSE);
+        }
+        if (FAILED(hr) && SUCCEEDED(result))
+            result = hr;
+    }
+    return result;
+}
+
+static VOID FwAppsShowRow(HWND hList, int row, const FwApp *app)
+{
+    WCHAR yes[32], no[32];
+
+    FwString(IDS_FW_YES, yes, _countof(yes), L"Yes");
+    FwString(IDS_FW_NO, no, _countof(no), L"No");
+    ListView_SetItemText(hList, row, 1, (app->Profiles & NET_FW_PROFILE2_PRIVATE) ? yes : no);
+    ListView_SetItemText(hList, row, 2, (app->Profiles & NET_FW_PROFILE2_PUBLIC) ? yes : no);
+}
+
+static int FwAppsAddRow(HWND hList, FwApps *apps, UINT index)
+{
+    LVITEMW item = { LVIF_TEXT | LVIF_PARAM };
+    int row;
+
+    item.iItem = ListView_GetItemCount(hList);
+    item.pszText = apps->Items[index].Name;
+    item.lParam = index;
+    row = ListView_InsertItem(hList, &item);
+    if (row >= 0)
+    {
+        ListView_SetCheckState(hList, row, apps->Items[index].Enabled);
+        FwAppsShowRow(hList, row, &apps->Items[index]);
+    }
+    return row;
+}
+
+static FwApp *FwAppsSelected(HWND hDlg, FwApps *apps, int *prow)
+{
+    HWND hList = GetDlgItem(hDlg, IDC_FW_APPS_LIST);
+    int row = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+    LVITEMW item = { LVIF_PARAM };
+
+    if (prow)
+        *prow = row;
+    if (row < 0)
+        return NULL;
+    item.iItem = row;
+    if (!ListView_GetItem(hList, &item) || (UINT)item.lParam >= apps->Count)
+        return NULL;
+    return &apps->Items[item.lParam];
+}
+
+static VOID FwAppsSyncButtons(HWND hDlg, FwApps *apps)
+{
+    FwApp *app = FwAppsSelected(hDlg, apps, NULL);
+
+    CheckDlgButton(hDlg, IDC_FW_APPS_PRIVATE, app && (app->Profiles & NET_FW_PROFILE2_PRIVATE) ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(hDlg, IDC_FW_APPS_PUBLIC, app && (app->Profiles & NET_FW_PROFILE2_PUBLIC) ? BST_CHECKED : BST_UNCHECKED);
+    EnableWindow(GetDlgItem(hDlg, IDC_FW_APPS_PRIVATE), app != NULL);
+    EnableWindow(GetDlgItem(hDlg, IDC_FW_APPS_PUBLIC), app != NULL);
+    EnableWindow(GetDlgItem(hDlg, IDC_FW_APPS_REMOVE), app != NULL);
+}
+
+/* An app the user picks: allowed on private and public networks, named after its file */
+static VOID FwAppsAdd(HWND hDlg, FwApps *apps)
+{
+    WCHAR path[MAX_PATH] = L"", filter[128], title[128];
+    OPENFILENAMEW ofn = { sizeof(ofn) };
+    FwApp *app;
+    int len;
+
+    if (apps->Count >= FW_MAX_APPS)
+        return;
+    FwString(IDS_FW_ADD_FILTER, filter, _countof(filter) - 8, L"Programs (*.exe)");
+    len = lstrlenW(filter);
+    /* "Programs (*.exe)" NUL "*.exe" NUL NUL */
+    StringCchCopyW(filter + len + 1, _countof(filter) - len - 1, L"*.exe");
+    filter[len + 1 + 5 + 1] = UNICODE_NULL;
+    FwString(IDS_FW_ADD, title, _countof(title), L"Allow another app...");
+    ofn.hwndOwner = hDlg;
+    ofn.lpstrFilter = filter;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = _countof(path);
+    ofn.lpstrTitle = title;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_EXPLORER;
+    if (!GetOpenFileNameW(&ofn))
+        return;
+
+    app = &apps->Items[apps->Count];
+    ZeroMemory(app, sizeof(*app));
+    StringCchCopyW(app->Path, _countof(app->Path), path);
+    StringCchCopyW(app->Name, _countof(app->Name), PathFindFileNameW(path));
+    PathRemoveExtensionW(app->Name);
+    app->Enabled = TRUE;
+    app->Profiles = FW_APP_PROFILES;
+    app->Changed = TRUE;
+    apps->Count++;
+
+    HWND hList = GetDlgItem(hDlg, IDC_FW_APPS_LIST);
+    apps->Filling = TRUE;
+    int row = FwAppsAddRow(hList, apps, apps->Count - 1);
+    apps->Filling = FALSE;
+    if (row >= 0)
+    {
+        ListView_SetItemState(hList, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        ListView_EnsureVisible(hList, row, FALSE);
+    }
+    FwAppsSyncButtons(hDlg, apps);
+}
+
+static INT_PTR CALLBACK FwAppsProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    FwApps *apps = (FwApps *)GetWindowLongPtrW(hDlg, DWLP_USER);
+
+    switch (uMsg)
+    {
+        case WM_INITDIALOG:
+        {
+            HWND hList = GetDlgItem(hDlg, IDC_FW_APPS_LIST);
+            static const struct { UINT Id; PCWSTR English; int Width; } columns[] =
+            {
+                { IDS_FW_COL_NAME, L"Name", 200 },
+                { IDS_FW_COL_PRIVATE, L"Private", 70 },
+                { IDS_FW_COL_PUBLIC, L"Public", 70 },
+            };
+            RECT rc;
+
+            apps = (FwApps *)lParam;
+            SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)apps);
+            ListView_SetExtendedListViewStyle(hList, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
+            GetClientRect(hList, &rc);
+            for (UINT c = 0; c < _countof(columns); c++)
+            {
+                WCHAR text[64];
+                LVCOLUMNW col = { LVCF_TEXT | LVCF_WIDTH };
+                FwString(columns[c].Id, text, _countof(text), columns[c].English);
+                col.pszText = text;
+                col.cx = c ? MulDiv(rc.right, 1, 5) : rc.right - 2 * MulDiv(rc.right, 1, 5) - GetSystemMetrics(SM_CXVSCROLL);
+                ListView_InsertColumn(hList, c, &col);
+            }
+            apps->Filling = TRUE;
+            for (UINT i = 0; i < apps->Count; i++)
+                FwAppsAddRow(hList, apps, i);
+            apps->Filling = FALSE;
+            FwAppsSyncButtons(hDlg, apps);
+            return TRUE;
+        }
+
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
+            if (apps && hdr->idFrom == IDC_FW_APPS_LIST && hdr->code == LVN_ITEMCHANGED)
+            {
+                NMLISTVIEW *nm = (NMLISTVIEW *)lParam;
+                if ((nm->uChanged & LVIF_STATE) && !apps->Filling &&
+                    ((nm->uNewState ^ nm->uOldState) & LVIS_STATEIMAGEMASK) && (UINT)nm->lParam < apps->Count)
+                {
+                    FwApp *app = &apps->Items[nm->lParam];
+                    app->Enabled = ListView_GetCheckState(hdr->hwndFrom, nm->iItem) != 0;
+                    app->Changed = TRUE;
+                }
+                if ((nm->uChanged & LVIF_STATE) && ((nm->uNewState ^ nm->uOldState) & LVIS_SELECTED))
+                    FwAppsSyncButtons(hDlg, apps);
+            }
+            break;
+        }
+
+        case WM_COMMAND:
+            if (!apps || HIWORD(wParam) != BN_CLICKED)
+                break;
+            switch (LOWORD(wParam))
+            {
+                case IDC_FW_APPS_PRIVATE:
+                case IDC_FW_APPS_PUBLIC:
+                {
+                    int row;
+                    FwApp *app = FwAppsSelected(hDlg, apps, &row);
+                    LONG bit = LOWORD(wParam) == IDC_FW_APPS_PRIVATE ? NET_FW_PROFILE2_PRIVATE : NET_FW_PROFILE2_PUBLIC;
+                    if (!app)
+                        break;
+                    if (IsDlgButtonChecked(hDlg, LOWORD(wParam)) == BST_CHECKED)
+                        app->Profiles |= bit;
+                    else
+                        app->Profiles &= ~bit;
+                    app->Changed = TRUE;
+                    FwAppsShowRow(GetDlgItem(hDlg, IDC_FW_APPS_LIST), row, app);
+                    return TRUE;
+                }
+                case IDC_FW_APPS_ADD:
+                    FwAppsAdd(hDlg, apps);
+                    return TRUE;
+                case IDC_FW_APPS_REMOVE:
+                {
+                    int row;
+                    FwApp *app = FwAppsSelected(hDlg, apps, &row);
+                    if (app)
+                    {
+                        app->Removed = TRUE;
+                        ListView_DeleteItem(GetDlgItem(hDlg, IDC_FW_APPS_LIST), row);
+                        FwAppsSyncButtons(hDlg, apps);
+                    }
+                    return TRUE;
+                }
+                case IDOK:
+                case IDCANCEL:
+                    EndDialog(hDlg, LOWORD(wParam));
+                    return TRUE;
+            }
+            break;
+    }
+    return FALSE;
+}
+
+static VOID FwAllowedAppsDialog(HWND hwndOwner)
+{
+    FwDlgBuilder *b;
+    FwApps *apps;
+    WCHAR text[256];
+    HRESULT hr;
+
+    b = (FwDlgBuilder *)HeapAlloc(GetProcessHeap(), 0, sizeof(FwDlgBuilder));
+    apps = (FwApps *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(FwApps));
+    if (!b || !apps)
+    {
+        if (b)
+            HeapFree(GetProcessHeap(), 0, b);
+        if (apps)
+            HeapFree(GetProcessHeap(), 0, apps);
+        return;
+    }
+    hr = FwAppsLoad(apps);
+    if (FAILED(hr))
+    {
+        FwReportError(hwndOwner, IDS_FW_UNAVAILABLE, L"The Orosi Firewall settings cannot be read (error 0x%08lX).", hr);
+    }
+    else
+    {
+        FwString(IDS_FW_ALLOWED_TITLE, text, _countof(text), L"Allowed apps");
+        b->Begin(text, 320, 232);
+        FwString(IDS_FW_ALLOWED_INTRO, text, _countof(text),
+                 L"Allow apps to communicate through Orosi Firewall. The changes are made when you click OK.");
+        b->Item(IDC_FW_APPS_INTRO, 0x0082, SS_LEFT, 7, 7, 306, 18, text);
+        b->ItemClass(IDC_FW_APPS_LIST, L"SysListView32",
+                     LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP | WS_GROUP, 7, 28, 306, 142);
+        FwString(IDS_FW_COL_PRIVATE, text, _countof(text), L"Private");
+        b->Item(IDC_FW_APPS_PRIVATE, 0x0080, BS_AUTOCHECKBOX | WS_TABSTOP | WS_GROUP, 7, 176, 90, 10, text);
+        FwString(IDS_FW_COL_PUBLIC, text, _countof(text), L"Public");
+        b->Item(IDC_FW_APPS_PUBLIC, 0x0080, BS_AUTOCHECKBOX | WS_TABSTOP, 100, 176, 90, 10, text);
+        FwString(IDS_FW_ADD, text, _countof(text), L"Allow another app...");
+        b->Item(IDC_FW_APPS_ADD, 0x0080, BS_PUSHBUTTON | WS_TABSTOP | WS_GROUP, 7, 192, 100, 14, text);
+        FwString(IDS_FW_REMOVE, text, _countof(text), L"Remove");
+        b->Item(IDC_FW_APPS_REMOVE, 0x0080, BS_PUSHBUTTON | WS_TABSTOP, 112, 192, 60, 14, text);
+        FwString(IDS_FW_OK, text, _countof(text), L"OK");
+        b->Item(IDOK, 0x0080, BS_DEFPUSHBUTTON | WS_TABSTOP | WS_GROUP, 206, 212, 50, 14, text);
+        FwString(IDS_FW_CANCEL, text, _countof(text), L"Cancel");
+        b->Item(IDCANCEL, 0x0080, BS_PUSHBUTTON | WS_TABSTOP, 263, 212, 50, 14, text);
+
+        if (DialogBoxIndirectParamW(shell32_hInstance, (LPCDLGTEMPLATEW)b->Storage, hwndOwner,
+                                    FwAppsProc, (LPARAM)apps) == IDOK)
+        {
+            hr = FwAppsApply(apps);
+            if (FAILED(hr))
+                FwReportError(hwndOwner, IDS_FW_FAILED, L"The settings could not be changed (error 0x%08lX).", hr);
+        }
+    }
+    FwAppsFree(apps);
+    HeapFree(GetProcessHeap(), 0, apps);
+    HeapFree(GetProcessHeap(), 0, b);
 }
 
 /* ---------------------------------------------------------------------------------------------- */
@@ -888,6 +1334,11 @@ public:
         {
             case FW_PANE_HOME:
                 NavigateTo(FW_CPL_PARSE);
+                break;
+            case FW_PANE_ALLOW:
+                FwAllowedAppsDialog(m_hWnd);
+                LoadState();
+                Relayout();
                 break;
             case FW_PANE_ONOFF:
                 Customize();
