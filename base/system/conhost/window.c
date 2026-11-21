@@ -2754,6 +2754,13 @@ static LRESULT WINAPI window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
     case WM_DESTROY:
         console->win = NULL;
+#ifdef __REACTOS__
+        if (console->window && console->window->italic_font)
+        {
+            DeleteObject( console->window->italic_font );
+            console->window->italic_font = NULL;
+        }
+#endif
         PostQuitMessage( 0 );
         break;
 

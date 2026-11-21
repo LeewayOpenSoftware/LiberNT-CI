@@ -3668,13 +3668,17 @@ static NTSTATUS screen_buffer_ioctl( struct screen_buffer *screen_buffer, unsign
             else
             {
                 /* A UTF-8 sequence may be split across writes: keep its first bytes for the next one */
-                const unsigned char *bytes;
+                const unsigned char *bytes = in_data;
                 size_t total = screen_buffer->utf8_pending_len + in_size, start, tail;
 
-                if (!(joined = malloc( total ? total : 1 ))) return STATUS_NO_MEMORY;
-                memcpy( joined, screen_buffer->utf8_pending, screen_buffer->utf8_pending_len );
-                memcpy( joined + screen_buffer->utf8_pending_len, in_data, in_size );
-                bytes = joined;
+                /* Only copy when bytes from the previous write must be prepended */
+                if (screen_buffer->utf8_pending_len)
+                {
+                    if (!(joined = malloc( total ))) return STATUS_NO_MEMORY;
+                    memcpy( joined, screen_buffer->utf8_pending, screen_buffer->utf8_pending_len );
+                    memcpy( joined + screen_buffer->utf8_pending_len, in_data, in_size );
+                    bytes = joined;
+                }
                 tail = 0;
                 for (start = total; start > 0 && total - start < 3; start--)
                 {
@@ -3688,7 +3692,7 @@ static NTSTATUS screen_buffer_ioctl( struct screen_buffer *screen_buffer, unsign
                 }
                 memcpy( screen_buffer->utf8_pending, bytes + total - tail, tail );
                 screen_buffer->utf8_pending_len = tail;
-                in_data = joined;
+                in_data = bytes;
                 in_size = total - tail;
             }
 #endif
