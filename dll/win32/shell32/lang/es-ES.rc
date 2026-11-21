@@ -1052,7 +1052,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_FILE_EXPLORER "File Explorer"
+    IDS_FILE_EXPLORER "Explorador de archivos"
     IDS_CPL_HOME "Página principal del Panel de control"
     IDS_CPL_CAT_SYSTEM "Sistema y seguridad"
     IDS_CPL_CAT_NETWORK "Redes e Internet"
