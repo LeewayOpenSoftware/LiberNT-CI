@@ -5,17 +5,23 @@
  * COPYRIGHT:   Copyright 2026 LeewayOpenSoftware
  *
  * The page reads the networks and their adapters from the Network List Manager (netprofm)
- * through its public COM interface, and the connection names where Windows keeps them; a
+ * and the connection names from the Network Connection Manager (netshell), both through
+ * their public COM interfaces, or from where Windows keeps the names; a
  * connection link does what a double click on it does in Network Connections (its status).
  */
 
 #include "precomp.h"
+#include <netcon.h>
 #include <netlistmgr.h>
 
 EXTERN_C const CLSID CLSID_NetworkSharingCenter =
     { 0x8e908fc9, 0xbecc, 0x40f6, { 0x91, 0x5b, 0xf4, 0xca, 0x0e, 0x70, 0xd0, 0x3d } };
 
-/* The Network List Manager (netprofm) */
+/* The Network Connection Manager (netshell) and the Network List Manager (netprofm) */
+static const CLSID kClsidConnectionManager =
+    { 0xba126ad1, 0x2166, 0x11d1, { 0xb1, 0xd0, 0x00, 0x80, 0x5f, 0xc1, 0x27, 0x0e } };
+static const IID kIidConnectionManager =
+    { 0xc08956a2, 0x1cd3, 0x11d1, { 0xb1, 0xc5, 0x00, 0x80, 0x5f, 0xc1, 0x27, 0x0e } };
 static const CLSID kClsidNetworkListManager =
     { 0xdcb00c01, 0x570f, 0x4a9b, { 0x8d, 0x69, 0x19, 0x9f, 0xdb, 0xa5, 0x72, 0x3b } };
 static const IID kIidNetworkListManager =
@@ -318,6 +324,56 @@ private:
         return RegGetValueW(HKEY_LOCAL_MACHINE, key, L"Name", RRF_RT_REG_SZ, NULL, name, &cb) == ERROR_SUCCESS && name[0];
     }
 
+    /* The names of the connections, from the Network Connection Manager (netshell) */
+    struct NscName
+    {
+        GUID Id;
+        WCHAR Name[128];
+    };
+    NscName m_names[NSC_MAX_NETWORKS * NSC_MAX_CONNS];
+    int m_nameCount;
+
+    VOID LoadConnectionNames()
+    {
+        CComPtr<INetConnectionManager> pManager;
+        CComPtr<IEnumNetConnection> pEnum;
+        CComPtr<INetConnection> pConn;
+        ULONG fetched;
+
+        m_nameCount = 0;
+        if (FAILED(CoCreateInstance(kClsidConnectionManager, NULL, CLSCTX_INPROC_SERVER, kIidConnectionManager, (void **)&pManager)) ||
+            FAILED(pManager->EnumConnections(NCME_DEFAULT, &pEnum)) || !pEnum)
+            return;
+        while (m_nameCount < (int)_countof(m_names) && pEnum->Next(1, &pConn, &fetched) == S_OK && fetched)
+        {
+            NETCON_PROPERTIES *pProps = NULL;
+            if (SUCCEEDED(pConn->GetProperties(&pProps)) && pProps)
+            {
+                if (pProps->pszwName && *pProps->pszwName)
+                {
+                    m_names[m_nameCount].Id = pProps->guidId;
+                    StringCchCopyW(m_names[m_nameCount].Name, _countof(m_names[m_nameCount].Name), pProps->pszwName);
+                    m_nameCount++;
+                }
+                CoTaskMemFree(pProps->pszwName);
+                CoTaskMemFree(pProps->pszwDeviceName);
+                CoTaskMemFree(pProps);
+            }
+            pConn.Release();
+        }
+    }
+
+    /* The name Network Connections shows: the Connection Manager's, else the registry's */
+    BOOL ConnectionNameOf(const GUID *adapter, PWSTR name, DWORD cch)
+    {
+        for (int i = 0; i < m_nameCount; i++)
+        {
+            if (IsEqualGUID(m_names[i].Id, *adapter))
+                return SUCCEEDED(StringCchCopyW(name, cch, m_names[i].Name));
+        }
+        return ConnectionName(adapter, name, cch);
+    }
+
     /* The connected networks and, for each, the connections (adapters) it goes through */
     VOID LoadNetworks()
     {
@@ -325,6 +381,7 @@ private:
         CComPtr<IEnumNetworks> pEnumNet;
 
         m_connCount = m_netCount = 0;
+        LoadConnectionNames();
         if (SUCCEEDED(CoCreateInstance(kClsidNetworkListManager, NULL, CLSCTX_INPROC_SERVER, kIidNetworkListManager, (void **)&pList)) &&
             SUCCEEDED(pList->GetNetworks(NLM_ENUM_NETWORK_CONNECTED, &pEnumNet)) && pEnumNet)
         {
@@ -358,7 +415,7 @@ private:
                         if (m_connCount < (int)_countof(m_conns) && SUCCEEDED(pNc->GetAdapterId(&adapter)))
                         {
                             NscConnection *conn = &m_conns[m_connCount];
-                            if (ConnectionName(&adapter, conn->Name, _countof(conn->Name)))
+                            if (ConnectionNameOf(&adapter, conn->Name, _countof(conn->Name)))
                             {
                                 conn->Id = adapter;
                                 conn->Used = TRUE;
@@ -666,7 +723,8 @@ public:
         m_linkCount(0),
         m_hot(-1),
         m_focus(-1),
-        m_tracking(FALSE)
+        m_tracking(FALSE),
+        m_nameCount(0)
     {
         ZeroMemory(&m_fs, sizeof(m_fs));
     }
