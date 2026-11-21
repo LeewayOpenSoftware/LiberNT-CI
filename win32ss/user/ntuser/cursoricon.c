@@ -1326,9 +1326,35 @@ NtUserFindExistingCursorIcon(
     }
 
     UserEnterShared();
-    CurIcon = pProcInfo->pCursorCache;
+    CurIcon = NULL;
+    if (paramSafe.cx <= 0 && paramSafe.cy <= 0)
+    {
+        /* No size asked (LoadCursor, LR_DEFAULTSIZE): the system cursor of that name comes
+         * first, at whatever size the pointer scheme loaded it. */
+        PCURICON_OBJECT pcurGlobal;
+
+        for (pcurGlobal = gcurFirst; pcurGlobal; pcurGlobal = pcurGlobal->pcurNext)
+        {
+            if (!(pcurGlobal->CURSORF_flags & CURSORF_GLOBAL) ||
+                paramSafe.bIcon != is_icon(pcurGlobal) ||
+                atomModName != pcurGlobal->atomModName ||
+                IS_INTRESOURCE(pcurGlobal->strName.Buffer) != IS_INTRESOURCE(ustrRsrcSafe.Buffer))
+                continue;
+            if (IS_INTRESOURCE(pcurGlobal->strName.Buffer)
+                    ? pcurGlobal->strName.Buffer == ustrRsrcSafe.Buffer
+                    : RtlCompareUnicodeString(&ustrRsrcSafe, &pcurGlobal->strName, TRUE) == 0)
+            {
+                CurIcon = pcurGlobal;
+                break;
+            }
+        }
+    }
+    if (!CurIcon)
+        CurIcon = pProcInfo->pCursorCache;
     while (CurIcon)
     {
+        if (CurIcon->CURSORF_flags & CURSORF_GLOBAL)
+            break; /* the system cursor found above */
         /* Icon/cursor */
         if (paramSafe.bIcon != is_icon(CurIcon))
         {

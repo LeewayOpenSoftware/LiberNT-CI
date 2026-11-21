@@ -298,7 +298,7 @@ static void test_LoadImage_SharedCursorSize(void)
 }
 
 /* The live system cursor after a reload: SetCursor on our own window, then the object GetCursorInfo reports. */
-static LONG LiveArrowWidth(HWND hwnd)
+static LONG LiveArrowWidth(HWND hwnd, HCURSOR *phLive)
 {
     CURSORINFO ci;
     ICONINFO ii;
@@ -315,6 +315,8 @@ static LONG LiveArrowWidth(HWND hwnd)
     ci.cbSize = sizeof(ci);
     if (!GetCursorInfo(&ci) || !ci.hCursor)
         return -1;
+    if (phLive)
+        *phLive = ci.hCursor;
     memset(&ii, 0, sizeof(ii));
     if (!GetIconInfo(ci.hCursor, &ii))
         return -1;
@@ -332,6 +334,7 @@ static void test_SystemParametersInfoA_SetCursors(void)
     DWORD old = 0, size = sizeof(old), type = 0, base = 48;
     BOOL hadOld;
     HWND hwnd;
+    HCURSOR live = NULL, shared;
     LONG width;
 
     if (RegCreateKeyExA(HKEY_CURRENT_USER, "Control Panel\\Cursors", 0, NULL, 0,
@@ -347,7 +350,7 @@ static void test_SystemParametersInfoA_SetCursors(void)
     ok(hwnd != NULL, "CreateWindowEx failed, error %lu\n", GetLastError());
     if (hwnd)
     {
-        width = LiveArrowWidth(hwnd);
+        width = LiveArrowWidth(hwnd, NULL);
         if (width < 0)
         {
             skip("No live cursor to measure (GetCursorInfo gave none)\n");
@@ -361,8 +364,12 @@ static void test_SystemParametersInfoA_SetCursors(void)
                 trace("CursorBaseSize is %lu here, live arrow before: %ld\n", old, width);
             RegSetValueExA(key, "CursorBaseSize", 0, REG_DWORD, (const BYTE *)&base, sizeof(base));
             ok(SystemParametersInfoA(SPI_SETCURSORS, 0, NULL, 0), "SystemParametersInfoA failed, error %lu\n", GetLastError());
-            width = LiveArrowWidth(hwnd);
+            width = LiveArrowWidth(hwnd, &live);
             ok(width == 48, "live arrow after SPI_SETCURSORS at base 48: %ld\n", width);
+            /* An app loading the default arrow gets the resized system cursor, as on Windows */
+            shared = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+            ok(shared == live, "LoadCursor(IDC_ARROW) %p is not the live system cursor %p\n", shared, live);
+            check_SharedCursorSize("arrow via LoadCursor after reload", shared, 48);
         }
         DestroyWindow(hwnd);
     }

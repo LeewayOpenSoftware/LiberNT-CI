@@ -2032,6 +2032,7 @@ CURSORICON_LoadImageW(
     UNICODE_STRING ustrRsrc;
     UNICODE_STRING ustrModule = {0, 0, NULL};
     LPCWSTR lpszResourceName = lpszName;
+    int cxRequested = cxDesired, cyRequested = cyDesired;
 
     /* Fix width/height */
     if(fuLoad & LR_DEFAULTSIZE)
@@ -2133,10 +2134,11 @@ CURSORICON_LoadImageW(
         FINDEXISTINGCURICONPARAM param;
 
         TRACE("Checking for an LR_SHARED cursor/icon.\n");
-        /* Ask win32k */
+        /* Ask win32k with the size the caller asked for: 0 (the default size) means the
+         * system cursor of that name, whatever size the pointer scheme gave it. */
         param.bIcon = bIcon;
-        param.cx = cxDesired;
-        param.cy = cyDesired;
+        param.cx = cxRequested;
+        param.cy = cyRequested;
         hCurIcon = NtUserFindExistingCursorIcon(&ustrModule, &ustrRsrc, &param);
         if(hCurIcon)
         {
