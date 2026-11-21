@@ -33,7 +33,7 @@ MpsApplyFirewallRule(
     if (!Rule->Active)
         return ERROR_SUCCESS;
 
-    if (Rule->Unsupported || Rule->ProfileMask != 7 ||
+    if (Rule->Unsupported ||
         Rule->Action == MpsRuleActionBypass ||
         Rule->LocalPortCount > MPS_MAX_PORTS ||
         Rule->RemotePortCount > MPS_MAX_PORTS ||
@@ -69,8 +69,9 @@ MpsApplyFirewallRule(
     Filter.subLayerKey = *SubLayerKey;
     Filter.action.type = Rule->Action == MpsRuleActionBlock ? FWP_ACTION_BLOCK :
                                                               FWP_ACTION_PERMIT;
+    /* weights in the sublayer: default inbound block 0 < allow rules < block rules < loopback */
     Filter.weight.type = FWP_UINT8;
-    Filter.weight.uint8 = Rule->Action == MpsRuleActionBlock ? 1 : 0;
+    Filter.weight.uint8 = Rule->Action == MpsRuleActionBlock ? MPS_WEIGHT_BLOCK_RULE : MPS_WEIGHT_ALLOW_RULE;
     Filter.filterCondition = Conditions;
 
     ConditionCount = 0;
@@ -177,6 +178,17 @@ MpsApplyFirewallRule(
             Error = FwpmFilterAdd0(Engine, &Filter, NULL, &Id);
             if (Error != ERROR_SUCCESS)
                 goto Exit;
+
+            /* a rule without IPv4 addresses holds for IPv6 too; best effort, the IPv4
+               filter is the one that must be there */
+            if (Rule->LocalAddressCount == 0 && Rule->RemoteAddressCount == 0)
+            {
+                Filter.layerKey = Rule->Inbound ? FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6 :
+                                                  FWPM_LAYER_ALE_AUTH_CONNECT_V6;
+                FwpmFilterAdd0(Engine, &Filter, NULL, &Id);
+                Filter.layerKey = Rule->Inbound ? FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4 :
+                                                  FWPM_LAYER_ALE_AUTH_CONNECT_V4;
+            }
         }
     }
 
@@ -232,17 +244,77 @@ MpsAddLoopbackPermit(
     Filter.subLayerKey = *SubLayerKey;
     Filter.action.type = FWP_ACTION_PERMIT;
     Filter.weight.type = FWP_UINT8;
-    Filter.weight.uint8 = 15;
+    Filter.weight.uint8 = MPS_WEIGHT_LOOPBACK;
     Filter.numFilterConditions = 1;
     Filter.filterCondition = &Condition;
     return FwpmFilterAdd0(Engine, &Filter, NULL, &Id);
 }
 
+/* The profile blocks the inbound connections no allow rule matches (DefaultInboundAction):
+   a block of the lowest weight, under a loopback permit so local traffic keeps working */
+DWORD
+MpsAddDefaultInboundBlock(
+    _In_ HANDLE Engine,
+    _In_ const GUID *SubLayerKey)
+{
+    static const GUID *const Layers[] = { &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, &FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6 };
+    FWPM_FILTER0 Filter;
+    FWPM_FILTER_CONDITION0 Condition;
+    UINT64 Id;
+    DWORD Error = ERROR_SUCCESS;
+    UINT Index;
+
+    if (Engine == NULL || SubLayerKey == NULL)
+        return ERROR_INVALID_PARAMETER;
+
+    for (Index = 0; Index < ARRAYSIZE(Layers); Index++)
+    {
+        DWORD LayerError;
+
+        ZeroMemory(&Condition, sizeof(Condition));
+        Condition.fieldKey = FWPM_CONDITION_FLAGS;
+        Condition.matchType = FWP_MATCH_FLAGS_ALL_SET;
+        Condition.conditionValue.type = FWP_UINT32;
+        Condition.conditionValue.uint32 = FWP_CONDITION_FLAG_IS_LOOPBACK;
+
+        ZeroMemory(&Filter, sizeof(Filter));
+        Filter.displayData.name = L"LiberNT firewall inbound loopback";
+        Filter.layerKey = *Layers[Index];
+        Filter.subLayerKey = *SubLayerKey;
+        Filter.action.type = FWP_ACTION_PERMIT;
+        Filter.weight.type = FWP_UINT8;
+        Filter.weight.uint8 = MPS_WEIGHT_LOOPBACK;
+        Filter.numFilterConditions = 1;
+        Filter.filterCondition = &Condition;
+        LayerError = FwpmFilterAdd0(Engine, &Filter, NULL, &Id);
+
+        /* never block a layer whose loopback could not be permitted */
+        if (LayerError == ERROR_SUCCESS)
+        {
+            Filter.displayData.name = L"LiberNT firewall default inbound block";
+            Filter.action.type = FWP_ACTION_BLOCK;
+            Filter.weight.uint8 = MPS_WEIGHT_DEFAULT_BLOCK;
+            Filter.numFilterConditions = 0;
+            Filter.filterCondition = NULL;
+            LayerError = FwpmFilterAdd0(Engine, &Filter, NULL, &Id);
+        }
+
+        /* IPv4 must hold; IPv6 is best effort */
+        if (Index == 0)
+            Error = LayerError;
+    }
+    return Error;
+}
+
+/* The rules of the active profile; with AllowInboundExceptions FALSE (DoNotAllowExceptions)
+   the inbound allow rules are left out */
 DWORD
 MpsLoadFirewallRulesFromKey(
     _In_ HANDLE Engine,
     _In_ const GUID *SubLayerKey,
-    _In_ HKEY Key)
+    _In_ HKEY Key,
+    _In_ UINT32 ProfileBit,
+    _In_ BOOL AllowInboundExceptions)
 {
     DWORD Error;
     DWORD ValueCount = 0;
@@ -302,6 +374,10 @@ MpsLoadFirewallRulesFromKey(
 
         RuleError = MpsParseFirewallRule(Text, CharacterCount - 1, &Rule);
         if (RuleError != ERROR_SUCCESS)
+            continue;
+        if (!(Rule.ProfileMask & ProfileBit))
+            continue;
+        if (!AllowInboundExceptions && Rule.Inbound && Rule.Action == MpsRuleActionAllow)
             continue;
         RuleError = MpsApplyFirewallRule(Engine, SubLayerKey, &Rule);
         if (RuleError != ERROR_SUCCESS && RuleError != ERROR_NOT_SUPPORTED)

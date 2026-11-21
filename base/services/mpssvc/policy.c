@@ -632,11 +632,10 @@ MpsParseFirewallRule(
     if (!Rule->HasAction || !Rule->HasDirection)
         return ERROR_INVALID_DATA;
 
+    /* a rule without Profile= applies to every profile; the service applies the rules of the
+       active profile only */
     if (!Rule->HasProfile)
-        Rule->ProfileMask = 7;
-
-    if (Rule->ProfileMask != 7)
-        Rule->Unsupported = TRUE;
+        Rule->ProfileMask = MPS_PROFILE_ALL;
 
     return ERROR_SUCCESS;
 }

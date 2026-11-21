@@ -216,7 +216,8 @@ START_TEST(mpssvc)
     ok(!Rule.Inbound, "Outbound rule was not recognized\n");
 
     ok(ParseRule(PartialProfile, &Rule) == ERROR_SUCCESS, "Failed to parse profile rule\n");
-    ok(Rule.Unsupported, "Profile-specific rule was not marked unsupported\n");
+    ok(!Rule.Unsupported, "Profile-specific rule was marked unsupported\n");
+    ok(Rule.ProfileMask == MPS_PROFILE_PUBLIC, "Unexpected profile mask %u\n", Rule.ProfileMask);
 
     ok(ParseRule(DocumentedExample, &Rule) == ERROR_SUCCESS,
        "Failed to parse the MS-GPFAS example rule\n");
@@ -345,8 +346,10 @@ START_TEST(mpssvc)
        "NULL engine was accepted by MpsAddFirewallSubLayer\n");
     ok(MpsAddLoopbackPermit(NULL, &TestSubLayer) == ERROR_INVALID_PARAMETER,
        "NULL engine was accepted by MpsAddLoopbackPermit\n");
-    ok(MpsLoadFirewallRulesFromKey(NULL, &TestSubLayer, NULL) == ERROR_INVALID_PARAMETER,
+    ok(MpsLoadFirewallRulesFromKey(NULL, &TestSubLayer, NULL, MPS_PROFILE_ALL, TRUE) == ERROR_INVALID_PARAMETER,
        "NULL parameters to MpsLoadFirewallRulesFromKey succeeded\n");
+    ok(MpsAddDefaultInboundBlock(NULL, &TestSubLayer) == ERROR_INVALID_PARAMETER,
+       "NULL engine was accepted by MpsAddDefaultInboundBlock\n");
 
     Owner = OpenEngine(0);
     if (Owner == NULL)
@@ -363,8 +366,8 @@ START_TEST(mpssvc)
     if (Engine != NULL)
     {
         ok(ApplyRule(Engine, Inactive) == ERROR_SUCCESS, "Inactive rule was not skipped\n");
-        ok(ApplyRule(Engine, PartialProfile) == ERROR_NOT_SUPPORTED,
-           "Unsupported active rule did not return ERROR_NOT_SUPPORTED\n");
+        ok(ApplyRule(Engine, PartialProfile) == ERROR_SUCCESS,
+           "Failed to apply profile-specific rule\n");
         ok(ApplyRule(Engine, ExactAddressRule) == ERROR_SUCCESS, "Failed to apply exact address rule\n");
         ok(ApplyRule(Engine, CidrAddressRule) == ERROR_SUCCESS, "Failed to apply CIDR address rule\n");
         ok(ApplyRule(Engine, RepeatedAddressRule) == ERROR_SUCCESS, "Failed to apply repeated address rule\n");
@@ -447,6 +450,16 @@ START_TEST(mpssvc)
         FwpmEngineClose0(Engine);
     }
 
+    /* the default inbound block of a profile leaves loopback traffic alone */
+    Engine = OpenEngine(FWPM_SESSION_FLAG_DYNAMIC);
+    if (Engine != NULL)
+    {
+        Error = MpsAddDefaultInboundBlock(Engine, &TestSubLayer);
+        ok(Error == ERROR_SUCCESS, "MpsAddDefaultInboundBlock returned %lu\n", Error);
+        ok(ConnectLoopback(Listener, Port, &WsaError), "The default inbound block stopped loopback: %d\n", WsaError);
+        FwpmEngineClose0(Engine);
+    }
+
     First = OpenEngine(FWPM_SESSION_FLAG_DYNAMIC);
     Second = OpenEngine(FWPM_SESSION_FLAG_DYNAMIC);
     KeyError = RegCreateKeyExW(HKEY_CURRENT_USER,
@@ -468,12 +481,24 @@ START_TEST(mpssvc)
         SetPortRule(TestKey, L"Range",
                     L"v2.10|Action=Block|Active=TRUE|Dir=Out|Protocol=6|RA4=127.0.0.1-127.0.0.2|RPort=%u|", Port);
 
-        Error = MpsLoadFirewallRulesFromKey(First, &TestSubLayer, TestKey);
+        /* the Public rule does not hold while the Private profile is active */
+        Error = MpsLoadFirewallRulesFromKey(First, &TestSubLayer, TestKey, MPS_PROFILE_PRIVATE, TRUE);
         ok(Error == ERROR_SUCCESS, "MpsLoadFirewallRulesFromKey returned %lu\n", Error);
         ok(ConnectLoopback(Listener, Port, &WsaError), "A skipped rule blocked the connect: %d\n", WsaError);
 
+        /* ...and holds while the Public profile is active */
+        Engine = OpenEngine(FWPM_SESSION_FLAG_DYNAMIC);
+        if (Engine != NULL)
+        {
+            Error = MpsLoadFirewallRulesFromKey(Engine, &TestSubLayer, TestKey, MPS_PROFILE_PUBLIC, TRUE);
+            ok(Error == ERROR_SUCCESS, "Public MpsLoadFirewallRulesFromKey returned %lu\n", Error);
+            ok(!ConnectLoopback(Listener, Port, &WsaError), "The Public rule was not enforced in the Public profile\n");
+            FwpmEngineClose0(Engine);
+        }
+        ok(ConnectLoopback(Listener, Port, &WsaError), "Connect after the Public session closed failed: %d\n", WsaError);
+
         SetPortRule(TestKey, L"Block", L"v2.10|Action=Block|Active=TRUE|Dir=Out|Protocol=6|RPort=%u|", Port);
-        Error = MpsLoadFirewallRulesFromKey(Second, &TestSubLayer, TestKey);
+        Error = MpsLoadFirewallRulesFromKey(Second, &TestSubLayer, TestKey, MPS_PROFILE_PRIVATE, TRUE);
         ok(Error == ERROR_SUCCESS, "Reload MpsLoadFirewallRulesFromKey returned %lu\n", Error);
         ok(!ConnectLoopback(Listener, Port, &WsaError), "Reloaded block rule was not enforced\n");
 
