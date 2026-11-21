@@ -5189,8 +5189,9 @@ FileStructW* _ILGetFileStructW(LPCITEMIDLIST pidl) {
         return NULL;
     }
 
-    /* A Windows block must be a version we know and hold its long name, terminated,
-     * before the trailing offset; otherwise the caller uses the primary name. */
+    /* The entry must be a version we know and hold its long name, terminated, before the
+     * trailing offset; otherwise the caller uses the primary name. Wine and ReactOS write
+     * the terminator too, so the check holds for every layout. */
     {
         UINT cbName = _ILFileStructWNameOffset(pFileStructW);
         UINT cchMax;
@@ -5200,16 +5201,13 @@ FileStructW* _ILGetFileStructW(LPCITEMIDLIST pidl) {
             WARN("Windows file entry of unknown version %u\n", ((const WORD *)pFileStructW)[1]);
             return NULL;
         }
-        if (cbName != FIELD_OFFSET(FileStructW, wszName))
+        if (cbName + sizeof(WCHAR) + sizeof(cbOffset) > pFileStructW->cbLen)
+            return NULL;
+        cchMax = (pFileStructW->cbLen - sizeof(cbOffset) - cbName) / sizeof(WCHAR);
+        if (wcsnlen(_ILGetFileStructWName(pFileStructW), cchMax) == cchMax)
         {
-            if (cbName + sizeof(WCHAR) + sizeof(cbOffset) > pFileStructW->cbLen)
-                return NULL;
-            cchMax = (pFileStructW->cbLen - sizeof(cbOffset) - cbName) / sizeof(WCHAR);
-            if (wcsnlen(_ILGetFileStructWName(pFileStructW), cchMax) == cchMax)
-            {
-                WARN("Windows file entry without a terminated long name\n");
-                return NULL;
-            }
+            WARN("File entry without a terminated long name\n");
+            return NULL;
         }
     }
 
