@@ -29,7 +29,18 @@ static const CHAR * const g_notExported[] =
     "PerformWSManPluginReportCompletion",
 };
 
-typedef DWORD (WINAPI *WSManPluginStartupFn)(DWORD, PCWSTR, PVOID, PVOID *);
+/* Documented wsman.h argument shapes (struct pointers as PVOID). */
+typedef DWORD (WINAPI *StartupFn)(DWORD, PCWSTR, PCWSTR, PVOID *);
+typedef DWORD (WINAPI *ShutdownFn)(PVOID, DWORD, DWORD);
+typedef VOID (WINAPI *ShellFn)(PVOID, PVOID, DWORD, PVOID, PVOID);
+typedef VOID (WINAPI *CommandFn)(PVOID, DWORD, PVOID, PCWSTR, PVOID);
+typedef VOID (WINAPI *SendFn)(PVOID, DWORD, PVOID, PVOID, PCWSTR, PVOID);
+typedef VOID (WINAPI *ReceiveFn)(PVOID, DWORD, PVOID, PVOID, PVOID);
+typedef VOID (WINAPI *SignalFn)(PVOID, DWORD, PVOID, PVOID, PCWSTR);
+typedef VOID (WINAPI *ConnectFn)(PVOID, DWORD, PVOID, PVOID, PVOID);
+typedef VOID (WINAPI *ReleaseShellContextFn)(PVOID);
+typedef VOID (WINAPI *ReleaseCommandContextFn)(PVOID, PVOID);
+
 typedef LONG (WINAPI *RtlGetVersionFn)(PVOID);
 
 typedef struct _TEST_OSVERSIONINFOW
@@ -102,7 +113,8 @@ void func_pwrshplugin(void)
     }
 
     {
-        WSManPluginStartupFn pStartup = (WSManPluginStartupFn)(VOID*)GetProcAddress(hMod, "WSManPluginStartup");
+        StartupFn pStartup = (StartupFn)(VOID*)GetProcAddress(hMod, "WSManPluginStartup");
+        ShutdownFn pShutdown = (ShutdownFn)(VOID*)GetProcAddress(hMod, "WSManPluginShutdown");
         PVOID pContext = (PVOID)(ULONG_PTR)0x1;
         DWORD dwRet;
 
@@ -114,6 +126,38 @@ void func_pwrshplugin(void)
                "WSManPluginStartup returned %lu, expected ERROR_NOT_SUPPORTED\n", dwRet);
             ok(pContext == NULL, "WSManPluginStartup did not clear *pluginContext\n");
         }
+
+        ok(pShutdown != NULL, "WSManPluginShutdown unresolved\n");
+        if (pShutdown)
+        {
+            dwRet = pShutdown(NULL, 0, 0);
+            ok(dwRet == NO_ERROR,
+               "WSManPluginShutdown returned %lu, expected NO_ERROR\n", dwRet);
+        }
+    }
+
+    /* Every VOID entry point must tolerate a NULL requestDetails and
+     * return without touching the caller's stack (stdcall arity check
+     * on i386: a wrong argument count corrupts the caller here). */
+    {
+        ShellFn pShell = (ShellFn)(VOID*)GetProcAddress(hMod, "WSManPluginShell");
+        CommandFn pCommand = (CommandFn)(VOID*)GetProcAddress(hMod, "WSManPluginCommand");
+        SendFn pSend = (SendFn)(VOID*)GetProcAddress(hMod, "WSManPluginSend");
+        ReceiveFn pReceive = (ReceiveFn)(VOID*)GetProcAddress(hMod, "WSManPluginReceive");
+        SignalFn pSignal = (SignalFn)(VOID*)GetProcAddress(hMod, "WSManPluginSignal");
+        ConnectFn pConnect = (ConnectFn)(VOID*)GetProcAddress(hMod, "WSManPluginConnect");
+        ReleaseShellContextFn pRelShell = (ReleaseShellContextFn)(VOID*)GetProcAddress(hMod, "WSManPluginReleaseShellContext");
+        ReleaseCommandContextFn pRelCmd = (ReleaseCommandContextFn)(VOID*)GetProcAddress(hMod, "WSManPluginReleaseCommandContext");
+
+        if (pShell) pShell(NULL, NULL, 0, NULL, NULL);
+        if (pCommand) pCommand(NULL, 0, NULL, L"cmd", NULL);
+        if (pSend) pSend(NULL, 0, NULL, NULL, L"stdin", NULL);
+        if (pReceive) pReceive(NULL, 0, NULL, NULL, NULL);
+        if (pSignal) pSignal(NULL, 0, NULL, NULL, L"0");
+        if (pConnect) pConnect(NULL, 0, NULL, NULL, NULL);
+        if (pRelShell) pRelShell(NULL);
+        if (pRelCmd) pRelCmd(NULL, NULL);
+        ok(TRUE, "VOID entry points survived NULL requestDetails\n");
     }
 
     ok(GetFileVersion("pwrshplugin.dll", dwVersion), "no version resource\n");
