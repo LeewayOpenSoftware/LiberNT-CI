@@ -400,6 +400,78 @@ static BOOL RealizesTrueType(HDC hdc, const WCHAR *name, BYTE precision, LONG he
     return ret;
 }
 
+static BOOL RealizeNamed(HDC hdc, const WCHAR *name, WCHAR *face, TEXTMETRICW *tm)
+{
+    LOGFONTW lf = { 0 };
+    HFONT hfont, old;
+    BOOL ret;
+
+    lf.lfHeight = -12;
+    lf.lfCharSet = DEFAULT_CHARSET;
+    wcscpy(lf.lfFaceName, name);
+    hfont = CreateFontIndirectW(&lf);
+    old = SelectObject(hdc, hfont);
+    face[0] = 0;
+    {
+        OUTLINETEXTMETRICW otm[8];
+
+        if (GetOutlineTextMetricsW(hdc, sizeof(otm), otm))
+            wcsncpy(face, (WCHAR *)((BYTE *)otm + (ULONG_PTR)otm[0].otmpFamilyName), LF_FACESIZE - 1);
+        face[LF_FACESIZE - 1] = 0;
+    }
+    ret = GetTextMetricsW(hdc, tm);
+    SelectObject(hdc, old);
+    DeleteObject(hfont);
+    return ret;
+}
+
+/* An installed face is used as it is: FontSubstitutes and the raster name fixup only stand in for a missing one */
+static
+void
+TestInstalledFaceNotSubstituted(HDC hdc)
+{
+    static const WCHAR *names[] = { L"Segoe UI" };
+    WCHAR srcPath[MAX_PATH], path[MAX_PATH], face[LF_FACESIZE];
+    TEXTMETRICW tm;
+    DWORD size;
+    BYTE *font;
+    UINT i;
+
+    GetWindowsDirectoryW(srcPath, _countof(srcPath));
+    wcscat(srcPath, L"\\Fonts\\arial.ttf");
+    for (i = 0; i < _countof(names); i++)
+    {
+        char name[LF_FACESIZE];
+
+        RealizeNamed(hdc, names[i], face, &tm);
+        if (!_wcsicmp(face, names[i]))
+        {
+            skip("%ls is installed\n", names[i]);
+            continue;
+        }
+        WideCharToMultiByte(CP_ACP, 0, names[i], -1, name, sizeof(name), NULL, NULL);
+        font = MakeRenamedFont(srcPath, name, &size);
+        if (!font || !WriteTempFile(L"zzzinst.ttf", font, size, path))
+        {
+            skip("Cannot create the test font\n");
+            HeapFree(GetProcessHeap(), 0, font);
+            continue;
+        }
+        if (AddFontResourceExW(path, FR_PRIVATE, 0))
+        {
+            ok(RealizeNamed(hdc, names[i], face, &tm), "GetTextMetricsW failed\n");
+            ok(!_wcsicmp(face, names[i]), "Installed %ls realized as %ls\n", names[i], face);
+            ok(tm.tmPitchAndFamily & TMPF_TRUETYPE, "Installed TrueType %ls reports pitch 0x%x\n",
+               names[i], tm.tmPitchAndFamily);
+            RemoveFontResourceExW(path, FR_PRIVATE, 0);
+        }
+        else
+            skip("Cannot add the test font\n");
+        DeleteFileW(path);
+        HeapFree(GetProcessHeap(), 0, font);
+    }
+}
+
 /* A raster and a TrueType font of one name: the output precision decides which one is realized */
 static
 void
@@ -540,6 +612,7 @@ TestEnumFontSubstitute(HDC hdc)
     TestEnumeratedLogfontRealizes(hdc);
     TestOutputPrecision(hdc);
     TestSameNamePair(hdc);
+    TestInstalledFaceNotSubstituted(hdc);
 }
 
 START_TEST(EnumFontFamilies)
