@@ -7463,19 +7463,26 @@ GetFontPenalty(const LOGFONTW *               LogFont,
     /* Is the candidate a non-vector font? */
     if (!(TM->tmPitchAndFamily & (TMPF_TRUETYPE | TMPF_VECTOR)))
     {
-        if (LogFont->lfHeight != 0 && TM->tmHeight < LogFont->lfHeight)
+        if (LogFont->lfHeight != 0)
         {
-            /* VectorHeightSmaller Penalty 2 */
-            /* Candidate is a vector font that is smaller than the
-               requested height. Penalty * height difference */
-            GOT_PENALTY("VectorHeightSmaller", 2 * labs(TM->tmHeight - LogFont->lfHeight));
-        }
-        if (LogFont->lfHeight != 0 && TM->tmHeight > LogFont->lfHeight)
-        {
-            /* VectorHeightBigger Penalty 1 */
-            /* Candidate is a vector font that is bigger than the
-               requested height. Penalty * height difference */
-            GOT_PENALTY("VectorHeightBigger", 1 * labs(TM->tmHeight - LogFont->lfHeight));
+            /* A negative lfHeight is a character height, a positive one a cell height. */
+            LONG ReqHeight = labs(LogFont->lfHeight);
+            LONG CandHeight = (LogFont->lfHeight < 0) ? TM->tmHeight - TM->tmInternalLeading : TM->tmHeight;
+
+            if (CandHeight < ReqHeight)
+            {
+                /* VectorHeightSmaller Penalty 2 */
+                /* Candidate is a vector font that is smaller than the
+                   requested height. Penalty * height difference */
+                GOT_PENALTY("VectorHeightSmaller", 2 * (ReqHeight - CandHeight));
+            }
+            else if (CandHeight > ReqHeight)
+            {
+                /* VectorHeightBigger Penalty 1 */
+                /* Candidate is a vector font that is bigger than the
+                   requested height. Penalty * height difference */
+                GOT_PENALTY("VectorHeightBigger", 1 * (CandHeight - ReqHeight));
+            }
         }
     }
 

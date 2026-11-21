@@ -382,13 +382,13 @@ static int CALLBACK CountRasterProc(const LOGFONTW *lf, const TEXTMETRICW *tm, D
     return 1;
 }
 
-static BOOL RealizesTrueType(HDC hdc, const WCHAR *name, BYTE precision)
+static BOOL RealizesTrueType(HDC hdc, const WCHAR *name, BYTE precision, LONG height)
 {
     LOGFONTW lf = { 0 };
     HFONT hfont, old;
     BOOL ret;
 
-    lf.lfHeight = 8;
+    lf.lfHeight = height;
     lf.lfCharSet = DEFAULT_CHARSET;
     lf.lfOutPrecision = precision;
     wcscpy(lf.lfFaceName, name);
@@ -444,16 +444,19 @@ TestSameNamePair(HDC hdc)
             continue;
         }
 
-        ok(!RealizesTrueType(hdc, name, OUT_RASTER_PRECIS),
+        ok(!RealizesTrueType(hdc, name, OUT_RASTER_PRECIS, 8),
            "Raster face (flags 0x%lx) with OUT_RASTER_PRECIS realizes TrueType\n", flags[i]);
 
         if (AddFontResourceExW(ttPath, flags[i], 0))
         {
-            ok(!RealizesTrueType(hdc, name, OUT_RASTER_PRECIS),
-               "Pair (flags 0x%lx) with OUT_RASTER_PRECIS realizes TrueType\n", flags[i]);
-            ok(RealizesTrueType(hdc, name, OUT_TT_ONLY_PRECIS),
+            /* A positive height is a cell height, a negative one a character height: both fit the 8 pixel cell */
+            ok(!RealizesTrueType(hdc, name, OUT_RASTER_PRECIS, 8),
+               "Pair (flags 0x%lx) with OUT_RASTER_PRECIS and height 8 realizes TrueType\n", flags[i]);
+            ok(!RealizesTrueType(hdc, name, OUT_RASTER_PRECIS, -8),
+               "Pair (flags 0x%lx) with OUT_RASTER_PRECIS and height -8 realizes TrueType\n", flags[i]);
+            ok(RealizesTrueType(hdc, name, OUT_TT_ONLY_PRECIS, -8),
                "Pair (flags 0x%lx) with OUT_TT_ONLY_PRECIS does not realize TrueType\n", flags[i]);
-            ok(RealizesTrueType(hdc, name, OUT_OUTLINE_PRECIS),
+            ok(RealizesTrueType(hdc, name, OUT_OUTLINE_PRECIS, -8),
                "Pair (flags 0x%lx) with OUT_OUTLINE_PRECIS does not realize TrueType\n", flags[i]);
             RemoveFontResourceExW(ttPath, flags[i], 0);
         }
