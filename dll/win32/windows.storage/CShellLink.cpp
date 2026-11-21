@@ -2953,6 +2953,72 @@ HRESULT STDMETHODCALLTYPE CShellLink::GetDateStamp(FILETIME *pDateStamp)
     return pExtractImage2->GetDateStamp(pDateStamp);
 }
 
+/*
+ * A shortcut shows the thumbnail of its target (Vista+ IThumbnailProvider path,
+ * registered under lnkfile\shellex). Only the target's own thumbnail is
+ * forwarded: a shortcut to a shortcut, a folder or a program has none, the
+ * caller then keeps the icon.
+ */
+HRESULT STDMETHODCALLTYPE CShellLink::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE *pdwAlpha)
+{
+    CComPtr<IShellItemImageFactory> pFactory;
+    CComHeapPtr<ITEMIDLIST> pidlParsed;
+    PCIDLIST_ABSOLUTE pidl = m_pPidl;
+    WCHAR szTarget[MAX_PATH];
+    HBITMAP hbm = NULL;
+    BITMAP bm;
+    SIZE size;
+    HRESULT hr;
+
+    if (pdwAlpha)
+        *pdwAlpha = WTSAT_UNKNOWN;
+    if (!phbmp)
+        return E_POINTER;
+    *phbmp = NULL;
+    if (!cx)
+        return E_FAIL;
+    /* A link saved with a path only: resolve it now */
+    if (!pidl && m_sPath && *m_sPath &&
+        SUCCEEDED(SHParseDisplayName(m_sPath, NULL, &pidlParsed, 0, NULL)))
+        pidl = pidlParsed;
+    if (!pidl)
+        return E_FAIL;
+    if (SHGetPathFromIDListW(pidl, szTarget) &&
+        !StrCmpIW(PathFindExtensionW(szTarget), L".lnk"))
+        return E_FAIL;
+
+    hr = SHCreateItemFromIDList(pidl, IID_PPV_ARG(IShellItemImageFactory, &pFactory));
+    if (FAILED(hr))
+        return hr;
+    size.cx = size.cy = cx;
+    hr = pFactory->GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &hbm);
+    if (FAILED(hr))
+        return hr;
+    if (!hbm)
+        return E_FAIL;
+    if (pdwAlpha)
+    {
+        /* Only a bitmap that carries alpha is ARGB; a 32bpp image with zero alpha
+         * bytes would otherwise be composed fully transparent */
+        *pdwAlpha = WTSAT_RGB;
+        if (GetObjectW(hbm, sizeof(bm), &bm) && bm.bmBitsPixel == 32 && bm.bmBits)
+        {
+            const BYTE *pbBits = (const BYTE *)bm.bmBits;
+            LONG cb = bm.bmWidthBytes * abs(bm.bmHeight);
+            for (LONG i = 3; i < cb; i += 4)
+            {
+                if (pbBits[i])
+                {
+                    *pdwAlpha = WTSAT_ARGB;
+                    break;
+                }
+            }
+        }
+    }
+    *phbmp = hbm;
+    return S_OK;
+}
+
 HRESULT STDMETHODCALLTYPE CShellLink::InitNew()
 {
     return S_OK;

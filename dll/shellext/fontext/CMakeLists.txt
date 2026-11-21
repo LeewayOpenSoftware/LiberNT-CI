@@ -10,6 +10,7 @@ list(APPEND SOURCE
     CFontFolderViewCB.cpp
     CFontIcon.cpp
     CFontTasks.cpp
+    CFontThumbnail.cpp
     fontext.cpp
     fontmeta.cpp
     fontpidl.cpp

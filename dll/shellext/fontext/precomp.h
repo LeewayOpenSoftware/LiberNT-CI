@@ -26,8 +26,11 @@
 #include <shellutils.h>
 #include <ntquery.h>
 #include <propkey.h>
+#include <propsys.h>
+#include <thumbcache.h>
 
 extern const GUID CLSID_CFontExt;
+extern const GUID CLSID_CFontThumbnail;
 extern LONG g_ModuleRefCnt;
 
 typedef struct tagINSTALL_FONT_DATA
@@ -47,6 +50,7 @@ typedef struct tagINSTALL_FONT_DATA
 #include "fontmeta.hpp"
 #include "CFontCache.hpp"
 #include "CFontExt.hpp"
+#include "CFontThumbnail.hpp"
 #include "CFontFolderViewCB.h"
 #include "CFontBackgroundMenu.h"
 

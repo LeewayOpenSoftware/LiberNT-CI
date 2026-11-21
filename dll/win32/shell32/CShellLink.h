@@ -40,6 +40,7 @@ class CShellLink :
     public IExtractIconA,
     public IExtractIconW,
     public IExtractImage2,
+    public IThumbnailProvider,
     public IPersistPropertyBag,
     public IServiceProvider,
     public IObjectWithSite,
@@ -211,6 +212,9 @@ public:
     STDMETHOD(Extract)(HBITMAP *phBmpThumbnail) override;
     STDMETHOD(GetDateStamp)(FILETIME *pDateStamp) override;
 
+    // IThumbnailProvider
+    STDMETHOD(GetThumbnail)(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE *pdwAlpha) override;
+
     STDMETHOD(InitNew)() override;
     STDMETHOD(Load)(IPropertyBag *pPropBag, IErrorLog *pErrorLog) override;
     STDMETHOD(Save)(IPropertyBag *pPropBag, BOOL fClearDirty, BOOL fSaveAllProperties) override;
@@ -266,6 +270,7 @@ BEGIN_COM_MAP(CShellLink)
     COM_INTERFACE_ENTRY_IID(IID_IExtractIconW, IExtractIconW)
     COM_INTERFACE_ENTRY_IID(IID_IExtractImage2, IExtractImage2)
     COM_INTERFACE_ENTRY_IID(IID_IExtractImage, IExtractImage)
+    COM_INTERFACE_ENTRY_IID(IID_IThumbnailProvider, IThumbnailProvider)
     COM_INTERFACE_ENTRY_IID(IID_IPersistPropertyBag, IPersistPropertyBag)
     COM_INTERFACE_ENTRY_IID(IID_IServiceProvider, IServiceProvider)
     COM_INTERFACE_ENTRY_IID(IID_IObjectWithSite, IObjectWithSite)

@@ -31,6 +31,7 @@ public:
 
 BEGIN_OBJECT_MAP(ObjectMap)
     OBJECT_ENTRY(CLSID_CFontExt, CFontExt)
+    OBJECT_ENTRY(CLSID_CFontThumbnail, CFontThumbnail)
 END_OBJECT_MAP()
 
 LONG g_ModuleRefCnt;

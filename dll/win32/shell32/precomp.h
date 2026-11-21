@@ -23,6 +23,7 @@
 #include <wininet.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <thumbcache.h>
 #include <emptyvc.h>
 #include <ndk/rtlfuncs.h>
 #include <fmifs/fmifs.h>
@@ -141,6 +142,7 @@ extern const GUID SHELL32_AdvtShortcutComponent;
 #define SHV_UPDATESTATUSBAR (WM_USER + 0x1112)
 #define SHV_FILL_LIST       (WM_USER + 0x1113)
 #define SHV_ARRANGE_COMPUTER (WM_USER + 0x1114)
+#define SHV_THUMBNAIL (WM_USER + 0x1115) /* CLSID_Thumbnail result: wParam HBITMAP, lParam item id */
 
 extern inline
 BOOL

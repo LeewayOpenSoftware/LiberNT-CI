@@ -45,3 +45,4 @@
 #define IDS_FONT_HIDE_VERB      402
 #define IDS_FONT_SHOW_VERB      403
 #define IDS_FONT_OPEN_VERB      404
+#define IDR_FONTTHUMB 8001
