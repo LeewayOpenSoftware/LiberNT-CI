@@ -1,4 +1,9 @@
 add_library(mpssvc_policy OBJECT policy.c filter.c)
+
+# the rule parser alone, shared with hnetcfg (INetFwPolicy2)
+add_library(mpssvc_rules OBJECT policy.c)
+target_include_directories(mpssvc_rules PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include)
+add_dependencies(mpssvc_rules psdk)
 target_include_directories(mpssvc_policy PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include)
 add_dependencies(mpssvc_policy psdk)
 
