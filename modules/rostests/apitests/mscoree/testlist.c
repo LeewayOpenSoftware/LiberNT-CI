@@ -8,10 +8,14 @@
 #define STANDALONE
 #include <apitest.h>
 
+extern void func_mscoree_malformed_installroot(void);
 extern void func_mscoree(void);
 
 const struct test winetest_testlist[] =
 {
+    /* Runs first: the malformed InstallRoot must be in place before the
+     * forwarder's first (cached) probe. */
+    { "mscoree_malformed_installroot", func_mscoree_malformed_installroot },
     { "mscoree", func_mscoree },
     { 0, 0 }
 };

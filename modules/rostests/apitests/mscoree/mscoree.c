@@ -62,6 +62,70 @@ GetFileVersion(
     return bRet;
 }
 
+void func_mscoree_malformed_installroot(void)
+{
+    static const WCHAR subkey[] = L"SOFTWARE\\Microsoft\\.NETFramework";
+    static const WCHAR valuename[] = L"InstallRoot";
+    WCHAR original[MAX_PATH];
+    DWORD original_len = sizeof(original);
+    DWORD original_type = 0;
+    WCHAR junk[400];
+    DWORD i;
+    HKEY key;
+    HMODULE hMod;
+    GetCORVersionFn pGetCORVersion;
+    WCHAR szVersion[32];
+    DWORD dwLength = 0;
+    HRESULT hr;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey, 0, KEY_QUERY_VALUE | KEY_SET_VALUE, &key) != ERROR_SUCCESS)
+    {
+        skip("cannot open the .NETFramework key (admin rights?)\n");
+        return;
+    }
+
+    if (RegQueryValueExW(key, valuename, NULL, &original_type, (LPBYTE)original, &original_len) != ERROR_SUCCESS)
+    {
+        original_len = 0;
+        original[0] = L'\0';
+    }
+
+    /* Oversized REG_SZ without a terminator: the forwarder must not
+     * read past the buffer and must fall back cleanly. This has to run
+     * before any other test loads mscoree, because the probe result is
+     * cached for the process. */
+    for (i = 0; i < _countof(junk); i++)
+        junk[i] = L'C';
+    ok(RegSetValueExW(key, valuename, 0, REG_SZ, (const BYTE *)junk, sizeof(junk)) == ERROR_SUCCESS,
+       "RegSetValueExW(junk InstallRoot) failed\n");
+    RegCloseKey(key);
+
+    hMod = LoadLibraryA("mscoree.dll");
+    ok(hMod != NULL, "LoadLibraryA(mscoree.dll) failed: %lu\n", GetLastError());
+    if (hMod)
+    {
+        pGetCORVersion = (GetCORVersionFn)(VOID*)GetProcAddress(hMod, "GetCORVersion");
+        ok(pGetCORVersion != NULL, "GetCORVersion unresolved\n");
+        if (pGetCORVersion)
+        {
+            hr = pGetCORVersion(szVersion, _countof(szVersion), &dwLength);
+            ok(hr == S_OK, "GetCORVersion after malformed InstallRoot returned hr=%lx\n", hr);
+        }
+        FreeLibrary(hMod);
+    }
+
+    /* Restore the original value (or remove the junk). */
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey, 0, KEY_SET_VALUE, &key) == ERROR_SUCCESS)
+    {
+        if (original_len)
+            ok(RegSetValueExW(key, valuename, 0, original_type, (const BYTE *)original, original_len) == ERROR_SUCCESS,
+               "restore InstallRoot failed\n");
+        else
+            ok(RegDeleteValueW(key, valuename) == ERROR_SUCCESS, "delete junk InstallRoot failed\n");
+        RegCloseKey(key);
+    }
+}
+
 void func_mscoree(void)
 {
     HMODULE hMod, hNtdll;
