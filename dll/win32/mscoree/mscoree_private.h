@@ -278,4 +278,6 @@ extern void runtimehost_uninit(void);
 extern void CDECL mono_print_handler_fn(const char *string, INT is_stdout);
 extern void CDECL mono_log_handler_fn(const char *log_domain, const char *log_level, const char *message, INT fatal, void *user_data);
 
+FARPROC WINAPI mscoree_get_real_export(LPCSTR name);
+
 #endif   /* __MSCOREE_PRIVATE__ */
