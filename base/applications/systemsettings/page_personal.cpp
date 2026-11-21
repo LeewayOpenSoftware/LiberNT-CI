@@ -417,6 +417,24 @@ BuildColors(PageBuilder &page)
                     if (index < (int)_countof(AccentColors))
                         SetAccentColor((UINT)index);
                 }).Keywords = Str(IDS_COLORS_KEYWORDS);
+
+    {
+        int captionAlign = CAPTIONALIGN_LEFT;
+        std::vector<std::wstring> aligns;
+
+        if (!page.Indexing)
+            SystemParametersInfoW(SPI_GETCAPTIONALIGNMENT, 0, &captionAlign, 0);
+        aligns.push_back(Str(IDS_CAPTION_ALIGN_LEFT));
+        aligns.push_back(Str(IDS_CAPTION_ALIGN_CENTER));
+        page.Choice(Str(IDS_CAPTION_ALIGN), Str(IDS_CAPTION_ALIGN_DESC), L"text_font_20_regular", aligns,
+                    captionAlign == CAPTIONALIGN_CENTER ? 1 : 0,
+                    [](int index)
+                    {
+                        SystemParametersInfoW(SPI_SETCAPTIONALIGNMENT,
+                                              index == 1 ? CAPTIONALIGN_CENTER : CAPTIONALIGN_LEFT,
+                                              NULL, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+                    }).Keywords = Str(IDS_CAPTION_ALIGN_KEYWORDS);
+    }
 }
 
 struct ScreenSaver

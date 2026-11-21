@@ -781,3 +781,8 @@
 #define IDS_COMBINE_ALWAYS             866
 #define IDS_COMBINE_WHEN_FULL          867
 #define IDS_COMBINE_NEVER              868
+#define IDS_CAPTION_ALIGN              869
+#define IDS_CAPTION_ALIGN_DESC         870
+#define IDS_CAPTION_ALIGN_LEFT         871
+#define IDS_CAPTION_ALIGN_CENTER       872
+#define IDS_CAPTION_ALIGN_KEYWORDS     873

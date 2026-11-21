@@ -779,6 +779,11 @@ BEGIN
     IDS_DRIVER_STATUS_ROLLBACK_PROBLEM "Revertido, pero el dispositivo aún reporta un problema (código %lu)"
     IDS_DRIVER_HISTORY_EMPTY "No hay instalaciones recientes de controladores."
     IDS_DRIVER_STATUS_PENDING_START "Instalado, pendiente de inicio"
+    IDS_CAPTION_ALIGN "Alineación del texto de la barra de título"
+    IDS_CAPTION_ALIGN_DESC "Elija si el texto del título de la ventana se alinea a la izquierda o al centro"
+    IDS_CAPTION_ALIGN_LEFT "Izquierda"
+    IDS_CAPTION_ALIGN_CENTER "Centrado"
+    IDS_CAPTION_ALIGN_KEYWORDS "barra de título alineación centrado izquierda texto ventana"
 END
 
 STRINGTABLE
