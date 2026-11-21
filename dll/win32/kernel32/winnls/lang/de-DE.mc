@@ -2661,7 +2661,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_GUID_SUBSTITUTION_MADE
 Language=German
-ERROR_GUID_SUBSTITUTION_MADE - During the translation of a global identifier (GUID) to a LiberNT security ID (SID), no administratively-defined GUID prefix was found. A substitute prefix was used, which will not compromise system security. However, this may provide a more restrictive access than intended.
+ERROR_GUID_SUBSTITUTION_MADE - During the translation of a global identifier (GUID) to a Orosi security ID (SID), no administratively-defined GUID prefix was found. A substitute prefix was used, which will not compromise system security. However, this may provide a more restrictive access than intended.
 .
 
 MessageId=681
@@ -3013,7 +3013,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_FIRMWARE_UPDATED
 Language=German
-ERROR_FIRMWARE_UPDATED - LiberNT hat festgestellt, dass die Systemfirmware (BIOS) aktualisiert wurde [voriges Firmwaredatum = %2, aktuelles Firmwaredatum = %3].
+ERROR_FIRMWARE_UPDATED - Orosi hat festgestellt, dass die Systemfirmware (BIOS) aktualisiert wurde [voriges Firmwaredatum = %2, aktuelles Firmwaredatum = %3].
 .
 
 MessageId=729
@@ -4125,7 +4125,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_OLD_WIN_VERSION
 Language=German
-ERROR_OLD_WIN_VERSION - The specified program requires a newer version of LiberNT.
+ERROR_OLD_WIN_VERSION - The specified program requires a newer version of Orosi.
 .
 
 MessageId=1151
@@ -4853,7 +4853,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_ACCESS_DISABLED_BY_POLICY
 Language=German
-ERROR_ACCESS_DISABLED_BY_POLICY - LiberNT cannot open this program because it has been prevented by a software restriction policy. For more information, open Event Viewer or contact your system administrator.
+ERROR_ACCESS_DISABLED_BY_POLICY - Orosi cannot open this program because it has been prevented by a software restriction policy. For more information, open Event Viewer or contact your system administrator.
 .
 
 MessageId=1261
@@ -4981,7 +4981,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_ACCESS_DISABLED_WEBBLADE
 Language=German
-ERROR_ACCESS_DISABLED_WEBBLADE - LiberNT cannot open this program since it has been disabled.
+ERROR_ACCESS_DISABLED_WEBBLADE - Orosi cannot open this program since it has been disabled.
 .
 
 MessageId=1278
@@ -4989,7 +4989,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_ACCESS_DISABLED_WEBBLADE_TAMPER
 Language=German
-ERROR_ACCESS_DISABLED_WEBBLADE_TAMPER - LiberNT cannot open this program because the license enforcement system has been tampered with or become corrupted.
+ERROR_ACCESS_DISABLED_WEBBLADE_TAMPER - Orosi cannot open this program because the license enforcement system has been tampered with or become corrupted.
 .
 
 MessageId=1279
@@ -6477,7 +6477,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_INSTALL_SERVICE_FAILURE
 Language=German
-ERROR_INSTALL_SERVICE_FAILURE - The ReactOS Installer service could not be accessed. This can occur if you are running LiberNT in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
+ERROR_INSTALL_SERVICE_FAILURE - The ReactOS Installer service could not be accessed. This can occur if you are running Orosi in safe mode, or if the ReactOS Installer is not correctly installed. Contact your support personnel for assistance.
 .
 
 MessageId=1602
@@ -6573,7 +6573,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_INSTALL_PACKAGE_VERSION
 Language=German
-ERROR_INSTALL_PACKAGE_VERSION - This installation package cannot be installed by the ReactOS Installer service. You must install a LiberNT service pack that contains a newer version of the ReactOS Installer service.
+ERROR_INSTALL_PACKAGE_VERSION - This installation package cannot be installed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
 .
 
 MessageId=1614
@@ -6765,7 +6765,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_PATCH_PACKAGE_UNSUPPORTED
 Language=German
-ERROR_PATCH_PACKAGE_UNSUPPORTED - This patch package cannot be processed by the ReactOS Installer service. You must install a LiberNT service pack that contains a newer version of the ReactOS Installer service.
+ERROR_PATCH_PACKAGE_UNSUPPORTED - This patch package cannot be processed by the ReactOS Installer service. You must install a Orosi service pack that contains a newer version of the ReactOS Installer service.
 .
 
 MessageId=1638
@@ -7789,7 +7789,7 @@ Severity=Success
 Facility=System
 SymbolicName=RPC_S_NOT_RPC_ERROR
 Language=German
-RPC_S_NOT_RPC_ERROR - The error specified is not a valid LiberNT RPC error code.
+RPC_S_NOT_RPC_ERROR - The error specified is not a valid Orosi RPC error code.
 .
 
 MessageId=1824
@@ -10045,7 +10045,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_CLUSTER_WRONG_OS_VERSION
 Language=German
-ERROR_CLUSTER_WRONG_OS_VERSION - This computer cannot be made a member of a cluster because it does not have the correct version of LiberNT installed.
+ERROR_CLUSTER_WRONG_OS_VERSION - This computer cannot be made a member of a cluster because it does not have the correct version of Orosi installed.
 .
 
 MessageId=5900
@@ -10085,7 +10085,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_CLUSTER_OLD_VERSION
 Language=German
-ERROR_CLUSTER_OLD_VERSION - One or more nodes in the cluster are running a version of LiberNT that does not support this operation.
+ERROR_CLUSTER_OLD_VERSION - One or more nodes in the cluster are running a version of Orosi that does not support this operation.
 .
 
 MessageId=5905
@@ -14841,7 +14841,7 @@ Severity=Success
 Facility=System
 SymbolicName=WSAEPROCLIM
 Language=German
-WSAEPROCLIM - A LiberNT Sockets implementation may have a limit on the number of applications that may use it simultaneously.
+WSAEPROCLIM - A Orosi Sockets implementation may have a limit on the number of applications that may use it simultaneously.
 .
 
 MessageId=10068
@@ -14889,7 +14889,7 @@ Severity=Success
 Facility=System
 SymbolicName=WSAVERNOTSUPPORTED
 Language=German
-WSAVERNOTSUPPORTED - The LiberNT Sockets version requested is not supported.
+WSAVERNOTSUPPORTED - The Orosi Sockets version requested is not supported.
 .
 
 MessageId=10093
@@ -17491,3 +17491,4 @@ CLASS_E_NOTLICENSED - Class is not licensed for use
 .
 
 ; EOF
+"
