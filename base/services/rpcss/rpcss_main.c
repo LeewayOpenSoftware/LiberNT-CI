@@ -74,7 +74,7 @@ HRESULT __cdecl irpcss_server_register(handle_t h, const GUID *clsid, unsigned i
         return E_OUTOFMEMORY;
 
     entry->clsid = *clsid;
-    entry->single_use = !(flags & (REGCLS_MULTIPLEUSE | REGCLS_MULTI_SEPARATE));
+    entry->single_use = !(flags & (REGCLS_MULTIPLEUSE | REGCLS_MULTI_SEPARATE | REGCLS_SURROGATE));
     if (!(entry->object = malloc(FIELD_OFFSET(MInterfacePointer, abData[object->ulCntData]))))
     {
         free(entry);

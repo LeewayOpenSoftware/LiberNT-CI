@@ -103,14 +103,25 @@ static ULONG WINAPI factory_Release(IClassFactory *iface)
 static HRESULT WINAPI factory_CreateInstance(IClassFactory *iface,
     IUnknown *punkouter, REFIID iid, void **ppv)
 {
-    FIXME("(%p,%p,%s,%p): stub\n", iface, punkouter, wine_dbgstr_guid(iid), ppv);
-    return E_NOTIMPL;
+    struct factory *factory = impl_from_IClassFactory(iface);
+
+    TRACE("(%p,%p,%s,%p)\n", iface, punkouter, wine_dbgstr_guid(iid), ppv);
+
+    if (ppv) *ppv = NULL;
+    if (!factory->dll_factory)
+        return E_UNEXPECTED;
+    return IClassFactory_CreateInstance(factory->dll_factory, punkouter, iid, ppv);
 }
 
 static HRESULT WINAPI factory_LockServer(IClassFactory *iface, BOOL lock)
 {
+    struct factory *factory = impl_from_IClassFactory(iface);
+
     TRACE("(%p,%d)\n", iface, lock);
-    return S_OK;
+
+    if (!factory->dll_factory)
+        return S_OK;
+    return IClassFactory_LockServer(factory->dll_factory, lock);
 }
 
 static const IClassFactoryVtbl ClassFactory_Vtbl =
@@ -162,9 +173,15 @@ static HRESULT WINAPI marshal_GetUnmarshalClass(IMarshal *iface, REFIID iid, voi
 static HRESULT WINAPI marshal_GetMarshalSizeMax(IMarshal *iface, REFIID iid, void *pv,
         DWORD dwDestContext, void *pvDestContext, DWORD mshlflags, DWORD *size)
 {
-    FIXME("(%p,%s,%p,%08lx,%p,%08lx,%p): stub\n", iface, wine_dbgstr_guid(iid), pv,
+    struct factory *factory = impl_from_IMarshal(iface);
+
+    TRACE("(%p,%s,%p,%08lx,%p,%08lx,%p)\n", iface, wine_dbgstr_guid(iid), pv,
           dwDestContext, pvDestContext, mshlflags, size);
-    return E_NOTIMPL;
+
+    /* MarshalInterface marshals the DLL's own class object, so that is the object to size */
+    if (!factory->dll_factory)
+        return E_UNEXPECTED;
+    return CoGetMarshalSizeMax(size, iid, (IUnknown *)factory->dll_factory, dwDestContext, pvDestContext, mshlflags);
 }
 
 static HRESULT WINAPI marshal_MarshalInterface(IMarshal *iface, IStream *stream, REFIID iid,
