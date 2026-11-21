@@ -1629,9 +1629,29 @@ static HRESULT WINAPI ProxyCliSec_QueryBlanket(IClientSecurity *iface,
         *pAuthnSvc = RPC_C_AUTHN_WINNT;
     if (pAuthzSvc)
         *pAuthzSvc = RPC_C_AUTHZ_NONE;
-    /* FIXME: an out-of-process proxy reports the server's user; the OXID resolution does not give it yet */
+    /* An out-of-process proxy reports the user the server process runs as (Windows 11, NTLM); in-process it is NULL.
+     * The OXID resolution carries the server pid only, so the name comes from that process's token; a server
+     * that cannot be opened gives no name. */
     if (ppServerPrincName)
+    {
         *ppServerPrincName = NULL;
+        if (com_call_security_enabled() && This->oxid_info.dwPid != GetCurrentProcessId())
+        {
+            HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, This->oxid_info.dwPid);
+
+            if (process)
+            {
+                HANDLE token;
+
+                if (OpenProcessToken(process, TOKEN_QUERY, &token))
+                {
+                    *ppServerPrincName = com_security_token_user(token);
+                    CloseHandle(token);
+                }
+                CloseHandle(process);
+            }
+        }
+    }
     if (pAuthnLevel)
         *pAuthnLevel = RPC_C_AUTHN_LEVEL_PKT_PRIVACY;
     if (pImpLevel)
