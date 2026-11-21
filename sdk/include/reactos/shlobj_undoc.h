@@ -1507,6 +1507,23 @@ DECLARE_INTERFACE_(IFadeTask, IUnknown) // {FADB55B4-D382-4FC4-81D7-ABB325C7F12A
 
 /*****************************************************************************
  * IThumbnail3 interface
+ *
+ * Background thumbnail generator (CLSID_Thumbnail). Every GetBitmap* call is
+ * queued and extracted on the object's worker thread; the result is delivered
+ * with PostMessage(hwnd, uMsg, (WPARAM)hbmThumbnail, (LPARAM)dwItemID) to the
+ * window given to Init().
+ * hbmThumbnail is always a 32bpp top-down DIB section with premultiplied alpha
+ * (opaque pixels carry 0xFF; the generator converts what a provider returns).
+ * The aspect of the picture is kept; the receiver may shrink the bitmap to
+ * its cell.
+ * Once posted, the receiver owns it; if PostMessage fails the generator
+ * deletes it. Nothing is posted for an item without thumbnail. Only the newest
+ * request per dwItemID is delivered.
+ * Init(NULL, 0) and Release() cancel everything still pending, and nothing is
+ * posted after Init(NULL, 0) returns: the cancel and the post are serialized on
+ * the same lock, so a result that did not make it before the cancel is dropped.
+ * Release() never waits for an extraction in flight; the worker thread finishes
+ * it on its own, drops the result and exits.
  */
 #define INTERFACE IThumbnail3
 DECLARE_INTERFACE_(IThumbnail3, IUnknown)
