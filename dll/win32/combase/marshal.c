@@ -23,6 +23,7 @@
 
 #define COBJMACROS
 #include "objbase.h"
+#include <strsafe.h>
 
 #include "dcom.h"
 #include "combase_private.h"
@@ -1616,12 +1617,12 @@ static WCHAR *proxy_manager_get_server_user(const struct proxy_manager *This)
     HANDLE pipe, process, token;
     ULONG pid;
 
-    wsprintfW(name, L"\\\\.\\pipe\\lrpc\\\\pipe\\OLE_%016I64x", This->oxid);
+    StringCchPrintfW(name, ARRAY_SIZE(name), L"\\\\.\\pipe\\lrpc\\\\pipe\\OLE_%016I64x", This->oxid);
     pipe = CreateFileW(name, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                        SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
     if (pipe == INVALID_HANDLE_VALUE)
         return NULL;
-    if (GetNamedPipeServerProcessId(pipe, &pid) && pid &&
+    if (GetNamedPipeServerProcessId(pipe, &pid) && pid && pid != GetCurrentProcessId() &&
         (process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)))
     {
         if (OpenProcessToken(process, TOKEN_QUERY, &token))
