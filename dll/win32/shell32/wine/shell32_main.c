@@ -2674,6 +2674,35 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
             return TRUE;
         }
 
+        case WM_SYSCOLORCHANGE:
+        {
+            /* Let the children (the SysLink especially) pick up the new system
+               colours, and re-tint the wordmark for the new scheme. */
+            HWND hChild = GetWindow(hWnd, GW_CHILD);
+
+            while (hChild)
+            {
+                SendMessageW(hChild, WM_SYSCOLORCHANGE, 0, 0);
+                hChild = GetWindow(hChild, GW_HWNDNEXT);
+            }
+
+            if (state)
+            {
+                HDC hdc = GetDC(hWnd);
+                int dpi = hdc ? GetDeviceCaps(hdc, LOGPIXELSX) : 96;
+
+                if (hdc)
+                    ReleaseDC(hWnd, hdc);
+                if (state->hbmWordmark)
+                    DeleteObject(state->hbmWordmark);
+                state->hbmWordmark = NULL;
+                SHELL_LoadAboutWordmark(state, dpi);
+            }
+
+            InvalidateRect(hWnd, NULL, TRUE);
+            return TRUE;
+        }
+
         case WM_NOTIFY:
         {
             NMHDR *hdr = (NMHDR *)lParam;
