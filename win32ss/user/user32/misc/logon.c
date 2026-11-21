@@ -113,7 +113,7 @@ UpdatePerUserSystemParameters(DWORD dwReserved,
     IntLoadPreloadKeyboardLayouts();
 
     Ret = NtUserUpdatePerUserSystemParameters(dwReserved, bEnable);
-    if (bEnable)
-        LoadUserCursors();
+    if (bEnable && !LoadUserCursors())
+        ERR("UpdatePerUserSystemParameters: the pointer scheme was not fully applied\n");
     return Ret;
 }

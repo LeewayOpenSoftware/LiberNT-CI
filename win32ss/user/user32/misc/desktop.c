@@ -701,7 +701,9 @@ RealSystemParametersInfoW(UINT uiAction,
       return GetHighContrastW(uiParam, pvParam, fWinIni);
 
     case SPI_SETCURSORS:
-      LoadUserCursors();
+      /* Windows reports success here whatever happened to the cursors; the log says. */
+      if (!LoadUserCursors())
+        ERR("SPI_SETCURSORS: the pointer scheme was not fully applied\n");
       break;
 
     case SPI_SETDESKWALLPAPER:
