@@ -201,6 +201,8 @@ MpsOpenAndLoadEngine(
     /* the rules and the default inbound action hold only while the active profile is on */
     Profile = MpsActiveProfile();
     MpsReadProfileSettings(PolicyKey, Profile, &Settings);
+    MpsLog(L"profile %u: enabled %d, block inbound %d, no exceptions %d\n",
+           Profile, Settings.Enabled, Settings.BlockInbound, Settings.NoExceptions);
     if (Error == ERROR_SUCCESS && Settings.Enabled)
     {
         HKEY RulesKey;
@@ -219,11 +221,97 @@ MpsOpenAndLoadEngine(
     if (Error != ERROR_SUCCESS)
     {
         FwpmEngineClose0(NewEngine);
-        return Error;
+        NewEngine = NULL;
+        if (!Settings.Enabled)
+            return Error;
+
+        /* fail closed: a profile that is on keeps loopback and its default inbound action
+           even when its rules could not be loaded; whatever of the block could be added stays */
+        MpsLog(L"profile %u: policy not loaded (%lu), only loopback and the default action apply\n",
+               Profile, Error);
+        Error = MpsOpenEngine(FWPM_SESSION_FLAG_DYNAMIC, &NewEngine);
+        if (Error != ERROR_SUCCESS)
+            return Error;
+        Error = MpsAddLoopbackPermit(NewEngine, &FWPM_SUBLAYER_MPSSVC_WF);
+        if (Error != ERROR_SUCCESS)
+        {
+            FwpmEngineClose0(NewEngine);
+            return Error;
+        }
+        if (Settings.BlockInbound)
+        {
+            /* without its block the new engine would leave inbound open: keep the old one */
+            Error = MpsAddDefaultInboundBlock(NewEngine, &FWPM_SUBLAYER_MPSSVC_WF);
+            if (Error != ERROR_SUCCESS)
+            {
+                MpsLog(L"default inbound block not added (%lu), the previous filters stay\n", Error);
+                FwpmEngineClose0(NewEngine);
+                return Error;
+            }
+        }
     }
 
     *Engine = NewEngine;
     return ERROR_SUCCESS;
+}
+
+static HKEY
+MpsOpenPolicyKey(VOID)
+{
+    HKEY PolicyKey;
+
+    /* an empty key changes nothing, it only lets a policy written later take effect */
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE,
+                        MPS_POLICY_KEY,
+                        0,
+                        NULL,
+                        0,
+                        KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY,
+                        NULL,
+                        &PolicyKey,
+                        NULL) != ERROR_SUCCESS)
+    {
+        return NULL;
+    }
+    return PolicyKey;
+}
+
+static BOOL
+MpsNotifyPolicy(
+    _In_ HKEY PolicyKey,
+    _In_ HANDLE ChangeEvent)
+{
+    return RegNotifyChangeKeyValue(PolicyKey,
+                                   TRUE,
+                                   REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET,
+                                   ChangeEvent,
+                                   TRUE) == ERROR_SUCCESS;
+}
+
+/* Armed before the policy is read, so a write during the read still wakes the service.
+   A key that was deleted (or never opened) is opened again, and the policy is read from it. */
+static BOOL
+MpsWatchPolicy(
+    _Inout_ HKEY *PolicyKey,
+    _In_ HANDLE ChangeEvent)
+{
+    if (*PolicyKey != NULL && MpsNotifyPolicy(*PolicyKey, ChangeEvent))
+        return TRUE;
+
+    if (*PolicyKey != NULL)
+        RegCloseKey(*PolicyKey);
+    *PolicyKey = MpsOpenPolicyKey();
+    if (*PolicyKey == NULL)
+    {
+        MpsLog(L"policy key not opened, its changes are not watched\n");
+        return FALSE;
+    }
+    if (!MpsNotifyPolicy(*PolicyKey, ChangeEvent))
+    {
+        MpsLog(L"policy changes are not watched\n");
+        return FALSE;
+    }
+    return TRUE;
 }
 
 /* An interface or an address came or went: the active profile may have changed */
@@ -300,22 +388,9 @@ MpsServiceMain(
 
     ComReady = SUCCEEDED(CoInitializeEx(NULL, COINIT_MULTITHREADED));
 
-    /* the whole policy is watched (profiles and rules); an empty key changes nothing, it only
-       lets a policy written later take effect without a restart */
-    Error = RegCreateKeyExW(HKEY_LOCAL_MACHINE,
-                            MPS_POLICY_KEY,
-                            0,
-                            NULL,
-                            0,
-                            KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY,
-                            NULL,
-                            &PolicyKey,
-                            NULL);
-    if (Error != ERROR_SUCCESS)
-    {
-        PolicyKey = NULL;
-        Error = ERROR_SUCCESS;
-    }
+    /* the whole policy is watched (profiles and rules) */
+    PolicyKey = MpsOpenPolicyKey();
+    Error = ERROR_SUCCESS;
 
     if (NotifyIpInterfaceChange(AF_UNSPEC, MpsInterfaceChanged, NetworkEvent, FALSE, &InterfaceNotify) != NO_ERROR)
         InterfaceNotify = NULL;
@@ -325,6 +400,7 @@ MpsServiceMain(
     if (Error == ERROR_SUCCESS)
         Error = MpsAddSubLayer();
 
+    WatchPolicy = MpsWatchPolicy(&PolicyKey, ChangeEvent);
     if (Error == ERROR_SUCCESS)
         Error = MpsOpenAndLoadEngine(PolicyKey, &Engine);
 
@@ -338,14 +414,6 @@ MpsServiceMain(
 
         while (!StopRequested)
         {
-            WatchPolicy = PolicyKey != NULL &&
-                          RegNotifyChangeKeyValue(PolicyKey,
-                                                  TRUE,
-                                                  REG_NOTIFY_CHANGE_NAME |
-                                                  REG_NOTIFY_CHANGE_LAST_SET,
-                                                  ChangeEvent,
-                                                  TRUE) == ERROR_SUCCESS;
-
             WaitResult = WaitForMultipleObjects(WatchPolicy ? 3 : 2,
                                                 WaitHandles,
                                                 FALSE,
@@ -365,6 +433,11 @@ MpsServiceMain(
                     StopRequested = TRUE;
                     continue;
                 }
+
+                /* the watch fired, or could not be armed before: armed again before the policy
+                   is read */
+                if (!WatchPolicy || WaitResult == WAIT_OBJECT_0 + 2)
+                    WatchPolicy = MpsWatchPolicy(&PolicyKey, ChangeEvent);
 
                 if (MpsOpenAndLoadEngine(PolicyKey, &NewEngine) == ERROR_SUCCESS)
                 {

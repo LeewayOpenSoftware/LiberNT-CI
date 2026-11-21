@@ -101,6 +101,18 @@ MpsAddLoopbackPermit(
     _In_ HANDLE Engine,
     _In_ const GUID *SubLayerKey);
 
+#define MPS_MAX_RULE_VALUES 4096
+
+BOOL
+MpsIsLayerAbsent(
+    _In_ DWORD Error);
+
+/* a line to the debugger output (DbgView, kernel debugger) */
+VOID
+MpsLog(
+    _In_ PCWSTR Format,
+    ...);
+
 DWORD
 MpsAddDefaultInboundBlock(
     _In_ HANDLE Engine,
