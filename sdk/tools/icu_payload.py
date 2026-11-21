@@ -63,11 +63,16 @@ mkdir host cross
     --disable-tests --disable-samples --disable-extras --disable-tools \
     CC="$TRIPLE-clang" CXX="$TRIPLE-clang++" >/dev/null && make -j"$(nproc)" >/dev/null)
 LIBS="cross/lib/libsicuin.a cross/lib/libsicuuc.a cross/lib/sicudt.a"
+# Only i386 decorates C names with a leading underscore; on x64 and ARM64 a leading underscore is
+# part of the name (ICU's internal _isUnicodeLocaleTypeSubtag), so stripping it there exports a missing symbol.
+strip_cdecl_underscore() {
+    if [ "$TRIPLE" = i686-w64-mingw32 ]; then sed 's/^_//'; else cat; fi
+}
 {
     echo "LIBRARY icu.dll"
     echo "EXPORTS"
     llvm-nm --defined-only --extern-only -P cross/lib/libsicuuc.a cross/lib/libsicuin.a 2>/dev/null |
-        awk '$2 == "T" { print $1 }' | grep -v '^_Z' | sed 's/^_//' |
+        awk '$2 == "T" { print $1 }' | grep -v '^_Z' | strip_cdecl_underscore |
         grep -E '^[A-Za-z][A-Za-z0-9_]*$' | grep -v '^uprv_' | sort -u
 } > icu.def
 cat > icu.rc <<RC
