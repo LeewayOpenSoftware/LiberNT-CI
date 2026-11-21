@@ -32109,7 +32109,7 @@ Language=Romanian
 The directory cannot validate the proposed naming context name because it does not hold a replica of the naming context above the proposed naming context. Please ensure that the domain naming master role is held by a server that is configured as a global catalog server, and that the server is up to date with its replication partners. (Applies only to Windows 2000 Domain Naming masters)
 .
 Language=Japanese
-ディレクトリが提案されたネーミング コンテキストの上のネーミング コンテキストのレプリカを保持していないため、提案されたネーミング コンテキスト名を検証できません。グローバルカタログサーバーとして構成されているサーバーによってドメインネーミングマスターの役割が保持され、そのサーバーがレプリケーションパートナーと最新であることを確認してください。 (Orosi 2000ドメイン ネーミング マスターにのみ適用されます) 。
+ディレクトリが提案されたネーミング コンテキストの上のネーミング コンテキストのレプリカを保持していないため、提案されたネーミング コンテキスト名を検証できません。グローバルカタログサーバーとして構成されているサーバーによってドメインネーミングマスターの役割が保持され、そのサーバーがレプリケーションパートナーと最新であることを確認してください。 (Windows 2000ドメイン ネーミング マスターにのみ適用されます) 。
 .
 
 MessageId=8496
@@ -32675,7 +32675,7 @@ Language=Romanian
 Only DSAs configured to be Global Catalog servers should be allowed to hold the Domain Naming Master FSMO role. (Applies only to Windows 2000 servers)
 .
 Language=Japanese
-グローバルカタログサーバーとして構成されたDSAのみがドメインネーミングマスターFSMOロールを保持できます。 (Orosi 2000サーバーにのみ適用されます) 。
+グローバルカタログサーバーとして構成されたDSAのみがドメインネーミングマスターFSMOロールを保持できます。 (Windows 2000サーバーにのみ適用されます) 。
 .
 
 MessageId=8524
@@ -36374,7 +36374,7 @@ Language=Romanian
 The application directory partition operation failed. The domain controller holding the domain naming master role is down or unable to service the request or is not running Windows Server 2003.
 .
 Language=Japanese
-ドメインネーミングマスターFSMOロールに到達できなかったため、操作は失敗しました。ドメイン ネーミング マスター FSMO ロールを保持するドメイン コントローラーがダウンしているか、要求を処理できないか、Orosi Server 2003 以降が実行されていません。
+ドメインネーミングマスターFSMOロールに到達できなかったため、操作は失敗しました。ドメイン ネーミング マスター FSMO ロールを保持するドメイン コントローラーがダウンしているか、要求を処理できないか、Windows Server 2003 以降が実行されていません。
 .
 
 MessageId=10004
@@ -40214,7 +40214,7 @@ Language=Romanian
 The lifetime value received in the Responder Lifetime Notify is below the Windows 2000 configured minimum value. Please fix the policy on the peer machine.
 .
 Language=Japanese
-レスポンダライフタイム通知で受信したライフタイム値が、Orosi 2000で設定されている最小値を下回っています。対向マシンのポリシーを修正してください。
+レスポンダライフタイム通知で受信したライフタイム値が、Windows 2000で設定されている最小値を下回っています。対向マシンのポリシーを修正してください。
 .
 
 MessageId=13881
