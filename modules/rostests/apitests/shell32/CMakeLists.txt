@@ -25,6 +25,7 @@ list(APPEND SOURCE
     DragDrop.cpp
     ExtractIconEx.cpp
     FindExecutable.cpp
+    FontsFolderExtension.cpp
     GetDisplayNameOf.cpp
     GUIDFromString.cpp
     IconPositions.cpp

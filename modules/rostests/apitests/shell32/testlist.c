@@ -26,6 +26,7 @@ extern void func_CUserNotification(void);
 extern void func_DragDrop(void);
 extern void func_ExtractIconEx(void);
 extern void func_FindExecutable(void);
+extern void func_FontsFolderExtension(void);
 extern void func_GetDisplayNameOf(void);
 extern void func_GUIDFromString(void);
 extern void func_IconPositions(void);
@@ -128,6 +129,7 @@ const struct test winetest_testlist[] =
     { "DragDrop", func_DragDrop },
     { "ExtractIconEx", func_ExtractIconEx },
     { "FindExecutable", func_FindExecutable },
+    { "FontsFolderExtension", func_FontsFolderExtension },
     { "GetDisplayNameOf", func_GetDisplayNameOf },
     { "GUIDFromString", func_GUIDFromString },
     { "IconPositions", func_IconPositions },
