@@ -1296,6 +1296,7 @@ NtUserFindExistingCursorIcon(
     NTSTATUS Status;
     PPROCESSINFO pProcInfo = PsGetCurrentProcessWin32Process();
     RTL_ATOM atomModName;
+    BOOL bSystemCursor = FALSE;
 
     TRACE("Enter NtUserFindExistingCursorIcon\n");
 
@@ -1345,16 +1346,15 @@ NtUserFindExistingCursorIcon(
                     : RtlCompareUnicodeString(&ustrRsrcSafe, &pcurGlobal->strName, TRUE) == 0)
             {
                 CurIcon = pcurGlobal;
+                bSystemCursor = TRUE;
                 break;
             }
         }
     }
-    if (!CurIcon)
+    if (!bSystemCursor)
         CurIcon = pProcInfo->pCursorCache;
-    while (CurIcon)
+    while (!bSystemCursor && CurIcon)
     {
-        if (CurIcon->CURSORF_flags & CURSORF_GLOBAL)
-            break; /* the system cursor found above */
         /* Icon/cursor */
         if (paramSafe.bIcon != is_icon(CurIcon))
         {
