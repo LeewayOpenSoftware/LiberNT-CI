@@ -50,6 +50,7 @@ struct CplTask
 
 static const CplTask g_Tasks[] =
 {
+    { 5, L"{4026492F-2F69-46B8-B9BF-5654FC07E423}" }, /* Orosi Firewall */
     { 5, L"{BB06C0E4-D293-4f75-8A90-CB05B6477EEE}" }, /* System */
     { 5, L"{025A5937-A6BE-4686-A844-36FE4BEC8B6D}" }, /* Power Options */
     { 5, L"{74246bfc-4c96-11d0-abef-0020af6b0b7a}" }, /* Device Manager */

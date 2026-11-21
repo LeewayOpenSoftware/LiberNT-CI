@@ -434,6 +434,39 @@
 #define IDS_CPL_VIEW_LARGE                          60074
 #define IDS_CPL_VIEW_SMALL                          60075
 #define IDS_CPL_VIEW_CLASSIC                        60076
+
+/* Orosi Firewall page */
+#define IDS_FW_NAME                                 60080
+#define IDS_FW_TITLE                                60081
+#define IDS_FW_INTRO                                60082
+#define IDS_FW_PRIVATE                              60083
+#define IDS_FW_PUBLIC                               60084
+#define IDS_FW_DOMAIN                               60085
+#define IDS_FW_CONNECTED                            60086
+#define IDS_FW_NOTCONNECTED                         60087
+#define IDS_FW_STATE                                60088
+#define IDS_FW_ON                                   60089
+#define IDS_FW_OFF                                  60090
+#define IDS_FW_INCOMING                             60091
+#define IDS_FW_IN_ALLOWED                           60092
+#define IDS_FW_IN_BLOCKALL                          60093
+#define IDS_FW_IN_ALLOW                             60094
+#define IDS_FW_ACTIVE                               60095
+#define IDS_FW_NONE                                 60096
+#define IDS_FW_PANE_ONOFF                           60097
+#define IDS_FW_PANE_RESTORE                         60098
+#define IDS_FW_CUSTOMIZE                            60099
+#define IDS_FW_CUSTOMIZE_INTRO                      60100
+#define IDS_FW_PRIVATE_SETTINGS                     60101
+#define IDS_FW_PUBLIC_SETTINGS                      60102
+#define IDS_FW_TURN_ON                              60103
+#define IDS_FW_TURN_OFF                             60104
+#define IDS_FW_RESTORE_ASK                          60105
+#define IDS_FW_FAILED                               60106
+#define IDS_FW_UNAVAILABLE                          60107
+#define IDS_FW_OK                                   60108
+#define IDS_FW_CANCEL                               60109
+#define IDS_FW_PANE_NSC                             60110
 #define IDS_SEARCHBAND_COMMAND                      12708
 #define IDS_FOLDERSHORTCUT_TYPE                     10540
 
