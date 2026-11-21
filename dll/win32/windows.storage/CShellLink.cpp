@@ -1834,10 +1834,12 @@ HRESULT STDMETHODCALLTYPE CShellLink::GetIconLocation(UINT uFlags, PWSTR pszIcon
         {
             hr = m_pPidl ? SHELL_GetUIObjectOfAbsoluteItem(NULL, m_pPidl, IID_PPV_ARG(IExtractIconW, &m_pTargetExtractIcon))
                          : E_FAIL;
-            if (FAILED(hr) && m_sPath && *m_sPath)
+            if (FAILED(hr) && m_sPath && *m_sPath && !PathIsUNCW(m_sPath) && !PathIsNetworkPathW(m_sPath))
             {
                 /* A link made elsewhere carries a pidl our folders may not resolve;
-                 * its LinkInfo path still names the target (Windows falls back the same way). */
+                 * its LinkInfo path still names the target (Windows falls back the same way).
+                 * Local paths only: a dropped .lnk must not make a folder view reach out
+                 * over the network for an icon. */
                 CComHeapPtr<ITEMIDLIST> pidlPath;
 
                 if (SUCCEEDED(SHParseDisplayName(m_sPath, NULL, &pidlPath, 0, NULL)))
