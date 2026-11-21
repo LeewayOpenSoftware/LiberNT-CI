@@ -80,7 +80,7 @@ Severity=Warning
 Facility=System
 SymbolicName=BUGCHECK_MESSAGE_INTRO
 Language=English
-A problem has been detected and LiberNT has been shut down to prevent damage
+A problem has been detected and Orosi has been shut down to prevent damage
 to your computer.
 .
 

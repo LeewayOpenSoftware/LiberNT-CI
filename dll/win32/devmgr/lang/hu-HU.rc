@@ -87,7 +87,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "A LiberNT nem tudja elérni ezt az eszközt, mivel a szervíz beállításai a rendszerleíró adatbázisban hibásak vagy hiányoznak."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "A LiberNT sikeresen betöltötte az eszköz illesztőprogramját, de nem találja az eszközt."
     IDS_DEV_DUPLICATE_DEVICE "A LiberNT nem tudja betölteni az illesztőprogramot ehhez az eszközhöz, mivel egy másik ugyanilyen eszköz már működik a számítógépben."
-    IDS_DEV_FAILED_POST_START "A LiberNT leállította ezt az eszközt mert problémákat jelzett."
+    IDS_DEV_FAILED_POST_START "A Orosi leállította ezt az eszközt mert problémákat jelzett."
     IDS_DEV_HALTED "Egy alkalmazás vagy szolgáltatás leállította ezt az eszközt."
     IDS_DEV_PHANTOM "Jelenleg ez az eszköz nincs a számítógéphez csatlakoztatva."
     IDS_DEV_SYSTEM_SHUTDOWN "A LiberNT nem tud hozzáférni ehhez az eszközhöz, mivel az operációs rendszer a leállítás folyamatában van."

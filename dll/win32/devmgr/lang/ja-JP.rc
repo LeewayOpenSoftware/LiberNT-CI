@@ -86,7 +86,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "レジストリ中にサービス キー情報が見つからないか、不正に記録されているため、LiberNT は、このハードウェアにアクセスできません。"
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT は、このハードウェアに対するデバイス ドライバーを正しく読み込みましたが、ハードウェア デバイスが見つかりません。"
     IDS_DEV_DUPLICATE_DEVICE "システムに重複したデバイスがすでに作動しているため、LiberNT はこのハードウェアに対するデバイス ドライバーを読み込めません。"
-    IDS_DEV_FAILED_POST_START "LiberNT は、デバイスが問題を報告したため、このデバイスを停止しました。"
+    IDS_DEV_FAILED_POST_START "Orosi は、デバイスが問題を報告したため、このデバイスを停止しました。"
     IDS_DEV_HALTED "アプリケーションかサービスは、このハードウェア デバイスをシャットダウンしました。"
     IDS_DEV_PHANTOM "現在、このハードウェア デバイスは、コンピューターに接続されていません。"
     IDS_DEV_SYSTEM_SHUTDOWN "OS がシャットダウン中のため、LiberNT は、このハードウェア デバイスへのアクセスを取得できません。"

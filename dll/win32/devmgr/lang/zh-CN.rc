@@ -95,7 +95,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT 无法访问这个硬件，因为它在注册表中的服务密钥信息已丢失或记录不正确。"
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT 成功地加载了这个硬件的设备驱动程序，但找不到硬件设备。"
     IDS_DEV_DUPLICATE_DEVICE "LiberNT 无法加载这个硬件的设备驱动程序，因为已有一个重复的设备在系统上运行。"
-    IDS_DEV_FAILED_POST_START "因为此设备报告了问题，LiberNT 已将其停止。"
+    IDS_DEV_FAILED_POST_START "因为此设备报告了问题，Orosi 已将其停止。"
     IDS_DEV_HALTED "应用程序或服务已关闭这个硬件设备。"
     IDS_DEV_PHANTOM "此硬件设备没有连接到计算机。"
     IDS_DEV_SYSTEM_SHUTDOWN "因为操作系统正在关闭，LiberNT 无法访问这个硬件设备。"

@@ -93,7 +93,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT ei saa riistvarale ligi, sest selle teenuse võtme informatsioon on kas regstrist kadunud või valesti registreeritud."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT edukalt laadis seadme draiverid, aga ei leia selle riistvara ise."
     IDS_DEV_DUPLICATE_DEVICE "LiberNT ei saa laadida selle seadme draiverit, sest teine samasugune seade on juba süsteemis käivitatud."
-    IDS_DEV_FAILED_POST_START "LiberNT seiskas selle seadme kuna see teavitas probleemist."
+    IDS_DEV_FAILED_POST_START "Orosi seiskas selle seadme kuna see teavitas probleemist."
     IDS_DEV_HALTED "Rakendus või teenus on selle seadme välja lülitanud."
     IDS_DEV_PHANTOM "See seade ei ole hetkel arvutiga ühendatud."
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT ei saa ligi sellele seadmele, sest operatsiooni süsteem on sulgemas."

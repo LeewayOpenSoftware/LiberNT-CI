@@ -88,7 +88,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT tidak bisa mengakses perangkat keras ini karena informasi kunci layanan dalam registri hilang atau terekam secara tidak sah."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT mengambil driver perangkat untuk perangkat keras dengan sukses tapi tidak bisa menemukan perangkatnya."
     IDS_DEV_DUPLICATE_DEVICE "LiberNT tidak bisa mengambil driver perangkat untuk perangkat keras ini karena adanya perangkat duplikat yang sudah berjalan dalam sistem."
-    IDS_DEV_FAILED_POST_START "LiberNT telah menghentikan perangkat ini karena dilaporkan bermasalah."
+    IDS_DEV_FAILED_POST_START "Orosi telah menghentikan perangkat ini karena dilaporkan bermasalah."
     IDS_DEV_HALTED "Aplikasi atau layanan telah mematikan perangkat keras ini."
     IDS_DEV_PHANTOM "Saat ini, perangkat keras ini tidak disambungkan ke komputer."
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT tidak mendapatkan akses terhadap perangkat keras ini karena sistem operasi masih dalam proses penonaktifan."

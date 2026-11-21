@@ -88,7 +88,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT, bu donanımın, kayıt defterindeki hizmet anahtarı bilgisinin eksik ya da yanlış saklanmış olmasından dolayı bu donanıma erişemiyor."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT, bu donanım için aygıt sürücüsünü başarıyla yükledi ancak donanım aygıtını bulamıyor."
     IDS_DEV_DUPLICATE_DEVICE "LiberNT, sistemde bu donanımın aynısının çalışıyor olmasından dolayı bu donanım için aygıt sürücüsünü yükleyemiyor."
-    IDS_DEV_FAILED_POST_START "LiberNT, bu aygıtı, sorunlar bildirdiğinden dolayı durdurdu."
+    IDS_DEV_FAILED_POST_START "Orosi, bu aygıtı, sorunlar bildirdiğinden dolayı durdurdu."
     IDS_DEV_HALTED "Bir uygulama ya da bir hizmet bu donanım aygıtını kapattı."
     IDS_DEV_PHANTOM "Şimdi bu donanım aygıtı bilgisayara bağlı değil."
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT, işletim sisteminin kapatılmakta olmasından dolayı bu donanım aygıtı için erişim sağlayamıyor."

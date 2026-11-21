@@ -88,7 +88,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT kan ikke få tilgang til denne maskinvaren fordi dens tjeneste nøkkel informasjon i registret mangler eller er uriktig."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT har fullført å laste denne enhetsdriverne for for maskinvare men kan ikke finne maskinvare enheten."
     IDS_DEV_DUPLICATE_DEVICE "LiberNT kan ikke laste enhetsdriveren for denne maskinvaren fordi det er en duplikat enhet som allerede kjører på systemet."
-    IDS_DEV_FAILED_POST_START "LiberNT har stoppet denne enheten fordi det har rapportert problemer."
+    IDS_DEV_FAILED_POST_START "Orosi har stoppet denne enheten fordi det har rapportert problemer."
     IDS_DEV_HALTED "Et program eller tjeneste har slått av denne maskinvare enheten."
     IDS_DEV_PHANTOM "Nåværende, denne maskinvare enheten er ikke koblet til datamaskinen."
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT kan ikke få tilgang til denne maskinvare enheten fordi operativssystemet er i prosessen for å slås av."

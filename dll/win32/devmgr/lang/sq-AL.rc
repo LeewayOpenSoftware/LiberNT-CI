@@ -90,7 +90,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT nuk mund të hyni në këtë pajisje elektronike, sepse shërbimi i informacionit kyç i saj në regjistër mungon ose është regjistruar gabimisht."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT ka ngarkuar me sukses komanduesin e pajisjes për këtë pjesë elektronike, por nuk mund të gjejë pajisje elektronike."
     IDS_DEV_DUPLICATE_DEVICE "LiberNT nuk mund të ngarkojë komanduesin e pajisjes për këtë pajisje elektronike, sepse nuk është një pajisje e dublikatë duke punuar në sistem."
-    IDS_DEV_FAILED_POST_START "LiberNT ka ndaluar këtë pajisje për shkak se ajo e ka raportuar probleme."
+    IDS_DEV_FAILED_POST_START "Orosi ka ndaluar këtë pajisje për shkak se ajo e ka raportuar probleme."
     IDS_DEV_HALTED "Një program apo shërbim e ka mbyllur këtë pajisje elektronike."
     IDS_DEV_PHANTOM "Aktualisht, kjo pajisje pajisje nuk është e lidhur tek kompjuteri."
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT nuk mund të kenë akses në këtë pajisje elektronike për shkak se sistemi operativ është në proces mbyllje."

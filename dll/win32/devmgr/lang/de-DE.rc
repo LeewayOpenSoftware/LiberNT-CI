@@ -88,7 +88,7 @@ BEGIN
     IDS_DEV_DRIVER_SERVICE_KEY_INVALID "LiberNT kann dieses Gerät nicht ansprechen, weil seine Serviceschlüssel-Information nicht in der Registrierungsdatenbank ist oder weil sie falsch ist."
     IDS_DEV_LEGACY_SERVICE_NO_DEVICES "LiberNT hat den Gerätetreiber für dieses Gerät erfolgreich geladen, kann aber das Gerät nicht finden."
     IDS_DEV_DUPLICATE_DEVICE "LiberNT kann den Gerätetreiber für dieses Gerät nicht laden, weil bereits ein identisches Gerät installiert ist."
-    IDS_DEV_FAILED_POST_START "LiberNT hat dieses Gerät angehalten, weil es Probleme berichtet hat."
+    IDS_DEV_FAILED_POST_START "Orosi hat dieses Gerät angehalten, weil es Probleme berichtet hat."
     IDS_DEV_HALTED "Eine Anwendung oder ein Dienst hat dieses Gerät heruntergefahren."
     IDS_DEV_PHANTOM "Dieses Gerät ist momentan nicht mit dem Computer verbunden."
     IDS_DEV_SYSTEM_SHUTDOWN "LiberNT kann auf dieses Gerät nicht zugreifen, weil das Betriebssystem heruntergefahren wird."
