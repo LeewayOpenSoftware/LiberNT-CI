@@ -1,4 +1,4 @@
-Noto Emoji 3.002, the monochrome emoji font linked behind the Segoe UI, Tahoma and
+Noto Emoji 3.002, the monochrome emoji font behind the "Segoe UI Emoji" FontSubstitutes row, also linked behind the Segoe UI, Tahoma and
 Microsoft Sans Serif chains (FontLink) so emoji show as outlines in GDI. Shipped unmodified
 under the name NotoEmoji.ttf (upstream file NotoEmoji[wght].ttf, variable weight 300-700,
 default 400).

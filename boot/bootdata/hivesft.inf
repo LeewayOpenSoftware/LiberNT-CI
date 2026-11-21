@@ -1307,11 +1307,11 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Terminal 8 (VGA res)",0x00000000,"vgaoem.fon"
 ; F1 file (icon font card)
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Segoe Fluent Icons (Leeway replacement) (TrueType)",0x00000000,"SegoeIcons.ttf"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Twemoji Mozilla (Segoe UI Emoji replacement) (TrueType)",0x00000000,"TwemojiMozilla.ttf"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Emoji (monochrome emoji fallback) (TrueType)",0x00000000,"NotoEmoji.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Twemoji Mozilla (colour emoji for DirectWrite) (TrueType)",0x00000000,"TwemojiMozilla.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Emoji (Segoe UI Emoji replacement) (TrueType)",0x00000000,"NotoEmoji.ttf"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","System",0x00000000,"FreeSans"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Emoji",0x00000000,"Twemoji Mozilla"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Emoji",0x00000000,"Noto Emoji"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI",0x00000000,"Selawik"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Light",0x00000000,"Selawik Light"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Semilight",0x00000000,"Selawik Semilight"

@@ -1,5 +1,6 @@
-Twemoji Mozilla 0.7.0 (COLR version 0), the colour emoji font behind the "Segoe UI Emoji"
-FontSubstitutes row. Shipped unmodified under the name TwemojiMozilla.ttf (upstream asset
+Twemoji Mozilla 0.7.0 (COLR version 0), the colour emoji font for DirectWrite (COLR layers
+via TranslateColorGlyphRun). GDI cannot draw it: its base glyphs are empty, so "Segoe UI Emoji"
+resolves to Noto Emoji. Shipped unmodified under the name TwemojiMozilla.ttf (upstream asset
 Twemoji.Mozilla.ttf).
 
 Origin:   https://github.com/mozilla/twemoji-colr/releases/tag/v0.7.0 (released 2022-10-28)
