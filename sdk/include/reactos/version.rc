@@ -18,11 +18,11 @@
 #include <ntverp.h>
 
 /* Define some defaults (shouldn't be overwritten by applications) */
-#define REACTOS_DEFAULT_STR_COMPANY_NAME    "LiberNT Project"
-#define REACTOS_DEFAULT_STR_DESCRIPTION     "LiberNT Core Component"
+#define REACTOS_DEFAULT_STR_COMPANY_NAME    "Leeway Open Software"
+#define REACTOS_DEFAULT_STR_DESCRIPTION     "Orosi Core Component"
 #define REACTOS_DEFAULT_STR_INTERNAL_NAME   ""
-#define REACTOS_DEFAULT_STR_LEGAL_COPYRIGHT "(C) 1996-" COPYRIGHT_YEAR " ReactOS and LiberNT contributors"
-#define REACTOS_DEFAULT_STR_PRODUCT_NAME    "LiberNT Operating System"
+#define REACTOS_DEFAULT_STR_LEGAL_COPYRIGHT "(C) Leeway Open Software. Based on ReactOS (C) 1996-" COPYRIGHT_YEAR "."
+#define REACTOS_DEFAULT_STR_PRODUCT_NAME    "Orosi"
 
 /* Set defaults for everything, unless overridden */
 #ifndef REACTOS_FILEVERSION
