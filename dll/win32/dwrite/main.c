@@ -611,6 +611,9 @@ struct dwritefactory
     struct
     {
         FILETIME timestamp;
+#ifdef __REACTOS__
+        BOOL built;
+#endif
         struct dwrite_fontset_entry **entries;
         unsigned int count;
     } system_set;
@@ -1730,6 +1733,9 @@ static HRESULT factory_create_system_fontset(struct dwritefactory *factory, cons
 
     hr = fontset_builder_get_entries(builder, &factory->system_set.entries, &factory->system_set.count);
     IDWriteFontSetBuilder2_Release(builder);
+#ifdef __REACTOS__
+    factory->system_set.built = SUCCEEDED(hr);
+#endif
 
     return hr;
 }
@@ -1747,7 +1753,12 @@ HRESULT create_system_fontset(IDWriteFactory7 *factory_iface, REFIID riid, void 
 
     EnterCriticalSection(&factory->cs);
 
+#ifdef __REACTOS__
+    /* A hive-seeded Fonts key carries LastWriteTime 0, which never compares newer than the zeroed cache. */
+    if (!factory->system_set.built || CompareFileTime(&timestamp, &factory->system_set.timestamp) > 0)
+#else
     if (CompareFileTime(&timestamp, &factory->system_set.timestamp) > 0)
+#endif
         hr = factory_create_system_fontset(factory, &timestamp);
 
     if (SUCCEEDED(hr))
