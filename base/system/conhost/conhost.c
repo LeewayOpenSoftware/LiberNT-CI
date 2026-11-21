@@ -2976,8 +2976,9 @@ static NTSTATUS write_console( struct screen_buffer *screen_buffer, const WCHAR 
     empty_update_rect( screen_buffer, &update_rect );
 
 #ifdef __REACTOS__
-    /* As on Windows, VT processing does not depend on ENABLE_PROCESSED_OUTPUT */
-    if (screen_buffer->mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+    /* As on Windows, escape sequences are parsed only with ENABLE_PROCESSED_OUTPUT too */
+    if ((screen_buffer->mode & (ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) ==
+        (ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
     {
         vt_write( screen_buffer, buffer, len, &update_rect );
         scroll_to_cursor( screen_buffer );

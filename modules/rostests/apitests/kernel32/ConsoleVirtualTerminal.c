@@ -58,6 +58,27 @@ WriteVt(HANDLE Output,
     return Success && Written == Length;
 }
 
+/* Finds a primary device-attributes reply, ESC [ ? <digits and ;> c, whatever its parameters */
+static BOOL
+ContainsDeviceAttributes(const WCHAR *Buffer, DWORD Count)
+{
+    DWORD i, j;
+
+    for (i = 0; i + 3 < Count; i++)
+    {
+        if (Buffer[i] != 0x1b || Buffer[i + 1] != L'[' || Buffer[i + 2] != L'?')
+            continue;
+        for (j = i + 3; j < Count && ((Buffer[j] >= L'0' && Buffer[j] <= L'9') || Buffer[j] == L';'); j++)
+            ;
+        if (j > i + 3 && j < Count && Buffer[j] == L'c')
+        {
+            trace("Primary device attributes: %.*ls\n", (int)(j - i - 1), &Buffer[i + 1]);
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 #define WRITE_VT(Output, String) WriteVt((Output), (String), sizeof(String) - 1)
 
 static BOOL
@@ -304,8 +325,8 @@ TestEditStartup(HANDLE Input,
        "Unexpected OSC 11 background-colour reply\n");
     ok(Contains(Responses, CharacterCount, L"\x1b[4;2R"),
        "Missing cursor-position reply for the ambiguous-width probe\n");
-    ok(Contains(Responses, CharacterCount, L"\x1b[?61;1;6;7;21;22;23;24;28;32;42c"),
-       "Missing primary device-attributes reply\n");
+    ok(ContainsDeviceAttributes(Responses, CharacterCount),
+       "Missing primary device-attributes reply (ESC [ ? ... c)\n");
 
     WriteVt(Output, EditRestore, sizeof(EditRestore) - 1);
     ok(ReadCell(Output, MarkerPosition.X, MarkerPosition.Y) == L'P',
@@ -697,12 +718,16 @@ TestFaintItalic(HANDLE Output)
     ok(Attribute == Plain, "Italic attribute is %#x, expected %#x\n", Attribute, Plain);
     Attribute = ReadCellAttribute(Output, 3, 0);
     ok((Attribute & 0x0f) == FOREGROUND_RED, "Faint italic red attribute is %#x\n", Attribute);
+    /* SGR 22 and 23 reset intensity and italic only: the red from SGR 31 stays */
     Attribute = ReadCellAttribute(Output, 4, 0);
-    ok(Attribute == Plain, "Attribute after SGR 22;23 is %#x, expected %#x\n", Attribute, Plain);
+    ok(Attribute == ((Plain & 0xf0) | FOREGROUND_RED), "Attribute after SGR 22;23 is %#x, expected %#x\n",
+       Attribute, (Plain & 0xf0) | FOREGROUND_RED);
     Attribute = ReadCellAttribute(Output, 5, 0);
-    ok(Attribute & FOREGROUND_INTENSITY, "Bold faint attribute is %#x, expected intensity\n", Attribute);
+    ok(Attribute == ((Plain & 0xf0) | FOREGROUND_RED | FOREGROUND_INTENSITY),
+       "Bold faint attribute is %#x, expected %#x\n", Attribute, (Plain & 0xf0) | FOREGROUND_RED | FOREGROUND_INTENSITY);
     Attribute = ReadCellAttribute(Output, 6, 0);
-    ok(Attribute == Plain, "SGR 22 left attribute %#x, expected %#x\n", Attribute, Plain);
+    ok(Attribute == ((Plain & 0xf0) | FOREGROUND_RED), "SGR 22 left attribute %#x, expected %#x\n",
+       Attribute, (Plain & 0xf0) | FOREGROUND_RED);
 }
 
 static VOID
@@ -753,13 +778,16 @@ TestVtWithoutProcessedOutput(HANDLE Output)
     }
     if (ClearScreen(Output, &Info))
     {
-        WRITE_VT(Output, "\x1b[2;3HQ\x1b[1;1H");
-        Cell = ReadCell(Output, 2, 1);
-        ok(Cell == L'Q', "CUP without processed output put %04x at (2,1), expected Q\n", Cell);
+        /* As on Windows: without processed output, VT sequences are not parsed */
+        WRITE_VT(Output, "\x1b[2;3HQ");
         Cell = ReadCell(Output, 0, 0);
-        ok(Cell == L' ', "Escape sequence was written as text: %04x at (0,0)\n", Cell);
+        ok(Cell == 0x1b, "Without processed output (0,0) is %04x, expected the ESC character\n", Cell);
         Cell = ReadCell(Output, 1, 0);
-        ok(Cell == L' ', "Escape sequence was written as text: %04x at (1,0)\n", Cell);
+        ok(Cell == L'[', "Without processed output (1,0) is %04x, expected [\n", Cell);
+        Cell = ReadCell(Output, 6, 0);
+        ok(Cell == L'Q', "Without processed output (6,0) is %04x, expected Q\n", Cell);
+        Cell = ReadCell(Output, 2, 1);
+        ok(Cell == L' ', "CUP was parsed without processed output: %04x at (2,1)\n", Cell);
     }
     SetConsoleMode(Output, Mode);
 }
