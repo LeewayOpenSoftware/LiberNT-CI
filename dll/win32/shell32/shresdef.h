@@ -407,6 +407,24 @@
 #define IDS_CPL_CAT_APPEARANCE                      60046
 #define IDS_CPL_CAT_CLOCK                           60047
 #define IDS_CPL_CAT_ACCESS                          60048
+
+/* Network and Sharing Center */
+#define IDS_NSC_TITLE                               60050
+#define IDS_NSC_ACTIVE                              60051
+#define IDS_NSC_NONE                                60052
+#define IDS_NSC_ACCESS                              60053
+#define IDS_NSC_CONNECTIONS                         60054
+#define IDS_NSC_INTERNET                            60055
+#define IDS_NSC_NOINTERNET                          60056
+#define IDS_NSC_NOACCESS                            60057
+#define IDS_NSC_PUBLIC                              60058
+#define IDS_NSC_PRIVATE                             60059
+#define IDS_NSC_DOMAIN                              60060
+#define IDS_NSC_UNIDENTIFIED                        60061
+#define IDS_NSC_ADAPTERS                            60062
+#define IDS_NSC_SHARING                             60063
+#define IDS_NSC_SEEALSO                             60064
+#define IDS_NSC_INETOPTIONS                         60065
 #define IDS_SEARCHBAND_COMMAND                      12708
 #define IDS_FOLDERSHORTCUT_TYPE                     10540
 

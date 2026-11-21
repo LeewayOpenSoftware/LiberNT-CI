@@ -33,6 +33,8 @@ int PersCompareChain(PCUIDLIST_RELATIVE pidl1, PCUIDLIST_RELATIVE pidl2);
 BOOL CplIsCategoryName(PCWSTR name);
 BOOL CplIsPersonalizationParseName(PCWSTR name);
 HRESULT CplCategoryBind(PCIDLIST_ABSOLUTE pidlAbsCategory, REFIID riid, LPVOID *ppvOut);
+/* Browses from a view without doing it inside the view's own window procedure; takes pidl */
+HRESULT PersNavigateOutside(IShellBrowser *psb, PIDLIST_ABSOLUTE pidl);
 
 class CPersonalizationFolder :
     public CComCoClass<CPersonalizationFolder, &CLSID_PersonalizationFolder>,

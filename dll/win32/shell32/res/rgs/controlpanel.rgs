@@ -86,16 +86,13 @@ HKCR
 			val InfoTip = s 'View the status of your network and manage its connections.'
 			val LocalizedString = s 'Network and Sharing Center'
 			DefaultIcon = e '%%SystemRoot%%\system32\netshell.dll,-100'
-			Shell
+			InprocServer32 = s '%MODULE%'
 			{
-				Open
-				{
-					Command = e '%%SystemRoot%%\ImmersiveControlPanel\SystemSettings.exe "ms-settings:network"'
-				}
+				val ThreadingModel = s 'Apartment'
 			}
 			ShellFolder
 			{
-				val Attributes = d '0'
+				val Attributes = d '671088644'
 			}
 		}
 	}

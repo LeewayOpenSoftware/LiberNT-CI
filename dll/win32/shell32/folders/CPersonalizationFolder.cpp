@@ -175,7 +175,7 @@ static LRESULT CALLBACK PersNavProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 }
 
 /* The view cannot navigate from its own window procedure: the browser releases the last reference to it there. */
-static HRESULT PersNavigateOutside(IShellBrowser *psb, PIDLIST_ABSOLUTE pidl)
+HRESULT PersNavigateOutside(IShellBrowser *psb, PIDLIST_ABSOLUTE pidl)
 {
     static const WCHAR cls[] = L"PersonalizationNavHelper";
     WNDCLASSW wc = {};

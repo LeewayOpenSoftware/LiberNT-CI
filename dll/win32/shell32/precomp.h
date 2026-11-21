@@ -78,6 +78,7 @@
 #include "folders/CDesktopFolder.h"
 #include "folders/CControlPanelFolder.h"
 #include "folders/CPersonalizationFolder.h"
+#include "folders/CNetCenterFolder.h"
 #include "folders/CMyDocsFolder.h"
 #include "folders/CNetFolder.h"
 #include "folders/CFontsFolder.h"
