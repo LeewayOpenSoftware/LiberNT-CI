@@ -66,6 +66,7 @@ CStringW FontTask_Title(UINT iTask);
 bool FontTask_Available(UINT iTask);
 HRESULT FontTask_Run(HWND hwnd, UINT iTask);
 HRESULT _CFontCommandProvider_Create(REFIID riid, LPVOID* ppvOut);
+HRESULT _CFontPaneVisibility_Create(REFIID riid, LPVOID* ppvOut);
 HRESULT _FontThumbnail_Create(PCWSTR pszPath, REFIID riid, LPVOID* ppvOut);
 
 inline BOOL IsFontDotExt(LPCWSTR pchDotExt)

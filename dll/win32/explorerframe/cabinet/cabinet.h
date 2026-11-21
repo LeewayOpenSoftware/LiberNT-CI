@@ -146,6 +146,9 @@ private:
     void CreateNavigationPane();
     void SetNavigationBackground(COLORREF color);
     void SyncNavigationPane();
+    BOOL NavigationShown() const;
+    void UpdateFolderPanes();
+    void ToggleNavigationPane();
     void WatchFolder();
     void UpdateDetails();
     void ShowTabMenu(int index, POINT screen);
@@ -248,7 +251,9 @@ private:
     ULONG m_NavigationDepth;
     BOOL m_ClosePending;
     ULONG m_ChangeNotify;
-    BOOL m_NavigationVisible;
+    BOOL m_NavigationVisible;      // the user's setting for the navigation pane
+    DWORD m_FolderNavigationState; // EP_NavPane state the current folder asked for (IExplorerPaneVisibility)
+    BOOL m_FolderNavigationShown;  // shown anyway in a folder that turns it off by default
     IExplorerBrowser *m_SearchBrowser;
     WCHAR m_SearchQuery[MAX_PATH];
     WCHAR m_SearchPaths[26][MAX_PATH];

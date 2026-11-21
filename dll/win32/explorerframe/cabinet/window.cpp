@@ -205,6 +205,8 @@ CCabinetWindow::CCabinetWindow() :
     m_ClosePending(FALSE),
     m_ChangeNotify(0),
     m_NavigationVisible(TRUE),
+    m_FolderNavigationState(EPS_DONTCARE),
+    m_FolderNavigationShown(FALSE),
     m_SearchBrowser(NULL),
     m_SearchPathCount(0),
     m_SearchActive(FALSE)
@@ -793,8 +795,8 @@ CCabinetWindow::LayoutChildren(HDWP *hdwp)
     left = 0;
     if (m_NavigationWindow)
     {
-        ShowWindow(m_NavigationWindow, m_NavigationVisible ? SW_SHOW : SW_HIDE);
-        if (m_NavigationVisible)
+        ShowWindow(m_NavigationWindow, NavigationShown() ? SW_SHOW : SW_HIDE);
+        if (NavigationShown())
         {
             left = Scale(160);
             PlaceChild(hdwp,m_NavigationWindow, Scale(2), top, Scale(154), max(0, bottom - top));
@@ -1823,7 +1825,7 @@ CCabinetWindow::CycleFocus()
         m_AddressBand->EndEdit();
         SetFocus(m_SearchEdit);
     }
-    else if (focus == m_SearchEdit && m_NavigationVisible && m_NavigationWindow)
+    else if (focus == m_SearchEdit && NavigationShown() && m_NavigationWindow)
         SetFocus(FindWindowExW(m_NavigationWindow, NULL, WC_TREEVIEWW, NULL) ?
                  FindWindowExW(m_NavigationWindow, NULL, WC_TREEVIEWW, NULL) : m_NavigationWindow);
     else if (view && (focus == m_SearchEdit || (m_NavigationWindow && (focus == m_NavigationWindow ||
@@ -2293,6 +2295,7 @@ CCabinetWindow::ActivateTab(int index)
     UpdateCommands();
     UpdateDetails();
     UpdatePreview();
+    UpdateFolderPanes();
     SyncNavigationPane();
     WatchFolder();
     if (GetActiveWindow() == m_hwnd)
@@ -2460,6 +2463,7 @@ CCabinetWindow::OnNavigationComplete(IExplorerBrowser *browser, PCIDLIST_ABSOLUT
         if (!m_SearchActive)
             SetWindowTextW(m_SearchEdit, L"");
         UpdateAddress();
+        UpdateFolderPanes();
         SyncNavigationPane();
         WatchFolder();
         PostMessageW(m_hwnd, WM_CABINET_STATUS, 0, 0);
@@ -3255,7 +3259,8 @@ CCabinetWindow::ShowViewMenu()
         SHGetSetSettings(&state, SSF_SHOWEXTENSIONS | SSF_SHOWALLOBJECTS, FALSE);
         folderView->GetCurrentFolderFlags(&flags);
         LoadText(IDS_CAB_SHOW_NAVIGATION, text, _countof(text));
-        AppendMenuW(show, MF_STRING | (m_NavigationVisible ? MF_CHECKED : 0), 50, text);
+        AppendMenuW(show, MF_STRING | (NavigationShown() ? MF_CHECKED : 0) |
+                    ((m_FolderNavigationState & EPS_FORCE) ? MF_GRAYED : 0), 50, text);
         LoadText(IDS_CAB_SHOW_DETAILS, text, _countof(text));
         AppendMenuW(show, MF_STRING | (m_DetailsPane ? MF_CHECKED : 0), 51, text);
         LoadText(IDS_CAB_SHOW_PREVIEW, text, _countof(text));
@@ -3280,10 +3285,7 @@ CCabinetWindow::ShowViewMenu()
         UpdateViewToggles();
     }
     else if (command == 50)
-    {
-        m_NavigationVisible = !m_NavigationVisible;
-        OnSize();
-    }
+        ToggleNavigationPane();
     else if (command == 51)
         SetPane(!m_DetailsPane, FALSE);
     else if (command == 55)
@@ -3403,6 +3405,74 @@ CCabinetWindow::ShowMoreMenu()
     if (command >= 100 && command < 100 + (UINT)CabinetCommand::Count)
         ExecuteCommand((CabinetCommand)(command - 100));
     UpdateStatus();
+}
+
+/* The navigation pane is shown when the user wants it, unless the current folder turns
+   it off (IExplorerPaneVisibility EP_NavPane): EPS_DEFAULT_OFF until the user shows it
+   in that folder, EPS_FORCE always. The user's own setting is never changed by a folder. */
+BOOL
+CCabinetWindow::NavigationShown() const
+{
+    DWORD state = m_FolderNavigationState & EPS_STATE_MASK;
+
+    if (m_FolderNavigationState & EPS_FORCE)
+        return state == EPS_DEFAULT_ON || (state != EPS_DEFAULT_OFF && m_NavigationVisible);
+    if (state == EPS_DEFAULT_OFF)
+        return m_FolderNavigationShown;
+    return m_NavigationVisible;
+}
+
+void
+CCabinetWindow::ToggleNavigationPane()
+{
+    if (m_FolderNavigationState & EPS_FORCE)
+        return;
+    if ((m_FolderNavigationState & EPS_STATE_MASK) == EPS_DEFAULT_OFF)
+        m_FolderNavigationShown = !m_FolderNavigationShown; // for this folder only
+    else
+        m_NavigationVisible = !m_NavigationVisible;
+    OnSize();
+}
+
+/* Ask the folder of the active tab which panes it wants, the way Windows does: the
+   folder itself, then its view object, then a service of the view */
+void
+CCabinetWindow::UpdateFolderPanes()
+{
+    CabinetTab *tab = ActiveTab();
+    IShellView *view = NULL;
+    IFolderView *folderView = NULL;
+    IShellFolder *folder = NULL;
+    IExplorerPaneVisibility *visibility = NULL;
+    EXPLORERPANESTATE state = EPS_DONTCARE;
+    BOOL before = NavigationShown();
+
+    if (tab && tab->Browser && SUCCEEDED(tab->Browser->GetCurrentView(IID_PPV_ARG(IShellView, &view))))
+    {
+        if (SUCCEEDED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))) &&
+            SUCCEEDED(folderView->GetFolder(IID_PPV_ARG(IShellFolder, &folder))))
+        {
+            if (FAILED(folder->QueryInterface(IID_PPV_ARG(IExplorerPaneVisibility, &visibility))))
+                folder->CreateViewObject(m_hwnd, IID_PPV_ARG(IExplorerPaneVisibility, &visibility));
+        }
+        if (!visibility)
+            IUnknown_QueryService(view, SID_ExplorerPaneVisibility, IID_PPV_ARG(IExplorerPaneVisibility, &visibility));
+    }
+    if (visibility && FAILED(visibility->GetPaneState((REFEXPLORERPANE)&EP_NavPane, &state)))
+        state = EPS_DONTCARE;
+    if (visibility)
+        visibility->Release();
+    if (folder)
+        folder->Release();
+    if (folderView)
+        folderView->Release();
+    if (view)
+        view->Release();
+
+    m_FolderNavigationState = state;
+    m_FolderNavigationShown = FALSE;
+    if (NavigationShown() != before)
+        OnSize();
 }
 
 void

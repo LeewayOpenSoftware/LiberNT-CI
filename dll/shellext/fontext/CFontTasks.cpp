@@ -206,6 +206,33 @@ HRESULT _CFontCommandProvider_Create(REFIID riid, LPVOID* ppvOut)
     return ShellObjectCreator<CFontCommandProvider>(riid, ppvOut);
 }
 
+// Like the Windows Fonts folder: its links take the place of the navigation pane,
+// which the user can still show from the View menu
+class CFontPaneVisibility :
+    public CComObjectRootEx<CComMultiThreadModelNoCS>,
+    public IExplorerPaneVisibility
+{
+public:
+    STDMETHODIMP GetPaneState(REFEXPLORERPANE ep, EXPLORERPANESTATE *peps) override
+    {
+        if (!peps)
+            return E_POINTER;
+        *peps = (ep && IsEqualGUID(*ep, EP_NavPane)) ? EPS_DEFAULT_OFF : EPS_DONTCARE;
+        return S_OK;
+    }
+
+    DECLARE_NOT_AGGREGATABLE(CFontPaneVisibility)
+    DECLARE_PROTECT_FINAL_CONSTRUCT()
+    BEGIN_COM_MAP(CFontPaneVisibility)
+        COM_INTERFACE_ENTRY_IID(IID_IExplorerPaneVisibility, IExplorerPaneVisibility)
+    END_COM_MAP()
+};
+
+HRESULT _CFontPaneVisibility_Create(REFIID riid, LPVOID* ppvOut)
+{
+    return ShellObjectCreator<CFontPaneVisibility>(riid, ppvOut);
+}
+
 // The thumbnail provider lives in its own class (registered for the font file types);
 // the folder hands it out for its items.
 HRESULT _FontThumbnail_Create(PCWSTR pszPath, REFIID riid, LPVOID* ppvOut)
