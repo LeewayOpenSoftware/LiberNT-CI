@@ -337,6 +337,15 @@ static BOOL WCMD_dir_parent_is_root(const WCHAR *dirName)
   len = GetFullPathNameW(dirName, ARRAY_SIZE(full), full, NULL);
   if (len == 0 || len >= ARRAY_SIZE(full)) return FALSE;
 
+  /* Normalize a verbatim path: \\?\C:\... -> C:\... and
+     \\?\UNC\server\share\... -> \\server\share\... */
+  if (full[0] == L'\\' && full[1] == L'\\' && full[2] == L'?' && full[3] == L'\\') {
+    if (full[4] == L'U' && full[5] == L'N' && full[6] == L'C' && full[7] == L'\\')
+      memmove(full + 2, full + 8, (lstrlenW(full + 8) + 1) * sizeof(WCHAR));
+    else
+      memmove(full, full + 4, (lstrlenW(full + 4) + 1) * sizeof(WCHAR));
+  }
+
   /* Strip the trailing backslash */
   lastSlash = full + lstrlenW(full) - 1;
   if (lastSlash > full && *lastSlash == L'\\') *lastSlash = L'\0';
