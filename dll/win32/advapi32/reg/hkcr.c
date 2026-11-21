@@ -183,6 +183,49 @@ GetFallbackHKCRKey(
     return ErrorCode;
 }
 
+/*
+ * A caller whose token integrity level is above Medium (an elevated token, a
+ * High-integrity process, or SYSTEM) must not have the per-user
+ * HKCU\Software\Classes registrations merged into HKEY_CLASSES_ROOT: a
+ * standard-user (Medium) process could otherwise plant a class registration,
+ * for example an InprocServer32, that the more privileged process then loads.
+ * Windows drops the per-user classes from the merged view for exactly these
+ * tokens; the effective (thread) token is used so impersonation is honoured.
+ */
+static
+BOOL
+ClassesRootShouldIgnorePerUser(VOID)
+{
+    HANDLE hToken;
+    union
+    {
+        TOKEN_MANDATORY_LABEL Label;
+        BYTE Buffer[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+    } Il;
+    DWORD Length;
+    DWORD Rid = SECURITY_MANDATORY_MEDIUM_RID;
+    PUCHAR Count;
+
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &hToken) &&
+        !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+    {
+        /* Cannot read our own token (unreachable for the current process):
+         * keep the legacy merged view rather than deny access. */
+        return FALSE;
+    }
+
+    if (GetTokenInformation(hToken, TokenIntegrityLevel, &Il, sizeof(Il), &Length))
+    {
+        Count = GetSidSubAuthorityCount(Il.Label.Label.Sid);
+        if (Count != NULL && *Count != 0)
+            Rid = *GetSidSubAuthority(Il.Label.Label.Sid, *Count - 1);
+    }
+
+    CloseHandle(hToken);
+
+    return (Rid > SECURITY_MANDATORY_MEDIUM_RID);
+}
+
 /* Get the HKCU key (if it exists) from an HKCR key */
 static
 LONG
@@ -209,6 +252,15 @@ GetPreferredHKCRKey(
         RtlFreeUnicodeString(&KeyName);
         *PreferredKey = hKey;
         return ERROR_SUCCESS;
+    }
+
+    /* An elevated, high-integrity or SYSTEM caller gets the per-machine
+     * classes only. Refuse the per-user view the same way we do when the
+     * HKCU key is absent, so every HKCR operation falls back to HKLM. */
+    if (ClassesRootShouldIgnorePerUser())
+    {
+        RtlFreeUnicodeString(&KeyName);
+        return ERROR_FILE_NOT_FOUND;
     }
 
     /* 18 == wcslen(L"\\Registry\\Machine\\") */

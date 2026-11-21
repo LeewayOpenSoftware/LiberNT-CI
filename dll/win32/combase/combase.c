@@ -343,6 +343,40 @@ static HKEY get_classes_root_hkey(HKEY hkey, REGSAM access)
 }
 
 #ifdef __REACTOS__
+/*
+ * A caller above Medium integrity (elevated, High, or SYSTEM) must not read
+ * the per-user HKCU\Software\Classes COM registrations: a standard-user
+ * process could otherwise plant a class that the privileged process loads.
+ */
+static BOOL should_ignore_peruser_classes(void)
+{
+    HANDLE token;
+    union
+    {
+        TOKEN_MANDATORY_LABEL label;
+        BYTE buffer[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+    } il;
+    DWORD length, rid = SECURITY_MANDATORY_MEDIUM_RID;
+    PUCHAR count;
+
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token) &&
+        !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return FALSE;
+
+    if (GetTokenInformation(token, TokenIntegrityLevel, &il, sizeof(il), &length))
+    {
+        count = GetSidSubAuthorityCount(il.label.Label.Sid);
+        if (count != NULL && *count != 0)
+            rid = *GetSidSubAuthority(il.label.Label.Sid, *count - 1);
+    }
+
+    CloseHandle(token);
+
+    return rid > SECURITY_MANDATORY_MEDIUM_RID;
+}
+#endif
+
+#ifdef __REACTOS__
 LSTATUS open_classes_key(HKEY hkey, const WCHAR *name, REGSAM access, HKEY *retkey)
 #else
 static LSTATUS open_classes_key(HKEY hkey, const WCHAR *name, REGSAM access, HKEY *retkey)
@@ -352,7 +386,7 @@ static LSTATUS open_classes_key(HKEY hkey, const WCHAR *name, REGSAM access, HKE
     UNICODE_STRING nameW;
 
 #ifdef __REACTOS__
-    if (!(access & (KEY_WOW64_32KEY | KEY_WOW64_64KEY)))
+    if (!(access & (KEY_WOW64_32KEY | KEY_WOW64_64KEY)) && !should_ignore_peruser_classes())
     {
         WCHAR *user_name;
         SIZE_T length;
