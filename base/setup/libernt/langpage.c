@@ -184,11 +184,16 @@ LanguagePageProc(
             }
             if (HIWORD(wParam) != CBN_SELCHANGE)
                 break;
+            /* Typing in the closed list only previews; the switch reloads the frame
+               and changes the input layout, so it waits for the close-up or Next */
             if (LOWORD(wParam) == IDC_LANGUAGELIST)
             {
                 SelectLayoutForLocale(hwndDlg, pSetupData);
-                ActivateLayout(hwndDlg, pSetupData);
-                SetTimer(hwndDlg, LANGUAGE_TIMER, LANGUAGE_DELAY, NULL);
+                if (SendMessageW((HWND)lParam, CB_GETDROPPEDSTATE, 0, 0))
+                {
+                    ActivateLayout(hwndDlg, pSetupData);
+                    SetTimer(hwndDlg, LANGUAGE_TIMER, LANGUAGE_DELAY, NULL);
+                }
             }
             else if (LOWORD(wParam) == IDC_LAYOUTLIST)
             {
