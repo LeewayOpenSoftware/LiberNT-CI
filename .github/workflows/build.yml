@@ -116,8 +116,9 @@ jobs:
       uses: actions/cache/restore@v5
       with:
         path: ccache
-        key: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-${{github.run_id}}-${{github.run_attempt}}
+        key: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-image-${{github.run_id}}-${{github.run_attempt}}
         restore-keys: |
+          ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-image-
           ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-
 
     - name: Set ccache settings
@@ -233,7 +234,7 @@ jobs:
 
     - name: Save ccache
       id: ccache_save
-      if: ${{ always() && steps.ccache_restore.outcome == 'success' && env.LRM_RS != 'ON' }}
+      if: ${{ always() && steps.ccache_restore.outcome == 'success' && env.LAB_POC != 'ON' }}
       uses: actions/cache/save@v5
       with:
         path: ccache
@@ -244,7 +245,7 @@ jobs:
       continue-on-error: true
       env:
         GH_TOKEN: ${{ github.token }}
-        CACHE_KEY_PREFIX: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-
+        CACHE_KEY_PREFIX: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-image-
         CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
       run: |
         gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key \
@@ -364,8 +365,9 @@ jobs:
       uses: actions/cache/restore@v5
       with:
         path: ccache
-        key: ccache-clang-i386-${{github.run_id}}-${{github.run_attempt}}
+        key: ccache-clang-i386-image-${{github.run_id}}-${{github.run_attempt}}
         restore-keys: |
+          ccache-clang-i386-image-
           ccache-clang-i386-
 
     - name: Set ccache settings
@@ -418,7 +420,7 @@ jobs:
       continue-on-error: true
       env:
         GH_TOKEN: ${{ github.token }}
-        CACHE_KEY_PREFIX: ccache-clang-i386-
+        CACHE_KEY_PREFIX: ccache-clang-i386-image-
         CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
       run: |
         gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key \
