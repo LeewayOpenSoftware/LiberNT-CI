@@ -107,6 +107,7 @@ TEXTOBJ_UnlockText(PLFONT plfnt)
 #define AFRX_REGISTRY_NO_OVERWRITE 0x8 /* with AFRX_WRITE_REGISTRY: keep a value that exists */
 
 VOID NTAPI LFONT_vCleanup(PVOID ObjectBody);
+VOID NTAPI LFONT_vFreeRealizedFont(PTEXTOBJ TextObj);
 PTEXTOBJ FASTCALL RealizeFontInit(HFONT);
 NTSTATUS FASTCALL TextIntRealizeFont(HFONT,PTEXTOBJ);
 NTSTATUS FASTCALL TextIntCreateFontIndirect(CONST LPLOGFONTW lf, HFONT *NewFont);

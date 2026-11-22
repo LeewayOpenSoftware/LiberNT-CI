@@ -36,6 +36,7 @@ list(APPEND SOURCE
     Dpi.c
     DpiHostingBehavior.c
     DpiAwareness.c
+    DpiScaleRule.c
     DpiScaling.c
     DpiVirtualization.c
     DrawIconEx.c

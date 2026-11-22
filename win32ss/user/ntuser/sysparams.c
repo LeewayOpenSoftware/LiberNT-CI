@@ -14,6 +14,7 @@
 
 #include <win32k.h>
 #include <ndk/inbvfuncs.h>
+#include <dpiscale.h>
 DBG_DEFAULT_CHANNEL(UserSysparams);
 
 SPIVALUES gspv;
@@ -63,6 +64,11 @@ static const WCHAR* VAL_MDALIGN = L"MenuDropAlignment";
 
 static const WCHAR* KEY_SYSTEM_DPI =
     L"\\Registry\\Machine\\System\\CurrentControlSet\\Hardware Profiles\\Current\\Software\\Fonts";
+static const WCHAR* VAL_LOGPIXELS = L"LogPixels";
+/* Set next to LogPixels once a scale was chosen or recommended; a value without it predates this and is migrated once */
+static const WCHAR* VAL_LOGPIXELS_CHOSEN = L"LogPixelsChosen";
+extern HDC hSystemBM;
+static const WCHAR* VAL_WIN8DPISCALING = L"Win8DpiScaling";
 static const WCHAR* KEY_METRIC = L"Control Panel\\Desktop\\WindowMetrics";
 static const WCHAR* VAL_BORDER = L"BorderWidth";
 static const WCHAR* VAL_CAPTIONALIGN = L"CaptionAlignment";
@@ -146,8 +152,6 @@ SpiUnscaleFromSystemDpi(INT Value)
 
 #define SPI_RAW_SMBIOS_HEADER       8
 #define SPI_MAX_SMBIOS_TABLE        (1024 * 1024)
-#define SPI_MIN_EFFECTIVE_WIDTH     1280
-#define SPI_MIN_EFFECTIVE_HEIGHT    1000
 
 static
 BOOLEAN
@@ -184,19 +188,7 @@ SpiIsPortableChassis(VOID)
         {
             if (Structure[0] == 3 && Structure[1] > 5)
             {
-                switch (Structure[5] & 0x7F)
-                {
-                    case 0x08:
-                    case 0x09:
-                    case 0x0A:
-                    case 0x0B:
-                    case 0x0E:
-                    case 0x1E:
-                    case 0x1F:
-                    case 0x20:
-                        Portable = TRUE;
-                        break;
-                }
+                Portable = (BOOLEAN)DpiScaleIsPortableChassis(Structure[5]);
                 break;
             }
             Next = Structure + Structure[1];
@@ -215,10 +207,9 @@ static
 UINT
 SpiRecommendedSystemDpi(VOID)
 {
-    static const UINT Scales[] = { 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500 };
     static UINT Recommended;
-    ULONG Width = 0, Height = 0, Index;
-    UINT Scale = 100;
+    ULONG Width = 0, Height = 0;
+    UINT Scale;
 
     if (Recommended)
         return Recommended;
@@ -226,47 +217,107 @@ SpiRecommendedSystemDpi(VOID)
     if (InbvQueryBootScreen(NULL, 0, &Width, &Height) != STATUS_BUFFER_TOO_SMALL || !Width || !Height ||
         !SpiIsPortableChassis())
         return Recommended;
-    for (Index = 0; Index < RTL_NUMBER_OF(Scales); ++Index)
-    {
-        if ((ULONGLONG)Width * 100 / Scales[Index] < SPI_MIN_EFFECTIVE_WIDTH ||
-            (ULONGLONG)Height * 100 / Scales[Index] < SPI_MIN_EFFECTIVE_HEIGHT)
-            break;
-        Scale = Scales[Index];
-    }
+    Scale = DpiScaleRecommended(Width, Height, TRUE);
     TRACE("Recommended scale for the %lux%lu portable panel: %u%%\n", Width, Height, Scale);
     Recommended = USER_SYSTEM_DPI_DEFAULT * Scale / 100;
     return Recommended;
 }
 
 static
+VOID
+SpiStoreSystemDpi(DWORD Dpi)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING ustrKey;
+    HANDLE hKey;
+
+    RtlInitUnicodeString(&ustrKey, KEY_SYSTEM_DPI);
+    InitializeObjectAttributes(&ObjectAttributes, &ustrKey, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    if (NT_SUCCESS(ZwOpenKey(&hKey, KEY_SET_VALUE, &ObjectAttributes)))
+    {
+        RegWriteDWORD((HKEY)hKey, VAL_LOGPIXELS, Dpi);
+        RegWriteDWORD((HKEY)hKey, VAL_LOGPIXELS_CHOSEN, 1);
+        ZwClose(hKey);
+    }
+}
+
+static
 UINT
-SpiLoadSystemDpi(VOID)
+SpiLoadMachineDpi(VOID)
 {
     HKEY hKey;
-    DWORD Dpi;
+    DWORD Dpi = 0, Chosen = 0;
+    BOOLEAN Stored = FALSE;
 
     if (NT_SUCCESS(RegOpenKey(KEY_SYSTEM_DPI, &hKey)))
     {
-        if (!RegReadDWORD(hKey, L"LogPixels", &Dpi))
-            Dpi = USER_SYSTEM_DPI_DEFAULT;
+        Stored = RegReadDWORD(hKey, VAL_LOGPIXELS, &Dpi);
+        if (!RegReadDWORD(hKey, VAL_LOGPIXELS_CHOSEN, &Chosen))
+            Chosen = 0;
         ZwClose(hKey);
     }
-    else
-    {
-        Dpi = USER_SYSTEM_DPI_DEFAULT;
-    }
 
-    if (Dpi < USER_SYSTEM_DPI_MIN || Dpi > USER_SYSTEM_DPI_MAX)
+    /* An explicit value, 96 included, is what the user chose; 0 or garbage means nothing was chosen yet.
+     * Installs made before this stored 96 as "recommend": without the marker that 96 is migrated once to the
+     * recommendation (and marked), so an upgraded portable panel keeps its scale and 100% stays selectable. */
+    if (Stored && Dpi >= USER_SYSTEM_DPI_MIN && Dpi <= USER_SYSTEM_DPI_MAX)
     {
+        if (Dpi != USER_SYSTEM_DPI_DEFAULT || Chosen)
+        {
+            if (!Chosen)
+                SpiStoreSystemDpi(Dpi);
+            return Dpi;
+        }
+    }
+    if (Stored && Dpi == USER_SYSTEM_DPI_DEFAULT)
+        TRACE("Migrating a pre-F1 LogPixels of 96 to the recommended scale\n");
+    else if (Stored && Dpi != 0)
         WARN("Ignoring invalid system DPI %lu\n", Dpi);
-        Dpi = USER_SYSTEM_DPI_DEFAULT;
+
+    /* Nothing chosen: recommend a scale for this panel and keep it, so Settings shows it and 100% stays selectable */
+    Dpi = min(SpiRecommendedSystemDpi(), USER_SYSTEM_DPI_MAX);
+    SpiStoreSystemDpi(Dpi);
+    return Dpi;
+}
+
+static
+UINT
+SpiLoadSystemDpi(VOID)
+{
+    DWORD Custom = 0, Dpi = 0;
+
+    /* The per-user custom scale of Windows (Control Panel\Desktop LogPixels, armed by Win8DpiScaling = 1)
+     * wins over the machine value; it is read at sign-in, which is when Windows applies it too */
+    if (RegReadUserSetting(KEY_DESKTOP, VAL_WIN8DPISCALING, REG_DWORD, &Custom, sizeof(Custom)) && Custom == 1 &&
+        RegReadUserSetting(KEY_DESKTOP, VAL_LOGPIXELS, REG_DWORD, &Dpi, sizeof(Dpi)) &&
+        Dpi >= USER_SYSTEM_DPI_MIN && Dpi <= USER_SYSTEM_DPI_MAX)
+    {
+        return Dpi;
     }
 
-    /* FIXME: a machine LogPixels of 96 cannot keep 100% on a portable panel; per-monitor scaling settings are missing */
-    if (Dpi == USER_SYSTEM_DPI_DEFAULT)
-        Dpi = min(SpiRecommendedSystemDpi(), USER_SYSTEM_DPI_MAX);
+    return SpiLoadMachineDpi();
+}
 
-    return Dpi;
+/* The DPI loaded at this sign-in may differ from the one the session runs with (another user, or a
+ * setting changed since boot): the display caps, the stock fonts and the virtualization follow it */
+static
+VOID
+SpiApplySystemDpi(VOID)
+{
+    UINT Dpi = UserGetSystemDpi();
+
+    PDEVOBJ_vSetLogPixels(Dpi);
+    GreSetStockFontDpi(Dpi);
+    UserDpiUpdateVirtualization();
+
+    /* Dialog base units come from SYSTEM_FONT, which may have changed size (see display.c on a mode change) */
+    if (gpsi && hSystemBM)
+    {
+        TEXTMETRICW tmw;
+
+        gpsi->cxSysFontChar = IntGetCharDimensions(hSystemBM, &tmw, (DWORD*)&gpsi->cySysFontChar);
+        gpsi->tmSysFont = tmw;
+    }
 }
 
 static
@@ -516,6 +567,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.uiSystemDpi = SpiLoadSystemDpi();
     if (gpsi)
         gpsi->dmLogPixels = (USHORT)gspv.uiSystemDpi;
+    SpiApplySystemDpi();
 
     /* Load mouse settings */
     gspv.caiMouse.FirstThreshold = SpiLoadMouse(VAL_MOUSE1, 6);

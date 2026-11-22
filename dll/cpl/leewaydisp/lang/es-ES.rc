@@ -186,7 +186,7 @@ BEGIN
     IDS_CP_DISP_HEAD "Facilite la lectura de lo que aparece en la pantalla"
     IDS_CP_DISP_DESC "Puede cambiar el tamaño del texto y de otros elementos de la pantalla."
     IDS_CP_DISP_SCALE "Escala actual: %u%%"
-    IDS_CP_DISP_SCALE_NA "Cambiar la escala aún no es posible en este sistema."
+    IDS_CP_DISP_SCALE_CHANGE "Cambiar la escala en Configuración"
     IDS_CP_LINK_RESOLUTION "Ajustar resolución"
     IDS_CP_LINK_DISPSET "Cambiar configuración de pantalla"
     IDS_CP_RES_HEAD "Cambiar la apariencia de las pantallas"

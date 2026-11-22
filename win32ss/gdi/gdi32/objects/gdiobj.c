@@ -28,7 +28,9 @@ GetStockObject(
             return NULL;
         }
 
-        stock_objects[fnObject] = hobj;
+        /* A stock font depends on the DPI awareness of the calling thread (design size when unaware) */
+        if (GDI_HANDLE_GET_TYPE(hobj) != GDILoObjType_LO_FONT_TYPE)
+            stock_objects[fnObject] = hobj;
     }
 
     return hobj;

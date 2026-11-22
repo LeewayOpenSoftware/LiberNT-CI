@@ -621,6 +621,15 @@ PromptRestart(HWND owner, const std::wstring &reason)
 }
 
 void
+PromptSignOut(HWND owner, const std::wstring &reason)
+{
+    if (!AskNow(owner, reason, IDS_SIGNOUT_NOW, IDS_SIGNOUT_LATER))
+        return;
+    if (!ExitWindowsEx(EWX_LOGOFF, SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_RECONFIG | SHTDN_REASON_FLAG_PLANNED))
+        ShowError(owner, GetLastError());
+}
+
+void
 CopyToClipboard(HWND owner, const std::wstring &text)
 {
     SIZE_T size = (text.length() + 1) * sizeof(WCHAR);

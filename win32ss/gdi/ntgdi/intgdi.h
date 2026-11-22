@@ -187,6 +187,7 @@ IntGetSystemPaletteEntries(HDC  hDC,
                            LPPALETTEENTRY  pe);
 
 VOID  FASTCALL CreateStockObjects (VOID);
+VOID  NTAPI GreSetStockFontDpi(_In_ UINT Dpi);
 VOID  FASTCALL CreateSysColorObjects (VOID);
 
 PPOINT GDI_Bezier (const POINT *Points, INT count, PINT nPtsOut);

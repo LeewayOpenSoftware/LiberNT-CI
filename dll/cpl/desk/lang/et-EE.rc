@@ -175,9 +175,8 @@ CAPTION "Üldist"
 FONT 8, "MS Shell Dlg"
 BEGIN
     GROUPBOX "Kuva", -1, 7, 6, 237, 56, WS_GROUP
-    LTEXT "Fondi suurus:", -1, 14, 20, 222, 9//FIXME: add accel. I used "&Fondi suurus:" for the backport. 2k3sp2 does now call this "&DPI setting:". Feel free to translate that.
-    COMBOBOX IDC_FONTSIZE_COMBO, 14, 30, 223, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT "", IDC_FONTSIZE_CUSTOM, 14, 46, 223, 12
+    LTEXT "", IDC_SCALE_CURRENT, 14, 20, 222, 9
+    PUSHBUTTON "Change in Settings...", IDC_SCALE_SETTINGS, 14, 34, 110, 14, WS_TABSTOP
     GROUPBOX "Ühilduvus", -1, 7, 67, 237, 97
     LTEXT "Võimalik, et mõni programm ei tööta õigesti, kui te ei taaskäivita arvutit pärast kuvasätete muutmist.\n\nPärast kuvasätete muutmist:", -1, 12, 78, 228, 34
     AUTORADIOBUTTON "&Taaskäivita arvuti enne uute kuvasätete rakendamist", IDC_RESTART_RB, 14, 116, 228, 10
@@ -306,4 +305,9 @@ BEGIN
     IDS_APPLY_FAILED "Ei saanud uusi sätteid rakendada..."
     IDS_APPLY_NEEDS_RESTART "Te peate enda arvuti taaskäivitama sättete rakendamiseks."
     IDS_TIMEOUTTEXT "Ennistamine %d sekundi pärast."
+END
+
+STRINGTABLE
+BEGIN
+    IDS_SCALE_CURRENT "Scale: %u%%"
 END

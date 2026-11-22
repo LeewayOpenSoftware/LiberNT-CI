@@ -785,6 +785,15 @@ BEGIN
     IDS_CAPTION_ALIGN_LEFT "Left"
     IDS_CAPTION_ALIGN_CENTER "Center"
     IDS_CAPTION_ALIGN_KEYWORDS "title bar caption alignment center centre left window title text"
+    IDS_SCALE_RECOMMENDED "%u%% (Recommended)"
+    IDS_SCALE_PENDING " (after sign-out)"
+    IDS_SCALE_CUSTOM "Custom scaling"
+    IDS_SCALE_CUSTOM_DESC "Any scale from 100% to 500% for this account"
+    IDS_SCALE_CUSTOM_NOTE "Custom scaling applies to this account on every display and needs a sign-out. Choose %u%% to turn it off."
+    IDS_SIGNOUT_SCALE "Sign out to apply the new scale? Some apps will look blurry until you sign out again."
+    IDS_SIGNOUT_NOW "Sign out now"
+    IDS_SIGNOUT_LATER "Later"
+    IDS_SCALE_DEFAULT "%u%% (Default)"
 END
 
 STRINGTABLE

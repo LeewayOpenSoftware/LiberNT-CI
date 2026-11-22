@@ -299,7 +299,6 @@ LONG MONTHCAL_CompareSystemTime(const SYSTEMTIME *first, const SYSTEMTIME *secon
 
 #ifdef __REACTOS__
 #define wcsnicmp _wcsnicmp
-#define GetDpiForWindow(PVOID) 96
 #endif
 
 #endif  /* __WINE_COMCTL32_H */
