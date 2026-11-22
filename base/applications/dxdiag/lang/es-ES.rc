@@ -254,4 +254,5 @@ BEGIN
     IDS_DMUSIC_EXT "Externo"
     IDS_DMUSIC_PORT "Puerto por defecto"
     IDS_DDDISABLE_MSG "Esto desactivará toda aceleración de hardware mediante DirectDraw en todas las pantallas.\n¿Desea continuar?\n"
+    IDS_D3DCFG_RUNTIME "Entorno de ejecución Direct3D (WineD3D): %s"
 END

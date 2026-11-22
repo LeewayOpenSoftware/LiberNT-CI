@@ -203,6 +203,81 @@ DisplayPageSetDeviceDetails(HWND * hDlgCtrls, LPCGUID classGUID, LPGUID * device
 }
 
 
+/* Fills the unused Notes field with the Direct3D (WineD3D) runtime configuration
+ * read from HKCU\Software\Wine\Direct3D -- the keys the engine actually honours.
+ * Read-only diagnostic; values are set from Orosi Settings > Display > Graphics. */
+static void
+SetD3DRuntimeInfo(HWND hwndDlg)
+{
+    HKEY hKey;
+    WCHAR detail[400];
+    WCHAR out[512];
+    WCHAR fmt[256];
+    WCHAR sz[128];
+    DWORD cb, type, dw;
+
+    detail[0] = L'\0';
+
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Wine\\Direct3D", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        cb = sizeof(sz) - sizeof(WCHAR); type = 0;
+        if (RegQueryValueExW(hKey, L"renderer", NULL, &type, (LPBYTE)sz, &cb) == ERROR_SUCCESS && type == REG_SZ)
+        {
+            sz[cb / sizeof(WCHAR)] = L'\0';
+            wcscat(detail, L"renderer=");
+            if (!wcscmp(sz, L"gl")) wcscat(detail, L"OpenGL");
+            else if (!wcscmp(sz, L"vulkan")) wcscat(detail, L"Vulkan");
+            else if (!wcscmp(sz, L"no3d") || !wcscmp(sz, L"gdi")) wcscat(detail, L"No 3D");
+            else wcscat(detail, sz);
+        }
+        cb = sizeof(sz) - sizeof(WCHAR); type = 0;
+        if (RegQueryValueExW(hKey, L"shader_backend", NULL, &type, (LPBYTE)sz, &cb) == ERROR_SUCCESS && type == REG_SZ)
+        {
+            sz[cb / sizeof(WCHAR)] = L'\0';
+            if (detail[0]) wcscat(detail, L"; ");
+            wcscat(detail, L"shaders=");
+            wcscat(detail, sz);
+        }
+        cb = sizeof(dw); type = 0;
+        if (RegQueryValueExW(hKey, L"csmt", NULL, &type, (LPBYTE)&dw, &cb) == ERROR_SUCCESS && type == REG_DWORD)
+        {
+            if (detail[0]) wcscat(detail, L"; ");
+            wcscat(detail, dw ? L"CSMT=on" : L"CSMT=off");
+        }
+        cb = sizeof(dw); type = 0;
+        if (RegQueryValueExW(hKey, L"MultisampleTextures", NULL, &type, (LPBYTE)&dw, &cb) == ERROR_SUCCESS && type == REG_DWORD)
+        {
+            if (detail[0]) wcscat(detail, L"; ");
+            wcscat(detail, dw ? L"multisampling=on" : L"multisampling=off");
+        }
+        cb = sizeof(dw); type = 0;
+        if (RegQueryValueExW(hKey, L"SampleCount", NULL, &type, (LPBYTE)&dw, &cb) == ERROR_SUCCESS && type == REG_DWORD)
+        {
+            WCHAR n[40];
+            if (detail[0]) wcscat(detail, L"; ");
+            wsprintfW(n, L"sample count=%u", dw);
+            wcscat(detail, n);
+        }
+        cb = sizeof(sz) - sizeof(WCHAR); type = 0;
+        if (RegQueryValueExW(hKey, L"VideoMemorySize", NULL, &type, (LPBYTE)sz, &cb) == ERROR_SUCCESS && type == REG_SZ)
+        {
+            sz[cb / sizeof(WCHAR)] = L'\0';
+            if (detail[0]) wcscat(detail, L"; ");
+            wcscat(detail, L"video memory=");
+            wcscat(detail, sz);
+        }
+        RegCloseKey(hKey);
+    }
+
+    if (!detail[0])
+        wcscpy(detail, L"default configuration");
+
+    if (!LoadStringW(hInst, IDS_D3DCFG_RUNTIME, fmt, sizeof(fmt) / sizeof(WCHAR)) || !fmt[0])
+        wcscpy(fmt, L"Direct3D runtime (WineD3D): %s");
+    wsprintfW(out, fmt, detail);
+    SetDlgItemTextW(hwndDlg, IDC_TEXT_INFO, out);
+}
+
 static
 BOOL
 InitializeDialog(HWND hwndDlg, PDISPLAY_DEVICEW pDispDevice)
@@ -304,6 +379,9 @@ InitializeDialog(HWND hwndDlg, PDISPLAY_DEVICEW pDispDevice)
     hDlgCtrls[4] = GetDlgItem(hwndDlg, IDC_STATIC_ADAPTER_DATE);
 
     DisplayPageSetDeviceDetails(hDlgCtrls, &GUID_DEVCLASS_DISPLAY, NULL);
+
+    /* Orosi: surface the Direct3D runtime configuration in the Notes field. */
+    SetD3DRuntimeInfo(hwndDlg);
     return TRUE;
 }
 
