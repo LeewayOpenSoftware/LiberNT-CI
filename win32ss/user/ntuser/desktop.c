@@ -2121,7 +2121,6 @@ static BOOL
 IntPaintDesktopContent(HDC hDC)
 {
     static WCHAR s_wszSafeMode[] = L"Safe Mode"; // FIXME: Localize!
-    static WCHAR s_wszAssistance[64];
 
     RECTL Rect;
     HBRUSH DesktopBrush, PreviousBrush;
@@ -2371,15 +2370,14 @@ IntPaintDesktopContent(HDC hDC)
     /*
      * Display the system version on the desktop background
      */
-    /* TODO: a key that appears after the desktop was painted shows at the next paint, nothing asks for one */
 
-    if (InSafeMode || g_AlwaysDisplayVersion || g_PaintDesktopVersion || *s_wszAssistance)
+    if (InSafeMode || g_AlwaysDisplayVersion || g_PaintDesktopVersion)
     {
         NTSTATUS Status;
         static WCHAR wszzVersion[1024] = L"\0";
 
         /* Only used in normal mode */
-        static POLYTEXTW VerStrs[4] = {{0},{0},{0},{0}};
+        static POLYTEXTW VerStrs[3] = {{0},{0},{0}};
         INT i = 0;
         SIZE_T len;
 
@@ -2454,16 +2452,11 @@ IntPaintDesktopContent(HDC hDC)
             if (!InSafeMode && NT_SUCCESS(Status) && *wszzVersion)
             {
                 PWCHAR pstr = wszzVersion;
-                for (i = 0; (i < ARRAYSIZE(VerStrs) - 1) && *pstr; ++i)
+                for (i = 0; (i < ARRAYSIZE(VerStrs)) && *pstr; ++i)
                 {
                     VerStrs[i].n = lstrlenW(pstr);
                     VerStrs[i].lpstr = pstr;
                     pstr += (VerStrs[i].n + 1);
-                }
-                if (*s_wszAssistance)
-                {
-                    VerStrs[i].n = lstrlenW(s_wszAssistance);
-                    VerStrs[i].lpstr = s_wszAssistance;
                 }
             }
         }
@@ -2527,14 +2520,6 @@ IntPaintDesktopContent(HDC hDC)
 
                 IntGdiSetTextAlign(hDC, TA_CENTER | TA_TOP);
                 GreExtTextOutW(hDC, (Rect.right + Rect.left)/2, Rect.top + 3, 0, NULL, wszzVersion, len, NULL, 0);
-                if (*s_wszAssistance)
-                {
-                    SIZE Size = {0, 0};
-
-                    GreGetTextExtentW(hDC, wszzVersion, (INT)len, &Size, 1);
-                    GreExtTextOutW(hDC, (Rect.right + Rect.left)/2, Rect.top + 3 + Size.cy, 0, NULL,
-                                   s_wszAssistance, lstrlenW(s_wszAssistance), NULL, 0);
-                }
             }
         }
 
