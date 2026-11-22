@@ -4418,6 +4418,7 @@ DwmComposeLoop(HANDLE hStopEvent)
             /* A preference change can expose pixels outside ordinary
              * window damage. Rebuild the scene and its cached backdrops. */
             forceFull = TRUE;
+            DwmFrameButtonsInvalidate();   /* a scheme/preference change can change the caption-button glyph or colour */
             Settings.Changed = FALSE;
         }
 

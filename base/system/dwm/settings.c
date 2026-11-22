@@ -7,7 +7,6 @@
 
 #include "settings.h"
 #include <reactos/dwmframe.h>
-#include "framebuttons.h"
 
 static const struct
 {
@@ -122,7 +121,6 @@ DwmSettingsWindowProc(HWND Window, UINT Message, WPARAM WParam, LPARAM LParam)
     {
         if (Message == WM_SETTINGCHANGE)
         {
-            DwmFrameButtonsInvalidate();   /* drop button images cached under the previous scheme */
             Error = DwmSettingsRead(&Effects);
             if (Error == ERROR_SUCCESS)
             {
