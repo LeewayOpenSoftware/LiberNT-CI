@@ -1719,10 +1719,18 @@ public:
         }
         else if ((Current == Page::Options || Current == Page::Power) && OptionCount)
         {
-            if (Key == VK_DOWN || Key == VK_TAB)
-                Focus = (Focus + 1) % OptionCount;
-            else if (Key == VK_UP)
+            BOOL Back = Key == VK_UP || Key == VK_LEFT || (Key == VK_TAB && (GetKeyState(VK_SHIFT) & 0x8000));
+
+            if (Back)
                 Focus = (Focus + OptionCount - 1) % OptionCount;
+            else if (Key == VK_DOWN || Key == VK_RIGHT || Key == VK_TAB)
+                Focus = (Focus + 1) % OptionCount;
+            else if (Key == VK_HOME)
+                Focus = 0;
+            else if (Key == VK_END)
+                Focus = OptionCount - 1;
+            else
+                return;
             Hover = HitOption + Focus;
             InvalidateRect(Window, NULL, FALSE);
         }
@@ -2275,6 +2283,15 @@ LogonUiDialogProc(HWND Dialog, UINT Message, WPARAM wParam, LPARAM lParam)
                 Screen->Activate(Target);
             return TRUE;
         }
+
+        case WM_GETDLGCODE:
+            /* Otherwise the dialog manager eats arrows and Tab as control navigation */
+            if (Screen->Current == Page::Options || Screen->Current == Page::Power)
+            {
+                SetWindowLongPtrW(Dialog, DWLP_MSGRESULT, DLGC_WANTARROWS | DLGC_WANTTAB);
+                return TRUE;
+            }
+            return FALSE;
 
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
