@@ -62,6 +62,9 @@ typedef struct _MACHINE
     BOOLEAN TlbDisabled;
     MACHINE_FAULT_ROUTINE Fault;
     PVOID FaultContext;
+    /* Test hook: runs before a TLB invalidation takes effect, so a test can act inside that window */
+    VOID (*BeforeTlbInvalidate)(_In_opt_ PVOID Context, _In_ ULONG64 VirtualAddress, _In_ ULONG64 PageCount);
+    PVOID BeforeTlbInvalidateContext;
 
     volatile LONG64 Faults;
     volatile LONG64 TlbHits;
