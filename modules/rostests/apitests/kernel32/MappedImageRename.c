@@ -16,7 +16,9 @@
  *   - open for write (FILE_WRITE_DATA, share R/W/D):    STATUS_SHARING_VIOLATION
  * Some of these are expected to FAIL on LiberNT today where our stack diverges;
  * the test documents the target behaviour (servicing / PendingFileRenameOperations
- * depends on rename-to-a-free-name being permitted on a mapped image).
+ * depends on rename-to-a-free-name being permitted on a mapped image). Because it
+ * is run precisely where it diverges, every failure path names the denier (the
+ * raw NTSTATUS, or GetLastError() when the open itself is refused).
  */
 
 #include "precomp.h"
@@ -67,6 +69,12 @@ MapScratchImage(
     return NULL;
 }
 
+/* STATUS_IO_DEVICE_ERROR is never a legitimate result here; use it as the
+ * sentinel that means "the source open was refused" so a refused DELETE-open on
+ * LiberNT is distinguishable from a rename that actually ran and returned a
+ * status. The real reason is traced via GetLastError(). */
+#define OPEN_REFUSED STATUS_IO_DEVICE_ERROR
+
 static
 NTSTATUS
 RenameTo(
@@ -91,7 +99,10 @@ RenameTo(
     File = CreateFileW(Source, DELETE | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
     if (File == INVALID_HANDLE_VALUE)
-        return STATUS_UNSUCCESSFUL;
+    {
+        trace("RenameTo: open of '%ls' (DELETE) refused, GetLastError() == %lu\n", Source, GetLastError());
+        return OPEN_REFUSED;
+    }
     memset(Buffer, 0, sizeof(Buffer));
     if (Class == FileRenameInformationEx)
         *(PULONG)Info = Flags;
@@ -114,6 +125,7 @@ START_TEST(MappedImageRename)
     FILE_DISPOSITION_INFORMATION Disposition;
     NTSTATUS Status;
     DWORD Length;
+    BOOL Moved = FALSE;     /* TRUE while the mapped file currently lives at mir_moved.dll */
 
     Length = GetTempPathW(RTL_NUMBER_OF(TestDirectory), TestDirectory);
     ok(Length != 0, "GetTempPathW failed with %lu\n", GetLastError());
@@ -127,6 +139,8 @@ START_TEST(MappedImageRename)
         RemoveDirectoryW(TestDirectory);
         return;
     }
+    MakePath(Free, L"mir_moved.dll");
+    MakePath(NewFile, L"mir_new.dll");
 
     /* open DELETE on the mapped image -> allowed */
     File = CreateFileW(Image, DELETE | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -149,20 +163,36 @@ START_TEST(MappedImageRename)
     ok(Status == STATUS_SUCCESS, "rename of a mapped image to a free name returned 0x%lx (want SUCCESS)\n", Status);
     if (Status == STATUS_SUCCESS)
     {
-        MakePath(Free, L"mir_moved.dll");
+        Moved = TRUE;
         Status = RenameTo(Free, L"mir_probe.dll", 0, FileRenameInformation);
         ok(Status == STATUS_SUCCESS, "rename back returned 0x%lx\n", Status);
+        if (Status == STATUS_SUCCESS)
+            Moved = FALSE;
+        else
+            goto cleanup;   /* image stuck at mir_moved.dll; the Image-path cases below cannot run */
     }
 
     /* replace (rename-over) the mapped image -> access denied, classic and POSIX */
-    MakePath(NewFile, L"mir_new.dll");
     DeleteFileW(NewFile);
     ok(CopyFileW(Image, NewFile, FALSE), "staging replacement file failed with %lu\n", GetLastError());
     Status = RenameTo(NewFile, L"mir_probe.dll", RENAME_REPLACE_IF_EXISTS, FileRenameInformation);
     ok(Status == STATUS_ACCESS_DENIED, "classic replace over a mapped image returned 0x%lx (want ACCESS_DENIED)\n", Status);
-    Status = RenameTo(NewFile, L"mir_probe.dll", RENAME_REPLACE_IF_EXISTS | RENAME_POSIX_SEMANTICS,
-                      FileRenameInformationEx);
-    ok(Status == STATUS_ACCESS_DENIED, "POSIX replace over a mapped image returned 0x%lx (want ACCESS_DENIED)\n", Status);
+
+    /* If the classic replace unexpectedly SUCCEEDED (a LiberNT divergence), it
+     * consumed mir_new.dll; re-stage it so the POSIX case tests the same thing
+     * rather than reporting a misleading open failure. */
+    if (GetFileAttributesW(NewFile) == INVALID_FILE_ATTRIBUTES &&
+        !CopyFileW(Image, NewFile, FALSE))
+    {
+        skip("replacement file gone after classic replace and could not be re-staged (%lu); skipping POSIX case\n",
+             GetLastError());
+    }
+    else
+    {
+        Status = RenameTo(NewFile, L"mir_probe.dll", RENAME_REPLACE_IF_EXISTS | RENAME_POSIX_SEMANTICS,
+                          FileRenameInformationEx);
+        ok(Status == STATUS_ACCESS_DENIED, "POSIX replace over a mapped image returned 0x%lx (want ACCESS_DENIED)\n", Status);
+    }
     DeleteFileW(NewFile);
 
     /* in-place delete of the mapped image -> cannot delete */
@@ -177,8 +207,16 @@ START_TEST(MappedImageRename)
         CloseHandle(File);
     }
 
-    /* teardown: unmap, then the file can be deleted */
+cleanup:
+    /* teardown: unmap, then the file (under whichever name it holds) can be deleted */
     FreeLibrary(Module);
-    ok(DeleteFileW(Image), "delete after FreeLibrary failed with %lu\n", GetLastError());
+    if (Moved)
+        ok(DeleteFileW(Free), "delete after FreeLibrary (image at mir_moved.dll) failed with %lu\n", GetLastError());
+    else
+        ok(DeleteFileW(Image), "delete after FreeLibrary failed with %lu\n", GetLastError());
+    /* belt and braces: drop any leftover name so the dir can be removed */
+    DeleteFileW(Free);
+    DeleteFileW(Image);
+    DeleteFileW(NewFile);
     RemoveDirectoryW(TestDirectory);
 }
