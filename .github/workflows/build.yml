@@ -55,6 +55,7 @@ jobs:
             arch: amd64
       fail-fast: false
     runs-on: ubuntu-24.04
+    timeout-minutes: 180
     env:
       # LRM-RS special pool is the amd64 default (owner order 2026-11-14). ON unless an explicit opt-out.
       LRM_RS: ${{ (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'off' && !inputs.force_panic) && 'OFF' || 'ON' }}
@@ -115,8 +116,9 @@ jobs:
       uses: actions/cache/restore@v5
       with:
         path: ccache
-        key: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-${{github.run_id}}-${{github.run_attempt}}
+        key: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-image-${{github.run_id}}-${{github.run_attempt}}
         restore-keys: |
+          ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-image-
           ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-
 
     - name: Set ccache settings
@@ -232,7 +234,7 @@ jobs:
 
     - name: Save ccache
       id: ccache_save
-      if: ${{ always() && steps.ccache_restore.outcome == 'success' && env.LRM_RS != 'ON' }}
+      if: ${{ always() && steps.ccache_restore.outcome == 'success' && env.LAB_POC != 'ON' }}
       uses: actions/cache/save@v5
       with:
         path: ccache
@@ -243,7 +245,7 @@ jobs:
       continue-on-error: true
       env:
         GH_TOKEN: ${{ github.token }}
-        CACHE_KEY_PREFIX: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-
+        CACHE_KEY_PREFIX: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-image-
         CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
       run: |
         gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key \
@@ -363,8 +365,9 @@ jobs:
       uses: actions/cache/restore@v5
       with:
         path: ccache
-        key: ccache-clang-i386-${{github.run_id}}-${{github.run_attempt}}
+        key: ccache-clang-i386-image-${{github.run_id}}-${{github.run_attempt}}
         restore-keys: |
+          ccache-clang-i386-image-
           ccache-clang-i386-
 
     - name: Set ccache settings
@@ -417,7 +420,7 @@ jobs:
       continue-on-error: true
       env:
         GH_TOKEN: ${{ github.token }}
-        CACHE_KEY_PREFIX: ccache-clang-i386-
+        CACHE_KEY_PREFIX: ccache-clang-i386-image-
         CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
       run: |
         gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key \
@@ -556,11 +559,25 @@ jobs:
         if-no-files-found: error
 
     - name: Save ccache
+      id: ccache_save
       if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
       uses: actions/cache/save@v5
       with:
         path: ccache
         key: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+
+    - name: Prune older ccache entries
+      if: ${{ always() && steps.ccache_save.outcome == 'success' }}
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CACHE_KEY_PREFIX: ccache-clang-amd64-rostests-
+        CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+      run: |
+        gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key           --jq '.[] | select(.key != env.CACHE_KEY_KEEP) | .id' |
+        while read -r id; do
+          gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true
+        done
 
   build-rostests-i386:
     # Compile-only native i386 test suite. Not blocking: the i386 tests still have -Wformat
@@ -639,11 +656,25 @@ jobs:
         fi
 
     - name: Save ccache
+      id: ccache_save
       if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
       uses: actions/cache/save@v5
       with:
         path: ccache
         key: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+
+    - name: Prune older ccache entries
+      if: ${{ always() && steps.ccache_save.outcome == 'success' }}
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CACHE_KEY_PREFIX: ccache-clang-i386-rostests-
+        CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+      run: |
+        gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key           --jq '.[] | select(.key != env.CACHE_KEY_KEEP) | .id' |
+        while read -r id; do
+          gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true
+        done
 
   ntfslib-host-tests:
     if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
