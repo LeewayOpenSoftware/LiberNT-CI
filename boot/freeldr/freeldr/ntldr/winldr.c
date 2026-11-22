@@ -162,6 +162,34 @@ WinLdrGetSystemDpi(VOID)
 }
 #endif
 
+#ifdef UEFIBOOT
+static
+VOID
+WinLdrFillBootEntropy(
+    _Out_ PBOOT_ENTROPY_LDR_RESULT Entropy)
+{
+    PBOOT_ENTROPY_SOURCE_LDR_RESULT Source = &Entropy->EntropySourceResult[0];
+
+    Entropy->maxEntropySources = BootMaxEntropySources;
+    Source->SourceId = BootEntropySourceUefi;
+    Source->EntropyLength = sizeof(Source->EntropyData);
+    if (UefiGetRandom(Source->EntropyData, sizeof(Source->EntropyData)) &&
+        UefiGetRandom(Entropy->SeedBytesForCng, sizeof(Entropy->SeedBytesForCng)) &&
+        UefiGetRandom(Entropy->RngBytesForNtoskrnl, sizeof(Entropy->RngBytesForNtoskrnl)))
+    {
+        Source->ResultCode = BootEntropySourceSuccess;
+        Source->ResultStatus = STATUS_SUCCESS;
+        return;
+    }
+
+    RtlZeroMemory(Entropy, sizeof(*Entropy));
+    Entropy->maxEntropySources = BootMaxEntropySources;
+    Source->SourceId = BootEntropySourceUefi;
+    Source->ResultCode = BootEntropySourceNotPresent;
+    Source->ResultStatus = STATUS_NOT_FOUND;
+}
+#endif
+
 // Init "phase 0"
 VOID
 AllocateAndInitLPB(
@@ -193,6 +221,9 @@ AllocateAndInitLPB(
     Extension = &WinLdrSystemBlock->Extension;
     LoaderBlock->Extension = Extension;
     Extension->Size = sizeof(LOADER_PARAMETER_EXTENSION);
+#ifdef UEFIBOOT
+    WinLdrFillBootEntropy(&Extension->BootEntropyResult);
+#endif
 #if (NTDDI_VERSION >= NTDDI_WIN7)
     /* Win7+ moved version info to the LOADER_PARAMETER_BLOCK itself */
     LoaderBlock->OsMajorVersion = (VersionToBoot & 0xFF00) >> 8;

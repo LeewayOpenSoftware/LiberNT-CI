@@ -30,6 +30,33 @@ OslQueryDpi(VOID);
 
 POSL_SYSTEM_BLOCK OslSystemBlock;
 
+/* The firmware RNG is the only entropy the kernel debugger can trust before the OS runs */
+static
+VOID
+OslFillBootEntropy(
+    _Out_ PBOOT_ENTROPY_LDR_RESULT Entropy)
+{
+    PBOOT_ENTROPY_SOURCE_LDR_RESULT Source = &Entropy->EntropySourceResult[0];
+
+    Entropy->maxEntropySources = BootMaxEntropySources;
+    Source->SourceId = BootEntropySourceUefi;
+    Source->EntropyLength = sizeof(Source->EntropyData);
+    if (FwGetRandom(Source->EntropyData, sizeof(Source->EntropyData)) &&
+        FwGetRandom(Entropy->SeedBytesForCng, sizeof(Entropy->SeedBytesForCng)) &&
+        FwGetRandom(Entropy->RngBytesForNtoskrnl, sizeof(Entropy->RngBytesForNtoskrnl)))
+    {
+        Source->ResultCode = BootEntropySourceSuccess;
+        Source->ResultStatus = STATUS_SUCCESS;
+        return;
+    }
+
+    RtlZeroMemory(Entropy, sizeof(*Entropy));
+    Entropy->maxEntropySources = BootMaxEntropySources;
+    Source->SourceId = BootEntropySourceUefi;
+    Source->ResultCode = BootEntropySourceNotPresent;
+    Source->ResultStatus = STATUS_NOT_FOUND;
+}
+
 PLOADER_PARAMETER_BLOCK
 OslAllocateLoaderBlock(VOID)
 {
@@ -57,6 +84,8 @@ OslAllocateLoaderBlock(VOID)
 
     if (FwGetTime(&Time))
         RtlTimeFieldsToTime(&Time, &Extension->SystemTime);
+
+    OslFillBootEntropy(&Extension->BootEntropyResult);
 
     InitializeListHead(&LoaderBlock->LoadOrderListHead);
     InitializeListHead(&LoaderBlock->MemoryDescriptorListHead);

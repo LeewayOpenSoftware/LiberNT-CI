@@ -266,6 +266,7 @@ KdpGatherEntropy(
 {
     LARGE_INTEGER Samples[16], Time;
     ULONG i, Value, Previous = 0, Hardware = 0;
+    PBOOT_ENTROPY_LDR_RESULT Entropy;
 
     for (i = 0; i < KDNET_ENTROPY_SAMPLES; i++)
     {
@@ -292,8 +293,17 @@ KdpGatherEntropy(
     if (LoaderBlock->Extension &&
         LoaderBlock->Extension->Size >= RTL_SIZEOF_THROUGH_FIELD(LOADER_PARAMETER_EXTENSION, BootEntropyResult))
     {
-        KdCryptoAddEntropy(&LoaderBlock->Extension->BootEntropyResult,
-                           sizeof(LoaderBlock->Extension->BootEntropyResult));
+        Entropy = &LoaderBlock->Extension->BootEntropyResult;
+        KdCryptoAddEntropy(Entropy, sizeof(*Entropy));
+        for (i = 0; i < min(Entropy->maxEntropySources, BootMaxEntropySources); i++)
+        {
+            if (Entropy->EntropySourceResult[i].SourceId == BootEntropySourceUefi &&
+                Entropy->EntropySourceResult[i].ResultCode == BootEntropySourceSuccess &&
+                Entropy->EntropySourceResult[i].EntropyLength >= KDNET_KEY_SIZE)
+            {
+                Hardware += KDNET_HARDWARE_SAMPLES;
+            }
+        }
     }
 
     return Hardware;
