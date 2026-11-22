@@ -1147,6 +1147,25 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 NtfsReportFileChange(VolCB, FileCB, NotifyFilter, FILE_ACTION_MODIFIED);
         }
 
+        /* A resident stream defers its data size to a paging write (see the
+         * ResidentSizeDeferred path in NtfsWriteFileData): the record keeps
+         * the old size until the lazy writer flushes. Flush it now, on the
+         * last handle's cleanup, so the file record carries the right size
+         * once the handle is gone - as on Windows, where metadata is correct
+         * after close. The paging write this triggers persists the resident
+         * data and settles the deferred size; it is a no-op if nothing is
+         * dirty. Guarded on the shared cache map, which holds the deferred
+         * data, and skipped for a file that is being deleted. */
+        if (FileCB->StreamCB && FileCB->StreamCB->ResidentSizeDeferred &&
+            !FileCB->DeletePending && !(FileCB->CreateOptions & FILE_DELETE_ON_CLOSE) &&
+            IrpSp->FileObject->SectionObjectPointer &&
+            IrpSp->FileObject->SectionObjectPointer->SharedCacheMap)
+        {
+            IO_STATUS_BLOCK FlushStatus;
+
+            CcFlushCache(IrpSp->FileObject->SectionObjectPointer, NULL, 0, &FlushStatus);
+        }
+
         /* The cache holds a file-object reference, so waiting for CLOSE to
          * release the private map prevents normal cached files from closing. */
         if (IrpSp->FileObject->PrivateCacheMap)
