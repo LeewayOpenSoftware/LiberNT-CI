@@ -157,6 +157,86 @@ cleanup:
     if (hdc_dst) DeleteDC(hdc_dst);
 }
 
+/* A source rect that reaches outside the source bitmap must not read outside it (it faulted win32k in HALFTONE).
+ * Windows paints the part that maps outside as black, and nothing when the rect misses the bitmap. */
+static void test_StretchBlt_halftone_source_outside(void)
+{
+    static const struct { WORD SrcBpp, DstBpp; } Formats[] = { { 24, 32 }, { 32, 32 }, { 32, 24 }, { 24, 24 } };
+    static const struct { int x, y; BOOL Inside; } Origins[] = { { -4, -4, TRUE }, { 4, 4, TRUE }, { -100, -100, FALSE }, { 100, 100, FALSE } };
+    const COLORREF Sentinel = RGB(0xEF, 0xCD, 0xAB), Fill = RGB(0x99, 0x66, 0x33);
+    BITMAPINFO SrcInfo = {0}, DstInfo;
+    HBITMAP SrcBitmap, DstBitmap, OldSrc, OldDst;
+    HDC SrcDc, DstDc;
+    HBRUSH Brush;
+    RECT Rect;
+    PVOID Bits;
+    UINT f, o;
+
+    SrcInfo.bmiHeader.biSize = sizeof(SrcInfo.bmiHeader);
+    SrcInfo.bmiHeader.biWidth = 8;
+    SrcInfo.bmiHeader.biHeight = -8;
+    SrcInfo.bmiHeader.biPlanes = 1;
+    SrcInfo.bmiHeader.biCompression = BI_RGB;
+    DstInfo = SrcInfo;
+    DstInfo.bmiHeader.biWidth = 16;
+    DstInfo.bmiHeader.biHeight = -16;
+
+    for (f = 0; f < ARRAYSIZE(Formats); f++)
+    {
+        SrcInfo.bmiHeader.biBitCount = Formats[f].SrcBpp;
+        DstInfo.bmiHeader.biBitCount = Formats[f].DstBpp;
+        SrcDc = CreateCompatibleDC(NULL);
+        DstDc = CreateCompatibleDC(NULL);
+        SrcBitmap = CreateDIBSection(SrcDc, &SrcInfo, DIB_RGB_COLORS, &Bits, NULL, 0);
+        DstBitmap = CreateDIBSection(DstDc, &DstInfo, DIB_RGB_COLORS, &Bits, NULL, 0);
+        ok(SrcDc && DstDc && SrcBitmap && DstBitmap, "%u: setup failed, error %lu\n", f, GetLastError());
+        if (!SrcDc || !DstDc || !SrcBitmap || !DstBitmap)
+            goto next;
+        OldSrc = SelectObject(SrcDc, SrcBitmap);
+        OldDst = SelectObject(DstDc, DstBitmap);
+        SetRect(&Rect, 0, 0, 8, 8);
+        Brush = CreateSolidBrush(Fill);
+        FillRect(SrcDc, &Rect, Brush);
+        DeleteObject(Brush);
+        SetStretchBltMode(DstDc, HALFTONE);
+        SetBrushOrgEx(DstDc, 0, 0, NULL);
+
+        for (o = 0; o < ARRAYSIZE(Origins); o++)
+        {
+            SetRect(&Rect, 0, 0, 16, 16);
+            Brush = CreateSolidBrush(Sentinel);
+            FillRect(DstDc, &Rect, Brush);
+            DeleteObject(Brush);
+
+            /* 2x: destination 0..7 maps to source origin..origin+3, 8..15 to origin+4..origin+7 */
+            StretchBlt(DstDc, 0, 0, 16, 16, SrcDc, Origins[o].x, Origins[o].y, 8, 8, SRCCOPY);
+
+            if (Origins[o].Inside && Origins[o].x < 0)
+            {
+                ok(GetPixel(DstDc, 2, 2) == RGB(0, 0, 0), "%u/%u: outside pixel %06lx\n", f, o, GetPixel(DstDc, 2, 2));
+                ok(GetPixel(DstDc, 12, 12) == Fill, "%u/%u: inside pixel %06lx\n", f, o, GetPixel(DstDc, 12, 12));
+            }
+            else if (Origins[o].Inside)
+            {
+                ok(GetPixel(DstDc, 2, 2) == Fill, "%u/%u: inside pixel %06lx\n", f, o, GetPixel(DstDc, 2, 2));
+                ok(GetPixel(DstDc, 12, 12) == RGB(0, 0, 0), "%u/%u: outside pixel %06lx\n", f, o, GetPixel(DstDc, 12, 12));
+            }
+            else
+            {
+                ok(GetPixel(DstDc, 2, 2) == Sentinel && GetPixel(DstDc, 12, 12) == Sentinel,
+                   "%u/%u: pixels %06lx %06lx\n", f, o, GetPixel(DstDc, 2, 2), GetPixel(DstDc, 12, 12));
+            }
+        }
+        SelectObject(SrcDc, OldSrc);
+        SelectObject(DstDc, OldDst);
+next:
+        if (SrcBitmap) DeleteObject(SrcBitmap);
+        if (DstBitmap) DeleteObject(DstBitmap);
+        if (SrcDc) DeleteDC(SrcDc);
+        if (DstDc) DeleteDC(DstDc);
+    }
+}
+
 static void check_StretchBlt_stretch(HDC hdcDst, HDC hdcSrc, BITMAPINFO *dst_info, UINT32 *dstBuffer, UINT32 *srcBuffer,
                                      int nXOriginDest, int nYOriginDest, int nWidthDest, int nHeightDest,
                                      int nXOriginSrc, int nYOriginSrc, int nWidthSrc, int nHeightSrc,
@@ -931,6 +1011,7 @@ static void test_StretchBlt_TopDownOptions(BOOL SrcTopDown, BOOL DstTopDown)
 START_TEST(StretchBlt)
 {
     test_StretchBlt_halftone();
+    test_StretchBlt_halftone_source_outside();
 
     trace("\n\n## Start of generalized StretchBlt tests.\n\n");
     test_StretchBlt();
