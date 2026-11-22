@@ -1196,6 +1196,9 @@ static LRESULT handle_internal_message( PWND pWnd, UINT msg, WPARAM wparam, LPAR
           ExFreePoolWithTag(winpos, USERTAG_SWP);
           return lRes;
        }
+       case WM_ASYNC_REFITMAXIMIZED:
+          co_WinPosRefitMaximizedWindow(pWnd);
+          return 0;
        case WM_ASYNC_DESTROYWINDOW:
        {
           TRACE("WM_ASYNC_DESTROYWINDOW\n");

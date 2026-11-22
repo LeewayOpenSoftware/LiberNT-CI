@@ -2892,6 +2892,9 @@ UserSystemParametersInfo(
         /* Update system metrics */
         InitMetrics();
 
+        if (uiAction == SPI_SETWORKAREA)
+            co_WinPosRefitMaximizedWindows();
+
         /* Send notification to toplevel windows, if requested */
         if (fWinIni & SPIF_SENDCHANGE)
         {

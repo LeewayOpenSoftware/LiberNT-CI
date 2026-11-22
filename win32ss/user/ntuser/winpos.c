@@ -1131,6 +1131,61 @@ co_WinPosGetMinMaxInfo(PWND Window, POINT* MaxSize, POINT* MaxPos,
     return 0; // FIXME: What does it return? Wine returns MINMAXINFO.
 }
 
+/* Re-fit one maximized window to the current work area; runs on the thread that owns the window */
+VOID FASTCALL
+co_WinPosRefitMaximizedWindow(PWND pwnd)
+{
+    USER_REFERENCE_ENTRY Ref;
+    POINT MaxSize, MaxPos;
+
+    if (!(pwnd->style & WS_MAXIMIZE) || (pwnd->style & WS_MINIMIZE))
+        return;
+
+    UserRefObjectCo(pwnd, &Ref);
+    co_WinPosGetMinMaxInfo(pwnd, &MaxSize, &MaxPos, NULL, NULL);
+    if (pwnd->rcWindow.left != MaxPos.x || pwnd->rcWindow.top != MaxPos.y ||
+        pwnd->rcWindow.right - pwnd->rcWindow.left != MaxSize.x ||
+        pwnd->rcWindow.bottom - pwnd->rcWindow.top != MaxSize.y)
+    {
+        co_WinPosSetWindowPos(pwnd, NULL, MaxPos.x, MaxPos.y, MaxSize.x, MaxSize.y,
+                              SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    UserDerefObjectCo(pwnd);
+}
+
+/* Re-fit maximized top-level windows to the current work area (display or work area change).
+ * Windows of other threads are handled asynchronously so a hung app cannot block the caller. */
+VOID FASTCALL
+co_WinPosRefitMaximizedWindows(VOID)
+{
+    PWND pDesktop = UserGetDesktopWindow();
+    PTHREADINFO ptiCurrent = PsGetCurrentThreadWin32Thread();
+    HWND *List;
+    ULONG i;
+
+    if (!pDesktop)
+        return;
+
+    List = IntWinListChildren(pDesktop);
+    if (!List)
+        return;
+
+    for (i = 0; List[i]; i++)
+    {
+        PWND pwnd = UserGetWindowObject(List[i]);
+
+        if (!pwnd || !(pwnd->style & WS_MAXIMIZE) || (pwnd->style & WS_MINIMIZE))
+            continue;
+
+        if (pwnd->head.pti == ptiCurrent)
+            co_WinPosRefitMaximizedWindow(pwnd);
+        else
+            co_IntSendMessageNoWait(List[i], WM_ASYNC_REFITMAXIMIZED, 0, 0);
+    }
+
+    ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
+}
+
 static
 BOOL
 IntValidateParent(PWND Child, PREGION ValidateRgn)

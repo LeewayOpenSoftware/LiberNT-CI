@@ -75,6 +75,7 @@ typedef struct _WND_DATA
     ULONG DwmCaption[DWM_CAPTION_BUTTONS + 2];
     ULONG DwmFrameInsets;
     UINT lastHitTest;
+    SIZE CaptionCalcSize;   /* window size rcCaptionButtons were computed at */
     BOOL HasAppDefinedRgn;
     BOOL HasThemeRgn;
     BOOL UpdatingRgn;
