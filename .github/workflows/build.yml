@@ -55,6 +55,7 @@ jobs:
             arch: amd64
       fail-fast: false
     runs-on: ubuntu-24.04
+    timeout-minutes: 180
     env:
       # LRM-RS special pool is the amd64 default (owner order 2026-11-14). ON unless an explicit opt-out.
       LRM_RS: ${{ (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'off' && !inputs.force_panic) && 'OFF' || 'ON' }}
