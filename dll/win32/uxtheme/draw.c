@@ -244,6 +244,10 @@ static PTHEME_PROPERTY UXTHEME_SelectImage(HTHEME hTheme, int iPartId, int iStat
         /* If an image couldn't be selected, choose the first one */
         tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME, TMT_IMAGEFILE1);
     }
+    else if(imageselecttype == IST_SIZE && !pRect) {
+        /* No destination (GetThemePartSize TS_TRUE/TS_MIN pass NULL): take the first image, as when none fits */
+        tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME, TMT_IMAGEFILE1);
+    }
     else if(imageselecttype == IST_SIZE) {
         POINT size = {pRect->right-pRect->left, pRect->bottom-pRect->top};
         POINT reqsize;
