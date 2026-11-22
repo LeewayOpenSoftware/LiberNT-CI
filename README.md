@@ -43,11 +43,11 @@
 ---
 
 <p align="center">
-   <img width="1280" height="800" alt="The LiberNT desktop on amd64" src="https://github.com/user-attachments/assets/e36fe28a-6af6-4db9-8c21-de19865d34aa" />
+   <img width="1280" height="800" alt="06-cad-esc-desktop" src="https://github.com/user-attachments/assets/68bfa059-667d-401a-ac3f-a760f3156f72" />
 
 </p>
 
-<p align="center"><sub>The LiberNT desktop on amd64</sub></p>
+<p align="center"><sub>The Orosi desktop on amd64</sub></p>
 
 ---
 
