@@ -136,6 +136,12 @@ static LOGFONTW DefaultGuiFont =
 
 HGDIOBJ StockObjects[NB_STOCK_OBJECTS];
 
+/* The stock fonts exist twice: StockObjects holds the 96 DPI design sizes that a DPI-unaware caller sees
+ * (its drawing is scaled by the virtualization), StockFontsScaled the sizes for the system DPI */
+static HGDIOBJ StockFontsScaled[NB_STOCK_OBJECTS];
+static UINT guStockFontDpi = 96;
+static BOOL gbStockFontsCJK;
+
 static
 HPEN
 FASTCALL
@@ -267,6 +273,7 @@ CreateStockFonts(void)
     DeviceDefaultFont.lfCharSet = bActiveCharSet;
     SystemFixedFont.lfCharSet = bActiveCharSet;
     DefaultGuiFont.lfCharSet = bActiveCharSet;
+    gbStockFontsCJK = bIsCJK;
 
     TextIntCreateFontIndirect(&OEMFixedFont, (HFONT*)&StockObjects[OEM_FIXED_FONT]);
     TextIntCreateFontIndirect(&AnsiFixedFont, (HFONT*)&StockObjects[ANSI_FIXED_FONT]);
@@ -275,6 +282,73 @@ CreateStockFonts(void)
     TextIntCreateFontIndirect(&DeviceDefaultFont, (HFONT*)&StockObjects[DEVICE_DEFAULT_FONT]);
     TextIntCreateFontIndirect(&SystemFixedFont, (HFONT*)&StockObjects[SYSTEM_FIXED_FONT]);
     TextIntCreateFontIndirect(&DefaultGuiFont, (HFONT*)&StockObjects[DEFAULT_GUI_FONT]);
+
+    /* The same sizes until the system DPI is known (GreSetStockFontDpi) */
+    TextIntCreateFontIndirect(&OEMFixedFont, (HFONT*)&StockFontsScaled[OEM_FIXED_FONT]);
+    TextIntCreateFontIndirect(&AnsiFixedFont, (HFONT*)&StockFontsScaled[ANSI_FIXED_FONT]);
+    TextIntCreateFontIndirect(&AnsiVarFont, (HFONT*)&StockFontsScaled[ANSI_VAR_FONT]);
+    TextIntCreateFontIndirect(&SystemFont, (HFONT*)&StockFontsScaled[SYSTEM_FONT]);
+    TextIntCreateFontIndirect(&DeviceDefaultFont, (HFONT*)&StockFontsScaled[DEVICE_DEFAULT_FONT]);
+    TextIntCreateFontIndirect(&SystemFixedFont, (HFONT*)&StockFontsScaled[SYSTEM_FIXED_FONT]);
+    TextIntCreateFontIndirect(&DefaultGuiFont, (HFONT*)&StockFontsScaled[DEFAULT_GUI_FONT]);
+}
+
+static LONG
+IntStockFontHeightForDpi(INT Object, LONG Design, UINT Dpi)
+{
+    switch (Object)
+    {
+        case DEFAULT_GUI_FONT:
+            /* 8 points (9 for CJK) at the system DPI: -11 at 96, -13 at 120, -16 at 144, -21 at 192, like Windows */
+            return -EngMulDiv(gbStockFontsCJK ? 9 : 8, Dpi, 72);
+
+        case SYSTEM_FONT:
+        case DEVICE_DEFAULT_FONT:
+        case SYSTEM_FIXED_FONT:
+        case OEM_FIXED_FONT:
+            /* Bitmap fonts: Windows moves to its 120 DPI strikes (20 pixels) from 120 DPI on and stays there */
+            if (Dpi >= 120 && !gbStockFontsCJK)
+                return 20;
+            return Design;
+
+        default:
+            /* ANSI_VAR_FONT and ANSI_FIXED_FONT keep their 96 DPI size on Windows */
+            return Design;
+    }
+}
+
+/* Called whenever the system DPI is (re)loaded; the handles stay, the logical fonts are re-realized lazily */
+VOID
+NTAPI
+GreSetStockFontDpi(_In_ UINT Dpi)
+{
+    static const struct { INT Object; PLOGFONTW Design; } Fonts[] =
+    {
+        { OEM_FIXED_FONT, &OEMFixedFont }, { ANSI_FIXED_FONT, &AnsiFixedFont }, { ANSI_VAR_FONT, &AnsiVarFont },
+        { SYSTEM_FONT, &SystemFont }, { DEVICE_DEFAULT_FONT, &DeviceDefaultFont },
+        { SYSTEM_FIXED_FONT, &SystemFixedFont }, { DEFAULT_GUI_FONT, &DefaultGuiFont },
+    };
+    PTEXTOBJ pTextObj;
+    ULONG i;
+
+    if (Dpi == guStockFontDpi || Dpi < 96)
+        return;
+    guStockFontDpi = Dpi;
+
+    for (i = 0; i < RTL_NUMBER_OF(Fonts); i++)
+    {
+        if (!StockFontsScaled[Fonts[i].Object])
+            continue;
+        pTextObj = TEXTOBJ_LockText(StockFontsScaled[Fonts[i].Object]);
+        if (!pTextObj)
+            continue;
+        pTextObj->logfont.elfEnumLogfontEx.elfLogFont = *Fonts[i].Design;
+        pTextObj->logfont.elfEnumLogfontEx.elfLogFont.lfHeight =
+            IntStockFontHeightForDpi(Fonts[i].Object, Fonts[i].Design->lfHeight, Dpi);
+        pTextObj->Font = NULL;
+        pTextObj->fl &= ~TEXTOBJECT_INIT;
+        TEXTOBJ_UnlockText(pTextObj);
+    }
 }
 
 /*!
@@ -320,6 +394,10 @@ CreateStockObjects(void)
         {
             GDIOBJ_ConvertToStockObj(&StockObjects[Object]);
         }
+        if (NULL != StockFontsScaled[Object])
+        {
+            GDIOBJ_ConvertToStockObj(&StockFontsScaled[Object]);
+        }
     }
     hStockColorSpace = StockObjects[20];
 
@@ -336,7 +414,14 @@ NtGdiGetStockObject(INT Object)
 {
     DPRINT("NtGdiGetStockObject index %d\n", Object);
 
-    return ((Object < 0) || (NB_STOCK_OBJECTS <= Object)) ? NULL : StockObjects[Object];
+    if ((Object < 0) || (NB_STOCK_OBJECTS <= Object))
+        return NULL;
+
+    /* A DPI-unaware caller draws in 96 DPI design units and gets the design-size fonts */
+    if (StockFontsScaled[Object] && !UserDpiIsVirtualCaller())
+        return StockFontsScaled[Object];
+
+    return StockObjects[Object];
 }
 
 VOID FASTCALL

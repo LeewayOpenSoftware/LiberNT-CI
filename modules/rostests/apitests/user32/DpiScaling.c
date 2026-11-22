@@ -7,6 +7,7 @@
 
 #include "precomp.h"
 #include <winreg.h>
+#include <winnls.h>
 
 typedef INT (WINAPI *PGETSYSTEMMETRICSFORDPI)(INT, UINT);
 typedef BOOL (WINAPI *PSYSTEMPARAMETERSINFOFORDPI)(UINT, UINT, PVOID, UINT, UINT);
@@ -388,6 +389,14 @@ TestFramesForDpi(void)
     }
 }
 
+static BOOL
+IsCjkCodePage(void)
+{
+    UINT CodePage = GetACP();
+
+    return CodePage == 932 || CodePage == 936 || CodePage == 949 || CodePage == 950 || CodePage == 1361;
+}
+
 static void
 TestThreadContexts(void)
 {
@@ -436,6 +445,21 @@ TestThreadContexts(void)
            Contexts[Index].Name, Ncm.iScrollWidth, GetSystemMetrics(SM_CXVSCROLL));
         ok(Pixels == (INT)pGetDpiForSystem(), "context %s: LOGPIXELSY %d, GetDpiForSystem %u\n",
            Contexts[Index].Name, Pixels, pGetDpiForSystem());
+
+        /* The stock fonts follow the DPI the caller sees: 8 points for DEFAULT_GUI_FONT (9 for CJK), the
+           120 DPI bitmap strikes (20 pixels) for SYSTEM_FONT from 120 DPI on, as on Windows */
+        ZeroMemory(&Font, sizeof(Font));
+        GetObjectW(GetStockObject(DEFAULT_GUI_FONT), sizeof(Font), &Font);
+        trace("context %s: DEFAULT_GUI_FONT %ld \"%ls\"\n", Contexts[Index].Name, Font.lfHeight, Font.lfFaceName);
+        ok(Font.lfHeight == -MulDiv(IsCjkCodePage() ? 9 : 8, (INT)pGetDpiForSystem(), 72),
+           "context %s: DEFAULT_GUI_FONT height %ld at %u DPI\n", Contexts[Index].Name, Font.lfHeight,
+           pGetDpiForSystem());
+        ZeroMemory(&Font, sizeof(Font));
+        GetObjectW(GetStockObject(SYSTEM_FONT), sizeof(Font), &Font);
+        trace("context %s: SYSTEM_FONT %ld \"%ls\"\n", Contexts[Index].Name, Font.lfHeight, Font.lfFaceName);
+        if (!IsCjkCodePage())
+            ok(Font.lfHeight == (pGetDpiForSystem() >= 120 ? 20 : 16), "context %s: SYSTEM_FONT height %ld at %u DPI\n",
+               Contexts[Index].Name, Font.lfHeight, pGetDpiForSystem());
 
         hWnd = CreateWindowExW(0, L"static", L"DpiScaling", WS_OVERLAPPEDWINDOW, 10, 10, 300, 200, NULL, NULL,
                                NULL, NULL);
