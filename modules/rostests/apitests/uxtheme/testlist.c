@@ -20,6 +20,7 @@ extern void func_SetThemeAppProperties(void);
 extern void func_SetWindowTheme(void);
 extern void func_TextScaling(void);
 extern void func_ThemeDpi(void);
+extern void func_ThemeReload(void);
 extern void func_ThemeRegion(void);
 extern void func_ThemeRendering(void);
 extern void func_ThemeShellTransition(void);
@@ -48,6 +49,7 @@ const struct test winetest_testlist[] =
     { "TextScaling",    func_TextScaling },
     { "SetThemeAppProperties", func_SetThemeAppProperties },
     { "ThemeDpi", func_ThemeDpi },
+    { "ThemeReload", func_ThemeReload },
     { "ThemeRegion", func_ThemeRegion },
 { "ThemeRendering", func_ThemeRendering },
     { "ThemeShellTransition", func_ThemeShellTransition },

@@ -14,6 +14,7 @@ list(APPEND SOURCE
     SetWindowTheme.c
     TextScaling.c
     ThemeDpi.c
+    ThemeReload.c
     SetThemeAppProperties.c
     ThemeRegion.c
     ThemeRendering.c
