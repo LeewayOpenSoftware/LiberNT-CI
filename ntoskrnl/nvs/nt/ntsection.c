@@ -2512,12 +2512,12 @@ MmForceSectionClosedEx(
     _In_ ULONG ForceCloseFlags)
 {
     BOOLEAN Closed = TRUE;
+    BOOLEAN LaterOk = BooleanFlagOn(ForceCloseFlags, MM_FORCE_CLOSED_LATER_OK);
 
-    /* MM_FORCE_CLOSED_LATER_OK: like DelayClose above, no close is deferred past outstanding references */
     if (ForceCloseFlags & MM_FORCE_CLOSED_IMAGE)
-        Closed = MiCloseUnusedControlArea(SectionObjectPointer, TRUE) && Closed;
+        Closed = MiCloseUnusedControlArea(SectionObjectPointer, TRUE, LaterOk) && Closed;
     if (ForceCloseFlags & MM_FORCE_CLOSED_DATA)
-        Closed = MiCloseUnusedControlArea(SectionObjectPointer, FALSE) && Closed;
+        Closed = MiCloseUnusedControlArea(SectionObjectPointer, FALSE, LaterOk) && Closed;
     return Closed;
 }
 
