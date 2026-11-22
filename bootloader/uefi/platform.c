@@ -286,11 +286,24 @@ FwGetRandom(
     _In_ ULONG Size)
 {
     FW_EFI_RNG_PROTOCOL *Rng;
+    PUCHAR Output = Buffer;
+    ULONG Chunk;
 
     if (EFI_ERROR(GlobalSystemTable->BootServices->LocateProtocol(&FwRngGuid, NULL, (VOID**)&Rng)))
         return FALSE;
 
-    return !EFI_ERROR(Rng->GetRNG(Rng, NULL, Size, Buffer));
+    /* Some firmware RNGs refuse large requests */
+    while (Size)
+    {
+        Chunk = min(Size, 64);
+        if (EFI_ERROR(Rng->GetRNG(Rng, NULL, Chunk, Output)))
+            return FALSE;
+
+        Output += Chunk;
+        Size -= Chunk;
+    }
+
+    return TRUE;
 }
 
 PCWSTR

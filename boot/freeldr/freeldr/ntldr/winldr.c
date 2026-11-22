@@ -172,21 +172,25 @@ WinLdrFillBootEntropy(
 
     Entropy->maxEntropySources = BootMaxEntropySources;
     Source->SourceId = BootEntropySourceUefi;
-    Source->EntropyLength = sizeof(Source->EntropyData);
-    if (UefiGetRandom(Source->EntropyData, sizeof(Source->EntropyData)) &&
-        UefiGetRandom(Entropy->SeedBytesForCng, sizeof(Entropy->SeedBytesForCng)) &&
-        UefiGetRandom(Entropy->RngBytesForNtoskrnl, sizeof(Entropy->RngBytesForNtoskrnl)))
+    if (!UefiGetRandom(Source->EntropyData, sizeof(Source->EntropyData)))
     {
-        Source->ResultCode = BootEntropySourceSuccess;
-        Source->ResultStatus = STATUS_SUCCESS;
+        RtlZeroMemory(Source->EntropyData, sizeof(Source->EntropyData));
+        Source->ResultCode = BootEntropySourceNotPresent;
+        Source->ResultStatus = STATUS_NOT_FOUND;
         return;
     }
 
-    RtlZeroMemory(Entropy, sizeof(*Entropy));
-    Entropy->maxEntropySources = BootMaxEntropySources;
-    Source->SourceId = BootEntropySourceUefi;
-    Source->ResultCode = BootEntropySourceNotPresent;
-    Source->ResultStatus = STATUS_NOT_FOUND;
+    Source->EntropyLength = sizeof(Source->EntropyData);
+    Source->ResultCode = BootEntropySourceSuccess;
+    Source->ResultStatus = STATUS_SUCCESS;
+
+    /* These seeds stay in the loader block; whoever consumes them should wipe them */
+    if (!UefiGetRandom(Entropy->SeedBytesForCng, sizeof(Entropy->SeedBytesForCng)) ||
+        !UefiGetRandom(Entropy->RngBytesForNtoskrnl, sizeof(Entropy->RngBytesForNtoskrnl)))
+    {
+        RtlZeroMemory(Entropy->SeedBytesForCng, sizeof(Entropy->SeedBytesForCng));
+        RtlZeroMemory(Entropy->RngBytesForNtoskrnl, sizeof(Entropy->RngBytesForNtoskrnl));
+    }
 }
 #endif
 
