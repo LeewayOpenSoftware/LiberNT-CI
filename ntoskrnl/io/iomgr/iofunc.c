@@ -17,6 +17,12 @@
 #include <debug.h>
 #include "internal/io_i.h"
 
+/* FILE_RENAME_INFORMATION_EX replace flag (from ntifs); guarded so ntoskrnl
+ * need not pull the full ntifs rename-flag set just for this one bit. */
+#ifndef FILE_RENAME_REPLACE_IF_EXISTS
+#define FILE_RENAME_REPLACE_IF_EXISTS 0x00000001
+#endif
+
 /* Directory query SL_ flags not yet present in this tree's DDK headers
    (values match the Windows 10 RS3 WDK, where SL_QUERY_DIRECTORY_MASK is
    the set of flags valid for NtQueryDirectoryFileEx) */
@@ -4498,6 +4504,7 @@ NtSetInformationFile(IN HANDLE FileHandle,
         Irp->IoStatus.Information = 0;
     }
     else if (FileInformationClass == FileRenameInformation ||
+             FileInformationClass == FileRenameInformationEx ||
              FileInformationClass == FileLinkInformation ||
              FileInformationClass == FileMoveClusterInformation)
     {
@@ -4517,6 +4524,14 @@ NtSetInformationFile(IN HANDLE FileHandle,
             if (FileInformationClass == FileMoveClusterInformation)
             {
                 StackPtr->Parameters.SetFile.ClusterCount = ((PFILE_MOVE_CLUSTER_INFORMATION)RenameInfo)->ClusterCount;
+            }
+            else if (FileInformationClass == FileRenameInformationEx)
+            {
+                /* FILE_RENAME_INFORMATION_EX carries a Flags ULONG where classic
+                 * rename has the ReplaceIfExists boolean; surface the one flag the
+                 * stack location can hold. The FSD reads the full Flags itself. */
+                StackPtr->Parameters.SetFile.ReplaceIfExists =
+                    (BOOLEAN)((*(PULONG)RenameInfo & FILE_RENAME_REPLACE_IF_EXISTS) != 0);
             }
             else
             {
