@@ -2332,7 +2332,11 @@ SmpProcessFileRenames(VOID)
                             &IoStatusBlock,
                             FILE_SHARE_READ | FILE_SHARE_WRITE,
                             FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT);
-        if (!NT_SUCCESS(Status)) goto Quickie;
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SMSS: PFR open of source '%wZ' failed - Status == %x\n", &RegEntry->Name, Status);
+            goto Quickie;
+        }
 
         /* Check if it's a rename or just a delete */
         ValueLength = RegEntry->Value.Length;
@@ -2467,7 +2471,8 @@ Quickie:
         if (!NT_SUCCESS(Status))
         {
             /* We totally failed */
-            DPRINT1("SMSS: '%wZ' => '%wZ' failed - Status == %x\n",
+            DPRINT1("SMSS: PFR %s '%wZ' => '%wZ' failed - Status == %x\n",
+                    RegEntry->Value.Length ? "rename" : "delete",
                     &RegEntry->Name, &RegEntry->Value, Status);
         }
         else if (RegEntry->Value.Length)
