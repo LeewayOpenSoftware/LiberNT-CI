@@ -75,8 +75,42 @@ static void TestStretchDrawEchoesRect(void)
     CloseThemeData(theme);
 }
 
+static void TestSizeSelectedImageWithoutRect(void)
+{
+    HTHEME theme = OpenThemeData(NULL, L"SCROLLBAR");
+    int select = -1;
+    HRESULT hr;
+    SIZE sz;
+
+    if (!theme)
+    {
+        skip("SCROLLBAR theme class not available\n");
+        return;
+    }
+    if (FAILED(GetThemeEnumValue(theme, SBP_ARROWBTN, ABS_UPNORMAL, TMT_IMAGESELECTTYPE, &select)) || select != IST_SIZE)
+    {
+        skip("SCROLLBAR arrow does not select its image by size (select %d)\n", select);
+        CloseThemeData(theme);
+        return;
+    }
+
+    /* The image is chosen by destination size, but TS_TRUE and TS_MIN take no rect; this used to
+       dereference the NULL rect */
+    sz.cx = sz.cy = -1;
+    hr = GetThemePartSize(theme, NULL, SBP_ARROWBTN, ABS_UPNORMAL, NULL, TS_TRUE, &sz);
+    ok(hr == S_OK, "TS_TRUE failed hr 0x%08lx\n", (unsigned long)hr);
+    ok(sz.cx > 0 && sz.cy > 0, "TS_TRUE size %ldx%ld\n", sz.cx, sz.cy);
+    sz.cx = sz.cy = -1;
+    hr = GetThemePartSize(theme, NULL, SBP_ARROWBTN, ABS_UPNORMAL, NULL, TS_MIN, &sz);
+    ok(hr == S_OK, "TS_MIN failed hr 0x%08lx\n", (unsigned long)hr);
+    ok(sz.cx > 0 && sz.cy > 0, "TS_MIN size %ldx%ld\n", sz.cx, sz.cy);
+
+    CloseThemeData(theme);
+}
+
 START_TEST(PartSize)
 {
     TestBorderFillReject();
     TestStretchDrawEchoesRect();
+    TestSizeSelectedImageWithoutRect();
 }

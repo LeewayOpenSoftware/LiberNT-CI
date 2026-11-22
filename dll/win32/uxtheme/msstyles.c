@@ -677,6 +677,7 @@ static PTHEME_PARTSTATE MSSTYLES_AddPartState(PTHEME_CLASS tc, int iPartId, int 
     if (!cur)
         RaiseException(STATUS_NO_MEMORY, EXCEPTION_NONCONTINUABLE, 0, NULL);
 #endif
+    memset(cur, 0, sizeof(*cur));
     cur->iPartId = iPartId;
     cur->iStateId = iStateId;
     cur->properties = NULL;
@@ -858,6 +859,8 @@ static PTHEME_PROPERTY MSSTYLES_AddProperty(PTHEME_PARTSTATE ps, int iPropertyPr
     if (!cur)
         RaiseException(STATUS_NO_MEMORY, EXCEPTION_NONCONTINUABLE, 0, NULL);
 #endif
+    /* v4/v4file must read NULL: they route the getters to the version-4 readers */
+    memset(cur, 0, sizeof(*cur));
     cur->iPrimitiveType = iPropertyPrimitive;
     cur->iPropertyId = iPropertyId;
     cur->lpValue = lpValue;
@@ -903,6 +906,7 @@ static PTHEME_PROPERTY MSSTYLES_AddMetric(PTHEME_FILE tf, int iPropertyPrimitive
     if (!cur)
         RaiseException(STATUS_NO_MEMORY, EXCEPTION_NONCONTINUABLE, 0, NULL);
 #endif
+    memset(cur, 0, sizeof(*cur));
     cur->iPrimitiveType = iPropertyPrimitive;
     cur->iPropertyId = iPropertyId;
     cur->lpValue = lpValue;
