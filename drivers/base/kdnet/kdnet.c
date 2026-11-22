@@ -335,7 +335,6 @@ KdpTerminalInitialize(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    /* Timer jitter alone is guessable; a generated key needs the hardware generator */
     /* A short given key falls to an offline search from one captured hello */
     if (KdNetOptions.HaveKey)
     {
@@ -345,6 +344,7 @@ KdpTerminalInitialize(
             return STATUS_PWD_TOO_SHORT;
     }
 
+    /* Timer jitter alone is guessable; a generated key needs the hardware generator */
     if (KdpGatherEntropy(LoaderBlock) < KDNET_HARDWARE_SAMPLES && !KdNetOptions.HaveKey)
         return STATUS_CRYPTO_SYSTEM_INVALID;
 
