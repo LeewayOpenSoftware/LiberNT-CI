@@ -216,6 +216,14 @@ add_livecd_shortcut("Service Manager"
 add_livecd_shortcut("System Configuration"
     "shell:system\\msconfig.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_admintools}")
+add_livecd_shortcut("Registry Editor"
+    "shell:windows\\regedit.exe" ICON_INDEX 0
+    DESTINATION "${dir_startmenu_admintools}")
+add_livecd_shortcut("NT Object Namespace Explorer"
+    "shell:windows\\explorer.exe"
+    CMDLINE_ARGS "shell:::{845B0FB2-66E0-416B-8F91-314E23F7C12D}"
+    ICON "${envvar_systemroot}\\system32\\ntobjshex.dll" ICON_INDEX 0
+    DESTINATION "${dir_startmenu_admintools}")
 add_livecd_shortcut("Magnify"
     "shell:system\\magnify.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_accessibility}")
@@ -245,9 +253,6 @@ add_livecd_shortcut("Keyboard Layout Switcher"
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("ReactX Diagnostic"
     "shell:system\\dxdiag.exe" ICON_INDEX 0
-    DESTINATION "${dir_startmenu_systemtools}")
-add_livecd_shortcut("Registry Editor"
-    "shell:windows\\regedit.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Task Manager"
     "shell:system\\taskmgr.exe" ICON_INDEX 0
