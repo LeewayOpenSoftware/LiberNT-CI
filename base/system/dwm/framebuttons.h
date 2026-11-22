@@ -14,6 +14,9 @@ extern "C" {
 ULONG
 DwmFrameKey(const DWM_WIN *Window);
 
+VOID
+DwmFrameButtonsInvalidate(void);
+
 const ULONG *
 DwmFrameButtonImage(const DWM_WIN *Window, ULONG Button, ULONG Background);
 

@@ -14,7 +14,7 @@
 #include "framebuttons.h"
 
 #define DWM_FRAME_BUTTON_CACHE 24
-#define DWM_FRAME_BUTTON_MAX   256
+#define DWM_FRAME_BUTTON_MAX   192
 
 typedef BOOL (WINAPI *PFN_DRAW_CAPTION_BUTTON)(HDC, const RECT *, UINT, ULONG, BOOL, BOOL);
 
@@ -26,12 +26,22 @@ typedef struct _DWM_FRAME_BUTTON
     ULONG Height;
     ULONG Background;
     ULONG Flags;
+    ULONG Gen;
     ULONG Stamp;
     ULONG *Pixels;
 } DWM_FRAME_BUTTON;
 
 static DWM_FRAME_BUTTON g_frameButtons[DWM_FRAME_BUTTON_CACHE];
 static ULONG g_frameButtonStamp;
+static ULONG g_frameButtonGen;
+
+/* A theme or colour-scheme change can leave an image cached under the same button/state/size/
+ * colour but a different glyph. Bump a generation so those entries are never reused. */
+VOID
+DwmFrameButtonsInvalidate(void)
+{
+    ++g_frameButtonGen;
+}
 static PFN_DRAW_CAPTION_BUTTON g_drawCaptionButton;
 static BOOL g_drawCaptionButtonLoaded;
 
@@ -144,6 +154,11 @@ DwmFrameButtonImage(const DWM_WIN *Window, ULONG Button, ULONG Background)
     Height = (ULONG)(Rect->bottom - Rect->top);
     if (Width > DWM_FRAME_BUTTON_MAX || Height > DWM_FRAME_BUTTON_MAX)
         return NULL;
+    /* Backstop for a transient rect the publisher missed: a caption button is a modest box,
+     * never a sliver or bar. Reject aspect ratios past 1:3 / 3:1 so a garbage frame (5x256,
+     * 1x29, 6x32) can never render or poison the cache. */
+    if (Width * 3u < Height || Height * 3u < Width)
+        return NULL;
     State = DwmFrameButtonState(Window, Button);
     Flags = Window->LayerFlags & (DWM_WINDOW_ACTIVE | DWM_WINDOW_DARK);
 
@@ -152,7 +167,8 @@ DwmFrameButtonImage(const DWM_WIN *Window, ULONG Button, ULONG Background)
         Entry = &g_frameButtons[Index];
         if (Entry->Pixels != NULL && Entry->Button == Button && Entry->State == State &&
             Entry->Width == Width && Entry->Height == Height &&
-            Entry->Background == Background && Entry->Flags == Flags)
+            Entry->Background == Background && Entry->Flags == Flags &&
+            Entry->Gen == g_frameButtonGen)
         {
             Entry->Stamp = ++g_frameButtonStamp;
             return Entry->Pixels;
@@ -170,6 +186,7 @@ DwmFrameButtonImage(const DWM_WIN *Window, ULONG Button, ULONG Background)
     Oldest->Height = Height;
     Oldest->Background = Background;
     Oldest->Flags = Flags;
+    Oldest->Gen = g_frameButtonGen;
     Oldest->Stamp = ++g_frameButtonStamp;
     if (!DwmFrameRenderButton(Oldest))
     {

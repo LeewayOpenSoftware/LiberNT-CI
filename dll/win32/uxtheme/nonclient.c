@@ -1253,6 +1253,46 @@ ThemeDwmPublishFrameInsets(HWND hWnd, const WINDOWINFO *wi, PWND_DATA pwndData)
         RemovePropW(hWnd, DWM_PROP_FRAME_INSETS);
 }
 
+/* A live colour-scheme or DPI reload can briefly hand the compositor caption-button rects
+ * at the wrong size: a wrong-DPI size (e.g. 46x32 computed at 144 dpi = 59x41), a failed
+ * GetThemePartSize square (41x41, 29x29), or a mid-maximize caption height (5x256). Drawn, a
+ * 46x32 glyph stretched into those is the owner's stripe/dot glitch. Publish only when every
+ * button matches the window's real caption-button metrics, so a transient never reaches dwm. */
+static BOOL
+ThemeCaptionButtonsAreSane(HWND hWnd, const WINDOWINFO *wi)
+{
+    PWND_DATA pwndData = ThemeGetWndData(hWnd);
+    BOOL toolwin = (wi->dwExStyle & WS_EX_TOOLWINDOW) != 0;
+    INT expW, expH, i;
+    UINT dpi;
+
+    if (!pwndData)
+        return FALSE;
+    dpi = GetDpiForWindow(hWnd);
+    if (!dpi)
+        dpi = GetDpiForSystem();
+    expW = GetSystemMetricsForDpi(toolwin ? SM_CXSMSIZE : SM_CXSIZE, dpi);
+    expH = GetSystemMetricsForDpi(toolwin ? SM_CYSMSIZE : SM_CYSIZE, dpi);
+    if (expW <= 0 || expH <= 0)
+        return TRUE;   /* no reference available: do not block the publish */
+    for (i = CLOSEBUTTON; i <= HELPBUTTON; i++)
+    {
+        const RECT *r = &pwndData->rcCaptionButtons[i];
+        INT w = r->right - r->left, h = r->bottom - r->top;
+        INT dw, dh, tolW, tolH;
+
+        if (w <= 0 || h <= 0)
+            continue;   /* absent button */
+        dw = w - expW; if (dw < 0) dw = -dw;
+        dh = h - expH; if (dh < 0) dh = -dh;
+        tolW = expW / 4; if (tolW < 6) tolW = 6;   /* +-25%, with a small absolute slack */
+        tolH = expH / 4; if (tolH < 4) tolH = 4;
+        if (dw > tolW || dh > tolH)
+            return FALSE;
+    }
+    return TRUE;
+}
+
 static VOID
 ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWORD htDown)
 {
@@ -1275,6 +1315,8 @@ ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWOR
 
     if (ThemeDwmHasCaptionButtons(hWnd, wi))
     {
+        if (!ThemeCaptionButtonsAreSane(hWnd, wi))
+            return;   /* transient reload/maximize state: keep the last good published rects */
         Rect = &pwndData->rcCaptionButtons[CLOSEBUTTON];
         Row = DWM_CAPTION_PACK(Rect->top, Rect->bottom);
         State = DWM_CAPTION_STATE_VALID;
