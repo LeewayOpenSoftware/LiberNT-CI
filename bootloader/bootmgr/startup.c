@@ -14,13 +14,17 @@
 static PCSTR BmStartupNames[] =
 {
     "Debugging",
+#ifdef KD_BROADCAST
     "Network debugging on this cable"
+#endif
 };
 
 static const ULONG BmStartupProfiles[] =
 {
     BM_PROFILE_DEBUGGING,
+#ifdef KD_BROADCAST
     BM_PROFILE_LOCAL_BROADCAST
+#endif
 };
 
 BOOLEAN

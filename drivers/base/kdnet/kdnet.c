@@ -203,8 +203,10 @@ KdpParseOptions(
     if (!Options)
         return;
 
+#ifdef KD_BROADCAST
     Text = KdpFindOption(Options, "LOCAL_BROADCAST");
     KdNetOptions.Broadcast = Text && *Text == '1';
+#endif
 
     Text = KdpFindOption(Options, "HOST_IP");
     if (Text && KdpParseNumbers(Text, '.', Values, 4) &&

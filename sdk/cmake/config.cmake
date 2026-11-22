@@ -132,6 +132,13 @@ turn it on by hand for a build given to someone who needs help." OFF)
 if(ENABLE_REMOTE_ASSISTANCE AND NOT DBG)
     message(FATAL_ERROR "ENABLE_REMOTE_ASSISTANCE needs a debug build (DBG)")
 endif()
+option(LIBERNT_ENABLE_KD_BROADCAST
+"Whether to build the keyless LAN broadcast mode of the network debugger (LOCAL_BROADCAST=1) and
+its \"network debugging on this cable\" boot entry. Any host on the segment can drive the debugger
+in that mode, so it is for debug builds in a controlled lab only." OFF)
+if(LIBERNT_ENABLE_KD_BROADCAST AND NOT DBG)
+    message(FATAL_ERROR "LIBERNT_ENABLE_KD_BROADCAST needs a debug build (DBG)")
+endif()
 set(LIBERNT_ASSIST_RELAY_HOST "" CACHE STRING
 "Host name of the remote assistance relay. Empty: the network debugger offers cable and LAN
 debugging only and no boot entry reaches a relay. Only used with ENABLE_REMOTE_ASSISTANCE.")
