@@ -143,6 +143,9 @@
 #define IDS_TAB_GRAPHICS   207
 #define IDS_GFX_DEFAULT    208
 #define IDS_GFX_CUSTOM     209
+#define IDS_GFX_ENABLED    320
+#define IDS_GFX_DISABLED   321
+#define IDS_GFX_NO3D       322
 #define IDD_GRAPHICS       307
 #define IDC_GFX_RENDERER   460
 #define IDC_GFX_SHADER     461

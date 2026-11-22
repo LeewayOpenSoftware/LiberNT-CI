@@ -1068,12 +1068,30 @@ static const GFX_CTRL gfxCtrls[] = {
 };
 #define GFX_NCTRL ((int)ARRAYSIZE(gfxCtrls))
 
+/* A few option labels are localized (Default/Custom via IDS already); map the
+ * English table labels for the translatable ones. Renderer/API names stay literal. */
+static const WCHAR *
+GfxLocLabel(const WCHAR *label, WCHAR *buf, int cch)
+{
+    UINT id = 0;
+    if (!wcscmp(label, L"Enabled"))  id = IDS_GFX_ENABLED;
+    else if (!wcscmp(label, L"Disabled")) id = IDS_GFX_DISABLED;
+    else if (!wcscmp(label, L"No 3D"))    id = IDS_GFX_NO3D;
+    if (id)
+    {
+        LoadStr(id, buf, cch);
+        return buf;
+    }
+    return label;
+}
+
 static void
 GfxInitCombo(HWND hwnd, HKEY hKey, const GFX_CTRL *c)
 {
     union { DWORD dw; WCHAR sz[128]; BYTE raw[256]; } buf;
     DWORD cb = sizeof(buf) - sizeof(WCHAR), type = 0;
     WCHAR def[64];
+    WCHAR lbl[64];
     BOOL have, matched = FALSE;
     int i, sel = 0;
 
@@ -1085,7 +1103,7 @@ GfxInitCombo(HWND hwnd, HKEY hKey, const GFX_CTRL *c)
     LoadStr(IDS_GFX_DEFAULT, def, ARRAYSIZE(def));
     for (i = 0; i < c->count; i++)
     {
-        const WCHAR *txt = c->opt[i].label ? c->opt[i].label : def;
+        const WCHAR *txt = c->opt[i].label ? GfxLocLabel(c->opt[i].label, lbl, ARRAYSIZE(lbl)) : def;
 
         SendDlgItemMessageW(hwnd, c->id, CB_ADDSTRING, 0, (LPARAM)txt);
         if (have && i > 0 && !matched)
