@@ -106,6 +106,7 @@ BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ *DestSurf, SURFOBJ *SourceSurf, SURFOBJ *Ma
   BOOL UsesSource = ROP4_USES_SOURCE(ROP);
   BOOL UsesPattern = ROP4_USES_PATTERN(ROP);
   BOOLEAN bTopToBottom, bLeftToRight;
+  BOOLEAN Row0In, Row1In, Col0In, Col1In;
 
   ASSERT(IS_VALID_ROP4(ROP));
 
@@ -145,6 +146,12 @@ BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ *DestSurf, SURFOBJ *SourceSurf, SURFOBJ *Ma
     DPRINT("Source BPP: %u, SourceRect: (%d,%d)-(%d,%d)\n",
       BitsPerFormat(SourceSurf->iBitmapFormat), SourceRect->left, SourceRect->top, SourceRect->right, SourceRect->bottom);
   }
+
+  /* Windows draws nothing when the HALFTONE source rect misses the source bitmap entirely */
+  if (UseHalftone &&
+      (SourceRect->right <= 0 || SourceRect->bottom <= 0 ||
+       SourceRect->left >= SourceSurf->sizlBitmap.cx || SourceRect->top >= SourceCy))
+    return TRUE;
 
   if (MaskSurf)
   {
@@ -303,19 +310,25 @@ BOOLEAN DIB_XXBPP_StretchBlt(SURFOBJ *DestSurf, SURFOBJ *SourceSurf, SURFOBJ *Ma
           sx1 = min(sx + 1, SourceRect->right - 1);
           FractionX = (ULONG)((SourceFixedX >> 16) & 0xffff);
           if (UseDirect32Bpp)
-          {
-            Color00 = DIB_DirectPixel(SourceRow0, sx, SourceBytes);
-            Color01 = DIB_DirectPixel(SourceRow0, sx1, SourceBytes);
-            Color10 = DIB_DirectPixel(SourceRow1, sx, SourceBytes);
-            Color11 = DIB_DirectPixel(SourceRow1, sx1, SourceBytes);
             SourceFixedX += StepX;
+          /* The source rect is not clipped to the surface; as on Windows, samples outside it read as black */
+          Row0In = sy >= 0 && sy < SourceCy;
+          Row1In = sy1 >= 0 && sy1 < SourceCy;
+          Col0In = sx >= 0 && sx < SourceSurf->sizlBitmap.cx;
+          Col1In = sx1 >= 0 && sx1 < SourceSurf->sizlBitmap.cx;
+          if (UseDirect32Bpp)
+          {
+            Color00 = (Row0In && Col0In) ? DIB_DirectPixel(SourceRow0, sx, SourceBytes) : 0;
+            Color01 = (Row0In && Col1In) ? DIB_DirectPixel(SourceRow0, sx1, SourceBytes) : 0;
+            Color10 = (Row1In && Col0In) ? DIB_DirectPixel(SourceRow1, sx, SourceBytes) : 0;
+            Color11 = (Row1In && Col1In) ? DIB_DirectPixel(SourceRow1, sx1, SourceBytes) : 0;
           }
           else
           {
-            Color00 = XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx, sy));
-            Color01 = XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx1, sy));
-            Color10 = XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx, sy1));
-            Color11 = XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx1, sy1));
+            Color00 = (Row0In && Col0In) ? XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx, sy)) : 0;
+            Color01 = (Row0In && Col1In) ? XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx1, sy)) : 0;
+            Color10 = (Row1In && Col0In) ? XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx, sy1)) : 0;
+            Color11 = (Row1In && Col1In) ? XLATEOBJ_iXlate(ColorTranslation, fnSource_GetPixel(SourceSurf, sx1, sy1)) : 0;
           }
           if (Color00 == Color01 && Color00 == Color10 && Color00 == Color11)
             Source = Color00 & 0x00FFFFFF;
