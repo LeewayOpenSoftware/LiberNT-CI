@@ -16,6 +16,8 @@
 #include <shellapi.h>
 #include <gdiplus.h>
 #include <strsafe.h>
+#include <winreg.h>
+#include <wchar.h>
 #include <leewayui/display_backend.h>
 #include "resource.h"
 #include "internal.h"
@@ -64,7 +66,7 @@ Caps(void)
 typedef struct MAINDATA
 {
     HWND Tab;
-    HWND Pages[3];
+    HWND Pages[4];
     int PageCount;
     ULONG_PTR GdipToken;
     int InitialTab;
@@ -996,6 +998,154 @@ SaverProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return FALSE;
 }
 
+/* GRAPHICS PAGE **********************************************************/
+/* Writes HKCU\Software\Wine\Direct3D, the keys wined3d actually reads.
+ * "Default" removes the value so the engine keeps its built-in behaviour. */
+#define GFX_D3D_KEY L"Software\\Wine\\Direct3D"
+
+typedef struct GFX_OPT
+{
+    const WCHAR *label;   /* NULL = localized "Default"; selecting it removes the value */
+    int type;             /* 0 remove, 1 REG_DWORD, 2 REG_SZ */
+    DWORD dword;
+    const WCHAR *sz;
+} GFX_OPT;
+
+/* Vulkan is omitted until its runtime init is verified on our target (needs a vulkan-1.dll ICD). */
+static const GFX_OPT gfxRenderer[] = {
+    { NULL,      0, 0, NULL },
+    { L"OpenGL", 2, 0, L"gl" },
+    { L"No 3D",  2, 0, L"no3d" },
+};
+/* shader_backend applies to the OpenGL path only; the engine honours just these two. */
+static const GFX_OPT gfxShader[] = {
+    { NULL,                   0, 0, NULL },
+    { L"GLSL",                2, 0, L"glsl" },
+    { L"GLSL (vkd3d-shader)", 2, 0, L"glsl-vkd3d" },
+};
+static const GFX_OPT gfxLevel[] = {
+    { NULL,   0, 0, NULL },
+    { L"1.4", 1, 1, NULL },
+    { L"2",   1, 2, NULL },
+    { L"3",   1, 3, NULL },
+};
+static const GFX_OPT gfxVidMem[] = {
+    { NULL,      0, 0, NULL },
+    { L"8 MB",   2, 0, L"8 MB" },
+    { L"16 MB",  2, 0, L"16 MB" },
+    { L"32 MB",  2, 0, L"32 MB" },
+    { L"64 MB",  2, 0, L"64 MB" },
+    { L"128 MB", 2, 0, L"128 MB" },
+    { L"256 MB", 2, 0, L"256 MB" },
+    { L"512 MB", 2, 0, L"512 MB" },
+};
+
+static void
+GfxInitCombo(HWND hwnd, HKEY hKey, int id, const WCHAR *value, const GFX_OPT *opt, int count)
+{
+    union { DWORD dw; WCHAR sz[128]; BYTE raw[256]; } buf;
+    DWORD cb = sizeof(buf), type = 0;
+    WCHAR def[64];
+    BOOL have;
+    int i, sel = 0;
+
+    have = (RegQueryValueExW(hKey, value, NULL, &type, buf.raw, &cb) == ERROR_SUCCESS);
+    LoadStr(IDS_GFX_DEFAULT, def, ARRAYSIZE(def));
+    for (i = 0; i < count; i++)
+    {
+        const WCHAR *txt = opt[i].label ? opt[i].label : def;
+        SendDlgItemMessageW(hwnd, id, CB_ADDSTRING, 0, (LPARAM)txt);
+        if (have && i > 0)
+        {
+            if (opt[i].type == 1 && type == REG_DWORD && buf.dw == opt[i].dword)
+                sel = i;
+            else if (opt[i].type == 2 && type == REG_SZ && !wcscmp(buf.sz, opt[i].sz))
+                sel = i;
+        }
+    }
+    SendDlgItemMessageW(hwnd, id, CB_SETCURSEL, sel, 0);
+}
+
+static void
+GfxSaveCombo(HWND hwnd, HKEY hKey, int id, const WCHAR *value, const GFX_OPT *opt, int count)
+{
+    int sel = (int)SendDlgItemMessageW(hwnd, id, CB_GETCURSEL, 0, 0);
+
+    if (sel < 0 || sel >= count)
+        return;
+    if (opt[sel].type == 0)
+    {
+        RegDeleteValueW(hKey, value);
+    }
+    else if (opt[sel].type == 1)
+    {
+        DWORD v = opt[sel].dword;
+        RegSetValueExW(hKey, value, 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+    }
+    else if (opt[sel].type == 2)
+    {
+        RegSetValueExW(hKey, value, 0, REG_SZ, (const BYTE *)opt[sel].sz,
+                       (DWORD)((wcslen(opt[sel].sz) + 1) * sizeof(WCHAR)));
+    }
+}
+
+static void
+GfxUpdateEnable(HWND hwnd)
+{
+    /* The shader backend only exists for the OpenGL path; "No 3D" (index 2) has none. */
+    int r = (int)SendDlgItemMessageW(hwnd, IDC_GFX_RENDERER, CB_GETCURSEL, 0, 0);
+    EnableWindow(GetDlgItem(hwnd, IDC_GFX_SHADER), r != 2);
+}
+
+static INT_PTR CALLBACK
+GraphicsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    HKEY hKey;
+
+    UNREFERENCED_PARAMETER(lParam);
+
+    switch (msg)
+    {
+        case WM_INITDIALOG:
+            if (RegCreateKeyExW(HKEY_CURRENT_USER, GFX_D3D_KEY, 0, NULL, 0, KEY_READ, NULL, &hKey, NULL)
+                    == ERROR_SUCCESS)
+            {
+                GfxInitCombo(hwnd, hKey, IDC_GFX_RENDERER, L"renderer", gfxRenderer, ARRAYSIZE(gfxRenderer));
+                GfxInitCombo(hwnd, hKey, IDC_GFX_SHADER, L"shader_backend", gfxShader, ARRAYSIZE(gfxShader));
+                GfxInitCombo(hwnd, hKey, IDC_GFX_GSLEVEL, L"MaxShaderModelGS", gfxLevel, ARRAYSIZE(gfxLevel));
+                GfxInitCombo(hwnd, hKey, IDC_GFX_PSLEVEL, L"MaxShaderModelPS", gfxLevel, ARRAYSIZE(gfxLevel));
+                GfxInitCombo(hwnd, hKey, IDC_GFX_VSLEVEL, L"MaxShaderModelVS", gfxLevel, ARRAYSIZE(gfxLevel));
+                GfxInitCombo(hwnd, hKey, IDC_GFX_VIDMEM, L"VideoMemorySize", gfxVidMem, ARRAYSIZE(gfxVidMem));
+                RegCloseKey(hKey);
+            }
+            GfxUpdateEnable(hwnd);
+            return TRUE;
+        case WM_COMMAND:
+            if (LOWORD(wParam) == IDC_GFX_RENDERER && HIWORD(wParam) == CBN_SELCHANGE)
+            {
+                GfxUpdateEnable(hwnd);
+                return TRUE;
+            }
+            if (LOWORD(wParam) == IDC_GFX_APPLY)
+            {
+                if (RegCreateKeyExW(HKEY_CURRENT_USER, GFX_D3D_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL)
+                        == ERROR_SUCCESS)
+                {
+                    GfxSaveCombo(hwnd, hKey, IDC_GFX_RENDERER, L"renderer", gfxRenderer, ARRAYSIZE(gfxRenderer));
+                    GfxSaveCombo(hwnd, hKey, IDC_GFX_SHADER, L"shader_backend", gfxShader, ARRAYSIZE(gfxShader));
+                    GfxSaveCombo(hwnd, hKey, IDC_GFX_GSLEVEL, L"MaxShaderModelGS", gfxLevel, ARRAYSIZE(gfxLevel));
+                    GfxSaveCombo(hwnd, hKey, IDC_GFX_PSLEVEL, L"MaxShaderModelPS", gfxLevel, ARRAYSIZE(gfxLevel));
+                    GfxSaveCombo(hwnd, hKey, IDC_GFX_VSLEVEL, L"MaxShaderModelVS", gfxLevel, ARRAYSIZE(gfxLevel));
+                    GfxSaveCombo(hwnd, hKey, IDC_GFX_VIDMEM, L"VideoMemorySize", gfxVidMem, ARRAYSIZE(gfxVidMem));
+                    RegCloseKey(hKey);
+                }
+                return TRUE;
+            }
+            break;
+    }
+    return FALSE;
+}
+
 /* MAIN WINDOW **************************************************************/
 
 static void
@@ -1017,9 +1167,9 @@ MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
         case WM_INITDIALOG:
         {
-            static const UINT tabIds[3] = { IDS_TAB_PERSONALIZE, IDS_TAB_DISPLAY, IDS_TAB_SAVER };
-            static const UINT pageIds[3] = { IDD_PERSONALIZE, IDD_DISPLAY, IDD_SAVER };
-            static DLGPROC procs[3] = { PersonalizeProc, DisplayProc, SaverProc };
+            static const UINT tabIds[4] = { IDS_TAB_PERSONALIZE, IDS_TAB_DISPLAY, IDS_TAB_GRAPHICS, IDS_TAB_SAVER };
+            static const UINT pageIds[4] = { IDD_PERSONALIZE, IDD_DISPLAY, IDD_GRAPHICS, IDD_SAVER };
+            static DLGPROC procs[4] = { PersonalizeProc, DisplayProc, GraphicsProc, SaverProc };
             WCHAR text[64];
             TCITEMW item;
             RECT rc;
@@ -1029,7 +1179,7 @@ MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             SetWindowLongPtrW(hwnd, DWLP_USER, (LONG_PTR)md);
             md->Tab = GetDlgItem(hwnd, IDC_TAB);
             /* The screen saver tab is offered only when the system answers its settings calls. */
-            md->PageCount = (Caps() & LDISP_CAP_SCREENSAVER) ? 3 : 2;
+            md->PageCount = (Caps() & LDISP_CAP_SCREENSAVER) ? 4 : 3;
             for (i = 0; i < md->PageCount; i++)
             {
                 LoadStr(tabIds[i], text, ARRAYSIZE(text));
