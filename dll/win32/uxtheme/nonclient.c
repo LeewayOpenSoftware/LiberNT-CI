@@ -1085,8 +1085,10 @@ ThemeDarkStyleCaption(PDRAW_CONTEXT pcontext, COLORREF *color)
 {
     COLORREF fill;
 
-    if (!pcontext->theme || ThemeCaptionIsLight(pcontext->theme) ||
-        FAILED(GetThemeColor(pcontext->theme, WP_CAPTION, FS_ACTIVE, TMT_FILLCOLORHINT, &fill)))
+    if (ThemeCaptionIsLight(pcontext->theme) ||
+        (FAILED(GetThemeColor(pcontext->theme, WP_CAPTION, pcontext->Active ? FS_ACTIVE : FS_INACTIVE,
+                              TMT_FILLCOLORHINT, &fill)) &&
+         FAILED(GetThemeColor(pcontext->theme, WP_CAPTION, FS_ACTIVE, TMT_FILLCOLORHINT, &fill))))
         return FALSE;
     *color = fill;
     return TRUE;
