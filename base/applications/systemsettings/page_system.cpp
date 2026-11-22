@@ -231,11 +231,15 @@ ValidDpi(DWORD dpi)
     return (dpi >= 96 && dpi <= 480) ? dpi : 0;
 }
 
-/* The machine value win32k persisted (its recommendation unless an administrator set one) */
+/* The machine value win32k persisted (its recommendation unless an administrator set one); an unmarked 96
+ * predates F1 and win32k migrates it to the recommendation at the next boot */
 static UINT
 MachineDpi(UINT recommended)
 {
     UINT dpi = ValidDpi(ReadDword(HKEY_LOCAL_MACHINE, MACHINE_DPI_KEY, L"LogPixels", 0));
+
+    if (dpi == 96 && !ReadDword(HKEY_LOCAL_MACHINE, MACHINE_DPI_KEY, L"LogPixelsChosen", 0))
+        dpi = 0;
     return dpi ? dpi : recommended;
 }
 
@@ -372,7 +376,12 @@ BuildDisplay(PageBuilder &page)
         if (!DpiScaleIsOffered(current.dmPelsWidth, current.dmPelsHeight, percent) && dpi != recommended &&
             dpi != machine)
             continue;
-        label = dpi == recommended ? Format(IDS_SCALE_RECOMMENDED, percent) : Printf(L"%u%%", percent);
+        if (dpi == recommended)
+            label = Format(IDS_SCALE_RECOMMENDED, percent);
+        else if (dpi == machine)
+            label = Format(IDS_SCALE_DEFAULT, percent);
+        else
+            label = Printf(L"%u%%", percent);
         if (dpi == next)
         {
             sizeIndex = (int)offered.size();

@@ -793,6 +793,7 @@ BEGIN
     IDS_SIGNOUT_SCALE "Sign out to apply the new scale? Some apps will look blurry until you sign out again."
     IDS_SIGNOUT_NOW "Sign out now"
     IDS_SIGNOUT_LATER "Later"
+    IDS_SCALE_DEFAULT "%u%% (Default)"
 END
 
 STRINGTABLE

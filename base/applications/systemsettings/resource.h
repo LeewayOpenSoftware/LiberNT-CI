@@ -794,3 +794,4 @@
 #define IDS_SIGNOUT_SCALE              879
 #define IDS_SIGNOUT_NOW                880
 #define IDS_SIGNOUT_LATER              881
+#define IDS_SCALE_DEFAULT              882

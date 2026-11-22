@@ -792,6 +792,7 @@ BEGIN
     IDS_SIGNOUT_SCALE "¿Cerrar sesión para aplicar la nueva escala? Algunas aplicaciones se verán borrosas hasta que vuelva a cerrar sesión."
     IDS_SIGNOUT_NOW "Cerrar sesión ahora"
     IDS_SIGNOUT_LATER "Más tarde"
+    IDS_SCALE_DEFAULT "%u%% (predeterminado)"
 END
 
 STRINGTABLE
