@@ -21,7 +21,6 @@ TARGETS = (
     ("keyboard", ("dll/cpl/main/resources/keyboard.ico",)),
     ("mouse", ("dll/cpl/main/resources/mouse.ico",)),
     ("network-connections", ("dll/shellext/netshell/res/netshell.ico",)),
-    ("opengl-configuration", ("dll/cpl/openglcfg/resources/openglcfg.ico",)),
     ("personalization", ("dll/cpl/desk/resources/personalization.ico",)),
     ("phone-and-modem", ("dll/cpl/telephon/resources/applet.ico",)),
     ("power-options", ("dll/cpl/powercfg/resources/ac.ico",)),
@@ -34,7 +33,6 @@ TARGETS = (
     ("taskbar-and-start-menu", ("dll/win32/shell32/res/icons/40.ico",)),
     ("text-services", ("dll/cpl/input/resources/keyboard-shortcuts.ico",)),
     ("user-accounts", ("dll/cpl/usrmgr/resources/applet.ico",)),
-    ("wined3d-options", ("dll/cpl/wined3dcfg/resources/wined3dcfg.ico",)),
 )
 
 
