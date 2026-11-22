@@ -330,7 +330,12 @@ KdpNetInit(
         {
             KdpDebugMode.Net = FALSE;
             KdpNetConfigured = FALSE;
-            if (Result == STATUS_CRYPTO_SYSTEM_INVALID)
+            if (Result == STATUS_PWD_TOO_SHORT)
+            {
+                HalDisplayString("   Network debugging unavailable: ENCRYPTION_KEY is shorter than 16 characters\r\n");
+                DbgPrint("Network debugger: refused, ENCRYPTION_KEY shorter than 16 characters\n");
+            }
+            else if (Result == STATUS_CRYPTO_SYSTEM_INVALID)
             {
                 HalDisplayString("   Network debugging unavailable: no hardware random source for a key;\r\n"
                                  "   set ENCRYPTION_KEY to use it on this machine\r\n");

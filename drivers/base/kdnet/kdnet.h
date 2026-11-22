@@ -27,6 +27,7 @@
 #define KDNET_INPUT_SIZE        0x10000
 #define KDNET_KEY_TEXT_SIZE     96
 #define KDNET_HARDWARE_SAMPLES  8
+#define KDNET_MIN_KEY_CHARS     16
 #define KDNET_HOST_NAME_SIZE    128
 
 #define KDNET_SECOND            1000000ULL

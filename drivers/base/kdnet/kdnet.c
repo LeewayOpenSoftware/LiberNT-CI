@@ -316,6 +316,7 @@ KdpTerminalInitialize(
 {
     NTSTATUS Status;
     ULONG64 Start, Notice;
+    ULONG i, Length;
 
     if (KdNetReady)
         return STATUS_SUCCESS;
@@ -325,6 +326,15 @@ KdpTerminalInitialize(
         return Status;
 
     /* Timer jitter alone is guessable; a generated key needs the hardware generator */
+    /* A short given key falls to an offline search from one captured hello */
+    if (KdNetOptions.HaveKey)
+    {
+        for (i = 0, Length = 0; KdNetOptions.Key[i]; i++)
+            Length += KdNetOptions.Key[i] != '-' && KdNetOptions.Key[i] != ' ';
+        if (Length < KDNET_MIN_KEY_CHARS)
+            return STATUS_PWD_TOO_SHORT;
+    }
+
     if (KdpGatherEntropy(LoaderBlock) < KDNET_HARDWARE_SAMPLES && !KdNetOptions.HaveKey)
         return STATUS_CRYPTO_SYSTEM_INVALID;
 
