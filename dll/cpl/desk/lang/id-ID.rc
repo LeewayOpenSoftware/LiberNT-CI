@@ -168,9 +168,8 @@ CAPTION "Umum"
 FONT 8, "MS Shell Dlg"
 BEGIN
     GROUPBOX "Tampilan", -1, 7, 6, 237, 56, WS_GROUP
-    LTEXT "Ukuran Fon:", -1, 14, 20, 222, 9//FIXME: add accel. I used "&Ukuran Fon:" for the backport. 2k3sp2 does now call this "&DPI setting:". Feel free to translate that.
-    COMBOBOX IDC_FONTSIZE_COMBO, 14, 30, 223, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT "", IDC_FONTSIZE_CUSTOM, 14, 46, 223, 12
+    LTEXT "", IDC_SCALE_CURRENT, 14, 20, 222, 9
+    PUSHBUTTON "Change in Settings...", IDC_SCALE_SETTINGS, 14, 34, 110, 14, WS_TABSTOP
     GROUPBOX "Kompatibilitas", -1, 7, 67, 237, 97
     LTEXT "Berapa program berjalan tidak semestimnya jika anda tidak memulai ulang komputer setelah mengubah pengaturan warna.\n\nSetelah saya mengubah pengaturan warna", -1, 12, 78, 228, 34
     AUTORADIOBUTTON "&Mulai ulang komputer sebelum menerapkan pengaturan warna baru", IDC_RESTART_RB, 14, 116, 228, 10
@@ -299,4 +298,9 @@ BEGIN
     IDS_APPLY_FAILED "Gagal menerapkan setelan baru..."
     IDS_APPLY_NEEDS_RESTART "Anda harus memulai ulang komputer untuk menerapkan perubahan."
     IDS_TIMEOUTTEXT "Mengembalikan setelan sebelumnya dalam %d detik."
+END
+
+STRINGTABLE
+BEGIN
+    IDS_SCALE_CURRENT "Scale: %u%%"
 END

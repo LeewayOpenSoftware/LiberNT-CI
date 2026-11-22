@@ -168,9 +168,8 @@ CAPTION "Общи"
 FONT 8, "MS Shell Dlg"
 BEGIN
     GROUPBOX "Екран", -1, 7, 6, 237, 56, WS_GROUP
-    LTEXT "Размер на шрифта:", -1, 14, 20, 222, 9//FIXME: add accel. I used "&Размер на шрифта:" for the backport. 2k3sp2 calls this "&DPI setting:" now. Feel free to translate that.
-    COMBOBOX IDC_FONTSIZE_COMBO, 14, 30, 223, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT "", IDC_FONTSIZE_CUSTOM, 14, 46, 223, 12
+    LTEXT "", IDC_SCALE_CURRENT, 14, 20, 222, 9
+    PUSHBUTTON "Change in Settings...", IDC_SCALE_SETTINGS, 14, 34, 110, 14, WS_TABSTOP
     GROUPBOX "Съвместимост", -1, 7, 67, 237, 97
     LTEXT "Някои приложения няма да работят правилно, ако не презапуснете компютъра, след като промените цветовите настройки.\nСлед като променя цветовите настройки", -1, 12, 78, 228, 34
     AUTORADIOBUTTON "&Презапуск преди прилагане на новите цветови настройки", IDC_RESTART_RB, 14, 116, 228, 10
@@ -299,4 +298,9 @@ BEGIN
     IDS_APPLY_FAILED "Неуспешно прилагане на новите настройки..."
     IDS_APPLY_NEEDS_RESTART "За прилагане на настройките, трябва да рестартирате компютъра"
     IDS_TIMEOUTTEXT "Връщане на предишните настройки след %d секунди."
+END
+
+STRINGTABLE
+BEGIN
+    IDS_SCALE_CURRENT "Scale: %u%%"
 END
