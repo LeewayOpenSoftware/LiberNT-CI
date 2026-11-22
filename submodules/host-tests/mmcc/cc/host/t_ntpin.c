@@ -98,6 +98,12 @@ CcNtKickLazyWriter(VOID)
 {
 }
 
+BOOLEAN
+CcNtLazyIsStalled(VOID)
+{
+    return FALSE;
+}
+
 PCC_NT_MAP
 CcNtReferenceMap(PSECTION_OBJECT_POINTERS Pointers)
 {
