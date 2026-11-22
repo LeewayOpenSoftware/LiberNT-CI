@@ -1,0 +1,10 @@
+/*
+ * PROJECT:     LiberNT API tests
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Common controls 6 manifest for the DPI tools
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+#include <windef.h>
+#include <winuser.h>
+#include <reactos/manifest_exe.rc>
