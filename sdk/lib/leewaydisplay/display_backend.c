@@ -141,12 +141,37 @@ LDispCommitMode(const WCHAR *device, const LDISP_MODE *mode)
     return Change(device, mode, CDS_UPDATEREGISTRY);
 }
 
+typedef UINT (WINAPI *LDISP_GETDPIFORSYSTEM)(VOID);
+typedef DPI_AWARENESS_CONTEXT (WINAPI *LDISP_SETTHREADDPIAWARENESSCONTEXT)(DPI_AWARENESS_CONTEXT);
+
+/* The session DPI as a system-aware caller sees it, so a DPI-unaware host does not read the virtualized 96 */
 UINT
 LDispGetSystemDpi(void)
 {
-    HDC hdc = GetDC(NULL);
-    UINT dpi = hdc ? (UINT)GetDeviceCaps(hdc, LOGPIXELSX) : 96;
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    LDISP_GETDPIFORSYSTEM getDpi = NULL;
+    LDISP_SETTHREADDPIAWARENESSCONTEXT setContext = NULL;
+    DPI_AWARENESS_CONTEXT previous;
+    HDC hdc;
+    UINT dpi;
 
+    if (user32)
+    {
+        getDpi = (LDISP_GETDPIFORSYSTEM)GetProcAddress(user32, "GetDpiForSystem");
+        setContext = (LDISP_SETTHREADDPIAWARENESSCONTEXT)GetProcAddress(user32, "SetThreadDpiAwarenessContext");
+    }
+    if (getDpi && setContext)
+    {
+        previous = setContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
+        dpi = getDpi();
+        if (previous)
+            setContext(previous);
+        if (dpi)
+            return dpi;
+    }
+
+    hdc = GetDC(NULL);
+    dpi = hdc ? (UINT)GetDeviceCaps(hdc, LOGPIXELSX) : 96;
     if (hdc)
         ReleaseDC(NULL, hdc);
     return dpi;
