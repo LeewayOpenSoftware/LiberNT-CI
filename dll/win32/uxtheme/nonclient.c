@@ -1014,24 +1014,14 @@ ThemeCaptionDpi(PDRAW_CONTEXT pcontext)
 static BOOL
 ThemeUseCaptionGlyphs(HTHEME hTheme, INT iPartId, INT iStateId, COLORREF *background)
 {
-    static const INT minDpiIds[] = { TMT_MINDPI1, TMT_MINDPI2, TMT_MINDPI3, TMT_MINDPI4,
-                                     TMT_MINDPI5, TMT_MINDPI6, TMT_MINDPI7 };
-    UINT dpi = MSSTYLES_GetThemeDPI((PTHEME_CLASS)hTheme);
-    INT selectType = IST_NONE, minDpi, i;
     COLORREF fill;
 
-    if (dpi <= 96)
-        return FALSE;
-    if (SUCCEEDED(GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_IMAGESELECTTYPE, &selectType)) &&
-        selectType == IST_DPI)
-    {
-        for (i = 0; i < ARRAYSIZE(minDpiIds); i++)
-        {
-            if (SUCCEEDED(GetThemeInt(hTheme, iPartId, iStateId, minDpiIds[i], &minDpi)) &&
-                minDpi > 96 && (UINT)minDpi <= dpi)
-                return FALSE;
-        }
-    }
+    /* Win11 caption buttons are flat: transparent at rest, a solid fill only on hover/press. Draw any
+     * themed caption (one that defines a caption fill colour) with the glyph button at every DPI --
+     * 100% included -- instead of the Win8 msstyles button bitmap and its opaque FillColorHint block.
+     * A classic theme defines no caption fill -> return FALSE and keep the msstyles button. */
+    UNREFERENCED_PARAMETER(iPartId);
+    UNREFERENCED_PARAMETER(iStateId);
     if (FAILED(GetThemeColor(hTheme, WP_CAPTION, FS_ACTIVE, TMT_FILLCOLORHINT, &fill)))
         return FALSE;
     *background = fill;
