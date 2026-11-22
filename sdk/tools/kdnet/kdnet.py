@@ -241,7 +241,9 @@ class Target:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Attach to a LiberNT target over the network debugger transport.')
+    parser = argparse.ArgumentParser(description='Attach to a LiberNT target over the network debugger transport. '
+                                     'A target booted without HOST_IP broadcasts its keyed hello to port 50000 '
+                                     'every second; a host with the key attaches to it.')
     parser.add_argument('--key', help='key shown by the target or set with /ENCRYPTION_KEY')
     parser.add_argument('--local', metavar='INTERFACE',
                         help='target booted with LOCAL_BROADCAST=1 on this cabled interface (key still required)')

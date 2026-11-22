@@ -144,6 +144,7 @@ KdpSendHello(VOID)
     USHORT Flags;
     PUCHAR Data;
 
+    /* Without HOST_IP the keyed hello is broadcast so that a host on the LAN can find the target */
     Destination = KdNetOptions.HostIp ? KdNetOptions.HostIp : KDNET_IP_BROADCAST;
     Data = KdUdpBegin(Destination, &Handle);
     if (!Data)
