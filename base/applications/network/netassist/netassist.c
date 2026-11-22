@@ -58,7 +58,7 @@ AssistSetText(HWND Dialog, INT Control, UINT String)
 static void
 AssistShowState(HWND Dialog)
 {
-    WCHAR Key[64];
+    WCHAR Key[96];
     LONG Error = AssistReadKey(Key, ARRAYSIZE(Key));
     BOOL HaveKey = Error == ERROR_SUCCESS;
 
@@ -87,7 +87,7 @@ AssistShowState(HWND Dialog)
 static void
 AssistCopyKey(HWND Dialog)
 {
-    WCHAR Key[64];
+    WCHAR Key[96];
     HGLOBAL Memory;
     SIZE_T Size;
     PWSTR Text;

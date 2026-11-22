@@ -258,12 +258,12 @@ KdpParseOptions(
 }
 
 static
-VOID
+ULONG
 KdpGatherEntropy(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     LARGE_INTEGER Samples[16], Time;
-    ULONG i, Value;
+    ULONG i, Value, Hardware;
 
     for (i = 0; i < KDNET_ENTROPY_SAMPLES; i++)
     {
@@ -275,6 +275,7 @@ KdpGatherEntropy(
 
     for (i = 0; i < 64 && KdNetArchRandom(&Value); i++)
         KdCryptoAddEntropy(&Value, sizeof(Value));
+    Hardware = i;
 
     KeQuerySystemTime(&Time);
     KdCryptoAddEntropy(&Time, sizeof(Time));
@@ -287,6 +288,8 @@ KdpGatherEntropy(
         KdCryptoAddEntropy(&LoaderBlock->Extension->BootEntropyResult,
                            sizeof(LoaderBlock->Extension->BootEntropyResult));
     }
+
+    return Hardware;
 }
 
 static
@@ -314,7 +317,10 @@ KdpTerminalInitialize(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    KdpGatherEntropy(LoaderBlock);
+    /* Timer jitter alone is guessable; a generated key needs the hardware generator */
+    if (KdpGatherEntropy(LoaderBlock) < KDNET_HARDWARE_SAMPLES && !KdNetOptions.HaveKey && !KdNetOptions.Broadcast)
+        return STATUS_CRYPTO_SYSTEM_INVALID;
+
     Status = KdNicInitialize(LoaderBlock);
     if (!NT_SUCCESS(Status))
         return Status;

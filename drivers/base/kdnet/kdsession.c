@@ -682,7 +682,9 @@ KdSessionInitialize(VOID)
     static const CHAR RendezvousLabel[] = "LiberNT KDNET v1 rendezvous";
     UCHAR Hash[KDNET_HASH_SIZE];
     CHAR Normalized[KDNET_KEY_TEXT_SIZE];
-    ULONG i, Length = 0, Value;
+    static const CHAR Base32[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    UCHAR Secret[KDNET_KEY_SIZE];
+    ULONG i, Length = 0, Bits = 0, Count = 0, Out = 0, Accumulator = 0;
     CHAR Character;
 
     if (KdNetOptions.Broadcast)
@@ -695,15 +697,33 @@ KdSessionInitialize(VOID)
     }
     else
     {
-        do
+        /* 256 bits as 52 base32 characters in groups of four, like Windows KDNET keys */
+        KdCryptoRandom(Secret, sizeof(Secret));
+        for (i = 0; i <= sizeof(Secret); i++)
         {
-            KdCryptoRandom((PUCHAR)&Value, sizeof(Value));
-        } while (Value >= 4200000000UL);
+            if (i < sizeof(Secret))
+            {
+                Accumulator = (Accumulator << 8) | Secret[i];
+                Bits += 8;
+            }
+            else if (Bits)
+            {
+                Accumulator <<= 5 - Bits;
+                Bits = 5;
+            }
 
-        Value %= 100000000UL;
-        _snprintf(KdSessionKeyText, sizeof(KdSessionKeyText), "%04lu-%04lu", Value / 10000, Value % 10000);
-        KdSessionKeyText[sizeof(KdSessionKeyText) - 1] = ANSI_NULL;
-        KdCryptoWipe(&Value, sizeof(Value));
+            while (Bits >= 5 && Out + 2 < sizeof(KdSessionKeyText))
+            {
+                if (Count && Count % 4 == 0)
+                    KdSessionKeyText[Out++] = '-';
+                KdSessionKeyText[Out++] = Base32[(Accumulator >> (Bits - 5)) & 31];
+                Bits -= 5;
+                Count++;
+            }
+        }
+        KdSessionKeyText[Out] = ANSI_NULL;
+        KdCryptoWipe(Secret, sizeof(Secret));
+        Accumulator = 0;
     }
 
     for (i = 0; KdSessionKeyText[i]; i++)

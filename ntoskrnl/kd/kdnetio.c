@@ -153,8 +153,8 @@ NTAPI
 KdDisplayTransportKey(
     _In_ BOOLEAN DarkPalette)
 {
-    static const CHAR Label[] = "Network assistance key ";
-    CHAR Text[sizeof(Label) + 40];
+    static const CHAR Label[] = "Debugger key ";
+    CHAR Text[sizeof(Label) + 96];
     VID_DISPLAY_INFO DisplayInfo;
 
     RtlCopyMemory(Text, Label, sizeof(Label));
@@ -182,7 +182,7 @@ VOID
 KdpNetDrawPrompt(VOID)
 {
     CHAR Text[sizeof(KdpNetPrompt)];
-    CHAR Key[40];
+    CHAR Key[96];
 
     RtlCopyMemory(Text, KdpNetPrompt, sizeof(Text));
     Text[sizeof(Text) - 1] = ANSI_NULL;
@@ -247,8 +247,8 @@ KdpNetPublishKey(VOID)
     OBJECT_ATTRIBUTES ObjectAttributes;
     UCHAR DaclBuffer[128];
     PACL Dacl = (PACL)DaclBuffer;
-    WCHAR Text[40];
-    CHAR Key[40];
+    WCHAR Text[96];
+    CHAR Key[96];
     HANDLE Handle;
     ULONG Length, i;
 
@@ -330,8 +330,17 @@ KdpNetInit(
         {
             KdpDebugMode.Net = FALSE;
             KdpNetConfigured = FALSE;
-            HalDisplayString("   Network debugging unavailable\r\n");
-            DbgPrint("Network debugger: no usable network card, status 0x%08lx\n", Result);
+            if (Result == STATUS_CRYPTO_SYSTEM_INVALID)
+            {
+                HalDisplayString("   Network debugging unavailable: no hardware random source for a key;\r\n"
+                                 "   set ENCRYPTION_KEY to use it on this machine\r\n");
+                DbgPrint("Network debugger: refused, no hardware random source and no ENCRYPTION_KEY\n");
+            }
+            else
+            {
+                HalDisplayString("   Network debugging unavailable\r\n");
+                DbgPrint("Network debugger: no usable network card, status 0x%08lx\n", Result);
+            }
             return Result;
         }
 
