@@ -269,12 +269,19 @@ SetD3DRuntimeInfo(HWND hwndDlg)
         RegCloseKey(hKey);
     }
 
-    if (!detail[0])
-        wcscpy(detail, L"default configuration");
-
     if (!LoadStringW(hInst, IDS_D3DCFG_RUNTIME, fmt, sizeof(fmt) / sizeof(WCHAR)) || !fmt[0])
         wcscpy(fmt, L"Direct3D runtime (WineD3D): %s");
-    wsprintfW(out, fmt, detail);
+    /* Make the source explicit so the read-only text is not mistaken for a control. */
+    if (detail[0])
+    {
+        WCHAR body[460];
+        wsprintfW(body, L"from registry: %s", detail);
+        wsprintfW(out, fmt, body);
+    }
+    else
+    {
+        wsprintfW(out, fmt, L"no registry overrides (engine defaults)");
+    }
     SetDlgItemTextW(hwndDlg, IDC_TEXT_INFO, out);
 }
 
