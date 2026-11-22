@@ -314,6 +314,8 @@ MiArchTlbInvalidateAll(_In_ BOOLEAN AllProcessors)
 
     if (Machine->TlbDisabled)
         return;
+    if (Machine->BeforeTlbInvalidate != NULL)
+        Machine->BeforeTlbInvalidate(Machine->BeforeTlbInvalidateContext, 0, ~0ULL);
 
     for (Cpu = 0; Cpu < Machine->CpuCount; Cpu++)
     {
@@ -341,6 +343,8 @@ MachineTlbInvalidateCpus(_In_ ULONG64 VirtualAddress, _In_ ULONG64 PageCount, _I
 
     if (Machine->TlbDisabled)
         return;
+    if (Machine->BeforeTlbInvalidate != NULL)
+        Machine->BeforeTlbInvalidate(Machine->BeforeTlbInvalidateContext, VirtualAddress, PageCount);
 
     for (Cpu = 0; Cpu < Machine->CpuCount; Cpu++)
     {

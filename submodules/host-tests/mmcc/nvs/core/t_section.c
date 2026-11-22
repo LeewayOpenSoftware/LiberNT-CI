@@ -952,6 +952,93 @@ SectionCopyOnWriteOwnerCharge(void)
     WorldDestroy(&World);
 }
 
+typedef struct _STALE_TLB_RACE
+{
+    TEST_WORLD *World;
+    PMI_SEGMENT Segment;
+    ULONG64 Va;
+    ULONG64 Offset;
+    ULONG64 Value;
+    BOOLEAN Done;
+} STALE_TLB_RACE;
+
+/* Inside the shootdown window of MiSetRangeModified: a flush on another thread consumes whatever modified mark the
+ * page already has, then CPU 1 stores through the writable translation it still caches (no fault, no dirty bit) */
+static
+VOID
+SectionStaleTlbRaceHook(_In_opt_ PVOID Context, _In_ ULONG64 VirtualAddress, _In_ ULONG64 PageCount)
+{
+    STALE_TLB_RACE *Race = Context;
+    ULONG Cpu = MachineCpu;
+    LONG Stale;
+
+    if (Race->Done || (PageCount != ~0ULL && (Race->Va < VirtualAddress ||
+                                              Race->Va - VirtualAddress >= PageCount << PAGE_SHIFT)))
+        return;
+    Race->Done = TRUE;
+
+    CHECK(NT_SUCCESS(MiSegmentFlush(Race->Segment, Race->Offset, PAGE_SIZE)));
+    Stale = Race->World->Machine.StaleTlbUses;
+    CHECK(NT_SUCCESS(MachineAccessMemory(&Race->World->Machine, 1, Race->Va, &Race->Value, 8, MachineWrite, FALSE)));
+    /* The stale use is the point of the scenario, not a harness violation */
+    Stale = Race->World->Machine.StaleTlbUses - Stale;
+    CHECK(Stale <= 1);
+    __sync_fetch_and_sub(&Race->World->Machine.StaleTlbUses, Stale);
+    MachineCpu = Cpu;
+}
+
+/* Upstream 482978b95aa: the modified mark must only be set once no CPU can still write through the old translation,
+ * or that store is never written back. The final flush must carry the store CPU 1 made inside the window. */
+static
+void
+SectionModifiedAfterShootdown(void)
+{
+    TEST_WORLD World;
+    TEST_FILE File;
+    PMI_ADDRESS_SPACE System;
+    PMI_SEGMENT Segment;
+    STALE_TLB_RACE Race;
+    ULONG64 Base = 0;
+    ULONG64 Value;
+
+    WorldCreate(&World, 1024, 2, 100000);
+    World.Machine.StrictTlb = TRUE;
+    FileCreate(&File, 0x80000);
+    System = &World.System.SystemSpace;
+    WorldAttach(&World, 0, NULL);
+
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentDataFile, 0x80000, MI_PROT_READWRITE, &TestFileOps,
+                                     &File, NULL, 0, &Segment)));
+    CHECK(NT_SUCCESS(Map(System, Segment, &Base, 0x40000, 0x40000, MI_PROT_READWRITE)));
+
+    /* CPU 1 dirties the page and keeps a writable translation for it */
+    Value = 0x1111111111111111ULL;
+    CHECK(NT_SUCCESS(MachineAccessMemory(&World.Machine, 1, Base + 0x2000, &Value, 8, MachineWrite, FALSE)));
+    MachineCpu = 0;
+
+    RtlZeroMemory(&Race, sizeof(Race));
+    Race.World = &World;
+    Race.Segment = Segment;
+    Race.Va = Base + 0x2000;
+    Race.Offset = 0x42000;
+    Race.Value = 0x2222222222222222ULL;
+    World.Machine.BeforeTlbInvalidateContext = &Race;
+    World.Machine.BeforeTlbInvalidate = SectionStaleTlbRaceHook;
+    CHECK(NT_SUCCESS(MiSetRangeModified(System, Base + 0x2000, 0x1000)));
+    World.Machine.BeforeTlbInvalidate = NULL;
+    CHECK(Race.Done);
+
+    CHECK(NT_SUCCESS(MiSegmentFlush(Segment, 0x42000, 0x1000)));
+    CHECK(*(ULONG64 *)(File.Data + 0x42000) == 0x2222222222222222ULL);
+
+    CHECK(NT_SUCCESS(MiUnmapView(System, Base)));
+    MiSegmentDereference(Segment);
+    MiPfnDrainCaches(&World.System.Pfn);
+    CHECK(WorldCheck(&World) == 0);
+    FileDestroy(&File);
+    WorldDestroy(&World);
+}
+
 static
 void
 SectionSystemSpaceView(void)
@@ -2143,6 +2230,7 @@ TestSection(void)
     SectionCopyOnWrite();
     SectionCopyOnWriteOwnerCharge();
     SectionSystemSpaceView();
+    SectionModifiedAfterShootdown();
     SectionViewOutlivesOwner();
     SectionUnusedCache();
     SectionViewProtection();
