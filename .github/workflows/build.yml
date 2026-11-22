@@ -559,11 +559,25 @@ jobs:
         if-no-files-found: error
 
     - name: Save ccache
+      id: ccache_save
       if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
       uses: actions/cache/save@v5
       with:
         path: ccache
         key: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+
+    - name: Prune older ccache entries
+      if: ${{ always() && steps.ccache_save.outcome == 'success' }}
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CACHE_KEY_PREFIX: ccache-clang-amd64-rostests-
+        CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+      run: |
+        gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key           --jq '.[] | select(.key != env.CACHE_KEY_KEEP) | .id' |
+        while read -r id; do
+          gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true
+        done
 
   build-rostests-i386:
     # Compile-only native i386 test suite. Not blocking: the i386 tests still have -Wformat
@@ -642,11 +656,25 @@ jobs:
         fi
 
     - name: Save ccache
+      id: ccache_save
       if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
       uses: actions/cache/save@v5
       with:
         path: ccache
         key: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+
+    - name: Prune older ccache entries
+      if: ${{ always() && steps.ccache_save.outcome == 'success' }}
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CACHE_KEY_PREFIX: ccache-clang-i386-rostests-
+        CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+      run: |
+        gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key           --jq '.[] | select(.key != env.CACHE_KEY_KEEP) | .id' |
+        while read -r id; do
+          gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true
+        done
 
   ntfslib-host-tests:
     if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
