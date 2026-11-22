@@ -14,3 +14,13 @@ Each SVG is rasterized at its native size (sips -s format png on macOS, or any
 SVG renderer), then capglyphs.py writes every frame with the renderer's alpha
 unchanged and only the state color applied: w, i, d for dark captions and l, li,
 ld for light captions.
+
+
+Small-size frames added 2026-11-22 (capglyphs_small.py): the glyphs above are Microsoft
+Fluent UI System Icons (MIT, see LICENSE); the 2026-11-18 owner commit packaged them at
+their native sizes. Fluent has no native 10 px frame for these glyphs, nor a native 12 px
+for Square Multiple (restore) or Question (help). The 10 px frames (all five) and the 12 px
+frames (restore, help) are therefore NOT Fluent art: they are hand-pixeled on the grid
+(1 px solid strokes) to match the Fluent glyph shapes at those sizes, by capglyphs_small.py.
+The native frames are preserved byte-for-byte; the step is idempotent. These hand-pixeled
+frames await owner sign-off.
