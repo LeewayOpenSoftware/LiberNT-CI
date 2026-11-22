@@ -290,6 +290,7 @@ InitDesktopImpl(VOID)
     return STATUS_SUCCESS;
 }
 
+#ifdef REMOTE_ASSISTANCE
 static VOID
 IntQueryNetworkAssistanceKey(OUT PWSTR pwszText,
                              IN SIZE_T cchText)
@@ -329,6 +330,7 @@ IntQueryNetworkAssistanceKey(OUT PWSTR pwszText,
         pwszText[0] = UNICODE_NULL;
     }
 }
+#endif
 
 static NTSTATUS
 GetSystemVersionString(OUT PWSTR pwszzVersion,
@@ -2412,8 +2414,10 @@ IntPaintDesktopContent(HDC hDC)
      * Display the system version on the desktop background
      */
     /* TODO: a key that appears after the desktop was painted shows at the next paint, nothing asks for one */
+#ifdef REMOTE_ASSISTANCE
     if (!*s_wszAssistance && KD_DEBUGGER_ENABLED)
         IntQueryNetworkAssistanceKey(s_wszAssistance, ARRAYSIZE(s_wszAssistance));
+#endif
 
     if (InSafeMode || g_AlwaysDisplayVersion || g_PaintDesktopVersion || *s_wszAssistance)
     {

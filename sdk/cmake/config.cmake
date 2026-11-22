@@ -125,6 +125,14 @@ endif()
 set(WITH_DEBUG_SYMBOLS ${_REACTOS_DEFAULT_DEBUG_SYMBOLS} CACHE BOOL
 "Whether to compile debug information.")
 
+option(ENABLE_REMOTE_ASSISTANCE
+"Whether to build remote assistance: the relay mode of the network debugger, the published
+assistance key on the desktop, netassist.exe and the relay boot entries. Debug builds only;
+turn it on by hand for a build given to someone who needs help." OFF)
+if(ENABLE_REMOTE_ASSISTANCE AND NOT DBG)
+    message(FATAL_ERROR "ENABLE_REMOTE_ASSISTANCE needs a debug build (DBG)")
+endif()
+
 if(MSVC)
     set(KDBG FALSE CACHE BOOL
 "Whether to compile in the integrated kernel debugger.")

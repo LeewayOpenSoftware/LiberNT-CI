@@ -213,6 +213,7 @@ KdpParseOptions(
         KdNetOptions.HostIp = KDNET_IP(Values[0], Values[1], Values[2], Values[3]);
     }
 
+#ifdef REMOTE_ASSISTANCE
     Text = KdpFindOption(Options, "HOST_NAME");
     if (Text && !KdNetOptions.HostIp)
     {
@@ -221,6 +222,7 @@ KdpParseOptions(
 
         KdNetOptions.HostName[i] = ANSI_NULL;
     }
+#endif
 
     Text = KdpFindOption(Options, "HOST_PORT");
     if (Text && KdpParseNumbers(Text, ANSI_NULL, Values, 1) && Values[0])
