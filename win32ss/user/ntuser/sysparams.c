@@ -63,6 +63,7 @@ static const WCHAR* VAL_MDALIGN = L"MenuDropAlignment";
 
 static const WCHAR* KEY_SYSTEM_DPI =
     L"\\Registry\\Machine\\System\\CurrentControlSet\\Hardware Profiles\\Current\\Software\\Fonts";
+static const WCHAR* VAL_LOGPIXELS = L"LogPixels";
 static const WCHAR* KEY_METRIC = L"Control Panel\\Desktop\\WindowMetrics";
 static const WCHAR* VAL_BORDER = L"BorderWidth";
 static const WCHAR* VAL_CAPTIONALIGN = L"CaptionAlignment";
@@ -239,34 +240,53 @@ SpiRecommendedSystemDpi(VOID)
 }
 
 static
+VOID
+SpiStoreSystemDpi(DWORD Dpi)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING ustrKey;
+    HANDLE hKey;
+
+    RtlInitUnicodeString(&ustrKey, KEY_SYSTEM_DPI);
+    InitializeObjectAttributes(&ObjectAttributes, &ustrKey, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    if (NT_SUCCESS(ZwOpenKey(&hKey, KEY_SET_VALUE, &ObjectAttributes)))
+    {
+        RegWriteDWORD((HKEY)hKey, VAL_LOGPIXELS, Dpi);
+        ZwClose(hKey);
+    }
+}
+
+static
 UINT
-SpiLoadSystemDpi(VOID)
+SpiLoadMachineDpi(VOID)
 {
     HKEY hKey;
-    DWORD Dpi;
+    DWORD Dpi = 0;
+    BOOLEAN Stored = FALSE;
 
     if (NT_SUCCESS(RegOpenKey(KEY_SYSTEM_DPI, &hKey)))
     {
-        if (!RegReadDWORD(hKey, L"LogPixels", &Dpi))
-            Dpi = USER_SYSTEM_DPI_DEFAULT;
+        Stored = RegReadDWORD(hKey, VAL_LOGPIXELS, &Dpi);
         ZwClose(hKey);
     }
-    else
-    {
-        Dpi = USER_SYSTEM_DPI_DEFAULT;
-    }
 
-    if (Dpi < USER_SYSTEM_DPI_MIN || Dpi > USER_SYSTEM_DPI_MAX)
-    {
+    /* An explicit value, 96 included, is what the user chose; 0 or garbage means nothing was chosen yet */
+    if (Stored && Dpi >= USER_SYSTEM_DPI_MIN && Dpi <= USER_SYSTEM_DPI_MAX)
+        return Dpi;
+    if (Stored && Dpi != 0)
         WARN("Ignoring invalid system DPI %lu\n", Dpi);
-        Dpi = USER_SYSTEM_DPI_DEFAULT;
-    }
 
-    /* FIXME: a machine LogPixels of 96 cannot keep 100% on a portable panel; per-monitor scaling settings are missing */
-    if (Dpi == USER_SYSTEM_DPI_DEFAULT)
-        Dpi = min(SpiRecommendedSystemDpi(), USER_SYSTEM_DPI_MAX);
-
+    /* Nothing chosen: recommend a scale for this panel and keep it, so Settings shows it and 100% stays selectable */
+    Dpi = min(SpiRecommendedSystemDpi(), USER_SYSTEM_DPI_MAX);
+    SpiStoreSystemDpi(Dpi);
     return Dpi;
+}
+
+static
+UINT
+SpiLoadSystemDpi(VOID)
+{
+    return SpiLoadMachineDpi();
 }
 
 static

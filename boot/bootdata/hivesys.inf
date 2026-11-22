@@ -587,8 +587,9 @@ HKLM,"SYSTEM\CurrentControlSet\Control\IDConfigDB\Hardware Profiles\0001","Prefe
 HKLM,"SYSTEM\CurrentControlSet\Control\IDConfigDB\Hardware Profiles\0001","FriendlyName",0x00000000,"Undocked Profile"
 HKLM,"SYSTEM\CurrentControlSet\Control\IDConfigDB\Hardware Profiles\0001","Aliasable",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Control\IDConfigDB\Hardware Profiles\0001","Cloned",0x00010001,0x00000001
-HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\0000\Software\Fonts","LogPixels",0x00010003,96
-HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\0001\Software\Fonts","LogPixels",0x00010003,96
+; LogPixels 0 = no scale chosen yet: win32k stores the recommended scale for the panel at the first start
+HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\0000\Software\Fonts","LogPixels",0x00010003,0
+HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\0001\Software\Fonts","LogPixels",0x00010003,0
 HKLM,"SYSTEM\CurrentControlSet\Hardware Profiles\0001\System\CurrentControlSet",,0x00000012
 
 ; Keyboard Layouts
