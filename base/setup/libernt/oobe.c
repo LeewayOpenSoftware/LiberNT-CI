@@ -1320,12 +1320,13 @@ wWinMain(
         }
     }
 
-    FirstBootRun = EndFirstBootSetup();
+    /* A postponed launch must not touch the Run value, it brings the wizard back next boot */
     if (!ComponentsOnly && IsFirstBootPostponed())
     {
         DPRINT1("First-boot setup was postponed for this boot\n");
         return OOBE_SKIPPED;
     }
+    FirstBootRun = EndFirstBootSetup();
     if (!ComponentsOnly)
         DPRINT1("Disk signature check finished with exit code %lu\n", RunExpandStorage(L"/u"));
     /* An automated session's tests own BITS and the network, so no component is downloaded under them */
@@ -1374,6 +1375,10 @@ wWinMain(
     if (ComponentsOnly)
         return ERROR_SUCCESS;
     if (!SetupData.bInstalled)
+    {
         PostponeFirstBootSetup();
+        if (FirstBootRun)
+            ScheduleFirstBootSetup();
+    }
     return SetupData.bInstalled ? ERROR_SUCCESS : OOBE_SKIPPED;
 }
