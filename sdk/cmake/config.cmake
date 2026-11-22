@@ -132,6 +132,12 @@ turn it on by hand for a build given to someone who needs help." OFF)
 if(ENABLE_REMOTE_ASSISTANCE AND NOT DBG)
     message(FATAL_ERROR "ENABLE_REMOTE_ASSISTANCE needs a debug build (DBG)")
 endif()
+set(LIBERNT_ASSIST_RELAY_HOST "" CACHE STRING
+"Host name of the remote assistance relay. Empty: the network debugger offers cable and LAN
+debugging only and no boot entry reaches a relay. Only used with ENABLE_REMOTE_ASSISTANCE.")
+if(LIBERNT_ASSIST_RELAY_HOST AND NOT LIBERNT_ASSIST_RELAY_HOST MATCHES "^[A-Za-z0-9][A-Za-z0-9.-]*$")
+    message(FATAL_ERROR "LIBERNT_ASSIST_RELAY_HOST must be a plain host name")
+endif()
 
 if(MSVC)
     set(KDBG FALSE CACHE BOOL

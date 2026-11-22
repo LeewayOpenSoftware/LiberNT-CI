@@ -242,6 +242,9 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     endif()
     if(ENABLE_REMOTE_ASSISTANCE)
         add_definitions(-DREMOTE_ASSISTANCE)
+        if(LIBERNT_ASSIST_RELAY_HOST)
+            add_compile_definitions("$<$<COMPILE_LANGUAGE:C,CXX>:REMOTE_ASSISTANCE_RELAY_HOST=\"${LIBERNT_ASSIST_RELAY_HOST}\">")
+        endif()
     endif()
 
     option(PCH "Whether to use precompiled headers" OFF)
