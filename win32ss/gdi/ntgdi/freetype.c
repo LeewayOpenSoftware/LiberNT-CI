@@ -644,7 +644,15 @@ VOID
 NTAPI
 LFONT_vCleanup(PVOID ObjectBody)
 {
-    PTEXTOBJ TextObj = ObjectBody;
+    LFONT_vFreeRealizedFont(ObjectBody);
+}
+
+/* The realized font is a per-LFONT clone (TextIntRealizeFont): the owner frees it here, both when the
+ * object dies and when a stock font is re-sized for another DPI and must realize again */
+VOID
+NTAPI
+LFONT_vFreeRealizedFont(PTEXTOBJ TextObj)
+{
     PFONTGDI Font;
 
     if (!TextObj->Font)

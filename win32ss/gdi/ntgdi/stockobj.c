@@ -342,11 +342,16 @@ GreSetStockFontDpi(_In_ UINT Dpi)
         pTextObj = TEXTOBJ_LockText(StockFontsScaled[Fonts[i].Object]);
         if (!pTextObj)
             continue;
+        /* Same push lock as FontGetObject / the realization, so no reader sees a half-written LOGFONT */
+        KeEnterCriticalRegion();
+        ExAcquirePushLockExclusive(&pTextObj->lock);
         pTextObj->logfont.elfEnumLogfontEx.elfLogFont = *Fonts[i].Design;
         pTextObj->logfont.elfEnumLogfontEx.elfLogFont.lfHeight =
             IntStockFontHeightForDpi(Fonts[i].Object, Fonts[i].Design->lfHeight, Dpi);
-        pTextObj->Font = NULL;
+        LFONT_vFreeRealizedFont(pTextObj);
         pTextObj->fl &= ~TEXTOBJECT_INIT;
+        ExReleasePushLockExclusive(&pTextObj->lock);
+        KeLeaveCriticalRegion();
         TEXTOBJ_UnlockText(pTextObj);
     }
 }
