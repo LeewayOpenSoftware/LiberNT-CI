@@ -263,7 +263,7 @@ KdpGatherEntropy(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     LARGE_INTEGER Samples[16], Time;
-    ULONG i, Value, Hardware;
+    ULONG i, Value, Previous = 0, Hardware = 0;
 
     for (i = 0; i < KDNET_ENTROPY_SAMPLES; i++)
     {
@@ -274,8 +274,13 @@ KdpGatherEntropy(
     }
 
     for (i = 0; i < 64 && KdNetArchRandom(&Value); i++)
+    {
         KdCryptoAddEntropy(&Value, sizeof(Value));
-    Hardware = i;
+        /* Some firmware leaves RDRAND returning one constant with the carry set */
+        if (Value != 0 && Value != MAXULONG && (i == 0 || Value != Previous))
+            Hardware++;
+        Previous = Value;
+    }
 
     KeQuerySystemTime(&Time);
     KdCryptoAddEntropy(&Time, sizeof(Time));
