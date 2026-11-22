@@ -134,6 +134,7 @@ UCHAR IopSetOperationLength[FileMaximumInformation] =
     0,
     sizeof(FILE_IO_PRIORITY_HINT_INFORMATION),
     [FileDispositionInformationEx] = sizeof(FILE_DISPOSITION_INFORMATION_EX),
+    [FileRenameInformationEx] = sizeof(FILE_RENAME_INFORMATION),
     [FileCaseSensitiveInformation] = sizeof(FILE_CASE_SENSITIVE_INFORMATION)
 };
 
@@ -231,6 +232,7 @@ ACCESS_MASK IopSetOperationAccess[FileMaximumInformation] =
     DELETE,
     0,
     [FileDispositionInformationEx] = DELETE,
+    [FileRenameInformationEx] = DELETE,
     [FileCaseSensitiveInformation] = FILE_WRITE_ATTRIBUTES
 };
 

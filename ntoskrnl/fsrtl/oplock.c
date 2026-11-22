@@ -1700,7 +1700,8 @@ FsRtlCheckOplockEx(IN POPLOCK Oplock,
     {
         /* Only deal with really specific classes */
         FileInfo = Stack->Parameters.SetFile.FileInformationClass;
-        if (FileInfo == FileRenameInformation || FileInfo == FileLinkInformation ||
+        if (FileInfo == FileRenameInformation || FileInfo == FileRenameInformationEx ||
+            FileInfo == FileLinkInformation ||
             FileInfo == FileShortNameInformation)
         {
             /* No need to break */
