@@ -290,48 +290,6 @@ InitDesktopImpl(VOID)
     return STATUS_SUCCESS;
 }
 
-#ifdef REMOTE_ASSISTANCE
-static VOID
-IntQueryNetworkAssistanceKey(OUT PWSTR pwszText,
-                             IN SIZE_T cchText)
-{
-    WCHAR KeyBuffer[40];
-    UNICODE_STRING KeyString;
-    RTL_QUERY_REGISTRY_TABLE QueryTable[] =
-    {
-        {
-            NULL,
-            RTL_QUERY_REGISTRY_DIRECT,
-            L"Key",
-            &KeyString,
-            REG_NONE, NULL, 0
-        },
-
-        {0}
-    };
-
-    pwszText[0] = UNICODE_NULL;
-    RtlInitEmptyUnicodeString(&KeyString, KeyBuffer, sizeof(KeyBuffer));
-    if (!NT_SUCCESS(RtlQueryRegistryValues(RTL_REGISTRY_CONTROL,
-                                           L"NetworkAssistance",
-                                           QueryTable,
-                                           NULL,
-                                           NULL)) ||
-        KeyString.Length == 0)
-    {
-        return;
-    }
-
-    if (!NT_SUCCESS(RtlStringCchPrintfW(pwszText,
-                                        cchText,
-                                        L"Network assistance key %wZ",
-                                        &KeyString)))
-    {
-        pwszText[0] = UNICODE_NULL;
-    }
-}
-#endif
-
 static NTSTATUS
 GetSystemVersionString(OUT PWSTR pwszzVersion,
                        IN SIZE_T cchDest,
@@ -2414,10 +2372,6 @@ IntPaintDesktopContent(HDC hDC)
      * Display the system version on the desktop background
      */
     /* TODO: a key that appears after the desktop was painted shows at the next paint, nothing asks for one */
-#ifdef REMOTE_ASSISTANCE
-    if (!*s_wszAssistance && KD_DEBUGGER_ENABLED)
-        IntQueryNetworkAssistanceKey(s_wszAssistance, ARRAYSIZE(s_wszAssistance));
-#endif
 
     if (InSafeMode || g_AlwaysDisplayVersion || g_PaintDesktopVersion || *s_wszAssistance)
     {

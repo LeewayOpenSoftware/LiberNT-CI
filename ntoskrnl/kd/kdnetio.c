@@ -262,7 +262,6 @@ KdpNetPublishKey(VOID)
     if (!NT_SUCCESS(RtlCreateAcl(Dacl, sizeof(DaclBuffer), ACL_REVISION)) ||
         !NT_SUCCESS(RtlAddAccessAllowedAce(Dacl, ACL_REVISION, KEY_ALL_ACCESS, SeLocalSystemSid)) ||
         !NT_SUCCESS(RtlAddAccessAllowedAce(Dacl, ACL_REVISION, KEY_ALL_ACCESS, SeAliasAdminsSid)) ||
-        !NT_SUCCESS(RtlAddAccessAllowedAce(Dacl, ACL_REVISION, KEY_READ, SeInteractiveSid)) ||
         !NT_SUCCESS(RtlCreateSecurityDescriptor(&SecurityDescriptor, SECURITY_DESCRIPTOR_REVISION)) ||
         !NT_SUCCESS(RtlSetDaclSecurityDescriptor(&SecurityDescriptor, TRUE, Dacl, FALSE)))
     {
