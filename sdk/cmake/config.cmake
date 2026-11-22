@@ -133,9 +133,9 @@ if(ENABLE_REMOTE_ASSISTANCE AND NOT DBG)
     message(FATAL_ERROR "ENABLE_REMOTE_ASSISTANCE needs a debug build (DBG)")
 endif()
 option(LIBERNT_ENABLE_KD_BROADCAST
-"Whether to build the keyless LAN broadcast mode of the network debugger (LOCAL_BROADCAST=1) and
-its \"network debugging on this cable\" boot entry. Any host on the segment can drive the debugger
-in that mode, so it is for debug builds in a controlled lab only." OFF)
+"Whether to build the cable mode of the network debugger (LOCAL_BROADCAST=1: the keyed session
+carried by broadcasts, for a machine without an address) and its \"network debugging on this
+cable\" boot entry. Debug builds in a controlled lab only." OFF)
 if(LIBERNT_ENABLE_KD_BROADCAST AND NOT DBG)
     message(FATAL_ERROR "LIBERNT_ENABLE_KD_BROADCAST needs a debug build (DBG)")
 endif()

@@ -325,7 +325,7 @@ KdpTerminalInitialize(
         return Status;
 
     /* Timer jitter alone is guessable; a generated key needs the hardware generator */
-    if (KdpGatherEntropy(LoaderBlock) < KDNET_HARDWARE_SAMPLES && !KdNetOptions.HaveKey && !KdNetOptions.Broadcast)
+    if (KdpGatherEntropy(LoaderBlock) < KDNET_HARDWARE_SAMPLES && !KdNetOptions.HaveKey)
         return STATUS_CRYPTO_SYSTEM_INVALID;
 
     Status = KdNicInitialize(LoaderBlock);
@@ -428,9 +428,9 @@ KdpTerminalQueryStatus(
     else if (KdNetOptions.Broadcast)
     {
         Length = _snprintf(Buffer, Size,
-                           "Network debugger: %02x-%02x-%02x-%02x-%02x-%02x broadcasts to UDP port %u%s",
+                           "Network debugger: %02x-%02x-%02x-%02x-%02x-%02x keyed session by broadcast on UDP port %u%s",
                            KdNicAddress[0], KdNicAddress[1], KdNicAddress[2],
-                           KdNicAddress[3], KdNicAddress[4], KdNicAddress[5], KDNET_BROADCAST_OUTPUT_PORT,
+                           KdNicAddress[3], KdNicAddress[4], KdNicAddress[5], KdNetOptions.HostPort,
                            KdNicLinkState ? "" : ", no link yet");
     }
     else if (!KdIpAddress)

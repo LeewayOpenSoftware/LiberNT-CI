@@ -731,8 +731,9 @@ KdIpInput(
     DestinationPort = KdNetGet16(Udp + 2);
     if (KdNetOptions.Broadcast)
     {
-        if (DestinationPort == KDNET_BROADCAST_INPUT_PORT)
-            KdSessionBroadcastInput(Udp + UDP_HEADER_SIZE, UdpLength - UDP_HEADER_SIZE);
+        /* No address on a bare cable: the keyed session runs over broadcasts and answers by broadcast */
+        if (DestinationPort == KdNetOptions.HostPort)
+            KdSessionInput(KDNET_IP_BROADCAST, KdNetOptions.HostPort, Udp + UDP_HEADER_SIZE, UdpLength - UDP_HEADER_SIZE);
 
         return;
     }

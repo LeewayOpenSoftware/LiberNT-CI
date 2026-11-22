@@ -39,8 +39,6 @@ INFO_SYSTEM, INFO_PCI, INFO_ACPI, INFO_MODULES = 1, 2, 3, 4
 INFO_NAMES = {INFO_SYSTEM: 'system', INFO_PCI: 'pci', INFO_ACPI: 'acpi', INFO_MODULES: 'modules'}
 INFO_LIMIT = 0x10000
 QUIT_KEY = 0x1D
-LOCAL_INPUT_PORT = 6665
-LOCAL_OUTPUT_PORT = 6666
 
 
 def sha256(*parts):
@@ -246,7 +244,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Attach to a LiberNT target over the network debugger transport.')
     parser.add_argument('--key', help='key shown by the target or set with /ENCRYPTION_KEY')
     parser.add_argument('--local', metavar='INTERFACE',
-                        help='target booted with LOCAL_BROADCAST=1 on this cabled interface: no key, no root')
+                        help='target booted with LOCAL_BROADCAST=1 on this cabled interface (key still required)')
     parser.add_argument('--port', type=int, default=50000, help='UDP port to listen on')
     parser.add_argument('--bind', default='0.0.0.0', help='local address to listen on')
     parser.add_argument('--relay', metavar='HOST[:PORT]', help='reach the target through this relay')
@@ -283,69 +281,11 @@ def file_server(args, target, emit, report):
     return feed
 
 
-def local_main(args):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, args.local.encode('ascii'))
-    sock.bind(('', LOCAL_OUTPUT_PORT))
-    sock.setblocking(False)
-
-    interactive = sys.stdin.isatty() and sys.stdout.isatty()
-    saved_terminal = None
-    if interactive:
-        import termios
-        import tty
-        saved_terminal = termios.tcgetattr(sys.stdin.fileno())
-        tty.setraw(sys.stdin.fileno())
-
-    log = open(args.output, 'wb') if args.output else None
-    script = []
-    for item in args.send:
-        delay, _, text = item.partition(':')
-        script.append((float(delay), text.encode('ascii').decode('unicode_escape').encode('latin-1')))
-    script.sort()
-
-    sys.stderr.write('kdnet: listening on %s, UDP port %d\n' % (args.local, LOCAL_OUTPUT_PORT))
-    sys.stderr.flush()
-    start = time.monotonic()
-    readers = [sock] + ([sys.stdin] if interactive else [])
-    seen = False
-    try:
-        while args.duration is None or time.monotonic() - start < args.duration:
-            ready, _, _ = select.select(readers, [], [], 0.05)
-            if sock in ready:
-                data = sock.recv(2048)
-                seen = True
-                if log:
-                    log.write(data)
-                    log.flush()
-                sys.stdout.buffer.write(data.replace(b'\n', b'\r\n') if interactive else data)
-                sys.stdout.buffer.flush()
-            if interactive and sys.stdin in ready:
-                typed = os.read(sys.stdin.fileno(), 256)
-                if not typed or QUIT_KEY in typed:
-                    break
-                sock.sendto(typed, ('255.255.255.255', LOCAL_INPUT_PORT))
-            while script and time.monotonic() - start >= script[0][0]:
-                sock.sendto(script.pop(0)[1], ('255.255.255.255', LOCAL_INPUT_PORT))
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if saved_terminal is not None:
-            import termios
-            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, saved_terminal)
-        if log:
-            log.close()
-    return 0 if seen else 1
-
 
 def main():
     args = parse_args()
-    if args.local:
-        return local_main(args)
     if not args.key:
-        sys.exit('kdnet: --key is required unless --local is used')
+        sys.exit('kdnet: --key is required')
     load_crypto()
     target = Target(args.key)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -355,7 +295,16 @@ def main():
         relay = (socket.gethostbyname(host), int(port or 50000))
     else:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((args.bind, args.port))
+        if args.local:
+            # the target has no address on a bare cable and answers by broadcast
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, args.local.encode('ascii'))
+            sock.bind(('', args.port))
+        else:
+            sock.bind((args.bind, args.port))
+
+    def aim(address):
+        return ('255.255.255.255', args.port) if args.local else address
     sock.setblocking(False)
 
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
@@ -438,7 +387,7 @@ def main():
                             cookie = offered + bytes(HELLO_SIZE - HEADER_SIZE - len(offered))
                             last_subscribe = -60.0
                     elif kind == TYPE_HELLO and target.parse_hello(data):
-                        peer = address
+                        peer = aim(address)
                         if target.attached and not target.info['attached'] and now - session_time >= 3.0:
                             resume = target.expected if target.info['output'] >= target.expected else None
                             target.attached = False
@@ -451,7 +400,7 @@ def main():
                             last_init = now
                     elif kind == TYPE_RESPONSE and not target.attached:
                         if target.handle_response(data):
-                            peer = address
+                            peer = aim(address)
                             session_time = now
                             if attach_time is None:
                                 attach_time = now
@@ -468,7 +417,7 @@ def main():
                         payload = target.handle_data(data)
                         if payload is None:
                             continue
-                        peer = address
+                        peer = aim(address)
                         acknowledge = True
                         if payload and not args.info:
                             feed(payload)
