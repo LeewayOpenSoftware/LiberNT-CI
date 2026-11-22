@@ -150,6 +150,7 @@ list(APPEND SOURCE
     lstrcpynW.c
     lstrlen.c
     Mailslot.c
+    MappedImageRename.c
     MappedReadAfterWrite.c
     MuiResources.c
     MultiByteToWideChar.c
