@@ -46,9 +46,7 @@ HKLM
             {
               NoRemove NameSpace
               {
-                ForceRemove {1C6D6E08-2332-4A7B-A94D-6432DB2B5AE6} = s 'System Registry'
-                {
-                }
+                Delete {1C6D6E08-2332-4A7B-A94D-6432DB2B5AE6}
               }
             }
           }

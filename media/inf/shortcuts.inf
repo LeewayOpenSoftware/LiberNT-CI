@@ -26,6 +26,8 @@ QuickLaunchShortcuts=26, Microsoft\Internet Explorer\Quick Launch
 %SystemRoot%\system32\diskmgmt.exe, %DISKMGMT_TITLE%, %DISKMGMT_DESC%, 0
 %SystemRoot%\system32\eventvwr.exe, %EVENTVWR_TITLE%, %EVENTVWR_DESC%, 0
 %SystemRoot%\system32\msconfig.exe, %MSCONFIG_TITLE%, %MSCONFIG_DESC%, 0
+%SystemRoot%\regedit.exe, %REGEDIT_TITLE%, %REGEDIT_DESC%, 0
+%SystemRoot%\explorer.exe, %NTOBJECT_TITLE%, %NTOBJECT_DESC%, 0, , "shell:::{845B0FB2-66E0-416B-8F91-314E23F7C12D}", %SystemRoot%\system32\ntobjshex.dll,0
 
 [CommunicationsShortcuts]
 %SystemRoot%\system32\mstsc.exe, %MSTSC_TITLE%, %MSTSC_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
@@ -43,7 +45,6 @@ QuickLaunchShortcuts=26, Microsoft\Internet Explorer\Quick Launch
 %SystemRoot%\system32\charmap.exe, %CHARMAP_TITLE%, %CHARMAP_DESC%, 0
 %SystemRoot%\system32\clipbrd.exe, %CLIPBRD_TITLE%, %CLIPBRD_DESC%, 0
 %SystemRoot%\system32\kbswitch.exe, %KBSWITCH_TITLE%, %KBSWITCH_DESC%, 0
-%SystemRoot%\regedit.exe, %REGEDIT_TITLE%, %REGEDIT_DESC%, 0
 %SystemRoot%\system32\taskmgr.exe, %TASKMGR_TITLE%, %TASKMGR_DESC%, 0
 %SystemRoot%\system32\taskmgr11.exe, %TASKMGR11_TITLE%, %TASKMGR11_DESC%, 0
 %SystemRoot%\system32\lntget.exe, %LNTGET_TITLE%, %LNTGET_DESC%, 0, %SystemRoot%\system32, gui
@@ -116,6 +117,8 @@ EVENTVWR_TITLE=Event Viewer
 EVENTVWR_DESC=Launch Event Viewer
 MSCONFIG_TITLE=System Configuration
 MSCONFIG_DESC=Launch System Configuration program
+NTOBJECT_TITLE=NT Object Namespace Explorer
+NTOBJECT_DESC=Browse the NT Object Namespace
 CALC_TITLE=Calculator
 CALC_DESC=Launch Calculator
 NOTEPAD_TITLE=Notepad
@@ -563,6 +566,8 @@ EVENTVWR_TITLE=Visor de sucesos
 EVENTVWR_DESC=Ejecuta el visor de sucesos
 MSCONFIG_TITLE=Configuración del sistema
 MSCONFIG_DESC=Ejecuta la utilidad de configuración del sistema
+NTOBJECT_TITLE=Explorador de objetos NT
+NTOBJECT_DESC=Examinar el espacio de nombres de objetos NT
 CALC_TITLE=Calculadora
 CALC_DESC=Ejecuta la calculadora
 NOTEPAD_TITLE=Bloc de notas
