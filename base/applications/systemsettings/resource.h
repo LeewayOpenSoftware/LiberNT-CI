@@ -795,3 +795,5 @@
 #define IDS_SIGNOUT_NOW                880
 #define IDS_SIGNOUT_LATER              881
 #define IDS_SCALE_DEFAULT              882
+#define IDS_GFX_LINK_DESC              884
+#define IDS_GFX_LINK_KEYWORDS          885

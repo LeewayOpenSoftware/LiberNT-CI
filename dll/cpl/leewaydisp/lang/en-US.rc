@@ -13,6 +13,8 @@ BEGIN
     IDS_CPL_PERSONALIZE_DESC "Change the desktop background and see how your display is set up."
     IDS_CPL_DISPLAY_NAME "Display"
     IDS_CPL_DISPLAY_DESC "Check your displays and change the screen resolution."
+    IDS_CPL_GRAPHICS_NAME "Graphics"
+    IDS_CPL_GRAPHICS_DESC "Choose the Direct3D engine, shader backend and OpenGL implementation."
     IDS_TITLE "Display and Personalization"
     IDS_TAB_PERSONALIZE "Personalization"
     IDS_TAB_DISPLAY "Display"

@@ -800,4 +800,6 @@ BEGIN
     IDS_SECURITY_GROUP "Seguridad"
     IDS_FIREWALL "Orosi Firewall"
     IDS_FIREWALL_DESC "Activar o desactivar el firewall y elegir las aplicaciones que permite"
+    IDS_GFX_LINK_DESC "Motor Direct3D, sombreadores, multimuestreo, memoria de vídeo e implementación de OpenGL"
+    IDS_GFX_LINK_KEYWORDS "gráficos graficos tarjeta gráfica gpu 3d direct3d d3d opengl motor sombreadores multimuestreo memoria de vídeo graphics"
 END

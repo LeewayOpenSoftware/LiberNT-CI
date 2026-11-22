@@ -307,6 +307,8 @@ BuildDisplay(PageBuilder &page)
         page.Choice(Str(IDS_RESOLUTION), std::wstring(), L"desktop_20_regular", options, -1, nullptr);
         page.Choice(Str(IDS_ORIENTATION), std::wstring(), L"desktop_20_regular", options, -1, nullptr);
         page.Choice(Str(IDS_REFRESH_RATE), std::wstring(), L"desktop_pulse_20_regular", options, -1, nullptr);
+        page.Link(Str(IDS_GRAPHICS), Str(IDS_GFX_LINK_DESC), L"desktop_pulse_20_regular", nullptr).Keywords =
+            Str(IDS_GFX_LINK_KEYWORDS);
         return;
     }
     labels = DisplayDevices(names);
@@ -486,6 +488,9 @@ BuildDisplay(PageBuilder &page)
     page.Info(Str(IDS_DESKTOP_MODE),
               Printf(L"%lu \x00D7 %lu, %lu Hz", current.dmPelsWidth, current.dmPelsHeight, current.dmDisplayFrequency));
     page.Info(Str(IDS_COLOR_DEPTH), Format(IDS_BITS_FORMAT, current.dmBitsPerPel));
+    /* The Graphics tab (index 2) of the Leeway Display control panel applet 2 */
+    page.Link(Str(IDS_GRAPHICS), Str(IDS_GFX_LINK_DESC), L"desktop_pulse_20_regular",
+              [](int) { Launch(L"control.exe", L"leewaydisp.cpl,@2"); }).Keywords = Str(IDS_GFX_LINK_KEYWORDS);
 }
 
 static const DWORD PowerTimes[] = { 60, 120, 180, 300, 600, 900, 1200, 1500, 1800, 2700, 3600, 7200, 10800,

@@ -6,6 +6,8 @@
 #define IDS_CPL_PERSONALIZE_DESC   201
 #define IDS_CPL_DISPLAY_NAME       202
 #define IDS_CPL_DISPLAY_DESC       203
+#define IDS_CPL_GRAPHICS_NAME      315
+#define IDS_CPL_GRAPHICS_DESC      316
 #define IDS_TITLE                  204
 #define IDS_TAB_PERSONALIZE        205
 #define IDS_TAB_DISPLAY            206

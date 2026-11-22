@@ -13,6 +13,8 @@ BEGIN
     IDS_CPL_PERSONALIZE_DESC "デスクトップの背景を変更し、ディスプレイの設定を確認します。"
     IDS_CPL_DISPLAY_NAME "ディスプレイ"
     IDS_CPL_DISPLAY_DESC "ディスプレイを確認し、画面の解像度を変更します。"
+    IDS_CPL_GRAPHICS_NAME "Graphics"
+    IDS_CPL_GRAPHICS_DESC "Choose the Direct3D engine, shader backend and OpenGL implementation."
     IDS_TITLE "ディスプレイと個人用設定"
     IDS_TAB_PERSONALIZE "個人用設定"
     IDS_TAB_DISPLAY "ディスプレイ"
