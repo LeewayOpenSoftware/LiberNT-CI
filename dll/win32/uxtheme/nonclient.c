@@ -1078,18 +1078,17 @@ plain:
     DrawThemeBackground(pcontext->theme, pcontext->hDC, iPartId, iStateId, prc, NULL);
 }
 
-/* A dialog frame on a dark caption has no immersive-dark property, so its close part would come from the light
- * msstyles image and show as a white square; sample the caption next to the button to pick the dark glyph path. */
+/* A dialog frame has no immersive-dark property; when the active style has a dark caption its close part from
+ * the msstyles image is not drawn for the dark fill, so use the glyph button on the style's caption fill. */
 static BOOL
-ThemeSampleDarkCaption(PDRAW_CONTEXT pcontext, const RECT *rect, BOOL buttonLeft, COLORREF *color)
+ThemeDarkStyleCaption(PDRAW_CONTEXT pcontext, COLORREF *color)
 {
-    COLORREF sample = GetPixel(pcontext->hDC, buttonLeft ? rect->right + 2 : rect->left - 2,
-                               (rect->top + rect->bottom) / 2);
+    COLORREF fill;
 
-    if (sample == CLR_INVALID ||
-        (GetRValue(sample) * 299 + GetGValue(sample) * 587 + GetBValue(sample) * 114) / 1000 >= 128)
+    if (!pcontext->theme || ThemeCaptionIsLight(pcontext->theme) ||
+        FAILED(GetThemeColor(pcontext->theme, WP_CAPTION, FS_ACTIVE, TMT_FILLCOLORHINT, &fill)))
         return FALSE;
-    *color = sample;
+    *color = fill;
     return TRUE;
 }
 
@@ -1173,8 +1172,7 @@ ThemeDrawCaptionButton(PDRAW_CONTEXT pcontext,
                                     &pwndData->rcCaptionButtons[buttonId], background, FALSE,
                                     ThemeCaptionDpi(pcontext));
     else if (iPartId == WP_CLOSEBUTTON && !(pcontext->wi.dwStyle & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) &&
-             ThemeSampleDarkCaption(pcontext, &pwndData->rcCaptionButtons[buttonId],
-                                    pwndData->CaptionButtonLeft[buttonId], &background))
+             ThemeDarkStyleCaption(pcontext, &background))
         ThemeDrawCaptionGlyphButton(pcontext, buttonId, iStateId,
                                     &pwndData->rcCaptionButtons[buttonId], background, TRUE,
                                     ThemeCaptionDpi(pcontext));
