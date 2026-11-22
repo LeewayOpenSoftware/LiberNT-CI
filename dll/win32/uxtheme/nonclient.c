@@ -770,6 +770,16 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
         if (FAILED(GetThemePartSize(htheme, NULL, iPartId, 0, NULL, TS_TRUE, &ButtonSize)) ||
             ButtonSize.cy <= 0)
             ButtonSize.cx = ButtonSize.cy = captionBtnHeight;
+        /* TS_TRUE can hand back the whole multi-frame button strip (46x256 = 8 frames of
+         * 46x32) while the theme is mid-reload; one frame is about caption-tall. If the
+         * size is implausible for a single frame, use the caption-button ratio so the
+         * button is never sized from the strip. */
+        if (ButtonSize.cy <= 0 || ButtonSize.cx <= 0 ||
+            ButtonSize.cy > 2 * captionBtnHeight || ButtonSize.cx > 3 * captionBtnHeight)
+        {
+            ButtonSize.cy = captionBtnHeight;
+            ButtonSize.cx = MulDiv(captionBtnHeight, CAPTION_BUTTON_WIDTH_UNITS, CAPTION_BUTTON_HEIGHT_UNITS);
+        }
 
         captionBtnWidth = MulDiv(ButtonSize.cx, captionBtnHeight, ButtonSize.cy);
 
@@ -816,6 +826,8 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
         else
             rcCurrent.right = min(rcCurrent.right, rcLastButton.left);
     }
+    pwndData->CaptionCalcSize.cx = wi->rcWindow.right - wi->rcWindow.left;
+    pwndData->CaptionCalcSize.cy = wi->rcWindow.bottom - wi->rcWindow.top;
 }
 
 void ThemeCalculateCaptionButtonsPos(HWND hWnd, HTHEME htheme)
@@ -1315,6 +1327,9 @@ ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWOR
 
     if (ThemeDwmHasCaptionButtons(hWnd, wi))
     {
+        if (pwndData->CaptionCalcSize.cx != wi->rcWindow.right - wi->rcWindow.left ||
+            pwndData->CaptionCalcSize.cy != wi->rcWindow.bottom - wi->rcWindow.top)
+            ThemeCalculateCaptionButtonsPos(hWnd, NULL);   /* rects were computed at a different window size */
         if (!ThemeCaptionButtonsAreSane(hWnd, wi))
             return;   /* transient reload/maximize state: keep the last good published rects */
         Rect = &pwndData->rcCaptionButtons[CLOSEBUTTON];
@@ -1340,6 +1355,8 @@ ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWOR
             {
                 LONG Width = wi->rcWindow.right - wi->rcWindow.left;
 
+                if (Rect->right > Width || Rect->right <= Rect->left)
+                    continue;   /* stale rect from a larger width: skip, never pack a negative/wrapped span */
                 Spans[i] = DWM_CAPTION_PACK(Width - Rect->right, Width - Rect->left);
                 State |= DWM_CAPTION_STATE_RIGHT(i);
             }
