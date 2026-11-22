@@ -14,7 +14,7 @@
 
 #define VALUE_DEFAULT              L"Default"
 
-#define KEY_WINE                  L"Software\Wine\Direct3D"
+#define KEY_WINE                  L"Software\\Wine\\Direct3D"
 
 #define KEY_GSLEVEL               L"MaxShaderModelGS"
 #define KEY_VSLEVEL               L"MaxShaderModelVS"
