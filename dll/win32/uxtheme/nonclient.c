@@ -860,14 +860,14 @@ ThemeFillSolidRect(HDC hDC, const RECT *rect, COLORREF color)
 static BOOL
 ThemeDrawCaptionGlyph(HDC hDC, const RECT *rect, UINT baseId, INT shade, UINT dpi)
 {
-    /* Win11 draws the caption glyph at roughly a third of the button height. The sizes are the exact
-     * frames present in the cap_*.ico files (12,16,20,24,28) so the glyph is never scaled: 12 px at
-     * 100/125%, 16 at 150%, 20 at 200%, 28 at 300%. */
+    /* Win11 draws the caption glyph at roughly a third of the button height. The sizes are the frames
+     * present in the cap_*.ico files (12/16/20/24/28), so the glyph is drawn at a native resolution:
+     * 12 px at 100/125%, 16 at 150%, 20 at 200%, 24 at 250%, 28 at 300%. */
     static const struct
     {
         UINT MinDpi;
         INT Size;
-    } glyphFrames[] = { { 288, 28 }, { 192, 20 }, { 144, 16 }, { 96, 12 }, { 0, 12 } };
+    } glyphFrames[] = { { 288, 28 }, { 240, 24 }, { 192, 20 }, { 144, 16 }, { 96, 12 }, { 0, 12 } };
     INT height = rect->bottom - rect->top;
     INT size, i;
     HICON icon;
@@ -878,6 +878,11 @@ ThemeDrawCaptionGlyph(HDC hDC, const RECT *rect, UINT baseId, INT shade, UINT dp
             break;
     }
     size = glyphFrames[i].Size;
+
+    /* The restore and help glyphs ship no 12 px .ico frame (only 16/20/24/28); step them up so the
+     * icon scaler never blurs them. Drop this once those two families gain a 12 px frame. */
+    if ((baseId == IDI_CAPTION_RESTORE || baseId == IDI_CAPTION_HELP) && size < 16)
+        size = 16;
 
     icon = LoadImageW(hDllInst, MAKEINTRESOURCEW(baseId + shade), IMAGE_ICON, size, size, LR_SHARED);
     if (!icon)
