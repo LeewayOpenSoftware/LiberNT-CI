@@ -289,7 +289,9 @@ SpiLoadMachineDpi(VOID)
             return Dpi;
         }
     }
-    if (Stored && Dpi != 0)
+    if (Stored && Dpi == USER_SYSTEM_DPI_DEFAULT)
+        TRACE("Migrating a pre-F1 LogPixels of 96 to the recommended scale\n");
+    else if (Stored && Dpi != 0)
         WARN("Ignoring invalid system DPI %lu\n", Dpi);
 
     /* Nothing chosen: recommend a scale for this panel and keep it, so Settings shows it and 100% stays selectable */
