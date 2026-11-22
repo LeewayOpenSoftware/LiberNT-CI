@@ -204,6 +204,99 @@ DisplayPageSetDeviceDetails(HWND * hDlgCtrls, LPCGUID classGUID, LPGUID * device
 }
 
 
+/* Reads a REG_SZ/REG_EXPAND_SZ value into buf. Returns 1 if the whole value was read,
+ * 2 if the value exists but is longer than buf (caller shows "(truncated)" rather than
+ * dropping it silently), 0 if the value is absent or not a string. */
+static int
+GfxReadRegSz(HKEY hKey, const WCHAR *name, WCHAR *buf, DWORD cchBuf)
+{
+    DWORD cb = (cchBuf - 1) * sizeof(WCHAR), type = 0;
+    LONG r = RegQueryValueExW(hKey, name, NULL, &type, (LPBYTE)buf, &cb);
+
+    if (type != REG_SZ && type != REG_EXPAND_SZ)
+        return 0;
+    if (r == ERROR_SUCCESS && cb >= sizeof(WCHAR))
+    {
+        DWORD cch = cb / sizeof(WCHAR);
+        if (cch >= cchBuf)
+            cch = cchBuf - 1;
+        buf[cch] = L'\0';
+        return 1;
+    }
+    if (r == ERROR_MORE_DATA)
+        return 2;   /* present but does not fit buf */
+    return 0;
+}
+
+/* Appends the OpenGL implementation, the registered ICD list and the DEBUGCHANNEL
+ * value (all read-only) to the diagnostic line. DEBUGCHANNEL is a developer env var:
+ * shown here only, never editable (a GUI that changes the system environment is a dev
+ * tool, not product). All appends are bounded (StringCch*): the sources are untrusted. */
+static void
+AppendOpenGLInfo(WCHAR *out, size_t cch)
+{
+    HKEY hKey;
+    WCHAR sz[256];
+    DWORD n, i;
+    int any, tr;
+
+    StringCchCatW(out, cch, L"  |  OpenGL: ");
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\ReactOS\\OpenGL", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        tr = GfxReadRegSz(hKey, NULL, sz, ARRAYSIZE(sz));
+        if (tr == 1 && sz[0])
+            StringCchCatW(out, cch, sz);
+        else if (tr == 2)
+            StringCchCatW(out, cch, L"(truncated)");
+        else
+            StringCchCatW(out, cch, L"system default");
+        RegCloseKey(hKey);
+    }
+    else
+    {
+        StringCchCatW(out, cch, L"system default");
+    }
+
+    StringCchCatW(out, cch, L" (ICDs: ");
+    any = 0;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+            L"Software\\Microsoft\\Windows NT\\CurrentVersion\\OpenGLDrivers", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        for (i = 0; ; i++)
+        {
+            n = ARRAYSIZE(sz);
+            if (RegEnumKeyExW(hKey, i, sz, &n, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+                break;
+            if (any)
+                StringCchCatW(out, cch, L", ");
+            StringCchCatW(out, cch, sz);
+            any = 1;
+        }
+        RegCloseKey(hKey);
+    }
+    if (!any)
+        StringCchCatW(out, cch, L"none");
+    StringCchCatW(out, cch, L")");
+
+    StringCchCatW(out, cch, L"  |  DEBUGCHANNEL: ");
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+            L"System\\CurrentControlSet\\Control\\Session Manager\\Environment", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        tr = GfxReadRegSz(hKey, L"DEBUGCHANNEL", sz, ARRAYSIZE(sz));
+        if (tr == 1 && sz[0])
+            StringCchCatW(out, cch, sz);
+        else if (tr == 2)
+            StringCchCatW(out, cch, L"(truncated)");
+        else
+            StringCchCatW(out, cch, L"unset");
+        RegCloseKey(hKey);
+    }
+    else
+    {
+        StringCchCatW(out, cch, L"unset");
+    }
+}
+
 /* Fills the unused Notes field with the Direct3D (WineD3D) runtime configuration
  * read from HKCU\Software\Wine\Direct3D -- the keys the engine actually honours.
  * Read-only diagnostic; values are set from Orosi Settings > Display > Graphics.
@@ -213,32 +306,32 @@ SetD3DRuntimeInfo(HWND hwndDlg)
 {
     HKEY hKey;
     WCHAR detail[400];
-    WCHAR out[512];
+    WCHAR out[1024];
     WCHAR fmt[256];
     WCHAR sz[128];
     DWORD cb, type, dw;
+    int tr;
 
     detail[0] = L'\0';
 
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Wine\\Direct3D", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
     {
-        cb = sizeof(sz) - sizeof(WCHAR); type = 0;
-        if (RegQueryValueExW(hKey, L"renderer", NULL, &type, (LPBYTE)sz, &cb) == ERROR_SUCCESS && type == REG_SZ)
+        tr = GfxReadRegSz(hKey, L"renderer", sz, ARRAYSIZE(sz));
+        if (tr)
         {
-            sz[cb / sizeof(WCHAR)] = L'\0';
             StringCchCatW(detail, ARRAYSIZE(detail), L"renderer=");
-            if (!wcscmp(sz, L"gl")) StringCchCatW(detail, ARRAYSIZE(detail), L"OpenGL");
+            if (tr == 2) StringCchCatW(detail, ARRAYSIZE(detail), L"(truncated)");
+            else if (!wcscmp(sz, L"gl")) StringCchCatW(detail, ARRAYSIZE(detail), L"OpenGL");
             else if (!wcscmp(sz, L"vulkan")) StringCchCatW(detail, ARRAYSIZE(detail), L"Vulkan");
             else if (!wcscmp(sz, L"no3d") || !wcscmp(sz, L"gdi")) StringCchCatW(detail, ARRAYSIZE(detail), L"No 3D");
             else StringCchCatW(detail, ARRAYSIZE(detail), sz);
         }
-        cb = sizeof(sz) - sizeof(WCHAR); type = 0;
-        if (RegQueryValueExW(hKey, L"shader_backend", NULL, &type, (LPBYTE)sz, &cb) == ERROR_SUCCESS && type == REG_SZ)
+        tr = GfxReadRegSz(hKey, L"shader_backend", sz, ARRAYSIZE(sz));
+        if (tr)
         {
-            sz[cb / sizeof(WCHAR)] = L'\0';
             if (detail[0]) StringCchCatW(detail, ARRAYSIZE(detail), L"; ");
             StringCchCatW(detail, ARRAYSIZE(detail), L"shaders=");
-            StringCchCatW(detail, ARRAYSIZE(detail), sz);
+            StringCchCatW(detail, ARRAYSIZE(detail), tr == 2 ? L"(truncated)" : sz);
         }
         cb = sizeof(dw); type = 0;
         if (RegQueryValueExW(hKey, L"csmt", NULL, &type, (LPBYTE)&dw, &cb) == ERROR_SUCCESS && type == REG_DWORD)
@@ -260,13 +353,12 @@ SetD3DRuntimeInfo(HWND hwndDlg)
             StringCchPrintfW(n, ARRAYSIZE(n), L"sample count=%u", dw);
             StringCchCatW(detail, ARRAYSIZE(detail), n);
         }
-        cb = sizeof(sz) - sizeof(WCHAR); type = 0;
-        if (RegQueryValueExW(hKey, L"VideoMemorySize", NULL, &type, (LPBYTE)sz, &cb) == ERROR_SUCCESS && type == REG_SZ)
+        tr = GfxReadRegSz(hKey, L"VideoMemorySize", sz, ARRAYSIZE(sz));
+        if (tr)
         {
-            sz[cb / sizeof(WCHAR)] = L'\0';
             if (detail[0]) StringCchCatW(detail, ARRAYSIZE(detail), L"; ");
             StringCchCatW(detail, ARRAYSIZE(detail), L"video memory=");
-            StringCchCatW(detail, ARRAYSIZE(detail), sz);
+            StringCchCatW(detail, ARRAYSIZE(detail), tr == 2 ? L"(truncated)" : sz);
         }
         RegCloseKey(hKey);
     }
@@ -284,6 +376,7 @@ SetD3DRuntimeInfo(HWND hwndDlg)
     {
         StringCchPrintfW(out, ARRAYSIZE(out), fmt, L"no registry overrides (engine defaults)");
     }
+    AppendOpenGLInfo(out, ARRAYSIZE(out));
     SetDlgItemTextW(hwndDlg, IDC_TEXT_INFO, out);
 }
 
