@@ -786,3 +786,11 @@
 #define IDS_CAPTION_ALIGN_LEFT         871
 #define IDS_CAPTION_ALIGN_CENTER       872
 #define IDS_CAPTION_ALIGN_KEYWORDS     873
+#define IDS_SCALE_RECOMMENDED          874
+#define IDS_SCALE_PENDING              875
+#define IDS_SCALE_CUSTOM               876
+#define IDS_SCALE_CUSTOM_DESC          877
+#define IDS_SCALE_CUSTOM_NOTE          878
+#define IDS_SIGNOUT_SCALE              879
+#define IDS_SIGNOUT_NOW                880
+#define IDS_SIGNOUT_LATER              881

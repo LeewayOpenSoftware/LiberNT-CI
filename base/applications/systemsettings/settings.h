@@ -355,6 +355,7 @@ void ShowError(HWND owner, DWORD error);
 bool IsAdmin();
 bool EnablePrivilege(LPCWSTR name);
 void PromptRestart(HWND owner, const std::wstring &reason);
+void PromptSignOut(HWND owner, const std::wstring &reason);
 void CopyToClipboard(HWND owner, const std::wstring &text);
 
 bool InputBox(HWND owner, const std::wstring &title, const std::wstring &prompt, std::wstring &value,
