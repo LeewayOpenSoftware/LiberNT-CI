@@ -14,7 +14,7 @@
 #include "framebuttons.h"
 
 #define DWM_FRAME_BUTTON_CACHE 24
-#define DWM_FRAME_BUTTON_MAX   192
+#define DWM_FRAME_BUTTON_MAX   256
 
 typedef BOOL (WINAPI *PFN_DRAW_CAPTION_BUTTON)(HDC, const RECT *, UINT, ULONG, BOOL, BOOL);
 

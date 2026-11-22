@@ -769,7 +769,10 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
 
         if (FAILED(GetThemePartSize(htheme, NULL, iPartId, 0, NULL, TS_TRUE, &ButtonSize)) ||
             ButtonSize.cy <= 0)
-            ButtonSize.cx = ButtonSize.cy = captionBtnHeight;
+        {
+            ButtonSize.cy = captionBtnHeight;
+            ButtonSize.cx = MulDiv(captionBtnHeight, CAPTION_BUTTON_WIDTH_UNITS, CAPTION_BUTTON_HEIGHT_UNITS);
+        }
         /* TS_TRUE can hand back the whole multi-frame button strip (46x256 = 8 frames of
          * 46x32) while the theme is mid-reload; one frame is about caption-tall. If the
          * size is implausible for a single frame, use the caption-button ratio so the
@@ -1265,42 +1268,31 @@ ThemeDwmPublishFrameInsets(HWND hWnd, const WINDOWINFO *wi, PWND_DATA pwndData)
         RemovePropW(hWnd, DWM_PROP_FRAME_INSETS);
 }
 
-/* A live colour-scheme or DPI reload can briefly hand the compositor caption-button rects
- * at the wrong size: a wrong-DPI size (e.g. 46x32 computed at 144 dpi = 59x41), a failed
- * GetThemePartSize square (41x41, 29x29), or a mid-maximize caption height (5x256). Drawn, a
- * 46x32 glyph stretched into those is the owner's stripe/dot glitch. Publish only when every
- * button matches the window's real caption-button metrics, so a transient never reaches dwm. */
+/* Backstop for a transient reload/maximize rect the source paths miss: a real caption button
+ * fits inside the window's top non-client band and is a modest box, never a sliver or bar.
+ * Measured against the window's OWN caption band (not SM_CXSIZE, which is the msstyles caption
+ * metric, not how the button rect is computed), this never blocks a valid rect; it only drops
+ * the degenerate transients (5x256, 46x256, a wrong-DPI 59x41 taller than the band). */
 static BOOL
 ThemeCaptionButtonsAreSane(HWND hWnd, const WINDOWINFO *wi)
 {
     PWND_DATA pwndData = ThemeGetWndData(hWnd);
-    BOOL toolwin = (wi->dwExStyle & WS_EX_TOOLWINDOW) != 0;
-    INT expW, expH, i;
-    UINT dpi;
+    LONG ncTop, i;
 
     if (!pwndData)
         return FALSE;
-    dpi = GetDpiForWindow(hWnd);
-    if (!dpi)
-        dpi = GetDpiForSystem();
-    expW = GetSystemMetricsForDpi(toolwin ? SM_CXSMSIZE : SM_CXSIZE, dpi);
-    expH = GetSystemMetricsForDpi(toolwin ? SM_CYSMSIZE : SM_CYSIZE, dpi);
-    if (expW <= 0 || expH <= 0)
-        return TRUE;   /* no reference available: do not block the publish */
+    ncTop = (LONG)wi->rcClient.top - (LONG)wi->rcWindow.top;
+    if (ncTop <= 0)
+        return TRUE;   /* no caption band to measure against: do not block */
     for (i = CLOSEBUTTON; i <= HELPBUTTON; i++)
     {
         const RECT *r = &pwndData->rcCaptionButtons[i];
-        INT w = r->right - r->left, h = r->bottom - r->top;
-        INT dw, dh, tolW, tolH;
+        LONG w = r->right - r->left, h = r->bottom - r->top;
 
         if (w <= 0 || h <= 0)
             continue;   /* absent button */
-        dw = w - expW; if (dw < 0) dw = -dw;
-        dh = h - expH; if (dh < 0) dh = -dh;
-        tolW = expW / 4; if (tolW < 6) tolW = 6;   /* +-25%, with a small absolute slack */
-        tolH = expH / 4; if (tolH < 4) tolH = 4;
-        if (dw > tolW || dh > tolH)
-            return FALSE;
+        if (h > ncTop + 4 || w > 3 * h || h > 3 * w)
+            return FALSE;   /* taller than the caption band, or a sliver/bar */
     }
     return TRUE;
 }
@@ -1349,6 +1341,8 @@ ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWOR
                 continue;
             if (pwndData->CaptionButtonLeft[Buttons[i]])
             {
+                if (Rect->left < 0 || Rect->right <= Rect->left)
+                    continue;   /* stale/reversed rect: never pack a negative/wrapped span */
                 Spans[i] = DWM_CAPTION_PACK(Rect->left, Rect->right);
             }
             else
