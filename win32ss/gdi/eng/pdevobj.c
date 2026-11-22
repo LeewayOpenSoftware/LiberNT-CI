@@ -1114,7 +1114,8 @@ PDEVOBJ_iGetColorManagementCaps(PPDEVOBJ ppdev)
     return ret;
 }
 
-/* The logical DPI is win32k policy (see PDEVOBJ_Create); a new system DPI reaches every display PDEV here */
+/* The logical DPI is win32k policy (see PDEVOBJ_Create); a new system DPI reaches every display PDEV here.
+ * Lock contract: called under the USER lock (sign-in parameter reload), like the mode changes that create PDEVs. */
 VOID
 NTAPI
 PDEVOBJ_vSetLogPixels(

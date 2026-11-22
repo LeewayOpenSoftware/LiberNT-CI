@@ -64,6 +64,9 @@ static const WCHAR* VAL_MDALIGN = L"MenuDropAlignment";
 static const WCHAR* KEY_SYSTEM_DPI =
     L"\\Registry\\Machine\\System\\CurrentControlSet\\Hardware Profiles\\Current\\Software\\Fonts";
 static const WCHAR* VAL_LOGPIXELS = L"LogPixels";
+/* Set next to LogPixels once a scale was chosen or recommended; a value without it predates this and is migrated once */
+static const WCHAR* VAL_LOGPIXELS_CHOSEN = L"LogPixelsChosen";
+extern HDC hSystemBM;
 static const WCHAR* VAL_WIN8DPISCALING = L"Win8DpiScaling";
 static const WCHAR* KEY_METRIC = L"Control Panel\\Desktop\\WindowMetrics";
 static const WCHAR* VAL_BORDER = L"BorderWidth";
@@ -253,6 +256,7 @@ SpiStoreSystemDpi(DWORD Dpi)
     if (NT_SUCCESS(ZwOpenKey(&hKey, KEY_SET_VALUE, &ObjectAttributes)))
     {
         RegWriteDWORD((HKEY)hKey, VAL_LOGPIXELS, Dpi);
+        RegWriteDWORD((HKEY)hKey, VAL_LOGPIXELS_CHOSEN, 1);
         ZwClose(hKey);
     }
 }
@@ -262,18 +266,29 @@ UINT
 SpiLoadMachineDpi(VOID)
 {
     HKEY hKey;
-    DWORD Dpi = 0;
+    DWORD Dpi = 0, Chosen = 0;
     BOOLEAN Stored = FALSE;
 
     if (NT_SUCCESS(RegOpenKey(KEY_SYSTEM_DPI, &hKey)))
     {
         Stored = RegReadDWORD(hKey, VAL_LOGPIXELS, &Dpi);
+        if (!RegReadDWORD(hKey, VAL_LOGPIXELS_CHOSEN, &Chosen))
+            Chosen = 0;
         ZwClose(hKey);
     }
 
-    /* An explicit value, 96 included, is what the user chose; 0 or garbage means nothing was chosen yet */
+    /* An explicit value, 96 included, is what the user chose; 0 or garbage means nothing was chosen yet.
+     * Installs made before this stored 96 as "recommend": without the marker that 96 is migrated once to the
+     * recommendation (and marked), so an upgraded portable panel keeps its scale and 100% stays selectable. */
     if (Stored && Dpi >= USER_SYSTEM_DPI_MIN && Dpi <= USER_SYSTEM_DPI_MAX)
-        return Dpi;
+    {
+        if (Dpi != USER_SYSTEM_DPI_DEFAULT || Chosen)
+        {
+            if (!Chosen)
+                SpiStoreSystemDpi(Dpi);
+            return Dpi;
+        }
+    }
     if (Stored && Dpi != 0)
         WARN("Ignoring invalid system DPI %lu\n", Dpi);
 
@@ -312,6 +327,15 @@ SpiApplySystemDpi(VOID)
     PDEVOBJ_vSetLogPixels(Dpi);
     GreSetStockFontDpi(Dpi);
     UserDpiUpdateVirtualization();
+
+    /* Dialog base units come from SYSTEM_FONT, which may have changed size (see display.c on a mode change) */
+    if (gpsi && hSystemBM)
+    {
+        TEXTMETRICW tmw;
+
+        gpsi->cxSysFontChar = IntGetCharDimensions(hSystemBM, &tmw, (DWORD*)&gpsi->cySysFontChar);
+        gpsi->tmSysFont = tmw;
+    }
 }
 
 static
