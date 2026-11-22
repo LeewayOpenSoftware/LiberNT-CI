@@ -1041,6 +1041,12 @@ static const GFX_OPT gfxVidMem[] = {
     { L"256 MB", 2, 0, L"256 MB" },
     { L"512 MB", 2, 0, L"512 MB" },
 };
+/* On/off knobs (MultisampleTextures); the engine reads them as a DWORD. */
+static const GFX_OPT gfxToggle[] = {
+    { NULL,        0, 0, NULL },
+    { L"Enabled",  1, 1, NULL },
+    { L"Disabled", 1, 0, NULL },
+};
 
 typedef struct GFX_CTRL
 {
@@ -1054,6 +1060,7 @@ typedef struct GFX_CTRL
 static const GFX_CTRL gfxCtrls[] = {
     { IDC_GFX_RENDERER, L"renderer",         gfxRenderer, ARRAYSIZE(gfxRenderer), FALSE },
     { IDC_GFX_SHADER,   L"shader_backend",   gfxShader,   ARRAYSIZE(gfxShader),   TRUE  },
+    { IDC_GFX_MSAA,     L"MultisampleTextures", gfxToggle, ARRAYSIZE(gfxToggle),  FALSE },
     { IDC_GFX_VIDMEM,   L"VideoMemorySize",  gfxVidMem,   ARRAYSIZE(gfxVidMem),   FALSE },
     { IDC_GFX_GSLEVEL,  L"MaxShaderModelGS", gfxLevel,    ARRAYSIZE(gfxLevel),    FALSE },
     { IDC_GFX_PSLEVEL,  L"MaxShaderModelPS", gfxLevel,    ARRAYSIZE(gfxLevel),    FALSE },
@@ -1070,6 +1077,7 @@ GfxInitCombo(HWND hwnd, HKEY hKey, const GFX_CTRL *c)
     BOOL have, matched = FALSE;
     int i, sel = 0;
 
+    SendDlgItemMessageW(hwnd, c->id, CB_RESETCONTENT, 0, 0);
     have = (hKey != NULL &&
             RegQueryValueExW(hKey, c->value, NULL, &type, buf.raw, &cb) == ERROR_SUCCESS);
     if (have && type == REG_SZ)
@@ -1097,7 +1105,7 @@ GfxInitCombo(HWND hwnd, HKEY hKey, const GFX_CTRL *c)
     }
     if (have && !matched)
     {
-        WCHAR item[160], valstr[132];
+        WCHAR item[160], valstr[132], fmt[64];
 
         if (type == REG_DWORD)
             StringCchPrintfW(valstr, ARRAYSIZE(valstr), L"%lu", (unsigned long)buf.dw);
@@ -1105,7 +1113,8 @@ GfxInitCombo(HWND hwnd, HKEY hKey, const GFX_CTRL *c)
             StringCchCopyW(valstr, ARRAYSIZE(valstr), buf.sz);
         else
             valstr[0] = 0;
-        StringCchPrintfW(item, ARRAYSIZE(item), L"Custom (%s)", valstr);
+        LoadStr(IDS_GFX_CUSTOM, fmt, ARRAYSIZE(fmt));
+        StringCchPrintfW(item, ARRAYSIZE(item), fmt, valstr);
         sel = (int)SendDlgItemMessageW(hwnd, c->id, CB_ADDSTRING, 0, (LPARAM)item);
     }
     SendDlgItemMessageW(hwnd, c->id, CB_SETCURSEL, sel, 0);
@@ -1183,8 +1192,8 @@ GraphicsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             if (LOWORD(wParam) == IDC_GFX_APPLY)
             {
-                if (RegCreateKeyExW(HKEY_CURRENT_USER, GFX_D3D_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL)
-                        == ERROR_SUCCESS)
+                if (RegCreateKeyExW(HKEY_CURRENT_USER, GFX_D3D_KEY, 0, NULL, 0,
+                                    KEY_READ | KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS)
                 {
                     for (i = 0; i < GFX_NCTRL; i++)
                     {
@@ -1192,10 +1201,14 @@ GraphicsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                             IsWindowEnabled(GetDlgItem(hwnd, gfxCtrls[i].id)))
                             GfxSaveCombo(hwnd, hKey, &gfxCtrls[i]);   /* only touched + active combos */
                     }
+                    for (i = 0; i < GFX_NCTRL; i++)
+                        GfxInitCombo(hwnd, hKey, &gfxCtrls[i]);   /* refresh: drop stale Custom, reflect writes */
                     RegCloseKey(hKey);
+                    SetWindowLongPtrW(hwnd, DWLP_USER, 0);
+                    GfxUpdateEnable(hwnd);
+                    EnableWindow(GetDlgItem(hwnd, IDC_GFX_APPLY), FALSE);
                 }
-                SetWindowLongPtrW(hwnd, DWLP_USER, 0);
-                EnableWindow(GetDlgItem(hwnd, IDC_GFX_APPLY), FALSE);
+                /* key open failed: keep the dirty mask and Apply enabled, do not drop the change */
                 return TRUE;
             }
             break;
