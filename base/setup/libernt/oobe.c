@@ -1055,6 +1055,34 @@ HasAutomationPayload(VOID)
     return FALSE;
 }
 
+/* Volatile, so a postponed first-boot setup is offered again on the next boot only */
+#define OOBE_POSTPONED_KEY L"SYSTEM\\Setup\\OobePostponed"
+
+static BOOL
+IsFirstBootPostponed(VOID)
+{
+    HKEY hKey;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, OOBE_POSTPONED_KEY, 0, KEY_QUERY_VALUE, &hKey) != ERROR_SUCCESS)
+        return FALSE;
+    RegCloseKey(hKey);
+    return TRUE;
+}
+
+static VOID
+PostponeFirstBootSetup(VOID)
+{
+    HKEY hKey;
+    LONG Error;
+
+    Error = RegCreateKeyExW(HKEY_LOCAL_MACHINE, OOBE_POSTPONED_KEY, 0, NULL, REG_OPTION_VOLATILE,
+                            KEY_WRITE, NULL, &hKey, NULL);
+    if (Error == ERROR_SUCCESS)
+        RegCloseKey(hKey);
+    else
+        DPRINT1("Cannot postpone the first-boot setup (error %ld)\n", Error);
+}
+
 static BOOL
 EndFirstBootSetup(VOID)
 {
@@ -1275,12 +1303,29 @@ wWinMain(
     INITCOMMONCONTROLSEX iccx;
     HRESULT hrCom;
     ULONG FirstPage;
+    HANDLE hInstanceMutex;
 
     ComponentsOnly = (wcsstr(lpszCmdLine, L"/components") != NULL);
     ProcessHeap = GetProcessHeap();
     SetupData.hInstance = hInst;
 
+    /* One first-boot wizard per session, whoever starts it */
+    if (!ComponentsOnly)
+    {
+        hInstanceMutex = CreateMutexW(NULL, TRUE, L"Local\\OrosiFirstBootSetup");
+        if (hInstanceMutex && GetLastError() == ERROR_ALREADY_EXISTS)
+        {
+            DPRINT1("First-boot setup already running\n");
+            return OOBE_SKIPPED;
+        }
+    }
+
     FirstBootRun = EndFirstBootSetup();
+    if (!ComponentsOnly && IsFirstBootPostponed())
+    {
+        DPRINT1("First-boot setup was postponed for this boot\n");
+        return OOBE_SKIPPED;
+    }
     if (!ComponentsOnly)
         DPRINT1("Disk signature check finished with exit code %lu\n", RunExpandStorage(L"/u"));
     /* An automated session's tests own BITS and the network, so no component is downloaded under them */
@@ -1328,5 +1373,7 @@ wWinMain(
         CoUninitialize();
     if (ComponentsOnly)
         return ERROR_SUCCESS;
+    if (!SetupData.bInstalled)
+        PostponeFirstBootSetup();
     return SetupData.bInstalled ? ERROR_SUCCESS : OOBE_SKIPPED;
 }
