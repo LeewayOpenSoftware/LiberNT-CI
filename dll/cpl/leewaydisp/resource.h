@@ -115,7 +115,7 @@
 #define IDS_CP_DISP_HEAD         289
 #define IDS_CP_DISP_DESC         290
 #define IDS_CP_DISP_SCALE        291
-#define IDS_CP_DISP_SCALE_NA     292
+#define IDS_CP_DISP_SCALE_CHANGE 292
 #define IDS_CP_LINK_RESOLUTION   293
 #define IDS_CP_LINK_DISPSET      294
 #define IDS_CP_RES_HEAD          295

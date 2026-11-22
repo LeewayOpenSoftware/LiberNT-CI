@@ -63,7 +63,8 @@ enum
     ACT_SAVER,
     ACT_RESOLUTION,
     ACT_PERSONALIZE,
-    ACT_ADVANCED
+    ACT_ADVANCED,
+    ACT_SCALE
 };
 
 enum { LK_TEXT = 0, LK_TILE };
@@ -408,6 +409,9 @@ DoAction(PAGEDATA *pd, int action)
             break;
         case ACT_ADVANCED:
             Launch(hwnd, L"rundll32.exe", L"shell32.dll,Control_RunDLL desk.cpl,,2");
+            break;
+        case ACT_SCALE:
+            Launch(hwnd, L"ms-settings:display", NULL);
             break;
     }
 }
@@ -1216,6 +1220,7 @@ DisplaySetup(PAGEDATA *pd)
     AddLink(pd, ACT_RESOLUTION, LK_TEXT, TRUE, IDS_CP_LINK_RESOLUTION);
     AddLink(pd, ACT_RESOLUTION, LK_TEXT, TRUE, IDS_CP_LINK_DISPSET);
     AddLink(pd, ACT_PERSONALIZE, LK_TEXT, TRUE, IDS_CPL_PERSONALIZE_NAME);
+    AddLink(pd, ACT_SCALE, LK_TEXT, TRUE, IDS_CP_DISP_SCALE_CHANGE);
 }
 
 static void
@@ -1227,7 +1232,7 @@ DisplayLayout(PAGEDATA *pd, int w, int h)
     SetRect(&pd->Links[1].Rect, S(14), y + S(40), pane - S(8), y + S(58));
     SetRect(&pd->Links[2].Rect, S(14), y + S(62), pane - S(8), y + S(80));
     SetRect(&pd->Links[3].Rect, S(14), h - S(42), pane - S(8), h - S(24));
-    UNREFERENCED_PARAMETER(w);
+    SetRect(&pd->Links[4].Rect, pane + S(14), S(126), w - S(14), S(146));
 }
 
 static void
@@ -1258,9 +1263,6 @@ DisplayPaint(HDC hdc, PAGEDATA *pd, int w, int h)
     StringCchPrintfW(text, ARRAYSIZE(text), Str(IDS_CP_DISP_SCALE), LDispGetSystemDpi() * 100 / 96);
     SetRect(&t, x0, S(100), w - S(14), S(122));
     DrawTextW(hdc, text, -1, &t, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
-    SetTextColor(hdc, ColDisabled);
-    SetRect(&t, x0, S(126), w - S(14), S(170));
-    DrawTextW(hdc, Str(IDS_CP_DISP_SCALE_NA), -1, &t, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
     for (i = 0; i < pd->LinkCount; i++)
         DrawTextLink(hdc, pd, &pd->Links[i], pd->Hot == i);
 }
