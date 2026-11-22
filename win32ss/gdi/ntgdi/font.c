@@ -322,19 +322,23 @@ FontGetObject(
         }
     }
 
+    /* Copy under the lock too: a stock font can be re-sized for another DPI meanwhile */
+    if (pvBuffer != NULL)
+    {
+        /* Calculate the maximum size according to number of axes */
+        cjMaxSize = FIELD_OFFSET(ENUMLOGFONTEXDVW,
+                        elfDesignVector.dvValues[plf->elfDesignVector.dvNumAxes]);
+
+        if (cjBuffer > cjMaxSize) cjBuffer = cjMaxSize;
+
+        RtlCopyMemory(pvBuffer, plf, cjBuffer);
+    }
+
     ExReleasePushLockExclusive(&plfont->lock);
     KeLeaveCriticalRegion();
 
     /* If buffer is NULL, only the size is requested */
     if (pvBuffer == NULL) return sizeof(LOGFONTW);
-
-    /* Calculate the maximum size according to number of axes */
-    cjMaxSize = FIELD_OFFSET(ENUMLOGFONTEXDVW,
-                    elfDesignVector.dvValues[plf->elfDesignVector.dvNumAxes]);
-
-    if (cjBuffer > cjMaxSize) cjBuffer = cjMaxSize;
-
-    RtlCopyMemory(pvBuffer, plf, cjBuffer);
 
     return cjBuffer;
 }
