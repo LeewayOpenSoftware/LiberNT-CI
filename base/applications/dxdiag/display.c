@@ -10,6 +10,7 @@
 #include "precomp.h"
 
 #include <d3d9.h>
+#include <strsafe.h>
 
 static const GUID DISPLAY_GUID = { 0x67685559, 0x3106, 0x11D0, { 0xB9, 0x71, 0x00, 0xAA, 0x00, 0x34, 0x2F, 0x9F } };
 
@@ -205,7 +206,8 @@ DisplayPageSetDeviceDetails(HWND * hDlgCtrls, LPCGUID classGUID, LPGUID * device
 
 /* Fills the unused Notes field with the Direct3D (WineD3D) runtime configuration
  * read from HKCU\Software\Wine\Direct3D -- the keys the engine actually honours.
- * Read-only diagnostic; values are set from Orosi Settings > Display > Graphics. */
+ * Read-only diagnostic; values are set from Orosi Settings > Display > Graphics.
+ * All appends are bounded (StringCch*): the pieces come from HKCU and are untrusted. */
 static void
 SetD3DRuntimeInfo(HWND hwndDlg)
 {
@@ -224,63 +226,63 @@ SetD3DRuntimeInfo(HWND hwndDlg)
         if (RegQueryValueExW(hKey, L"renderer", NULL, &type, (LPBYTE)sz, &cb) == ERROR_SUCCESS && type == REG_SZ)
         {
             sz[cb / sizeof(WCHAR)] = L'\0';
-            wcscat(detail, L"renderer=");
-            if (!wcscmp(sz, L"gl")) wcscat(detail, L"OpenGL");
-            else if (!wcscmp(sz, L"vulkan")) wcscat(detail, L"Vulkan");
-            else if (!wcscmp(sz, L"no3d") || !wcscmp(sz, L"gdi")) wcscat(detail, L"No 3D");
-            else wcscat(detail, sz);
+            StringCchCatW(detail, ARRAYSIZE(detail), L"renderer=");
+            if (!wcscmp(sz, L"gl")) StringCchCatW(detail, ARRAYSIZE(detail), L"OpenGL");
+            else if (!wcscmp(sz, L"vulkan")) StringCchCatW(detail, ARRAYSIZE(detail), L"Vulkan");
+            else if (!wcscmp(sz, L"no3d") || !wcscmp(sz, L"gdi")) StringCchCatW(detail, ARRAYSIZE(detail), L"No 3D");
+            else StringCchCatW(detail, ARRAYSIZE(detail), sz);
         }
         cb = sizeof(sz) - sizeof(WCHAR); type = 0;
         if (RegQueryValueExW(hKey, L"shader_backend", NULL, &type, (LPBYTE)sz, &cb) == ERROR_SUCCESS && type == REG_SZ)
         {
             sz[cb / sizeof(WCHAR)] = L'\0';
-            if (detail[0]) wcscat(detail, L"; ");
-            wcscat(detail, L"shaders=");
-            wcscat(detail, sz);
+            if (detail[0]) StringCchCatW(detail, ARRAYSIZE(detail), L"; ");
+            StringCchCatW(detail, ARRAYSIZE(detail), L"shaders=");
+            StringCchCatW(detail, ARRAYSIZE(detail), sz);
         }
         cb = sizeof(dw); type = 0;
         if (RegQueryValueExW(hKey, L"csmt", NULL, &type, (LPBYTE)&dw, &cb) == ERROR_SUCCESS && type == REG_DWORD)
         {
-            if (detail[0]) wcscat(detail, L"; ");
-            wcscat(detail, dw ? L"CSMT=on" : L"CSMT=off");
+            if (detail[0]) StringCchCatW(detail, ARRAYSIZE(detail), L"; ");
+            StringCchCatW(detail, ARRAYSIZE(detail), dw ? L"CSMT=on" : L"CSMT=off");
         }
         cb = sizeof(dw); type = 0;
         if (RegQueryValueExW(hKey, L"MultisampleTextures", NULL, &type, (LPBYTE)&dw, &cb) == ERROR_SUCCESS && type == REG_DWORD)
         {
-            if (detail[0]) wcscat(detail, L"; ");
-            wcscat(detail, dw ? L"multisampling=on" : L"multisampling=off");
+            if (detail[0]) StringCchCatW(detail, ARRAYSIZE(detail), L"; ");
+            StringCchCatW(detail, ARRAYSIZE(detail), dw ? L"multisampling=on" : L"multisampling=off");
         }
         cb = sizeof(dw); type = 0;
         if (RegQueryValueExW(hKey, L"SampleCount", NULL, &type, (LPBYTE)&dw, &cb) == ERROR_SUCCESS && type == REG_DWORD)
         {
             WCHAR n[40];
-            if (detail[0]) wcscat(detail, L"; ");
-            wsprintfW(n, L"sample count=%u", dw);
-            wcscat(detail, n);
+            if (detail[0]) StringCchCatW(detail, ARRAYSIZE(detail), L"; ");
+            StringCchPrintfW(n, ARRAYSIZE(n), L"sample count=%u", dw);
+            StringCchCatW(detail, ARRAYSIZE(detail), n);
         }
         cb = sizeof(sz) - sizeof(WCHAR); type = 0;
         if (RegQueryValueExW(hKey, L"VideoMemorySize", NULL, &type, (LPBYTE)sz, &cb) == ERROR_SUCCESS && type == REG_SZ)
         {
             sz[cb / sizeof(WCHAR)] = L'\0';
-            if (detail[0]) wcscat(detail, L"; ");
-            wcscat(detail, L"video memory=");
-            wcscat(detail, sz);
+            if (detail[0]) StringCchCatW(detail, ARRAYSIZE(detail), L"; ");
+            StringCchCatW(detail, ARRAYSIZE(detail), L"video memory=");
+            StringCchCatW(detail, ARRAYSIZE(detail), sz);
         }
         RegCloseKey(hKey);
     }
 
-    if (!LoadStringW(hInst, IDS_D3DCFG_RUNTIME, fmt, sizeof(fmt) / sizeof(WCHAR)) || !fmt[0])
-        wcscpy(fmt, L"Direct3D runtime (WineD3D): %s");
+    if (!LoadStringW(hInst, IDS_D3DCFG_RUNTIME, fmt, ARRAYSIZE(fmt)) || !fmt[0])
+        StringCchCopyW(fmt, ARRAYSIZE(fmt), L"Direct3D runtime (WineD3D): %s");
     /* Make the source explicit so the read-only text is not mistaken for a control. */
     if (detail[0])
     {
         WCHAR body[460];
-        wsprintfW(body, L"from registry: %s", detail);
-        wsprintfW(out, fmt, body);
+        StringCchPrintfW(body, ARRAYSIZE(body), L"from registry: %s", detail);
+        StringCchPrintfW(out, ARRAYSIZE(out), fmt, body);
     }
     else
     {
-        wsprintfW(out, fmt, L"no registry overrides (engine defaults)");
+        StringCchPrintfW(out, ARRAYSIZE(out), fmt, L"no registry overrides (engine defaults)");
     }
     SetDlgItemTextW(hwndDlg, IDC_TEXT_INFO, out);
 }
