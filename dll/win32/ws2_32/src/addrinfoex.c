@@ -91,6 +91,7 @@ GetAddrInfoExSync(IN PCWSTR pName,
 typedef struct _WS_ADDRINFOEX_REQUEST
 {
     LIST_ENTRY ListEntry;
+    ULONG Id;
     LONG RefCount;
     LONG State;
     PWSTR Name;
@@ -106,9 +107,10 @@ typedef struct _WS_ADDRINFOEX_REQUEST
 #define WS_ADDRINFOEX_PENDING 0
 #define WS_ADDRINFOEX_DONE    1
 
-/* Requests that may still be cancelled; a handle is valid only while it is listed here */
+/* Requests that may still be cancelled; the handle is the request Id, valid only while listed */
 static LIST_ENTRY WsAddrInfoExPending = { &WsAddrInfoExPending, &WsAddrInfoExPending };
 static LONG WsAddrInfoExLock;
+static ULONG WsAddrInfoExNextId;
 
 static
 VOID
@@ -195,15 +197,6 @@ WsAddrInfoExClaim(IN PWS_ADDRINFOEX_REQUEST Request)
 static
 DWORD
 WINAPI
-WsAddrInfoExCancelDelivery(IN PVOID Context)
-{
-    WsAddrInfoExDeliver(Context);
-    return 0;
-}
-
-static
-DWORD
-WINAPI
 WsAddrInfoExWorker(IN PVOID Context)
 {
     PWS_ADDRINFOEX_REQUEST Request = Context;
@@ -243,7 +236,22 @@ GetAddrInfoExAsync(IN PCWSTR pName,
                    OUT LPHANDLE lpHandle)
 {
     PWS_ADDRINFOEX_REQUEST Request;
+    ADDRINFOW NumericHints;
     BOOL Failed = FALSE;
+    INT ErrorCode;
+
+    lpOverlapped->Internal = WSAEINPROGRESS;
+    lpOverlapped->InternalHigh = 0;
+
+    /* Windows completes numeric names inline: no event, no routine, Internal left in progress */
+    if (Hints)
+        NumericHints = *Hints;
+    else
+        RtlZeroMemory(&NumericHints, sizeof(NumericHints));
+    NumericHints.ai_flags |= AI_NUMERICHOST;
+    ErrorCode = GetAddrInfoExSync(pName, pServiceName, &NumericHints, ppResult);
+    if ((ErrorCode == ERROR_SUCCESS) || ((Hints) && (Hints->ai_flags & AI_NUMERICHOST)))
+        return ErrorCode;
 
     Request = HeapAlloc(WsSockHeap, HEAP_ZERO_MEMORY, sizeof(*Request));
     if (!Request) return WSA_NOT_ENOUGH_MEMORY;
@@ -269,14 +277,13 @@ GetAddrInfoExAsync(IN PCWSTR pName,
     /* One reference for the worker, one for the delivery */
     Request->RefCount = 2;
 
-    lpOverlapped->Internal = WSAEINPROGRESS;
-    lpOverlapped->InternalHigh = 0;
-
     WsAddrInfoExAcquire();
+    if (++WsAddrInfoExNextId == 0) WsAddrInfoExNextId = 1;
+    Request->Id = WsAddrInfoExNextId;
     InsertTailList(&WsAddrInfoExPending, &Request->ListEntry);
     WsAddrInfoExRelease();
 
-    if (lpHandle) *lpHandle = (HANDLE)Request;
+    if (lpHandle) *lpHandle = (HANDLE)(ULONG_PTR)Request->Id;
 
     if (!QueueUserWorkItem(WsAddrInfoExWorker, Request, WT_EXECUTELONGFUNCTION))
     {
@@ -331,8 +338,8 @@ GetAddrInfoExW(IN PCWSTR pName,
 
     *ppResult = NULL;
 
-    /* A completion routine is only meaningful for an overlapped request */
-    if ((lpCompletionRoutine) && !(lpOverlapped))
+    /* A completion routine or a cancel handle is only meaningful for an overlapped request */
+    if (((lpCompletionRoutine) || (lpHandle)) && !(lpOverlapped))
     {
         SetLastError(WSAEINVAL);
         return WSAEINVAL;
@@ -428,9 +435,13 @@ GetAddrInfoExCancel(IN LPHANDLE lpHandle)
         WsAddrInfoExAcquire();
         for (Entry = WsAddrInfoExPending.Flink; Entry != &WsAddrInfoExPending; Entry = Entry->Flink)
         {
-            if ((HANDLE)CONTAINING_RECORD(Entry, WS_ADDRINFOEX_REQUEST, ListEntry) != Handle) continue;
+            Request = CONTAINING_RECORD(Entry, WS_ADDRINFOEX_REQUEST, ListEntry);
+            if ((HANDLE)(ULONG_PTR)Request->Id != Handle)
+            {
+                Request = NULL;
+                continue;
+            }
 
-            Request = (PWS_ADDRINFOEX_REQUEST)Handle;
             Request->State = WS_ADDRINFOEX_DONE;
             Request->Error = WSA_E_CANCELLED;
             RemoveEntryList(&Request->ListEntry);
@@ -445,9 +456,8 @@ GetAddrInfoExCancel(IN LPHANDLE lpHandle)
         return WSA_INVALID_HANDLE;
     }
 
-    /* Complete from a pool thread, as a normal completion would; inline only if that fails */
-    if (!QueueUserWorkItem(WsAddrInfoExCancelDelivery, Request, WT_EXECUTEDEFAULT))
-        WsAddrInfoExDeliver(Request);
+    /* As on Windows, the cancellation completes on the calling thread before we return */
+    WsAddrInfoExDeliver(Request);
 
     return NO_ERROR;
 }
