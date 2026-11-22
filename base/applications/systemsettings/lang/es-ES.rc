@@ -788,7 +788,7 @@ BEGIN
     IDS_SCALE_PENDING " (al cerrar sesión)"
     IDS_SCALE_CUSTOM "Escalado personalizado"
     IDS_SCALE_CUSTOM_DESC "Cualquier escala entre 100% y 500% para esta cuenta"
-    IDS_SCALE_CUSTOM_NOTE "El escalado personalizado se aplica a esta cuenta en todas las pantallas y requiere cerrar sesión. Elija la escala recomendada para desactivarlo."
+    IDS_SCALE_CUSTOM_NOTE "El escalado personalizado se aplica a esta cuenta en todas las pantallas y requiere cerrar sesión. Elija %u%% para desactivarlo."
     IDS_SIGNOUT_SCALE "¿Cerrar sesión para aplicar la nueva escala? Algunas aplicaciones se verán borrosas hasta que vuelva a cerrar sesión."
     IDS_SIGNOUT_NOW "Cerrar sesión ahora"
     IDS_SIGNOUT_LATER "Más tarde"

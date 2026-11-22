@@ -10,6 +10,7 @@
 #include <buildno.h>
 #include <algorithm>
 #include <dpiscale.h>
+#include <leewayui/display_backend.h>
 
 #define WINDOWS_NT_KEY L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
 #define DESKTOP_KEY L"Control Panel\\Desktop"
@@ -276,7 +277,7 @@ ApplyUserDpi(HWND owner, UINT dpi, UINT machine)
         ShowError(owner, ERROR_ACCESS_DENIED);
         return;
     }
-    if (dpi != before && dpi != GetDpiForSystem())
+    if (dpi != before && dpi != LDispGetSystemDpi())
         PromptSignOut(owner, Str(IDS_SIGNOUT_SCALE));
 }
 
@@ -353,20 +354,23 @@ BuildDisplay(PageBuilder &page)
     }
 
     /* Recommended from the native (largest) mode, the offered list from the mode in use, as Windows does */
-    running = GetDpiForSystem();
+    running = LDispGetSystemDpi();
     recommended = MulDiv(96, DpiScaleRecommended(sizes.empty() ? current.dmPelsWidth : sizes[0].Width,
                                                  sizes.empty() ? current.dmPelsHeight : sizes[0].Height,
                                                  IsPortableChassis()), 100);
     machine = MachineDpi(recommended);
     next = NextSessionDpi(machine);
-    page.Group(Str(IDS_SCALE_LAYOUT)).Footer = Str(IDS_SCALE_CUSTOM_NOTE);
+    /* The machine value is what turns custom scaling off; it differs from Recommended when win32k recommended
+     * from the boot framebuffer or an administrator set another value */
+    page.Group(Str(IDS_SCALE_LAYOUT)).Footer = Format(IDS_SCALE_CUSTOM_NOTE, MulDiv(machine, 100, 96));
     options.clear();
     for (UINT i = 0; i < DPI_SCALE_COUNT; i++)
     {
         UINT percent = DpiScaleStandard[i], dpi = MulDiv(96, percent, 100);
         std::wstring label;
 
-        if (!DpiScaleIsOffered(current.dmPelsWidth, current.dmPelsHeight, percent) && dpi != recommended)
+        if (!DpiScaleIsOffered(current.dmPelsWidth, current.dmPelsHeight, percent) && dpi != recommended &&
+            dpi != machine)
             continue;
         label = dpi == recommended ? Format(IDS_SCALE_RECOMMENDED, percent) : Printf(L"%u%%", percent);
         if (dpi == next)
