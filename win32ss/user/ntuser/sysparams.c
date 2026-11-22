@@ -14,6 +14,7 @@
 
 #include <win32k.h>
 #include <ndk/inbvfuncs.h>
+#include <dpiscale.h>
 DBG_DEFAULT_CHANNEL(UserSysparams);
 
 SPIVALUES gspv;
@@ -148,8 +149,6 @@ SpiUnscaleFromSystemDpi(INT Value)
 
 #define SPI_RAW_SMBIOS_HEADER       8
 #define SPI_MAX_SMBIOS_TABLE        (1024 * 1024)
-#define SPI_MIN_EFFECTIVE_WIDTH     1280
-#define SPI_MIN_EFFECTIVE_HEIGHT    1000
 
 static
 BOOLEAN
@@ -186,19 +185,7 @@ SpiIsPortableChassis(VOID)
         {
             if (Structure[0] == 3 && Structure[1] > 5)
             {
-                switch (Structure[5] & 0x7F)
-                {
-                    case 0x08:
-                    case 0x09:
-                    case 0x0A:
-                    case 0x0B:
-                    case 0x0E:
-                    case 0x1E:
-                    case 0x1F:
-                    case 0x20:
-                        Portable = TRUE;
-                        break;
-                }
+                Portable = (BOOLEAN)DpiScaleIsPortableChassis(Structure[5]);
                 break;
             }
             Next = Structure + Structure[1];
@@ -217,10 +204,9 @@ static
 UINT
 SpiRecommendedSystemDpi(VOID)
 {
-    static const UINT Scales[] = { 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500 };
     static UINT Recommended;
-    ULONG Width = 0, Height = 0, Index;
-    UINT Scale = 100;
+    ULONG Width = 0, Height = 0;
+    UINT Scale;
 
     if (Recommended)
         return Recommended;
@@ -228,13 +214,7 @@ SpiRecommendedSystemDpi(VOID)
     if (InbvQueryBootScreen(NULL, 0, &Width, &Height) != STATUS_BUFFER_TOO_SMALL || !Width || !Height ||
         !SpiIsPortableChassis())
         return Recommended;
-    for (Index = 0; Index < RTL_NUMBER_OF(Scales); ++Index)
-    {
-        if ((ULONGLONG)Width * 100 / Scales[Index] < SPI_MIN_EFFECTIVE_WIDTH ||
-            (ULONGLONG)Height * 100 / Scales[Index] < SPI_MIN_EFFECTIVE_HEIGHT)
-            break;
-        Scale = Scales[Index];
-    }
+    Scale = DpiScaleRecommended(Width, Height, TRUE);
     TRACE("Recommended scale for the %lux%lu portable panel: %u%%\n", Width, Height, Scale);
     Recommended = USER_SYSTEM_DPI_DEFAULT * Scale / 100;
     return Recommended;

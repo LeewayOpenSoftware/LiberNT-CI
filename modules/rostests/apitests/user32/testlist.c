@@ -35,6 +35,7 @@ extern void func_DM_REPOSITION(void);
 extern void func_Dpi(void);
 extern void func_DpiAwareness(void);
 extern void func_DpiProcessDefault(void);
+extern void func_DpiScaleRule(void);
 extern void func_DpiScaling(void);
 extern void func_DpiVirtualization(void);
 extern void func_DrawIconEx(void);
@@ -191,6 +192,7 @@ const struct test winetest_testlist[] =
     { "Dpi", func_Dpi },
     { "DpiAwareness", func_DpiAwareness },
     { "DpiProcessDefault", func_DpiProcessDefault },
+    { "DpiScaleRule", func_DpiScaleRule },
     { "DpiScaling", func_DpiScaling },
     { "DpiVirtualization", func_DpiVirtualization },
     { "DrawIconEx", func_DrawIconEx },
