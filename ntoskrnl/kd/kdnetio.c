@@ -177,6 +177,37 @@ KdDisplayTransportKey(
     return TRUE;
 }
 
+/* HalDisplayString draws nothing over the boot screen, so a refusal goes where the key banner goes */
+static
+VOID
+KdpNetDisplayRefusal(
+    _In_ PCSTR Line1,
+    _In_opt_ PCSTR Line2)
+{
+    VID_DISPLAY_INFO DisplayInfo;
+
+    if (InbvIsBootDriverInstalled() && InbvGetDisplayState() == INBV_DISPLAY_STATE_OWNED)
+    {
+        InbvQueryDisplayInfo(&DisplayInfo);
+        InbvAcquireLock();
+        VidDisplayStringXY(Line1, 0, 0, FALSE);
+        if (Line2)
+            VidDisplayStringXY(Line2, 0, DisplayInfo.CharacterHeight, FALSE);
+        InbvReleaseLock();
+        return;
+    }
+
+    HalDisplayString("   ");
+    HalDisplayString(Line1);
+    HalDisplayString("\r\n");
+    if (Line2)
+    {
+        HalDisplayString("   ");
+        HalDisplayString(Line2);
+        HalDisplayString("\r\n");
+    }
+}
+
 static
 VOID
 KdpNetDrawPrompt(VOID)
@@ -332,18 +363,18 @@ KdpNetInit(
             KdpNetConfigured = FALSE;
             if (Result == STATUS_PWD_TOO_SHORT)
             {
-                HalDisplayString("   Network debugging unavailable: ENCRYPTION_KEY is shorter than 16 characters\r\n");
+                KdpNetDisplayRefusal("Network debugging unavailable: ENCRYPTION_KEY is shorter than 16 characters", NULL);
                 DbgPrint("Network debugger: refused, ENCRYPTION_KEY shorter than 16 characters\n");
             }
             else if (Result == STATUS_CRYPTO_SYSTEM_INVALID)
             {
-                HalDisplayString("   Network debugging unavailable: no hardware random source for a key;\r\n"
-                                 "   set ENCRYPTION_KEY to use it on this machine\r\n");
+                KdpNetDisplayRefusal("Network debugging unavailable: no hardware random source for a key;",
+                                     "set ENCRYPTION_KEY to use it on this machine");
                 DbgPrint("Network debugger: refused, no hardware random source and no ENCRYPTION_KEY\n");
             }
             else
             {
-                HalDisplayString("   Network debugging unavailable\r\n");
+                KdpNetDisplayRefusal("Network debugging unavailable", NULL);
                 DbgPrint("Network debugger: no usable network card, status 0x%08lx\n", Result);
             }
             return Result;
