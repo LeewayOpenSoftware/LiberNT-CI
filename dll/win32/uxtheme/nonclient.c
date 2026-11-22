@@ -1268,35 +1268,6 @@ ThemeDwmPublishFrameInsets(HWND hWnd, const WINDOWINFO *wi, PWND_DATA pwndData)
         RemovePropW(hWnd, DWM_PROP_FRAME_INSETS);
 }
 
-/* Backstop for a transient reload/maximize rect the source paths miss: a real caption button
- * fits inside the window's top non-client band and is a modest box, never a sliver or bar.
- * Measured against the window's OWN caption band (not SM_CXSIZE, which is the msstyles caption
- * metric, not how the button rect is computed), this never blocks a valid rect; it only drops
- * the degenerate transients (5x256, 46x256, a wrong-DPI 59x41 taller than the band). */
-static BOOL
-ThemeCaptionButtonsAreSane(HWND hWnd, const WINDOWINFO *wi)
-{
-    PWND_DATA pwndData = ThemeGetWndData(hWnd);
-    LONG ncTop, i;
-
-    if (!pwndData)
-        return FALSE;
-    ncTop = (LONG)wi->rcClient.top - (LONG)wi->rcWindow.top;
-    if (ncTop <= 0)
-        return TRUE;   /* no caption band to measure against: do not block */
-    for (i = CLOSEBUTTON; i <= HELPBUTTON; i++)
-    {
-        const RECT *r = &pwndData->rcCaptionButtons[i];
-        LONG w = r->right - r->left, h = r->bottom - r->top;
-
-        if (w <= 0 || h <= 0)
-            continue;   /* absent button */
-        if (h > ncTop + 4 || w > 3 * h || h > 3 * w)
-            return FALSE;   /* taller than the caption band, or a sliver/bar */
-    }
-    return TRUE;
-}
-
 static VOID
 ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWORD htDown)
 {
@@ -1322,8 +1293,6 @@ ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWOR
         if (pwndData->CaptionCalcSize.cx != wi->rcWindow.right - wi->rcWindow.left ||
             pwndData->CaptionCalcSize.cy != wi->rcWindow.bottom - wi->rcWindow.top)
             ThemeCalculateCaptionButtonsPos(hWnd, NULL);   /* rects were computed at a different window size */
-        if (!ThemeCaptionButtonsAreSane(hWnd, wi))
-            return;   /* transient reload/maximize state: keep the last good published rects */
         Rect = &pwndData->rcCaptionButtons[CLOSEBUTTON];
         Row = DWM_CAPTION_PACK(Rect->top, Rect->bottom);
         State = DWM_CAPTION_STATE_VALID;
