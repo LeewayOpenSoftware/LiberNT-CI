@@ -19,7 +19,6 @@ classic Control Panel items whose existing icon resources they replace.
 | Keyboard | `main.cpl,-200` |
 | Mouse | `main.cpl,-100` |
 | Network Connections | `netshell.dll,-100` |
-| OpenGL Configuration | `openglcfg.cpl,-1` |
 | Personalization | `desk.cpl,-100` |
 | Phone and Modem | `telephon.cpl,-100` |
 | Power Options | `powercfg.cpl,-100` |
@@ -32,7 +31,6 @@ classic Control Panel items whose existing icon resources they replace.
 | Taskbar and Start Menu | `shell32.dll,-40` |
 | Text Services and Input | `input.dll,-1502` |
 | User Accounts | `usrmgr.cpl,-40` |
-| WineD3D Options | `wined3dcfg.cpl,-1` |
 
 Display keeps the primary `desk.cpl` icon resource. Personalization uses the
 existing secondary resource so both entries can show their matching artwork.

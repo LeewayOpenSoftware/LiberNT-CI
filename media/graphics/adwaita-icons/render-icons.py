@@ -153,8 +153,6 @@ TARGETS = (
     ("devices/input-gaming", "dll/cpl/joy/", ("joy",)),
     ("legacy:legacy/applications-internet", "dll/cpl/inetcpl/", ("inetcpl",)),
     ("legacy:legacy/preferences-system-network", "dll/shellext/netshell/res/", ("netshell",)),
-    ("legacy:legacy/applications-graphics", "dll/cpl/openglcfg/resources/", ("openglcfg",)),
-    ("legacy:legacy/applications-graphics", "dll/cpl/wined3dcfg/resources/", ("wined3dcfg",)),
     ("legacy:legacy/modem", "dll/cpl/telephon/resources/", ("applet",)),
     ("legacy:legacy/ac-adapter", "dll/cpl/powercfg/resources/", ("ac",)),
     ("legacy:legacy/system-software-install", "dll/cpl/appwiz/resources/", ("applet",)),
