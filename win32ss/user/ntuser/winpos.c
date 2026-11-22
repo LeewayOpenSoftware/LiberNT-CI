@@ -1131,6 +1131,40 @@ co_WinPosGetMinMaxInfo(PWND Window, POINT* MaxSize, POINT* MaxPos,
     return 0; // FIXME: What does it return? Wine returns MINMAXINFO.
 }
 
+/* Re-fit maximized top-level windows to the current work area (display or work area change) */
+VOID FASTCALL
+co_WinPosRefitMaximizedWindows(VOID)
+{
+    PWND pDesktop = UserGetDesktopWindow();
+    HWND *List;
+    ULONG i;
+
+    if (!pDesktop)
+        return;
+
+    List = IntWinListChildren(pDesktop);
+    if (!List)
+        return;
+
+    for (i = 0; List[i]; i++)
+    {
+        PWND pwnd = UserGetWindowObject(List[i]);
+        USER_REFERENCE_ENTRY Ref;
+        POINT MaxSize, MaxPos;
+
+        if (!pwnd || !(pwnd->style & WS_MAXIMIZE) || (pwnd->style & WS_MINIMIZE))
+            continue;
+
+        UserRefObjectCo(pwnd, &Ref);
+        co_WinPosGetMinMaxInfo(pwnd, &MaxSize, &MaxPos, NULL, NULL);
+        co_WinPosSetWindowPos(pwnd, NULL, MaxPos.x, MaxPos.y, MaxSize.x, MaxSize.y,
+                              SWP_NOZORDER | SWP_NOACTIVATE);
+        UserDerefObjectCo(pwnd);
+    }
+
+    ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
+}
+
 static
 BOOL
 IntValidateParent(PWND Child, PREGION ValidateRgn)

@@ -1050,6 +1050,16 @@ UserChangeDisplaySettings(
         //pdesk = IntGetActiveDesktop();
         //IntHideDesktop(pdesk);
 
+        /* The desktop window must have the new size before windows are re-fitted */
+        {
+            PWND pwndDesktop = UserGetDesktopWindow();
+
+            if (pwndDesktop)
+                co_WinPosSetWindowPos(pwndDesktop, NULL, 0, 0,
+                                      gpsi->aiSysMet[SM_CXSCREEN], gpsi->aiSysMet[SM_CYSCREEN],
+                                      SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+
         /* Send WM_DISPLAYCHANGE to all toplevel windows */
         co_IntSendMessageTimeout( HWND_BROADCAST,
                                   WM_DISPLAYCHANGE,
@@ -1058,6 +1068,8 @@ UserChangeDisplaySettings(
                                   SMTO_NORMAL,
                                   100,
                                   &ulResult );
+
+        co_WinPosRefitMaximizedWindows();
 
         ERR("BitCount New %d Orig %d ChkNew %d\n",gpsi->BitCount,OrigBC,ppdev->gdiinfo.cBitsPixel);
 
