@@ -125,6 +125,34 @@ endif()
 set(WITH_DEBUG_SYMBOLS ${_REACTOS_DEFAULT_DEBUG_SYMBOLS} CACHE BOOL
 "Whether to compile debug information.")
 
+option(ENABLE_REMOTE_ASSISTANCE
+"Whether to build remote assistance: the relay mode of the network debugger, the published
+assistance key on the desktop, netassist.exe and the relay boot entries. Debug builds only;
+turn it on by hand for a build given to someone who needs help." OFF)
+if(ENABLE_REMOTE_ASSISTANCE AND NOT DBG)
+    message(FATAL_ERROR "ENABLE_REMOTE_ASSISTANCE needs a debug build (DBG)")
+endif()
+option(LIBERNT_ENABLE_KD_BROADCAST
+"Whether to build the cable mode of the network debugger (LOCAL_BROADCAST=1: the keyed session
+carried by broadcasts, for a machine without an address) and its \"network debugging on this
+cable\" boot entry. Debug builds in a controlled lab only." OFF)
+if(LIBERNT_ENABLE_KD_BROADCAST AND NOT DBG)
+    message(FATAL_ERROR "LIBERNT_ENABLE_KD_BROADCAST needs a debug build (DBG)")
+endif()
+option(LIBERNT_ENABLE_BOOT_UDP_LOG
+"Whether the UEFI boot manager and OS loader also broadcast their debug log in clear text
+(UDP 6665 to 255.255.255.255:6666), for a machine without a serial port. Debug builds in a
+controlled lab only; the serial port and boot.log logs do not depend on it." OFF)
+if(LIBERNT_ENABLE_BOOT_UDP_LOG AND NOT DBG)
+    message(FATAL_ERROR "LIBERNT_ENABLE_BOOT_UDP_LOG needs a debug build (DBG)")
+endif()
+set(LIBERNT_ASSIST_RELAY_HOST "" CACHE STRING
+"Host name of the remote assistance relay. Empty: the network debugger offers cable and LAN
+debugging only and no boot entry reaches a relay. Only used with ENABLE_REMOTE_ASSISTANCE.")
+if(LIBERNT_ASSIST_RELAY_HOST AND NOT LIBERNT_ASSIST_RELAY_HOST MATCHES "^[A-Za-z0-9][A-Za-z0-9.-]*$")
+    message(FATAL_ERROR "LIBERNT_ASSIST_RELAY_HOST must be a plain host name")
+endif()
+
 if(MSVC)
     set(KDBG FALSE CACHE BOOL
 "Whether to compile in the integrated kernel debugger.")

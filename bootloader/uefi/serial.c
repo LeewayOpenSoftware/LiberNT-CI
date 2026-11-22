@@ -476,6 +476,9 @@ FwDebugAnnounce(
     }
 
     Adapters = UdpLogOpen();
-    RtlStringCchPrintfA(Line, RTL_NUMBER_OF(Line), "UDP log broadcast to port 6666 on %lu network adapters\n", Adapters);
-    FwDebugPrint(Line);
+    if (Adapters)
+    {
+        RtlStringCchPrintfA(Line, RTL_NUMBER_OF(Line), "UDP log broadcast to port 6666 on %lu network adapters\n", Adapters);
+        FwDebugPrint(Line);
+    }
 }

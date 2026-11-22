@@ -9,6 +9,13 @@
 
 #include "uefinetp.h"
 
+/* Clear text on the LAN: only a lab build that asks for it (LIBERNT_ENABLE_BOOT_UDP_LOG) sends it */
+#ifdef BOOT_UDP_LOG
+#define UDPLOG_BUILT TRUE
+#else
+#define UDPLOG_BUILT FALSE
+#endif
+
 #define UDPLOG_MAX_ADAPTERS  4
 #define UDPLOG_TX_BUFFERS    2
 #define UDPLOG_FRAME_BYTES   2048
@@ -280,7 +287,7 @@ UdpLogOpen(VOID)
     UINTN Count, i;
     ULONG j;
 
-    if (!FwDebugEnabled || UdpLogOpened || BootServicesExitedFlag || !UdpLogEnter(&OldTpl))
+    if (!UDPLOG_BUILT || !FwDebugEnabled || UdpLogOpened || BootServicesExitedFlag || !UdpLogEnter(&OldTpl))
         return UdpLogAdapterCount;
 
     UdpLogOpened = TRUE;
@@ -389,7 +396,7 @@ UdpLogWrite(
     SIZE_T Length;
     EFI_TPL OldTpl;
 
-    if (!FwDebugEnabled || UdpLogActive || BootServicesExitedFlag)
+    if (!UDPLOG_BUILT || !FwDebugEnabled || UdpLogActive || BootServicesExitedFlag)
         return;
 
     UdpLogActive = TRUE;

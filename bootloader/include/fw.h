@@ -221,6 +221,11 @@ BOOLEAN
 FwGetTime(
     _Out_ PTIME_FIELDS Time);
 
+BOOLEAN
+FwGetRandom(
+    _Out_writes_bytes_(Size) PVOID Buffer,
+    _In_ ULONG Size);
+
 PCWSTR
 FwGetLoadOptions(
     _Out_ PULONG Chars);

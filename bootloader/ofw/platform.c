@@ -1162,6 +1162,16 @@ OfwBcd(
 }
 
 BOOLEAN
+FwGetRandom(
+    _Out_writes_bytes_(Size) PVOID Buffer,
+    _In_ ULONG Size)
+{
+    UNREFERENCED_PARAMETER(Buffer);
+    UNREFERENCED_PARAMETER(Size);
+    return FALSE;
+}
+
+BOOLEAN
 FwGetTime(
     _Out_ PTIME_FIELDS Time)
 {

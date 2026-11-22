@@ -48,7 +48,6 @@ QuickLaunchShortcuts=26, Microsoft\Internet Explorer\Quick Launch
 %SystemRoot%\system32\taskmgr11.exe, %TASKMGR11_TITLE%, %TASKMGR11_DESC%, 0
 %SystemRoot%\system32\lntget.exe, %LNTGET_TITLE%, %LNTGET_DESC%, 0, %SystemRoot%\system32, gui
 %SystemRoot%\system32\dxdiag.exe, %DXDIAG_TITLE%, %DXDIAG_DESC%, 0
-%SystemRoot%\system32\netassist.exe, %NETASSIST_TITLE%, %NETASSIST_DESC%, 0
 %SystemRoot%\system32\control.exe, %GECKO_TITLE%, %GECKO_DESC%, 0, , "appwiz.cpl,,install_gecko"
 %SystemRoot%\system32\oobe\oobe.exe, %COMPONENTS_TITLE%, %COMPONENTS_DESC%, 0, %SystemRoot%\system32\oobe, "/components"
 
@@ -104,8 +103,6 @@ TASKMGR11_TITLE=Task Manager 11
 TASKMGR11_DESC=Launch Task Manager
 DWMSETTINGS_TITLE=DWM Settings
 DWMSETTINGS_DESC=Customize desktop window effects
-NETASSIST_TITLE=Network Assistance
-NETASSIST_DESC=Show the network assistance key for a LiberNT developer
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Optional Components

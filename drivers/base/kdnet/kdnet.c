@@ -58,7 +58,8 @@ BOOLEAN
 KdpIsConnected(VOID)
 {
     /* TODO: the relay acknowledges nothing, so reaching it means having an address and the relay's resolved name */
-    return KdNetReady && KdIpAddress && (KdNetOptions.HostIp || !KdNetOptions.HostName[0]);
+    return KdNetReady && (KdNetOptions.Broadcast ||
+                          (KdIpAddress && (KdNetOptions.HostIp || !KdNetOptions.HostName[0])));
 }
 
 static
@@ -203,8 +204,10 @@ KdpParseOptions(
     if (!Options)
         return;
 
+#ifdef KD_BROADCAST
     Text = KdpFindOption(Options, "LOCAL_BROADCAST");
     KdNetOptions.Broadcast = Text && *Text == '1';
+#endif
 
     Text = KdpFindOption(Options, "HOST_IP");
     if (Text && KdpParseNumbers(Text, '.', Values, 4) &&
@@ -213,6 +216,7 @@ KdpParseOptions(
         KdNetOptions.HostIp = KDNET_IP(Values[0], Values[1], Values[2], Values[3]);
     }
 
+#ifdef REMOTE_ASSISTANCE
     Text = KdpFindOption(Options, "HOST_NAME");
     if (Text && !KdNetOptions.HostIp)
     {
@@ -221,6 +225,7 @@ KdpParseOptions(
 
         KdNetOptions.HostName[i] = ANSI_NULL;
     }
+#endif
 
     Text = KdpFindOption(Options, "HOST_PORT");
     if (Text && KdpParseNumbers(Text, ANSI_NULL, Values, 1) && Values[0])
@@ -256,12 +261,13 @@ KdpParseOptions(
 }
 
 static
-VOID
+ULONG
 KdpGatherEntropy(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     LARGE_INTEGER Samples[16], Time;
-    ULONG i, Value;
+    ULONG i, Value, Previous = 0, Hardware = 0;
+    PBOOT_ENTROPY_LDR_RESULT Entropy;
 
     for (i = 0; i < KDNET_ENTROPY_SAMPLES; i++)
     {
@@ -272,7 +278,13 @@ KdpGatherEntropy(
     }
 
     for (i = 0; i < 64 && KdNetArchRandom(&Value); i++)
+    {
         KdCryptoAddEntropy(&Value, sizeof(Value));
+        /* Some firmware leaves RDRAND returning one constant with the carry set */
+        if (Value != 0 && Value != MAXULONG && (i == 0 || Value != Previous))
+            Hardware++;
+        Previous = Value;
+    }
 
     KeQuerySystemTime(&Time);
     KdCryptoAddEntropy(&Time, sizeof(Time));
@@ -282,9 +294,20 @@ KdpGatherEntropy(
     if (LoaderBlock->Extension &&
         LoaderBlock->Extension->Size >= RTL_SIZEOF_THROUGH_FIELD(LOADER_PARAMETER_EXTENSION, BootEntropyResult))
     {
-        KdCryptoAddEntropy(&LoaderBlock->Extension->BootEntropyResult,
-                           sizeof(LoaderBlock->Extension->BootEntropyResult));
+        Entropy = &LoaderBlock->Extension->BootEntropyResult;
+        KdCryptoAddEntropy(Entropy, sizeof(*Entropy));
+        for (i = 0; i < min(Entropy->maxEntropySources, BootMaxEntropySources); i++)
+        {
+            if (Entropy->EntropySourceResult[i].SourceId == BootEntropySourceUefi &&
+                Entropy->EntropySourceResult[i].ResultCode == BootEntropySourceSuccess &&
+                Entropy->EntropySourceResult[i].EntropyLength >= KDNET_KEY_SIZE)
+            {
+                Hardware += KDNET_HARDWARE_SAMPLES;
+            }
+        }
     }
+
+    return Hardware;
 }
 
 static
@@ -304,6 +327,7 @@ KdpTerminalInitialize(
 {
     NTSTATUS Status;
     ULONG64 Start, Notice;
+    ULONG i, Length;
 
     if (KdNetReady)
         return STATUS_SUCCESS;
@@ -312,7 +336,19 @@ KdpTerminalInitialize(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    KdpGatherEntropy(LoaderBlock);
+    /* A short given key falls to an offline search from one captured hello */
+    if (KdNetOptions.HaveKey)
+    {
+        for (i = 0, Length = 0; KdNetOptions.Key[i]; i++)
+            Length += KdNetOptions.Key[i] != '-' && KdNetOptions.Key[i] != ' ';
+        if (Length < KDNET_MIN_KEY_CHARS)
+            return STATUS_PWD_TOO_SHORT;
+    }
+
+    /* Timer jitter alone is guessable; a generated key needs the hardware generator */
+    if (KdpGatherEntropy(LoaderBlock) < KDNET_HARDWARE_SAMPLES && !KdNetOptions.HaveKey)
+        return STATUS_CRYPTO_SYSTEM_INVALID;
+
     Status = KdNicInitialize(LoaderBlock);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -413,9 +449,9 @@ KdpTerminalQueryStatus(
     else if (KdNetOptions.Broadcast)
     {
         Length = _snprintf(Buffer, Size,
-                           "Network debugger: %02x-%02x-%02x-%02x-%02x-%02x broadcasts to UDP port %u%s",
+                           "Network debugger: %02x-%02x-%02x-%02x-%02x-%02x keyed session by broadcast on UDP port %u%s",
                            KdNicAddress[0], KdNicAddress[1], KdNicAddress[2],
-                           KdNicAddress[3], KdNicAddress[4], KdNicAddress[5], KDNET_BROADCAST_OUTPUT_PORT,
+                           KdNicAddress[3], KdNicAddress[4], KdNicAddress[5], KdNetOptions.HostPort,
                            KdNicLinkState ? "" : ", no link yet");
     }
     else if (!KdIpAddress)

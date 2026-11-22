@@ -162,6 +162,38 @@ WinLdrGetSystemDpi(VOID)
 }
 #endif
 
+#ifdef UEFIBOOT
+static
+VOID
+WinLdrFillBootEntropy(
+    _Out_ PBOOT_ENTROPY_LDR_RESULT Entropy)
+{
+    PBOOT_ENTROPY_SOURCE_LDR_RESULT Source = &Entropy->EntropySourceResult[0];
+
+    Entropy->maxEntropySources = BootMaxEntropySources;
+    Source->SourceId = BootEntropySourceUefi;
+    if (!UefiGetRandom(Source->EntropyData, sizeof(Source->EntropyData)))
+    {
+        RtlZeroMemory(Source->EntropyData, sizeof(Source->EntropyData));
+        Source->ResultCode = BootEntropySourceNotPresent;
+        Source->ResultStatus = STATUS_NOT_FOUND;
+        return;
+    }
+
+    Source->EntropyLength = sizeof(Source->EntropyData);
+    Source->ResultCode = BootEntropySourceSuccess;
+    Source->ResultStatus = STATUS_SUCCESS;
+
+    /* These seeds stay in the loader block; whoever consumes them should wipe them */
+    if (!UefiGetRandom(Entropy->SeedBytesForCng, sizeof(Entropy->SeedBytesForCng)) ||
+        !UefiGetRandom(Entropy->RngBytesForNtoskrnl, sizeof(Entropy->RngBytesForNtoskrnl)))
+    {
+        RtlZeroMemory(Entropy->SeedBytesForCng, sizeof(Entropy->SeedBytesForCng));
+        RtlZeroMemory(Entropy->RngBytesForNtoskrnl, sizeof(Entropy->RngBytesForNtoskrnl));
+    }
+}
+#endif
+
 // Init "phase 0"
 VOID
 AllocateAndInitLPB(
@@ -193,6 +225,9 @@ AllocateAndInitLPB(
     Extension = &WinLdrSystemBlock->Extension;
     LoaderBlock->Extension = Extension;
     Extension->Size = sizeof(LOADER_PARAMETER_EXTENSION);
+#ifdef UEFIBOOT
+    WinLdrFillBootEntropy(&Extension->BootEntropyResult);
+#endif
 #if (NTDDI_VERSION >= NTDDI_WIN7)
     /* Win7+ moved version info to the LOADER_PARAMETER_BLOCK itself */
     LoaderBlock->OsMajorVersion = (VersionToBoot & 0xFF00) >> 8;
@@ -1601,41 +1636,6 @@ LoadAndBootWindows(
     /* Post-process the boot options */
     NtLdrNormalizeOptions(BootOptions);
     TRACE("BootOptions(2): '%s'\n", BootOptions);
-    if (NtLdrGetOption(BootOptions, "DEBUGPORT=NET"))
-    {
-        CHAR AssistanceOption[32];
-        ULONG AssistanceKey, AssistanceRound;
-        TIMEINFO* AssistanceTime;
-
-        if (!NtLdrGetOption(BootOptions, "ENCRYPTION_KEY=") &&
-            !NtLdrGetOption(BootOptions, "ASSISTANCE_KEY="))
-        {
-            AssistanceRound = 0;
-            do
-            {
-#ifdef UEFIBOOT
-                if (UefiGetRandom(&AssistanceKey, sizeof(AssistanceKey)))
-                    continue;
-#endif
-                AssistanceTime = ArcGetTime();
-                AssistanceKey = (ULONG)(ULONG_PTR)&AssistanceTime ^ ++AssistanceRound;
-                AssistanceKey = AssistanceKey * 1664525UL + AssistanceTime->Second;
-                AssistanceKey = AssistanceKey * 1664525UL + AssistanceTime->Minute;
-                AssistanceKey = AssistanceKey * 1664525UL + AssistanceTime->Hour;
-                AssistanceKey = AssistanceKey * 1664525UL + AssistanceTime->Day;
-                AssistanceKey = AssistanceKey * 1664525UL + AssistanceTime->Month;
-                AssistanceKey = AssistanceKey * 1664525UL + AssistanceTime->Year;
-                AssistanceKey = (AssistanceKey ^ (AssistanceKey >> 15)) * 2246822519UL;
-                AssistanceKey ^= AssistanceKey >> 13;
-            } while (AssistanceKey >= 4200000000UL);
-
-            AssistanceKey %= 100000000UL;
-            RtlStringCbPrintfA(AssistanceOption, sizeof(AssistanceOption), "ASSISTANCE_KEY=%04lu-%04lu",
-                               AssistanceKey / 10000, AssistanceKey % 10000);
-            NtLdrAddOptions(BootOptions, sizeof(BootOptions), TRUE, AssistanceOption);
-        }
-    }
-
 #if defined(UEFIBOOT) && defined(FREELDR_HTTP_BOOT)
     /* HTTP boot: download the ISO and initialize it as the boot ramdisk. */
     ArgValue = GetArgumentValue(Argc, Argv, "HttpBootUrl");

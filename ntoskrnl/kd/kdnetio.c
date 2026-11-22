@@ -17,11 +17,13 @@ NTAPI
 KdpNetShowPrompt(
     _In_opt_z_ PCSTR Prompt);
 
+#ifdef REMOTE_ASSISTANCE
 static
 VOID
 NTAPI
 KdpNetPublishWorker(
     _In_ PVOID Context);
+#endif
 
 static KD_TERMINAL_INTERFACE KdpNetInterface;
 static const KD_TERMINAL_HOST KdpNetHost = {KdpInfoQuery, KdpInfoState, KdpNetShowPrompt};
@@ -31,8 +33,10 @@ static BOOLEAN KdpNetConfigured;
 static BOOLEAN KdpNetPrinted;
 static CHAR KdpNetPrompt[128];
 static KDPC KdpNetPromptDpc;
+#ifdef REMOTE_ASSISTANCE
 static WORK_QUEUE_ITEM KdpNetPublishItem;
 static LONG KdpNetPublishQueued;
+#endif
 
 static
 VOID
@@ -149,8 +153,8 @@ NTAPI
 KdDisplayTransportKey(
     _In_ BOOLEAN DarkPalette)
 {
-    static const CHAR Label[] = "Network assistance key ";
-    CHAR Text[sizeof(Label) + 40];
+    static const CHAR Label[] = "Debugger key ";
+    CHAR Text[sizeof(Label) + 96];
     VID_DISPLAY_INFO DisplayInfo;
 
     RtlCopyMemory(Text, Label, sizeof(Label));
@@ -173,12 +177,43 @@ KdDisplayTransportKey(
     return TRUE;
 }
 
+/* HalDisplayString draws nothing over the boot screen, so a refusal goes where the key banner goes */
+static
+VOID
+KdpNetDisplayRefusal(
+    _In_ PCSTR Line1,
+    _In_opt_ PCSTR Line2)
+{
+    VID_DISPLAY_INFO DisplayInfo;
+
+    if (InbvIsBootDriverInstalled() && InbvGetDisplayState() == INBV_DISPLAY_STATE_OWNED)
+    {
+        InbvQueryDisplayInfo(&DisplayInfo);
+        InbvAcquireLock();
+        VidDisplayStringXY(Line1, 0, 0, FALSE);
+        if (Line2)
+            VidDisplayStringXY(Line2, 0, DisplayInfo.CharacterHeight, FALSE);
+        InbvReleaseLock();
+        return;
+    }
+
+    HalDisplayString("   ");
+    HalDisplayString(Line1);
+    HalDisplayString("\r\n");
+    if (Line2)
+    {
+        HalDisplayString("   ");
+        HalDisplayString(Line2);
+        HalDisplayString("\r\n");
+    }
+}
+
 static
 VOID
 KdpNetDrawPrompt(VOID)
 {
     CHAR Text[sizeof(KdpNetPrompt)];
-    CHAR Key[40];
+    CHAR Key[96];
 
     RtlCopyMemory(Text, KdpNetPrompt, sizeof(Text));
     Text[sizeof(Text) - 1] = ANSI_NULL;
@@ -191,8 +226,10 @@ KdpNetDrawPrompt(VOID)
         return;
 
     KdDisplayTransportKey(FALSE);
+#ifdef REMOTE_ASSISTANCE
     if (KdpNetReady && !InterlockedExchange(&KdpNetPublishQueued, TRUE))
         ExQueueWorkItem(&KdpNetPublishItem, DelayedWorkQueue);
+#endif
 }
 
 static
@@ -229,6 +266,7 @@ KdpNetShowPrompt(
         KeInsertQueueDpc(&KdpNetPromptDpc, NULL, NULL);
 }
 
+#ifdef REMOTE_ASSISTANCE
 static
 VOID
 KdpNetPublishKey(VOID)
@@ -240,8 +278,8 @@ KdpNetPublishKey(VOID)
     OBJECT_ATTRIBUTES ObjectAttributes;
     UCHAR DaclBuffer[128];
     PACL Dacl = (PACL)DaclBuffer;
-    WCHAR Text[40];
-    CHAR Key[40];
+    WCHAR Text[96];
+    CHAR Key[96];
     HANDLE Handle;
     ULONG Length, i;
 
@@ -255,7 +293,6 @@ KdpNetPublishKey(VOID)
     if (!NT_SUCCESS(RtlCreateAcl(Dacl, sizeof(DaclBuffer), ACL_REVISION)) ||
         !NT_SUCCESS(RtlAddAccessAllowedAce(Dacl, ACL_REVISION, KEY_ALL_ACCESS, SeLocalSystemSid)) ||
         !NT_SUCCESS(RtlAddAccessAllowedAce(Dacl, ACL_REVISION, KEY_ALL_ACCESS, SeAliasAdminsSid)) ||
-        !NT_SUCCESS(RtlAddAccessAllowedAce(Dacl, ACL_REVISION, KEY_READ, SeInteractiveSid)) ||
         !NT_SUCCESS(RtlCreateSecurityDescriptor(&SecurityDescriptor, SECURITY_DESCRIPTOR_REVISION)) ||
         !NT_SUCCESS(RtlSetDaclSecurityDescriptor(&SecurityDescriptor, TRUE, Dacl, FALSE)))
     {
@@ -282,6 +319,7 @@ KdpNetPublishWorker(
 
     KdpNetPublishKey();
 }
+#endif
 
 NTSTATUS
 NTAPI
@@ -306,7 +344,9 @@ KdpNetInit(
 
         KdpNetInterface.Configure(KeLoaderBlock ? KeLoaderBlock->LoadOptions : NULL);
         KeInitializeDpc(&KdpNetPromptDpc, KdpNetPromptDpcRoutine, NULL);
+#ifdef REMOTE_ASSISTANCE
         ExInitializeWorkItem(&KdpNetPublishItem, KdpNetPublishWorker, NULL);
+#endif
         KdpNetInterface.SetHost(&KdpNetHost);
         KdpNetConfigured = TRUE;
         KeInitializeSpinLock(&KdpNetSpinLock);
@@ -321,8 +361,22 @@ KdpNetInit(
         {
             KdpDebugMode.Net = FALSE;
             KdpNetConfigured = FALSE;
-            HalDisplayString("   Network debugging unavailable\r\n");
-            DbgPrint("Network debugger: no usable network card, status 0x%08lx\n", Result);
+            if (Result == STATUS_PWD_TOO_SHORT)
+            {
+                KdpNetDisplayRefusal("Network debugging unavailable: ENCRYPTION_KEY is shorter than 16 characters", NULL);
+                DbgPrint("Network debugger: refused, ENCRYPTION_KEY shorter than 16 characters\n");
+            }
+            else if (Result == STATUS_CRYPTO_SYSTEM_INVALID)
+            {
+                KdpNetDisplayRefusal("Network debugging unavailable: no hardware random source for a key;",
+                                     "set ENCRYPTION_KEY to use it on this machine");
+                DbgPrint("Network debugger: refused, no hardware random source and no ENCRYPTION_KEY\n");
+            }
+            else
+            {
+                KdpNetDisplayRefusal("Network debugging unavailable", NULL);
+                DbgPrint("Network debugger: no usable network card, status 0x%08lx\n", Result);
+            }
             return Result;
         }
 
@@ -332,7 +386,9 @@ KdpNetInit(
         HalDisplayString("   Network debugging enabled\r\n");
         KdpNetDisplayStatus();
         KdDisplayTransportKey(FALSE);
+#ifdef REMOTE_ASSISTANCE
         KdpNetPublishKey();
+#endif
         KdQueryTransportStatus(Status, sizeof(Status));
         DbgPrint("%s\n", Status);
     }
