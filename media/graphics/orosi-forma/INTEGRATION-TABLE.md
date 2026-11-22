@@ -97,7 +97,21 @@ rest as "available without consumer".
 | Shell32 50–53 share one physical file | Low | Known | Preserve as-is |
 | Dead-path drop risk (sample-phase defect, fixed in 13af124072c1) | Medium | FIXED | Mechanical gate script now enforced |
 
-## Phase 2 (pending owner, after VM leg)
+## Phase 2 (COMPLETE 2026-11-22)
 
-Bulk replacement of all 345 proposed entries + optical audit, using the
-gate script per batch.
+Bulk replacement of all 345 proposed entries, executed on branch
+forma/icons-bulk (3 module commits + gate fix + this table). Gate PASS
+(repo-relative resolution), builds green amd64+i386 for shell32,
+shell32_mun, explorer, user32, netshell, stobject. PE verification:
+345 proposal image-sets present in the expected binaries (368 checks per
+arch: 23 icons are dual-embedded via explorer.rc cross-module refs and
+netshell/stobject own rc), shell32.dll has zero icon groups (art lives in
+shell32.dll.mun), reserves 50-53 byte-identical to base.
+
+Notes:
+- Shared physical files 312.ico / 512.ico each feed two resource ids
+  (230/312 and 239/512) whose layout proposals conflict; the primary id
+  (312/512) proposal ships. Both ids render the same file either way.
+- netshell/stobject tray icons ship in their own dlls AND in explorer.exe
+  (cross-module references); all embedded copies verified.
+- 30 additional icons remain "available without consumer" (not in scope).
