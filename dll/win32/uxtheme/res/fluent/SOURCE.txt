@@ -14,3 +14,11 @@ Each SVG is rasterized at its native size (sips -s format png on macOS, or any
 SVG renderer), then capglyphs.py writes every frame with the renderer's alpha
 unchanged and only the state color applied: w, i, d for dark captions and l, li,
 ld for light captions.
+
+
+Small-size frames added 2026-11-22 (capglyphs_small.py): Fluent has no native 10 px
+frame for these glyphs, nor a native 12 px for Square Multiple (restore) or Question
+(help). The 10 px frame (all five) and the 12 px frame (restore, help) are pixel-fit
+from the nearest native frame already in each .ico (LANCZOS downscale + a light unsharp
+to keep the edge crisp); the native frames are preserved byte-for-byte and the step is
+idempotent. These derived frames are not native Fluent art and await owner sign-off.
