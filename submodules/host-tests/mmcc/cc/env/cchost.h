@@ -155,6 +155,9 @@ static inline void CcHostResourceReuse(CC_RESOURCE *Resource)
         abort();
     if (pthread_rwlock_unlock(Resource->Native) != 0)
         abort();
+    /* A reclaimed view is a new lock: without this TSan links the old and new ranges into false cycles */
+    if (pthread_rwlock_destroy(Resource->Native) != 0 || pthread_rwlock_init(Resource->Native, NULL) != 0)
+        abort();
 }
 
 static inline void CcHostLockAcquire(PCC_LOCK Lock)
