@@ -1,21 +1,52 @@
 #!/usr/bin/env python3
 # PROJECT:     LiberNT uxtheme
 # LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
-# PURPOSE:     Add the small caption-glyph frames Fluent has no native size for
-#              (10 px for all five glyphs; 12 px for restore and help), pixel-fit
-#              from the nearest native frame already in each cap_*.ico. Existing
-#              frames are preserved byte-for-byte; run is idempotent.
+# PURPOSE:     Add the small caption-glyph frames that Fluent UI System Icons has
+#              no native size for: 10 px for all five glyphs, and 12 px for restore
+#              and help. These frames are hand-pixeled on the grid (1 px solid
+#              strokes) to match the Fluent glyph shapes at a size with no native
+#              source, rather than resampled. Native frames are preserved
+#              byte-for-byte; the step is idempotent.
 # COPYRIGHT:   Copyright 2026 Leeway Open Software
 import os, struct, sys
 if os.environ.get("LIBERNT_REGEN_ART") != "1":
-    sys.exit("refusing to run: set LIBERNT_REGEN_ART=1 to add the derived small frames on purpose")
-from PIL import Image, ImageFilter
+    sys.exit("refusing to run: set LIBERNT_REGEN_ART=1 to (re)write the derived small frames on purpose")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHADES = {"w": (255,255,255), "i": (160,160,160), "d": (105,105,105),
           "l": (0,0,0), "li": (146,146,146), "ld": (224,224,224)}
-REF = {"close":12, "max":12, "min":12, "restore":16, "help":16}   # nearest native to derive from
+
+# Hand-pixeled masks. '#' = opaque, '.' = transparent. One grid per (glyph, size).
+G = {}
+G[("close",10)] = [
+ "..........",".#.....#..","..#...#...","...#.#....","....#.....",
+ "...#.#....","..#...#...",".#.....#..","..........",".........."]
+G[("max",10)] = [
+ "..........",".#######..",".#.....#..",".#.....#..",".#.....#..",
+ ".#.....#..",".#.....#..",".#######..","..........",".........."]
+G[("min",10)] = [
+ "..........","..........","..........","..........",".#######..",
+ "..........","..........","..........","..........",".........."]
+G[("restore",10)] = [
+ "..........","....####..","....#..#..","....#..#..",".#####.#..",
+ ".#...#....",".#...#....",".#...#....",".#####....",".........."]
+G[("help",10)] = [
+ "..........","...###....","..#...#...","......#...",".....#....",
+ "....#.....","....#.....","..........","....#.....",".........."]
+G[("restore",12)] = [
+ "............",".....#####..",".....#...#..",".....#...#..",".....#...#..",
+ ".######..#..",".#....#.....",".#....#.....",".#....#.....",".#....#.....",
+ ".######.....","............"]
+G[("help",12)] = [
+ "............","...####.....","..#....#....",".......#....","......#.....",
+ ".....#......",".....#......",".....#......","............",".....#......",
+ "............","............"]
+
 NEW = {"close":[10], "max":[10], "min":[10], "restore":[12,10], "help":[12,10]}
+
+def rows_from_grid(g, size):
+    assert len(g) == size and all(len(r) == size for r in g), "grid not %dx%d" % (size, size)
+    return [[255 if ch == "#" else 0 for ch in r] for r in g]
 
 def dib(size, rows, color):
     r,g,b = color
@@ -44,27 +75,15 @@ def write_ico(path, frames):
         offset += len(blob); blobs.append(blob)
     open(path,"wb").write(out + b"".join(blobs))
 
-def alpha_rows(path, size):
-    im = Image.open(path); im.size=(size,size); a = im.convert("RGBA").split()[3]; px=a.load()
-    return [[px[x,y] for x in range(size)] for y in range(size)]
-
-def derive(ref_rows, ref_size, target):
-    img = Image.new("L",(ref_size,ref_size)); img.putdata([v for row in ref_rows for v in row])
-    small = img.resize((target,target), Image.LANCZOS)
-    small = small.filter(ImageFilter.UnsharpMask(radius=0.7, percent=140, threshold=0))
-    px = small.load()
-    return [[px[x,y] for x in range(target)] for y in range(target)]
-
 def main():
     for fam, targets in NEW.items():
-        ref = alpha_rows(os.path.join(HERE,"cap_%s_w.ico"%fam), REF[fam])
-        masks = {t: derive(ref, REF[fam], t) for t in targets}
+        masks = {t: rows_from_grid(G[(fam,t)], t) for t in targets}
         for suf, color in SHADES.items():
-            p = os.path.join(HERE, "cap_%s_%s.ico"%(fam,suf))
-            frames = parse_ico(p); have = {w for w,_ in frames}
+            p = os.path.join(HERE, "cap_%s_%s.ico" % (fam, suf))
+            # keep every native frame; drop and re-add only the sizes this tool owns
+            frames = [(w, blob) for (w, blob) in parse_ico(p) if w not in targets]
             for t in targets:
-                if t not in have:
-                    frames.append((t, dib(t, masks[t], color)))
+                frames.append((t, dib(t, masks[t], color)))
             write_ico(p, frames)
     print("done")
 
