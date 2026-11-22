@@ -146,6 +146,7 @@
 #define IDS_GFX_ENABLED    320
 #define IDS_GFX_DISABLED   321
 #define IDS_GFX_NO3D       322
+#define IDS_GFX_OGL_SOFTWARE 323
 #define IDD_GRAPHICS       307
 #define IDC_GFX_RENDERER   460
 #define IDC_GFX_SHADER     461
@@ -155,3 +156,4 @@
 #define IDC_GFX_VSLEVEL    465
 #define IDC_GFX_APPLY      466
 #define IDC_GFX_MSAA       467
+#define IDC_GFX_OGL        468

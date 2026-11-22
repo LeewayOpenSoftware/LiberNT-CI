@@ -1068,6 +1068,24 @@ static const GFX_CTRL gfxCtrls[] = {
 };
 #define GFX_NCTRL ((int)ARRAYSIZE(gfxCtrls))
 
+/* OpenGL implementation selector (migrated from openglcfg.cpl). This writes a DIFFERENT
+ * key from the Direct3D combos: the default value of HKCU\Software\ReactOS\OpenGL, which
+ * opengl32 (icdload.c) reads to pick the ICD. The option list is dynamic (the registered
+ * ICDs), so it is handled outside the static gfxCtrls table and gets its own dirty bit. */
+#define GFX_OGL_KEY      L"Software\\ReactOS\\OpenGL"
+#define GFX_OGL_DRIVERS  L"Software\\Microsoft\\Windows NT\\CurrentVersion\\OpenGLDrivers"
+/* opengl32 matches this literal token case-insensitively to force the built-in software
+ * renderer; it is NOT the display label (openglcfg wrote the label, which never matched). */
+#define GFX_OGL_SOFTWARE L"ReactOS Software Implementation"
+#define GFX_OGL_MAXITEMS 32
+#define GFX_OGL_NAMELEN  128
+#define GFX_OGL_DIRTYBIT ((LONG_PTR)1 << GFX_NCTRL)
+
+/* Value written for OpenGL combo item i (i>=1); item 0 = Default = delete the value.
+ * Rebuilt on every populate so indices track the combo exactly. */
+static WCHAR gfxOglVal[GFX_OGL_MAXITEMS][GFX_OGL_NAMELEN];
+static int gfxOglCount;   /* number of non-Custom items (>= 2: Default + Software) */
+
 /* A few option labels are localized (Default/Custom via IDS already); map the
  * English table labels for the translatable ones. Renderer/API names stay literal. */
 static const WCHAR *
@@ -1169,6 +1187,105 @@ GfxUpdateEnable(HWND hwnd)
     EnableWindow(GetDlgItem(hwnd, IDC_GFX_SHADER), r != 2);
 }
 
+static void
+GfxOglInit(HWND hwnd)
+{
+    HKEY hKey;
+    WCHAR cur[GFX_OGL_NAMELEN], def[64], soft[64];
+    BOOL haveCur = FALSE;
+    int i, sel = 0, n;
+
+    SendDlgItemMessageW(hwnd, IDC_GFX_OGL, CB_RESETCONTENT, 0, 0);
+
+    cur[0] = 0;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, GFX_OGL_KEY, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        DWORD cb = sizeof(cur) - sizeof(WCHAR), type = 0;
+        if (RegQueryValueExW(hKey, NULL, NULL, &type, (LPBYTE)cur, &cb) == ERROR_SUCCESS &&
+            type == REG_SZ && cb > sizeof(WCHAR))
+        {
+            cur[cb / sizeof(WCHAR)] = 0;
+            haveCur = TRUE;
+        }
+        else
+            cur[0] = 0;
+        RegCloseKey(hKey);
+    }
+
+    LoadStr(IDS_GFX_DEFAULT, def, ARRAYSIZE(def));
+    SendDlgItemMessageW(hwnd, IDC_GFX_OGL, CB_ADDSTRING, 0, (LPARAM)def);
+    gfxOglVal[0][0] = 0;   /* Default: delete the value */
+
+    LoadStr(IDS_GFX_OGL_SOFTWARE, soft, ARRAYSIZE(soft));
+    SendDlgItemMessageW(hwnd, IDC_GFX_OGL, CB_ADDSTRING, 0, (LPARAM)soft);
+    StringCchCopyW(gfxOglVal[1], GFX_OGL_NAMELEN, GFX_OGL_SOFTWARE);
+    n = 2;
+
+    /* The remaining items are the ICDs actually registered under HKLM OpenGLDrivers. */
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, GFX_OGL_DRIVERS, 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        for (i = 0; n < GFX_OGL_MAXITEMS; i++)
+        {
+            WCHAR name[GFX_OGL_NAMELEN];
+            DWORD cch = ARRAYSIZE(name);
+            if (RegEnumKeyExW(hKey, (DWORD)i, name, &cch, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+                break;
+            SendDlgItemMessageW(hwnd, IDC_GFX_OGL, CB_ADDSTRING, 0, (LPARAM)name);
+            StringCchCopyW(gfxOglVal[n], GFX_OGL_NAMELEN, name);
+            n++;
+        }
+        RegCloseKey(hKey);
+    }
+    gfxOglCount = n;
+
+    if (haveCur && cur[0])
+    {
+        if (!_wcsicmp(cur, GFX_OGL_SOFTWARE))
+            sel = 1;
+        else
+        {
+            for (i = 2; i < n; i++)
+            {
+                if (!wcscmp(cur, gfxOglVal[i]))
+                {
+                    sel = i;
+                    break;
+                }
+            }
+            if (i >= n)   /* unknown stored value: preserve it as a read-only Custom item */
+            {
+                WCHAR item[GFX_OGL_NAMELEN + 32], fmt[64];
+                LoadStr(IDS_GFX_CUSTOM, fmt, ARRAYSIZE(fmt));
+                StringCchPrintfW(item, ARRAYSIZE(item), fmt, cur);
+                sel = (int)SendDlgItemMessageW(hwnd, IDC_GFX_OGL, CB_ADDSTRING, 0, (LPARAM)item);
+            }
+        }
+    }
+    SendDlgItemMessageW(hwnd, IDC_GFX_OGL, CB_SETCURSEL, sel, 0);
+    /* god: if only one implementation existed, show it disabled rather than a fake choice.
+     * Default + Software always give >= 2, so in practice this stays enabled. */
+    EnableWindow(GetDlgItem(hwnd, IDC_GFX_OGL), gfxOglCount > 1);
+}
+
+static void
+GfxOglSave(HWND hwnd)
+{
+    HKEY hKey;
+    int sel = (int)SendDlgItemMessageW(hwnd, IDC_GFX_OGL, CB_GETCURSEL, 0, 0);
+
+    if (sel < 0 || sel >= gfxOglCount)   /* "Custom (...)" or none: leave the stored value alone */
+        return;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, GFX_OGL_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL)
+            != ERROR_SUCCESS)
+        return;
+    if (sel == 0)
+        RegDeleteValueW(hKey, NULL);   /* Default: remove the override, let the system pick */
+    else
+        RegSetValueExW(hKey, NULL, 0, REG_SZ, (const BYTE *)gfxOglVal[sel],
+                       (DWORD)((wcslen(gfxOglVal[sel]) + 1) * sizeof(WCHAR)));
+    RegCloseKey(hKey);
+}
+
 static INT_PTR CALLBACK
 GraphicsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -1190,11 +1307,18 @@ GraphicsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (hKey)
                 RegCloseKey(hKey);
             GfxUpdateEnable(hwnd);
+            GfxOglInit(hwnd);
             EnableWindow(GetDlgItem(hwnd, IDC_GFX_APPLY), FALSE);   /* nothing changed yet */
             return TRUE;
         case WM_COMMAND:
             if (HIWORD(wParam) == CBN_SELCHANGE)
             {
+                if (LOWORD(wParam) == IDC_GFX_OGL)
+                {
+                    SetWindowLongPtrW(hwnd, DWLP_USER, dirty | GFX_OGL_DIRTYBIT);
+                    EnableWindow(GetDlgItem(hwnd, IDC_GFX_APPLY), TRUE);
+                    return TRUE;
+                }
                 for (i = 0; i < GFX_NCTRL; i++)
                 {
                     if (LOWORD(wParam) == gfxCtrls[i].id)
@@ -1210,6 +1334,11 @@ GraphicsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             if (LOWORD(wParam) == IDC_GFX_APPLY)
             {
+                BOOL d3dOk = TRUE;
+
+                if (dirty & GFX_OGL_DIRTYBIT)
+                    GfxOglSave(hwnd);   /* OpenGL implementation lives in its own key */
+
                 if (RegCreateKeyExW(HKEY_CURRENT_USER, GFX_D3D_KEY, 0, NULL, 0,
                                     KEY_READ | KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS)
                 {
@@ -1222,11 +1351,17 @@ GraphicsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     for (i = 0; i < GFX_NCTRL; i++)
                         GfxInitCombo(hwnd, hKey, &gfxCtrls[i]);   /* refresh: drop stale Custom, reflect writes */
                     RegCloseKey(hKey);
+                }
+                else if (dirty & ~GFX_OGL_DIRTYBIT)
+                    d3dOk = FALSE;   /* D3D key failed with D3D combos dirty: keep them, Apply stays on */
+
+                GfxOglInit(hwnd);   /* refresh: drop stale Custom, reflect the write */
+                if (d3dOk)
+                {
                     SetWindowLongPtrW(hwnd, DWLP_USER, 0);
                     GfxUpdateEnable(hwnd);
                     EnableWindow(GetDlgItem(hwnd, IDC_GFX_APPLY), FALSE);
                 }
-                /* key open failed: keep the dirty mask and Apply enabled, do not drop the change */
                 return TRUE;
             }
             break;
