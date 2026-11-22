@@ -1,5 +1,6 @@
 
 list(APPEND SOURCE
+    CorBindToRuntimeEx.c
     mscoree.c
     testlist.c)
 

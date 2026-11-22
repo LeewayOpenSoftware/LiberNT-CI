@@ -239,6 +239,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoActivityId.c
     ntos_io/IoAcpiIoctl.c
     ntos_io/IoPciPdoPnp.c
+    ntos_io/IoRamdiskPnp.c
     ntos_io/IoAcpiCmosRegion.c
     ntos_io/IoI8042Sync.c
     ntos_io/IoErrorLogEntry.c
@@ -407,6 +408,7 @@ list(APPEND KMTEST_DRV_SOURCE
     rtl/RtlBitmapKM.c
     rtl/RtlBitmapEx.c
     rtl/RtlAtomEx.c
+    rtl/RtlAssertUnanswered.c
     rtl/RtlGenericTableKM.c
     rtl/RtlTableElementKM.c
     rtl/RtlGuidKM.c

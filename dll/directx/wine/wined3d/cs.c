@@ -161,10 +161,13 @@ struct wined3d_cs_present
     enum wined3d_cs_op opcode;
     HWND dst_window_override;
     struct wined3d_swapchain *swapchain;
-    RECT src_rect;
-    RECT dst_rect;
+    unsigned int rect_count;
     unsigned int swap_interval;
     uint32_t flags;
+    BOOL has_scroll;
+    RECT scroll_rect;
+    POINT scroll_offset;
+    RECT rects[1];
 };
 
 struct wined3d_cs_clear
@@ -490,6 +493,9 @@ struct wined3d_cs_blt_sub_resource
     uint32_t flags;
     struct wined3d_blt_fx fx;
     enum wined3d_texture_filter_type filter;
+#ifdef __REACTOS__
+    struct wined3d_swapchain *throttled_swapchain;
+#endif
 };
 
 struct wined3d_cs_update_sub_resource
@@ -721,7 +727,9 @@ static void wined3d_cs_exec_present(struct wined3d_cs *cs, const void *data)
                     &src_rect, WINED3D_BLT_ALPHA_TEST, NULL, WINED3D_TEXF_POINT);
     }
 
-    swapchain->swapchain_ops->swapchain_present(swapchain, &op->src_rect, &op->dst_rect, op->swap_interval, op->flags);
+    swapchain->swapchain_ops->swapchain_present(swapchain, op->rects, &op->rects[op->rect_count],
+            op->rect_count, op->has_scroll ? &op->scroll_rect : NULL, &op->scroll_offset,
+            op->swap_interval, op->flags);
 
     /* Discard buffers if the swap effect allows it. */
     back_buffer = swapchain->back_buffers[desc->backbuffer_count - 1];
@@ -765,22 +773,35 @@ static void wined3d_cs_exec_present(struct wined3d_cs *cs, const void *data)
 }
 
 void wined3d_cs_emit_present(struct wined3d_cs *cs, struct wined3d_swapchain *swapchain,
-        const RECT *src_rect, const RECT *dst_rect, HWND dst_window_override,
-        unsigned int swap_interval, uint32_t flags)
+        const RECT *src_rects, const RECT *dst_rects, unsigned int rect_count, const RECT *scroll_rect,
+        const POINT *scroll_offset, HWND dst_window_override, unsigned int swap_interval, uint32_t flags)
 {
     struct wined3d_cs_present *op;
     unsigned int i;
 
     wined3d_not_from_cs(cs);
 
-    op = wined3d_device_context_require_space(&cs->c, sizeof(*op), WINED3D_CS_QUEUE_DEFAULT);
+    op = wined3d_device_context_require_space(&cs->c,
+            FIELD_OFFSET(struct wined3d_cs_present, rects[2 * rect_count]), WINED3D_CS_QUEUE_DEFAULT);
     op->opcode = WINED3D_CS_OP_PRESENT;
     op->dst_window_override = dst_window_override;
     op->swapchain = swapchain;
-    op->src_rect = *src_rect;
-    op->dst_rect = *dst_rect;
+    op->rect_count = rect_count;
+    memcpy(op->rects, src_rects, sizeof(*src_rects) * rect_count);
+    memcpy(&op->rects[rect_count], dst_rects, sizeof(*dst_rects) * rect_count);
     op->swap_interval = swap_interval;
     op->flags = flags;
+    op->has_scroll = !!scroll_rect;
+    if (scroll_rect)
+    {
+        op->scroll_rect = *scroll_rect;
+        op->scroll_offset = *scroll_offset;
+    }
+    else
+    {
+        SetRectEmpty(&op->scroll_rect);
+        op->scroll_offset.x = op->scroll_offset.y = 0;
+    }
 
     wined3d_resource_reference(&swapchain->front_buffer->resource);
     for (i = 0; i < swapchain->state.desc.backbuffer_count; ++i)
@@ -2702,6 +2723,10 @@ static void wined3d_cs_exec_blt_sub_resource(struct wined3d_cs *cs, const void *
                 &op->dst_box, texture_from_resource(op->src_resource), op->src_sub_resource_idx,
                 &op->src_box, op->flags, &op->fx, op->filter)))
             FIXME("Blit failed.\n");
+#ifdef __REACTOS__
+        if (op->throttled_swapchain)
+            ReleaseSemaphore(op->throttled_swapchain->frame_latency_semaphore, 1, NULL);
+#endif
     }
 }
 
@@ -2711,6 +2736,19 @@ void wined3d_device_context_emit_blt_sub_resource(struct wined3d_device_context 
         unsigned int flags, const struct wined3d_blt_fx *fx, enum wined3d_texture_filter_type filter)
 {
     struct wined3d_cs_blt_sub_resource *op;
+#ifdef __REACTOS__
+    struct wined3d_swapchain *throttled_swapchain = NULL;
+
+    if (context == &context->device->cs->c && dst_resource->type == WINED3D_RTYPE_TEXTURE_2D)
+    {
+        struct wined3d_texture *dst_texture = texture_from_resource(dst_resource);
+        struct wined3d_swapchain *swapchain = dst_texture->swapchain;
+
+        if (swapchain && swapchain->front_buffer == dst_texture
+                && !(swapchain->state.desc.flags & WINED3D_SWAPCHAIN_FRAME_LATENCY_WAITABLE_OBJECT))
+            throttled_swapchain = swapchain;
+    }
+#endif
 
     /* If we are replacing the whole resource, the CS thread might discard and
      * rename the buffer object, in which case ours is no longer valid. */
@@ -2731,12 +2769,20 @@ void wined3d_device_context_emit_blt_sub_resource(struct wined3d_device_context 
     else
         memset(&op->fx, 0, sizeof(op->fx));
     op->filter = filter;
+#ifdef __REACTOS__
+    op->throttled_swapchain = throttled_swapchain;
+#endif
 
     wined3d_device_context_reference_resource(context, dst_resource);
     if (src_resource)
         wined3d_device_context_reference_resource(context, src_resource);
 
     wined3d_device_context_submit(context, WINED3D_CS_QUEUE_DEFAULT);
+#ifdef __REACTOS__
+    /* Front buffer updates count against the frame latency like presents */
+    if (throttled_swapchain)
+        WaitForSingleObject(throttled_swapchain->frame_latency_semaphore, INFINITE);
+#endif
     if (flags & WINED3D_BLT_SYNCHRONOUS)
         wined3d_device_context_finish(context, WINED3D_CS_QUEUE_DEFAULT);
 }

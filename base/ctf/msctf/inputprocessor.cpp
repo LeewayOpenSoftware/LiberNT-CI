@@ -653,10 +653,37 @@ STDMETHODIMP CInputProcessorProfiles::GetLanguageList(
     _Out_ LANGID **ppLangId,
     _Out_ ULONG *pulCount)
 {
-    FIXME("Semi-STUB:(%p)\n", this);
-    *ppLangId = (LANGID *)CoTaskMemAlloc(sizeof(LANGID));
-    **ppLangId = m_currentLanguage;
-    *pulCount = 1;
+    HKL *phkl;
+    LANGID *plangid;
+    INT chkl, ihkl;
+    ULONG count = 0, i;
+
+    TRACE("(%p)\n", this);
+
+    chkl = ::GetKeyboardLayoutList(0, NULL);
+    phkl = (HKL *)cicMemAlloc(max(chkl, 1) * sizeof(HKL));
+    plangid = (LANGID *)CoTaskMemAlloc(max(chkl, 1) * sizeof(LANGID));
+    if (!phkl || !plangid)
+    {
+        cicMemFree(phkl);
+        CoTaskMemFree(plangid);
+        return E_OUTOFMEMORY;
+    }
+
+    chkl = ::GetKeyboardLayoutList(chkl, phkl);
+    for (ihkl = 0; ihkl < chkl; ++ihkl)
+    {
+        LANGID langid = LOWORD(phkl[ihkl]);
+
+        for (i = 0; i < count && plangid[i] != langid; ++i)
+            ;
+        if (i == count)
+            plangid[count++] = langid;
+    }
+    cicMemFree(phkl);
+
+    *ppLangId = plangid;
+    *pulCount = count;
     return S_OK;
 }
 
@@ -1487,12 +1514,15 @@ STDMETHODIMP CEnumTfLanguageProfiles::Next(
             DWORD cName = _countof(m_szwCurrentClsid);
             CLSID clsid;
 
-            error = RegEnumKeyExW(m_tipkey, m_tip_index, m_szwCurrentClsid, &cName, NULL, NULL,
-                                  NULL, NULL);
-            if (error != ERROR_SUCCESS && error != ERROR_MORE_DATA)
-                break;
+            if (!m_langkey)
+            {
+                error = RegEnumKeyExW(m_tipkey, m_tip_index, m_szwCurrentClsid, &cName, NULL, NULL,
+                                      NULL, NULL);
+                if (error != ERROR_SUCCESS && error != ERROR_MORE_DATA)
+                    break;
 
-            ++m_tip_index;
+                ++m_tip_index;
+            }
 
             hr = CLSIDFromString(m_szwCurrentClsid, &clsid);
             if (FAILED(hr))
