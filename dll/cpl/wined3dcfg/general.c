@@ -2,31 +2,14 @@
 
 #include <winreg.h>
 
+/* wined3d only honours MaxShaderModelGS/PS/VS and VideoMemorySize; the former
+ * dead controls wrote keys the engine never reads (see wined3d_main.c). */
 WINED3D_SETTINGS gwd3dsShaderLvl[] =
 {
     {VALUE_DEFAULT, REG_NONE, 0},
     {L"1.4", REG_DWORD, 1},
     {L"2", REG_DWORD, 2},
     {L"3", REG_DWORD, 3},
-};
-
-WINED3D_SETTINGS gwd3dsDisable[] =
-{
-    {VALUE_DEFAULT, REG_NONE, 0},
-    {VALUE_DISABLED, REG_SZ, 0}
-};
-
-WINED3D_SETTINGS gwd3dsEnable[] =
-{
-    {VALUE_DEFAULT, REG_NONE, 0},
-    {VALUE_ENABLED, REG_SZ, 0}
-};
-
-WINED3D_SETTINGS gwd3dsOffscreen[] =
-{
-    {VALUE_DEFAULT, REG_NONE, 0},
-    {VALUE_BACKBUFFER, REG_SZ, 0},
-    {VALUE_FBO, REG_SZ, 0}
 };
 
 WINED3D_SETTINGS gwd3dsVidMem[] =
@@ -39,12 +22,6 @@ WINED3D_SETTINGS gwd3dsVidMem[] =
     {L"128 MB", REG_SZ, 128},
     {L"256 MB", REG_SZ, 256},
     {L"512 MB", REG_SZ, 512},
-};
-
-WINED3D_SETTINGS gwd3dsDdRender[] =
-{
-    {VALUE_DEFAULT, REG_NONE, 0},
-    {VALUE_GDI, REG_SZ, 0}
 };
 
 
@@ -80,16 +57,10 @@ static VOID InitSettings(HWND hWndDlg)
     if (RegCreateKeyExW(HKEY_CURRENT_USER, KEY_WINE, 0, NULL, 0, MAXIMUM_ALLOWED, NULL, &hKey, NULL) != ERROR_SUCCESS)
         return;
 
-    INIT_CONTROL(GLSL, gwd3dsDisable);
-    INIT_CONTROL(OFFSCREEN, gwd3dsOffscreen);
-    INIT_CONTROL(VIDMEMSIZE, gwd3dsVidMem);
-    INIT_CONTROL(MULTISAMPLING, gwd3dsDisable);
-    INIT_CONTROL(STRICTDRAWORDERING, gwd3dsEnable);
-    INIT_CONTROL(ALWAYSOFFSCREEN, gwd3dsEnable);
-    INIT_CONTROL(DDRENDERER, gwd3dsDdRender);
+    INIT_CONTROL(GSLEVEL, gwd3dsShaderLvl);
     INIT_CONTROL(PSLEVEL, gwd3dsShaderLvl);
     INIT_CONTROL(VSLEVEL, gwd3dsShaderLvl);
-    INIT_CONTROL(GSLEVEL, gwd3dsShaderLvl);
+    INIT_CONTROL(VIDMEMSIZE, gwd3dsVidMem);
 
     RegCloseKey(hKey);
 }
@@ -128,16 +99,10 @@ static VOID WriteSettings(HWND hWndDlg)
     if (RegOpenKeyExW(HKEY_CURRENT_USER, KEY_WINE, 0, KEY_WRITE, &hKey) != ERROR_SUCCESS)
         return;
 
-    SAVE_CONTROL(GLSL, gwd3dsDisable);
-    SAVE_CONTROL(OFFSCREEN, gwd3dsOffscreen);
-    SAVE_CONTROL(VIDMEMSIZE, gwd3dsVidMem);
-    SAVE_CONTROL(MULTISAMPLING, gwd3dsDisable);
-    SAVE_CONTROL(STRICTDRAWORDERING, gwd3dsEnable);
-    SAVE_CONTROL(ALWAYSOFFSCREEN, gwd3dsEnable);
-    SAVE_CONTROL(DDRENDERER, gwd3dsDdRender);
+    SAVE_CONTROL(GSLEVEL, gwd3dsShaderLvl);
     SAVE_CONTROL(PSLEVEL, gwd3dsShaderLvl);
     SAVE_CONTROL(VSLEVEL, gwd3dsShaderLvl);
-    SAVE_CONTROL(GSLEVEL, gwd3dsShaderLvl);
+    SAVE_CONTROL(VIDMEMSIZE, gwd3dsVidMem);
 
     RegCloseKey(hKey);
 }
