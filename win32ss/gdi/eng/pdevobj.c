@@ -1114,6 +1114,41 @@ PDEVOBJ_iGetColorManagementCaps(PPDEVOBJ ppdev)
     return ret;
 }
 
+/* The logical DPI is win32k policy (see PDEVOBJ_Create); a new system DPI reaches every display PDEV here */
+VOID
+NTAPI
+PDEVOBJ_vSetLogPixels(
+    _In_ ULONG ulLogPixels)
+{
+    PPDEVOBJ ppdev;
+    ULONG i;
+
+    if (!gpmdev)
+        return;
+
+    for (i = 0; i < gpmdev->cDev; i++)
+    {
+        ppdev = gpmdev->dev[i].ppdev;
+        if (!ppdev)
+            continue;
+        ppdev->gdiinfo.ulLogPixelsX = ulLogPixels;
+        ppdev->gdiinfo.ulLogPixelsY = ulLogPixels;
+        if (ppdev->pdmwDev)
+        {
+            ppdev->pdmwDev->dmLogPixels = (WORD)ulLogPixels;
+            ppdev->pdmwDev->dmFields |= DM_LOGPIXELS;
+        }
+    }
+
+    ppdev = gpmdev->ppdevGlobal;
+    if (ppdev)
+    {
+        ppdev->gdiinfo.ulLogPixelsX = ulLogPixels;
+        ppdev->gdiinfo.ulLogPixelsY = ulLogPixels;
+        PDEVOBJ_vGetDeviceCaps(ppdev, &GdiHandleTable->DevCaps);
+    }
+}
+
 VOID
 NTAPI
 PDEVOBJ_vGetDeviceCaps(

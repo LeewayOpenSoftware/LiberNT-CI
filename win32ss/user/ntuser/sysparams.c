@@ -64,6 +64,7 @@ static const WCHAR* VAL_MDALIGN = L"MenuDropAlignment";
 static const WCHAR* KEY_SYSTEM_DPI =
     L"\\Registry\\Machine\\System\\CurrentControlSet\\Hardware Profiles\\Current\\Software\\Fonts";
 static const WCHAR* VAL_LOGPIXELS = L"LogPixels";
+static const WCHAR* VAL_WIN8DPISCALING = L"Win8DpiScaling";
 static const WCHAR* KEY_METRIC = L"Control Panel\\Desktop\\WindowMetrics";
 static const WCHAR* VAL_BORDER = L"BorderWidth";
 static const WCHAR* VAL_CAPTIONALIGN = L"CaptionAlignment";
@@ -286,7 +287,31 @@ static
 UINT
 SpiLoadSystemDpi(VOID)
 {
+    DWORD Custom = 0, Dpi = 0;
+
+    /* The per-user custom scale of Windows (Control Panel\Desktop LogPixels, armed by Win8DpiScaling = 1)
+     * wins over the machine value; it is read at sign-in, which is when Windows applies it too */
+    if (RegReadUserSetting(KEY_DESKTOP, VAL_WIN8DPISCALING, REG_DWORD, &Custom, sizeof(Custom)) && Custom == 1 &&
+        RegReadUserSetting(KEY_DESKTOP, VAL_LOGPIXELS, REG_DWORD, &Dpi, sizeof(Dpi)) &&
+        Dpi >= USER_SYSTEM_DPI_MIN && Dpi <= USER_SYSTEM_DPI_MAX)
+    {
+        return Dpi;
+    }
+
     return SpiLoadMachineDpi();
+}
+
+/* The DPI loaded at this sign-in may differ from the one the session runs with (another user, or a
+ * setting changed since boot): the display caps, the stock fonts and the virtualization follow it */
+static
+VOID
+SpiApplySystemDpi(VOID)
+{
+    UINT Dpi = UserGetSystemDpi();
+
+    PDEVOBJ_vSetLogPixels(Dpi);
+    GreSetStockFontDpi(Dpi);
+    UserDpiUpdateVirtualization();
 }
 
 static
@@ -536,6 +561,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.uiSystemDpi = SpiLoadSystemDpi();
     if (gpsi)
         gpsi->dmLogPixels = (USHORT)gspv.uiSystemDpi;
+    SpiApplySystemDpi();
 
     /* Load mouse settings */
     gspv.caiMouse.FirstThreshold = SpiLoadMouse(VAL_MOUSE1, 6);
