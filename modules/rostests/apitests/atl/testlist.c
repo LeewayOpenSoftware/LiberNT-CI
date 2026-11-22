@@ -19,6 +19,7 @@ extern void func_CRegKey(void);
 extern void func_CSimpleArray(void);
 extern void func_CSimpleMap(void);
 extern void func_CString(void);
+extern void func_StatReg(void);
 extern void func_SubclassWindow(void);
 
 const struct test winetest_testlist[] =
@@ -41,6 +42,7 @@ const struct test winetest_testlist[] =
     { "CSimpleArray", func_CSimpleArray },
     { "CSimpleMap", func_CSimpleMap },
     { "CString", func_CString },
+    { "StatReg", func_StatReg },
     { "SubclassWindow", func_SubclassWindow },
     { 0, 0 }
 };
