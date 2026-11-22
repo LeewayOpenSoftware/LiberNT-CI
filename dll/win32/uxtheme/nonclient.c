@@ -1081,9 +1081,10 @@ plain:
 /* A dialog frame on a dark caption has no immersive-dark property, so its close part would come from the light
  * msstyles image and show as a white square; sample the caption next to the button to pick the dark glyph path. */
 static BOOL
-ThemeSampleDarkCaption(PDRAW_CONTEXT pcontext, const RECT *rect, COLORREF *color)
+ThemeSampleDarkCaption(PDRAW_CONTEXT pcontext, const RECT *rect, BOOL buttonLeft, COLORREF *color)
 {
-    COLORREF sample = GetPixel(pcontext->hDC, rect->left - 2, (rect->top + rect->bottom) / 2);
+    COLORREF sample = GetPixel(pcontext->hDC, buttonLeft ? rect->right + 2 : rect->left - 2,
+                               (rect->top + rect->bottom) / 2);
 
     if (sample == CLR_INVALID ||
         (GetRValue(sample) * 299 + GetGValue(sample) * 587 + GetBValue(sample) * 114) / 1000 >= 128)
@@ -1172,7 +1173,8 @@ ThemeDrawCaptionButton(PDRAW_CONTEXT pcontext,
                                     &pwndData->rcCaptionButtons[buttonId], background, FALSE,
                                     ThemeCaptionDpi(pcontext));
     else if (iPartId == WP_CLOSEBUTTON && !(pcontext->wi.dwStyle & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) &&
-             ThemeSampleDarkCaption(pcontext, &pwndData->rcCaptionButtons[buttonId], &background))
+             ThemeSampleDarkCaption(pcontext, &pwndData->rcCaptionButtons[buttonId],
+                                    pwndData->CaptionButtonLeft[buttonId], &background))
         ThemeDrawCaptionGlyphButton(pcontext, buttonId, iStateId,
                                     &pwndData->rcCaptionButtons[buttonId], background, TRUE,
                                     ThemeCaptionDpi(pcontext));
