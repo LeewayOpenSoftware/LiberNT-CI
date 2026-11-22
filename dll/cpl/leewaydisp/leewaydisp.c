@@ -1000,7 +1000,9 @@ SaverProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 /* GRAPHICS PAGE **********************************************************/
 /* Writes HKCU\Software\Wine\Direct3D, the keys wined3d actually reads.
- * "Default" removes the value so the engine keeps its built-in behaviour. */
+ * "Default" removes the value so the engine keeps its built-in behaviour.
+ * A stored value the page does not offer is shown read-only as "Custom (...)",
+ * and only combos the user actually changes are written, so nothing is wiped. */
 #define GFX_D3D_KEY L"Software\\Wine\\Direct3D"
 
 typedef struct GFX_OPT
@@ -1040,52 +1042,95 @@ static const GFX_OPT gfxVidMem[] = {
     { L"512 MB", 2, 0, L"512 MB" },
 };
 
+typedef struct GFX_CTRL
+{
+    int id;
+    const WCHAR *value;
+    const GFX_OPT *opt;
+    int count;
+    BOOL icase;           /* case-insensitive match, as wined3d reads shader_backend (stricmp) */
+} GFX_CTRL;
+
+static const GFX_CTRL gfxCtrls[] = {
+    { IDC_GFX_RENDERER, L"renderer",         gfxRenderer, ARRAYSIZE(gfxRenderer), FALSE },
+    { IDC_GFX_SHADER,   L"shader_backend",   gfxShader,   ARRAYSIZE(gfxShader),   TRUE  },
+    { IDC_GFX_VIDMEM,   L"VideoMemorySize",  gfxVidMem,   ARRAYSIZE(gfxVidMem),   FALSE },
+    { IDC_GFX_GSLEVEL,  L"MaxShaderModelGS", gfxLevel,    ARRAYSIZE(gfxLevel),    FALSE },
+    { IDC_GFX_PSLEVEL,  L"MaxShaderModelPS", gfxLevel,    ARRAYSIZE(gfxLevel),    FALSE },
+    { IDC_GFX_VSLEVEL,  L"MaxShaderModelVS", gfxLevel,    ARRAYSIZE(gfxLevel),    FALSE },
+};
+#define GFX_NCTRL ((int)ARRAYSIZE(gfxCtrls))
+
 static void
-GfxInitCombo(HWND hwnd, HKEY hKey, int id, const WCHAR *value, const GFX_OPT *opt, int count)
+GfxInitCombo(HWND hwnd, HKEY hKey, const GFX_CTRL *c)
 {
     union { DWORD dw; WCHAR sz[128]; BYTE raw[256]; } buf;
-    DWORD cb = sizeof(buf), type = 0;
+    DWORD cb = sizeof(buf) - sizeof(WCHAR), type = 0;
     WCHAR def[64];
-    BOOL have;
+    BOOL have, matched = FALSE;
     int i, sel = 0;
 
-    have = (RegQueryValueExW(hKey, value, NULL, &type, buf.raw, &cb) == ERROR_SUCCESS);
+    have = (hKey != NULL &&
+            RegQueryValueExW(hKey, c->value, NULL, &type, buf.raw, &cb) == ERROR_SUCCESS);
+    if (have && type == REG_SZ)
+        buf.sz[cb / sizeof(WCHAR)] = 0;   /* guarantee NUL termination before compare */
     LoadStr(IDS_GFX_DEFAULT, def, ARRAYSIZE(def));
-    for (i = 0; i < count; i++)
+    for (i = 0; i < c->count; i++)
     {
-        const WCHAR *txt = opt[i].label ? opt[i].label : def;
-        SendDlgItemMessageW(hwnd, id, CB_ADDSTRING, 0, (LPARAM)txt);
-        if (have && i > 0)
+        const WCHAR *txt = c->opt[i].label ? c->opt[i].label : def;
+
+        SendDlgItemMessageW(hwnd, c->id, CB_ADDSTRING, 0, (LPARAM)txt);
+        if (have && i > 0 && !matched)
         {
-            if (opt[i].type == 1 && type == REG_DWORD && buf.dw == opt[i].dword)
+            if (c->opt[i].type == 1 && type == REG_DWORD && buf.dw == c->opt[i].dword)
+            {
                 sel = i;
-            else if (opt[i].type == 2 && type == REG_SZ && !wcscmp(buf.sz, opt[i].sz))
+                matched = TRUE;
+            }
+            else if (c->opt[i].type == 2 && type == REG_SZ &&
+                     (c->icase ? !_wcsicmp(buf.sz, c->opt[i].sz) : !wcscmp(buf.sz, c->opt[i].sz)))
+            {
                 sel = i;
+                matched = TRUE;
+            }
         }
     }
-    SendDlgItemMessageW(hwnd, id, CB_SETCURSEL, sel, 0);
+    if (have && !matched)
+    {
+        WCHAR item[160], valstr[132];
+
+        if (type == REG_DWORD)
+            StringCchPrintfW(valstr, ARRAYSIZE(valstr), L"%lu", (unsigned long)buf.dw);
+        else if (type == REG_SZ)
+            StringCchCopyW(valstr, ARRAYSIZE(valstr), buf.sz);
+        else
+            valstr[0] = 0;
+        StringCchPrintfW(item, ARRAYSIZE(item), L"Custom (%s)", valstr);
+        sel = (int)SendDlgItemMessageW(hwnd, c->id, CB_ADDSTRING, 0, (LPARAM)item);
+    }
+    SendDlgItemMessageW(hwnd, c->id, CB_SETCURSEL, sel, 0);
 }
 
 static void
-GfxSaveCombo(HWND hwnd, HKEY hKey, int id, const WCHAR *value, const GFX_OPT *opt, int count)
+GfxSaveCombo(HWND hwnd, HKEY hKey, const GFX_CTRL *c)
 {
-    int sel = (int)SendDlgItemMessageW(hwnd, id, CB_GETCURSEL, 0, 0);
+    int sel = (int)SendDlgItemMessageW(hwnd, c->id, CB_GETCURSEL, 0, 0);
 
-    if (sel < 0 || sel >= count)
+    if (sel < 0 || sel >= c->count)   /* "Custom (...)" or none: leave the stored value alone */
         return;
-    if (opt[sel].type == 0)
+    if (c->opt[sel].type == 0)
     {
-        RegDeleteValueW(hKey, value);
+        RegDeleteValueW(hKey, c->value);
     }
-    else if (opt[sel].type == 1)
+    else if (c->opt[sel].type == 1)
     {
-        DWORD v = opt[sel].dword;
-        RegSetValueExW(hKey, value, 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+        DWORD v = c->opt[sel].dword;
+        RegSetValueExW(hKey, c->value, 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
     }
-    else if (opt[sel].type == 2)
+    else if (c->opt[sel].type == 2)
     {
-        RegSetValueExW(hKey, value, 0, REG_SZ, (const BYTE *)opt[sel].sz,
-                       (DWORD)((wcslen(opt[sel].sz) + 1) * sizeof(WCHAR)));
+        RegSetValueExW(hKey, c->value, 0, REG_SZ, (const BYTE *)c->opt[sel].sz,
+                       (DWORD)((wcslen(c->opt[sel].sz) + 1) * sizeof(WCHAR)));
     }
 }
 
@@ -1100,45 +1145,57 @@ GfxUpdateEnable(HWND hwnd)
 static INT_PTR CALLBACK
 GraphicsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    LONG_PTR dirty = GetWindowLongPtrW(hwnd, DWLP_USER);
     HKEY hKey;
+    int i;
 
     UNREFERENCED_PARAMETER(lParam);
 
     switch (msg)
     {
         case WM_INITDIALOG:
+            SetWindowLongPtrW(hwnd, DWLP_USER, 0);
             if (RegCreateKeyExW(HKEY_CURRENT_USER, GFX_D3D_KEY, 0, NULL, 0, KEY_READ, NULL, &hKey, NULL)
-                    == ERROR_SUCCESS)
-            {
-                GfxInitCombo(hwnd, hKey, IDC_GFX_RENDERER, L"renderer", gfxRenderer, ARRAYSIZE(gfxRenderer));
-                GfxInitCombo(hwnd, hKey, IDC_GFX_SHADER, L"shader_backend", gfxShader, ARRAYSIZE(gfxShader));
-                GfxInitCombo(hwnd, hKey, IDC_GFX_GSLEVEL, L"MaxShaderModelGS", gfxLevel, ARRAYSIZE(gfxLevel));
-                GfxInitCombo(hwnd, hKey, IDC_GFX_PSLEVEL, L"MaxShaderModelPS", gfxLevel, ARRAYSIZE(gfxLevel));
-                GfxInitCombo(hwnd, hKey, IDC_GFX_VSLEVEL, L"MaxShaderModelVS", gfxLevel, ARRAYSIZE(gfxLevel));
-                GfxInitCombo(hwnd, hKey, IDC_GFX_VIDMEM, L"VideoMemorySize", gfxVidMem, ARRAYSIZE(gfxVidMem));
+                    != ERROR_SUCCESS)
+                hKey = NULL;
+            for (i = 0; i < GFX_NCTRL; i++)
+                GfxInitCombo(hwnd, hKey, &gfxCtrls[i]);   /* populated even if the key is missing */
+            if (hKey)
                 RegCloseKey(hKey);
-            }
             GfxUpdateEnable(hwnd);
+            EnableWindow(GetDlgItem(hwnd, IDC_GFX_APPLY), FALSE);   /* nothing changed yet */
             return TRUE;
         case WM_COMMAND:
-            if (LOWORD(wParam) == IDC_GFX_RENDERER && HIWORD(wParam) == CBN_SELCHANGE)
+            if (HIWORD(wParam) == CBN_SELCHANGE)
             {
-                GfxUpdateEnable(hwnd);
-                return TRUE;
+                for (i = 0; i < GFX_NCTRL; i++)
+                {
+                    if (LOWORD(wParam) == gfxCtrls[i].id)
+                    {
+                        SetWindowLongPtrW(hwnd, DWLP_USER, dirty | ((LONG_PTR)1 << i));
+                        EnableWindow(GetDlgItem(hwnd, IDC_GFX_APPLY), TRUE);
+                        if (gfxCtrls[i].id == IDC_GFX_RENDERER)
+                            GfxUpdateEnable(hwnd);
+                        return TRUE;
+                    }
+                }
+                break;
             }
             if (LOWORD(wParam) == IDC_GFX_APPLY)
             {
                 if (RegCreateKeyExW(HKEY_CURRENT_USER, GFX_D3D_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL)
                         == ERROR_SUCCESS)
                 {
-                    GfxSaveCombo(hwnd, hKey, IDC_GFX_RENDERER, L"renderer", gfxRenderer, ARRAYSIZE(gfxRenderer));
-                    GfxSaveCombo(hwnd, hKey, IDC_GFX_SHADER, L"shader_backend", gfxShader, ARRAYSIZE(gfxShader));
-                    GfxSaveCombo(hwnd, hKey, IDC_GFX_GSLEVEL, L"MaxShaderModelGS", gfxLevel, ARRAYSIZE(gfxLevel));
-                    GfxSaveCombo(hwnd, hKey, IDC_GFX_PSLEVEL, L"MaxShaderModelPS", gfxLevel, ARRAYSIZE(gfxLevel));
-                    GfxSaveCombo(hwnd, hKey, IDC_GFX_VSLEVEL, L"MaxShaderModelVS", gfxLevel, ARRAYSIZE(gfxLevel));
-                    GfxSaveCombo(hwnd, hKey, IDC_GFX_VIDMEM, L"VideoMemorySize", gfxVidMem, ARRAYSIZE(gfxVidMem));
+                    for (i = 0; i < GFX_NCTRL; i++)
+                    {
+                        if ((dirty & ((LONG_PTR)1 << i)) &&
+                            IsWindowEnabled(GetDlgItem(hwnd, gfxCtrls[i].id)))
+                            GfxSaveCombo(hwnd, hKey, &gfxCtrls[i]);   /* only touched + active combos */
+                    }
                     RegCloseKey(hKey);
                 }
+                SetWindowLongPtrW(hwnd, DWLP_USER, 0);
+                EnableWindow(GetDlgItem(hwnd, IDC_GFX_APPLY), FALSE);
                 return TRUE;
             }
             break;
