@@ -58,7 +58,8 @@ BOOLEAN
 KdpIsConnected(VOID)
 {
     /* TODO: the relay acknowledges nothing, so reaching it means having an address and the relay's resolved name */
-    return KdNetReady && KdIpAddress && (KdNetOptions.HostIp || !KdNetOptions.HostName[0]);
+    return KdNetReady && (KdNetOptions.Broadcast ||
+                          (KdIpAddress && (KdNetOptions.HostIp || !KdNetOptions.HostName[0])));
 }
 
 static
