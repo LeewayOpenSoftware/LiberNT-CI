@@ -1156,8 +1156,9 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
          * data and settles the deferred size; it is a no-op if nothing is
          * dirty. Guarded on the shared cache map, which holds the deferred
          * data, and skipped for a file that is being deleted. */
-        if (FileCB->StreamCB && FileCB->StreamCB->ResidentSizeDeferred &&
-            !FileCB->DeletePending && !(FileCB->CreateOptions & FILE_DELETE_ON_CLOSE) &&
+        if (LastHandle && FileCB->StreamCB && FileCB->StreamCB->ResidentSizeDeferred &&
+            !FileCB->StreamCB->DeletePending && !FileCB->DeletePending &&
+            !(FileCB->CreateOptions & FILE_DELETE_ON_CLOSE) &&
             IrpSp->FileObject->SectionObjectPointer &&
             IrpSp->FileObject->SectionObjectPointer->SharedCacheMap)
         {
