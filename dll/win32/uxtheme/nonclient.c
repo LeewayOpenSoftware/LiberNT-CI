@@ -860,11 +860,14 @@ ThemeFillSolidRect(HDC hDC, const RECT *rect, COLORREF color)
 static BOOL
 ThemeDrawCaptionGlyph(HDC hDC, const RECT *rect, UINT baseId, INT shade, UINT dpi)
 {
+    /* Win11 draws the caption glyph at roughly a third of the button height. The sizes are the frames
+     * present in the cap_*.ico files (12/16/20/24/28), so the glyph is drawn at a native resolution:
+     * 12 px at 100/125%, 16 at 150%, 20 at 200%, 24 at 250%, 28 at 300%. */
     static const struct
     {
         UINT MinDpi;
         INT Size;
-    } glyphFrames[] = { { 192, 28 }, { 144, 24 }, { 120, 20 }, { 0, 16 }, { 0, 12 } };
+    } glyphFrames[] = { { 288, 28 }, { 240, 24 }, { 192, 20 }, { 144, 16 }, { 96, 12 }, { 0, 12 } };
     INT height = rect->bottom - rect->top;
     INT size, i;
     HICON icon;
@@ -875,6 +878,11 @@ ThemeDrawCaptionGlyph(HDC hDC, const RECT *rect, UINT baseId, INT shade, UINT dp
             break;
     }
     size = glyphFrames[i].Size;
+
+    /* The restore and help glyphs ship no 12 px .ico frame (only 16/20/24/28); step them up so the
+     * icon scaler never blurs them. Drop this once those two families gain a 12 px frame. */
+    if ((baseId == IDI_CAPTION_RESTORE || baseId == IDI_CAPTION_HELP) && size < 16)
+        size = 16;
 
     icon = LoadImageW(hDllInst, MAKEINTRESOURCEW(baseId + shade), IMAGE_ICON, size, size, LR_SHARED);
     if (!icon)
@@ -1014,24 +1022,14 @@ ThemeCaptionDpi(PDRAW_CONTEXT pcontext)
 static BOOL
 ThemeUseCaptionGlyphs(HTHEME hTheme, INT iPartId, INT iStateId, COLORREF *background)
 {
-    static const INT minDpiIds[] = { TMT_MINDPI1, TMT_MINDPI2, TMT_MINDPI3, TMT_MINDPI4,
-                                     TMT_MINDPI5, TMT_MINDPI6, TMT_MINDPI7 };
-    UINT dpi = MSSTYLES_GetThemeDPI((PTHEME_CLASS)hTheme);
-    INT selectType = IST_NONE, minDpi, i;
     COLORREF fill;
 
-    if (dpi <= 96)
-        return FALSE;
-    if (SUCCEEDED(GetThemeEnumValue(hTheme, iPartId, iStateId, TMT_IMAGESELECTTYPE, &selectType)) &&
-        selectType == IST_DPI)
-    {
-        for (i = 0; i < ARRAYSIZE(minDpiIds); i++)
-        {
-            if (SUCCEEDED(GetThemeInt(hTheme, iPartId, iStateId, minDpiIds[i], &minDpi)) &&
-                minDpi > 96 && (UINT)minDpi <= dpi)
-                return FALSE;
-        }
-    }
+    /* Win11 caption buttons are flat: transparent at rest, a solid fill only on hover/press. Draw any
+     * themed caption (one that defines a caption fill colour) with the glyph button at every DPI --
+     * 100% included -- instead of the Win8 msstyles button bitmap and its opaque FillColorHint block.
+     * A classic theme defines no caption fill -> return FALSE and keep the msstyles button. */
+    UNREFERENCED_PARAMETER(iPartId);
+    UNREFERENCED_PARAMETER(iStateId);
     if (FAILED(GetThemeColor(hTheme, WP_CAPTION, FS_ACTIVE, TMT_FILLCOLORHINT, &fill)))
         return FALSE;
     *background = fill;
