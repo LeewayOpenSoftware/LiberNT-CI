@@ -755,4 +755,6 @@ BEGIN
     IDS_SECURITY_GROUP "Security"
     IDS_FIREWALL "Orosi Firewall"
     IDS_FIREWALL_DESC "Turn the firewall on or off and choose the apps it allows"
+    IDS_GFX_LINK_DESC "Direct3D engine, shaders, multisampling, video memory and OpenGL implementation"
+    IDS_GFX_LINK_KEYWORDS "graphics gpu 3d direct3d d3d opengl gl renderer shader multisampling antialiasing video memory wined3d gráficos"
 END

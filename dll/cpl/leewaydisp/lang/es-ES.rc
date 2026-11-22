@@ -13,6 +13,8 @@ BEGIN
     IDS_CPL_PERSONALIZE_DESC "Cambia el fondo del escritorio y consulta cómo está configurada la pantalla."
     IDS_CPL_DISPLAY_NAME "Pantalla"
     IDS_CPL_DISPLAY_DESC "Revisa las pantallas y cambia la resolución."
+    IDS_CPL_GRAPHICS_NAME "Gráficos"
+    IDS_CPL_GRAPHICS_DESC "Elige el motor Direct3D, el backend de sombreadores y la implementación de OpenGL."
     IDS_TITLE "Pantalla y personalización"
     IDS_TAB_PERSONALIZE "Personalización"
     IDS_TAB_DISPLAY "Pantalla"

@@ -13,6 +13,8 @@ BEGIN
     IDS_CPL_PERSONALIZE_DESC "更改桌面背景并查看显示器的设置情况。"
     IDS_CPL_DISPLAY_NAME "显示"
     IDS_CPL_DISPLAY_DESC "检查显示器并更改屏幕分辨率。"
+    IDS_CPL_GRAPHICS_NAME "Graphics"
+    IDS_CPL_GRAPHICS_DESC "Choose the Direct3D engine, shader backend and OpenGL implementation."
     IDS_TITLE "显示和个性化"
     IDS_TAB_PERSONALIZE "个性化"
     IDS_TAB_DISPLAY "显示"
