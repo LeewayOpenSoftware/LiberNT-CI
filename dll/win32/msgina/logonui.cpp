@@ -24,6 +24,7 @@ extern "C" {
 #define LOGONUI_CLOCK_MS        500
 #define LOGONUI_CONFIRM_MS      1600
 #define WM_LOGONUI_DONE         (WM_APP + 0x40)
+#define WM_LOGONUI_FOCUS        (WM_APP + 0x41)
 #define LOGONUI_MAX_USERS       6
 #define LOGONUI_MAX_OPTIONS     4
 #define LOGONUI_TEXT            256
@@ -2293,6 +2294,11 @@ LogonUiDialogProc(HWND Dialog, UINT Message, WPARAM wParam, LPARAM lParam)
             }
             return FALSE;
 
+        case WM_SETFOCUS:
+            /* The row pages take the keys themselves; DefDlgProc would hand the focus
+               to one of the hidden password edits of the Options mode */
+            return Screen->Current == Page::Options || Screen->Current == Page::Power;
+
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
             Screen->Key(wParam);
@@ -2306,9 +2312,17 @@ LogonUiDialogProc(HWND Dialog, UINT Message, WPARAM wParam, LPARAM lParam)
             Screen->JobDone((LogonJob *)lParam);
             return TRUE;
 
+        case WM_LOGONUI_FOCUS:
+            if (Screen->Current == Page::Options || Screen->Current == Page::Power)
+                SetFocus(Dialog);
+            return TRUE;
+
         case WM_ACTIVATE:
             if (LOWORD(wParam) != WA_INACTIVE && Screen->Animation != Anim::Enter && Screen->Animation != Anim::Dismiss)
                 Screen->ShowFields(TRUE);
+            /* DefDlgProc restores a saved child focus after this; take it back once it has */
+            if (LOWORD(wParam) != WA_INACTIVE)
+                PostMessageW(Dialog, WM_LOGONUI_FOCUS, 0, 0);
             return FALSE;
 
         case WM_DESTROY:
