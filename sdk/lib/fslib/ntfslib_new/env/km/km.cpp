@@ -959,6 +959,7 @@ NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
     NTFS_CACHE_SLOT* Slot;
     NTSTATUS Status;
     BOOLEAN SameBlock;
+    BOOLEAN Passive = (KeGetCurrentIrql() == PASSIVE_LEVEL);
 
     if (!NtfsCacheReady)
         return STATUS_SUCCESS;
@@ -973,6 +974,12 @@ NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
     }
     if (Slot->Dirty && (Slot->Tag != Block || Slot->Owner != Owner))
     {
+        /* A page-in (APC_LEVEL) must not write back: keep the dirty block and leave this one uncached */
+        if (!Passive)
+        {
+            ExReleaseFastMutex(&NtfsCacheMutex);
+            return STATUS_SUCCESS;
+        }
         ULONGLONG Victim = Slot->Tag;
         PDEVICE_OBJECT VictimOwner = Slot->Owner;
         ObReferenceObject(VictimOwner);
