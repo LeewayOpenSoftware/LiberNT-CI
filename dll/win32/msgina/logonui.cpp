@@ -2569,7 +2569,13 @@ LogonUiCoverSetStatus(_In_opt_ PCWSTR Message)
     Old = (PWSTR)InterlockedExchangePointer(&g_CoverPending, Copy);
     if (Old)
         HeapFree(GetProcessHeap(), 0, Old);
-    PostMessageW(g_Cover, WM_LOGONUI_COVER_STATUS, 0, 0);
+    if (!PostMessageW(g_Cover, WM_LOGONUI_COVER_STATUS, 0, 0))
+    {
+        /* The cover went away in between: take the copy back so it is not leaked. */
+        Old = (PWSTR)InterlockedExchangePointer(&g_CoverPending, NULL);
+        if (Old)
+            HeapFree(GetProcessHeap(), 0, Old);
+    }
     return TRUE;
 }
 
