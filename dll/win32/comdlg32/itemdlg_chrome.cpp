@@ -47,12 +47,18 @@ struct ItemDlgChrome : public ShellFrame::AddressBandHost, public ShellFrame::Na
     HIMAGELIST NavImages;
     HIMAGELIST NavDisabled;
     HIMAGELIST CommandImages;
+    HIMAGELIST ChevronImages;
+    HWND HideBar;
+    HBRUSH Background;
+    ShellFrame::BandPalette Palette;
+    BOOL Save;
+    BOOL Collapsed;
     ShellFrame::AddressBand *Address;
     ShellFrame::SearchBox *Search;
     ShellFrame::NavigationPane Pane;
     ShellFrame::NavigationPaneEvents *Events;
     DWORD Cookie;
-    WCHAR Texts[8][64];
+    WCHAR Texts[10][64];
     PIDLIST_ABSOLUTE Location;
     PIDLIST_ABSOLUTE SearchOrigin;
     WCHAR SearchQuery[MAX_PATH];
@@ -288,24 +294,86 @@ EditSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWO
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
-static HIMAGELIST
-Glyphs(const LPCWSTR *names, UINT count, int size, BOOL disabled)
+static BOOL
+IsDark(COLORREF color)
 {
-    ShellFrame::BandPalette palette;
-
-    ShellFrame::GetBandPalette(&palette);
-    return ShellFrame::GlyphImages(names, count, size, disabled ? palette.GlyphDisabled : palette.Glyph);
+    return GetRValue(color) * 299 + GetGValue(color) * 587 + GetBValue(color) * 114 < 128000;
 }
 
-extern "C" ItemDlgChrome *
-ItemDlgChrome_Create(HWND dialog, const ItemDlgChromeHost *host, void *context)
+static void
+SetImages(HWND bar, HIMAGELIST images, HIMAGELIST disabled)
+{
+    if (!bar)
+        return;
+    SendMessageW(bar, TB_SETIMAGELIST, 0, (LPARAM)images);
+    if (disabled)
+        SendMessageW(bar, TB_SETDISABLEDIMAGELIST, 0, (LPARAM)disabled);
+    InvalidateRect(bar, NULL, TRUE);
+}
+
+/* Colors and glyphs follow the system colors, light or dark, like File Explorer. */
+static void
+ApplyTheme(ItemDlgChrome *chrome)
 {
     static const LPCWSTR NavGlyphs[] =
     {
         L"arrow_left_16_regular", L"arrow_right_16_regular", L"arrow_up_16_regular", L"arrow_clockwise_16_regular"
     };
     static const LPCWSTR CommandGlyphs[] = { L"add_circle_20_regular", L"list_20_regular" };
-    ShellFrame::BandPalette palette;
+    static const LPCWSTR ChevronGlyphs[] = { L"chevron_up_12_regular", L"chevron_down_12_regular" };
+    HIMAGELIST old[4] = { chrome->NavImages, chrome->NavDisabled, chrome->CommandImages, chrome->ChevronImages };
+    BOOL dark;
+
+    ShellFrame::GetBandPalette(&chrome->Palette);
+    chrome->NavImages = ShellFrame::GlyphImages(NavGlyphs, _countof(NavGlyphs), chrome->Scale(16), chrome->Palette.Glyph);
+    chrome->NavDisabled = ShellFrame::GlyphImages(NavGlyphs, _countof(NavGlyphs), chrome->Scale(16),
+                                                  chrome->Palette.GlyphDisabled);
+    chrome->CommandImages = ShellFrame::GlyphImages(CommandGlyphs, _countof(CommandGlyphs), chrome->Scale(20),
+                                                    chrome->Palette.Glyph);
+    chrome->ChevronImages = ShellFrame::GlyphImages(ChevronGlyphs, _countof(ChevronGlyphs), chrome->Scale(12),
+                                                    chrome->Palette.Glyph);
+    SetImages(chrome->NavBar, chrome->NavImages, chrome->NavDisabled);
+    SetImages(chrome->RefreshBar, chrome->NavImages, NULL);
+    SetImages(chrome->Commands, chrome->CommandImages, NULL);
+    SetImages(chrome->ViewBar, chrome->CommandImages, NULL);
+    SetImages(chrome->HideBar, chrome->ChevronImages, NULL);
+    for (UINT i = 0; i < _countof(old); i++)
+    {
+        if (old[i])
+            ImageList_Destroy(old[i]);
+    }
+
+    if (chrome->Background)
+        DeleteObject(chrome->Background);
+    chrome->Background = CreateSolidBrush(chrome->Palette.Band);
+    chrome->Pane.SetPinGlyph(chrome->Scale(16), chrome->Palette.GlyphDisabled);
+    chrome->Pane.SetBackground(chrome->Palette.Body);
+    if (chrome->Address)
+        chrome->Address->RefreshGlyphs();
+    if (chrome->Search)
+        chrome->Search->RefreshGlyphs();
+
+    /* DWMWA_USE_IMMERSIVE_DARK_MODE */
+    dark = IsDark(chrome->Palette.Window);
+    DwmSetWindowAttribute(chrome->Dialog, 20, &dark, sizeof(dark));
+}
+
+static void
+UpdateHideButton(ItemDlgChrome *chrome)
+{
+    TBBUTTONINFOW info = { sizeof(info) };
+
+    if (!chrome->HideBar)
+        return;
+    info.dwMask = TBIF_TEXT | TBIF_IMAGE;
+    info.iImage = chrome->Collapsed ? 1 : 0;
+    info.pszText = chrome->Collapsed ? chrome->Texts[8] : chrome->Texts[7];
+    SendMessageW(chrome->HideBar, TB_SETBUTTONINFOW, IDC_HIDEFOLDERS, (LPARAM)&info);
+}
+
+extern "C" ItemDlgChrome *
+ItemDlgChrome_Create(HWND dialog, const ItemDlgChromeHost *host, void *context, BOOL save)
+{
     ItemDlgChrome *chrome;
     HFONT font = (HFONT)SendMessageW(dialog, WM_GETFONT, 0, 0);
 
@@ -315,13 +383,13 @@ ItemDlgChrome_Create(HWND dialog, const ItemDlgChromeHost *host, void *context)
     chrome->Dialog = dialog;
     chrome->Host = host;
     chrome->Context = context;
+    chrome->Save = save;
     chrome->Started = ShellFrame::Startup();
     if (!chrome->Started)
     {
         delete chrome;
         return NULL;
     }
-    ShellFrame::GetBandPalette(&palette);
 
     LoadText(IDS_NAV_BACK, L"Back", chrome->Texts[0], _countof(chrome->Texts[0]));
     LoadText(IDS_NAV_FORWARD, L"Forward", chrome->Texts[1], _countof(chrome->Texts[1]));
@@ -330,30 +398,30 @@ ItemDlgChrome_Create(HWND dialog, const ItemDlgChromeHost *host, void *context)
     LoadText(IDS_ORGANIZE, L"Organize", chrome->Texts[4], _countof(chrome->Texts[4]));
     LoadText(IDS_NEW_FOLDER, L"New folder", chrome->Texts[5], _countof(chrome->Texts[5]));
     LoadText(IDS_VIEW_DETAILS, L"Details", chrome->Texts[6], _countof(chrome->Texts[6]));
-
-    chrome->NavImages = Glyphs(NavGlyphs, _countof(NavGlyphs), chrome->Scale(16), FALSE);
-    chrome->NavDisabled = Glyphs(NavGlyphs, _countof(NavGlyphs), chrome->Scale(16), TRUE);
-    chrome->CommandImages = Glyphs(CommandGlyphs, _countof(CommandGlyphs), chrome->Scale(20), FALSE);
+    LoadText(IDS_HIDE_FOLDERS, L"Hide Folders", chrome->Texts[7], _countof(chrome->Texts[7]));
+    LoadText(IDS_BROWSE_FOLDERS, L"Browse Folders", chrome->Texts[8], _countof(chrome->Texts[8]));
 
     chrome->NavBar = CreateBar(dialog, 0x7f0);
-    SendMessageW(chrome->NavBar, TB_SETIMAGELIST, 0, (LPARAM)chrome->NavImages);
-    SendMessageW(chrome->NavBar, TB_SETDISABLEDIMAGELIST, 0, (LPARAM)chrome->NavDisabled);
     AddButton(chrome->NavBar, 0, IDC_NAVBACK, BTNS_BUTTON, chrome->Texts[0]);
     AddButton(chrome->NavBar, 1, IDC_NAVFORWARD, BTNS_BUTTON, chrome->Texts[1]);
     AddButton(chrome->NavBar, 2, IDC_NAVUP, BTNS_BUTTON, chrome->Texts[2]);
 
     chrome->RefreshBar = CreateBar(dialog, 0x7f1);
-    SendMessageW(chrome->RefreshBar, TB_SETIMAGELIST, 0, (LPARAM)chrome->NavImages);
     AddButton(chrome->RefreshBar, 3, IDC_NAVREFRESH, BTNS_BUTTON, chrome->Texts[3]);
 
     chrome->Commands = CreateBar(dialog, 0x7f2);
-    SendMessageW(chrome->Commands, TB_SETIMAGELIST, 0, (LPARAM)chrome->CommandImages);
     AddButton(chrome->Commands, I_IMAGENONE, IDC_ORGANIZE, BTNS_WHOLEDROPDOWN | BTNS_SHOWTEXT, chrome->Texts[4]);
     AddButton(chrome->Commands, 0, IDC_NEWFOLDER, BTNS_BUTTON | BTNS_SHOWTEXT, chrome->Texts[5]);
 
     chrome->ViewBar = CreateBar(dialog, 0x7f3);
-    SendMessageW(chrome->ViewBar, TB_SETIMAGELIST, 0, (LPARAM)chrome->CommandImages);
     AddButton(chrome->ViewBar, 1, IDC_VIEWMENU, BTNS_WHOLEDROPDOWN, chrome->Texts[6]);
+
+    /* Only the save dialog folds its browser away, as on Windows. */
+    if (save)
+    {
+        chrome->HideBar = CreateBar(dialog, 0x7f4);
+        AddButton(chrome->HideBar, 0, IDC_HIDEFOLDERS, BTNS_BUTTON | BTNS_SHOWTEXT, chrome->Texts[7]);
+    }
 
     chrome->Address = new ShellFrame::AddressBand();
     if (chrome->Address && chrome->Address->Create(dialog, chrome, font))
@@ -368,9 +436,8 @@ ItemDlgChrome_Create(HWND dialog, const ItemDlgChromeHost *host, void *context)
         if (chrome->Events)
             chrome->Pane.Control()->TreeAdvise(static_cast<INameSpaceTreeControlEvents *>(chrome->Events),
                                                &chrome->Cookie);
-        chrome->Pane.SetPinGlyph(chrome->Scale(16), palette.GlyphDisabled);
-        chrome->Pane.SetBackground(palette.Body);
     }
+    ApplyTheme(chrome);
     return chrome;
 }
 
@@ -407,6 +474,10 @@ ItemDlgChrome_Destroy(ItemDlgChrome *chrome)
         ImageList_Destroy(chrome->NavDisabled);
     if (chrome->CommandImages)
         ImageList_Destroy(chrome->CommandImages);
+    if (chrome->ChevronImages)
+        ImageList_Destroy(chrome->ChevronImages);
+    if (chrome->Background)
+        DeleteObject(chrome->Background);
     if (chrome->Location)
         ILFree(chrome->Location);
     if (chrome->SearchOrigin)
@@ -416,11 +487,19 @@ ItemDlgChrome_Destroy(ItemDlgChrome *chrome)
     delete chrome;
 }
 
+static int
+AddressRowBottom(ItemDlgChrome *chrome)
+{
+    return chrome->Scale(8) + chrome->Scale(32) + chrome->Scale(8);
+}
+
 /* Two rows on top as in Windows 11, the navigation pane on the left, the browser in the rest. */
 extern "C" void
-ItemDlgChrome_Layout(ItemDlgChrome *chrome, HDWP *hdwp, const RECT *client, int bottom, RECT *browser)
+ItemDlgChrome_Layout(ItemDlgChrome *chrome, HDWP *hdwp, const RECT *client, int bottom, const RECT *buttons,
+                     RECT *browser)
 {
     int width = client->right, row = chrome->Scale(32), top = chrome->Scale(8), left, search, refresh, pane = 0;
+    int shown = chrome->Collapsed ? SW_HIDE : SW_SHOW;
     SIZE size;
 
     size = BarSize(chrome->NavBar);
@@ -434,6 +513,24 @@ ItemDlgChrome_Layout(ItemDlgChrome *chrome, HDWP *hdwp, const RECT *client, int 
     Place(hdwp, chrome->RefreshBar, refresh, top + (row - size.cy) / 2, size.cx, size.cy);
     if (chrome->Address)
         Place(hdwp, chrome->Address->Window(), left, top, max(0, refresh - chrome->Scale(4) - left), row);
+
+    if (chrome->HideBar && buttons)
+    {
+        size = BarSize(chrome->HideBar);
+        Place(hdwp, chrome->HideBar, chrome->Scale(8), buttons->top + (buttons->bottom - buttons->top - size.cy) / 2,
+              size.cx, size.cy);
+    }
+
+    ShowWindow(chrome->Commands, shown);
+    ShowWindow(chrome->ViewBar, shown);
+    if (chrome->Pane.Window())
+        ShowWindow(chrome->Pane.Window(), shown);
+    if (chrome->Collapsed)
+    {
+        top = AddressRowBottom(chrome);
+        SetRect(browser, 0, top, 0, top);
+        return;
+    }
 
     top += row + chrome->Scale(6);
     size = BarSize(chrome->Commands);
@@ -449,6 +546,48 @@ ItemDlgChrome_Layout(ItemDlgChrome *chrome, HDWP *hdwp, const RECT *client, int 
         pane = chrome->Scale(176);
     }
     SetRect(browser, pane ? pane : chrome->Scale(4), top, width - chrome->Scale(4), bottom);
+}
+
+extern "C" BOOL
+ItemDlgChrome_IsCollapsed(ItemDlgChrome *chrome)
+{
+    return chrome && chrome->Collapsed;
+}
+
+extern "C" int
+ItemDlgChrome_TopHeight(ItemDlgChrome *chrome)
+{
+    return chrome ? AddressRowBottom(chrome) : 0;
+}
+
+/* The dialog and its labels take the band color; edit boxes and lists keep their own. */
+extern "C" BOOL
+ItemDlgChrome_OnColor(ItemDlgChrome *chrome, UINT msg, HDC dc, INT_PTR *result)
+{
+    if (!chrome || !chrome->Background)
+        return FALSE;
+    switch (msg)
+    {
+        case WM_CTLCOLORDLG:
+            *result = (INT_PTR)chrome->Background;
+            return TRUE;
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN:
+            SetTextColor(dc, chrome->Palette.Text);
+            SetBkColor(dc, chrome->Palette.Band);
+            *result = (INT_PTR)chrome->Background;
+            return TRUE;
+    }
+    return FALSE;
+}
+
+extern "C" void
+ItemDlgChrome_SettingsChanged(ItemDlgChrome *chrome)
+{
+    if (!chrome)
+        return;
+    ApplyTheme(chrome);
+    RedrawWindow(chrome->Dialog, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
 extern "C" void
@@ -712,6 +851,11 @@ ItemDlgChrome_OnCommand(ItemDlgChrome *chrome, UINT id)
         case IDC_NEWFOLDER:
             NewFolder(chrome);
             return TRUE;
+        case IDC_HIDEFOLDERS:
+            chrome->Collapsed = !chrome->Collapsed;
+            UpdateHideButton(chrome);
+            chrome->Host->collapse(chrome->Context, chrome->Collapsed);
+            return TRUE;
     }
     return FALSE;
 }
@@ -722,14 +866,15 @@ ItemDlgChrome_OnNotify(ItemDlgChrome *chrome, NMHDR *header, LRESULT *result)
     if (!chrome || !header)
         return FALSE;
     if (header->hwndFrom != chrome->NavBar && header->hwndFrom != chrome->RefreshBar &&
-        header->hwndFrom != chrome->Commands && header->hwndFrom != chrome->ViewBar)
+        header->hwndFrom != chrome->Commands && header->hwndFrom != chrome->ViewBar &&
+        header->hwndFrom != chrome->HideBar)
     {
         return FALSE;
     }
     switch (header->code)
     {
         case NM_CUSTOMDRAW:
-            *result = ShellFrame::ToolbarCustomDraw((NMTBCUSTOMDRAW *)header, GetSysColor(COLOR_3DFACE));
+            *result = ShellFrame::ToolbarCustomDraw((NMTBCUSTOMDRAW *)header, chrome->Palette.Band);
             return TRUE;
         case TBN_DROPDOWN:
         {

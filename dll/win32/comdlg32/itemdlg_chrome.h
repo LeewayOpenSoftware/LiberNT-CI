@@ -51,11 +51,17 @@ typedef struct ItemDlgChromeHost
     void (*navigate)(void *context, PCIDLIST_ABSOLUTE pidl);
     void (*navigate_text)(void *context, LPCWSTR text);
     IShellView *(*get_view)(void *context);
+    void (*collapse)(void *context, BOOL collapsed);
 } ItemDlgChromeHost;
 
-ItemDlgChrome *ItemDlgChrome_Create(HWND dialog, const ItemDlgChromeHost *host, void *context);
+ItemDlgChrome *ItemDlgChrome_Create(HWND dialog, const ItemDlgChromeHost *host, void *context, BOOL save);
 void ItemDlgChrome_Destroy(ItemDlgChrome *chrome);
-void ItemDlgChrome_Layout(ItemDlgChrome *chrome, HDWP *hdwp, const RECT *client, int bottom, RECT *browser);
+void ItemDlgChrome_Layout(ItemDlgChrome *chrome, HDWP *hdwp, const RECT *client, int bottom, const RECT *buttons,
+                          RECT *browser);
+BOOL ItemDlgChrome_IsCollapsed(ItemDlgChrome *chrome);
+int ItemDlgChrome_TopHeight(ItemDlgChrome *chrome);
+BOOL ItemDlgChrome_OnColor(ItemDlgChrome *chrome, UINT msg, HDC dc, INT_PTR *result);
+void ItemDlgChrome_SettingsChanged(ItemDlgChrome *chrome);
 void ItemDlgChrome_SetLocation(ItemDlgChrome *chrome, PCIDLIST_ABSOLUTE pidl);
 BOOL ItemDlgChrome_OnNotify(ItemDlgChrome *chrome, NMHDR *header, LRESULT *result);
 BOOL ItemDlgChrome_OnCommand(ItemDlgChrome *chrome, UINT id);

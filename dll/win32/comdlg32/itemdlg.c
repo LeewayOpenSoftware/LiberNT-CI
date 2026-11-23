@@ -135,6 +135,7 @@ typedef struct FileDialogImpl {
     UINT cctrl_indent, dpi_x, dpi_y;
     HWND cctrls_hwnd;
     ItemDlgChrome *chrome;
+    int bottom_height, expanded_height, collapsed_height;
     struct list cctrls;
     UINT_PTR cctrl_next_dlgid;
     customctrl *cctrl_active_vg;
@@ -1819,7 +1820,7 @@ static void update_layout(FileDialogImpl *This)
 
     SetRectEmpty(&toolbar_rc);
 
-    if(dialog_rc.right < min_width || dialog_rc.bottom < min_height)
+    if(dialog_rc.right < min_width || (dialog_rc.bottom < min_height && !ItemDlgChrome_IsCollapsed(This->chrome)))
     {
         TRACE("Dialog size (%ld, %ld) too small, not updating layout\n", dialog_rc.right, dialog_rc.bottom);
         return;
@@ -1949,6 +1950,8 @@ static void update_layout(FileDialogImpl *This)
     customctrls_rc.top = customctrls_rc.bottom -
         ctrl_container_resize(This, customctrls_rc.right - customctrls_rc.left);
 
+    This->bottom_height = dialog_rc.bottom - customctrls_rc.top + vspacing;
+
     /* The ExplorerBrowser control. */
     ebrowser_rc.left = dialog_rc.left + hspacing;
     ebrowser_rc.top = toolbar_rc.bottom + vspacing;
@@ -1963,7 +1966,7 @@ static void update_layout(FileDialogImpl *This)
     hdwp = BeginDeferWindowPos(This->chrome ? 14 : 7);
 
     if (hdwp && This->chrome)
-        ItemDlgChrome_Layout(This->chrome, &hdwp, &dialog_rc, customctrls_rc.top - vspacing, &ebrowser_rc);
+        ItemDlgChrome_Layout(This->chrome, &hdwp, &dialog_rc, customctrls_rc.top - vspacing, &open_rc, &ebrowser_rc);
 
     if(hdwp && This->peb)
         IExplorerBrowser_SetRect(This->peb, &hdwp, ebrowser_rc);
@@ -2045,9 +2048,32 @@ static IShellView *chrome_get_view(void *context)
     return view;
 }
 
+/* Folding keeps the address row and the file name area, as the Windows save dialog does. */
+static void chrome_collapse(void *context, BOOL collapsed)
+{
+    FileDialogImpl *This = context;
+    RECT window, client;
+    int height;
+
+    GetWindowRect(This->dlg_hwnd, &window);
+    GetClientRect(This->dlg_hwnd, &client);
+    if (collapsed)
+    {
+        This->expanded_height = window.bottom - window.top;
+        height = This->expanded_height - client.bottom + ItemDlgChrome_TopHeight(This->chrome) + This->bottom_height;
+        This->collapsed_height = height;
+    }
+    else
+    {
+        height = This->expanded_height;
+    }
+    SetWindowPos(This->dlg_hwnd, NULL, 0, 0, window.right - window.left, height,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 static const ItemDlgChromeHost chrome_host =
 {
-    chrome_navigate, chrome_navigate_text, chrome_get_view
+    chrome_navigate, chrome_navigate_text, chrome_get_view, chrome_collapse
 };
 
 static HRESULT init_explorerbrowser(FileDialogImpl *This)
@@ -2295,7 +2321,7 @@ static LRESULT on_wm_initdialog(HWND hwnd, LPARAM lParam)
     }
 
     ctrl_container_reparent(This, This->dlg_hwnd);
-    This->chrome = ItemDlgChrome_Create(hwnd, &chrome_host, This);
+    This->chrome = ItemDlgChrome_Create(hwnd, &chrome_host, This, This->dlg_type == ITEMDLG_TYPE_SAVE);
     init_explorerbrowser(This);
     if (!This->chrome)
         init_toolbar(This, hwnd);
@@ -2325,6 +2351,8 @@ static LRESULT on_wm_getminmaxinfo(FileDialogImpl *This, LPARAM lparam)
     /* FIXME */
     mmi->ptMinTrackSize.x = 640;
     mmi->ptMinTrackSize.y = 480;
+    if (This && ItemDlgChrome_IsCollapsed(This->chrome) && This->collapsed_height)
+        mmi->ptMinTrackSize.y = mmi->ptMaxTrackSize.y = This->collapsed_height;
 
     return FALSE;
 }
@@ -2484,6 +2512,22 @@ static INT_PTR CALLBACK itemdlg_dlgproc(HWND hwnd, UINT umessage, WPARAM wparam,
     case WM_SIZE:             return on_wm_size(This);
     case WM_GETMINMAXINFO:    return on_wm_getminmaxinfo(This, lparam);
     case WM_DESTROY:          return on_wm_destroy(This);
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+    {
+        INT_PTR brush;
+
+        if (This && ItemDlgChrome_OnColor(This->chrome, umessage, (HDC)wparam, &brush))
+            return brush;
+        break;
+    }
+    case WM_SETTINGCHANGE:
+    case WM_SYSCOLORCHANGE:
+    case WM_THEMECHANGED:
+        if (This)
+            ItemDlgChrome_SettingsChanged(This->chrome);
+        break;
     case WM_NOTIFY:
     {
         LRESULT result = 0;
