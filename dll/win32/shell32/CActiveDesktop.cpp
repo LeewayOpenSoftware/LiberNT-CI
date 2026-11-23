@@ -106,27 +106,40 @@ HRESULT WINAPI CActiveDesktop::ApplyChanges(DWORD dwFlags)
 
     TRACE("(%lx)\n", dwFlags);
 
-    /* AD_APPLY_SAVE persists the pending options. */
-    if ((dwFlags & AD_APPLY_SAVE) && m_bOptionsPending)
+    /* AD_APPLY_SAVE persists the pending options (and a pending wallpaper
+     * path, so SAVE alone does not silently drop it). */
+    if (dwFlags & AD_APPLY_SAVE)
     {
         LPCWSTR pszWallpaperStyle, pszTileWallpaper;
         HKEY hKey;
         LSTATUS Status;
 
-        if (!StyleToRegistry(m_dwPendingStyle, &pszWallpaperStyle, &pszTileWallpaper))
+        if (m_bOptionsPending && !StyleToRegistry(m_dwPendingStyle, &pszWallpaperStyle, &pszTileWallpaper))
             return E_INVALIDARG;
 
         Status = RegCreateKeyExW(HKEY_CURRENT_USER, szDesktopKey, 0, NULL,
                                  0, KEY_WRITE, NULL, &hKey, NULL);
         if (Status != ERROR_SUCCESS)
             return HRESULT_FROM_WIN32(Status);
-        hr = WriteRegistryString(hKey, szWallpaperStyleValue, pszWallpaperStyle);
-        if (SUCCEEDED(hr))
-            hr = WriteRegistryString(hKey, szTileWallpaperValue, pszTileWallpaper);
+
+        hr = S_OK;
+        if (m_bOptionsPending)
+        {
+            hr = WriteRegistryString(hKey, szWallpaperStyleValue, pszWallpaperStyle);
+            if (SUCCEEDED(hr))
+                hr = WriteRegistryString(hKey, szTileWallpaperValue, pszTileWallpaper);
+            if (SUCCEEDED(hr))
+                m_bOptionsPending = FALSE;
+        }
+        if (SUCCEEDED(hr) && m_bWallpaperPending)
+        {
+            hr = WriteRegistryString(hKey, szWallpaperValue, m_szPendingWallpaper);
+            if (SUCCEEDED(hr))
+                m_bWallpaperPending = FALSE;
+        }
         RegCloseKey(hKey);
         if (FAILED(hr))
             return hr;
-        m_bOptionsPending = FALSE;
     }
 
     /* AD_APPLY_REFRESH / AD_APPLY_FORCE apply the wallpaper through SPI. */
@@ -154,6 +167,7 @@ HRESULT WINAPI CActiveDesktop::ApplyChanges(DWORD dwFlags)
                 if (hrRead == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
                 {
                     TRACE("No wallpaper configured; nothing to apply\n");
+                    hr = S_FALSE;
                 }
                 else
                 {
@@ -169,12 +183,15 @@ HRESULT WINAPI CActiveDesktop::ApplyChanges(DWORD dwFlags)
             else
             {
                 TRACE("No wallpaper configured; nothing to apply\n");
+                hr = S_FALSE;
             }
         }
     }
 
-    /* Read back the effective style so m_dwPendingStyle tracks reality. */
-    if (SUCCEEDED(ReadRegistryString(szWallpaperStyleValue, szStyle, ARRAYSIZE(szStyle))) &&
+    /* Read back the effective style so m_dwPendingStyle tracks reality, but
+     * never clobber a pending style that has not been saved yet. */
+    if (!m_bOptionsPending &&
+        SUCCEEDED(ReadRegistryString(szWallpaperStyleValue, szStyle, ARRAYSIZE(szStyle))) &&
         SUCCEEDED(ReadRegistryString(szTileWallpaperValue, szTile, ARRAYSIZE(szTile))))
     {
         RegistryToStyle(szStyle, szTile, &m_dwPendingStyle);
@@ -191,9 +208,11 @@ HRESULT WINAPI CActiveDesktop::GetWallpaper(PWSTR pwszWallpaper, UINT cchWallpap
 
     if (!pwszWallpaper || !cchWallpaper)
         return E_INVALIDARG;
-    if (dwFlags & ~(AD_GETWP_LAST_APPLIED))
+    if (dwFlags & ~(AD_GETWP_BMP | AD_GETWP_IMAGE | AD_GETWP_LAST_APPLIED))
         return E_INVALIDARG;
 
+    /* BMP, IMAGE and LAST_APPLIED all resolve to the applied image path here
+     * (there is no separate HTML/DS image to report). */
     ReadRegistryString(szWallpaperValue, szCurrent, ARRAYSIZE(szCurrent));
     StringCchCopyW(pwszWallpaper, cchWallpaper, szCurrent);
     return S_OK;
