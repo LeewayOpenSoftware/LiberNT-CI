@@ -971,7 +971,7 @@ InstallPageProc(
     return FALSE;
 }
 
-/* libernt.exe runs from <source>\system32\oobe; return <source>. */
+/* oros.exe runs from <source>\system32\oobe; return <source>. */
 static BOOL
 GetInstallSourceRoot(
     _Out_writes_(cchRoot) PWSTR pszRoot,

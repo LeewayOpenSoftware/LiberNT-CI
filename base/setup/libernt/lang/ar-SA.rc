@@ -253,7 +253,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nفشلت الخطوة بالحالة 0x%08lx."
     IDS_FORMAT_FAILED "تعذّر على برنامج الإعداد تهيئة %s بنظام %s.\n%s"
     IDS_CHECK_FAILED "عثر برنامج الإعداد على أخطاء في %s تعذّر إصلاحها (الحالة 0x%08lx). يستمر الإعداد."
-    IDS_SETUPLIB_MISSING "لا يستطيع برنامج الإعداد تحميل %s. شغّل libernt.exe من المجلد system32\\oobe في مصدر التثبيت الذي يحتوي على txtsetup.sif."
+    IDS_SETUPLIB_MISSING "لا يستطيع برنامج الإعداد تحميل %s. شغّل oros.exe من المجلد system32\\oobe في مصدر التثبيت الذي يحتوي على txtsetup.sif."
 END
 
 STRINGTABLE

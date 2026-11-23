@@ -853,7 +853,7 @@ wWinMain(IN HINSTANCE hInst,
         NotifyLogon();
 
     if (bIsLiveCD)
-        StartInstaller(L"system32\\oobe\\libernt.exe");
+        StartInstaller(L"system32\\oobe\\oros.exe");
 
     return 0;
 }

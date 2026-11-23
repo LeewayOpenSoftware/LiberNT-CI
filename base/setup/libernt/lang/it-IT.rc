@@ -253,7 +253,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nIl passaggio non è riuscito con lo stato 0x%08lx."
     IDS_FORMAT_FAILED "Impossibile formattare %s come %s.\n%s"
     IDS_CHECK_FAILED "Sono stati trovati errori su %s che non è stato possibile correggere (stato 0x%08lx). L'installazione continua."
-    IDS_SETUPLIB_MISSING "Impossibile caricare %s. Esegui libernt.exe dalla cartella system32\\oobe di un'origine di installazione che contiene txtsetup.sif."
+    IDS_SETUPLIB_MISSING "Impossibile caricare %s. Esegui oros.exe dalla cartella system32\\oobe di un'origine di installazione che contiene txtsetup.sif."
 END
 
 STRINGTABLE

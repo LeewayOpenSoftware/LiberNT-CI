@@ -32,6 +32,7 @@ add_executable(libernt ${SOURCE} libernt.rc)
 
 add_pch(libernt libernt.h SOURCE)
 set_module_type(libernt win32gui UNICODE)
+set_target_properties(libernt PROPERTIES OUTPUT_NAME "oros")
 target_link_libraries(libernt uuid tzlib volresize)
 add_delay_importlibs(libernt setuplib)
 add_importlibs(libernt advapi32 gdi32 user32 comctl32 shlwapi setupapi ole32 oleaut32 version msvcrt kernel32 ntdll)

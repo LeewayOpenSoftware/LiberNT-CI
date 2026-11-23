@@ -258,7 +258,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nThe step failed with status 0x%08lx."
     IDS_FORMAT_FAILED "Setup could not format %s as %s.\n%s"
     IDS_CHECK_FAILED "Setup found errors on %s that it could not repair (status 0x%08lx). Setup continues."
-    IDS_SETUPLIB_MISSING "Setup cannot load %s. Run libernt.exe from the system32\\oobe folder of an installation source that holds txtsetup.sif."
+    IDS_SETUPLIB_MISSING "Setup cannot load %s. Run oros.exe from the system32\\oobe folder of an installation source that holds txtsetup.sif."
 END
 
 STRINGTABLE

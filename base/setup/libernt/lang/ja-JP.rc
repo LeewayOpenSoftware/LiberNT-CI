@@ -252,7 +252,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nこの手順はステータス 0x%08lx で失敗しました。"
     IDS_FORMAT_FAILED "%s を %s でフォーマットできませんでした。\n%s"
     IDS_CHECK_FAILED "%s に修復できないエラーが見つかりました (ステータス 0x%08lx)。セットアップは続行します。"
-    IDS_SETUPLIB_MISSING "%s を読み込めません。txtsetup.sif を含むインストール ソースの system32\\oobe フォルダーから libernt.exe を実行してください。"
+    IDS_SETUPLIB_MISSING "%s を読み込めません。txtsetup.sif を含むインストール ソースの system32\\oobe フォルダーから oros.exe を実行してください。"
 END
 
 STRINGTABLE

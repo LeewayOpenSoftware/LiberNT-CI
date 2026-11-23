@@ -22,7 +22,7 @@ Arranca `bootcd.iso` en una máquina virtual o en un PC y sigue las instruccione
 
 `LiberNT.img` no necesita instalación. Inícialo en una máquina virtual como QEMU, o escríbelo en una unidad USB o una tarjeta SD y arranca el equipo desde ella. Usa `LiberNT.vhd` en las máquinas virtuales que aceptan discos VHD, y `LiberNT.vhdx` en las máquinas virtuales Hyper-V de generación 2, con el arranque seguro desactivado.
 
-El disco preinstalado también incluye la instalación de LiberNT. Ejecuta `C:\<arquitectura>\libernt.exe`, por ejemplo `C:\arm64\libernt.exe`, para instalar LiberNT en otro disco desde el sistema en ejecución.
+El disco preinstalado también incluye la instalación de LiberNT. Ejecuta `C:\<arquitectura>\system32\oobe\oros.exe`, por ejemplo `C:\arm64\system32\oobe\oros.exe`, para instalar LiberNT en otro disco desde el sistema en ejecución.
 
 ## Ayuda
 
