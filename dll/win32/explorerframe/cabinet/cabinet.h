@@ -75,7 +75,7 @@ enum class CabinetCommand
 HINSTANCE CabinetModule();
 HRESULT CabinetSite_Create(CCabinetWindow *window, IExplorerBrowser *browser, IUnknown **site);
 
-class CCabinetWindow : public ICabinetBandHost
+class CCabinetWindow : public ICabinetBandHost, public ShellFrame::NavigationPaneHost
 {
 public:
     CCabinetWindow();
@@ -89,8 +89,8 @@ public:
     void OnViewCreated(IExplorerBrowser *browser, IShellView *view);
     void OnSelectionChanged();
     HRESULT OnDefaultCommand(IShellView *view);
-    void OnNavigationItem(IShellItem *item, BOOL newTab);
-    void PaintNavigationItem(HDC dc, const RECT &rc, const NSTCCUSTOMDRAW *item);
+    void OnNavigationItem(IShellItem *item, BOOL newTab) override;
+    void PaintNavigationItem(HDC dc, const RECT &rc, const NSTCCUSTOMDRAW *item) override;
     void OnViewEvent(DISPID dispid);
 
     void OnTabSelect(int index) override;

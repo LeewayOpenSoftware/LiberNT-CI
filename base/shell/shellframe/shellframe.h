@@ -449,6 +449,55 @@ private:
     HBRUSH m_BoxBrush;
 };
 
+class NavigationPaneHost
+{
+public:
+    virtual ~NavigationPaneHost() {}
+    virtual void OnNavigationItem(IShellItem *item, BOOL newTab) = 0;
+    virtual void PaintNavigationItem(HDC dc, const RECT &rc, const NSTCCUSTOMDRAW *item) = 0;
+};
+
+class NavigationPaneEvents : public INameSpaceTreeControlEvents, public INameSpaceTreeControlCustomDraw
+{
+public:
+    NavigationPaneEvents(NavigationPaneHost *host);
+
+    STDMETHODIMP QueryInterface(REFIID riid, void **ppv) override;
+    STDMETHODIMP_(ULONG) AddRef() override;
+    STDMETHODIMP_(ULONG) Release() override;
+
+    STDMETHODIMP OnItemClick(IShellItem *item, NSTCEHITTEST hit, NSTCECLICKTYPE click) override;
+    STDMETHODIMP OnPropertyItemCommit(IShellItem *item) override;
+    STDMETHODIMP OnItemStateChanging(IShellItem *item, NSTCITEMSTATE mask, NSTCITEMSTATE state) override;
+    STDMETHODIMP OnItemStateChanged(IShellItem *item, NSTCITEMSTATE mask, NSTCITEMSTATE state) override;
+    STDMETHODIMP OnSelectionChanged(IShellItemArray *selection) override;
+    STDMETHODIMP OnKeyboardInput(UINT msg, WPARAM wParam, LPARAM lParam) override;
+    STDMETHODIMP OnBeforeExpand(IShellItem *item) override;
+    STDMETHODIMP OnAfterExpand(IShellItem *item) override;
+    STDMETHODIMP OnBeginLabelEdit(IShellItem *item) override;
+    STDMETHODIMP OnEndLabelEdit(IShellItem *item) override;
+    STDMETHODIMP OnGetToolTip(IShellItem *item, LPWSTR tip, int length) override;
+    STDMETHODIMP OnBeforeItemDelete(IShellItem *item) override;
+    STDMETHODIMP OnItemAdded(IShellItem *item, BOOL root) override;
+    STDMETHODIMP OnItemDeleted(IShellItem *item, BOOL root) override;
+    STDMETHODIMP OnBeforeContextMenu(IShellItem *item, REFIID riid, void **ppv) override;
+    STDMETHODIMP OnAfterContextMenu(IShellItem *item, IContextMenu *menu, REFIID riid, void **ppv) override;
+    STDMETHODIMP OnBeforeStateImageChange(IShellItem *item) override;
+    STDMETHODIMP OnGetDefaultIconIndex(IShellItem *item, int *defaultIcon, int *openIcon) override;
+
+    STDMETHODIMP PrePaint(HDC hdc, RECT *prc, LRESULT *plres) override;
+    STDMETHODIMP PostPaint(HDC hdc, RECT *prc) override;
+    STDMETHODIMP ItemPrePaint(HDC hdc, RECT *prc, NSTCCUSTOMDRAW *item, COLORREF *text, COLORREF *textBack,
+                              LRESULT *plres) override;
+    STDMETHODIMP ItemPostPaint(HDC hdc, RECT *prc, NSTCCUSTOMDRAW *item) override;
+
+protected:
+    virtual ~NavigationPaneEvents();
+
+    LONG m_Ref;
+    NavigationPaneHost *m_Host;
+};
+
 class NavigationPane
 {
 public:

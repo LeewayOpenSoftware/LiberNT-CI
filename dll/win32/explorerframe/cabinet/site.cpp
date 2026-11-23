@@ -223,12 +223,11 @@ CabinetSite_Create(CCabinetWindow *window, IExplorerBrowser *browser, IUnknown *
 
 // Also the navigation pane's site (IObjectWithSite of the tree control), so the
 // pane's context menus reach this window through SID_SCabinetFrame
-class CCabinetNavigation : public INameSpaceTreeControlEvents, public INameSpaceTreeControlCustomDraw,
-                           public IServiceProvider, public IOleCommandTarget
+class CCabinetNavigation : public ShellFrame::NavigationPaneEvents, public IServiceProvider, public IOleCommandTarget
 {
 public:
     CCabinetNavigation(CCabinetWindow *window) :
-        m_Ref(1),
+        ShellFrame::NavigationPaneEvents(window),
         m_Window(window)
     {
     }
@@ -237,18 +236,6 @@ public:
     {
         if (!ppv)
             return E_POINTER;
-        if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_INameSpaceTreeControlEvents))
-        {
-            *ppv = static_cast<INameSpaceTreeControlEvents *>(this);
-            AddRef();
-            return S_OK;
-        }
-        if (IsEqualIID(riid, IID_INameSpaceTreeControlCustomDraw))
-        {
-            *ppv = static_cast<INameSpaceTreeControlCustomDraw *>(this);
-            AddRef();
-            return S_OK;
-        }
         if (IsEqualIID(riid, IID_IServiceProvider))
         {
             *ppv = static_cast<IServiceProvider *>(this);
@@ -261,8 +248,17 @@ public:
             AddRef();
             return S_OK;
         }
-        *ppv = NULL;
-        return E_NOINTERFACE;
+        return ShellFrame::NavigationPaneEvents::QueryInterface(riid, ppv);
+    }
+
+    STDMETHODIMP_(ULONG) AddRef() override
+    {
+        return ShellFrame::NavigationPaneEvents::AddRef();
+    }
+
+    STDMETHODIMP_(ULONG) Release() override
+    {
+        return ShellFrame::NavigationPaneEvents::Release();
     }
 
     STDMETHODIMP QueryService(REFGUID service, REFIID riid, void **ppv) override
@@ -288,140 +284,7 @@ public:
         return CabinetFrame_Exec(m_Window, group, command, in);
     }
 
-    STDMETHODIMP_(ULONG) AddRef() override
-    {
-        return InterlockedIncrement(&m_Ref);
-    }
-
-    STDMETHODIMP_(ULONG) Release() override
-    {
-        ULONG ref = InterlockedDecrement(&m_Ref);
-        if (!ref)
-            delete this;
-        return ref;
-    }
-
-    STDMETHODIMP OnItemClick(IShellItem *item, NSTCEHITTEST hit, NSTCECLICKTYPE click) override
-    {
-        if (!item || !(hit & (NSTCEHT_ONITEMICON | NSTCEHT_ONITEMLABEL | NSTCEHT_ONITEMRIGHT | NSTCEHT_ONITEMIDENT)))
-            return S_FALSE;
-        if ((click & NSTCECT_BUTTON) == NSTCECT_LBUTTON)
-            m_Window->OnNavigationItem(item, FALSE);
-        else if ((click & NSTCECT_BUTTON) == NSTCECT_MBUTTON)
-            m_Window->OnNavigationItem(item, TRUE);
-        return S_FALSE;
-    }
-
-    STDMETHODIMP OnPropertyItemCommit(IShellItem *item) override { UNREFERENCED_PARAMETER(item); return S_FALSE; }
-    STDMETHODIMP OnItemStateChanging(IShellItem *item, NSTCITEMSTATE mask, NSTCITEMSTATE state) override
-    {
-        UNREFERENCED_PARAMETER(item);
-        UNREFERENCED_PARAMETER(mask);
-        UNREFERENCED_PARAMETER(state);
-        return S_OK;
-    }
-    STDMETHODIMP OnItemStateChanged(IShellItem *item, NSTCITEMSTATE mask, NSTCITEMSTATE state) override
-    {
-        UNREFERENCED_PARAMETER(item);
-        UNREFERENCED_PARAMETER(mask);
-        UNREFERENCED_PARAMETER(state);
-        return S_OK;
-    }
-    STDMETHODIMP OnSelectionChanged(IShellItemArray *selection) override
-    {
-        UNREFERENCED_PARAMETER(selection);
-        return S_OK;
-    }
-    STDMETHODIMP OnKeyboardInput(UINT msg, WPARAM wParam, LPARAM lParam) override
-    {
-        UNREFERENCED_PARAMETER(msg);
-        UNREFERENCED_PARAMETER(wParam);
-        UNREFERENCED_PARAMETER(lParam);
-        return S_FALSE;
-    }
-    STDMETHODIMP OnBeforeExpand(IShellItem *item) override { UNREFERENCED_PARAMETER(item); return S_OK; }
-    STDMETHODIMP OnAfterExpand(IShellItem *item) override { UNREFERENCED_PARAMETER(item); return S_OK; }
-    STDMETHODIMP OnBeginLabelEdit(IShellItem *item) override { UNREFERENCED_PARAMETER(item); return S_OK; }
-    STDMETHODIMP OnEndLabelEdit(IShellItem *item) override { UNREFERENCED_PARAMETER(item); return S_OK; }
-    STDMETHODIMP OnGetToolTip(IShellItem *item, LPWSTR tip, int length) override
-    {
-        UNREFERENCED_PARAMETER(item);
-        UNREFERENCED_PARAMETER(tip);
-        UNREFERENCED_PARAMETER(length);
-        return E_NOTIMPL;
-    }
-    STDMETHODIMP OnBeforeItemDelete(IShellItem *item) override { UNREFERENCED_PARAMETER(item); return S_OK; }
-    STDMETHODIMP OnItemAdded(IShellItem *item, BOOL root) override
-    {
-        UNREFERENCED_PARAMETER(item);
-        UNREFERENCED_PARAMETER(root);
-        return S_OK;
-    }
-    STDMETHODIMP OnItemDeleted(IShellItem *item, BOOL root) override
-    {
-        UNREFERENCED_PARAMETER(item);
-        UNREFERENCED_PARAMETER(root);
-        return S_OK;
-    }
-    STDMETHODIMP OnBeforeContextMenu(IShellItem *item, REFIID riid, void **ppv) override
-    {
-        UNREFERENCED_PARAMETER(item);
-        UNREFERENCED_PARAMETER(riid);
-        *ppv = NULL;
-        return E_NOTIMPL;
-    }
-    STDMETHODIMP OnAfterContextMenu(IShellItem *item, IContextMenu *menu, REFIID riid, void **ppv) override
-    {
-        UNREFERENCED_PARAMETER(item);
-        return menu->QueryInterface(riid, ppv);
-    }
-    STDMETHODIMP OnBeforeStateImageChange(IShellItem *item) override { UNREFERENCED_PARAMETER(item); return S_OK; }
-    STDMETHODIMP OnGetDefaultIconIndex(IShellItem *item, int *defaultIcon, int *openIcon) override
-    {
-        UNREFERENCED_PARAMETER(item);
-        UNREFERENCED_PARAMETER(defaultIcon);
-        UNREFERENCED_PARAMETER(openIcon);
-        return E_NOTIMPL;
-    }
-
-    STDMETHODIMP PrePaint(HDC hdc, RECT *prc, LRESULT *plres) override
-    {
-        UNREFERENCED_PARAMETER(hdc);
-        UNREFERENCED_PARAMETER(prc);
-        *plres = CDRF_DODEFAULT;
-        return S_OK;
-    }
-
-    STDMETHODIMP PostPaint(HDC hdc, RECT *prc) override
-    {
-        UNREFERENCED_PARAMETER(hdc);
-        UNREFERENCED_PARAMETER(prc);
-        return S_OK;
-    }
-
-    STDMETHODIMP ItemPrePaint(HDC hdc, RECT *prc, NSTCCUSTOMDRAW *item, COLORREF *text, COLORREF *textBack,
-                              LRESULT *plres) override
-    {
-        UNREFERENCED_PARAMETER(hdc);
-        UNREFERENCED_PARAMETER(prc);
-        UNREFERENCED_PARAMETER(item);
-        UNREFERENCED_PARAMETER(text);
-        UNREFERENCED_PARAMETER(textBack);
-        *plres = CDRF_DODEFAULT;
-        return S_OK;
-    }
-
-    STDMETHODIMP ItemPostPaint(HDC hdc, RECT *prc, NSTCCUSTOMDRAW *item) override
-    {
-        if (m_Window && prc)
-            m_Window->PaintNavigationItem(hdc, *prc, item);
-        return S_OK;
-    }
-
 private:
-    virtual ~CCabinetNavigation() {}
-
-    LONG m_Ref;
     CCabinetWindow *m_Window;
 };
 
