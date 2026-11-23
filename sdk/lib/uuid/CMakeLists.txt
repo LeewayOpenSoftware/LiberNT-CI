@@ -22,6 +22,7 @@ list(APPEND IDL_SOURCES
     comcat.idl
     commoncontrols.idl
 #    confpriv.idl
+    credentialprovider.idl
     ctffunc.idl
 #    ctfbui.idl
 #    ctfspui.idl

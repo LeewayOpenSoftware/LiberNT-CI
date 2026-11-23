@@ -32,6 +32,7 @@ list(APPEND SOURCE
     control.idl
     cor.idl
     cordebug.idl
+    credentialprovider.idl
 #   crtrow.idl
     ctffunc.idl
     ctxtcall.idl
