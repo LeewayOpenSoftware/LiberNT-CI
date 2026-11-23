@@ -79,6 +79,10 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/win.ini DESTINATION reactos FOR all
 
 # The licence text, opened by the About dialog
 add_cd_file(FILE ${REACTOS_SOURCE_DIR}/COPYING DESTINATION reactos NAME_ON_CD LICENSE.txt NO_CAB FOR all)
+# The Orosi Forma icon licence that LICENSE.txt refers to
+foreach(_forma LICENSE-FORMA.md COMPAT-GPL.md TRADEMARK-OROSI.md)
+    add_cd_file(FILE ${REACTOS_SOURCE_DIR}/media/graphics/orosi-forma/${_forma} DESTINATION reactos NO_CAB FOR all)
+endforeach()
 
 ## NOTE: The root setup.exe file is a renamed welcome.exe for BootCD purposes.
 # welcome.exe optional custom configuration (only for LiveImage)

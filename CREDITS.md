@@ -122,6 +122,11 @@ ReactOS graphic design from:
 - Mindflyer (mf@mufunyo.net)
 - Tango Desktop Project (http://tango-project.org/)
 - Everaldo (https://www.everaldo.com/)
+- Leeway Open Software (Orosi Forma icons, see [media/graphics/orosi-forma/LICENSE-FORMA.md](media/graphics/orosi-forma/LICENSE-FORMA.md))
+
+## Orosi Forma icons
+
+The Orosi Forma icons are Copyright © Leeway Open Software. On their own they are licensed under [LICENSE-FORMA.md](media/graphics/orosi-forma/LICENSE-FORMA.md); "Orosi" and "Leeway Open Software" are trademarks of Leeway Open Software, see [TRADEMARK-OROSI.md](media/graphics/orosi-forma/TRADEMARK-OROSI.md). Inside LiberNT binaries they carry the additional terms under section 7(b) and 7(e) of the GNU GPL version 3 that are appended to [COPYING](COPYING) and explained in [COMPAT-GPL.md](media/graphics/orosi-forma/COMPAT-GPL.md). [forma-owned.txt](media/graphics/orosi-forma/forma-owned.txt) lists the files.
 
 ## Copyright
 

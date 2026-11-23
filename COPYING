@@ -672,3 +672,28 @@ may consider it more useful to permit linking proprietary applications with
 the library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.  But first, please read
 <http://www.gnu.org/philosophy/why-not-lgpl.html>.
+
+
+===========================================================================
+ ADDITIONAL TERMS FOR THE OROSI FORMA ICONS (GNU GPL version 3, section 7)
+===========================================================================
+
+This section is not part of the GNU General Public License text above.
+
+LiberNT embeds the Orosi Forma icons, Copyright (C) Leeway Open Software,
+as resources in some of its binaries. The following additional terms under
+section 7 of the GNU GPL version 3 apply to those icon resources only, not
+to the rest of the program:
+
+ (b) You must preserve the author/origin attribution
+     "Orosi Forma (C) Leeway Open Software" as described in LICENSE-FORMA.md.
+
+ (e) The names "Orosi" and "Leeway Open Software" are trademarks of Leeway
+     Open Software; no trademark rights are granted, and their visible use
+     as origin identification must be preserved per LICENSE-FORMA.md and
+     TRADEMARK-OROSI.md.
+
+The Orosi Forma icons as files on their own are licensed under
+LICENSE-FORMA.md. COMPAT-GPL.md explains these terms. In the source tree
+the three files are in media/graphics/orosi-forma/; on an installed or live
+system they are next to this file (LICENSE.txt) in the Windows directory.
