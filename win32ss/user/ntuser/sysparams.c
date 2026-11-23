@@ -1215,9 +1215,10 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
         }
     }
 
-    /* Load the new wallpaper before committing anything. A file that does
-     * not exist or does not decode must fail the call and keep the current
-     * wallpaper, as on Windows (SPI_SETDESKWALLPAPER returns FALSE). */
+    /* Load the new wallpaper first. A file that does not exist or does not
+     * decode keeps the current wallpaper on screen (verified on Windows 11:
+     * the previous image stays and TranscodedWallpaper is untouched); the
+     * attempted name is still committed below and the call succeeds. */
     if (awcCaptured[0] != 0)
     {
         /* Convert file name to nt file name */
@@ -1232,26 +1233,28 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
 
         /* Load the Bitmap */
         hbmp = hbmSupplied ? hbmSupplied : UserLoadImage(ustr.Buffer);
-        if (!hbmp)
+        if (hbmp)
         {
-            ERR("Failed to load wallpaper %S\n", awcCaptured);
-            EngSetLastError(ERROR_FILE_NOT_FOUND);
-            return 0;
-        }
+            /* Try to get the size of the wallpaper */
+            if (!(psurfBmp = SURFACE_ShareLockSurface(hbmp)))
+            {
+                GreDeleteObject(hbmp);
+                return 0;
+            }
 
-        /* Try to get the size of the wallpaper */
-        if (!(psurfBmp = SURFACE_ShareLockSurface(hbmp)))
+            gspv.cxWallpaper = psurfBmp->SurfObj.sizlBitmap.cx;
+            gspv.cyWallpaper = psurfBmp->SurfObj.sizlBitmap.cy;
+            SURFACE_ShareUnlockSurface(psurfBmp);
+
+            /* Change the bitmap's ownership */
+            GreSetObjectOwner(hbmp, GDI_OBJ_HMGR_PUBLIC);
+        }
+        else
         {
-            GreDeleteObject(hbmp);
-            return 0;
+            /* Keep the current bitmap, size and mode; the name committed
+             * below records what was attempted. */
+            WARN("Failed to load wallpaper %S; keeping the current one\n", awcCaptured);
         }
-
-        gspv.cxWallpaper = psurfBmp->SurfObj.sizlBitmap.cx;
-        gspv.cyWallpaper = psurfBmp->SurfObj.sizlBitmap.cy;
-        SURFACE_ShareUnlockSurface(psurfBmp);
-
-        /* Change the bitmap's ownership */
-        GreSetObjectOwner(hbmp, GDI_OBJ_HMGR_PUBLIC);
     }
     else
     {
@@ -1280,23 +1283,29 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
     /* Yes, Windows really loads the current setting from the registry. */
     if (hbmp)
         gspv.WallpaperMode = SpiLoadWallpaperMode();
-    /* Take care of the old wallpaper, if any */
-    hOldBitmap = gspv.hbmWallpaper;
-    if(hOldBitmap != NULL)
+
+    /* Install the new bitmap, or remove the wallpaper on an empty name.
+     * On a load failure (hbmp == NULL with a non-empty name) the previous
+     * bitmap stays installed, so nothing is replaced. */
+    if (hbmp || awcCaptured[0] == 0)
     {
-        /* Delete the old wallpaper */
-        GreSetObjectOwner(hOldBitmap, GDI_OBJ_HMGR_POWNED);
-        GreDeleteObject(hOldBitmap);
+        /* Take care of the old wallpaper, if any */
+        hOldBitmap = gspv.hbmWallpaper;
+        if(hOldBitmap != NULL)
+        {
+            /* Delete the old wallpaper */
+            GreSetObjectOwner(hOldBitmap, GDI_OBJ_HMGR_POWNED);
+            GreDeleteObject(hOldBitmap);
+        }
+
+        /* Set the new wallpaper */
+        gspv.hbmWallpaper = hbmp;
+        gspv.bBootScreenWallpaper = FALSE;
+        gspv.bWallpaperApplied = TRUE;
+
+        NtUserRedrawWindow(UserGetShellWindow(), NULL, NULL, RDW_INVALIDATE | RDW_ERASE);
+        IntCompositionDamageWindow(UserGetDesktopWindow());
     }
-
-    /* Set the new wallpaper */
-    gspv.hbmWallpaper = hbmp;
-    gspv.bBootScreenWallpaper = FALSE;
-    gspv.bWallpaperApplied = TRUE;
-
-    NtUserRedrawWindow(UserGetShellWindow(), NULL, NULL, RDW_INVALIDATE | RDW_ERASE);
-    IntCompositionDamageWindow(UserGetDesktopWindow());
-
 
     return (UINT_PTR)KEY_DESKTOP;
 }
