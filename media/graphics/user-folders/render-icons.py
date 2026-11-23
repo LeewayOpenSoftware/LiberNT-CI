@@ -108,10 +108,10 @@ BADGED = (
 
 
 def write_frames(frames, path):
+    """Write RGBA frames as 32-bit DIBs with alpha and legacy AND transparency masks."""
     if is_owned(path):
         print(f"skip {path} (Orosi Forma)")
         return
-    """Write RGBA frames as 32-bit DIBs with alpha and legacy AND transparency masks."""
     entries = []
     for frame in frames:
         size = frame.width
