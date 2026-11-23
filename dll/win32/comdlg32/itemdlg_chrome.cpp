@@ -192,6 +192,12 @@ StartSearch(ItemDlgChrome *chrome, LPCWSTR text)
         if (chrome->Location && SHGetPathFromIDListW(chrome->Location, path))
         {
             StringCchCopyW(chrome->SearchPaths[chrome->SearchPathCount++], MAX_PATH, path);
+            /* The Desktop also shows the shared desktop's items, so search there too. */
+            if (ILIsEmpty(chrome->Location) &&
+                SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_COMMON_DESKTOPDIRECTORY, NULL, SHGFP_TYPE_CURRENT, path)))
+            {
+                StringCchCopyW(chrome->SearchPaths[chrome->SearchPathCount++], MAX_PATH, path);
+            }
         }
         else
         {
