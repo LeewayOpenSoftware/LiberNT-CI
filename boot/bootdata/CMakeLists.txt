@@ -235,11 +235,11 @@ add_livecd_shortcut("Remote Desktop Connection"
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_comms}")
 add_livecd_shortcut("Multimedia Player"
-    "shell:system\\mplay32.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\mplay32.exe" ICON_INDEX 0
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_entertainment}")
 add_livecd_shortcut("Sound Recorder"
-    "shell:system\\sndrec32.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\sndrec32.exe" ICON_INDEX 0
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_entertainment}")
 add_livecd_shortcut("Character Map"
@@ -286,7 +286,7 @@ add_livecd_shortcut("WordPad"
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_accessories}")
 add_livecd_shortcut("Solitaire"
-    "shell:system\\sol.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\sol.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_games}")
 add_livecd_shortcut("Spider Solitaire"
     "shell:system\\orosi_platform\\spider.exe" ICON_INDEX 0

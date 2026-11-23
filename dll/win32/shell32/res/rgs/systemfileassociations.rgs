@@ -116,7 +116,7 @@ HKCR
         }
         NoRemove audio
         {
-            NoRemove DefaultIcon = e '%%SystemRoot%%\system32\mplay32.exe,-10'
+            NoRemove DefaultIcon = e '%%SystemRoot%%\system32\orosi_platform\mplay32.exe,-10'
             NoRemove OpenWithList
             {
                 NoRemove mplay32.exe
@@ -146,7 +146,7 @@ HKCR
         }
         NoRemove video
         {
-            NoRemove DefaultIcon = e '%%SystemRoot%%\system32\mplay32.exe,-10'
+            NoRemove DefaultIcon = e '%%SystemRoot%%\system32\orosi_platform\mplay32.exe,-10'
             NoRemove OpenWithList
             {
                 NoRemove mplay32.exe
