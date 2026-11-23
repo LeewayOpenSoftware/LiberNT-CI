@@ -147,16 +147,25 @@ CcCopyWrite(
     ULONG64 Offset;
     CC_NT_MOVE Move = { Buffer, 0, TRUE, FALSE };
     LONG64 DirtyBefore;
+    IO_STATUS_BLOCK FlushStatus;
+    BOOLEAN WriteThrough;
     NTSTATUS Status;
 
     if (FileObject == NULL || FileOffset == NULL)
         ExRaiseStatus(STATUS_ACCESS_VIOLATION);
     Offset = (ULONG64)FileOffset->QuadPart;
     Move.BaseOffset = Offset;
+    WriteThrough = BooleanFlagOn(FileObject->Flags, FO_WRITE_THROUGH) && Length != 0;
     NtMap = CcNtReferenceFileMap(FileObject);
 
     if (NtMap == NULL)
         ExRaiseStatus(STATUS_INVALID_PARAMETER);
+
+    if (!Wait && WriteThrough)
+    {
+        CcNtDereferenceMap(NtMap);
+        return FALSE;
+    }
 
     if (!Wait && Length != 0 && !NtMap->Map.Ops.IsResident(NtMap->Map.Context, Offset, Length))
     {
@@ -192,6 +201,14 @@ CcCopyWrite(
 
     if (!NT_SUCCESS(Status))
         ExRaiseStatus(Status);
+
+    if (WriteThrough)
+    {
+        ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+        CcFlushCache(FileObject->SectionObjectPointer, FileOffset, Length, &FlushStatus);
+        if (!NT_SUCCESS(FlushStatus.Status))
+            ExRaiseStatus(FlushStatus.Status);
+    }
 
     return TRUE;
 }

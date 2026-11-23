@@ -967,8 +967,8 @@ MiSegmentRelease(
     }
 
     MI_ASSERT(Segment->State == MI_SEGMENT_ACTIVE);
-    if (AllowCache && System->UnusedSegmentLimit != 0 && Segment->Kind != MiSegmentPageFileBacked &&
-        Segment->FileOps.Release != NULL)
+    if (AllowCache && !Segment->CloseWhenUnused && System->UnusedSegmentLimit != 0 &&
+        Segment->Kind != MiSegmentPageFileBacked && Segment->FileOps.Release != NULL)
     {
         Segment->State = MI_SEGMENT_UNUSED;
         InsertTailList(&System->UnusedSegmentList, &Segment->UnusedLink);
@@ -1008,6 +1008,20 @@ MiSegmentDereferenceAndClose(
     _Inout_ PMI_SEGMENT Segment)
 {
     return MiSegmentRelease(Segment, FALSE, NULL);
+}
+
+VOID
+MiSegmentCloseWhenUnused(
+    _Inout_ PMI_SEGMENT Segment)
+{
+    PMI_SYSTEM System = Segment->System;
+    KIRQL OldIrql;
+
+    MI_SPIN_ACQUIRE(&System->SegmentListLock, &OldIrql);
+    MI_ASSERT(Segment->State == MI_SEGMENT_ACTIVE);
+    MI_ASSERT(MI_ATOMIC_READ32(&Segment->ReferenceCount) > 0);
+    Segment->CloseWhenUnused = TRUE;
+    MI_SPIN_RELEASE(&System->SegmentListLock, OldIrql);
 }
 
 ULONG
@@ -2691,7 +2705,7 @@ MiSegmentFlush(
     ULONG64 First = Offset >> PAGE_SHIFT;
     ULONG64 Last;
     ULONG64 Page;
-    ULONG Limit = Segment->FileOps.WriteFrames != NULL ? MI_MAX_FILE_WRITE_PAGES : 1;
+    ULONG Limit = Segment->FileOps.WriteFrames != NULL ? MI_MAX_FILE_FLUSH_PAGES : 1;
 
     if (Segment->Kind != MiSegmentDataFile || Length == 0)
         return STATUS_SUCCESS;
@@ -2708,7 +2722,7 @@ MiSegmentFlush(
 
     for (Page = First; Page < Last;)
     {
-        ULONG Frames[MI_MAX_FILE_WRITE_PAGES];
+        ULONG Frames[MI_MAX_FILE_FLUSH_PAGES];
         ULONG Count = 0;
         ULONG Bytes = 0;
         ULONG64 RunPage = Page;
@@ -2742,7 +2756,8 @@ MiSegmentFlush(
                 Page >= BridgeEnd)
             {
                 ULONG64 Next;
-                ULONG64 End = (Last < RunPage + Limit) ? Last : RunPage + Limit;
+                ULONG64 Bridge = RunPage + ((Limit < MI_MAX_FILE_WRITE_PAGES) ? Limit : MI_MAX_FILE_WRITE_PAGES);
+                ULONG64 End = (Last < Bridge) ? Last : Bridge;
 
                 if (Count == 0)
                     break;
