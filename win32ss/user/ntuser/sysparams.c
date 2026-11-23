@@ -1158,6 +1158,7 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
     UNICODE_STRING ustr;
     WCHAR awc[MAX_PATH];
     WCHAR awcCaptured[MAX_PATH + 1];
+    USHORT usCapturedLength;
     BOOL bResult;
     HBITMAP hbmp, hOldBitmap;
     SURFACE *psurfBmp;
@@ -1189,6 +1190,7 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
         return 0;
     }
     awcCaptured[ustr.Length / sizeof(WCHAR)] = UNICODE_NULL;
+    usCapturedLength = ustr.Length;
 
     if (hbmSupplied)
     {
@@ -1213,29 +1215,16 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
         }
     }
 
-    RtlCopyMemory(gspv.awcWallpaper, awcCaptured, ustr.Length + sizeof(WCHAR));
-
-    /* Update the UNICODE_STRING */
-    gspv.ustrWallpaper.Buffer = gspv.awcWallpaper;
-    gspv.ustrWallpaper.MaximumLength = sizeof(gspv.awcWallpaper);
-    gspv.ustrWallpaper.Length = ustr.Length;
-
-    TRACE("SpiSetWallpaper, name=%S\n", gspv.awcWallpaper);
-
-    /* Update registry */
-    if (fl & SPIF_UPDATEINIFILE)
-    {
-        SpiStoreSz(KEY_DESKTOP, L"Wallpaper", gspv.awcWallpaper);
-    }
-
-    /* Got a filename? */
-    if (gspv.awcWallpaper[0] != 0)
+    /* Load the new wallpaper before committing anything. A file that does
+     * not exist or does not decode must fail the call and keep the current
+     * wallpaper, as on Windows (SPI_SETDESKWALLPAPER returns FALSE). */
+    if (awcCaptured[0] != 0)
     {
         /* Convert file name to nt file name */
         ustr.Buffer = awc;
         ustr.MaximumLength = MAX_PATH * sizeof(WCHAR);
         ustr.Length = 0;
-        if (!W32kDosPathNameToNtPathName(gspv.awcWallpaper, &ustr))
+        if (!W32kDosPathNameToNtPathName(awcCaptured, &ustr))
         {
             ERR("W32kDosPathNameToNtPathName failed\n");
             return 0;
@@ -1245,9 +1234,9 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
         hbmp = hbmSupplied ? hbmSupplied : UserLoadImage(ustr.Buffer);
         if (!hbmp)
         {
-            gspv.cxWallpaper = 0;
-            gspv.cyWallpaper = 0;
-            goto ReplaceWallpaper;
+            ERR("Failed to load wallpaper %S\n", awcCaptured);
+            EngSetLastError(ERROR_FILE_NOT_FOUND);
+            return 0;
         }
 
         /* Try to get the size of the wallpaper */
@@ -1263,9 +1252,6 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
 
         /* Change the bitmap's ownership */
         GreSetObjectOwner(hbmp, GDI_OBJ_HMGR_PUBLIC);
-
-        /* Yes, Windows really loads the current setting from the registry. */
-        gspv.WallpaperMode = SpiLoadWallpaperMode();
     }
     else
     {
@@ -1275,7 +1261,25 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
         hbmp = 0;
     }
 
-ReplaceWallpaper:
+    /* The new name is committed only now that the wallpaper is validated. */
+    RtlCopyMemory(gspv.awcWallpaper, awcCaptured, usCapturedLength + sizeof(WCHAR));
+
+    /* Update the UNICODE_STRING */
+    gspv.ustrWallpaper.Buffer = gspv.awcWallpaper;
+    gspv.ustrWallpaper.MaximumLength = sizeof(gspv.awcWallpaper);
+    gspv.ustrWallpaper.Length = usCapturedLength;
+
+    TRACE("SpiSetWallpaper, name=%S\n", gspv.awcWallpaper);
+
+    /* Update registry */
+    if (fl & SPIF_UPDATEINIFILE)
+    {
+        SpiStoreSz(KEY_DESKTOP, L"Wallpaper", gspv.awcWallpaper);
+    }
+
+    /* Yes, Windows really loads the current setting from the registry. */
+    if (hbmp)
+        gspv.WallpaperMode = SpiLoadWallpaperMode();
     /* Take care of the old wallpaper, if any */
     hOldBitmap = gspv.hbmWallpaper;
     if(hOldBitmap != NULL)
