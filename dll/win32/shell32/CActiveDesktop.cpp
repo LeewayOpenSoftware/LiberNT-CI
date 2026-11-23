@@ -159,7 +159,11 @@ HRESULT WINAPI CActiveDesktop::ApplyChanges(DWORD dwFlags)
 
             if (!SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, szCurrent,
                                        SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
-                return HRESULT_FROM_WIN32(GetLastError());
+            {
+                DWORD dwError = GetLastError();
+                ERR("SPI_SETDESKWALLPAPER failed for '%ls': %lu\n", szCurrent, dwError);
+                return HRESULT_FROM_WIN32(dwError);
+            }
         }
         else
         {
@@ -181,7 +185,11 @@ HRESULT WINAPI CActiveDesktop::ApplyChanges(DWORD dwFlags)
             {
                 if (!SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, szCurrent,
                                            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
-                    return HRESULT_FROM_WIN32(GetLastError());
+                {
+                    DWORD dwError = GetLastError();
+                    ERR("SPI_SETDESKWALLPAPER failed for '%ls': %lu\n", szCurrent, dwError);
+                    return HRESULT_FROM_WIN32(dwError);
+                }
             }
             else
             {
