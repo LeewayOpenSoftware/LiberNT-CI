@@ -1102,6 +1102,46 @@ EnableTargetPlugPlay(VOID)
     return Error;
 }
 
+/* A first boot still pending from before an upgrade names the old oobe.exe. */
+static VOID
+RetargetPendingOobe(VOID)
+{
+    static const WCHAR OldName[] = L"\\oobe\\oobe.exe";
+    WCHAR Value[MAX_PATH + 32], NewValue[MAX_PATH + 32];
+    SIZE_T cchOld = ARRAYSIZE(OldName) - 1;
+    DWORD Type, cb;
+    PWSTR p;
+    HKEY hKey;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+                      0, KEY_QUERY_VALUE | KEY_SET_VALUE, &hKey) != ERROR_SUCCESS)
+    {
+        return;
+    }
+
+    ZeroMemory(Value, sizeof(Value));
+    cb = sizeof(Value) - sizeof(WCHAR);
+    if (RegQueryValueExW(hKey, L"OOBE", NULL, &Type, (LPBYTE)Value, &cb) == ERROR_SUCCESS &&
+        (Type == REG_SZ || Type == REG_EXPAND_SZ))
+    {
+        for (p = Value; *p; p++)
+        {
+            if (_wcsnicmp(p, OldName, cchOld) == 0)
+                break;
+        }
+        if (*p)
+        {
+            *p = UNICODE_NULL;
+            if (SUCCEEDED(StringCchPrintfW(NewValue, ARRAYSIZE(NewValue), L"%s\\oobe\\msoobe.exe%s",
+                                           Value, p + cchOld)))
+            {
+                SetRegString(hKey, L"OOBE", Type, NewValue);
+            }
+        }
+    }
+    RegCloseKey(hKey);
+}
+
 static UINT CALLBACK
 TargetRegistrationCallback(
     _In_ PVOID Context,
@@ -1633,6 +1673,8 @@ ConfigureTargetSystem(
     }
 
     ReportTargetPhase(9);
+    if (Settings->Upgrade)
+        RetargetPendingOobe();
     if (Settings->Components && !Settings->Upgrade)
     {
         Error = ScheduleFirstBootComponents(Settings);
