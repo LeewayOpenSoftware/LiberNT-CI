@@ -33,15 +33,15 @@ public:
     STDMETHOD(GetDesktopItemOptions)(LPCOMPONENTSOPT pco, DWORD dwReserved) override;
     STDMETHOD(SetDesktopItemOptions)(LPCCOMPONENTSOPT pco, DWORD dwReserved) override;
     STDMETHOD(AddDesktopItem)(LPCCOMPONENT pcomp, DWORD dwReserved) override;
-    STDMETHOD(AddDesktopItemWithUI)(HWND hwnd, LPCOMPONENT pcomp, DWORD dwReserved) override;
+    STDMETHOD(AddDesktopItemWithUI)(HWND hwnd, LPCCOMPONENT pcomp, DWORD dwReserved) override;
     STDMETHOD(ModifyDesktopItem)(LPCCOMPONENT pcomp, DWORD dwFlags) override;
     STDMETHOD(RemoveDesktopItem)(LPCCOMPONENT pcomp, DWORD dwReserved) override;
     STDMETHOD(GetDesktopItemCount)(int *pcItems, DWORD dwReserved) override;
-    STDMETHOD(GetDesktopItem)(int nComponent, LPCOMPONENT pcomp, DWORD dwReserved) override;
-    STDMETHOD(GetDesktopItemByID)(ULONG_PTR dwID, LPCOMPONENT pcomp, DWORD dwReserved) override;
-    STDMETHOD(GenerateDesktopItemHtml)(PCWSTR pwszFileName, LPCOMPONENT pcomp, DWORD dwReserved) override;
-    STDMETHOD(AddUrl)(HWND hwnd, PCWSTR pszSource, LPCOMPONENT pcomp, DWORD dwFlags) override;
-    STDMETHOD(GetDesktopItemBySource)(PCWSTR pwszSource, LPCOMPONENT pcomp, DWORD dwReserved) override;
+    STDMETHOD(GetDesktopItem)(int nComponent, LPCCOMPONENT pcomp, DWORD dwReserved) override;
+    STDMETHOD(GetDesktopItemByID)(ULONG_PTR dwID, LPCCOMPONENT pcomp, DWORD dwReserved) override;
+    STDMETHOD(GenerateDesktopItemHtml)(PCWSTR pwszFileName, LPCCOMPONENT pcomp, DWORD dwReserved) override;
+    STDMETHOD(AddUrl)(HWND hwnd, PCWSTR pszSource, LPCCOMPONENT pcomp, DWORD dwFlags) override;
+    STDMETHOD(GetDesktopItemBySource)(PCWSTR pwszSource, LPCCOMPONENT pcomp, DWORD dwReserved) override;
 
     STDMETHOD(SetSafeMode)(DWORD dwFlags) override;
     STDMETHOD(EnsureUpdateHTML)() override;
@@ -68,6 +68,14 @@ BEGIN_COM_MAP(CActiveDesktop)
     COM_INTERFACE_ENTRY_IID(IID_IADesktopP2, IADesktopP2)
     COM_INTERFACE_ENTRY_IID(IID_IPropertyBag, IPropertyBag)
 END_COM_MAP()
+
+private:
+    /* Pending wallpaper state, committed by ApplyChanges() on the user32
+     * SystemParametersInfo(SPI_SETDESKWALLPAPER) path. */
+    WCHAR m_szPendingWallpaper[MAX_PATH];
+    DWORD m_dwPendingStyle;
+    BOOL m_bWallpaperPending;
+    BOOL m_bOptionsPending;
 };
 
 
