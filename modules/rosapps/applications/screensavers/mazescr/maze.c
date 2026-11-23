@@ -61,9 +61,9 @@
 #define APPNAME _T("Maze")
 
 LRESULT CALLBACK ScreenSaverProc(HWND hWnd, UINT message, WPARAM uParam, LPARAM lParam);
-static int choose_door();
+static int choose_door(HDC);
 static long backup();
-static void draw_wall();
+static void draw_wall(int, int, int, HDC);
 static void draw_solid_square(int, int, int, HDC, HBRUSH);
 static void enter_square(int, HDC, HBRUSH);
 
@@ -177,8 +177,7 @@ static void WriteRegistry()
     RegCloseKey(skey);
 }
 
-static void set_maze_sizes(width, height)
-int width, height;
+static void set_maze_sizes(int width, int height)
 {
     maze_size_x = (width -1)/ grid_width;
     maze_size_y = (height-1) / grid_height;
@@ -410,10 +409,7 @@ static long backup()                                                  /* back up
     return sqnum;
 }
 
-static void draw_solid_square(i, j, dir, hDC, hBrush)          /* draw a solid square in a square */
-register int i, j, dir;
-HDC hDC;
-HBRUSH hBrush;
+static void draw_solid_square(int i, int j, int dir, HDC hDC, HBRUSH hBrush) /* draw a solid square in a square */
 {
     RECT rc;
 
@@ -479,9 +475,7 @@ static void draw_maze_border(HWND hWnd)    /* draw the maze outline */
     draw_solid_square(end_x, end_y, end_dir, hDC, hBrush);
 }
 
-static void draw_wall(i, j, dir, hDC)                                   /* draw a single wall */
-register int i, j, dir;
-HDC hDC;
+static void draw_wall(int i, int j, int dir, HDC hDC)                  /* draw a single wall */
 {
     SelectObject(hDC, hPenWall);
 

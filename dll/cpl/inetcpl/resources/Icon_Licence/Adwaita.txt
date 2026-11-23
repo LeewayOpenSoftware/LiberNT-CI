@@ -16,9 +16,4 @@ https://gitlab.gnome.org/GNOME/adwaita-icon-theme-legacy. Both themes state:
 
 The source artwork is in media/graphics/adwaita-icons.
 
-certificates.ico  mimetypes/application-certificate
-history.ico       AdwaitaLegacy legacy/document-open-recent
-home.ico          AdwaitaLegacy legacy/go-home
 inetcpl.ico       AdwaitaLegacy legacy/applications-internet
-restricted.ico    AdwaitaLegacy legacy/dialog-error
-trusted.ico       AdwaitaLegacy legacy/emblem-default

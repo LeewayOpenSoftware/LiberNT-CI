@@ -16,4 +16,3 @@ https://gitlab.gnome.org/GNOME/adwaita-icon-theme-legacy. Both themes state:
 
 The source artwork is in media/graphics/adwaita-icons.
 
-documents.ico  places/folder-documents

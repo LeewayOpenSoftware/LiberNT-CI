@@ -8,10 +8,13 @@ COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
 
 import math
 import re
+import runpy
 import struct
 import sys
 import zlib
 from pathlib import Path
+
+is_owned = runpy.run_path(str(Path(__file__).resolve().parents[1] / "orosi-forma/forma_owned.py"))["is_owned"]
 
 SIZES = (16, 18, 20, 22, 24, 26, 28, 31, 32, 35, 40, 44, 48)
 HALO = (0x00, 0x00, 0x00, 0x99)
@@ -580,8 +583,11 @@ def main():
     for name, draw in ICONS:
         out = root / name
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_bytes(ico([(s, render(draw, s)) for s in SIZES]))
-        out.with_name(out.stem + "_light.ico").write_bytes(ico([(s, render(draw, s, True)) for s in SIZES]))
+        for path, light in ((out, False), (out.with_name(out.stem + "_light.ico"), True)):
+            if is_owned(path):
+                print(f"skip {path} (Orosi Forma)")
+                continue
+            path.write_bytes(ico([(s, render(draw, s, light)) for s in SIZES]))
 
 
 if __name__ == "__main__":

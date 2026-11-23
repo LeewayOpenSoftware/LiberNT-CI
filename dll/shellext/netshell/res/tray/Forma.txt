@@ -1,0 +1,31 @@
+The following icons are Orosi Forma art (Orosi original, Leeway Open
+Software). Third-party art in this directory keeps its own licence list.
+
+license    = "Forma (Licencia de arte Forma, basada en CC BY-SA 4.0 + condición de marca Orosi)"
+trademark  = "Orosi — Leeway Open Software (debe permanecer visible en derivados)"
+provenance = "Orosi original (Leeway Open Software)"
+
+See media/graphics/orosi-forma/LICENSE-FORMA.md, with COMPAT-GPL.md and
+TRADEMARK-OROSI.md next to it.
+
+wifi_1.ico
+wifi_1_light.ico
+wifi_1_lock.ico
+wifi_1_lock_light.ico
+wifi_2.ico
+wifi_2_light.ico
+wifi_2_lock.ico
+wifi_2_lock_light.ico
+wifi_3.ico
+wifi_3_light.ico
+wifi_3_lock.ico
+wifi_3_lock_light.ico
+wifi_4.ico
+wifi_4_light.ico
+wifi_4_lock.ico
+wifi_4_lock_light.ico
+wifi_warn.ico
+wifi_warn_light.ico
+wifi_x.ico
+wifi_x_light.ico
+wired.ico

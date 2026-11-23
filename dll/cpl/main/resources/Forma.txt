@@ -1,0 +1,26 @@
+The following icons are Orosi Forma art (Orosi original, Leeway Open
+Software). Third-party art in this directory keeps its own licence list.
+
+license    = "Forma (Licencia de arte Forma, basada en CC BY-SA 4.0 + condición de marca Orosi)"
+trademark  = "Orosi — Leeway Open Software (debe permanecer visible en derivados)"
+provenance = "Orosi original (Leeway Open Software)"
+
+See media/graphics/orosi-forma/LICENSE-FORMA.md, with COMPAT-GPL.md and
+TRADEMARK-OROSI.md next to it.
+
+admintools_folder.ico
+folder_closed.ico
+folder_open.ico
+keyboard.ico
+lock_key.ico
+mouse.ico
+mouse_button.ico
+mouse_hide.ico
+mouse_left.ico
+mouse_pointer.ico
+mouse_right.ico
+mouse_speed.ico
+mouse_trails.ico
+mouse_wheel.ico
+repeat_delay.ico
+repeat_rate.ico

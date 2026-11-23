@@ -16,9 +16,3 @@ https://gitlab.gnome.org/GNOME/adwaita-icon-theme-legacy. Both themes state:
 
 The source artwork is in media/graphics/adwaita-icons.
 
-addhw.ico      mimetypes/application-x-firmware
-applet.ico     devices/computer
-dev.ico        mimetypes/application-x-firmware
-devmgr.ico     AdwaitaLegacy legacy/preferences-system
-hwprofile.ico  mimetypes/application-x-firmware
-license.ico    mimetypes/application-certificate

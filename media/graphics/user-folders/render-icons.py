@@ -17,11 +17,14 @@ import io
 import json
 import re
 from pathlib import Path
+import runpy
 import struct
 
 import numpy as np
 from PIL import Image
 import resvg_py
+
+is_owned = runpy.run_path(str(Path(__file__).resolve().parents[1] / "orosi-forma/forma_owned.py"))["is_owned"]
 
 
 SIZES = (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
@@ -106,6 +109,9 @@ BADGED = (
 
 def write_frames(frames, path):
     """Write RGBA frames as 32-bit DIBs with alpha and legacy AND transparency masks."""
+    if is_owned(path):
+        print(f"skip {path} (Orosi Forma)")
+        return
     entries = []
     for frame in frames:
         size = frame.width
