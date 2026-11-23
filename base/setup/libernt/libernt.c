@@ -1417,6 +1417,55 @@ RestartComputer(VOID)
                               SHTDN_REASON_FLAG_PLANNED);
 }
 
+/* The wallpaper host keeps the desktop background applied while the installer
+ * runs, so setup works with or without Explorer. The host owns a hidden
+ * top-level window whose fixed class identifies it; the strings mirror
+ * base/applications/wallpaperhost/wallpaperhost.cpp. Setup must never block
+ * on the host: any failure is logged and the install continues. */
+static HANDLE g_WallpaperHostProcess;
+
+static VOID
+StartWallpaperHost(VOID)
+{
+    WCHAR Path[MAX_PATH];
+    STARTUPINFOW StartupInfo = { sizeof(StartupInfo) };
+    PROCESS_INFORMATION ProcessInfo;
+
+    if (!GetSystemDirectoryW(Path, ARRAYSIZE(Path)))
+        return;
+    StringCchCatW(Path, ARRAYSIZE(Path), L"\\wallpaperhost.exe");
+
+    if (!CreateProcessW(Path, NULL, NULL, NULL, FALSE, 0, NULL, NULL,
+                        &StartupInfo, &ProcessInfo))
+    {
+        DPRINT1("WallpaperHost: failed to start (%lu); continuing without it\n",
+                GetLastError());
+        return;
+    }
+
+    CloseHandle(ProcessInfo.hThread);
+    g_WallpaperHostProcess = ProcessInfo.hProcess;
+}
+
+static VOID
+StopWallpaperHost(VOID)
+{
+    HWND HostWindow;
+
+    if (!g_WallpaperHostProcess)
+        return;
+
+    HostWindow = FindWindowW(L"OrosiWallpaperHostWindow", NULL);
+    if (HostWindow)
+        PostMessageW(HostWindow, WM_CLOSE, 0, 0);
+
+    if (WaitForSingleObject(g_WallpaperHostProcess, 5000) == WAIT_TIMEOUT)
+        TerminateProcess(g_WallpaperHostProcess, 0);
+
+    CloseHandle(g_WallpaperHostProcess);
+    g_WallpaperHostProcess = NULL;
+}
+
 int WINAPI
 wWinMain(
     HINSTANCE hInst,
@@ -1477,6 +1526,8 @@ wWinMain(
     hHotkeyThread = CreateThread(NULL, 0, HotkeyThread, NULL, 0, NULL);
     hrCom = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 
+    StartWallpaperHost();
+
     RunSetupWizard(&SetupData);
     UpgradeResult = !SetupData.bUpgrade ? ERROR_CANCELLED : SetupData.bInstalled ? ERROR_SUCCESS : ERROR_INSTALL_FAILURE;
 
@@ -1489,6 +1540,7 @@ wWinMain(
     }
 
 Quit:
+    StopWallpaperHost();
     FinishSetup(&SetupData.USetupData);
     if (SetupData.bMustReboot)
         RestartComputer();
