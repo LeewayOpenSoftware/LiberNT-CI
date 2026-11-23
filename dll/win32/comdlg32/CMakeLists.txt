@@ -14,6 +14,7 @@ list(APPEND SOURCE
     finddlg.c
     fontdlg.c
     itemdlg.c
+    itemdlg_ofn.c
     printdlg.c
     precomp.h
     ${CMAKE_CURRENT_BINARY_DIR}/comdlg32_stubs.c)

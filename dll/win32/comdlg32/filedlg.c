@@ -4702,6 +4702,12 @@ static inline BOOL is_win16_looks(DWORD flags)
             !(flags & OFN_EXPLORER));
 }
 
+/* Windows shows the item dialog unless a hook, template or the 3.1 look needs the classic one. */
+static BOOL try_item_dialog(OPENFILENAMEW *ofn, int type, BOOL *ret)
+{
+    return COMDLG32_UseItemDialog(ofn) && COMDLG32_GetFileNameItemDialog(ofn, type == SAVE_DIALOG, ret);
+}
+
 /* ------------------ APIs ---------------------- */
 
 /***********************************************************************
@@ -4716,6 +4722,8 @@ static inline BOOL is_win16_looks(DWORD flags)
  */
 BOOL WINAPI GetOpenFileNameA(OPENFILENAMEA *ofn)
 {
+    BOOL ret;
+
     TRACE("flags 0x%08lx\n", ofn->Flags);
 
     if (!valid_struct_size( ofn->lStructSize ))
@@ -4727,6 +4735,9 @@ BOOL WINAPI GetOpenFileNameA(OPENFILENAMEA *ofn)
     /* OFN_FILEMUSTEXIST implies OFN_PATHMUSTEXIST */
     if (ofn->Flags & OFN_FILEMUSTEXIST)
         ofn->Flags |= OFN_PATHMUSTEXIST;
+
+    if (COMDLG32_GetFileNameItemDialogA(ofn, FALSE, &ret))
+        return ret;
 
     if (is_win16_looks(ofn->Flags))
         return GetFileName31A(ofn, OPEN_DIALOG);
@@ -4751,6 +4762,8 @@ BOOL WINAPI GetOpenFileNameA(OPENFILENAMEA *ofn)
  */
 BOOL WINAPI GetOpenFileNameW(OPENFILENAMEW *ofn)
 {
+    BOOL ret;
+
     TRACE("flags 0x%08lx\n", ofn->Flags);
 
     if (!valid_struct_size( ofn->lStructSize ))
@@ -4762,6 +4775,9 @@ BOOL WINAPI GetOpenFileNameW(OPENFILENAMEW *ofn)
     /* OFN_FILEMUSTEXIST implies OFN_PATHMUSTEXIST */
     if (ofn->Flags & OFN_FILEMUSTEXIST)
         ofn->Flags |= OFN_PATHMUSTEXIST;
+
+    if (try_item_dialog(ofn, OPEN_DIALOG, &ret))
+        return ret;
 
     if (is_win16_looks(ofn->Flags))
         return GetFileName31W(ofn, OPEN_DIALOG);
@@ -4787,11 +4803,16 @@ BOOL WINAPI GetOpenFileNameW(OPENFILENAMEW *ofn)
  */
 BOOL WINAPI GetSaveFileNameA(OPENFILENAMEA *ofn)
 {
+    BOOL ret;
+
     if (!valid_struct_size( ofn->lStructSize ))
     {
         COMDLG32_SetCommDlgExtendedError( CDERR_STRUCTSIZE );
         return FALSE;
     }
+
+    if (COMDLG32_GetFileNameItemDialogA(ofn, TRUE, &ret))
+        return ret;
 
     if (is_win16_looks(ofn->Flags))
         return GetFileName31A(ofn, SAVE_DIALOG);
@@ -4817,11 +4838,16 @@ BOOL WINAPI GetSaveFileNameA(OPENFILENAMEA *ofn)
 BOOL WINAPI GetSaveFileNameW(
 	LPOPENFILENAMEW ofn) /* [in/out] address of init structure */
 {
+    BOOL ret;
+
     if (!valid_struct_size( ofn->lStructSize ))
     {
         COMDLG32_SetCommDlgExtendedError( CDERR_STRUCTSIZE );
         return FALSE;
     }
+
+    if (try_item_dialog(ofn, SAVE_DIALOG, &ret))
+        return ret;
 
     if (is_win16_looks(ofn->Flags))
         return GetFileName31W(ofn, SAVE_DIALOG);

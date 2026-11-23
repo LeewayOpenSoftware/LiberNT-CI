@@ -175,6 +175,11 @@ typedef struct {
 HRESULT FileOpenDialog_Constructor(IUnknown *pUnkOuter, REFIID riid, void **ppv);
 HRESULT FileSaveDialog_Constructor(IUnknown *pUnkOuter, REFIID riid, void **ppv);
 
+/* Routing of GetOpenFileName/GetSaveFileName to the item dialog */
+BOOL COMDLG32_UseItemDialog(const OPENFILENAMEW *ofn);
+BOOL COMDLG32_GetFileNameItemDialog(OPENFILENAMEW *ofn, BOOL save, BOOL *result);
+BOOL COMDLG32_GetFileNameItemDialogA(OPENFILENAMEA *ofn, BOOL save, BOOL *result);
+
 /* Shared helper functions */
 void COMDLG32_GetCanonicalPath(PCIDLIST_ABSOLUTE pidlAbsCurrent, LPWSTR lpstrFile, LPWSTR lpstrPathAndFile);
 int FILEDLG95_ValidatePathAction(LPWSTR lpstrPathAndFile, IShellFolder **ppsf,
