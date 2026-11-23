@@ -9,6 +9,7 @@ list(APPEND SOURCE
     printdlg.c)
 
 list(APPEND PCH_SKIP_SOURCE
+    itemroute.c
     testlist.c)
 
 add_executable(comdlg32_winetest
