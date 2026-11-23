@@ -405,7 +405,7 @@ AddNewTopicEx(
         /* Check for special applications: ReactOS Installer */
         if (_tcsicmp(szCommand, TEXT("libernt.exe")) == 0)
         {
-            ExpandInstallerPath(szCommand, pTopic->szCommand, ARRAYSIZE(pTopic->szCommand));
+            ExpandInstallerPath(TEXT("system32\\oobe\\libernt.exe"), pTopic->szCommand, ARRAYSIZE(pTopic->szCommand));
         }
         else
         {

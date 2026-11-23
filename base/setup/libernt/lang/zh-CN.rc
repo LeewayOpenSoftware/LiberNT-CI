@@ -253,7 +253,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\n该步骤失败，状态为 0x%08lx。"
     IDS_FORMAT_FAILED "安装程序无法将 %s 格式化为 %s。\n%s"
     IDS_CHECK_FAILED "安装程序在 %s 上发现无法修复的错误(状态 0x%08lx)。安装将继续。"
-    IDS_SETUPLIB_MISSING "安装程序无法加载 %s。请从包含其 system32 文件夹和 txtsetup.sif 的文件夹运行 libernt.exe。"
+    IDS_SETUPLIB_MISSING "安装程序无法加载 %s。请从包含 txtsetup.sif 的安装源的 system32\\oobe 文件夹运行 libernt.exe。"
 END
 
 STRINGTABLE

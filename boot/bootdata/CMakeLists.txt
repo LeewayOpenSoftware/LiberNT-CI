@@ -169,8 +169,8 @@ cmdenvvar(envvar_systemdrive "SystemDrive" TRUE)
 cmdenvvar(envvar_archdir     "PROCESSOR_ARCHITECTURE:x86=I386" TRUE)
 add_livecd_shortcut("Install Orosi"
     "shell:system\\cmd.exe"
-    CMDLINE_ARGS "/D /E:ON /C \"start ${envvar_systemdrive}\\${envvar_archdir}\\libernt.exe\""
-    ICON "${envvar_systemdrive}\\${ARCH}\\libernt.exe"
+    CMDLINE_ARGS "/D /E:ON /C \"start ${envvar_systemdrive}\\${envvar_archdir}\\system32\\oobe\\libernt.exe\""
+    ICON "${envvar_systemdrive}\\${ARCH}\\system32\\oobe\\libernt.exe"
     MINIMIZE
     DESTINATION "${dir_allusers_desktop}")
 add_cd_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/Install Orosi.lnk"

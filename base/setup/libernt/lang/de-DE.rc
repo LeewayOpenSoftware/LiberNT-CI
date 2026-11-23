@@ -253,7 +253,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nDer Schritt ist mit dem Status 0x%08lx fehlgeschlagen."
     IDS_FORMAT_FAILED "Setup konnte %s nicht als %s formatieren.\n%s"
     IDS_CHECK_FAILED "Setup hat auf %s Fehler gefunden, die nicht behoben werden konnten (Status 0x%08lx). Setup wird fortgesetzt."
-    IDS_SETUPLIB_MISSING "Setup kann %s nicht laden. Führen Sie libernt.exe aus dem Ordner aus, der den Ordner system32 und txtsetup.sif enthält."
+    IDS_SETUPLIB_MISSING "Setup kann %s nicht laden. Führen Sie libernt.exe aus dem Ordner system32\\oobe einer Installationsquelle aus, die txtsetup.sif enthält."
 END
 
 STRINGTABLE

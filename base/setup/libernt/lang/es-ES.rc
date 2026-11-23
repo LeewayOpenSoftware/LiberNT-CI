@@ -253,7 +253,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nEl paso falló con el estado 0x%08lx."
     IDS_FORMAT_FAILED "No se pudo formatear %s como %s.\n%s"
     IDS_CHECK_FAILED "Se encontraron errores en %s que no se pudieron reparar (estado 0x%08lx). La instalación continúa."
-    IDS_SETUPLIB_MISSING "No se puede cargar %s. Ejecute libernt.exe desde la carpeta que contiene su carpeta system32 y txtsetup.sif."
+    IDS_SETUPLIB_MISSING "No se puede cargar %s. Ejecute libernt.exe desde la carpeta system32\\oobe de un origen de instalación que contenga txtsetup.sif."
 END
 
 STRINGTABLE

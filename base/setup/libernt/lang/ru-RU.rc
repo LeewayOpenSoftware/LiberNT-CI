@@ -253,7 +253,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nЭтап завершился ошибкой с состоянием 0x%08lx."
     IDS_FORMAT_FAILED "Не удалось отформатировать %s в %s.\n%s"
     IDS_CHECK_FAILED "На %s найдены ошибки, которые не удалось исправить (состояние 0x%08lx). Установка продолжается."
-    IDS_SETUPLIB_MISSING "Не удается загрузить %s. Запустите libernt.exe из папки, в которой находятся его папка system32 и файл txtsetup.sif."
+    IDS_SETUPLIB_MISSING "Не удается загрузить %s. Запустите libernt.exe из папки system32\\oobe источника установки, содержащего файл txtsetup.sif."
 END
 
 STRINGTABLE

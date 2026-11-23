@@ -971,21 +971,41 @@ InstallPageProc(
     return FALSE;
 }
 
+/* libernt.exe runs from <source>\system32\oobe; return <source>. */
+static BOOL
+GetInstallSourceRoot(
+    _Out_writes_(cchRoot) PWSTR pszRoot,
+    _In_ DWORD cchRoot)
+{
+    DWORD Length;
+    PWSTR Name;
+    INT i;
+
+    Length = GetModuleFileNameW(NULL, pszRoot, cchRoot);
+    if (Length == 0 || Length >= cchRoot)
+        return FALSE;
+    for (i = 0; i < 3; i++)
+    {
+        Name = wcsrchr(pszRoot, L'\\');
+        if (!Name)
+            return FALSE;
+        *Name = UNICODE_NULL;
+    }
+    return TRUE;
+}
+
 static VOID
 LoadUnattendedAccountSettings(
     _Inout_ PSETUPDATA pSetupData)
 {
     WCHAR Path[MAX_PATH];
     WCHAR Value[MAX_PATH];
-    PWSTR Name;
-    DWORD Length;
 
-    Length = GetModuleFileNameW(NULL, Path, ARRAYSIZE(Path));
-    if (Length == 0 || Length >= ARRAYSIZE(Path) || !(Name = wcsrchr(Path, L'\\')))
+    if (!GetInstallSourceRoot(Path, ARRAYSIZE(Path)) ||
+        FAILED(StringCchCatW(Path, ARRAYSIZE(Path), L"\\unattend.inf")))
+    {
         return;
-    *Name = UNICODE_NULL;
-    if (FAILED(StringCchCatW(Path, ARRAYSIZE(Path), L"\\unattend.inf")))
-        return;
+    }
 
     if (GetPrivateProfileStringW(L"Unattend", L"ComputerName", L"", Value, ARRAYSIZE(Value), Path) &&
         IsValidSetupComputerName(Value))
@@ -1342,18 +1362,14 @@ SetupDelayHook(
     PDelayLoadInfo pdli)
 {
     static CHAR DllPath[MAX_PATH];
-    WCHAR ModulePath[MAX_PATH];
-    PWCHAR Name;
-    DWORD Length;
+    WCHAR SourceRoot[MAX_PATH];
 
     if (dliNotify == dliNotePreLoadLibrary && _stricmp(pdli->szDll, "setuplib.dll") == 0)
     {
-        Length = GetModuleFileNameW(NULL, ModulePath, ARRAYSIZE(ModulePath));
-        if (Length && Length < ARRAYSIZE(ModulePath) && (Name = wcsrchr(ModulePath, L'\\')) != NULL)
+        if (GetInstallSourceRoot(SourceRoot, ARRAYSIZE(SourceRoot)) &&
+            SUCCEEDED(StringCchPrintfA(DllPath, ARRAYSIZE(DllPath), "%S\\system32\\%s", SourceRoot, pdli->szDll)))
         {
-            *Name = UNICODE_NULL;
-            if (SUCCEEDED(StringCchPrintfA(DllPath, ARRAYSIZE(DllPath), "%S\\system32\\%s", ModulePath, pdli->szDll)))
-                pdli->szDll = DllPath;
+            pdli->szDll = DllPath;
         }
     }
     else if (dliNotify == dliFailLoadLib)
