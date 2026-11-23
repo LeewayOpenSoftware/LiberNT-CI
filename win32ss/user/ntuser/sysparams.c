@@ -1264,7 +1264,7 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
         hbmp = 0;
     }
 
-    /* The new name is committed only now that the wallpaper is validated. */
+    /* Commit the attempted name; on a load failure the previous bitmap stays. */
     RtlCopyMemory(gspv.awcWallpaper, awcCaptured, usCapturedLength + sizeof(WCHAR));
 
     /* Update the UNICODE_STRING */
