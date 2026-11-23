@@ -9,22 +9,28 @@
 
 #include <shellframe.h>
 
-#define CABINET_MAX_CRUMBS 32
+
+#define CABINET_MAX_CRUMBS SHELLFRAME_MAX_CRUMBS
 
 typedef ShellFrame::BandPalette CabinetPalette;
 
-void CabinetGetPalette(CabinetPalette *palette);
-BOOL CabinetComposedFrame(VOID);
-HIMAGELIST CabinetGlyphImages(const LPCWSTR *names, UINT count, int size, COLORREF color);
-void CabinetFillRound(HDC dc, const RECT &rc, int radius, COLORREF color);
-LRESULT CabinetToolbarCustomDraw(NMTBCUSTOMDRAW *draw, COLORREF base);
-
-class ICabinetBandHost : public ShellFrame::TabBandHost
+inline void CabinetGetPalette(CabinetPalette *palette) { ShellFrame::GetBandPalette(palette); }
+inline BOOL CabinetComposedFrame(VOID) { return ShellFrame::ComposedFrame(); }
+inline HIMAGELIST CabinetGlyphImages(const LPCWSTR *names, UINT count, int size, COLORREF color)
 {
-public:
-    virtual void OnAddressNavigate(PCIDLIST_ABSOLUTE pidl) = 0;
-    virtual void OnAddressText(LPCWSTR text) = 0;
-    virtual void OnAddressCancel() = 0;
+    return ShellFrame::GlyphImages(names, count, size, color);
+}
+inline void CabinetFillRound(HDC dc, const RECT &rc, int radius, COLORREF color)
+{
+    ShellFrame::FillRound(dc, rc, radius, color);
+}
+inline LRESULT CabinetToolbarCustomDraw(NMTBCUSTOMDRAW *draw, COLORREF base)
+{
+    return ShellFrame::ToolbarCustomDraw(draw, base);
+}
+
+class ICabinetBandHost : public ShellFrame::TabBandHost, public ShellFrame::AddressBandHost
+{
 };
 
 struct CabinetTabItem
@@ -33,30 +39,9 @@ struct CabinetTabItem
     int IconIndex;
 };
 
-class CCabinetBand : public IOleWindow
-{
-public:
-    CCabinetBand();
-    virtual ~CCabinetBand();
-
-    STDMETHODIMP QueryInterface(REFIID riid, void **ppv) override;
-    STDMETHODIMP_(ULONG) AddRef() override;
-    STDMETHODIMP_(ULONG) Release() override;
-    STDMETHODIMP GetWindow(HWND *window) override;
-    STDMETHODIMP ContextSensitiveHelp(BOOL enter) override;
-
-    HWND Window() const { return m_hwnd; }
-
-protected:
-    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-    virtual LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) = 0;
-    BOOL CreateBand(HWND parent, LPCWSTR className);
-    int Scale(int value) const;
-
-    LONG m_Refs;
-    HWND m_hwnd;
-    ICabinetBandHost *m_Host;
-};
+typedef ShellFrame::Band CCabinetBand;
+typedef ShellFrame::AddressBand CCabinetAddressBand;
+typedef ShellFrame::SearchBox CCabinetSearchBox;
 
 class CCabinetTabBand : public CCabinetBand
 {
@@ -72,64 +57,4 @@ protected:
 
 private:
     ShellFrame::TabBand m_Band;
-};
-
-class CCabinetAddressBand : public CCabinetBand
-{
-public:
-    CCabinetAddressBand();
-    ~CCabinetAddressBand();
-
-    BOOL Create(HWND parent, ICabinetBandHost *host, HFONT font);
-    void SetLocation(PCIDLIST_ABSOLUTE pidl);
-    void BeginEdit();
-    void EndEdit();
-    BOOL IsEditing() const { return m_Editing; }
-    void RefreshGlyphs();
-    HWND EditWindow() const { return m_Edit; }
-
-protected:
-    LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) override;
-
-private:
-    static LRESULT CALLBACK EditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR data);
-    void FreeCrumbs();
-    void Layout();
-    void AnimateChevron(UINT id, BOOL open);
-    void NoteMenuDismiss(UINT id);
-    void ShowChildren(int index);
-    void ShowOverflow();
-    RECT ButtonScreenRect(UINT id);
-
-    HWND m_Toolbar;
-    HWND m_Edit;
-    HIMAGELIST m_Images;
-    HFONT m_Font;
-    PIDLIST_ABSOLUTE m_Crumbs[CABINET_MAX_CRUMBS];
-    PWSTR m_CrumbNames[CABINET_MAX_CRUMBS];
-    int m_CrumbCount;
-    int m_FirstVisible;
-    BOOL m_Editing;
-    HBRUSH m_BoxBrush;
-    UINT m_DismissId;
-    DWORD m_DismissTick;
-};
-
-class CCabinetSearchBox : public CCabinetBand
-{
-public:
-    CCabinetSearchBox();
-    ~CCabinetSearchBox();
-
-    BOOL Create(HWND parent, HFONT font);
-    HWND EditWindow() const { return m_Edit; }
-    void RefreshGlyphs();
-
-protected:
-    LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) override;
-
-private:
-    HWND m_Edit;
-    HICON m_Glyph;
-    HBRUSH m_BoxBrush;
 };

@@ -12,6 +12,7 @@
 #include <dwmapi.h>
 #include <commctrl.h>
 #include <gdiplus.h>
+#include <shtypes.h>
 
 #ifndef SHELLFRAME_CUSTOM_CAPTION_BUTTONS
 #define SHELLFRAME_CUSTOM_CAPTION_BUTTONS 1
@@ -345,4 +346,105 @@ private:
     COLORREF m_ActiveFill;
 };
 
+
+#define SHELLFRAME_MAX_CRUMBS 32
+
+BOOL ComposedFrame(VOID);
+HIMAGELIST GlyphImages(const LPCWSTR *names, UINT count, int size, COLORREF color);
+void FillRound(HDC dc, const RECT &rc, int radius, COLORREF color);
+LRESULT ToolbarCustomDraw(NMTBCUSTOMDRAW *draw, COLORREF base);
+
+class AddressBandHost
+{
+public:
+    virtual ~AddressBandHost() {}
+    virtual void OnAddressNavigate(PCIDLIST_ABSOLUTE pidl) = 0;
+    virtual void OnAddressText(LPCWSTR text) = 0;
+    virtual void OnAddressCancel() = 0;
+};
+
+class Band : public IOleWindow
+{
+public:
+    Band();
+    virtual ~Band();
+
+    STDMETHODIMP QueryInterface(REFIID riid, void **ppv) override;
+    STDMETHODIMP_(ULONG) AddRef() override;
+    STDMETHODIMP_(ULONG) Release() override;
+    STDMETHODIMP GetWindow(HWND *window) override;
+    STDMETHODIMP ContextSensitiveHelp(BOOL enter) override;
+
+    HWND Window() const { return m_hwnd; }
+
+protected:
+    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    virtual LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) = 0;
+    BOOL CreateBand(HWND parent, LPCWSTR className);
+    int Scale(int value) const;
+
+    LONG m_Refs;
+    HWND m_hwnd;
+    AddressBandHost *m_Host;
+};
+
+class AddressBand : public Band
+{
+public:
+    AddressBand();
+    ~AddressBand();
+
+    BOOL Create(HWND parent, AddressBandHost *host, HFONT font);
+    void SetLocation(PCIDLIST_ABSOLUTE pidl);
+    void BeginEdit();
+    void EndEdit();
+    BOOL IsEditing() const { return m_Editing; }
+    void RefreshGlyphs();
+    HWND EditWindow() const { return m_Edit; }
+
+protected:
+    LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) override;
+
+private:
+    static LRESULT CALLBACK EditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR data);
+    void FreeCrumbs();
+    void Layout();
+    void AnimateChevron(UINT id, BOOL open);
+    void NoteMenuDismiss(UINT id);
+    void ShowChildren(int index);
+    void ShowOverflow();
+    RECT ButtonScreenRect(UINT id);
+
+    HWND m_Toolbar;
+    HWND m_Edit;
+    HIMAGELIST m_Images;
+    HFONT m_Font;
+    PIDLIST_ABSOLUTE m_Crumbs[SHELLFRAME_MAX_CRUMBS];
+    PWSTR m_CrumbNames[SHELLFRAME_MAX_CRUMBS];
+    int m_CrumbCount;
+    int m_FirstVisible;
+    BOOL m_Editing;
+    HBRUSH m_BoxBrush;
+    UINT m_DismissId;
+    DWORD m_DismissTick;
+};
+
+class SearchBox : public Band
+{
+public:
+    SearchBox();
+    ~SearchBox();
+
+    BOOL Create(HWND parent, HFONT font);
+    HWND EditWindow() const { return m_Edit; }
+    void RefreshGlyphs();
+
+protected:
+    LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) override;
+
+private:
+    HWND m_Edit;
+    HICON m_Glyph;
+    HBRUSH m_BoxBrush;
+};
 }

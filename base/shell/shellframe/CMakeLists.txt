@@ -8,6 +8,7 @@ add_custom_command(
     DEPENDS ${shellframe_icons} ${CMAKE_CURRENT_SOURCE_DIR}/embed_icons.cmake)
 
 list(APPEND SOURCE
+    bands.cpp
     canvas.cpp
     caption.cpp
     icons.cpp
