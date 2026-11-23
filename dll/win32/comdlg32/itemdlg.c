@@ -2035,13 +2035,6 @@ static void chrome_navigate_text(void *context, LPCWSTR text)
     }
 }
 
-static void chrome_search(void *context, LPCWSTR text)
-{
-    FileDialogImpl *This = context;
-
-    TRACE("%p %s\n", This, debugstr_w(text));
-}
-
 static IShellView *chrome_get_view(void *context)
 {
     FileDialogImpl *This = context;
@@ -2054,7 +2047,7 @@ static IShellView *chrome_get_view(void *context)
 
 static const ItemDlgChromeHost chrome_host =
 {
-    chrome_navigate, chrome_navigate_text, chrome_search, chrome_get_view
+    chrome_navigate, chrome_navigate_text, chrome_get_view
 };
 
 static HRESULT init_explorerbrowser(FileDialogImpl *This)

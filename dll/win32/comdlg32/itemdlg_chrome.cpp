@@ -53,6 +53,11 @@ struct ItemDlgChrome : public ShellFrame::AddressBandHost, public ShellFrame::Na
     ShellFrame::NavigationPaneEvents *Events;
     DWORD Cookie;
     WCHAR Texts[8][64];
+    PIDLIST_ABSOLUTE Location;
+    PIDLIST_ABSOLUTE SearchOrigin;
+    WCHAR SearchQuery[MAX_PATH];
+    WCHAR SearchPaths[26][MAX_PATH];
+    UINT SearchPathCount;
 
     int Scale(int value) const
     {
@@ -145,6 +150,104 @@ Place(HDWP *hdwp, HWND hwnd, int x, int y, int cx, int cy)
         SetWindowPos(hwnd, NULL, x, y, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+static const WCHAR FindFolder[] = L"shell:::{E17D4FC0-5564-11D1-83F2-00A0C90DC849}";
+
+static BOOL
+IsFindFolder(PCIDLIST_ABSOLUTE pidl)
+{
+    PIDLIST_ABSOLUTE find = NULL;
+    BOOL same;
+
+    if (!pidl || FAILED(SHParseDisplayName(FindFolder, NULL, &find, 0, NULL)))
+        return FALSE;
+    same = ILIsEqual(pidl, find);
+    ILFree(find);
+    return same;
+}
+
+/* Like File Explorer: search the shown folder, or every local drive from a virtual folder. */
+static void
+StartSearch(ItemDlgChrome *chrome, LPCWSTR text)
+{
+    PIDLIST_ABSOLUTE find = NULL;
+    WCHAR path[MAX_PATH];
+
+    StringCchCopyW(chrome->SearchQuery, _countof(chrome->SearchQuery), text);
+    StrTrimW(chrome->SearchQuery, L" \t");
+    if (!chrome->SearchQuery[0])
+    {
+        if (chrome->SearchOrigin && IsFindFolder(chrome->Location))
+            chrome->Host->navigate(chrome->Context, chrome->SearchOrigin);
+        return;
+    }
+    if (!IsFindFolder(chrome->Location))
+    {
+        chrome->SearchPathCount = 0;
+        if (chrome->Location && SHGetPathFromIDListW(chrome->Location, path))
+        {
+            StringCchCopyW(chrome->SearchPaths[chrome->SearchPathCount++], MAX_PATH, path);
+        }
+        else
+        {
+            WCHAR drives[128];
+            DWORD length = GetLogicalDriveStringsW(_countof(drives), drives);
+
+            for (PWSTR drive = drives; length && *drive && chrome->SearchPathCount < 26; drive += lstrlenW(drive) + 1)
+            {
+                UINT type = GetDriveTypeW(drive);
+
+                if (type == DRIVE_FIXED || type == DRIVE_REMOVABLE)
+                    StringCchCopyW(chrome->SearchPaths[chrome->SearchPathCount++], MAX_PATH, drive);
+            }
+        }
+        if (chrome->SearchOrigin)
+            ILFree(chrome->SearchOrigin);
+        chrome->SearchOrigin = chrome->Location ? ILClone(chrome->Location) : NULL;
+    }
+    if (!chrome->SearchPathCount)
+        return;
+    if (IsFindFolder(chrome->Location))
+    {
+        ItemDlgChrome_SetLocation(chrome, chrome->Location);
+        return;
+    }
+    if (SUCCEEDED(SHParseDisplayName(FindFolder, NULL, &find, 0, NULL)))
+    {
+        chrome->Host->navigate(chrome->Context, find);
+        ILFree(find);
+    }
+}
+
+/* The results folder is shown; hand it the query. The search engine lives in explorerframe. */
+static void
+RunPendingSearch(ItemDlgChrome *chrome)
+{
+    typedef HRESULT (WINAPI *START_SEARCH)(HWND, PCWSTR *, SIZE_T, PCWSTR);
+    IShellView *view;
+    HMODULE module;
+    START_SEARCH start;
+    HWND window = NULL;
+    PCWSTR paths[26];
+
+    if (!chrome->SearchQuery[0])
+        return;
+    module = GetModuleHandleW(L"explorerframe.dll");
+    if (!module)
+        module = LoadLibraryW(L"explorerframe.dll");
+    start = module ? (START_SEARCH)GetProcAddress(module, "ShellFind_StartSearch") : NULL;
+    view = chrome->Host->get_view(chrome->Context);
+    if (start && view && SUCCEEDED(view->GetWindow(&window)) && window)
+    {
+        for (UINT i = 0; i < chrome->SearchPathCount; i++)
+            paths[i] = chrome->SearchPaths[i];
+        start(window, paths, chrome->SearchPathCount, chrome->SearchQuery);
+    }
+    if (view)
+        view->Release();
+    /* explorerframe stays loaded while its folder is shown. */
+    chrome->SearchQuery[0] = UNICODE_NULL;
+}
+
 /* Enter and Escape belong to the address and search boxes, not to the dialog's buttons. */
 static LRESULT CALLBACK
 EditSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWORD_PTR data)
@@ -167,12 +270,13 @@ EditSubclass(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR id, DWO
                 WCHAR text[MAX_PATH];
 
                 GetWindowTextW(hwnd, text, _countof(text));
-                chrome->Host->search(chrome->Context, text);
+                StartSearch(chrome, text);
                 return 0;
             }
             if (id == 2 && wParam == VK_ESCAPE)
             {
                 SetWindowTextW(hwnd, L"");
+                StartSearch(chrome, L"");
                 return 0;
             }
             break;
@@ -303,6 +407,10 @@ ItemDlgChrome_Destroy(ItemDlgChrome *chrome)
         ImageList_Destroy(chrome->NavDisabled);
     if (chrome->CommandImages)
         ImageList_Destroy(chrome->CommandImages);
+    if (chrome->Location)
+        ILFree(chrome->Location);
+    if (chrome->SearchOrigin)
+        ILFree(chrome->SearchOrigin);
     if (chrome->Started)
         ShellFrame::Shutdown();
     delete chrome;
@@ -351,8 +459,21 @@ ItemDlgChrome_SetLocation(ItemDlgChrome *chrome, PCIDLIST_ABSOLUTE pidl)
 
     if (!chrome || !pidl)
         return;
+    if (pidl != chrome->Location)
+    {
+        if (chrome->Location)
+            ILFree(chrome->Location);
+        chrome->Location = ILClone(pidl);
+    }
     if (chrome->Address)
         chrome->Address->SetLocation(pidl);
+    if (IsFindFolder(pidl))
+    {
+        RunPendingSearch(chrome);
+        return;
+    }
+    if (chrome->Search)
+        SetWindowTextW(chrome->Search->EditWindow(), L"");
     chrome->Pane.Select(pidl);
     if (chrome->Search && SUCCEEDED(SHGetNameFromIDList(pidl, SIGDN_NORMALDISPLAY, &name)))
     {

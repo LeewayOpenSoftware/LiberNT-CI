@@ -50,7 +50,6 @@ typedef struct ItemDlgChromeHost
 {
     void (*navigate)(void *context, PCIDLIST_ABSOLUTE pidl);
     void (*navigate_text)(void *context, LPCWSTR text);
-    void (*search)(void *context, LPCWSTR text);
     IShellView *(*get_view)(void *context);
 } ItemDlgChromeHost;
 

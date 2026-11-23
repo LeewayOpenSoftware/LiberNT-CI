@@ -924,3 +924,10 @@ HRESULT ShellFind_StartSearch(HWND hwndView, PCWSTR *rgszPaths, SIZE_T cPaths, P
     pSearchStart.Detach();
     return S_OK;
 }
+
+/* The file dialogs search in the results folder of this module, as File Explorer does. */
+extern "C" HRESULT WINAPI
+ShellFind_StartSearchExport(HWND hwndView, PCWSTR *rgszPaths, SIZE_T cPaths, PCWSTR pszQuery)
+{
+    return ShellFind_StartSearch(hwndView, rgszPaths, cPaths, pszQuery);
+}
