@@ -1699,7 +1699,7 @@ DwmClientTopEdgePixel(const ULONG *Line, const DWM_WIN *Window, LONG x, LONG y)
 static ULONG
 DwmCornerEdgePixel(const BYTE *Pixels, const DWM_WIN *Window, LONG x, LONG y, ULONG Source)
 {
-    LONG r = (LONG)Window->CornerRadius, Width, Lines, Index, Column, Next;
+    LONG r = (LONG)Window->CornerRadius, Width, Index, Column, Next;
     BOOL Left, Top;
     double dx, dy, Depth, Fraction;
     const ULONG *Line;
@@ -1724,9 +1724,6 @@ DwmCornerEdgePixel(const BYTE *Pixels, const DWM_WIN *Window, LONG x, LONG y, UL
     if (Depth >= (double)Width + 0.5)
         return Source;
     Line = (const ULONG *)(Pixels + (SIZE_T)(Top ? r : Window->cy - 1 - r) * Window->Stride);
-    Lines = DwmEdgeLines(Line, Window, Left, Width);
-    if (Lines == 0 || Depth >= (double)Lines + 0.5)
-        return Source;
     Depth -= 0.5;
     if (Depth < 0.0)
         Depth = 0.0;
@@ -1734,8 +1731,15 @@ DwmCornerEdgePixel(const BYTE *Pixels, const DWM_WIN *Window, LONG x, LONG y, UL
     Fraction = Depth - (double)Index;
     Column = Left ? Index : Window->cx - 1 - Index;
     Next = Left ? Index + 1 : Window->cx - 2 - Index;
+    /* A gradient caption has no solid edge run; sample the nearest painted pixel on the edge line
+     * (clamped into the row) so the rounded corner continues the edge instead of exposing the
+     * unpainted black source pixel. For a solid edge this is the same pixel as before. */
+    if (Column < 0) Column = 0;
+    else if (Column > Window->cx - 1) Column = Window->cx - 1;
+    if (Next < 0) Next = 0;
+    else if (Next > Window->cx - 1) Next = Window->cx - 1;
     Outer = Line[Column];
-    Inner = Index + 1 < Lines ? Line[Next] : Source;
+    Inner = Line[Next];
     for (Shift = 0; Shift < 32; Shift += 8)
     {
         double Channel = (double)((Outer >> Shift) & 0xFFu) * (1.0 - Fraction) +

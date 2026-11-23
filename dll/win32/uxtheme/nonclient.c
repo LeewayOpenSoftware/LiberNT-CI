@@ -1606,6 +1606,30 @@ ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent, DWORD htHot, DWORD ht
     ThemeDrawCaptionText(pcontext, &rcContent, iPart, iState);
 }
 
+static COLORREF ThemeFrameFillColor(PDRAW_CONTEXT pcontext, INT iPartId);
+
+/* Win11's frame line is neutral grey: drop the theme fill colour tint, keep its luminance so the
+ * line stays light/dark adaptive. */
+static COLORREF
+ThemeNeutralGray(COLORREF color)
+{
+    INT l = (GetRValue(color) * 299 + GetGValue(color) * 587 + GetBValue(color) * 114) / 1000;
+    return RGB(l, l, l);
+}
+
+/* One frame edge: on the composited frame a flat neutral-grey hairline (Win11); off the compositor
+ * (FrameInsets empty) the classic themed frame part. */
+static void
+ThemeDrawFrameEdge(PDRAW_CONTEXT pcontext, const RECT *rc, INT iPartId, INT iState)
+{
+    if (!IsRectEmpty(&pcontext->FrameInsets))
+        ThemeFillSolidRect(pcontext->hDC, rc, ThemeNeutralGray(ThemeFrameFillColor(pcontext, iPartId)));
+    else if (pcontext->DarkMode)
+        ThemeFillSolidRect(pcontext->hDC, rc, ThemeDarkCaptionColor(pcontext));
+    else
+        DrawThemeBackground(pcontext->theme, pcontext->hDC, iPartId, iState, rc, NULL);
+}
+
 static void
 ThemeDrawBorders(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
 {
@@ -1616,28 +1640,19 @@ ThemeDrawBorders(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
     rcPart = *prcCurrent;
     rcPart.top = rcPart.bottom - (pcontext->wi.cyWindowBorders - pcontext->FrameInsets.bottom);
     prcCurrent->bottom = rcPart.top;
-    if (pcontext->DarkMode)
-        ThemeFillSolidRect(pcontext->hDC, &rcPart, ThemeDarkCaptionColor(pcontext));
-    else
-        DrawThemeBackground(pcontext->theme, pcontext->hDC, WP_FRAMEBOTTOM, iState, &rcPart, NULL);
+    ThemeDrawFrameEdge(pcontext, &rcPart, WP_FRAMEBOTTOM, iState);
 
     /* Draw the left border */
     rcPart = *prcCurrent;
     rcPart.right = rcPart.left + (pcontext->wi.cxWindowBorders - pcontext->FrameInsets.left);
     prcCurrent->left = rcPart.right;
-    if (pcontext->DarkMode)
-        ThemeFillSolidRect(pcontext->hDC, &rcPart, ThemeDarkCaptionColor(pcontext));
-    else
-        DrawThemeBackground(pcontext->theme, pcontext->hDC, WP_FRAMELEFT, iState, &rcPart, NULL);
+    ThemeDrawFrameEdge(pcontext, &rcPart, WP_FRAMELEFT, iState);
 
     /* Draw the right border */
     rcPart = *prcCurrent;
     rcPart.left = rcPart.right - (pcontext->wi.cxWindowBorders - pcontext->FrameInsets.right);
     prcCurrent->right = rcPart.left;
-    if (pcontext->DarkMode)
-        ThemeFillSolidRect(pcontext->hDC, &rcPart, ThemeDarkCaptionColor(pcontext));
-    else
-        DrawThemeBackground(pcontext->theme, pcontext->hDC, WP_FRAMERIGHT, iState, &rcPart, NULL);
+    ThemeDrawFrameEdge(pcontext, &rcPart, WP_FRAMERIGHT, iState);
 }
 
 static void
@@ -1847,11 +1862,11 @@ ThemeFillFrameBand(PDRAW_CONTEXT pcontext, const RECT *Window)
     if (IsRectEmpty(&pcontext->FrameInsets))
         return;
     SetRect(&rc, Window->left, Window->top, Window->left + pcontext->FrameInsets.left, Window->bottom);
-    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeFrameFillColor(pcontext, WP_FRAMELEFT));
+    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeNeutralGray(ThemeFrameFillColor(pcontext, WP_FRAMELEFT)));
     SetRect(&rc, Window->right - pcontext->FrameInsets.right, Window->top, Window->right, Window->bottom);
-    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeFrameFillColor(pcontext, WP_FRAMERIGHT));
+    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeNeutralGray(ThemeFrameFillColor(pcontext, WP_FRAMERIGHT)));
     SetRect(&rc, Window->left, Window->bottom - pcontext->FrameInsets.bottom, Window->right, Window->bottom);
-    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeFrameFillColor(pcontext, WP_FRAMEBOTTOM));
+    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeNeutralGray(ThemeFrameFillColor(pcontext, WP_FRAMEBOTTOM)));
 }
 
 static LRESULT
