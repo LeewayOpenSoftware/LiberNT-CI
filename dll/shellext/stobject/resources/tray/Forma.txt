@@ -1,0 +1,35 @@
+The following icons are Orosi Forma art (Orosi original, Leeway Open
+Software). Third-party art in this directory keeps its own licence list.
+
+license    = "Forma (CC BY-SA 4.0 + cláusula de marca Orosi)"
+trademark  = "Orosi — Leeway Open Software (debe permanecer visible en derivados)"
+provenance = "Orosi original (Leeway Open Software)"
+
+See media/graphics/orosi-forma/LICENSE-FORMA.md, with COMPAT-GPL.md and
+TRADEMARK-OROSI.md next to it.
+
+battery_0.ico
+battery_1.ico
+battery_2.ico
+battery_3.ico
+battery_4.ico
+battery_charge_0.ico
+battery_charge_1.ico
+battery_charge_2.ico
+battery_charge_3.ico
+battery_charge_4.ico
+battery_error.ico
+bluetooth.ico
+bluetooth_light.ico
+power_ac.ico
+speaker_0.ico
+speaker_0_light.ico
+speaker_1.ico
+speaker_1_light.ico
+speaker_2.ico
+speaker_2_light.ico
+speaker_3.ico
+speaker_3_light.ico
+speaker_mute.ico
+speaker_mute_light.ico
+usb.ico

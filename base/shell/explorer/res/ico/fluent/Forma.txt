@@ -1,0 +1,64 @@
+The following icons are Orosi Forma art (Orosi original, Leeway Open
+Software). Third-party art in this directory keeps its own licence list.
+
+license    = "Forma (CC BY-SA 4.0 + cláusula de marca Orosi)"
+trademark  = "Orosi — Leeway Open Software (debe permanecer visible en derivados)"
+provenance = "Orosi original (Leeway Open Software)"
+
+See media/graphics/orosi-forma/LICENSE-FORMA.md, with COMPAT-GPL.md and
+TRADEMARK-OROSI.md next to it.
+
+add_filled.ico
+airplane.ico
+apps_list_detail_filled.ico
+arrow_clockwise.ico
+arrow_left_filled.ico
+arrow_right_filled.ico
+arrow_up_filled.ico
+battery_0.ico
+battery_2.ico
+battery_5.ico
+battery_7.ico
+battery_10.ico
+battery_charge.ico
+battery_warning.ico
+chevron_down_filled.ico
+chevron_right_filled.ico
+chevron_up_filled.ico
+clipboard_paste_filled.ico
+copy_filled.ico
+cut_filled.ico
+delete_filled.ico
+desktop_checkmark_filled.ico
+desktop_filled.ico
+document_filled.ico
+folder_add_filled.ico
+folder_filled.ico
+folder_open_filled.ico
+globe.ico
+grid_filled.ico
+grid_regular.ico
+hard_drive_filled.ico
+link_filled.ico
+lock_closed.ico
+navigation_filled.ico
+options_filled.ico
+pin_filled.ico
+play_circle_filled.ico
+plug_connected.ico
+rename_filled.ico
+search_filled.ico
+search_regular.ico
+settings.ico
+square_multiple_regular.ico
+square_regular.ico
+text_bullet_list_ltr_filled.ico
+tray_accessibility.ico
+tray_alert.ico
+tray_alert_unread.ico
+tray_chevron_down.ico
+tray_chevron_right.ico
+tray_chevron_up.ico
+tray_dismiss.ico
+uninstall_app_filled.ico
+wrench_filled.ico

@@ -1,5 +1,5 @@
 # Icon files that carry Orosi Forma art (owner manifests, tandas 1+2).
-# The render scripts under media/graphics skip these paths.
+# See LICENSE-FORMA.md. The render scripts under media/graphics skip these paths.
 base/applications/calc/res/calc.ico
 base/applications/charmap/res/charmap.ico
 base/applications/charmap_new/res/charmap.ico
@@ -240,7 +240,6 @@ dll/cpl/inetcpl/resources/history.ico
 dll/cpl/inetcpl/resources/home.ico
 dll/cpl/inetcpl/resources/restricted.ico
 dll/cpl/inetcpl/resources/trusted.ico
-dll/cpl/input/resources/dot.ico
 dll/cpl/input/resources/keyboard-shortcuts.ico
 dll/cpl/input/resources/keyboard.ico
 dll/cpl/intl/resources/applet.ico

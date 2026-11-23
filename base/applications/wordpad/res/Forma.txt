@@ -1,0 +1,11 @@
+The following icons are Orosi Forma art (Orosi original, Leeway Open
+Software). Third-party art in this directory keeps its own licence list.
+
+license    = "Forma (CC BY-SA 4.0 + cláusula de marca Orosi)"
+trademark  = "Orosi — Leeway Open Software (debe permanecer visible en derivados)"
+provenance = "Orosi original (Leeway Open Software)"
+
+See media/graphics/orosi-forma/LICENSE-FORMA.md, with COMPAT-GPL.md and
+TRADEMARK-OROSI.md next to it.
+
+document.ico
