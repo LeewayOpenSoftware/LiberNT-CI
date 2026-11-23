@@ -10,6 +10,10 @@
 
 #include "notepad.h"
 
+#define COBJMACROS
+#include <shobjidl.h>
+#include <shlwapi.h>
+
 #include <assert.h>
 #include <commctrl.h>
 #include <strsafe.h>
@@ -470,6 +474,172 @@ BOOL DIALOG_FileSave(VOID)
     return FALSE;
 }
 
+
+/* Windows 11 Notepad saves through the item dialog with its encoding choice added to it. */
+#define NOTEPAD_CTL_ENCODING    1
+#define NOTEPAD_CTL_EOLN        2
+#define NOTEPAD_GROUP_ENCODING  3
+#define NOTEPAD_GROUP_EOLN      4
+
+static void
+LoadEncodingLabels(LPWSTR encoding, LPWSTR eoln, int length)
+{
+    /* The classic Save As template carries the translated labels. */
+    HWND hTemplate = CreateDialogW(Globals.hInstance, MAKEINTRESOURCEW(DIALOG_ENCODING), Globals.hMainWnd, NULL);
+
+    encoding[0] = eoln[0] = UNICODE_NULL;
+    if (hTemplate)
+    {
+        GetDlgItemTextW(hTemplate, 0x155, encoding, length);
+        GetDlgItemTextW(hTemplate, 0x156, eoln, length);
+        DestroyWindow(hTemplate);
+    }
+    if (!encoding[0])
+        StringCchCopyW(encoding, length, L"Encoding:");
+    if (!eoln[0])
+        StringCchCopyW(eoln, length, L"Endlines:");
+}
+
+static void
+AddChoices(IFileDialogCustomize *customize, DWORD control, const UINT *strings, UINT count, DWORD selected)
+{
+    WCHAR szText[128];
+    UINT i;
+
+    for (i = 0; i < count; i++)
+    {
+        LoadStringW(Globals.hInstance, strings[i], szText, _countof(szText));
+        IFileDialogCustomize_AddControlItem(customize, control, i, szText);
+    }
+    IFileDialogCustomize_SetSelectedControlItem(customize, control, selected);
+}
+
+static COMDLG_FILTERSPEC *
+FilterSpecs(LPCWSTR pszFilter, UINT *pCount)
+{
+    COMDLG_FILTERSPEC *specs;
+    LPCWSTR p;
+    UINT n = 0, i;
+
+    for (p = pszFilter; *p; p += wcslen(p) + 1)
+    {
+        p += wcslen(p) + 1;
+        if (!*p)
+            break;
+        n++;
+    }
+    *pCount = 0;
+    if (!n)
+        return NULL;
+    specs = HeapAlloc(GetProcessHeap(), 0, n * sizeof(*specs));
+    if (!specs)
+        return NULL;
+    for (p = pszFilter, i = 0; i < n; i++)
+    {
+        specs[i].pszName = p;
+        p += wcslen(p) + 1;
+        specs[i].pszSpec = p;
+        p += wcslen(p) + 1;
+    }
+    *pCount = n;
+    return specs;
+}
+
+/* Returns FALSE when the item dialog is not available, so the caller can fall back. */
+static BOOL
+DIALOG_ItemSaveAs(LPWSTR szPath, SIZE_T cchPath, BOOL *pbSaved)
+{
+    static const UINT Encodings[] = { STRING_ANSI, STRING_UNICODE, STRING_UNICODE_BE, STRING_UTF8, STRING_UTF8_BOM };
+    static const UINT Endlines[] = { STRING_CRLF, STRING_LF, STRING_CR };
+    IFileSaveDialog *dialog = NULL;
+    IFileDialogCustomize *customize = NULL;
+    IShellItem *item;
+    COMDLG_FILTERSPEC *specs;
+    WCHAR szEncoding[64], szEoln[64];
+    LPWSTR pszName, pszResult = NULL;
+    DWORD selected;
+    UINT count;
+    HRESULT hr, hrInit;
+    BOOL bShown = FALSE;
+
+    *pbSaved = FALSE;
+    hrInit = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    hr = CoCreateInstance(&CLSID_FileSaveDialog, NULL, CLSCTX_INPROC_SERVER, &IID_IFileSaveDialog, (void **)&dialog);
+    if (FAILED(hr))
+        goto done;
+    hr = IFileSaveDialog_QueryInterface(dialog, &IID_IFileDialogCustomize, (void **)&customize);
+    if (FAILED(hr))
+        goto done;
+
+    specs = FilterSpecs(Globals.szFilter, &count);
+    if (specs)
+    {
+        IFileSaveDialog_SetFileTypes(dialog, count, specs);
+        HeapFree(GetProcessHeap(), 0, specs);
+    }
+    IFileSaveDialog_SetOptions(dialog, FOS_OVERWRITEPROMPT | FOS_PATHMUSTEXIST | FOS_FORCEFILESYSTEM |
+                                       FOS_NOREADONLYRETURN);
+    IFileSaveDialog_SetDefaultExtension(dialog, szDefaultExt);
+
+    /* Start in the folder of the open document, if any. */
+    pszName = PathFindFileNameW(szPath);
+    if (pszName != szPath)
+    {
+        WCHAR szDir[MAX_PATH];
+
+        StringCchCopyNW(szDir, _countof(szDir), szPath, pszName - szPath);
+        if (SUCCEEDED(SHCreateItemFromParsingName(szDir, NULL, &IID_IShellItem, (void **)&item)))
+        {
+            IFileSaveDialog_SetFolder(dialog, item);
+            IShellItem_Release(item);
+        }
+    }
+    IFileSaveDialog_SetFileName(dialog, pszName);
+
+    LoadEncodingLabels(szEncoding, szEoln, _countof(szEncoding));
+    IFileDialogCustomize_StartVisualGroup(customize, NOTEPAD_GROUP_ENCODING, szEncoding);
+    IFileDialogCustomize_AddComboBox(customize, NOTEPAD_CTL_ENCODING);
+    IFileDialogCustomize_EndVisualGroup(customize);
+    AddChoices(customize, NOTEPAD_CTL_ENCODING, Encodings, _countof(Encodings), Globals.encFile);
+    IFileDialogCustomize_StartVisualGroup(customize, NOTEPAD_GROUP_EOLN, szEoln);
+    IFileDialogCustomize_AddComboBox(customize, NOTEPAD_CTL_EOLN);
+    IFileDialogCustomize_EndVisualGroup(customize);
+    AddChoices(customize, NOTEPAD_CTL_EOLN, Endlines, _countof(Endlines), Globals.iEoln);
+
+    hr = IFileSaveDialog_Show(dialog, Globals.hMainWnd);
+    if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED))
+    {
+        bShown = TRUE;
+        goto done;
+    }
+    if (FAILED(hr))
+        goto done;
+    bShown = TRUE;
+
+    if (SUCCEEDED(IFileSaveDialog_GetResult(dialog, &item)))
+    {
+        if (SUCCEEDED(IShellItem_GetDisplayName(item, SIGDN_FILESYSPATH, &pszResult)))
+        {
+            StringCchCopyW(szPath, cchPath, pszResult);
+            CoTaskMemFree(pszResult);
+            if (SUCCEEDED(IFileDialogCustomize_GetSelectedControlItem(customize, NOTEPAD_CTL_ENCODING, &selected)))
+                Globals.encFile = (ENCODING)selected;
+            if (SUCCEEDED(IFileDialogCustomize_GetSelectedControlItem(customize, NOTEPAD_CTL_EOLN, &selected)))
+                Globals.iEoln = (EOLN)selected;
+            *pbSaved = TRUE;
+        }
+        IShellItem_Release(item);
+    }
+
+done:
+    if (customize)
+        IFileDialogCustomize_Release(customize);
+    if (dialog)
+        IFileSaveDialog_Release(dialog);
+    if (SUCCEEDED(hrInit))
+        CoUninitialize();
+    return bShown;
+}
 static UINT_PTR
 CALLBACK
 DIALOG_FileSaveAs_Hook(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -535,6 +705,7 @@ BOOL DIALOG_FileSaveAs(VOID)
 {
     OPENFILENAME saveas;
     TCHAR szPath[MAX_PATH];
+    BOOL bSaved;
 
     ZeroMemory(&saveas, sizeof(saveas));
 
@@ -555,7 +726,10 @@ BOOL DIALOG_FileSaveAs(VOID)
     saveas.lpTemplateName = MAKEINTRESOURCE(DIALOG_ENCODING);
     saveas.lpfnHook = DIALOG_FileSaveAs_Hook;
 
-    if (GetSaveFileName(&saveas))
+    if (!DIALOG_ItemSaveAs(szPath, _countof(szPath), &bSaved))
+        bSaved = GetSaveFileName(&saveas);
+
+    if (bSaved)
     {
         /* HACK: Because in ROS, Save-As boxes don't check the validity
          * of file names and thus, here, szPath can be invalid !! We only
