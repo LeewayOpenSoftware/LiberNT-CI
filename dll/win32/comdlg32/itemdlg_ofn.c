@@ -421,6 +421,8 @@ BOOL COMDLG32_GetFileNameItemDialog(OPENFILENAMEW *ofn, BOOL save, BOOL *result)
         IFileDialog_SetFileTypeIndex(dialog, index);
     }
     IFileDialog_SetOptions(dialog, map_options(ofn->Flags, save));
+    if (!save && (ofn->Flags & OFN_ALLOWMULTISELECT) && !(ofn->Flags & OFN_NODEREFERENCELINKS))
+        COMDLG32_ItemDialogFollowFolderLinks(dialog);
     if (ofn->lpstrTitle)
         IFileDialog_SetTitle(dialog, ofn->lpstrTitle);
     if (ofn->lpstrDefExt)

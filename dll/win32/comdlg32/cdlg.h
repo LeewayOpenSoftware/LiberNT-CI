@@ -179,6 +179,7 @@ HRESULT FileSaveDialog_Constructor(IUnknown *pUnkOuter, REFIID riid, void **ppv)
 BOOL COMDLG32_UseItemDialog(const OPENFILENAMEW *ofn);
 BOOL COMDLG32_GetFileNameItemDialog(OPENFILENAMEW *ofn, BOOL save, BOOL *result);
 BOOL COMDLG32_GetFileNameItemDialogA(OPENFILENAMEA *ofn, BOOL save, BOOL *result);
+void COMDLG32_ItemDialogFollowFolderLinks(IFileDialog *dialog);
 
 /* Shared helper functions */
 void COMDLG32_GetCanonicalPath(PCIDLIST_ABSOLUTE pidlAbsCurrent, LPWSTR lpstrFile, LPWSTR lpstrPathAndFile);

@@ -136,6 +136,7 @@ typedef struct FileDialogImpl {
     HWND cctrls_hwnd;
     ItemDlgChrome *chrome;
     int bottom_height, expanded_height, collapsed_height;
+    BOOL follow_folder_links;
     struct list cctrls;
     UINT_PTR cctrl_next_dlgid;
     customctrl *cctrl_active_vg;
@@ -657,7 +658,7 @@ static BOOL shell_item_exists(IShellItem* shellitem)
     return result;
 }
 
-/* With FOS_NODEREFERENCELINKS (multiselect), a single link to a folder still opens that folder. */
+/* The OPENFILENAME route asks for unresolved links under multiselect, yet a link to a folder still opens it. */
 static void resolve_folder_link(WCHAR *path)
 {
     WCHAR target[MAX_PATH];
@@ -721,7 +722,7 @@ static HRESULT on_default_action(FileDialogImpl *This)
         psf_parent = NULL;
 
         COMDLG32_GetCanonicalPath(current_folder, fn_iter, canon_filename);
-        if ((This->options & FOS_NODEREFERENCELINKS) && file_count == 1)
+        if (This->follow_folder_links && file_count == 1)
             resolve_folder_link(canon_filename);
 
         if( (This->options & FOS_NOVALIDATE) &&
@@ -2548,6 +2549,9 @@ static INT_PTR CALLBACK itemdlg_dlgproc(HWND hwnd, UINT umessage, WPARAM wparam,
         break;
     }
     case WM_SETTINGCHANGE:
+        if (!This || !((lparam && !lstrcmpiW((LPCWSTR)lparam, L"ImmersiveColorSet")) || wparam == SPI_SETHIGHCONTRAST))
+            break;
+        /* fall through */
     case WM_SYSCOLORCHANGE:
     case WM_THEMECHANGED:
         if (This)
@@ -5044,4 +5048,10 @@ HRESULT FileOpenDialog_Constructor(IUnknown *pUnkOuter, REFIID riid, void **ppv)
 HRESULT FileSaveDialog_Constructor(IUnknown *pUnkOuter, REFIID riid, void **ppv)
 {
     return FileDialog_constructor(pUnkOuter, riid, ppv, ITEMDLG_TYPE_SAVE);
+}
+
+/* Direct IFileDialog callers get the documented FOS_NODEREFERENCELINKS; only GetOpenFileName follows folder links. */
+void COMDLG32_ItemDialogFollowFolderLinks(IFileDialog *dialog)
+{
+    impl_from_IFileDialog2((IFileDialog2 *)dialog)->follow_folder_links = TRUE;
 }

@@ -239,7 +239,14 @@ RunPendingSearch(ItemDlgChrome *chrome)
         return;
     module = GetModuleHandleW(L"explorerframe.dll");
     if (!module)
-        module = LoadLibraryW(L"explorerframe.dll");
+    {
+        WCHAR path[MAX_PATH];
+
+        /* Only the system copy, never one found on the application path. */
+        if (GetSystemDirectoryW(path, _countof(path)) &&
+            SUCCEEDED(StringCchCatW(path, _countof(path), L"\\explorerframe.dll")))
+            module = LoadLibraryW(path);
+    }
     start = module ? (START_SEARCH)GetProcAddress(module, "ShellFind_StartSearch") : NULL;
     view = chrome->Host->get_view(chrome->Context);
     if (start && view && SUCCEEDED(view->GetWindow(&window)) && window)
@@ -620,6 +627,8 @@ ItemDlgChrome_SetLocation(ItemDlgChrome *chrome, PCIDLIST_ABSOLUTE pidl)
         RunPendingSearch(chrome);
         return;
     }
+    /* A search whose results folder never showed must not run later. */
+    chrome->SearchQuery[0] = UNICODE_NULL;
     if (chrome->Search)
         SetWindowTextW(chrome->Search->EditWindow(), L"");
     chrome->Pane.Select(pidl);
@@ -674,28 +683,19 @@ AppendText(HMENU menu, UINT id, UINT text, LPCWSTR fallback, BOOL enabled)
     AppendMenuW(menu, MF_STRING | (enabled ? 0 : MF_GRAYED), id, buffer);
 }
 
-/* Rename the selected item in place through the view, without a browser service chain. */
+/* Rename the selected item in place in the view list; focus can sit on an unselected item. */
 static void
 RenameSelection(IShellView *view, HWND owner)
 {
-    IFolderView *folder = NULL;
-    PITEMID_CHILD child = NULL;
-    int focused = -1;
+    HWND list = ViewList(view);
+    int index = list ? ListView_GetNextItem(list, -1, LVNI_SELECTED) : -1;
 
-    if (SUCCEEDED(view->QueryInterface(IID_IFolderView, (void **)&folder)) &&
-        SUCCEEDED(folder->GetFocusedItem(&focused)) && focused >= 0 &&
-        SUCCEEDED(folder->Item(focused, &child)) &&
-        SUCCEEDED(view->SelectItem(child, SVSI_DESELECTOTHERS | SVSI_SELECT | SVSI_ENSUREVISIBLE |
-                                          SVSI_FOCUSED | SVSI_EDIT)))
+    if (index >= 0)
     {
-        ILFree(child);
-        folder->Release();
-        return;
+        SetFocus(list);
+        if (ListView_EditLabel(list, index))
+            return;
     }
-    if (child)
-        ILFree(child);
-    if (folder)
-        folder->Release();
     InvokeVerb(view, SVGIO_SELECTION, "rename", owner);
 }
 
