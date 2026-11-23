@@ -288,7 +288,7 @@ BEGIN
     IDS_OOBE_EXPAND_FAILED "Orosi no pudo ampliar la unidad C: (código de salida de lntexpandstorage: %lu). La instalación continúa; puede volver a intentarlo más tarde con lntexpandstorage en el Símbolo del sistema."
     IDS_OOBE_APPS_SPACE "Los componentes seleccionados necesitan unos %lu MB. La unidad C: tiene %I64u MB libres."
     IDS_OOBE_APPS_NOSPACE "No hay espacio libre suficiente para los componentes seleccionados"
-    IDS_OOBE_APPS_NOSPACE_TEXT "Necesitan unos %lu MB y la unidad C: tiene %I64u MB libres. Desactive algunas casillas para continuar. Para instalarlos más tarde, amplíe la unidad C: con lntexpandstorage en el Símbolo del sistema y luego ejecute %%SystemRoot%%\\system32\\oobe\\oobe.exe /components."
+    IDS_OOBE_APPS_NOSPACE_TEXT "Necesitan unos %lu MB y la unidad C: tiene %I64u MB libres. Desactive algunas casillas para continuar. Para instalarlos más tarde, amplíe la unidad C: con lntexpandstorage en el Símbolo del sistema y luego ejecute %%SystemRoot%%\\system32\\oobe\\msoobe.exe /components."
     IDS_OOBE_INSTALL_DRIVERS "Instalando los controladores de sus dispositivos..."
 END
 

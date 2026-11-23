@@ -288,7 +288,7 @@ BEGIN
     IDS_OOBE_EXPAND_FAILED "Orosi не удалось расширить диск C: (код выхода lntexpandstorage: %lu). Настройка продолжается; позже можно повторить попытку с помощью lntexpandstorage в командной строке."
     IDS_OOBE_APPS_SPACE "Выбранным компонентам нужно около %lu МБ. На диске C: свободно %I64u МБ."
     IDS_OOBE_APPS_NOSPACE "Недостаточно свободного места для выбранных компонентов"
-    IDS_OOBE_APPS_NOSPACE_TEXT "Им нужно около %lu МБ, а на диске C: свободно %I64u МБ. Снимите некоторые флажки, чтобы продолжить. Чтобы установить их позже, расширьте диск C: с помощью lntexpandstorage в командной строке, затем запустите %%SystemRoot%%\\system32\\oobe\\oobe.exe /components."
+    IDS_OOBE_APPS_NOSPACE_TEXT "Им нужно около %lu МБ, а на диске C: свободно %I64u МБ. Снимите некоторые флажки, чтобы продолжить. Чтобы установить их позже, расширьте диск C: с помощью lntexpandstorage в командной строке, затем запустите %%SystemRoot%%\\system32\\oobe\\msoobe.exe /components."
     IDS_OOBE_INSTALL_DRIVERS "Установка драйверов для ваших устройств..."
 END
 

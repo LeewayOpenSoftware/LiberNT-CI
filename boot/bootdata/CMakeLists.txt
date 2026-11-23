@@ -178,7 +178,7 @@ add_cd_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/Install Orosi.lnk"
             DESTINATION "${dir_startmenu_programs}"
             FOR preinstall)
 add_livecd_shortcut("Finish Setup"
-    "shell:system\\oobe\\oobe.exe" ICON_INDEX 0
+    "shell:system\\oobe\\msoobe.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_programs}"
     FOR preinstall)
 
@@ -267,7 +267,7 @@ add_livecd_shortcut("Driver Installer"
     "shell:system\\lntdrv.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Optional Components"
-    "shell:system\\oobe\\oobe.exe" ICON_INDEX 0 CMDLINE_ARGS "/components"
+    "shell:system\\oobe\\msoobe.exe" ICON_INDEX 0 CMDLINE_ARGS "/components"
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Calculator"
     "shell:system\\calc.exe" ICON_INDEX 0

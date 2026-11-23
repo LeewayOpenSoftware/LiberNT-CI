@@ -1059,7 +1059,7 @@ ScheduleFirstBootComponents(
     HKEY hKey;
     LONG Error;
 
-    if (FAILED(StringCchPrintfW(Path, ARRAYSIZE(Path), L"%s\\system32\\oobe\\oobe.exe", Settings->SystemRoot)) ||
+    if (FAILED(StringCchPrintfW(Path, ARRAYSIZE(Path), L"%s\\system32\\oobe\\msoobe.exe", Settings->SystemRoot)) ||
         GetFileAttributesW(Path) == INVALID_FILE_ATTRIBUTES)
     {
         return ERROR_FILE_NOT_FOUND;
@@ -1077,7 +1077,7 @@ ScheduleFirstBootComponents(
     if (Error != ERROR_SUCCESS)
         return Error;
 
-    SetRegString(hKey, L"OOBE", REG_EXPAND_SZ, L"%SystemRoot%\\system32\\oobe\\oobe.exe /components");
+    SetRegString(hKey, L"OOBE", REG_EXPAND_SZ, L"%SystemRoot%\\system32\\oobe\\msoobe.exe /components");
     RegCloseKey(hKey);
 
     return ERROR_SUCCESS;

@@ -288,7 +288,7 @@ BEGIN
     IDS_OOBE_EXPAND_FAILED "Orosi 无法扩展驱动器 C: (lntexpandstorage 退出代码 %lu)。设置将继续；你可以稍后在命令提示符中使用 lntexpandstorage 重试。"
     IDS_OOBE_APPS_SPACE "所选组件大约需要 %lu MB。驱动器 C: 有 %I64u MB 可用空间。"
     IDS_OOBE_APPS_NOSPACE "可用空间不足，无法安装所选组件"
-    IDS_OOBE_APPS_NOSPACE_TEXT "它们大约需要 %lu MB，而驱动器 C: 有 %I64u MB 可用空间。请取消勾选部分组件以继续。若要稍后安装，请在命令提示符中使用 lntexpandstorage 扩展驱动器 C:，然后运行 %%SystemRoot%%\\system32\\oobe\\oobe.exe /components。"
+    IDS_OOBE_APPS_NOSPACE_TEXT "它们大约需要 %lu MB，而驱动器 C: 有 %I64u MB 可用空间。请取消勾选部分组件以继续。若要稍后安装，请在命令提示符中使用 lntexpandstorage 扩展驱动器 C:，然后运行 %%SystemRoot%%\\system32\\oobe\\msoobe.exe /components。"
     IDS_OOBE_INSTALL_DRIVERS "正在为你的设备安装驱动程序..."
 END
 

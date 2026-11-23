@@ -288,7 +288,7 @@ BEGIN
     IDS_OOBE_EXPAND_FAILED "O Orosi não conseguiu expandir a unidade C: (código de saída do lntexpandstorage: %lu). A configuração continua; você pode tentar novamente depois com lntexpandstorage no Prompt de Comando."
     IDS_OOBE_APPS_SPACE "Os componentes selecionados precisam de cerca de %lu MB. A unidade C: tem %I64u MB livres."
     IDS_OOBE_APPS_NOSPACE "Espaço livre insuficiente para os componentes selecionados"
-    IDS_OOBE_APPS_NOSPACE_TEXT "Eles precisam de cerca de %lu MB, e a unidade C: tem %I64u MB livres. Desmarque algumas caixas para continuar. Para instalá-los depois, expanda a unidade C: com lntexpandstorage no Prompt de Comando e execute %%SystemRoot%%\\system32\\oobe\\oobe.exe /components."
+    IDS_OOBE_APPS_NOSPACE_TEXT "Eles precisam de cerca de %lu MB, e a unidade C: tem %I64u MB livres. Desmarque algumas caixas para continuar. Para instalá-los depois, expanda a unidade C: com lntexpandstorage no Prompt de Comando e execute %%SystemRoot%%\\system32\\oobe\\msoobe.exe /components."
     IDS_OOBE_INSTALL_DRIVERS "Instalando drivers para seus dispositivos..."
 END
 

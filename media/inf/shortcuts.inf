@@ -50,7 +50,7 @@ QuickLaunchShortcuts=26, Microsoft\Internet Explorer\Quick Launch
 %SystemRoot%\system32\lntget.exe, %LNTGET_TITLE%, %LNTGET_DESC%, 0, %SystemRoot%\system32, gui
 %SystemRoot%\system32\dxdiag.exe, %DXDIAG_TITLE%, %DXDIAG_DESC%, 0
 %SystemRoot%\system32\control.exe, %GECKO_TITLE%, %GECKO_DESC%, 0, , "appwiz.cpl,,install_gecko"
-%SystemRoot%\system32\oobe\oobe.exe, %COMPONENTS_TITLE%, %COMPONENTS_DESC%, 0, %SystemRoot%\system32\oobe, "/components"
+%SystemRoot%\system32\oobe\msoobe.exe, %COMPONENTS_TITLE%, %COMPONENTS_DESC%, 0, %SystemRoot%\system32\oobe, "/components"
 
 [AccessibilityShortcuts]
 %SystemRoot%\system32\magnify.exe, %MAGNIFY_TITLE%, %MAGNIFY_DESC%, 0
