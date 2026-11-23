@@ -185,7 +185,7 @@ static FILEOPENDIALOGOPTIONS map_options(DWORD flags, BOOL save)
     FILEOPENDIALOGOPTIONS fos = FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR;
 
     if (save && (flags & OFN_OVERWRITEPROMPT)) fos |= FOS_OVERWRITEPROMPT;
-    if (!save && (flags & OFN_ALLOWMULTISELECT)) fos |= FOS_ALLOWMULTISELECT;
+    if (!save && (flags & OFN_ALLOWMULTISELECT)) fos |= FOS_ALLOWMULTISELECT | FOS_NODEREFERENCELINKS;
     if (flags & OFN_PATHMUSTEXIST) fos |= FOS_PATHMUSTEXIST;
     if (flags & OFN_FILEMUSTEXIST) fos |= FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST;
     if (flags & OFN_CREATEPROMPT) fos |= FOS_CREATEPROMPT;
@@ -269,7 +269,16 @@ static BOOL store_multiple(OPENFILENAMEW *ofn, IShellItemArray *items, DWORD cou
             goto done;
     }
 
+    /* The layout names one folder; refuse rather than return names relative to the wrong one. */
     dir_len = PathFindFileNameW(paths[0]) - paths[0];
+    for (i = 1; i < count; i++)
+    {
+        if ((SIZE_T)(PathFindFileNameW(paths[i]) - paths[i]) != dir_len || _wcsnicmp(paths[i], paths[0], dir_len))
+        {
+            COMDLG32_SetCommDlgExtendedError(FNERR_INVALIDFILENAME);
+            goto done;
+        }
+    }
     if (dir_len > 1 && paths[0][dir_len - 1] == L'\\' && !(dir_len == 3 && paths[0][1] == L':'))
         dir_len--;
     needed = dir_len + 2;
@@ -305,11 +314,48 @@ done:
     return ret;
 }
 
+/* Multiselect asks for unresolved links; a single pick still follows its link, like the classic dialog. */
+static LPWSTR resolve_link(LPWSTR path)
+{
+    WCHAR target[MAX_PATH];
+    IShellLinkW *link;
+    IPersistFile *file;
+    LPWSTR resolved = NULL;
+
+    if (lstrcmpiW(PathFindExtensionW(path), L".lnk") ||
+        FAILED(CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkW, (void **)&link)))
+    {
+        return path;
+    }
+    if (SUCCEEDED(IShellLinkW_QueryInterface(link, &IID_IPersistFile, (void **)&file)))
+    {
+        if (SUCCEEDED(IPersistFile_Load(file, path, STGM_READ)) &&
+            IShellLinkW_GetPath(link, target, ARRAY_SIZE(target), NULL, 0) == S_OK && target[0])
+        {
+            resolved = heap_strdup(target);
+        }
+        IPersistFile_Release(file);
+    }
+    IShellLinkW_Release(link);
+    if (!resolved)
+        return path;
+    HeapFree(GetProcessHeap(), 0, path);
+    return resolved;
+}
+
 static BOOL store_item(OPENFILENAMEW *ofn, IShellItem *item)
 {
     LPWSTR path = get_item_path(item);
-    BOOL ret = path && store_single(ofn, path);
+    BOOL ret;
 
+    if (!path)
+    {
+        COMDLG32_SetCommDlgExtendedError(FNERR_INVALIDFILENAME);
+        return FALSE;
+    }
+    if ((ofn->Flags & OFN_ALLOWMULTISELECT) && !(ofn->Flags & OFN_NODEREFERENCELINKS))
+        path = resolve_link(path);
+    ret = store_single(ofn, path);
     HeapFree(GetProcessHeap(), 0, path);
     return ret;
 }
@@ -392,6 +438,7 @@ BOOL COMDLG32_GetFileNameItemDialog(OPENFILENAMEW *ofn, BOOL save, BOOL *result)
     {
         shown = TRUE;
         ofn->Flags &= ~(OFN_READONLY | OFN_EXTENSIONDIFFERENT);
+        COMDLG32_SetCommDlgExtendedError(0);
         *result = store_results(ofn, dialog, save);
         if (*result && count && SUCCEEDED(IFileDialog_GetFileTypeIndex(dialog, &index)))
             ofn->nFilterIndex = index;
@@ -473,6 +520,8 @@ BOOL COMDLG32_GetFileNameItemDialogA(OPENFILENAMEA *ofn, BOOL save, BOOL *result
     int len;
 
     *result = FALSE;
+    if (!ofn->lpstrFile || !ofn->nMaxFile)
+        return FALSE;
     ZeroMemory(&ofnW, sizeof(ofnW));
     memcpy(&ofnW, ofn, min(ofn->lStructSize, sizeof(ofnW)));
     ofnW.lStructSize = sizeof(ofnW);
@@ -497,7 +546,15 @@ BOOL COMDLG32_GetFileNameItemDialogA(OPENFILENAMEA *ofn, BOOL save, BOOL *result
     if (!*result)
     {
         if (CommDlgExtendedError() == FNERR_BUFFERTOOSMALL && ofn->nMaxFile >= 2)
-            *(WORD *)ofn->lpstrFile = *(WORD *)ofnW.lpstrFile;
+        {
+            CPINFO info;
+            UINT needed = *(WORD *)ofnW.lpstrFile;
+
+            /* Characters to bytes: assume the widest character of the ANSI code page. */
+            if (GetCPInfo(CP_ACP, &info) && info.MaxCharSize > 1)
+                needed *= info.MaxCharSize;
+            *(WORD *)ofn->lpstrFile = (WORD)min(needed, 0xffff);
+        }
         goto done;
     }
 
@@ -516,8 +573,11 @@ BOOL COMDLG32_GetFileNameItemDialogA(OPENFILENAMEA *ofn, BOOL save, BOOL *result
     ofn->nFileOffset = offset_WtoA(ofnW.lpstrFile, ofnW.nFileOffset);
     ofn->nFileExtension = offset_WtoA(ofnW.lpstrFile, ofnW.nFileExtension);
     ofn->nFilterIndex = ofnW.nFilterIndex;
-    if (ofnW.lpstrFileTitle)
-        WideCharToMultiByte(CP_ACP, 0, ofnW.lpstrFileTitle, -1, ofn->lpstrFileTitle, ofn->nMaxFileTitle, NULL, NULL);
+    if (ofnW.lpstrFileTitle &&
+        !WideCharToMultiByte(CP_ACP, 0, ofnW.lpstrFileTitle, -1, ofn->lpstrFileTitle, ofn->nMaxFileTitle, NULL, NULL))
+    {
+        ofn->lpstrFileTitle[ofn->nMaxFileTitle - 1] = 0;
+    }
 
 done:
     HeapFree(GetProcessHeap(), 0, (LPWSTR)ofnW.lpstrFilter);

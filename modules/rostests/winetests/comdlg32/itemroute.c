@@ -14,27 +14,39 @@
 
 #define ROUTE_TITLE L"comdlg32 route test"
 #define ROUTE_TITLE_A "comdlg32 route test"
-#define IDC_NAV_TOOLBAR 200
 
 static const WCHAR PolicyKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Comdlg32";
 
 struct driver
 {
     const WCHAR *text;
+    DWORD thread;
     BOOL found;
     BOOL item;
 };
 
-/* Finds the dialog by title, records which dialog it is, then accepts or cancels it. */
+static BOOL CALLBACK find_dialog(HWND hwnd, LPARAM lparam)
+{
+    WCHAR name[16];
+
+    if (IsWindowVisible(hwnd) && GetClassNameW(hwnd, name, ARRAY_SIZE(name)) && !lstrcmpW(name, L"#32770"))
+    {
+        *(HWND *)lparam = hwnd;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* Finds the dialog of the test thread, records which dialog it is, then accepts or cancels it. */
 static DWORD WINAPI driver_proc(void *arg)
 {
     struct driver *driver = arg;
     HWND hwnd = NULL;
     int i;
 
-    for (i = 0; i < 200 && !hwnd; i++)
+    for (i = 0; i < 400 && !hwnd; i++)
     {
-        hwnd = FindWindowW(NULL, ROUTE_TITLE);
+        EnumThreadWindows(driver->thread, find_dialog, (LPARAM)&hwnd);
         if (!hwnd)
             Sleep(50);
     }
@@ -42,7 +54,8 @@ static DWORD WINAPI driver_proc(void *arg)
         return 0;
     Sleep(300);
     driver->found = TRUE;
-    driver->item = GetDlgItem(hwnd, IDC_NAV_TOOLBAR) != NULL;
+    /* The classic dialog has the "Look in" combo box; the item dialog does not. */
+    driver->item = GetDlgItem(hwnd, cmb2) == NULL;
     if (driver->text)
     {
         SendDlgItemMessageW(hwnd, edt1, WM_SETTEXT, 0, (LPARAM)driver->text);
@@ -59,6 +72,7 @@ static HANDLE start_driver(struct driver *driver, const WCHAR *text)
 {
     ZeroMemory(driver, sizeof(*driver));
     driver->text = text;
+    driver->thread = GetCurrentThreadId();
     return CreateThread(NULL, 0, driver_proc, driver, 0, NULL);
 }
 
@@ -83,9 +97,14 @@ static void init_ofn(OPENFILENAMEW *ofn, WCHAR *file, DWORD size, const WCHAR *d
 
 static void get_test_dir(WCHAR *dir)
 {
-    GetTempPathW(MAX_PATH, dir);
-    lstrcatW(dir, L"cdlgroute");
-    CreateDirectoryW(dir, NULL);
+    WCHAR temp[MAX_PATH];
+
+    GetTempPathW(ARRAY_SIZE(temp), temp);
+    lstrcatW(temp, L"cdlgroute");
+    CreateDirectoryW(temp, NULL);
+    /* The item dialog returns long names; TEMP may be an 8.3 path. */
+    if (!GetLongPathNameW(temp, dir, MAX_PATH))
+        lstrcpyW(dir, temp);
 }
 
 static void create_file(const WCHAR *dir, const WCHAR *name)
@@ -302,6 +321,53 @@ static void test_ansi(const WCHAR *dir)
     delete_file(dir, L"routeansi.txt");
 }
 
+/* No file buffer: the ANSI path must not touch it and keeps the classic dialog. */
+static void test_ansi_null_file(void)
+{
+    OPENFILENAMEA ofn;
+    struct driver driver;
+    HANDLE thread;
+
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = ROUTE_TITLE_A;
+    ofn.Flags = OFN_EXPLORER;
+    thread = start_driver(&driver, NULL);
+    GetOpenFileNameA(&ofn);
+    finish_driver(thread);
+    ok(!driver.found || !driver.item, "expected no item dialog without a file buffer\n");
+}
+
+/* A caller in a multithreaded apartment still gets a working dialog. */
+static DWORD WINAPI mta_proc(void *arg)
+{
+    WCHAR file[MAX_PATH] = L"";
+    OPENFILENAMEW ofn;
+    struct driver driver;
+    HANDLE thread;
+    BOOL ret;
+
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    init_ofn(&ofn, file, ARRAY_SIZE(file), arg);
+    thread = start_driver(&driver, NULL);
+    ret = GetOpenFileNameW(&ofn);
+    finish_driver(thread);
+    ok(driver.found, "dialog not found in an MTA thread\n");
+    ok(!ret, "expected FALSE on cancel\n");
+    ok(CommDlgExtendedError() == 0, "error %#lx\n", CommDlgExtendedError());
+    CoUninitialize();
+    return 0;
+}
+
+static void test_mta(WCHAR *dir)
+{
+    HANDLE thread = CreateThread(NULL, 0, mta_proc, dir, 0, NULL);
+
+    ok(WaitForSingleObject(thread, 30000) == WAIT_OBJECT_0, "MTA thread did not finish\n");
+    CloseHandle(thread);
+}
+
 START_TEST(itemroute)
 {
     WCHAR dir[MAX_PATH];
@@ -314,6 +380,8 @@ START_TEST(itemroute)
     test_buffer_too_small(dir);
     test_multiselect(dir);
     test_ansi(dir);
+    test_ansi_null_file();
+    test_mta(dir);
     delete_file(dir, L"routesave.txt");
     delete_file(dir, L"routesave2.txt");
     RemoveDirectoryW(dir);
