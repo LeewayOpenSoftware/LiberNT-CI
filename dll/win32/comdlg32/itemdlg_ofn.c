@@ -404,8 +404,9 @@ BOOL COMDLG32_GetFileNameItemDialog(OPENFILENAMEW *ofn, BOOL save, BOOL *result)
     BOOL shown = FALSE;
 
     *result = FALSE;
+    /* The item dialog and its shell controls need a single-threaded apartment; MTA callers keep the classic dialog. */
     init = OleInitialize(NULL);
-    if (FAILED(init) && init != RPC_E_CHANGED_MODE)
+    if (FAILED(init))
         return FALSE;
 
     hr = save ? FileSaveDialog_Constructor(NULL, &IID_IFileDialog, (void **)&dialog)

@@ -363,7 +363,7 @@ static void test_ansi_null_file(void)
     ok(!driver.found || !driver.item, "expected no item dialog without a file buffer\n");
 }
 
-/* A caller in a multithreaded apartment still gets a working dialog. */
+/* A caller in a multithreaded apartment still gets a working dialog (the classic one). */
 static DWORD WINAPI mta_proc(void *arg)
 {
     WCHAR file[MAX_PATH] = L"";
