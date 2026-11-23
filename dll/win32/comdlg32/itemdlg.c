@@ -657,6 +657,27 @@ static BOOL shell_item_exists(IShellItem* shellitem)
     return result;
 }
 
+/* With FOS_NODEREFERENCELINKS (multiselect), a single link to a folder still opens that folder. */
+static void resolve_folder_link(WCHAR *path)
+{
+    WCHAR target[MAX_PATH];
+    IShellLinkW *link;
+    IPersistFile *file;
+
+    if (lstrcmpiW(PathFindExtensionW(path), L".lnk") ||
+        FAILED(CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, &IID_IShellLinkW, (void **)&link)))
+        return;
+    if (SUCCEEDED(IShellLinkW_QueryInterface(link, &IID_IPersistFile, (void **)&file)))
+    {
+        if (SUCCEEDED(IPersistFile_Load(file, path, STGM_READ)) &&
+            IShellLinkW_GetPath(link, target, ARRAY_SIZE(target), NULL, 0) == S_OK &&
+            target[0] && PathIsDirectoryW(target))
+            lstrcpynW(path, target, MAX_PATH);
+        IPersistFile_Release(file);
+    }
+    IShellLinkW_Release(link);
+}
+
 static HRESULT on_default_action(FileDialogImpl *This)
 {
     IShellFolder *psf_parent, *psf_desktop;
@@ -700,6 +721,8 @@ static HRESULT on_default_action(FileDialogImpl *This)
         psf_parent = NULL;
 
         COMDLG32_GetCanonicalPath(current_folder, fn_iter, canon_filename);
+        if ((This->options & FOS_NODEREFERENCELINKS) && file_count == 1)
+            resolve_folder_link(canon_filename);
 
         if( (This->options & FOS_NOVALIDATE) &&
             !(This->options & FOS_FILEMUSTEXIST) )
@@ -2323,6 +2346,8 @@ static LRESULT on_wm_initdialog(HWND hwnd, LPARAM lParam)
     ctrl_container_reparent(This, This->dlg_hwnd);
     This->chrome = ItemDlgChrome_Create(hwnd, &chrome_host, This, This->dlg_type == ITEMDLG_TYPE_SAVE);
     init_explorerbrowser(This);
+    if (This->chrome && This->peb)
+        ItemDlgChrome_SetBrowser(This->chrome, (IUnknown *)This->peb);
     if (!This->chrome)
         init_toolbar(This, hwnd);
     update_control_text(This);

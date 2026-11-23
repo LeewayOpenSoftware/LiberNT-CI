@@ -355,6 +355,8 @@ HIMAGELIST GlyphImages(const LPCWSTR *names, UINT count, int size, COLORREF colo
 void FillRound(HDC dc, const RECT &rc, int radius, COLORREF color);
 LRESULT ToolbarCustomDraw(NMTBCUSTOMDRAW *draw, COLORREF base);
 
+void UnregisterBandClasses(HINSTANCE instance);
+
 class AddressBandHost
 {
 public:

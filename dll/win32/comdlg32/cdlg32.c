@@ -83,6 +83,7 @@ BOOL WINAPI DllMain(HINSTANCE hInstance, DWORD Reason, LPVOID Reserved)
 	}
 	case DLL_PROCESS_DETACH:
             if (Reserved) break;
+            ItemDlgChrome_Unregister();
             if (COMDLG32_TlsIndex != TLS_OUT_OF_INDEXES) TlsFree(COMDLG32_TlsIndex);
 #ifdef __REACTOS__
             DeleteCriticalSection(&COMDLG32_OpenFileLock);

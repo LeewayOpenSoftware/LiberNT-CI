@@ -65,6 +65,8 @@ void ItemDlgChrome_SettingsChanged(ItemDlgChrome *chrome);
 void ItemDlgChrome_SetLocation(ItemDlgChrome *chrome, PCIDLIST_ABSOLUTE pidl);
 BOOL ItemDlgChrome_OnNotify(ItemDlgChrome *chrome, NMHDR *header, LRESULT *result);
 BOOL ItemDlgChrome_OnCommand(ItemDlgChrome *chrome, UINT id);
+void ItemDlgChrome_SetBrowser(ItemDlgChrome *chrome, IUnknown *browser);
+void ItemDlgChrome_Unregister(void);
 
 #ifdef __cplusplus
 }

@@ -1033,4 +1033,12 @@ SearchBox::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcW(m_hwnd, msg, wParam, lParam);
 }
 
+/* A module that unloads takes its window procedures with it, so its classes must go too. */
+void
+UnregisterBandClasses(HINSTANCE instance)
+{
+    UnregisterClassW(L"ShellFrameAddressBand", instance);
+    UnregisterClassW(L"ShellFrameSearchBox", instance);
+}
+
 } // namespace ShellFrame

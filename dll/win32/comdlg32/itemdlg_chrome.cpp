@@ -446,6 +446,8 @@ ItemDlgChrome_Destroy(ItemDlgChrome *chrome)
 {
     if (!chrome)
         return;
+    if (chrome->Pane.Control())
+        IUnknown_SetSite(chrome->Pane.Control(), NULL);
     if (chrome->Events)
     {
         if (chrome->Pane.Control() && chrome->Cookie)
@@ -467,6 +469,13 @@ ItemDlgChrome_Destroy(ItemDlgChrome *chrome)
         if (chrome->Search->Window())
             DestroyWindow(chrome->Search->Window());
         chrome->Search->Release();
+    }
+    /* Toolbars before the image lists they draw from. */
+    HWND bars[] = { chrome->NavBar, chrome->RefreshBar, chrome->Commands, chrome->ViewBar, chrome->HideBar };
+    for (UINT i = 0; i < _countof(bars); i++)
+    {
+        if (bars[i])
+            DestroyWindow(bars[i]);
     }
     if (chrome->NavImages)
         ImageList_Destroy(chrome->NavImages);
@@ -665,6 +674,31 @@ AppendText(HMENU menu, UINT id, UINT text, LPCWSTR fallback, BOOL enabled)
     AppendMenuW(menu, MF_STRING | (enabled ? 0 : MF_GRAYED), id, buffer);
 }
 
+/* Rename the selected item in place through the view, without a browser service chain. */
+static void
+RenameSelection(IShellView *view, HWND owner)
+{
+    IFolderView *folder = NULL;
+    PITEMID_CHILD child = NULL;
+    int focused = -1;
+
+    if (SUCCEEDED(view->QueryInterface(IID_IFolderView, (void **)&folder)) &&
+        SUCCEEDED(folder->GetFocusedItem(&focused)) && focused >= 0 &&
+        SUCCEEDED(folder->Item(focused, &child)) &&
+        SUCCEEDED(view->SelectItem(child, SVSI_DESELECTOTHERS | SVSI_SELECT | SVSI_ENSUREVISIBLE |
+                                          SVSI_FOCUSED | SVSI_EDIT)))
+    {
+        ILFree(child);
+        folder->Release();
+        return;
+    }
+    if (child)
+        ILFree(child);
+    if (folder)
+        folder->Release();
+    InvokeVerb(view, SVGIO_SELECTION, "rename", owner);
+}
+
 static void
 ShowOrganize(ItemDlgChrome *chrome, const RECT *button)
 {
@@ -704,7 +738,7 @@ ShowOrganize(ItemDlgChrome *chrome, const RECT *button)
             case OrganizeCopy: InvokeVerb(view, SVGIO_SELECTION, "copy", chrome->Dialog); break;
             case OrganizePaste: InvokeVerb(view, SVGIO_BACKGROUND, "paste", chrome->Dialog); break;
             case OrganizeDelete: InvokeVerb(view, SVGIO_SELECTION, "delete", chrome->Dialog); break;
-            case OrganizeRename: InvokeVerb(view, SVGIO_SELECTION, "rename", chrome->Dialog); break;
+            case OrganizeRename: RenameSelection(view, chrome->Dialog); break;
             case OrganizeProperties:
                 InvokeVerb(view, selected ? SVGIO_SELECTION : SVGIO_BACKGROUND, "properties", chrome->Dialog);
                 break;
@@ -809,13 +843,18 @@ NewFolder(ItemDlgChrome *chrome)
         }
         if (done)
         {
+            /* The flushed notification lists the folder; refresh only if it is still missing. */
             SHChangeNotify(SHCNE_MKDIR, SHCNF_PATHW | SHCNF_FLUSH, path, NULL);
-            view->Refresh();
             created = ILCreateFromPathW(path);
             if (created)
             {
-                view->SelectItem(ILFindLastID(created), SVSI_DESELECTOTHERS | SVSI_SELECT | SVSI_ENSUREVISIBLE |
-                                                        SVSI_FOCUSED | SVSI_EDIT);
+                const UINT flags = SVSI_DESELECTOTHERS | SVSI_SELECT | SVSI_ENSUREVISIBLE | SVSI_FOCUSED | SVSI_EDIT;
+
+                if (FAILED(view->SelectItem(ILFindLastID(created), flags)))
+                {
+                    view->Refresh();
+                    view->SelectItem(ILFindLastID(created), flags);
+                }
                 ILFree(created);
             }
         }
@@ -892,4 +931,18 @@ ItemDlgChrome_OnNotify(ItemDlgChrome *chrome, NMHDR *header, LRESULT *result)
         }
     }
     return FALSE;
+}
+
+/* The browser serves SID_SShellBrowser, so opening a pane item navigates the dialog, not a new window. */
+extern "C" void
+ItemDlgChrome_SetBrowser(ItemDlgChrome *chrome, IUnknown *browser)
+{
+    if (chrome && chrome->Pane.Control())
+        IUnknown_SetSite(chrome->Pane.Control(), browser);
+}
+
+extern "C" void
+ItemDlgChrome_Unregister(void)
+{
+    ShellFrame::UnregisterBandClasses(COMDLG32_hInstance);
 }
