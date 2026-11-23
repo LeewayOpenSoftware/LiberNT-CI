@@ -44,7 +44,7 @@ BEGIN
     IDS_VOL_VOLUME "Ses Düzeyi"
     IDS_VOL_ADJUST "&Ses Özelliklerini Düzenle"
     IDS_VOL_OPEN "&Ses Düzeyi Denetimini Aç"
-    IDS_VOL_RUN "SNDVOL32.EXE"
+    IDS_VOL_RUN "SNDVOL.EXE"
     IDS_VOL_MUTED "Ses Düzeyi (Sessiz)"
     IDS_VOL_NODEVICE "No Audio Output Device is installed."
 

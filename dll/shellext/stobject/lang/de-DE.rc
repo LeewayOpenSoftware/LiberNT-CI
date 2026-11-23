@@ -42,7 +42,7 @@ BEGIN
     IDS_VOL_VOLUME "Lautstärke"
     IDS_VOL_ADJUST "&Audioeigenschaften einstellen"
     IDS_VOL_OPEN "&Lautstärkeregelung öffnen"
-    IDS_VOL_RUN "SNDVOL32.EXE"
+    IDS_VOL_RUN "SNDVOL.EXE"
     IDS_VOL_MUTED "Lautstärke (ausgeschaltet)"
     IDS_VOL_NODEVICE "No Audio Output Device is installed."
 

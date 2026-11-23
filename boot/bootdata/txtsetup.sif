@@ -592,6 +592,15 @@ system32\spider.exe
 system32\winmine.exe
 system32\write.exe
 iexplore.exe
+system32\setup.exe
+welcome.exe
+system32\camera.exe
+system32\mplay32.exe
+system32\sndrec32.exe
+system32\sndvol32.exe
+system32\sol.exe
+system32\drwtsn32.exe
+system32\oobe\oobe.exe
 DiagnosticData,dir
 
 [Strings]

@@ -584,7 +584,7 @@ HKCR,".wav","Content Type",0x00000000,"audio/wav"
 HKCR,".wav","PerceivedType",0x00000000,"audio"
 HKCR,"SoundRec","",0x00000000,%WAVFILE%
 HKCR,"SoundRec\DefaultIcon","",0x00020000,"%SystemRoot%\system32\shell32.dll,-225"
-HKCR,"SoundRec\shell\open\command","",0x00020000,"%SystemRoot%\system32\mplay32.exe ""%1"""
+HKCR,"SoundRec\shell\open\command","",0x00020000,"%SystemRoot%\system32\orosi_platform\mplay32.exe ""%1"""
 
 ; Midi Sounds
 HKCR,".mid","",0x00000000,"MIDFile"
@@ -595,13 +595,13 @@ HKCR,".midi","Content Type",0x00000000,"audio/mid"
 HKCR,".midi","PerceivedType",0x00000000,"audio"
 HKCR,"MIDFile","",0x00000000,%MIDFILE%
 HKCR,"MIDFile\DefaultIcon","",0x00020000,"%SystemRoot%\system32\shell32.dll,-225"
-HKCR,"MIDFile\shell\open\command","",0x00020000,"%SystemRoot%\system32\mplay32.exe ""%1"""
+HKCR,"MIDFile\shell\open\command","",0x00020000,"%SystemRoot%\system32\orosi_platform\mplay32.exe ""%1"""
 
 ; Audio CD
 HKCR,".cda","",0x00000000,"CDAFile"
 HKCR,"CDAFile","",0x00000000,%CDAFILE%
 HKCR,"CDAFile\DefaultIcon","",0x00020000,"%SystemRoot%\system32\shell32.dll,-225"
-HKCR,"CDAFile\shell\open\command","",0x00020000,"%SystemRoot%\system32\mplay32.exe ""%1"""
+HKCR,"CDAFile\shell\open\command","",0x00020000,"%SystemRoot%\system32\orosi_platform\mplay32.exe ""%1"""
 
 ; Avi Files
 HKCR,".avi","",0x00000000,"AVIFile"
@@ -609,7 +609,7 @@ HKCR,".avi","Content Type",0x00000000,"video/avi"
 HKCR,".avi","PerceivedType",0x00000000,"video"
 HKCR,"AVIFile","",0x00000000,%AVIFILE%
 HKCR,"AVIFile\DefaultIcon","",0x00020000,"%SystemRoot%\system32\shell32.dll,-224"
-HKCR,"AVIFile\shell\open\command","",0x00020000,"%SystemRoot%\system32\mplay32.exe ""%1"""
+HKCR,"AVIFile\shell\open\command","",0x00020000,"%SystemRoot%\system32\orosi_platform\mplay32.exe ""%1"""
 
 ; Windows Media file types
 HKCR,".mp3","",0x00000000,"WMP11.AssocFile.MP3"
@@ -617,19 +617,19 @@ HKCR,".mp3","Content Type",0x00000000,"audio/mpeg"
 HKCR,".mp3","PerceivedType",0x00000000,"audio"
 HKCR,"WMP11.AssocFile.MP3","",0x00000000,%MP3FILE%
 HKCR,"WMP11.AssocFile.MP3\DefaultIcon","",0x00020000,"%SystemRoot%\system32\shell32.dll,-225"
-HKCR,"WMP11.AssocFile.MP3\shell\open\command","",0x00020000,"%SystemRoot%\system32\mplay32.exe ""%1"""
+HKCR,"WMP11.AssocFile.MP3\shell\open\command","",0x00020000,"%SystemRoot%\system32\orosi_platform\mplay32.exe ""%1"""
 HKCR,".wma","",0x00000000,"WMP11.AssocFile.WMA"
 HKCR,".wma","Content Type",0x00000000,"audio/x-ms-wma"
 HKCR,".wma","PerceivedType",0x00000000,"audio"
 HKCR,"WMP11.AssocFile.WMA","",0x00000000,%WMAFILE%
 HKCR,"WMP11.AssocFile.WMA\DefaultIcon","",0x00020000,"%SystemRoot%\system32\shell32.dll,-225"
-HKCR,"WMP11.AssocFile.WMA\shell\open\command","",0x00020000,"%SystemRoot%\system32\mplay32.exe ""%1"""
+HKCR,"WMP11.AssocFile.WMA\shell\open\command","",0x00020000,"%SystemRoot%\system32\orosi_platform\mplay32.exe ""%1"""
 HKCR,".mp4","",0x00000000,"WMP11.AssocFile.MP4"
 HKCR,".mp4","Content Type",0x00000000,"video/mp4"
 HKCR,".mp4","PerceivedType",0x00000000,"video"
 HKCR,"WMP11.AssocFile.MP4","",0x00000000,%MP4FILE%
 HKCR,"WMP11.AssocFile.MP4\DefaultIcon","",0x00020000,"%SystemRoot%\system32\shell32.dll,-224"
-HKCR,"WMP11.AssocFile.MP4\shell\open\command","",0x00020000,"%SystemRoot%\system32\mplay32.exe ""%1"""
+HKCR,"WMP11.AssocFile.MP4\shell\open\command","",0x00020000,"%SystemRoot%\system32\orosi_platform\mplay32.exe ""%1"""
 
 ; Binary files
 HKCR,".bin","NoOpen",0x00000000,""

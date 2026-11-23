@@ -377,9 +377,9 @@ SaveData(HWND hwndDlg)
 VOID
 LaunchSoundControl(HWND hwndDlg)
 {
-    if ((INT_PTR)ShellExecuteW(NULL, L"open", L"sndvol32.exe", NULL, NULL, SW_SHOWNORMAL) > 32)
+    if ((INT_PTR)ShellExecuteW(NULL, L"open", L"sndvol.exe", NULL, NULL, SW_SHOWNORMAL) > 32)
         return;
-    MessageBoxW(hwndDlg, L"Cannot run sndvol32.exe", NULL, MB_OK);
+    MessageBoxW(hwndDlg, L"Cannot run sndvol.exe", NULL, MB_OK);
 }
 
 /* Volume property page dialog callback */

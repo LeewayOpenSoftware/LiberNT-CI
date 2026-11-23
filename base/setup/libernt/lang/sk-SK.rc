@@ -258,7 +258,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nThe step failed with status 0x%08lx."
     IDS_FORMAT_FAILED "Setup could not format %s as %s.\n%s"
     IDS_CHECK_FAILED "Setup found errors on %s that it could not repair (status 0x%08lx). Setup continues."
-    IDS_SETUPLIB_MISSING "Setup cannot load %s. Run libernt.exe from the folder that holds its system32 folder and txtsetup.sif."
+    IDS_SETUPLIB_MISSING "Setup cannot load %s. Run oros.exe from the system32\\oobe folder of an installation source that holds txtsetup.sif."
 END
 
 STRINGTABLE
@@ -293,7 +293,7 @@ BEGIN
     IDS_OOBE_EXPAND_FAILED "Orosi could not expand drive C: (lntexpandstorage exit code %lu). Setup continues; you can try again later with lntexpandstorage in Command Prompt."
     IDS_OOBE_APPS_SPACE "The selected components need about %lu MB. Drive C: has %I64u MB free."
     IDS_OOBE_APPS_NOSPACE "Not enough free space for the selected components"
-    IDS_OOBE_APPS_NOSPACE_TEXT "They need about %lu MB, and drive C: has %I64u MB free. Clear some boxes to continue. To install them later, expand drive C: with lntexpandstorage in Command Prompt, then run %%SystemRoot%%\\system32\\oobe\\oobe.exe /components."
+    IDS_OOBE_APPS_NOSPACE_TEXT "They need about %lu MB, and drive C: has %I64u MB free. Clear some boxes to continue. To install them later, expand drive C: with lntexpandstorage in Command Prompt, then run %%SystemRoot%%\\system32\\oobe\\msoobe.exe /components."
     IDS_OOBE_INSTALL_DRIVERS "Installing drivers for your devices..."
 END
 

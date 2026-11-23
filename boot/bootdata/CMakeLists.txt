@@ -84,7 +84,7 @@ add_cd_file(FILE ${REACTOS_SOURCE_DIR}/COPYING DESTINATION reactos NAME_ON_CD LI
 # welcome.exe optional custom configuration (only for LiveImage)
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/)
     # Copy the main configuration file
-    add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/welcome.ini DESTINATION reactos NO_CAB FOR livecd)
+    add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/welcome.ini DESTINATION reactos/system32/oobe NO_CAB FOR livecd)
 
     # Convert the translation files (name format: xx-YY.ini) into UTF-16
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/welcome_config)
@@ -93,7 +93,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/)
         set(_converted_file ${CMAKE_CURRENT_BINARY_DIR}/welcome_config/${_file})
         set(_source_file ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/${_file})
         utf16le_convert(${_source_file} ${_converted_file})
-        add_cd_file(TARGET converted_welcome_i18n_files FILE ${_converted_file} DESTINATION reactos/welcome NO_CAB NAME_ON_CD ${_file} FOR livecd)
+        add_cd_file(TARGET converted_welcome_i18n_files FILE ${_converted_file} DESTINATION reactos/system32/oobe/welcome NO_CAB NAME_ON_CD ${_file} FOR livecd)
         list(APPEND _converted_welcome_i18n_files ${_converted_file})
     endforeach(_file)
     add_custom_target(converted_welcome_i18n_files DEPENDS ${_converted_welcome_i18n_files})
@@ -169,8 +169,8 @@ cmdenvvar(envvar_systemdrive "SystemDrive" TRUE)
 cmdenvvar(envvar_archdir     "PROCESSOR_ARCHITECTURE:x86=I386" TRUE)
 add_livecd_shortcut("Install Orosi"
     "shell:system\\cmd.exe"
-    CMDLINE_ARGS "/D /E:ON /C \"start ${envvar_systemdrive}\\${envvar_archdir}\\libernt.exe\""
-    ICON "${envvar_systemdrive}\\${ARCH}\\libernt.exe"
+    CMDLINE_ARGS "/D /E:ON /C \"start ${envvar_systemdrive}\\${envvar_archdir}\\system32\\oobe\\oros.exe\""
+    ICON "${envvar_systemdrive}\\${ARCH}\\system32\\oobe\\oros.exe"
     MINIMIZE
     DESTINATION "${dir_allusers_desktop}")
 add_cd_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/Install Orosi.lnk"
@@ -178,7 +178,7 @@ add_cd_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/Install Orosi.lnk"
             DESTINATION "${dir_startmenu_programs}"
             FOR preinstall)
 add_livecd_shortcut("Finish Setup"
-    "shell:system\\oobe\\oobe.exe" ICON_INDEX 0
+    "shell:system\\oobe\\msoobe.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_programs}"
     FOR preinstall)
 
@@ -235,11 +235,11 @@ add_livecd_shortcut("Remote Desktop Connection"
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_comms}")
 add_livecd_shortcut("Multimedia Player"
-    "shell:system\\mplay32.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\mplay32.exe" ICON_INDEX 0
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_entertainment}")
 add_livecd_shortcut("Sound Recorder"
-    "shell:system\\sndrec32.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\sndrec32.exe" ICON_INDEX 0
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_entertainment}")
 add_livecd_shortcut("Character Map"
@@ -267,7 +267,7 @@ add_livecd_shortcut("Driver Installer"
     "shell:system\\lntdrv.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Optional Components"
-    "shell:system\\oobe\\oobe.exe" ICON_INDEX 0 CMDLINE_ARGS "/components"
+    "shell:system\\oobe\\msoobe.exe" ICON_INDEX 0 CMDLINE_ARGS "/components"
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Calculator"
     "shell:system\\calc.exe" ICON_INDEX 0
@@ -286,7 +286,7 @@ add_livecd_shortcut("WordPad"
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_accessories}")
 add_livecd_shortcut("Solitaire"
-    "shell:system\\sol.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\sol.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_games}")
 add_livecd_shortcut("Spider Solitaire"
     "shell:system\\orosi_platform\\spider.exe" ICON_INDEX 0

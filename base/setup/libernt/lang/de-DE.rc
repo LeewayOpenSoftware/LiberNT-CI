@@ -253,7 +253,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nDer Schritt ist mit dem Status 0x%08lx fehlgeschlagen."
     IDS_FORMAT_FAILED "Setup konnte %s nicht als %s formatieren.\n%s"
     IDS_CHECK_FAILED "Setup hat auf %s Fehler gefunden, die nicht behoben werden konnten (Status 0x%08lx). Setup wird fortgesetzt."
-    IDS_SETUPLIB_MISSING "Setup kann %s nicht laden. Führen Sie libernt.exe aus dem Ordner aus, der den Ordner system32 und txtsetup.sif enthält."
+    IDS_SETUPLIB_MISSING "Setup kann %s nicht laden. Führen Sie oros.exe aus dem Ordner system32\\oobe einer Installationsquelle aus, die txtsetup.sif enthält."
 END
 
 STRINGTABLE
@@ -288,7 +288,7 @@ BEGIN
     IDS_OOBE_EXPAND_FAILED "Orosi konnte Laufwerk C: nicht erweitern (Exitcode von lntexpandstorage: %lu). Setup wird fortgesetzt; Sie können es später mit lntexpandstorage in der Eingabeaufforderung erneut versuchen."
     IDS_OOBE_APPS_SPACE "Die ausgewählten Komponenten benötigen etwa %lu MB. Laufwerk C: hat %I64u MB frei."
     IDS_OOBE_APPS_NOSPACE "Nicht genügend freier Speicher für die ausgewählten Komponenten"
-    IDS_OOBE_APPS_NOSPACE_TEXT "Sie benötigen etwa %lu MB, und Laufwerk C: hat %I64u MB frei. Deaktivieren Sie einige Kontrollkästchen, um fortzufahren. Um sie später zu installieren, erweitern Sie Laufwerk C: mit lntexpandstorage in der Eingabeaufforderung und führen dann %%SystemRoot%%\\system32\\oobe\\oobe.exe /components aus."
+    IDS_OOBE_APPS_NOSPACE_TEXT "Sie benötigen etwa %lu MB, und Laufwerk C: hat %I64u MB frei. Deaktivieren Sie einige Kontrollkästchen, um fortzufahren. Um sie später zu installieren, erweitern Sie Laufwerk C: mit lntexpandstorage in der Eingabeaufforderung und führen dann %%SystemRoot%%\\system32\\oobe\\msoobe.exe /components aus."
     IDS_OOBE_INSTALL_DRIVERS "Treiber für Ihre Geräte werden installiert..."
 END
 

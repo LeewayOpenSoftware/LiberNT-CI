@@ -142,7 +142,7 @@ La forma más rápida de probar LiberNT es el disco preinstalado:
 
 Arranca `bootcd.iso` en una máquina virtual o en un PC y sigue las instrucciones de la **instalación de LiberNT**.
 
-El disco preinstalado también incluye la instalación de LiberNT. Ejecuta `C:\<arquitectura>\libernt.exe`, por ejemplo `C:\arm64\libernt.exe`, para instalar LiberNT en otro disco desde el sistema en ejecución.
+El disco preinstalado también incluye la instalación de LiberNT. Ejecuta `C:\<arquitectura>\system32\oobe\oros.exe`, por ejemplo `C:\arm64\system32\oobe\oros.exe`, para instalar LiberNT en otro disco desde el sistema en ejecución.
 
 > [!CAUTION]
 > La instalación puede eliminar y formatear particiones. Haz una copia de seguridad de todo lo importante del disco de destino antes de instalar.

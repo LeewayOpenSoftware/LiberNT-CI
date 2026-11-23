@@ -24,7 +24,7 @@
 
 `LiberNT.img` 无需安装，开箱即用。把它放进 QEMU 等虚拟机中启动，或写入 U 盘、SD 卡，再从该设备启动。使用 VHD 磁盘的虚拟机请选 `LiberNT.vhd`；Hyper-V 第二代虚拟机请用 `LiberNT.vhdx`，并关闭安全启动。
 
-预装盘中也带有 LiberNT 安装程序。在运行中的系统里执行 `C:\<architecture>\libernt.exe`，例如 `C:\arm64\libernt.exe`，即可把 LiberNT 装到另一块磁盘。
+预装盘中也带有 LiberNT 安装程序。在运行中的系统里执行 `C:\<architecture>\system32\oobe\oros.exe`，例如 `C:\arm64\system32\oobe\oros.exe`，即可把 LiberNT 装到另一块磁盘。
 
 ## 求助
 

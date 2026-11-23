@@ -1551,9 +1551,9 @@ ScheduleFirstBootSetup(VOID)
     UINT Length;
 
     Length = GetSystemDirectoryW(Path, ARRAYSIZE(Path));
-    if (Length == 0 || Length + wcslen(L"\\oobe\\oobe.exe") >= ARRAYSIZE(Path))
+    if (Length == 0 || Length + wcslen(L"\\oobe\\msoobe.exe") >= ARRAYSIZE(Path))
         return;
-    wcscat(Path, L"\\oobe\\oobe.exe");
+    wcscat(Path, L"\\oobe\\msoobe.exe");
     if (GetFileAttributesW(Path) == INVALID_FILE_ATTRIBUTES)
         return;
 

@@ -41,7 +41,7 @@ QuickLaunchShortcuts=26, Microsoft\Internet Explorer\Quick Launch
 %SystemRoot%\system32\mspaint.exe, %MSPAINT_TITLE%, %MSPAINT_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
 
 [SystemToolsShortcuts]
-%SystemRoot%\system32\camera.exe, %CAMERA_TITLE%, %CAMERA_DESC%, 0
+%SystemRoot%\system32\orosi_platform\camera.exe, %CAMERA_TITLE%, %CAMERA_DESC%, 0
 %SystemRoot%\system32\charmap.exe, %CHARMAP_TITLE%, %CHARMAP_DESC%, 0
 %SystemRoot%\system32\orosi_platform\clipbrd.exe, %CLIPBRD_TITLE%, %CLIPBRD_DESC%, 0
 %SystemRoot%\system32\kbswitch.exe, %KBSWITCH_TITLE%, %KBSWITCH_DESC%, 0
@@ -50,18 +50,18 @@ QuickLaunchShortcuts=26, Microsoft\Internet Explorer\Quick Launch
 %SystemRoot%\system32\lntget.exe, %LNTGET_TITLE%, %LNTGET_DESC%, 0, %SystemRoot%\system32, gui
 %SystemRoot%\system32\dxdiag.exe, %DXDIAG_TITLE%, %DXDIAG_DESC%, 0
 %SystemRoot%\system32\control.exe, %GECKO_TITLE%, %GECKO_DESC%, 0, , "appwiz.cpl,,install_gecko"
-%SystemRoot%\system32\oobe\oobe.exe, %COMPONENTS_TITLE%, %COMPONENTS_DESC%, 0, %SystemRoot%\system32\oobe, "/components"
+%SystemRoot%\system32\oobe\msoobe.exe, %COMPONENTS_TITLE%, %COMPONENTS_DESC%, 0, %SystemRoot%\system32\oobe, "/components"
 
 [AccessibilityShortcuts]
 %SystemRoot%\system32\magnify.exe, %MAGNIFY_TITLE%, %MAGNIFY_DESC%, 0
 %SystemRoot%\system32\osk.exe, %OSK_TITLE%, %OSK_DESC%, 0
 
 [EntertainmentShortcuts]
-%SystemRoot%\system32\mplay32.exe, %MPLAY_TITLE%, %MPLAY_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
-%SystemRoot%\system32\sndrec32.exe, %SNDREC32_TITLE%, %SNDREC32_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
+%SystemRoot%\system32\orosi_platform\mplay32.exe, %MPLAY_TITLE%, %MPLAY_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
+%SystemRoot%\system32\orosi_platform\sndrec32.exe, %SNDREC32_TITLE%, %SNDREC32_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
 
 [GamesShortcuts]
-%SystemRoot%\system32\sol.exe, %SOL_TITLE%, %SOL_DESC%, 0
+%SystemRoot%\system32\orosi_platform\sol.exe, %SOL_TITLE%, %SOL_DESC%, 0
 %SystemRoot%\system32\orosi_platform\winmine.exe, %WINMINE_TITLE%, %WINMINE_DESC%, 0
 %SystemRoot%\system32\orosi_platform\spider.exe, %SPIDER_TITLE%, %SPIDER_DESC%, 0
 

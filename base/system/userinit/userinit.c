@@ -778,13 +778,20 @@ HasInstallationSource(IN LPCWSTR lpInstallerPath)
 {
     WCHAR Source[MAX_PATH];
     PWSTR ptr;
+    INT i;
 
     if (FAILED(StringCchCopyW(Source, ARRAYSIZE(Source), lpInstallerPath)))
         return FALSE;
-    ptr = wcsrchr(Source, L'\\');
-    if (!ptr)
-        return FALSE;
-    *++ptr = UNICODE_NULL;
+    /* The installer lives in <source>\system32\oobe */
+    for (i = 0; i < 3; i++)
+    {
+        ptr = wcsrchr(Source, L'\\');
+        if (!ptr)
+            return FALSE;
+        *ptr = UNICODE_NULL;
+    }
+    *ptr++ = L'\\';
+    *ptr = UNICODE_NULL;
     if (FAILED(StringCchCatW(Source, ARRAYSIZE(Source), L"txtsetup.sif")))
         return FALSE;
     return GetFileAttributesW(Source) != INVALID_FILE_ATTRIBUTES;
@@ -846,7 +853,7 @@ wWinMain(IN HINSTANCE hInst,
         NotifyLogon();
 
     if (bIsLiveCD)
-        StartInstaller(L"libernt.exe");
+        StartInstaller(L"system32\\oobe\\oros.exe");
 
     return 0;
 }

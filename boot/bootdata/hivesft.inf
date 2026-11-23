@@ -10,7 +10,7 @@ HKLM,"SOFTWARE\Classes\Applications\notepad.exe\shell\open\command","",0x0002000
 HKLM,"SOFTWARE\Classes\Applications\mspaint.exe\shell\open\command","",0x00020000,"%SystemRoot%\system32\mspaint.exe ""%1"""
 HKLM,"SOFTWARE\Classes\Applications\wordpad.exe\shell\open\command","",0x00020000,"%SystemRoot%\system32\wordpad.exe ""%1"""
 HKLM,"SOFTWARE\Classes\Applications\iexplore.exe\shell\open\command","",0x00020000,"""%programfiles%\Internet Explorer\iexplore.exe"" ""%1"""
-HKLM,"SOFTWARE\Classes\Applications\mplay32.exe\shell\open\command","",0x00020000,"%SystemRoot%\system32\mplay32.exe ""%1"""
+HKLM,"SOFTWARE\Classes\Applications\mplay32.exe\shell\open\command","",0x00020000,"%SystemRoot%\system32\orosi_platform\mplay32.exe ""%1"""
 
 ; Applications NoOpenWith
 HKLM,"SOFTWARE\Classes\Applications\accwiz.exe","NoOpenWith",0x00000000,""
@@ -76,11 +76,11 @@ HKLM,"SOFTWARE\Classes\Applications\zipfldr.dll","NoOpenWith",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\explorer.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\icwconn1.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\inoculan.exe","NoStartPage",0x00000000,""
-HKLM,"SOFTWARE\Classes\Applications\libernt.exe","NoStartPage",0x00000000,""
+HKLM,"SOFTWARE\Classes\Applications\oros.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\mobsync.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\navwnt.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\realmon.exe","NoStartPage",0x00000000,""
-HKLM,"SOFTWARE\Classes\Applications\sndvol32.exe","NoStartPage",0x00000000,""
+HKLM,"SOFTWARE\Classes\Applications\sndvol.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\xpsviewer.exe","NoStartPage",0x00000000,""
 
 ; mspaint.exe SupportedTypes

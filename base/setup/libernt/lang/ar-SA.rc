@@ -253,7 +253,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nفشلت الخطوة بالحالة 0x%08lx."
     IDS_FORMAT_FAILED "تعذّر على برنامج الإعداد تهيئة %s بنظام %s.\n%s"
     IDS_CHECK_FAILED "عثر برنامج الإعداد على أخطاء في %s تعذّر إصلاحها (الحالة 0x%08lx). يستمر الإعداد."
-    IDS_SETUPLIB_MISSING "لا يستطيع برنامج الإعداد تحميل %s. شغّل libernt.exe من المجلد الذي يحتوي على مجلد system32 الخاص به وعلى txtsetup.sif."
+    IDS_SETUPLIB_MISSING "لا يستطيع برنامج الإعداد تحميل %s. شغّل oros.exe من المجلد system32\\oobe في مصدر التثبيت الذي يحتوي على txtsetup.sif."
 END
 
 STRINGTABLE
@@ -288,7 +288,7 @@ BEGIN
     IDS_OOBE_EXPAND_FAILED "تعذّر على Orosi توسيع محرك الأقراص C: (رمز خروج lntexpandstorage هو %lu). يستمر الإعداد؛ يمكنك المحاولة لاحقًا باستخدام lntexpandstorage في موجه الأوامر."
     IDS_OOBE_APPS_SPACE "تحتاج المكونات المحددة إلى نحو %lu ميغابايت. يحتوي محرك الأقراص C: على %I64u ميغابايت حرة."
     IDS_OOBE_APPS_NOSPACE "لا توجد مساحة حرة كافية للمكونات المحددة"
-    IDS_OOBE_APPS_NOSPACE_TEXT "تحتاج إلى نحو %lu ميغابايت، ويحتوي محرك الأقراص C: على %I64u ميغابايت حرة. ألغِ تحديد بعض المربعات للمتابعة. لتثبيتها لاحقًا، وسّع محرك الأقراص C: باستخدام lntexpandstorage في موجه الأوامر، ثم شغّل %%SystemRoot%%\\system32\\oobe\\oobe.exe /components."
+    IDS_OOBE_APPS_NOSPACE_TEXT "تحتاج إلى نحو %lu ميغابايت، ويحتوي محرك الأقراص C: على %I64u ميغابايت حرة. ألغِ تحديد بعض المربعات للمتابعة. لتثبيتها لاحقًا، وسّع محرك الأقراص C: باستخدام lntexpandstorage في موجه الأوامر، ثم شغّل %%SystemRoot%%\\system32\\oobe\\msoobe.exe /components."
     IDS_OOBE_INSTALL_DRIVERS "جارٍ تثبيت برامج التشغيل لأجهزتك..."
 END
 

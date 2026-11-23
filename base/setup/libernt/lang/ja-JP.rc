@@ -252,7 +252,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nこの手順はステータス 0x%08lx で失敗しました。"
     IDS_FORMAT_FAILED "%s を %s でフォーマットできませんでした。\n%s"
     IDS_CHECK_FAILED "%s に修復できないエラーが見つかりました (ステータス 0x%08lx)。セットアップは続行します。"
-    IDS_SETUPLIB_MISSING "%s を読み込めません。system32 フォルダーと txtsetup.sif があるフォルダーから libernt.exe を実行してください。"
+    IDS_SETUPLIB_MISSING "%s を読み込めません。txtsetup.sif を含むインストール ソースの system32\\oobe フォルダーから oros.exe を実行してください。"
 END
 
 STRINGTABLE
@@ -287,7 +287,7 @@ BEGIN
     IDS_OOBE_EXPAND_FAILED "ドライブ C: を拡張できませんでした (lntexpandstorage の終了コード %lu)。セットアップは続行します。後でコマンド プロンプトから lntexpandstorage を実行して、もう一度試すことができます。"
     IDS_OOBE_APPS_SPACE "選んだコンポーネントには約 %lu MB 必要です。ドライブ C: の空きは %I64u MB です。"
     IDS_OOBE_APPS_NOSPACE "選んだコンポーネントに必要な空き領域が足りません"
-    IDS_OOBE_APPS_NOSPACE_TEXT "約 %lu MB 必要ですが、ドライブ C: の空きは %I64u MB です。続行するには、いくつかのチェックを外してください。後でインストールするには、コマンド プロンプトで lntexpandstorage を実行してドライブ C: を拡張してから、%%SystemRoot%%\\system32\\oobe\\oobe.exe /components を実行してください。"
+    IDS_OOBE_APPS_NOSPACE_TEXT "約 %lu MB 必要ですが、ドライブ C: の空きは %I64u MB です。続行するには、いくつかのチェックを外してください。後でインストールするには、コマンド プロンプトで lntexpandstorage を実行してドライブ C: を拡張してから、%%SystemRoot%%\\system32\\oobe\\msoobe.exe /components を実行してください。"
     IDS_OOBE_INSTALL_DRIVERS "デバイスのドライバーをインストールしています..."
 END
 

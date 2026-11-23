@@ -1240,7 +1240,7 @@ UpgradeInstalledCopy(VOID)
 
     if (!GetEnvironmentVariableW(L"SystemDrive", SystemDrive, ARRAYSIZE(SystemDrive)) ||
         !GetEnvironmentVariableW(L"PROCESSOR_ARCHITECTURE", Architecture, ARRAYSIZE(Architecture)) ||
-        FAILED(StringCchPrintfW(Path, ARRAYSIZE(Path), L"%s\\%s\\libernt.exe", SystemDrive,
+        FAILED(StringCchPrintfW(Path, ARRAYSIZE(Path), L"%s\\%s\\system32\\oobe\\oros.exe", SystemDrive,
                                 _wcsicmp(Architecture, L"x86") == 0 ? L"I386" : Architecture)) ||
         GetFileAttributesW(Path) == INVALID_FILE_ATTRIBUTES ||
         FAILED(StringCchPrintfW(CommandLine, ARRAYSIZE(CommandLine), L"\"%s\" /upgrade", Path)))

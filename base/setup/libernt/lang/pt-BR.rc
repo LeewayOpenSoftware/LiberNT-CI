@@ -253,7 +253,7 @@ BEGIN
     IDS_INSTALL_STEP_FAILED "%s\nA etapa falhou com o status 0x%08lx."
     IDS_FORMAT_FAILED "A instalação não conseguiu formatar %s como %s.\n%s"
     IDS_CHECK_FAILED "A instalação encontrou erros em %s que não conseguiu reparar (status 0x%08lx). A instalação continua."
-    IDS_SETUPLIB_MISSING "A instalação não consegue carregar %s. Execute o libernt.exe a partir da pasta que contém sua pasta system32 e o txtsetup.sif."
+    IDS_SETUPLIB_MISSING "A instalação não consegue carregar %s. Execute o oros.exe a partir da pasta system32\\oobe de uma origem de instalação que contenha o txtsetup.sif."
 END
 
 STRINGTABLE
@@ -288,7 +288,7 @@ BEGIN
     IDS_OOBE_EXPAND_FAILED "O Orosi não conseguiu expandir a unidade C: (código de saída do lntexpandstorage: %lu). A configuração continua; você pode tentar novamente depois com lntexpandstorage no Prompt de Comando."
     IDS_OOBE_APPS_SPACE "Os componentes selecionados precisam de cerca de %lu MB. A unidade C: tem %I64u MB livres."
     IDS_OOBE_APPS_NOSPACE "Espaço livre insuficiente para os componentes selecionados"
-    IDS_OOBE_APPS_NOSPACE_TEXT "Eles precisam de cerca de %lu MB, e a unidade C: tem %I64u MB livres. Desmarque algumas caixas para continuar. Para instalá-los depois, expanda a unidade C: com lntexpandstorage no Prompt de Comando e execute %%SystemRoot%%\\system32\\oobe\\oobe.exe /components."
+    IDS_OOBE_APPS_NOSPACE_TEXT "Eles precisam de cerca de %lu MB, e a unidade C: tem %I64u MB livres. Desmarque algumas caixas para continuar. Para instalá-los depois, expanda a unidade C: com lntexpandstorage no Prompt de Comando e execute %%SystemRoot%%\\system32\\oobe\\msoobe.exe /components."
     IDS_OOBE_INSTALL_DRIVERS "Instalando drivers para seus dispositivos..."
 END
 
