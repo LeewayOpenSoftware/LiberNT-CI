@@ -587,6 +587,10 @@ system32\diagdata.exe
 system32\bootok.exe
 system32\conime.exe
 system32\dwmsettings.exe
+system32\clipbrd.exe
+system32\spider.exe
+system32\winmine.exe
+system32\write.exe
 DiagnosticData,dir
 
 [Strings]
