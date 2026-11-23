@@ -60,7 +60,7 @@ Comprobación multilínea estricta → **8 ficheros** mencionan GPL v2 sin «or 
 - `LICENSE-FORMA.md` → junto al arte: `media/graphics/orosi-forma/LICENSE-FORMA.md` (y referenciado desde cada carpeta Forma).
 - `COMPAT-GPL.md`, `TRADEMARK-OROSI.md` → junto a `LICENSE-FORMA.md`.
 - Manifiestos `Icon_Licence/` por módulo: cada entrada Forma lleva
-  `license: "Forma (CC BY-SA 4.0 + cláusula de marca Orosi)"`,
+  `license: "Forma (Licencia de arte Forma, basada en CC BY-SA 4.0 + condición de marca Orosi)"`,
   `trademark: "Orosi — Leeway Open Software (debe permanecer visible en derivados)"`,
   `provenance: "Orosi original (Leeway Open Software)"`.
   Los recursos de terceros mantienen su `license`/`provenance` actuales **sin cambios**.

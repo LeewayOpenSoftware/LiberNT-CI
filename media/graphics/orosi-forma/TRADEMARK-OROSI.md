@@ -8,7 +8,7 @@
 
 > **⚠️ No es asesoría legal / Not legal advice.** La validación jurídica corresponde al propietario o a su abogado.
 
-**«Orosi»** y **«Leeway Open Software»** son marcas de **Leeway Open Software**. Esta política es **independiente del copyright**: la licencia de copyright del arte (CC BY-SA 4.0, ver `LICENSE-FORMA.md`) y del código (GPL) regula la copia y modificación; esta política regula el uso de los **nombres y logotipos como identificadores de origen**. Separar ambos planos es lo que permite que el requisito de «marca visible» **no** sea una restricción incompatible con la GPL (ver `COMPAT-GPL.md`).
+**«Orosi»** y **«Leeway Open Software»** son marcas de **Leeway Open Software**. Esta política es **independiente del copyright**: la licencia de copyright del arte (Licencia de arte Forma, basada en CC BY-SA 4.0, ver `LICENSE-FORMA.md`) y del código (GPL) regula la copia y modificación; esta política regula el uso de los **nombres y logotipos como identificadores de origen**. Separar ambos planos es lo que permite que el requisito de «marca visible» **no** sea una restricción incompatible con la GPL (ver `COMPAT-GPL.md`).
 
 ---
 
@@ -29,7 +29,7 @@ Los nombres denominativos «Orosi» y «Leeway Open Software» y sus logotipos a
 - Presentar un derivado alterado como si fuera el arte oficial Orosi.
 
 ### 4. Relación con el copyright
-- La **licencia de copyright** (CC BY-SA 4.0 + condiciones de `LICENSE-FORMA.md`) te permite copiar y modificar el arte.
+- La **licencia de copyright** (Licencia de arte Forma, basada en CC BY-SA 4.0 + condiciones de `LICENSE-FORMA.md`) te permite copiar y modificar el arte.
 - Esta **política de marca** NO amplía ni restringe esos derechos de copyright; solo regula el uso del **nombre/logotipo** como señal de origen.
 - En binarios GPLv3, la reserva de marca se declara vía **§7(e)** (ver `COMPAT-GPL.md`); en binarios GPLv2-only, la marca opera como derecho independiente de la licencia de copyright y como atribución conservada.
 
@@ -58,7 +58,7 @@ The word marks "Orosi" and "Leeway Open Software" and their associated logos, wh
 - Presenting an altered derivative as if it were the official Orosi art.
 
 ### 4. Relationship to copyright
-- The **copyright licence** (CC BY-SA 4.0 + `LICENSE-FORMA.md` conditions) lets you copy and modify the art.
+- The **copyright licence** (Forma Art License, based on CC BY-SA 4.0 + `LICENSE-FORMA.md` conditions) lets you copy and modify the art.
 - This **trademark policy** neither broadens nor narrows those copyright rights; it only governs use of the **name/logo** as a mark of origin.
 - In GPLv3 binaries, the trademark reservation is declared via **§7(e)** (see `COMPAT-GPL.md`); in GPLv2-only binaries, the mark operates as a right independent of the copyright licence and as preserved attribution.
 

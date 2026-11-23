@@ -1,7 +1,7 @@
 <!--
   COMPAT-GPL.md — Orosi Forma inside GPL LiberNT binaries
   Opción C elegida por el propietario: términos adicionales GPLv3 §7(b)/(e).
-  Complementa LICENSE-FORMA.md (opción A, CC BY-SA 4.0 + marca).
+  Complementa LICENSE-FORMA.md (opción A, Licencia de arte Forma basada en CC BY-SA 4.0 + marca).
   NO ES ASESORÍA LEGAL / NOT LEGAL ADVICE.
 -->
 
@@ -35,12 +35,16 @@ Como los términos del §7 son **permitidos** por la propia licencia, **no cuent
 
 ### Doble vía (recomendada)
 
-- El **arte Forma suelto** (ficheros `.ico/.svg/.png` distribuidos como assets) → **Opción A** (`LICENSE-FORMA.md`, CC BY-SA 4.0 + marca).
+- El **arte Forma suelto** (ficheros `.ico/.svg/.png` distribuidos como assets) → **Opción A** (`LICENSE-FORMA.md`, Licencia de arte Forma basada en CC BY-SA 4.0 + marca).
 - El **mismo arte incrustado** en un binario GPL → **Opción C** (estos términos §7(b)/(e) a nivel del binario).
+
+### Advertencia de compatibilidad CC → GPL (nota de Dwight)
+
+Creative Commons publica una compatibilidad **unidireccional** de **CC BY-SA 4.0 → GPLv3**, pero esa compatibilidad se refiere a la licencia **CC BY-SA 4.0 sin modificar**. Como la Licencia de arte Forma **añade** una condición de marca, **no** debe asumirse que esa compatibilidad CC se traslade automáticamente a la concesión modificada. Por tanto, la base jurídica para **incrustar** el arte Forma dentro de binarios GPL **descansa en la Opción C** (términos adicionales GPLv3 §7(b)/(e)), **no** en el mecanismo de compatibilidad CC→GPL. El arte Forma **suelto** (no combinado en el binario) se distribuye bajo la Opción A como asset independiente, donde esta cuestión no se plantea.
 
 ### Módulos GPLv2-only (sin «or later»)
 
-Si algún binario resultara ser **GPLv2-only** (sin «or later»), **no** puede elevarse a GPLv3 y, por tanto, **no** se le pueden adjuntar los términos §7(b)/(e). Para esos casos: **solo aplica la Opción A al asset suelto** (CC BY-SA 4.0 + marca), y la marca se mantiene como **atribución** (conservar avisos de copyright/atribución **sí** es compatible con GPLv2, porque la propia GPL exige conservarlos) y como **derecho de marca independiente** de la licencia de copyright. **No** se añade ningún término §7 a ese binario.
+Si algún binario resultara ser **GPLv2-only** (sin «or later»), **no** puede elevarse a GPLv3 y, por tanto, **no** se le pueden adjuntar los términos §7(b)/(e). Para esos casos: **solo aplica la Opción A al asset suelto** (Licencia de arte Forma basada en CC BY-SA 4.0 + marca), y la marca se mantiene como **atribución** (conservar avisos de copyright/atribución **sí** es compatible con GPLv2, porque la propia GPL exige conservarlos) y como **derecho de marca independiente** de la licencia de copyright. **No** se añade ningún término §7 a ese binario.
 
 Resultado del escaneo (ver `MODULOS-FORMA.md`): **ningún componente que porta Forma es uniformemente GPLv2-only**; el código principal es GPL-2.0-or-later o LGPL. Solo unos pocos ficheros de borde (algunos `lang/*.rc` de otras localizaciones y la herramienta heredada `pedump.c` con aviso académico no-GPL) deben verificarse por fichero antes de confiar en el §7 para esos binarios concretos.
 
@@ -70,11 +74,15 @@ Because §7 terms are **permitted** by the licence itself, they **do not count a
 
 ### Dual track (recommended)
 
-- The **loose Forma art** (`.ico/.svg/.png` distributed as assets) → **Option A** (`LICENSE-FORMA.md`, CC BY-SA 4.0 + trademark).
+- The **loose Forma art** (`.ico/.svg/.png` distributed as assets) → **Option A** (`LICENSE-FORMA.md`, Forma Art License based on CC BY-SA 4.0 + trademark).
 - The **same art embedded** in a GPL binary → **Option C** (these §7(b)/(e) terms at the binary level).
+
+### CC → GPL compatibility caveat (Dwight's note)
+
+Creative Commons publishes a **one-way** compatibility from **CC BY-SA 4.0 → GPLv3**, but that compatibility concerns the **unmodified** CC BY-SA 4.0 licence. Because the Forma Art License **adds** a trademark condition, that CC compatibility must **not** be assumed to carry over automatically to the modified grant. Therefore, the legal basis for **embedding** Forma art inside GPL binaries **rests on Option C** (GPLv3 §7(b)/(e) additional terms), **not** on the CC→GPL compatibility mechanism. **Loose** Forma art (not combined into the binary) is distributed under Option A as a standalone asset, where this question does not arise.
 
 ### GPLv2-only modules (no "or later")
 
-If a binary turns out to be **GPLv2-only** (no "or later"), it **cannot** be elevated to GPLv3, so the §7(b)/(e) terms **cannot** be attached. For those: **only Option A applies to the loose asset** (CC BY-SA 4.0 + trademark), and the mark is kept as **attribution** (preserving copyright/attribution notices **is** GPLv2-compatible, since the GPL itself requires keeping them) and as a **trademark right independent** of the copyright licence. **No** §7 term is added to that binary.
+If a binary turns out to be **GPLv2-only** (no "or later"), it **cannot** be elevated to GPLv3, so the §7(b)/(e) terms **cannot** be attached. For those: **only Option A applies to the loose asset** (Forma Art License based on CC BY-SA 4.0 + trademark), and the mark is kept as **attribution** (preserving copyright/attribution notices **is** GPLv2-compatible, since the GPL itself requires keeping them) and as a **trademark right independent** of the copyright licence. **No** §7 term is added to that binary.
 
 Scan result (see `MODULOS-FORMA.md`): **no Forma-carrying component is uniformly GPLv2-only**; the main code is GPL-2.0-or-later or LGPL. Only a few edge files (some other-locale `lang/*.rc` and the legacy `pedump.c` tool with a non-GPL academic notice) should be verified per file before relying on §7 for those specific binaries.
