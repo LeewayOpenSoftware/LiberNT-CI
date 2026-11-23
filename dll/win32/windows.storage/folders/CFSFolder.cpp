@@ -247,41 +247,43 @@ getShellClassInfo(LPCWSTR Entry, LPWSTR pszValue, DWORD cchValueLen, LPCWSTR Ini
     return GetPrivateProfileStringW(L".ShellClassInfo", Entry, NULL, pszValue, cchValueLen, IniFile);
 }
 
-static HRESULT
-getKnownFolderIconLocation(LPCWSTR path, LPWSTR iconFile, UINT cchMax, int *iconIndex)
+static const struct
 {
-    static const struct
-    {
-        const KNOWNFOLDERID *id;
-        int icon;
-    } folders[] =
-    {
-        { &FOLDERID_Desktop,   IDI_SHELL_DESKTOP },
-        { &FOLDERID_Documents, IDI_SHELL_MY_DOCUMENTS },
-        { &FOLDERID_Downloads, IDI_SHELL_DOWNLOADS },
-        { &FOLDERID_Music,     IDI_SHELL_MY_MUSIC },
-        { &FOLDERID_Pictures,  IDI_SHELL_MY_PICTURES },
-        { &FOLDERID_Videos,    IDI_SHELL_MY_MOVIES },
-    };
+    const KNOWNFOLDERID *id;
+    int icon;
+    UINT name;
+} s_KnownFolders[] =
+{
+    { &FOLDERID_Desktop,   IDI_SHELL_DESKTOP,      IDS_KF_DESKTOP },
+    { &FOLDERID_Documents, IDI_SHELL_MY_DOCUMENTS, IDS_KF_DOCUMENTS },
+    { &FOLDERID_Downloads, IDI_SHELL_DOWNLOADS,    IDS_KF_DOWNLOADS },
+    { &FOLDERID_Music,     IDI_SHELL_MY_MUSIC,     IDS_KF_MUSIC },
+    { &FOLDERID_Pictures,  IDI_SHELL_MY_PICTURES,  IDS_KF_PICTURES },
+    { &FOLDERID_Videos,    IDI_SHELL_MY_MOVIES,    IDS_KF_VIDEOS },
+};
 
+/* Index of the user folder at path in s_KnownFolders, or -1 */
+static int
+findKnownFolder(LPCWSTR path)
+{
     /* Process-wide (NULL token): resolved for the process user, refreshed on the counter and every FOLDER_ICON_CACHE_MS */
-    static WCHAR s_Paths[_countof(folders)][MAX_PATH];
+    static WCHAR s_Paths[_countof(s_KnownFolders)][MAX_PATH];
     static DWORD s_PathsTick;
     static LONG s_PathsGeneration;
     static BOOL s_PathsValid;
     DWORD now = GetTickCount();
     LONG generation = SHELL_AssocGenerationGet();
-    HRESULT hr = S_FALSE;
+    int found = -1;
 
     AcquireSRWLockExclusive(&s_FolderIconLock);
     if (!s_PathsValid || generation != s_PathsGeneration || now - s_PathsTick > FOLDER_ICON_CACHE_MS)
     {
-        for (UINT i = 0; i < _countof(folders); ++i)
+        for (UINT i = 0; i < _countof(s_KnownFolders); ++i)
         {
             CComHeapPtr<WCHAR> folderPath;
 
             s_Paths[i][0] = UNICODE_NULL;
-            if (SUCCEEDED(SHGetKnownFolderPath(*folders[i].id, KF_FLAG_DONT_VERIFY, NULL, &folderPath)) &&
+            if (SUCCEEDED(SHGetKnownFolderPath(*s_KnownFolders[i].id, KF_FLAG_DONT_VERIFY, NULL, &folderPath)) &&
                 SUCCEEDED(StringCchCopyW(s_Paths[i], _countof(s_Paths[i]), folderPath)))
             {
                 PathRemoveBackslashW(s_Paths[i]);
@@ -291,21 +293,27 @@ getKnownFolderIconLocation(LPCWSTR path, LPWSTR iconFile, UINT cchMax, int *icon
         s_PathsGeneration = generation;
         s_PathsValid = TRUE;
     }
-    for (UINT i = 0; i < _countof(folders); ++i)
+    for (UINT i = 0; i < _countof(s_KnownFolders); ++i)
     {
-        if (!s_Paths[i][0] || lstrcmpiW(path, s_Paths[i]) != 0)
-            continue;
-
-        hr = StringCchCopyW(iconFile, cchMax, swShell32Name);
-        if (SUCCEEDED(hr))
+        if (s_Paths[i][0] && lstrcmpiW(path, s_Paths[i]) == 0)
         {
-            *iconIndex = -folders[i].icon;
-            hr = S_OK;
+            found = i;
+            break;
         }
-        break;
     }
     ReleaseSRWLockExclusive(&s_FolderIconLock);
-    return hr;
+    return found;
+}
+
+static HRESULT
+getKnownFolderIconLocation(LPCWSTR path, LPWSTR iconFile, UINT cchMax, int *iconIndex)
+{
+    int i = findKnownFolder(path);
+
+    if (i < 0 || FAILED(StringCchCopyW(iconFile, cchMax, swShell32Name)))
+        return S_FALSE;
+    *iconIndex = -s_KnownFolders[i].icon;
+    return S_OK;
 }
 
 static HRESULT
@@ -1901,17 +1909,26 @@ HRESULT WINAPI CFSFolder::GetDisplayNameOf(PCUITEMID_CHILD pidl,
     if (!(GET_SHGDN_FOR(dwFlags) & SHGDN_FORPARSING) && _ILIsFolder(pidl) && m_sPathTarget &&
         (_ILGetFileAttributes(pidl, NULL, 0) & (FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY)))
     {
-        WCHAR szIniFile[MAX_PATH], szValue[MAX_PATH + 32], szName[MAX_PATH];
+        WCHAR szFolder[MAX_PATH], szIniFile[MAX_PATH], szValue[MAX_PATH + 32], szName[MAX_PATH];
+        int known;
 
-        if (SUCCEEDED(StringCchCopyW(szIniFile, _countof(szIniFile), m_sPathTarget)) &&
-            _ILSimpleGetTextW(pidl, szName, _countof(szName)) &&
-            PathAppendW(szIniFile, szName) && PathAppendW(szIniFile, L"desktop.ini") &&
-            GetPrivateProfileStringW(L".ShellClassInfo", L"LocalizedResourceName", L"",
-                                     szValue, _countof(szValue), szIniFile) &&
-            szValue[0] == L'@' &&
-            SUCCEEDED(SHLoadIndirectString(szValue, szName, _countof(szName), NULL)))
+        if (SUCCEEDED(StringCchCopyW(szFolder, _countof(szFolder), m_sPathTarget)) &&
+            _ILSimpleGetTextW(pidl, szName, _countof(szName)) && PathAppendW(szFolder, szName))
         {
-            return SHSetStrRet(strRet, szName);
+            if (SUCCEEDED(StringCchCopyW(szIniFile, _countof(szIniFile), szFolder)) &&
+                PathAppendW(szIniFile, L"desktop.ini") &&
+                GetPrivateProfileStringW(L".ShellClassInfo", L"LocalizedResourceName", L"",
+                                         szValue, _countof(szValue), szIniFile) &&
+                szValue[0] == L'@' &&
+                SUCCEEDED(SHLoadIndirectString(szValue, szName, _countof(szName), NULL)))
+            {
+                return SHSetStrRet(strRet, szName);
+            }
+
+            /* Profiles made before desktop.ini named them still show the user folders in the UI language. */
+            known = findKnownFolder(szFolder);
+            if (known >= 0 && LoadStringW(shell32_hInstance, s_KnownFolders[known].name, szName, _countof(szName)))
+                return SHSetStrRet(strRet, szName);
         }
     }
 

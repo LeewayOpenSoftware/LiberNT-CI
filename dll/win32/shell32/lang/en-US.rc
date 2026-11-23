@@ -867,6 +867,13 @@ BEGIN
     IDS_CDBURN_AREA "Local Settings\\Application Data\\Microsoft\\CD Burning"
     IDS_NETWORKPLACE "Network"
 
+    IDS_KF_DESKTOP "Desktop"
+    IDS_KF_DOCUMENTS "Documents"
+    IDS_KF_PICTURES "Pictures"
+    IDS_KF_MUSIC "Music"
+    IDS_KF_VIDEOS "Videos"
+    IDS_KF_DOWNLOADS "Downloads"
+
     IDS_NEWFOLDER "New Folder"
     IDS_NEWITEMFORMAT "New %s"
 

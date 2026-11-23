@@ -104,6 +104,14 @@
 #define IDS_PROGRAM_FILES_COMMON 65
 #define IDS_COMMON_DOCUMENTS     66
 #define IDS_ADMINTOOLS           67
+
+/* User folder names at the Windows shell32 IDs that desktop.ini files refer to */
+#define IDS_KF_DESKTOP           21769
+#define IDS_KF_DOCUMENTS         21770
+#define IDS_KF_PICTURES          21779
+#define IDS_KF_MUSIC             21790
+#define IDS_KF_VIDEOS            21791
+#define IDS_KF_DOWNLOADS         21798
 #define IDS_COMMON_MUSIC         68
 #define IDS_COMMON_PICTURES      69
 #define IDS_COMMON_VIDEO         70
