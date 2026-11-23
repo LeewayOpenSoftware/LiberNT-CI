@@ -184,9 +184,6 @@ CCabinetWindow::CCabinetWindow() :
     m_DetailsType(NULL),
     m_Navigation(NULL),
     m_NavigationWindow(NULL),
-    m_NavigationRootCount(0),
-    m_PinnedCount(0),
-    m_PinIcon(NULL),
     m_FocusSave(NULL),
     m_DetailsPane(FALSE),
     m_PreviewPane(FALSE),
@@ -213,7 +210,6 @@ CCabinetWindow::CCabinetWindow() :
 {
     m_SearchQuery[0] = UNICODE_NULL;
     ZeroMemory(m_Images, sizeof(m_Images));
-    ZeroMemory(m_NavigationRoots, sizeof(m_NavigationRoots));
     ZeroMemory(m_Tabs, sizeof(m_Tabs));
     SetRectEmpty(&m_PanelRect);
     SetRectEmpty(&m_ViewRect);
@@ -231,10 +227,6 @@ CCabinetWindow::~CCabinetWindow()
         DeleteObject(m_DetailsBitmap);
     if (m_TitleFont)
         DeleteObject(m_TitleFont);
-    if (m_PinIcon)
-        DestroyIcon(m_PinIcon);
-    for (UINT i = 0; i < m_NavigationRootCount; i++)
-        m_NavigationRoots[i]->Release();
     for (UINT i = 0; i < _countof(m_Images); i++)
     {
         if (m_Images[i])
@@ -331,9 +323,7 @@ CCabinetWindow::RefreshGlyphs()
     m_Images[2] = CabinetGlyphImages(CommandGlyphs, _countof(CommandGlyphs), command, palette.Glyph);
     m_Images[3] = CabinetGlyphImages(CommandGlyphs, _countof(CommandGlyphs), command, palette.GlyphDisabled);
     m_Images[4] = CabinetGlyphImages(ViewGlyphs, _countof(ViewGlyphs), glyph, palette.Glyph);
-    if (m_PinIcon)
-        DestroyIcon(m_PinIcon);
-    m_PinIcon = ShellFrame::CreateGlyphIcon(L"pin_16_regular", glyph, palette.GlyphDisabled);
+    m_NavPane.SetPinGlyph(glyph, palette.GlyphDisabled);
     if (m_NavBar)
     {
         SendMessageW(m_NavBar, TB_SETIMAGELIST, 0, (LPARAM)m_Images[0]);
@@ -2088,52 +2078,14 @@ CCabinetWindow::WatchFolder()
 void
 CCabinetWindow::CreateNavigationPane()
 {
-    static const KNOWNFOLDERID *QuickAccess[] =
-    {
-        &FOLDERID_Desktop, &FOLDERID_Downloads, &FOLDERID_Documents, &FOLDERID_Pictures, &FOLDERID_Music,
-        &FOLDERID_Videos
-    };
-    static const KNOWNFOLDERID *Locations[] = { &FOLDERID_ComputerFolder, &FOLDERID_NetworkFolder };
     IUnknown *events = NULL;
     DWORD cookie = 0;
-    IOleWindow *window = NULL;
-    RECT rc = { 0, 0, 0, 0 };
+    CabinetPalette palette;
 
-    if (FAILED(CoCreateInstance(CLSID_NamespaceTreeControl, NULL, CLSCTX_INPROC_SERVER,
-                                IID_PPV_ARG(INameSpaceTreeControl, &m_Navigation))))
+    if (!m_NavPane.Create(m_hwnd, Scale(26)))
         return;
-    if (FAILED(m_Navigation->Initialize(m_hwnd, &rc, NSTCS_HASEXPANDOS | NSTCS_ROOTHASEXPANDO |
-                                        NSTCS_SINGLECLICKEXPAND | NSTCS_FULLROWSELECT |
-                                        NSTCS_SHOWSELECTIONALWAYS | NSTCS_AUTOHSCROLL)))
-    {
-        m_Navigation->Release();
-        m_Navigation = NULL;
-        return;
-    }
-    m_Navigation->SetTheme(L"Explorer");
-    for (UINT i = 0; i < _countof(QuickAccess); i++)
-    {
-        IShellItem *item;
-        if (SUCCEEDED(SHGetKnownFolderItem(*QuickAccess[i], KF_FLAG_DEFAULT, NULL, IID_PPV_ARG(IShellItem, &item))))
-        {
-            if (SUCCEEDED(m_Navigation->AppendRoot(item, 0, NSTCRS_VISIBLE, NULL)))
-                m_NavigationRoots[m_NavigationRootCount++] = item;
-            else
-                item->Release();
-        }
-    }
-    m_PinnedCount = m_NavigationRootCount;
-    for (UINT i = 0; i < _countof(Locations); i++)
-    {
-        IShellItem *item;
-        if (SUCCEEDED(SHGetKnownFolderItem(*Locations[i], KF_FLAG_DEFAULT, NULL, IID_PPV_ARG(IShellItem, &item))))
-        {
-            if (SUCCEEDED(m_Navigation->AppendRoot(item, SHCONTF_FOLDERS, NSTCRS_VISIBLE, NULL)))
-                m_NavigationRoots[m_NavigationRootCount++] = item;
-            else
-                item->Release();
-        }
-    }
+    m_Navigation = m_NavPane.Control();
+    m_NavigationWindow = m_NavPane.Window();
     if (SUCCEEDED(CabinetNavigation_Create(this, &events)))
     {
         m_Navigation->TreeAdvise(events, &cookie);
@@ -2141,30 +2093,14 @@ CCabinetWindow::CreateNavigationPane()
         IUnknown_SetSite(m_Navigation, events);
         events->Release();
     }
-    if (SUCCEEDED(m_Navigation->QueryInterface(IID_PPV_ARG(IOleWindow, &window))))
-    {
-        window->GetWindow(&m_NavigationWindow);
-        window->Release();
-    }
-    if (m_NavigationWindow)
-    {
-        HWND tree = FindWindowExW(m_NavigationWindow, NULL, WC_TREEVIEWW, NULL);
-        CabinetPalette palette;
-
-        if (tree)
-            TreeView_SetItemHeight(tree, max(Scale(26), TreeView_GetItemHeight(tree)));
-        CabinetGetPalette(&palette);
-        SetNavigationBackground(palette.Body);
-    }
+    CabinetGetPalette(&palette);
+    SetNavigationBackground(palette.Body);
 }
 
 void
 CCabinetWindow::SetNavigationBackground(COLORREF color)
 {
-    HWND tree = m_NavigationWindow ? FindWindowExW(m_NavigationWindow, NULL, WC_TREEVIEWW, NULL) : NULL;
-
-    if (tree)
-        TreeView_SetBkColor(tree, color);
+    m_NavPane.SetBackground(color);
 }
 
 int
@@ -2560,34 +2496,7 @@ CCabinetWindow::OnDefaultCommand(IShellView *view)
 void
 CCabinetWindow::PaintNavigationItem(HDC dc, const RECT &rc, const NSTCCUSTOMDRAW *item)
 {
-    CabinetPalette palette;
-    UINT index;
-    int order;
-
-    if (!item || !item->psi || item->iLevel)
-        return;
-    for (index = 0; index < m_NavigationRootCount; index++)
-    {
-        if (m_NavigationRoots[index] == item->psi ||
-            (SUCCEEDED(m_NavigationRoots[index]->Compare(item->psi, SICHINT_CANONICAL, &order)) && !order))
-            break;
-    }
-    if (index >= m_NavigationRootCount)
-        return;
-    if (index < m_PinnedCount)
-    {
-        if (m_PinIcon)
-            DrawIconEx(dc, rc.right - Scale(28), rc.top + (rc.bottom - rc.top - Scale(16)) / 2, m_PinIcon,
-                       Scale(16), Scale(16), 0, NULL, DI_NORMAL);
-    }
-    else if (index == m_PinnedCount && index)
-    {
-        RECT line = { rc.left + Scale(12), rc.top, rc.right - Scale(12), rc.top + 1 };
-
-        CabinetGetPalette(&palette);
-        SetDCBrushColor(dc, palette.BandLine);
-        FillRect(dc, &line, (HBRUSH)GetStockObject(DC_BRUSH));
-    }
+    m_NavPane.PaintRoot(dc, rc, item, GetDpiForWindow(m_hwnd));
 }
 
 void
@@ -4118,8 +4027,9 @@ CCabinetWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
             if (m_Navigation)
             {
                 IUnknown_SetSite(m_Navigation, NULL);
-                m_Navigation->Release();
+                m_NavPane.Destroy();
                 m_Navigation = NULL;
+                m_NavigationWindow = NULL;
             }
             PostQuitMessage(0);
             break;

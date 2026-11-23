@@ -227,10 +227,7 @@ private:
     HWND m_DetailsType;
     INameSpaceTreeControl *m_Navigation;
     HWND m_NavigationWindow;
-    IShellItem *m_NavigationRoots[8];
-    UINT m_NavigationRootCount;
-    UINT m_PinnedCount;
-    HICON m_PinIcon;
+    ShellFrame::NavigationPane m_NavPane;
     HWND m_FocusSave;
     RECT m_PanelRect;
     RECT m_ViewRect;

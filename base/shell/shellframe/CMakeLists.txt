@@ -13,6 +13,7 @@ list(APPEND SOURCE
     caption.cpp
     icons.cpp
     navigation.cpp
+    navpane.cpp
     tabband.cpp
     theme.cpp
     window.cpp

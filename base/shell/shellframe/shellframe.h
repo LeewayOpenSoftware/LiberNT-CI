@@ -13,6 +13,7 @@
 #include <commctrl.h>
 #include <gdiplus.h>
 #include <shtypes.h>
+#include <shobjidl.h>
 
 #ifndef SHELLFRAME_CUSTOM_CAPTION_BUTTONS
 #define SHELLFRAME_CUSTOM_CAPTION_BUTTONS 1
@@ -446,5 +447,31 @@ private:
     HWND m_Edit;
     HICON m_Glyph;
     HBRUSH m_BoxBrush;
+};
+
+class NavigationPane
+{
+public:
+    NavigationPane();
+    ~NavigationPane();
+
+    BOOL Create(HWND parent, int itemHeight);
+    void Destroy();
+    INameSpaceTreeControl *Control() const { return m_Control; }
+    HWND Window() const { return m_Window; }
+    void SetBackground(COLORREF color);
+    void SetPinGlyph(int size, COLORREF color);
+    void PaintRoot(HDC dc, const RECT &rc, const NSTCCUSTOMDRAW *item, int dpi);
+    void Select(PCIDLIST_ABSOLUTE pidl);
+
+private:
+    void AppendRoot(REFKNOWNFOLDERID id, SHCONTF flags);
+
+    INameSpaceTreeControl *m_Control;
+    HWND m_Window;
+    IShellItem *m_Roots[8];
+    UINT m_RootCount;
+    UINT m_PinnedCount;
+    HICON m_PinIcon;
 };
 }
