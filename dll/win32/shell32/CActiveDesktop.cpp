@@ -11,35 +11,24 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell_ad);
 
-/* Public, documented IActiveDesktop constants (the tree's shlobj.h declares the
- * interface without its flag/style values). */
-#define AD_APPLY_SAVE   0x00000001
-#define AD_APPLY_ALL    0x00000002
-#define AD_APPLY_FORCE  0x00000004
-
-#define WPSTYLE_TILE    0
-#define WPSTYLE_CENTER  1
-#define WPSTYLE_STRETCH 2
-#define WPSTYLE_FIT     3
-#define WPSTYLE_FILL    4
-
 static const WCHAR szDesktopKey[] = L"Control Panel\\Desktop";
 static const WCHAR szWallpaperValue[] = L"Wallpaper";
 static const WCHAR szWallpaperStyleValue[] = L"WallpaperStyle";
 static const WCHAR szTileWallpaperValue[] = L"TileWallpaper";
 
 /* Map a WPSTYLE value onto the registry pair win32k reads back through
- * SpiLoadWallpaperMode (win32ss/user/ntuser/sysparams.c). */
+ * SpiLoadWallpaperMode (win32ss/user/ntuser/sysparams.c). WPSTYLE_SPAN has
+ * no Orosi equivalent yet and is rejected. */
 static BOOL
 StyleToRegistry(DWORD dwStyle, LPCWSTR *ppszWallpaperStyle, LPCWSTR *ppszTileWallpaper)
 {
     switch (dwStyle)
     {
-        case WPSTYLE_TILE:    *ppszWallpaperStyle = L"0";  *ppszTileWallpaper = L"1"; return TRUE;
-        case WPSTYLE_CENTER:  *ppszWallpaperStyle = L"0";  *ppszTileWallpaper = L"0"; return TRUE;
-        case WPSTYLE_STRETCH: *ppszWallpaperStyle = L"2";  *ppszTileWallpaper = L"0"; return TRUE;
-        case WPSTYLE_FIT:     *ppszWallpaperStyle = L"6";  *ppszTileWallpaper = L"0"; return TRUE;
-        case WPSTYLE_FILL:    *ppszWallpaperStyle = L"10"; *ppszTileWallpaper = L"0"; return TRUE;
+        case WPSTYLE_CENTER:     *ppszWallpaperStyle = L"0";  *ppszTileWallpaper = L"0"; return TRUE;
+        case WPSTYLE_TILE:       *ppszWallpaperStyle = L"0";  *ppszTileWallpaper = L"1"; return TRUE;
+        case WPSTYLE_STRETCH:    *ppszWallpaperStyle = L"2";  *ppszTileWallpaper = L"0"; return TRUE;
+        case WPSTYLE_KEEPASPECT: *ppszWallpaperStyle = L"6";  *ppszTileWallpaper = L"0"; return TRUE;
+        case WPSTYLE_CROPTOFIT:  *ppszWallpaperStyle = L"10"; *ppszTileWallpaper = L"0"; return TRUE;
         default: return FALSE;
     }
 }
@@ -55,39 +44,43 @@ RegistryToStyle(LPCWSTR pszWallpaperStyle, LPCWSTR pszTileWallpaper, DWORD *pdwS
     if (pszTileWallpaper[0] != L'0')
         return FALSE;
 
-    if (!lstrcmpW(pszWallpaperStyle, L"2"))  { *pdwStyle = WPSTYLE_STRETCH; return TRUE; }
-    if (!lstrcmpW(pszWallpaperStyle, L"6"))  { *pdwStyle = WPSTYLE_FIT;     return TRUE; }
-    if (!lstrcmpW(pszWallpaperStyle, L"10")) { *pdwStyle = WPSTYLE_FILL;    return TRUE; }
-    if (!lstrcmpW(pszWallpaperStyle, L"0"))  { *pdwStyle = WPSTYLE_CENTER;  return TRUE; }
+    if (!lstrcmpW(pszWallpaperStyle, L"2"))  { *pdwStyle = WPSTYLE_STRETCH;    return TRUE; }
+    if (!lstrcmpW(pszWallpaperStyle, L"6"))  { *pdwStyle = WPSTYLE_KEEPASPECT; return TRUE; }
+    if (!lstrcmpW(pszWallpaperStyle, L"10")) { *pdwStyle = WPSTYLE_CROPTOFIT;  return TRUE; }
+    if (!lstrcmpW(pszWallpaperStyle, L"0"))  { *pdwStyle = WPSTYLE_CENTER;     return TRUE; }
     return FALSE;
 }
 
 static BOOL
 IsValidStyle(DWORD dwStyle)
 {
-    return dwStyle <= WPSTYLE_FILL;
+    return dwStyle <= WPSTYLE_CROPTOFIT;
 }
 
 static HRESULT
 ReadRegistryString(LPCWSTR pszValue, LPWSTR pszBuffer, DWORD cchBuffer)
 {
+    LSTATUS Status;
     DWORD cb = cchBuffer * sizeof(WCHAR);
 
     pszBuffer[0] = UNICODE_NULL;
-    if (RegGetValueW(HKEY_CURRENT_USER, szDesktopKey, pszValue,
-                     RRF_RT_REG_SZ | RRF_ZEROONFAILURE, NULL, pszBuffer, &cb) != ERROR_SUCCESS)
-        return HRESULT_FROM_WIN32(GetLastError());
+    Status = RegGetValueW(HKEY_CURRENT_USER, szDesktopKey, pszValue,
+                          RRF_RT_REG_SZ | RRF_ZEROONFAILURE, NULL, pszBuffer, &cb);
+    if (Status != ERROR_SUCCESS)
+    {
+        pszBuffer[0] = UNICODE_NULL;
+        return HRESULT_FROM_WIN32(Status);
+    }
     return S_OK;
 }
 
 static HRESULT
 WriteRegistryString(HKEY hKey, LPCWSTR pszValue, LPCWSTR pszData)
 {
-    if (RegSetValueExW(hKey, pszValue, 0, REG_SZ,
-                       reinterpret_cast<const BYTE *>(pszData),
-                       (lstrlenW(pszData) + 1) * sizeof(WCHAR)) != ERROR_SUCCESS)
-        return HRESULT_FROM_WIN32(GetLastError());
-    return S_OK;
+    LSTATUS Status = RegSetValueExW(hKey, pszValue, 0, REG_SZ,
+                                    reinterpret_cast<const BYTE *>(pszData),
+                                    (lstrlenW(pszData) + 1) * sizeof(WCHAR));
+    return Status == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(Status);
 }
 
 /***********************************************************************
@@ -109,21 +102,24 @@ CActiveDesktop::~CActiveDesktop()
 HRESULT WINAPI CActiveDesktop::ApplyChanges(DWORD dwFlags)
 {
     WCHAR szStyle[16], szTile[16];
-    HRESULT hr;
+    HRESULT hr = S_OK;
 
     TRACE("(%lx)\n", dwFlags);
 
-    if (m_bOptionsPending)
+    /* AD_APPLY_SAVE persists the pending options. */
+    if ((dwFlags & AD_APPLY_SAVE) && m_bOptionsPending)
     {
         LPCWSTR pszWallpaperStyle, pszTileWallpaper;
+        HKEY hKey;
+        LSTATUS Status;
 
         if (!StyleToRegistry(m_dwPendingStyle, &pszWallpaperStyle, &pszTileWallpaper))
             return E_INVALIDARG;
 
-        HKEY hKey;
-        if (RegCreateKeyExW(HKEY_CURRENT_USER, szDesktopKey, 0, NULL,
-                            0, KEY_WRITE, NULL, &hKey, NULL) != ERROR_SUCCESS)
-            return HRESULT_FROM_WIN32(GetLastError());
+        Status = RegCreateKeyExW(HKEY_CURRENT_USER, szDesktopKey, 0, NULL,
+                                 0, KEY_WRITE, NULL, &hKey, NULL);
+        if (Status != ERROR_SUCCESS)
+            return HRESULT_FROM_WIN32(Status);
         hr = WriteRegistryString(hKey, szWallpaperStyleValue, pszWallpaperStyle);
         if (SUCCEEDED(hr))
             hr = WriteRegistryString(hKey, szTileWallpaperValue, pszTileWallpaper);
@@ -133,24 +129,48 @@ HRESULT WINAPI CActiveDesktop::ApplyChanges(DWORD dwFlags)
         m_bOptionsPending = FALSE;
     }
 
-    if (dwFlags & (AD_APPLY_SAVE | AD_APPLY_ALL | AD_APPLY_FORCE))
+    /* AD_APPLY_REFRESH / AD_APPLY_FORCE apply the wallpaper through SPI. */
+    if (dwFlags & (AD_APPLY_REFRESH | AD_APPLY_FORCE))
     {
         WCHAR szCurrent[MAX_PATH];
 
         if (m_bWallpaperPending)
         {
+            /* An explicit SetWallpaper() (including an empty string, which
+             * clears the wallpaper) is committed as requested. */
             StringCchCopyW(szCurrent, ARRAYSIZE(szCurrent), m_szPendingWallpaper);
             m_bWallpaperPending = FALSE;
+
+            if (!SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, szCurrent,
+                                       SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
+                return HRESULT_FROM_WIN32(GetLastError());
         }
         else
         {
-            ReadRegistryString(szWallpaperValue, szCurrent, ARRAYSIZE(szCurrent));
-        }
+            HRESULT hrRead = ReadRegistryString(szWallpaperValue, szCurrent, ARRAYSIZE(szCurrent));
 
-        /* Delegate decode/transcode/paint to the user32/win32k pipeline. */
-        if (!SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, szCurrent,
-                                   SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
-            return HRESULT_FROM_WIN32(GetLastError());
+            if (FAILED(hrRead))
+            {
+                if (hrRead == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
+                {
+                    TRACE("No wallpaper configured; nothing to apply\n");
+                }
+                else
+                {
+                    return hrRead;
+                }
+            }
+            else if (szCurrent[0] != UNICODE_NULL)
+            {
+                if (!SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, szCurrent,
+                                           SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
+                    return HRESULT_FROM_WIN32(GetLastError());
+            }
+            else
+            {
+                TRACE("No wallpaper configured; nothing to apply\n");
+            }
+        }
     }
 
     /* Read back the effective style so m_dwPendingStyle tracks reality. */
@@ -160,7 +180,7 @@ HRESULT WINAPI CActiveDesktop::ApplyChanges(DWORD dwFlags)
         RegistryToStyle(szStyle, szTile, &m_dwPendingStyle);
     }
 
-    return S_OK;
+    return hr;
 }
 
 HRESULT WINAPI CActiveDesktop::GetWallpaper(PWSTR pwszWallpaper, UINT cchWallpaper, DWORD dwFlags)
@@ -171,12 +191,8 @@ HRESULT WINAPI CActiveDesktop::GetWallpaper(PWSTR pwszWallpaper, UINT cchWallpap
 
     if (!pwszWallpaper || !cchWallpaper)
         return E_INVALIDARG;
-
-    if ((dwFlags & 0x3) == 0x2 /* AD_GETWP_PENDING */ && m_bWallpaperPending)
-    {
-        StringCchCopyW(pwszWallpaper, cchWallpaper, m_szPendingWallpaper);
-        return S_OK;
-    }
+    if (dwFlags & ~(AD_GETWP_LAST_APPLIED))
+        return E_INVALIDARG;
 
     ReadRegistryString(szWallpaperValue, szCurrent, ARRAYSIZE(szCurrent));
     StringCchCopyW(pwszWallpaper, cchWallpaper, szCurrent);

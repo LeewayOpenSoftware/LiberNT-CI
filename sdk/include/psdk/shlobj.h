@@ -1080,6 +1080,23 @@ typedef struct _tagCOMPONENTSOPT
 typedef COMPONENTSOPT *LPCOMPONENTSOPT;
 typedef const COMPONENTSOPT *LPCCOMPONENTSOPT;
 
+/* IActiveDesktop wallpaper styles and apply flags */
+#define WPSTYLE_CENTER      0
+#define WPSTYLE_TILE        1
+#define WPSTYLE_STRETCH     2
+#define WPSTYLE_KEEPASPECT  3
+#define WPSTYLE_CROPTOFIT   4
+#define WPSTYLE_SPAN        5
+
+#define AD_APPLY_SAVE       0x00000001
+#define AD_APPLY_HTMLGEN    0x00000002
+#define AD_APPLY_REFRESH    0x00000004
+#define AD_APPLY_ALL        0x00000007
+#define AD_APPLY_FORCE      0x00000008
+
+#define AD_GETWP_DEFAULT       0x00000000
+#define AD_GETWP_LAST_APPLIED  0x00000002
+
 
 typedef struct _tagCOMPPOS
 {
