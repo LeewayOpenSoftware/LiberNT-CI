@@ -591,6 +591,7 @@ system32\clipbrd.exe
 system32\spider.exe
 system32\winmine.exe
 system32\write.exe
+iexplore.exe
 DiagnosticData,dir
 
 [Strings]
