@@ -40,7 +40,7 @@ StartWallpaperHost(VOID)
     if (!CreateProcessW(Path, NULL, NULL, NULL, FALSE, 0, NULL, NULL,
                         &StartupInfo, &ProcessInfo))
     {
-        DPRINT("WallpaperHost: failed to start (%lu); continuing without it\n",
+        DPRINT1("WallpaperHost: failed to start (%lu); continuing without it\n",
                GetLastError());
         return;
     }
@@ -59,7 +59,14 @@ StopWallpaperHost(VOID)
 
     HostWindow = FindWindowW(L"OrosiWallpaperHostWindow", NULL);
     if (HostWindow)
-        PostMessageW(HostWindow, WM_CLOSE, 0, 0);
+    {
+        DWORD WindowProcessId;
+
+        /* Only signal a window that belongs to our own host process. */
+        GetWindowThreadProcessId(HostWindow, &WindowProcessId);
+        if (WindowProcessId == GetProcessId(g_WallpaperHostProcess))
+            PostMessageW(HostWindow, WM_CLOSE, 0, 0);
+    }
 
     if (WaitForSingleObject(g_WallpaperHostProcess, 5000) == WAIT_TIMEOUT)
         TerminateProcess(g_WallpaperHostProcess, 0);
