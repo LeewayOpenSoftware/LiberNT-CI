@@ -246,7 +246,7 @@ add_livecd_shortcut("Character Map"
     "shell:system\\charmap.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Clipboard Viewer"
-    "shell:system\\clipbrd.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\clipbrd.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Keyboard Layout Switcher"
     "shell:system\\kbswitch.exe" ICON_INDEX 0
@@ -289,9 +289,9 @@ add_livecd_shortcut("Solitaire"
     "shell:system\\sol.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_games}")
 add_livecd_shortcut("Spider Solitaire"
-    "shell:system\\spider.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\spider.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_games}")
 add_livecd_shortcut("WineMine"
-    "shell:system\\winmine.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\winmine.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_games}")
 
