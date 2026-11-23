@@ -34,12 +34,15 @@ Log(LPCWSTR Format, ...)
     OutputDebugStringW(Buffer);
 }
 
-/* Exit codes: 0 clean exit (session end or stop request, or another instance
+/* Exit codes: 0 clean exit (session end, stop request, or another instance
  * already running); 1 COM init failed; 2 ActiveDesktop activation failed;
- * 3 applying the wallpaper failed. */
+ * 3 applying the wallpaper failed; 4 the session window could not be
+ * registered or created; 5 the single-instance mutex failed. */
 #define EXIT_COM_INIT     1
 #define EXIT_ACTIVATE     2
 #define EXIT_APPLY        3
+#define EXIT_WINDOW       4
+#define EXIT_MUTEX        5
 
 static LRESULT CALLBACK
 SessionWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -91,7 +94,7 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdS
     if (!hSingleInstance)
     {
         Log(L"[Orosi.WallpaperHost] CreateMutexW failed: %lu\n", GetLastError());
-        return EXIT_COM_INIT;
+        return EXIT_MUTEX;
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS)
     {
@@ -125,7 +128,12 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdS
      * wallpaper on the user32 SPI path; with no prior SetWallpaper call it
      * applies the wallpaper configured in the registry. */
     hr = pActiveDesktop->ApplyChanges(AD_APPLY_ALL);
-    if (FAILED(hr))
+    if (hr == S_FALSE)
+    {
+        /* Nothing was configured; this is not an error. */
+        Log(L"[Orosi.WallpaperHost] nothing to apply (no wallpaper configured)\n");
+    }
+    else if (FAILED(hr))
     {
         Log(L"[Orosi.WallpaperHost] ApplyChanges failed: 0x%08lx\n", hr);
         pActiveDesktop->Release();
@@ -133,11 +141,15 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdS
         CloseHandle(hSingleInstance);
         return EXIT_APPLY;
     }
-    Log(L"[Orosi.WallpaperHost] wallpaper applied\n");
+    else
+    {
+        Log(L"[Orosi.WallpaperHost] wallpaper applied\n");
+    }
 
     /* Hidden top-level window (HWND_MESSAGE would never see the end of the
      * session): receives WM_QUERYENDSESSION/WM_ENDSESSION at session end and
      * WM_CLOSE from a launcher, and advertises the host with a fixed class. */
+    hWnd = NULL;
     WndClass.lpfnWndProc = SessionWindowProc;
     WndClass.hInstance = hInstance;
     WndClass.lpszClassName = g_szWindowClass;
@@ -151,6 +163,14 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdS
                                0, 0, 0, 0, NULL, NULL, hInstance, NULL);
         if (!hWnd)
             Log(L"[Orosi.WallpaperHost] CreateWindowExW failed: %lu\n", GetLastError());
+    }
+    if (!hWnd)
+    {
+        /* Without the session window the host could never be told to stop. */
+        pActiveDesktop->Release();
+        CoUninitialize();
+        CloseHandle(hSingleInstance);
+        return EXIT_WINDOW;
     }
 
     Log(L"[Orosi.WallpaperHost] entering session loop\n");
