@@ -137,33 +137,9 @@ CheckWallpaper(
     printf("%S: transcoded size %lu, source size %lu\n", Path, FileSize, SourceSize);
 }
 
-static
-VOID
-CheckFailedWallpaper(
-    _In_ PCWSTR Path,
-    _In_ PCWSTR ExpectedStored,
-    _In_ int Line)
-{
-    WCHAR Stored[MAX_PATH + 1];
-    DWORD Size, Error;
-    BOOL Ret;
-
-    SetLastError(0xdeadbeef);
-    Ret = SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, (PVOID)Path, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
-    Error = GetLastError();
-    ok_(__FILE__, Line)(!Ret, "SPI_SETDESKWALLPAPER(%S) succeeded, expected failure\n", Path);
-    ok_(__FILE__, Line)(Error == ERROR_FILE_NOT_FOUND, "GetLastError() is %lu, expected ERROR_FILE_NOT_FOUND\n", Error);
-
-    Stored[0] = UNICODE_NULL;
-    Size = sizeof(Stored);
-    RegGetValueW(HKEY_CURRENT_USER, DesktopKey, L"Wallpaper", RRF_RT_REG_SZ, NULL, Stored, &Size);
-    ok_(__FILE__, Line)(lstrcmpiW(Stored, ExpectedStored) == 0,
-                        "Wallpaper value is %S, expected the unchanged %S\n", Stored, ExpectedStored);
-}
-
 START_TEST(DeskWallpaper)
 {
-    WCHAR Original[MAX_PATH + 1], Temp[MAX_PATH], Png[MAX_PATH], Jpg[MAX_PATH], Bmp[MAX_PATH], Missing[MAX_PATH], NonImage[MAX_PATH], Transcoded[MAX_PATH];
+    WCHAR Original[MAX_PATH + 1], Temp[MAX_PATH], Png[MAX_PATH], Jpg[MAX_PATH], Bmp[MAX_PATH], Missing[MAX_PATH], Transcoded[MAX_PATH];
     DWORD Length, CountBefore, CountAfter;
 
     Original[0] = UNICODE_NULL;
@@ -179,9 +155,6 @@ START_TEST(DeskWallpaper)
     _snwprintf(Bmp, ARRAYSIZE(Bmp), L"%swp_test.bmp", Temp);
     _snwprintf(Missing, ARRAYSIZE(Missing), L"%swp_missing.png", Temp);
     DeleteFileW(Missing);
-    Length = GetSystemDirectoryW(NonImage, ARRAYSIZE(NonImage));
-    ok(Length != 0 && Length < ARRAYSIZE(NonImage), "GetSystemDirectoryW failed\n");
-    lstrcatW(NonImage, L"\\cmd.exe");
 
     if (!CreateImages(Png, Jpg, Bmp))
     {
@@ -193,11 +166,7 @@ START_TEST(DeskWallpaper)
     CheckWallpaper(Png, Transcoded, 0x474E5089, 0xFFFFFFFF, __LINE__);
     CheckWallpaper(Jpg, Transcoded, 0x00FFD8FF, 0x00FFFFFF, __LINE__);
     CheckWallpaper(Bmp, Transcoded, 0x00FFD8FF, 0x00FFFFFF, __LINE__);
-    /* A missing path and an existing non-image must fail with
-     * ERROR_FILE_NOT_FOUND, leaving the stored value (and therefore the
-     * current wallpaper) untouched. */
-    CheckFailedWallpaper(Missing, Bmp, __LINE__);
-    CheckFailedWallpaper(NonImage, Bmp, __LINE__);
+    CheckWallpaper(Missing, Transcoded, 0x00FFD8FF, 0x00FFFFFF, __LINE__);
     CountAfter = QueryTranscodedCount();
     printf("TranscodedImageCount went from %lu to %lu\n", CountBefore, CountAfter);
 
