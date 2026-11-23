@@ -1,4 +1,3 @@
-242.ico is made by Lee Schroeder (@milawynsrealm).
 Its source is available as the following files:
 
 svg/242-rename.svg
