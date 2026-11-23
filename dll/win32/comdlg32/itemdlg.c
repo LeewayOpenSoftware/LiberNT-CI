@@ -134,6 +134,7 @@ typedef struct FileDialogImpl {
     UINT cctrl_width, cctrl_def_height, cctrls_cols;
     UINT cctrl_indent, dpi_x, dpi_y;
     HWND cctrls_hwnd;
+    ItemDlgChrome *chrome;
     struct list cctrls;
     UINT_PTR cctrl_next_dlgid;
     customctrl *cctrl_active_vg;
@@ -1816,6 +1817,8 @@ static void update_layout(FileDialogImpl *This)
         return;
     }
 
+    SetRectEmpty(&toolbar_rc);
+
     if(dialog_rc.right < min_width || dialog_rc.bottom < min_height)
     {
         TRACE("Dialog size (%ld, %ld) too small, not updating layout\n", dialog_rc.right, dialog_rc.bottom);
@@ -1957,7 +1960,10 @@ static void update_layout(FileDialogImpl *This)
      */
 
     /* FIXME: The Save Dialog uses a slightly different layout. */
-    hdwp = BeginDeferWindowPos(7);
+    hdwp = BeginDeferWindowPos(This->chrome ? 14 : 7);
+
+    if (hdwp && This->chrome)
+        ItemDlgChrome_Layout(This->chrome, &hdwp, &dialog_rc, customctrls_rc.top - vspacing, &ebrowser_rc);
 
     if(hdwp && This->peb)
         IExplorerBrowser_SetRect(This->peb, &hdwp, ebrowser_rc);
@@ -2002,6 +2008,55 @@ static void update_layout(FileDialogImpl *This)
     return;
 }
 
+static void chrome_navigate(void *context, PCIDLIST_ABSOLUTE pidl)
+{
+    FileDialogImpl *This = context;
+
+    if (This->peb)
+        IExplorerBrowser_BrowseToIDList(This->peb, pidl, SBSP_ABSOLUTE);
+}
+
+static void chrome_navigate_text(void *context, LPCWSTR text)
+{
+    FileDialogImpl *This = context;
+    PIDLIST_ABSOLUTE pidl = NULL;
+    WCHAR expanded[MAX_PATH];
+
+    if (!ExpandEnvironmentStringsW(text, expanded, ARRAY_SIZE(expanded)))
+        lstrcpynW(expanded, text, ARRAY_SIZE(expanded));
+    if (SUCCEEDED(SHParseDisplayName(expanded, NULL, &pidl, 0, NULL)))
+    {
+        chrome_navigate(This, pidl);
+        ILFree(pidl);
+    }
+    else
+    {
+        MessageBeep(MB_ICONWARNING);
+    }
+}
+
+static void chrome_search(void *context, LPCWSTR text)
+{
+    FileDialogImpl *This = context;
+
+    TRACE("%p %s\n", This, debugstr_w(text));
+}
+
+static IShellView *chrome_get_view(void *context)
+{
+    FileDialogImpl *This = context;
+    IShellView *view = NULL;
+
+    if (This->peb)
+        IExplorerBrowser_GetCurrentView(This->peb, &IID_IShellView, (void **)&view);
+    return view;
+}
+
+static const ItemDlgChromeHost chrome_host =
+{
+    chrome_navigate, chrome_navigate_text, chrome_search, chrome_get_view
+};
+
 static HRESULT init_explorerbrowser(FileDialogImpl *This)
 {
     IShellItem *psi_folder;
@@ -2021,7 +2076,7 @@ static HRESULT init_explorerbrowser(FileDialogImpl *This)
         return hr;
     }
 
-    IExplorerBrowser_SetOptions(This->peb, EBO_SHOWFRAMES | EBO_NOBORDER);
+    IExplorerBrowser_SetOptions(This->peb, This->chrome ? EBO_NOBORDER : EBO_SHOWFRAMES | EBO_NOBORDER);
 
     hr = IExplorerBrowser_Initialize(This->peb, This->dlg_hwnd, &rc, NULL);
     if(FAILED(hr))
@@ -2037,7 +2092,7 @@ static HRESULT init_explorerbrowser(FileDialogImpl *This)
 
     /* Get previous options? */
 #ifdef __REACTOS__
-    fos.ViewMode = 0;
+    fos.ViewMode = This->chrome ? FVM_DETAILS : 0;
     fos.fFlags = FWF_AUTOARRANGE;
 #else
     fos.ViewMode = fos.fFlags = 0;
@@ -2247,8 +2302,10 @@ static LRESULT on_wm_initdialog(HWND hwnd, LPARAM lParam)
     }
 
     ctrl_container_reparent(This, This->dlg_hwnd);
+    This->chrome = ItemDlgChrome_Create(hwnd, &chrome_host, This);
     init_explorerbrowser(This);
-    init_toolbar(This, hwnd);
+    if (!This->chrome)
+        init_toolbar(This, hwnd);
     update_control_text(This);
     update_layout(This);
 
@@ -2282,6 +2339,9 @@ static LRESULT on_wm_getminmaxinfo(FileDialogImpl *This, LPARAM lparam)
 static LRESULT on_wm_destroy(FileDialogImpl *This)
 {
     TRACE("%p\n", This);
+
+    ItemDlgChrome_Destroy(This->chrome);
+    This->chrome = NULL;
 
     if(This->peb)
     {
@@ -2412,7 +2472,10 @@ static LRESULT on_wm_command(FileDialogImpl *This, WPARAM wparam, LPARAM lparam)
     case IDC_NAVFORWARD:      return on_browse_forward(This);
     case IDC_FILETYPE:        return on_command_filetype(This, wparam, lparam);
     case IDC_NAVUP:           return on_browse_up(This);
-    default:                  TRACE("Unknown command.\n");
+    default:
+        if (ItemDlgChrome_OnCommand(This->chrome, LOWORD(wparam)))
+            return TRUE;
+        TRACE("Unknown command.\n");
     }
     return FALSE;
 }
@@ -2428,6 +2491,17 @@ static INT_PTR CALLBACK itemdlg_dlgproc(HWND hwnd, UINT umessage, WPARAM wparam,
     case WM_SIZE:             return on_wm_size(This);
     case WM_GETMINMAXINFO:    return on_wm_getminmaxinfo(This, lparam);
     case WM_DESTROY:          return on_wm_destroy(This);
+    case WM_NOTIFY:
+    {
+        LRESULT result = 0;
+
+        if (This && ItemDlgChrome_OnNotify(This->chrome, (NMHDR *)lparam, &result))
+        {
+            SetWindowLongPtrW(hwnd, DWLP_MSGRESULT, result);
+            return TRUE;
+        }
+        break;
+    }
     }
 
     return FALSE;
@@ -3610,6 +3684,7 @@ static HRESULT WINAPI IExplorerBrowserEvents_fnOnNavigationComplete(IExplorerBro
     }
 
     events_OnFolderChange(This);
+    ItemDlgChrome_SetLocation(This->chrome, pidlFolder);
 
     return S_OK;
 }

@@ -194,4 +194,6 @@ extern BOOL GetFileName31W( OPENFILENAMEW *lpofn, UINT dlgType );
 #define ONOPEN_OPEN   2
 #define ONOPEN_SEARCH 3
 
+#include "itemdlg_chrome.h"
+
 #endif /* _WINE_DLL_CDLG_H */

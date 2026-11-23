@@ -21,14 +21,15 @@ list(APPEND SOURCE
 
 add_library(comdlg32 MODULE
     ${SOURCE}
+    itemdlg_chrome.cpp
     rsrc.rc
     ${CMAKE_CURRENT_BINARY_DIR}/comdlg32.def)
 
 add_idl_reg_scripts(comdlg32 registry comdlg32_classes.idl)
 set_module_type(comdlg32 win32dll)
 target_compile_definitions(comdlg32 PRIVATE _COMDLG32_)
-target_link_libraries(comdlg32 uuid wine oldnames wine_dll_register)
-add_delay_importlibs(comdlg32 ole32 winspool)
+target_link_libraries(comdlg32 uuid wine oldnames wine_dll_register shellframe cpprt)
+add_delay_importlibs(comdlg32 ole32 winspool gdiplus dwmapi uxtheme)
 add_importlibs(comdlg32 shell32 shlwapi comctl32 user32 gdi32 advapi32 msvcrt kernel32 ntdll)
 add_pch(comdlg32 precomp.h SOURCE)
 add_cd_file(TARGET comdlg32 DESTINATION reactos/system32 FOR all)
