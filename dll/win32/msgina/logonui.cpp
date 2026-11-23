@@ -25,6 +25,7 @@ extern "C" {
 #define LOGONUI_CONFIRM_MS      1600
 #define WM_LOGONUI_DONE         (WM_APP + 0x40)
 #define WM_LOGONUI_FOCUS        (WM_APP + 0x41)
+#define WM_LOGONUI_COVER_STATUS (WM_APP + 0x42)
 #define LOGONUI_MAX_USERS       6
 #define LOGONUI_MAX_OPTIONS     4
 #define LOGONUI_TEXT            256
@@ -131,6 +132,10 @@ static WNDPROC g_EditProc;
 static HWND g_Cover;
 static BOOL g_LogonUiShown = FALSE;
 static HBITMAP g_CoverBitmap;
+static HBITMAP g_CoverBase;
+static HFONT g_CoverFont;
+static RECT g_CoverStatus;
+static PVOID volatile g_CoverPending;
 static HWND g_LockWindow;
 
 static HBITMAP
@@ -147,6 +152,38 @@ CreateDib(int Width, int Height, UINT32 **Bits)
     return CreateDIBSection(NULL, &Info, DIB_RGB_COLORS, (PVOID *)Bits, NULL, 0);
 }
 
+/* Restore the clean Welcome frame, then draw the status line on it. */
+static void
+CoverDrawStatus(PCWSTR Message)
+{
+    BITMAP Cover, Base;
+    HDC Dc;
+    HGDIOBJ OldBitmap, OldFont;
+    RECT Rect = g_CoverStatus;
+
+    if (!g_CoverBitmap || !g_CoverBase || !GetObjectW(g_CoverBitmap, sizeof(Cover), &Cover) ||
+        !GetObjectW(g_CoverBase, sizeof(Base), &Base) || !Cover.bmBits || !Base.bmBits ||
+        Cover.bmWidthBytes != Base.bmWidthBytes || Cover.bmHeight != Base.bmHeight)
+        return;
+    GdiFlush();
+    CopyMemory(Cover.bmBits, Base.bmBits, (SIZE_T)Cover.bmWidthBytes * Cover.bmHeight);
+    if (!Message || !Message[0])
+        return;
+
+    Dc = CreateCompatibleDC(NULL);
+    if (!Dc)
+        return;
+    OldBitmap = SelectObject(Dc, g_CoverBitmap);
+    OldFont = SelectObject(Dc, g_CoverFont);
+    SetBkMode(Dc, TRANSPARENT);
+    SetTextColor(Dc, RGB(255, 255, 255));
+    DrawTextW(Dc, Message, -1, &Rect, DT_CENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    GdiFlush();
+    SelectObject(Dc, OldFont);
+    SelectObject(Dc, OldBitmap);
+    DeleteDC(Dc);
+}
+
 static LRESULT CALLBACK
 CoverWindowProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam)
 {
@@ -154,6 +191,19 @@ CoverWindowProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam)
     {
         case WM_ERASEBKGND:
             return TRUE;
+
+        case WM_LOGONUI_COVER_STATUS:
+        {
+            PWSTR Text = (PWSTR)InterlockedExchangePointer(&g_CoverPending, NULL);
+
+            if (Text)
+            {
+                CoverDrawStatus(Text);
+                HeapFree(GetProcessHeap(), 0, Text);
+                RedrawWindow(Window, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+            }
+            return 0;
+        }
 
         case WM_PAINT:
         {
@@ -175,10 +225,22 @@ CoverWindowProc(HWND Window, UINT Message, WPARAM wParam, LPARAM lParam)
             return MA_NOACTIVATE;
 
         case WM_DESTROY:
+        {
+            PWSTR Text = (PWSTR)InterlockedExchangePointer(&g_CoverPending, NULL);
+
+            if (Text)
+                HeapFree(GetProcessHeap(), 0, Text);
             DeleteObject(g_CoverBitmap);
             g_CoverBitmap = NULL;
+            if (g_CoverBase)
+                DeleteObject(g_CoverBase);
+            g_CoverBase = NULL;
+            if (g_CoverFont)
+                DeleteObject(g_CoverFont);
+            g_CoverFont = NULL;
             g_Cover = NULL;
             return 0;
+        }
     }
 
     return DefWindowProcW(Window, Message, wParam, lParam);
@@ -628,6 +690,7 @@ public:
     LogonJob *Pending = NULL;
     BOOL Busy = FALSE;
     ULONGLONG BusyStart = 0;
+    RECT BusyLabel = {};
     WCHAR ClockText[64] = L"";
     BOOL CapsLock = FALSE;
     RECT Avatar = {}, Name = {}, Title = {}, Subtitle = {}, UserField = {}, PasswordField = {}, OldField = {},
@@ -1506,6 +1569,29 @@ public:
             g_CoverBitmap = NULL;
             return;
         }
+        if (Welcome && !IsRectEmpty(&BusyLabel))
+        {
+            UINT32 *BaseBits;
+
+            /* Winlogon status text goes under the Welcome label (GUIDisplayStatusMessage). */
+            g_CoverBase = CreateDib(Width, Height, &BaseBits);
+            g_CoverFont = MakeFont(L"Selawik", 18);
+            if (g_CoverBase && g_CoverFont)
+            {
+                CopyMemory(BaseBits, FrameBits, (SIZE_T)Width * Height * sizeof(UINT32));
+                SetRect(&g_CoverStatus, Width / 2 - S(400), BusyLabel.bottom + S(12), Width / 2 + S(400),
+                        BusyLabel.bottom + S(44));
+            }
+            else
+            {
+                if (g_CoverBase)
+                    DeleteObject(g_CoverBase);
+                if (g_CoverFont)
+                    DeleteObject(g_CoverFont);
+                g_CoverBase = NULL;
+                g_CoverFont = NULL;
+            }
+        }
         SetWindowPos(g_Cover, HWND_TOPMOST, 0, 0, Width, Height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
         UpdateWindow(g_Cover);
     }
@@ -1812,6 +1898,7 @@ public:
         }
         LoadText(IDS_LOGONUI_WELCOME, Welcome, _countof(Welcome));
         Text(Dc, NameFont, Welcome, Label, DT_CENTER | DT_SINGLELINE, RGB(255, 255, 255));
+        BusyLabel = Label;
     }
 
     void DrawLock(HDC Dc, int Shift)
@@ -2452,6 +2539,44 @@ extern "C" BOOL
 LogonUiCoverShown(VOID)
 {
     return g_Cover != NULL;
+}
+
+extern "C" BOOL
+LogonUiCoverSetStatus(_In_opt_ PCWSTR Message)
+{
+    SIZE_T Length;
+    PWSTR Copy, Old;
+
+    if (!g_Cover)
+        return FALSE;
+    if (!g_CoverBase)
+        return TRUE;
+
+    /* The cover belongs to winlogon's SAS thread, which does not pump during logon: paint synchronously. */
+    if (GetWindowThreadProcessId(g_Cover, NULL) == GetCurrentThreadId())
+    {
+        CoverDrawStatus(Message);
+        RedrawWindow(g_Cover, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+        return TRUE;
+    }
+
+    /* Another thread: never SendMessage, it can deadlock against winlogon. */
+    Length = Message ? wcslen(Message) + 1 : 1;
+    Copy = (PWSTR)HeapAlloc(GetProcessHeap(), 0, Length * sizeof(WCHAR));
+    if (!Copy)
+        return TRUE;
+    StringCchCopyW(Copy, Length, Message ? Message : L"");
+    Old = (PWSTR)InterlockedExchangePointer(&g_CoverPending, Copy);
+    if (Old)
+        HeapFree(GetProcessHeap(), 0, Old);
+    if (!PostMessageW(g_Cover, WM_LOGONUI_COVER_STATUS, 0, 0))
+    {
+        /* The cover went away in between: take the copy back so it is not leaked. */
+        Old = (PWSTR)InterlockedExchangePointer(&g_CoverPending, NULL);
+        if (Old)
+            HeapFree(GetProcessHeap(), 0, Old);
+    }
+    return TRUE;
 }
 
 extern "C" BOOL
