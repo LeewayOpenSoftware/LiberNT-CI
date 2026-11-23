@@ -258,7 +258,7 @@ HRESULT WINAPI CActiveDesktop::AddDesktopItem(LPCCOMPONENT pcomp, DWORD dwReserv
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI CActiveDesktop::AddDesktopItemWithUI(HWND hwnd, LPCCOMPONENT pcomp, DWORD dwReserved)
+HRESULT WINAPI CActiveDesktop::AddDesktopItemWithUI(HWND hwnd, LPCOMPONENT pcomp, DWORD dwReserved)
 {
     UNIMPLEMENTED;
     return E_NOTIMPL;
@@ -282,31 +282,31 @@ HRESULT WINAPI CActiveDesktop::GetDesktopItemCount(int *pcItems, DWORD dwReserve
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI CActiveDesktop::GetDesktopItem(int nComponent, LPCCOMPONENT pcomp, DWORD dwReserved)
+HRESULT WINAPI CActiveDesktop::GetDesktopItem(int nComponent, LPCOMPONENT pcomp, DWORD dwReserved)
 {
     UNIMPLEMENTED;
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI CActiveDesktop::GetDesktopItemByID(ULONG_PTR dwID, LPCCOMPONENT pcomp, DWORD dwReserved)
+HRESULT WINAPI CActiveDesktop::GetDesktopItemByID(ULONG_PTR dwID, LPCOMPONENT pcomp, DWORD dwReserved)
 {
     UNIMPLEMENTED;
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI CActiveDesktop::GenerateDesktopItemHtml(PCWSTR pwszFileName, LPCCOMPONENT pcomp, DWORD dwReserved)
+HRESULT WINAPI CActiveDesktop::GenerateDesktopItemHtml(PCWSTR pwszFileName, LPCOMPONENT pcomp, DWORD dwReserved)
 {
     UNIMPLEMENTED;
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI CActiveDesktop::AddUrl(HWND hwnd, PCWSTR pszSource, LPCCOMPONENT pcomp, DWORD dwFlags)
+HRESULT WINAPI CActiveDesktop::AddUrl(HWND hwnd, PCWSTR pszSource, LPCOMPONENT pcomp, DWORD dwFlags)
 {
     UNIMPLEMENTED;
     return E_NOTIMPL;
 }
 
-HRESULT WINAPI CActiveDesktop::GetDesktopItemBySource(PCWSTR pwszSource, LPCCOMPONENT pcomp, DWORD dwReserved)
+HRESULT WINAPI CActiveDesktop::GetDesktopItemBySource(PCWSTR pwszSource, LPCOMPONENT pcomp, DWORD dwReserved)
 {
     UNIMPLEMENTED;
     return E_NOTIMPL;

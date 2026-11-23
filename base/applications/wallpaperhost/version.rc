@@ -1,0 +1,8 @@
+#define WINE_FILEDESCRIPTION_STR "Orosi Wallpaper Host"
+#define WINE_FILENAME_STR "wallpaperhost.exe"
+#define WINE_FILEVERSION 10,0,26100,1
+#define WINE_FILEVERSION_STR "10.0.26100.1"
+#define WINE_PRODUCTVERSION 10,0,26100,1
+#define WINE_PRODUCTVERSION_STR "10.0.26100.1"
+
+#include "wine/wine_common_ver.rc"
