@@ -3,4 +3,4 @@ Signature = "$Windows NT$"
 
 [AddReg]
 
-HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","AppLauncher",0x00020000,"%SystemRoot%\system32\applaunch.exe"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Run","AppLauncher",0x00020000,"%SystemRoot%\system32\orosi_platform\applaunch.exe"

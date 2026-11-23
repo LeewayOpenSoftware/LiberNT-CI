@@ -12,4 +12,4 @@ add_executable(dwmsettings
 target_include_directories(dwmsettings PRIVATE ${REACTOS_SOURCE_DIR}/base/system/dwm)
 set_module_type(dwmsettings win32gui UNICODE)
 add_importlibs(dwmsettings uxtheme advapi32 user32 gdi32 msvcrt kernel32)
-add_cd_file(TARGET dwmsettings DESTINATION reactos/system32 FOR all)
+add_cd_file(TARGET dwmsettings DESTINATION reactos/system32/orosi_platform FOR all)
