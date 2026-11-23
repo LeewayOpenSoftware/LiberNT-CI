@@ -134,7 +134,10 @@ HRESULT WINAPI CActiveDesktop::ApplyChanges(DWORD dwFlags)
         if (SUCCEEDED(hr) && m_bWallpaperPending)
         {
             hr = WriteRegistryString(hKey, szWallpaperValue, m_szPendingWallpaper);
-            if (SUCCEEDED(hr))
+            /* When REFRESH/FORCE follows, the apply branch below must still
+             * see the pending value (e.g. SetWallpaper(L"") + AD_APPLY_ALL);
+             * only consume it here when the call stops at persisting. */
+            if (SUCCEEDED(hr) && !(dwFlags & (AD_APPLY_REFRESH | AD_APPLY_FORCE)))
                 m_bWallpaperPending = FALSE;
         }
         RegCloseKey(hKey);
