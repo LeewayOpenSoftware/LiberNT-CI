@@ -186,11 +186,12 @@ CreateShortcut(
 
 static BOOL
 CreateShortcutsFromSection(
-    _In_ PITEMSDATA pItemsData,
-    _In_ PREGISTRATIONNOTIFY pNotify,
+    _In_opt_ PITEMSDATA pItemsData,
+    _In_opt_ PREGISTRATIONNOTIFY pNotify,
     _In_ HINF hinf,
     _In_ LPWSTR pszSection,
-    _In_ LPCWSTR pszFolder)
+    _In_ LPCWSTR pszFolder,
+    _In_ BOOL bExistingOnly)
 {
     INFCONTEXT Context;
     DWORD dwFieldCount;
@@ -211,9 +212,11 @@ CreateShortcutsFromSection(
 
     do
     {
-        pNotify->Progress++;
-
-        SendMessage(pItemsData->hwndDlg, PM_STEP_START, 0, (LPARAM)pNotify);
+        if (pItemsData)
+        {
+            pNotify->Progress++;
+            SendMessage(pItemsData->hwndDlg, PM_STEP_START, 0, (LPARAM)pNotify);
+        }
 
         dwFieldCount = SetupGetFieldCount(&Context);
         if (dwFieldCount < 3)
@@ -268,13 +271,76 @@ CreateShortcutsFromSection(
 
         wcscat(szName, L".lnk");
 
+        if (bExistingOnly)
+        {
+            WCHAR szLink[MAX_PATH];
+
+            /* Only retarget links the user still has; never recreate deleted ones. */
+            if (FAILED(StringCchPrintfW(szLink, ARRAYSIZE(szLink), L"%s\\%s", pszFolder, szName)) ||
+                GetFileAttributesW(szLink) == INVALID_FILE_ATTRIBUTES)
+            {
+                continue;
+            }
+        }
+
         CreateShortcut(pszFolder, szName, szCommand, szDescription, iIconNr, szDirectory, szArgs, szIcon);
 
-        SendMessage(pItemsData->hwndDlg, PM_STEP_END, 0, (LPARAM)pNotify);
+        if (pItemsData)
+            SendMessage(pItemsData->hwndDlg, PM_STEP_END, 0, (LPARAM)pNotify);
 
     } while (SetupFindNextLine(&Context, &Context));
 
     return TRUE;
+}
+
+/* Profiles created before an upgrade hold copies of the Default user's links. */
+static VOID
+RefreshProfileShortcuts(
+    _In_ HINF hinf,
+    _In_ LPWSTR pszSection,
+    _In_ LPCWSTR pszDefaultFolder)
+{
+    WCHAR szDefault[MAX_PATH], szSid[128], szFolder[MAX_PATH];
+    WCHAR szRaw[MAX_PATH], szProfile[MAX_PATH];
+    DWORD cch, cb, dwType, i;
+    SIZE_T cchDefault;
+    HKEY hList, hSid;
+
+    cch = ARRAYSIZE(szDefault);
+    if (!GetDefaultUserProfileDirectoryW(szDefault, &cch))
+        return;
+    cchDefault = wcslen(szDefault);
+    if (_wcsnicmp(pszDefaultFolder, szDefault, cchDefault) != 0 || pszDefaultFolder[cchDefault] != L'\\')
+        return;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList",
+                      0, KEY_READ, &hList) != ERROR_SUCCESS)
+    {
+        return;
+    }
+
+    for (i = 0; ; i++)
+    {
+        cch = ARRAYSIZE(szSid);
+        if (RegEnumKeyExW(hList, i, szSid, &cch, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+            break;
+        if (RegOpenKeyExW(hList, szSid, 0, KEY_QUERY_VALUE, &hSid) != ERROR_SUCCESS)
+            continue;
+
+        ZeroMemory(szRaw, sizeof(szRaw));
+        cb = sizeof(szRaw) - sizeof(WCHAR);
+        if (RegQueryValueExW(hSid, L"ProfileImagePath", NULL, &dwType, (LPBYTE)szRaw, &cb) == ERROR_SUCCESS &&
+            (dwType == REG_SZ || dwType == REG_EXPAND_SZ) &&
+            ExpandEnvironmentStringsW(szRaw, szProfile, ARRAYSIZE(szProfile)) != 0 &&
+            _wcsicmp(szProfile, szDefault) != 0 &&
+            SUCCEEDED(StringCchPrintfW(szFolder, ARRAYSIZE(szFolder), L"%s%s",
+                                       szProfile, pszDefaultFolder + cchDefault)))
+        {
+            CreateShortcutsFromSection(NULL, NULL, hinf, pszSection, szFolder, TRUE);
+        }
+        RegCloseKey(hSid);
+    }
+    RegCloseKey(hList);
 }
 
 static BOOL
@@ -282,7 +348,8 @@ CreateShortcuts(
     _In_ PITEMSDATA pItemsData,
     _In_ PREGISTRATIONNOTIFY pNotify,
     _In_ HINF hinf,
-    _In_ LPCWSTR szSection)
+    _In_ LPCWSTR szSection,
+    _In_ BOOL bUpgrade)
 {
     INFCONTEXT Context;
     WCHAR szPath[MAX_PATH];
@@ -333,7 +400,9 @@ CreateShortcuts(
             continue;
         }
 
-        CreateShortcutsFromSection(pItemsData, pNotify, hinf, szFolderSection, szPath);
+        CreateShortcutsFromSection(pItemsData, pNotify, hinf, szFolderSection, szPath, FALSE);
+        if (bUpgrade)
+            RefreshProfileShortcuts(hinf, szFolderSection, szPath);
 
     } while (SetupFindNextLine(&Context, &Context));
 
@@ -371,7 +440,8 @@ CountShortcuts(
 
 VOID
 InstallStartMenuItems(
-    _In_ PITEMSDATA pItemsData)
+    _In_ PITEMSDATA pItemsData,
+    _In_ BOOL bUpgrade)
 {
     HINF hShortcutsInf1 = INVALID_HANDLE_VALUE;
     HINF hShortcutsInf2 = INVALID_HANDLE_VALUE;
@@ -402,7 +472,7 @@ InstallStartMenuItems(
 
     SendMessage(pItemsData->hwndDlg, PM_ITEM_START, 1, (LPARAM)Steps);
 
-    if (!CreateShortcuts(pItemsData, &Notify, hShortcutsInf1, L"ShortcutFolders"))
+    if (!CreateShortcuts(pItemsData, &Notify, hShortcutsInf1, L"ShortcutFolders", bUpgrade))
     {
         DPRINT1("CreateShortcuts() failed");
         goto done;
@@ -410,7 +480,7 @@ InstallStartMenuItems(
 
     if (hShortcutsInf2 != INVALID_HANDLE_VALUE)
     {
-        if (!CreateShortcuts(pItemsData, &Notify, hShortcutsInf2, L"ShortcutFolders"))
+        if (!CreateShortcuts(pItemsData, &Notify, hShortcutsInf2, L"ShortcutFolders", bUpgrade))
         {
             DPRINT1("CreateShortcuts(rosapps) failed");
             goto done;

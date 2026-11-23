@@ -249,6 +249,8 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\wordpad.exe",,0x000200
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\wordpad.exe","Path",0x00020000,"%SystemRoot%\system32"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\write.exe",,0x00020000,"%SystemRoot%\system32\wordpad.exe"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\write.exe","Path",0x00020000,"%SystemRoot%\system32"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\IEXPLORE.EXE",,0x00020000,"%ProgramFiles%\Internet Explorer\iexplore.exe"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\IEXPLORE.EXE","Path",0x00020000,"%ProgramFiles%\Internet Explorer;"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Applets",,0x00000012
 
 ; default shell

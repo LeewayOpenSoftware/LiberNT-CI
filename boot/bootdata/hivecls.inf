@@ -72,9 +72,9 @@ HKCR,"Drive\shell\cmd\command","",0x00000000,"terminal.exe -d ""%V\."""
 HKCR,".clp","",0x00000000,"clpfile"
 HKCR,".clp","Content Type",0x00000000,"application/x-msclip"
 HKCR,"clpfile","",0x00000000,"Clipboard Element"
-HKCR,"clpfile","FriendlyTypeName",0x00020000,"@%SystemRoot%\system32\clipbrd.exe,-121"
-HKCR,"clpfile\DefaultIcon","",0x00020000,"%SystemRoot%\system32\clipbrd.exe,1"
-HKCR,"clpfile\shell\open\command","",0x00020000,"%SystemRoot%\system32\clipbrd.exe ""%1"""
+HKCR,"clpfile","FriendlyTypeName",0x00020000,"@%SystemRoot%\system32\orosi_platform\clipbrd.exe,-121"
+HKCR,"clpfile\DefaultIcon","",0x00020000,"%SystemRoot%\system32\orosi_platform\clipbrd.exe,1"
+HKCR,"clpfile\shell\open\command","",0x00020000,"%SystemRoot%\system32\orosi_platform\clipbrd.exe ""%1"""
 
 ; Event Log File
 HKCR,".evt","",0x00000000,"evtfile"
