@@ -108,7 +108,7 @@ TestRoundTrip(void)
 
     Size = 0;
     ok_ntstatus(CredSerPackLogon(KerbInteractiveLogon, L"DOM", L"user", L"pw", NULL, NULL, &Size), STATUS_BUFFER_TOO_SMALL);
-    ok_long(Size, sizeof(KERB_INTERACTIVE_UNLOCK_LOGON) + (3 + 4 + 2) * sizeof(WCHAR));
+    ok_long(Size, sizeof(KERB_INTERACTIVE_UNLOCK_LOGON) + (4 + 5 + 3) * sizeof(WCHAR));
 
     Size = PackLogon(KerbInteractiveLogon, L"DOM", L"user", L"pw", Buffer, sizeof(Buffer));
     ok_ntstatus(UnpackLogonGuarded(Buffer, Size, &Logon), STATUS_SUCCESS);

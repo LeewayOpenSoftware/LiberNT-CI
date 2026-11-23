@@ -1,6 +1,6 @@
 /*
  * PROJECT:     LiberNT Credential Serialization Library
- * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
  * PURPOSE:     Packs, validates and maps credential provider logon serializations
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */

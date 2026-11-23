@@ -1,6 +1,6 @@
 /*
  * PROJECT:     LiberNT Credential Serialization Library
- * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
  * PURPOSE:     Packs, validates and maps credential provider logon serializations
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
@@ -11,16 +11,7 @@
 #include <windef.h>
 #include <winbase.h>
 #include <ntsecapi.h>
-#include <security.h>
 #include <credser.h>
-
-static VOID
-CredSerInitLsaString(_Out_ PLSA_STRING String, _In_ PCSTR Source)
-{
-    String->Buffer = (PCHAR)Source;
-    String->Length = (USHORT)strlen(Source);
-    String->MaximumLength = String->Length + 1;
-}
 
 typedef struct _CREDSER_RANGE
 {
@@ -40,61 +31,32 @@ CredSerFitsLimit(_In_ SIZE_T Bytes, _In_ ULONG MaxChars)
     return Bytes <= MaxChars * sizeof(WCHAR);
 }
 
+static SIZE_T
+CredSerPackedBytes(_In_ SIZE_T Bytes, _In_ BOOLEAN Optional)
+{
+    return (Optional && !Bytes) ? 0 : Bytes + sizeof(WCHAR);
+}
+
 static VOID
 CredSerPutString(
     _Inout_ PUCHAR Base,
     _Inout_ PULONG Offset,
     _Out_ PUNICODE_STRING Target,
     _In_opt_ PCWSTR Source,
-    _In_ SIZE_T Bytes)
+    _In_ SIZE_T Bytes,
+    _In_ BOOLEAN Optional)
 {
+    SIZE_T Packed = CredSerPackedBytes(Bytes, Optional);
+
     Target->Length = (USHORT)Bytes;
-    Target->MaximumLength = (USHORT)Bytes;
-    Target->Buffer = Bytes ? (PWSTR)(ULONG_PTR)*Offset : NULL;
-    if (Bytes)
+    Target->MaximumLength = (USHORT)Packed;
+    Target->Buffer = Packed ? (PWSTR)(ULONG_PTR)*Offset : NULL;
+    if (Packed)
     {
         CopyMemory(Base + *Offset, Source, Bytes);
-        *Offset += (ULONG)Bytes;
+        *(PWCHAR)(Base + *Offset + Bytes) = UNICODE_NULL;
+        *Offset += (ULONG)Packed;
     }
-}
-
-NTSTATUS
-CredSerLookupPackages(
-    _In_ HANDLE LsaHandle,
-    _Out_ PCREDSER_PACKAGES Packages)
-{
-    LSA_STRING Name;
-    NTSTATUS Status;
-
-    ZeroMemory(Packages, sizeof(*Packages));
-
-    CredSerInitLsaString(&Name, NEGOSSP_NAME_A);
-    Status = LsaLookupAuthenticationPackage(LsaHandle, &Name, &Packages->Negotiate);
-    Packages->HaveNegotiate = NT_SUCCESS(Status);
-
-    CredSerInitLsaString(&Name, MSV1_0_PACKAGE_NAME);
-    Status = LsaLookupAuthenticationPackage(LsaHandle, &Name, &Packages->Msv1_0);
-    Packages->HaveMsv1_0 = NT_SUCCESS(Status);
-
-    if (!Packages->HaveNegotiate && !Packages->HaveMsv1_0)
-        return Status;
-    return STATUS_SUCCESS;
-}
-
-ULONG
-CredSerPreferredPackage(
-    _In_ const CREDSER_PACKAGES *Packages)
-{
-    return Packages->HaveNegotiate ? Packages->Negotiate : Packages->Msv1_0;
-}
-
-BOOLEAN
-CredSerIsKnownPackage(
-    _In_ const CREDSER_PACKAGES *Packages,
-    _In_ ULONG Package)
-{
-    return (Packages->HaveNegotiate && Package == Packages->Negotiate) ||
-           (Packages->HaveMsv1_0 && Package == Packages->Msv1_0);
 }
 
 NTSTATUS
@@ -127,7 +89,8 @@ CredSerPackLogon(
         return STATUS_INVALID_PARAMETER;
     }
 
-    Total = sizeof(KERB_INTERACTIVE_UNLOCK_LOGON) + DomainBytes + UserBytes + PasswordBytes;
+    Total = sizeof(KERB_INTERACTIVE_UNLOCK_LOGON) + CredSerPackedBytes(DomainBytes, TRUE) +
+            CredSerPackedBytes(UserBytes, FALSE) + CredSerPackedBytes(PasswordBytes, FALSE);
     if (!Buffer || *BufferSize < Total)
     {
         *BufferSize = (ULONG)Total;
@@ -141,9 +104,9 @@ CredSerPackLogon(
         Unlock->LogonId = *LogonId;
 
     Offset = sizeof(KERB_INTERACTIVE_UNLOCK_LOGON);
-    CredSerPutString(Buffer, &Offset, &Unlock->Logon.LogonDomainName, LogonDomainName, DomainBytes);
-    CredSerPutString(Buffer, &Offset, &Unlock->Logon.UserName, UserName, UserBytes);
-    CredSerPutString(Buffer, &Offset, &Unlock->Logon.Password, Password, PasswordBytes);
+    CredSerPutString(Buffer, &Offset, &Unlock->Logon.LogonDomainName, LogonDomainName, DomainBytes, TRUE);
+    CredSerPutString(Buffer, &Offset, &Unlock->Logon.UserName, UserName, UserBytes, FALSE);
+    CredSerPutString(Buffer, &Offset, &Unlock->Logon.Password, Password, PasswordBytes, FALSE);
 
     *BufferSize = (ULONG)Total;
     return STATUS_SUCCESS;
@@ -178,7 +141,9 @@ CredSerPackChangePassword(
         return STATUS_INVALID_PARAMETER;
     }
 
-    Total = sizeof(KERB_CHANGEPASSWORD_REQUEST) + DomainBytes + AccountBytes + OldBytes + NewBytes;
+    Total = sizeof(KERB_CHANGEPASSWORD_REQUEST) + CredSerPackedBytes(DomainBytes, TRUE) +
+            CredSerPackedBytes(AccountBytes, FALSE) + CredSerPackedBytes(OldBytes, FALSE) +
+            CredSerPackedBytes(NewBytes, FALSE);
     if (!Buffer || *BufferSize < Total)
     {
         *BufferSize = (ULONG)Total;
@@ -191,10 +156,10 @@ CredSerPackChangePassword(
     Request->Impersonating = FALSE;
 
     Offset = sizeof(KERB_CHANGEPASSWORD_REQUEST);
-    CredSerPutString(Buffer, &Offset, &Request->DomainName, DomainName, DomainBytes);
-    CredSerPutString(Buffer, &Offset, &Request->AccountName, AccountName, AccountBytes);
-    CredSerPutString(Buffer, &Offset, &Request->OldPassword, OldPassword, OldBytes);
-    CredSerPutString(Buffer, &Offset, &Request->NewPassword, NewPassword, NewBytes);
+    CredSerPutString(Buffer, &Offset, &Request->DomainName, DomainName, DomainBytes, TRUE);
+    CredSerPutString(Buffer, &Offset, &Request->AccountName, AccountName, AccountBytes, FALSE);
+    CredSerPutString(Buffer, &Offset, &Request->OldPassword, OldPassword, OldBytes, FALSE);
+    CredSerPutString(Buffer, &Offset, &Request->NewPassword, NewPassword, NewBytes, FALSE);
 
     *BufferSize = (ULONG)Total;
     return STATUS_SUCCESS;

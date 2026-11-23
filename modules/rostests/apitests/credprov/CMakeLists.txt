@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     Abi.c
+    CredUIPack.c
     Serialization.c
     testlist.c)
 
