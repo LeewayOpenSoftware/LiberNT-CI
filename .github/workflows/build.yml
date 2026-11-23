@@ -558,6 +558,21 @@ jobs:
         path: apitests-out/
         if-no-files-found: error
 
+    - name: Collect the winetests binaries
+      # Every *_winetest.exe (amd64), for a lab run against the image of the same commit.
+      run: |
+        OUT=${{steps.configure.outputs.outdir}}
+        mkdir -p winetests-out
+        find "$OUT/modules/rostests/winetests" -type f -name '*_winetest.exe' -exec cp {} winetests-out/ \;
+        ls winetests-out | wc -l
+
+    - name: Upload the winetests binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: winetests-clang-amd64-${{github.sha}}
+        path: winetests-out/
+        if-no-files-found: error
+
     - name: Save ccache
       id: ccache_save
       if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
