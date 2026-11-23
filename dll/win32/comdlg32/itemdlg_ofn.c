@@ -240,7 +240,8 @@ static BOOL store_single(OPENFILENAMEW *ofn, LPCWSTR path)
     ofn->nFileOffset = (WORD)(name - ofn->lpstrFile);
     dot = wcsrchr(name, L'.');
     ofn->nFileExtension = dot ? (WORD)(dot + 1 - ofn->lpstrFile) : 0;
-    if (dot && ofn->lpstrDefExt && lstrcmpiW(dot + 1, ofn->lpstrDefExt))
+    /* Like the classic dialog, no extension at all also differs from lpstrDefExt. */
+    if (ofn->lpstrDefExt && lstrcmpiW(dot ? dot + 1 : L"", ofn->lpstrDefExt))
         ofn->Flags |= OFN_EXTENSIONDIFFERENT;
     set_file_title(ofn, name);
     return TRUE;

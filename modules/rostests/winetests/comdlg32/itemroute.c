@@ -78,7 +78,8 @@ static HANDLE start_driver(struct driver *driver, const WCHAR *text)
 
 static void finish_driver(HANDLE thread)
 {
-    ok(WaitForSingleObject(thread, 15000) == WAIT_OBJECT_0, "driver thread did not finish\n");
+    /* Longer than the driver search, so a missed dialog cannot leak into the next test. */
+    ok(WaitForSingleObject(thread, 30000) == WAIT_OBJECT_0, "driver thread did not finish\n");
     CloseHandle(thread);
 }
 
@@ -156,6 +157,7 @@ static void test_save_ok(const WCHAR *dir)
     ok(ofn.nFileOffset == lstrlenW(dir) + 1, "nFileOffset %u\n", ofn.nFileOffset);
     ok(ofn.nFileExtension == lstrlenW(expected) - 3, "nFileExtension %u\n", ofn.nFileExtension);
     ok(ofn.nFilterIndex == 1, "nFilterIndex %lu\n", ofn.nFilterIndex);
+    ok(!(ofn.Flags & OFN_EXTENSIONDIFFERENT), "OFN_EXTENSIONDIFFERENT set for a .txt file\n");
     GetCurrentDirectoryW(ARRAY_SIZE(cwd), cwd);
     ok(!lstrcmpiW(cwd, dir), "current directory %s, expected %s\n", wine_dbgstr_w(cwd), wine_dbgstr_w(dir));
     SetCurrentDirectoryW(saved);
@@ -321,6 +323,28 @@ static void test_ansi(const WCHAR *dir)
     delete_file(dir, L"routeansi.txt");
 }
 
+static void test_extension_different(const WCHAR *dir)
+{
+    WCHAR file[MAX_PATH] = L"";
+    OPENFILENAMEW ofn;
+    struct driver driver;
+    HANDLE thread;
+    BOOL ret;
+
+    create_file(dir, L"routenoext");
+    init_ofn(&ofn, file, ARRAY_SIZE(file), dir);
+    ofn.lpstrFilter = L"All files\0*.*\0";
+    ofn.lpstrDefExt = L"txt";
+    ofn.Flags |= OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+    thread = start_driver(&driver, L"routenoext");
+    ret = GetOpenFileNameW(&ofn);
+    finish_driver(thread);
+    ok(ret, "GetOpenFileNameW failed, error %#lx\n", CommDlgExtendedError());
+    ok(!ret || (ofn.Flags & OFN_EXTENSIONDIFFERENT), "OFN_EXTENSIONDIFFERENT not set without an extension\n");
+    ok(!ret || !ofn.nFileExtension, "nFileExtension %u\n", ofn.nFileExtension);
+    delete_file(dir, L"routenoext");
+}
+
 /* No file buffer: the ANSI path must not touch it and keeps the classic dialog. */
 static void test_ansi_null_file(void)
 {
@@ -380,6 +404,7 @@ START_TEST(itemroute)
     test_buffer_too_small(dir);
     test_multiselect(dir);
     test_ansi(dir);
+    test_extension_different(dir);
     test_ansi_null_file();
     test_mta(dir);
     delete_file(dir, L"routesave.txt");
