@@ -11,6 +11,12 @@ STRINGTABLE
 BEGIN
     IDS_DIRECTORY "File folder"
     IDS_ANY_FILE "%s File"
+    IDS_KF_DESKTOP "Desktop"
+    IDS_KF_DOCUMENTS "Documents"
+    IDS_KF_PICTURES "Pictures"
+    IDS_KF_MUSIC "Music"
+    IDS_KF_VIDEOS "Videos"
+    IDS_KF_DOWNLOADS "Downloads"
     IDS_OPEN_VERB "&Open"
     IDS_OPENFILELOCATION "Open f&ile location"
     IDS_RUNAS_VERB "Run as..."

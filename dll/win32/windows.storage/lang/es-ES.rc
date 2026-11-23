@@ -11,6 +11,12 @@ STRINGTABLE
 BEGIN
     IDS_DIRECTORY "Directorio"
     IDS_ANY_FILE "Archivo %s"
+    IDS_KF_DESKTOP "Escritorio"
+    IDS_KF_DOCUMENTS "Documentos"
+    IDS_KF_PICTURES "Imágenes"
+    IDS_KF_MUSIC "Música"
+    IDS_KF_VIDEOS "Vídeos"
+    IDS_KF_DOWNLOADS "Descargas"
     IDS_OPEN_VERB "&Abrir"
     IDS_OPENFILELOCATION "Abrir &ubicación del archivo"
     IDS_RUNAS_VERB "Ejecutar como..."

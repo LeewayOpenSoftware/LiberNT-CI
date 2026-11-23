@@ -1906,8 +1906,7 @@ HRESULT WINAPI CFSFolder::GetDisplayNameOf(PCUITEMID_CHILD pidl,
         return E_INVALIDARG;
     }
 
-    if (!(GET_SHGDN_FOR(dwFlags) & SHGDN_FORPARSING) && _ILIsFolder(pidl) && m_sPathTarget &&
-        (_ILGetFileAttributes(pidl, NULL, 0) & (FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY)))
+    if (!(GET_SHGDN_FOR(dwFlags) & SHGDN_FORPARSING) && _ILIsFolder(pidl) && m_sPathTarget)
     {
         WCHAR szFolder[MAX_PATH], szIniFile[MAX_PATH], szValue[MAX_PATH + 32], szName[MAX_PATH];
         int known;
@@ -1915,7 +1914,9 @@ HRESULT WINAPI CFSFolder::GetDisplayNameOf(PCUITEMID_CHILD pidl,
         if (SUCCEEDED(StringCchCopyW(szFolder, _countof(szFolder), m_sPathTarget)) &&
             _ILSimpleGetTextW(pidl, szName, _countof(szName)) && PathAppendW(szFolder, szName))
         {
-            if (SUCCEEDED(StringCchCopyW(szIniFile, _countof(szIniFile), szFolder)) &&
+            /* Windows reads desktop.ini only for read-only or system folders. */
+            if ((_ILGetFileAttributes(pidl, NULL, 0) & (FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY)) &&
+                SUCCEEDED(StringCchCopyW(szIniFile, _countof(szIniFile), szFolder)) &&
                 PathAppendW(szIniFile, L"desktop.ini") &&
                 GetPrivateProfileStringW(L".ShellClassInfo", L"LocalizedResourceName", L"",
                                          szValue, _countof(szValue), szIniFile) &&
@@ -1925,7 +1926,7 @@ HRESULT WINAPI CFSFolder::GetDisplayNameOf(PCUITEMID_CHILD pidl,
                 return SHSetStrRet(strRet, szName);
             }
 
-            /* Profiles made before desktop.ini named them still show the user folders in the UI language. */
+            /* Profiles made without that desktop.ini entry still show the user folders in the UI language. */
             known = findKnownFolder(szFolder);
             if (known >= 0 && LoadStringW(shell32_hInstance, s_KnownFolders[known].name, szName, _countof(szName)))
                 return SHSetStrRet(strRet, szName);
