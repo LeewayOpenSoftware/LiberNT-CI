@@ -104,7 +104,8 @@ RegisterTypeLibraries(
 
 VOID
 InstallStartMenuItems(
-    _In_ PITEMSDATA pItemsData);
+    _In_ PITEMSDATA pItemsData,
+    _In_ BOOL bUpgrade);
 
 /* netinstall.c */
 

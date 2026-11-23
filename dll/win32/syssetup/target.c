@@ -1608,7 +1608,7 @@ ConfigureTargetSystem(
     RegisterTargetComponents();
 
     ReportTargetPhase(6);
-    InstallStartMenuItems(&ItemsData);
+    InstallStartMenuItems(&ItemsData, Settings->Upgrade);
 
     ReportTargetPhase(7);
     if (!Settings->Upgrade)
