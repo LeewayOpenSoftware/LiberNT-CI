@@ -405,7 +405,7 @@ RunTargetConfiguration(
     BOOL Success;
 
     if (!GetSystemDirectoryW(ApplicationName, ARRAYSIZE(ApplicationName)) ||
-        FAILED(StringCchCatW(ApplicationName, ARRAYSIZE(ApplicationName), L"\\setup.exe")) ||
+        FAILED(StringCchCatW(ApplicationName, ARRAYSIZE(ApplicationName), L"\\oobe\\setup.exe")) ||
         FAILED(StringCchPrintfW(CommandLine, ARRAYSIZE(CommandLine), L"\"%s\" -target", ApplicationName)))
     {
         return ERROR_BUFFER_OVERFLOW;

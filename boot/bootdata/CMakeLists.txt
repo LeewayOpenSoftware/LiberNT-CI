@@ -84,7 +84,7 @@ add_cd_file(FILE ${REACTOS_SOURCE_DIR}/COPYING DESTINATION reactos NAME_ON_CD LI
 # welcome.exe optional custom configuration (only for LiveImage)
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/)
     # Copy the main configuration file
-    add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/welcome.ini DESTINATION reactos NO_CAB FOR livecd)
+    add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/welcome.ini DESTINATION reactos/system32/oobe NO_CAB FOR livecd)
 
     # Convert the translation files (name format: xx-YY.ini) into UTF-16
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/welcome_config)
@@ -93,7 +93,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/)
         set(_converted_file ${CMAKE_CURRENT_BINARY_DIR}/welcome_config/${_file})
         set(_source_file ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/${_file})
         utf16le_convert(${_source_file} ${_converted_file})
-        add_cd_file(TARGET converted_welcome_i18n_files FILE ${_converted_file} DESTINATION reactos/welcome NO_CAB NAME_ON_CD ${_file} FOR livecd)
+        add_cd_file(TARGET converted_welcome_i18n_files FILE ${_converted_file} DESTINATION reactos/system32/oobe/welcome NO_CAB NAME_ON_CD ${_file} FOR livecd)
         list(APPEND _converted_welcome_i18n_files ${_converted_file})
     endforeach(_file)
     add_custom_target(converted_welcome_i18n_files DEPENDS ${_converted_welcome_i18n_files})

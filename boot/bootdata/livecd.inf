@@ -31,7 +31,7 @@ HKLM,"SYSTEM\CurrentControlSet\Services\RamDrv","Type",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager","BootExecute",0x00010000,""
 
 ; Shell
-HKLM,"SYSTEM\Setup","CmdLine",0x00020000,"setup -mini"
+HKLM,"SYSTEM\Setup","CmdLine",0x00020000,"%SystemRoot%\system32\oobe\setup.exe -mini"
 HKLM,"SYSTEM\Setup","SetupType",0x00010001,0x00000001
 HKLM,"SYSTEM\Setup","SystemSetupInProgress",0x00010001,0x00000001
 
