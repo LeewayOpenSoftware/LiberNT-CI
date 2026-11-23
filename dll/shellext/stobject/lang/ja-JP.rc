@@ -42,7 +42,7 @@ BEGIN
     IDS_VOL_VOLUME "音量"
     IDS_VOL_ADJUST "音声プロパティを調整(&A)"
     IDS_VOL_OPEN "音量調整を開く(&O)"
-    IDS_VOL_RUN "SNDVOL32.EXE"
+    IDS_VOL_RUN "SNDVOL.EXE"
     IDS_VOL_MUTED "音量 (ミュート中)"
     IDS_VOL_NODEVICE "オーディオ出力デバイスがインストールされていません。"
 

@@ -5,8 +5,8 @@
 #include "resources.h"
 
 #define REACTOS_STR_FILE_DESCRIPTION  "Orosi Sound Volume Control"
-#define REACTOS_STR_INTERNAL_NAME     "sndvol32"
-#define REACTOS_STR_ORIGINAL_FILENAME "sndvol32.exe"
+#define REACTOS_STR_INTERNAL_NAME     "sndvol"
+#define REACTOS_STR_ORIGINAL_FILENAME "sndvol.exe"
 #include <reactos/version.rc>
 
 #include <reactos/manifest_exe.rc>

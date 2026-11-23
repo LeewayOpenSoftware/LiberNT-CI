@@ -42,7 +42,7 @@ BEGIN
     IDS_VOL_VOLUME "Volume"
     IDS_VOL_ADJUST "&Ajustar Propriedades de Audio"
     IDS_VOL_OPEN "&Abrir o Control de volume"
-    IDS_VOL_RUN "SNDVOL32.EXE"
+    IDS_VOL_RUN "SNDVOL.EXE"
     IDS_VOL_MUTED "Volume (em mute)"
     IDS_VOL_NODEVICE "No Audio Output Device is installed."
 

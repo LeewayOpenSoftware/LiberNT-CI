@@ -423,7 +423,7 @@ static void _RunVolume(BOOL bTray)
 {
     ShellExecuteW(NULL,
                   NULL,
-                  L"sndvol32.exe",
+                  L"sndvol.exe",
                   bTray ? L"/t" : NULL,
                   NULL,
                   SW_SHOWNORMAL);

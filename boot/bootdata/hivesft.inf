@@ -80,7 +80,7 @@ HKLM,"SOFTWARE\Classes\Applications\libernt.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\mobsync.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\navwnt.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\realmon.exe","NoStartPage",0x00000000,""
-HKLM,"SOFTWARE\Classes\Applications\sndvol32.exe","NoStartPage",0x00000000,""
+HKLM,"SOFTWARE\Classes\Applications\sndvol.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\xpsviewer.exe","NoStartPage",0x00000000,""
 
 ; mspaint.exe SupportedTypes
