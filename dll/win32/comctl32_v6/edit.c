@@ -4342,7 +4342,7 @@ static BOOL EDIT_EM_SetCueBanner(EDITSTATE *es, BOOL draw_focused, const WCHAR *
     es->cue_banner_text = wcsdup(cue_text);
 #endif
     es->cue_banner_draw_focused = draw_focused;
-    if (!es->text_length)
+    if (!get_text_length(es))
         EDIT_UpdateText(es, NULL, TRUE);
 
     return TRUE;
