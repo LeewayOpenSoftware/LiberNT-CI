@@ -34,6 +34,16 @@ typedef BOOL (WINAPI *PFN_GetProcessInformation)(HANDLE, PROCESS_INFORMATION_CLA
 static PFN_QueryFullProcessImageNameW pQueryFullProcessImageNameW;
 static PFN_IsHungAppWindow pIsHungAppWindow;
 static PFN_IsWow64Process pIsWow64Process;
+
+/* In the 32-bit build, System32 image paths of 64-bit processes are redirected to
+   SysWOW64, so version resources and icons are read with the redirection off. */
+struct NoFsRedirection
+{
+    PVOID old;
+    BOOL active;
+    NoFsRedirection() : old(NULL), active(Wow64DisableWow64FsRedirection(&old)) {}
+    ~NoFsRedirection() { if (active) Wow64RevertWow64FsRedirection(old); }
+};
 static PFN_GetProcessInformation pGetProcessInformation;
 
 /* ProcessPowerThrottlingState (Win10 EcoQoS); harmless failure elsewhere */
@@ -3012,6 +3022,8 @@ static void ResolveExtra(ProcRow& p)
 
     if (x->path[0])
     {
+        NoFsRedirection noRedirect;
+
         /* description from version resource */
         DWORD dummy;
         DWORD cb = GetFileVersionInfoSizeW(x->path, &dummy);
@@ -3059,6 +3071,7 @@ static void ResolveExtra(ProcRow& p)
 BOOL GetFileCompany(const WCHAR* path, WCHAR* buf, int cch)
 {
     buf[0] = 0;
+    NoFsRedirection noRedirect;
     DWORD dummy;
     DWORD cb = GetFileVersionInfoSizeW(path, &dummy);
     if (!cb || cb > 256 * 1024) return FALSE;
@@ -4249,6 +4262,7 @@ static void LoadAppHistoryIcon(AppHistRow* history)
     if (!history->path[0])
         return;
 
+    NoFsRedirection noRedirect;
     SHFILEINFOW fileInfo;
     ZeroMemory(&fileInfo, sizeof(fileInfo));
     if (SHGetFileInfoW(history->path, 0, &fileInfo, sizeof(fileInfo),
