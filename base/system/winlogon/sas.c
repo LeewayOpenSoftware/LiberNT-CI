@@ -57,8 +57,7 @@ typedef struct tagLOGON_SOUND_DATA
 
 /* FUNCTIONS ****************************************************************/
 
-/* Host mode has no GINA; these are the WLX duties winlogon takes over (PHASE3-PLAN §10.3).
- * Lock, unlock, logoff and screen-saver UI in host mode arrive with the next commit. */
+/* Host mode has no GINA; these are the WLX duties winlogon takes over (PHASE3-PLAN §10.3). */
 static VOID
 WlDisplaySasNotice(IN PWLSESSION Session)
 {
@@ -71,6 +70,7 @@ WlDisplaySasNotice(IN PWLSESSION Session)
 static VOID
 WlDisplayLockedNotice(IN PWLSESSION Session)
 {
+    /* Host mode: the unlock page WlHostLock requested is the locked notice. */
     if (!Session->UseLogonUI)
         Session->Gina.Functions.WlxDisplayLockedNotice(Session->Gina.Context);
 }
@@ -1427,6 +1427,13 @@ HandleLogoff(
 
     LogonStage("logoff-start");
 
+    if (Session->UseLogonUI)
+    {
+        /* "Signing out" stands on the host before any user process is closed (plan, commit 7). */
+        DisplayStatusMessage(Session, Session->WinlogonDesktop, IDS_LOGGINGOFF);
+        SwitchDesktop(Session->WinlogonDesktop);
+    }
+
     Status = CreateLogoffSecurityAttributes(&psa);
     if (!NT_SUCCESS(Status))
     {
@@ -1447,9 +1454,12 @@ HandleLogoff(
         return Status;
     }
 
-    /* Invoke Logoff notifications on the application desktop */
-    SwitchDesktop(Session->ApplicationDesktop);
-    DisplayStatusMessage(Session, Session->ApplicationDesktop, IDS_LOGGINGOFF);
+    /* Invoke Logoff notifications on the application desktop (host mode: behind the host) */
+    if (!Session->UseLogonUI)
+    {
+        SwitchDesktop(Session->ApplicationDesktop);
+        DisplayStatusMessage(Session, Session->ApplicationDesktop, IDS_LOGGINGOFF);
+    }
     CallNotificationDlls(Session, LogoffHandler);
     RemoveStatusMessage(Session);
 
@@ -1725,6 +1735,8 @@ DoGenericAction(
                 if (WlIsLockOk(Session))
                 {
                     Session->LogonState = STATE_LOCKED;
+                    if (Session->UseLogonUI)
+                        WlHostLock(Session);    /* bounded wait for the unlock page; the switch follows either way (P2) */
                     SwitchDesktop(Session->WinlogonDesktop);
                     ReplyMessage(TRUE);
                     /* We may be on the Logged-On SAS dialog, in which case
@@ -1801,8 +1813,12 @@ DoGenericAction(
                 (Session->LogonState == STATE_LOCKED_SAS))
             {
                 CallNotificationDlls(Session, UnlockHandler);
+                if (Session->UseLogonUI)
+                    WlHostBeforeDesktopSwitch();
                 SwitchDesktop(Session->ApplicationDesktop);
                 RemoveStatusMessage(Session);
+                if (Session->UseLogonUI)
+                    WlHostAfterDesktopSwitch();
                 Session->LogonState = STATE_LOGGED_ON;
             }
             break;
@@ -1912,21 +1928,21 @@ DispatchSAS(
             return;
 
         case WLX_SAS_TYPE_SCRNSVR_TIMEOUT:
-            /* Host mode: a secure screen saver until the host lock lands (next commit). */
-            if (!Session->UseLogonUI &&
-                !Session->Gina.Functions.WlxScreenSaverNotify(Session->Gina.Context, &bSecure))
+            if (Session->UseLogonUI)
+            {
+                bSecure = WlHostScreenSaverSecure(Session);     /* msgina's WlxScreenSaverNotify, absorbed */
+            }
+            else if (!Session->Gina.Functions.WlxScreenSaverNotify(Session->Gina.Context, &bSecure))
             {
                 /* Skip start of screen saver */
                 SetEvent(Session->hEndOfScreenSaver);
+                break;
             }
-            else
+            StartScreenSaver(Session);
+            if (bSecure)
             {
-                StartScreenSaver(Session);
-                if (bSecure)
-                {
-                    wlxAction = WLX_SAS_ACTION_LOCK_WKSTA;
-//                    DoGenericAction(Session, WLX_SAS_ACTION_LOCK_WKSTA);
-                }
+                wlxAction = WLX_SAS_ACTION_LOCK_WKSTA;
+//                DoGenericAction(Session, WLX_SAS_ACTION_LOCK_WKSTA);
             }
             break;
 
@@ -1949,6 +1965,40 @@ DispatchSAS(
     {
         Session->LogonState = STATE_LOCKED;
         WlDisplayLockedNotice(Session);
+    }
+}
+
+/* Host mode: verdicts and notices from RPC and supervisor threads, replayed here (hostlogon.c). */
+static
+VOID
+HostEvent(
+    IN OUT PWLSESSION Session,
+    IN DWORD Event)
+{
+    if (!Session->UseLogonUI)
+        return;
+
+    switch (Event)
+    {
+        case WLHOST_EVENT_ENDED:
+            WlHostRelaunch(Session);
+            break;
+        case WLHOST_EVENT_UNLOCK:
+            DoGenericAction(Session, WLX_SAS_ACTION_UNLOCK_WKSTA);
+            break;
+        case WLHOST_EVENT_MUST_CHANGE:
+            if (Session->LogonState == STATE_LOCKED || Session->LogonState == STATE_LOCKED_SAS)
+                WlHostMustChange(Session);
+            break;
+        case WLHOST_EVENT_SHUTDOWN:
+            DoGenericAction(Session, WLX_SAS_ACTION_SHUTDOWN_POWER_OFF);
+            break;
+        case WLHOST_EVENT_RESTART:
+            DoGenericAction(Session, WLX_SAS_ACTION_SHUTDOWN_REBOOT);
+            break;
+        default:
+            WARN("Unknown host event %lu\n", Event);
+            break;
     }
 }
 
@@ -2241,6 +2291,11 @@ SASWindowProc(
             DispatchSAS(Session, (DWORD)wParam);
             return TRUE;
         }
+        case WL_WM_HOST_EVENT:
+        {
+            HostEvent(Session, (DWORD)wParam);
+            return TRUE;
+        }
         case WL_WM_SETUP_DONE:
         {
             RegisterHotKeys(Session, hwndDlg);
@@ -2305,6 +2360,9 @@ InitializeSAS(
         ERR("WL: Failed to register SAS window\n");
         goto cleanup;
     }
+
+    if (Session->UseLogonUI)
+        WlHostAttach(Session);
 
     if (!SetDefaultLanguage(NULL))
         return FALSE;

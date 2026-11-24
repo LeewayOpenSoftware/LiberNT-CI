@@ -44,6 +44,7 @@ struct _WLHOST_LAUNCH
 /* The level machine is touched by the SAS thread and by every supervisor thread. */
 static WLREC_STATE g_Recovery;
 static CRITICAL_SECTION g_RecoveryLock;
+static WLHOST_ENDED_CALLBACK g_EndedCallback;
 
 static WLREC_ACTION
 WlHostRecNext(VOID)
@@ -107,6 +108,13 @@ WlHostInit(VOID)
 {
     InitializeCriticalSection(&g_RecoveryLock);
     WlRecInit(&g_Recovery, NULL);
+}
+
+VOID
+WlHostSetEndedCallback(
+    _In_opt_ WLHOST_ENDED_CALLBACK Callback)
+{
+    g_EndedCallback = Callback;
 }
 
 VOID
@@ -350,6 +358,9 @@ WlHostSupervisor(
                      (!Launch->Terminated || End == WlRecEndHang) ? WlHostRecEnd(End) : WlHostRecLevelName());
     WlHostLog(End == WlRecEndNormal ? EVENTLOG_INFORMATION_TYPE : EVENTLOG_WARNING_TYPE, Text);
     SetEvent(Launch->EndedEvent);
+    /* WlHostStop joins this thread before it frees the entry, so Launch is still valid here. */
+    if (g_EndedCallback)
+        g_EndedCallback(Launch);
     return 0;
 }
 

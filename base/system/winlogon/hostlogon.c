@@ -15,13 +15,19 @@
 
 #define WLHL_READY_MS       2000
 #define WLHL_FADE_WAIT_MS   1500
-#define WLHL_CPUS_LOGON     1       /* CPUS_LOGON */
+#define WLHL_LOCK_READY_MS  2000    /* default for HKLM Winlogon\LockReadyTimeoutMs (P2) */
+#define WLHL_CPUS_LOGON             1   /* CPUS_LOGON */
+#define WLHL_CPUS_UNLOCK            2   /* CPUS_UNLOCK_WORKSTATION */
+#define WLHL_CPUS_CHANGE_PASSWORD   3   /* CPUS_CHANGE_PASSWORD */
+
+#define WLHL_WINLOGON_KEY   L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
 
 typedef struct _WLHL_SUBMIT
 {
     BOOL Pending;
     NTSTATUS Status;
     NTSTATUS SubStatus;
+    BOOL MustChange;        /* the account may only continue through a password change */
     HANDLE Token;
     LUID LogonId;
     WCHAR User[CREDSER_MAX_NAME_CHARS + 1];
@@ -29,17 +35,22 @@ typedef struct _WLHL_SUBMIT
     WCHAR Password[CREDSER_MAX_PASSWORD_CHARS + 1];
 } WLHL_SUBMIT;
 
+static PWLSESSION g_Session;
 static HANDLE g_Lsa;
 static ULONG g_MsvPackage;
 static CREDSER_PACKAGES g_Packages;
 static BOOL g_Connected;
-static CRITICAL_SECTION g_SubmitLock;
+static CRITICAL_SECTION g_SubmitLock;   /* g_Submit, g_PendingAction, g_Accepting, g_SubmitBusy, g_ChangeFor */
+static CRITICAL_SECTION g_LaunchLock;   /* g_Launch: swapped by the SAS thread, read by RPC threads */
 static HANDLE g_SubmitEvent;
 static WLHL_SUBMIT g_Submit;
 static DWORD g_PendingAction;           /* WLUI_ACTION from the host's power flyout */
-static PWLHOST_LAUNCH g_Launch;         /* the live host, if any */
-static BOOL g_Accepting;                /* the SAS thread is waiting for a submit (R2) */
+static PWLHOST_LAUNCH g_Launch;         /* the live host, if any (SAS thread owns it) */
+static DWORD g_HostScenario;            /* what the live host was asked to show; 0 = status only */
+static BOOL g_Accepting;                /* the SAS thread is waiting for a logon submit (R2) */
 static BOOL g_SubmitBusy;               /* a submit is between the gate and the slot */
+static DWORD g_ChangeFor;               /* scenario a forced password change resumes; 0 = no change page */
+static BOOL g_LsaBroken;                /* the last logged-out SAS could not reach the LSA */
 
 /* ---- LSA ---------------------------------------------------------------------- */
 
@@ -76,11 +87,8 @@ WlHlConnectLsa(VOID)
         return FALSE;
     }
     g_MsvPackage = g_Packages.Msv1_0;
-
-    InitializeCriticalSection(&g_SubmitLock);
-    g_SubmitEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
-    g_Connected = (g_SubmitEvent != NULL);
-    return g_Connected;
+    g_Connected = TRUE;
+    return TRUE;
 }
 
 /* A provider CLSID is acceptable when it is registered for logon on this machine. */
@@ -178,65 +186,57 @@ WlHlTokenHasLogonSid(
     return Found;
 }
 
-/* Runs on an RPC thread: the serialization is untrusted input (PHASE3-PLAN §5.1, Q1). */
-static DWORD
-WlHlSubmitHandler(
-    _In_ PWLUI_LAUNCH_STATE State,
-    _In_ WLUI_AUTH_ROLE Role,
-    _In_ DWORD Scenario,
-    _In_ const GUID *ProviderClsid,
-    _In_ DWORD AuthenticationPackage,
-    _In_reads_bytes_(cbSerialization) const BYTE *Serialization,
-    _In_ DWORD cbSerialization)
+/* Q2: an unlock is decided by the identity of the session's token, never by the blob. */
+static BOOL
+WlHlSameTokenUser(
+    _In_opt_ HANDLE A,
+    _In_opt_ HANDLE B)
 {
-    CREDSER_LOGON Logon;
+    BYTE BufA[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE], BufB[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    DWORD Size;
+
+    if (A == NULL || B == NULL)
+        return FALSE;
+    if (!GetTokenInformation(A, TokenUser, BufA, sizeof(BufA), &Size) ||
+        !GetTokenInformation(B, TokenUser, BufB, sizeof(BufB), &Size))
+        return FALSE;
+    return EqualSid(((PTOKEN_USER)BufA)->User.Sid, ((PTOKEN_USER)BufB)->User.Sid);
+}
+
+static BOOL
+WlHlMustChange(
+    _In_ NTSTATUS Status,
+    _In_ NTSTATUS SubStatus)
+{
+    return Status == STATUS_PASSWORD_MUST_CHANGE || Status == STATUS_PASSWORD_EXPIRED ||
+           SubStatus == STATUS_PASSWORD_MUST_CHANGE || SubStatus == STATUS_PASSWORD_EXPIRED;
+}
+
+/* Interactive or unlock logon through MSV1_0, with the logon SID groups msgina built. */
+static NTSTATUS
+WlHlLsaLogon(
+    _In_ const CREDSER_LOGON *Logon,
+    _In_ BOOL Unlock,
+    _Out_ PHANDLE Token,
+    _Out_ PLUID LogonId,
+    _Out_ PNTSTATUS SubStatus)
+{
     PMSV1_0_INTERACTIVE_LOGON Msv = NULL;
     PTOKEN_GROUPS Groups;
     ULONG MsvSize = 0, ProfileSize = 0;
-    PVOID Copy = NULL, Profile = NULL;
+    PVOID Profile = NULL;
     LSA_STRING Origin;
     TOKEN_SOURCE Source;
     QUOTA_LIMITS Quotas;
-    LUID LogonId;
-    HANDLE Token = NULL;
-    NTSTATUS Status, SubStatus = STATUS_SUCCESS;
+    NTSTATUS Status;
 
-    UNREFERENCED_PARAMETER(State);
-    UNREFERENCED_PARAMETER(Role);
-
-    if (Scenario != WLHL_CPUS_LOGON)
-        return ERROR_NOT_SUPPORTED;         /* unlock and change-password land with the next commit */
-    if (!CredSerIsKnownPackage(&g_Packages, AuthenticationPackage))
-        return ERROR_INVALID_PARAMETER;
-    if (!WlHlProviderRegistered(ProviderClsid))
-        return ERROR_ACCESS_DENIED;
-    if (Serialization == NULL || cbSerialization == 0 || cbSerialization > CREDSER_MAX_BLOB_SIZE)
-        return ERROR_INVALID_PARAMETER;
-
-    /* A logon runs only while the SAS thread waits for one, and one at a time (R2). */
-    EnterCriticalSection(&g_SubmitLock);
-    if (!g_Accepting || g_SubmitBusy || g_Submit.Pending)
-    {
-        LeaveCriticalSection(&g_SubmitLock);
-        return ERROR_BUSY;
-    }
-    g_SubmitBusy = TRUE;
-    LeaveCriticalSection(&g_SubmitLock);
-
-    /* One private copy; every later step reads only the copy. */
-    Status = CredSerCapture(Serialization, cbSerialization, &Copy);
-    if (NT_SUCCESS(Status))
-        Status = CredSerUnpackLogon(Copy, cbSerialization, &Logon);
-    if (NT_SUCCESS(Status))
-        Status = CredSerBuildMsv1_0Logon(&Logon, &Msv, &MsvSize);
+    *Token = NULL;
+    *SubStatus = STATUS_SUCCESS;
+    Status = CredSerBuildMsv1_0Logon(Logon, &Msv, &MsvSize);
     if (!NT_SUCCESS(Status))
-    {
-        CredSerFree(Copy, cbSerialization);
-        EnterCriticalSection(&g_SubmitLock);
-        g_SubmitBusy = FALSE;
-        LeaveCriticalSection(&g_SubmitLock);
-        return ERROR_INVALID_PARAMETER;
-    }
+        return Status;
+    if (Unlock)
+        Msv->MessageType = MsV1_0WorkstationUnlockLogon;    /* same buffer as msgina lsa.c, unlock type */
 
     RtlInitString(&Origin, "Winlogon");
     CopyMemory(Source.SourceName, "User32  ", TOKEN_SOURCE_LENGTH);
@@ -244,74 +244,64 @@ WlHlSubmitHandler(
 
     Groups = WlHlBuildLogonGroups();
     Status = Groups ? LsaLogonUser(g_Lsa, &Origin, Interactive, g_MsvPackage, Msv, MsvSize, Groups, &Source,
-                                   &Profile, &ProfileSize, &LogonId, &Token, &Quotas, &SubStatus)
+                                   &Profile, &ProfileSize, LogonId, Token, &Quotas, SubStatus)
                     : (NTSTATUS)STATUS_NO_MEMORY;
     WlHlFreeLogonGroups(Groups);
     if (Profile)
         LsaFreeReturnBuffer(Profile);
-    if (NT_SUCCESS(Status) && !WlHlTokenHasLogonSid(Token))
-        ERR("WL: logon token carries no logon SID; AllowAccessOnSession will refuse it\n");
-
-    EnterCriticalSection(&g_SubmitLock);
-    g_SubmitBusy = FALSE;
-    if (!g_Accepting)
-    {
-        /* The SAS thread stopped waiting meanwhile: nobody would ever consume this logon. */
-        LeaveCriticalSection(&g_SubmitLock);
-        if (Token)
-            CloseHandle(Token);
-        CredSerFree(Msv, MsvSize);
-        CredSerFree(Copy, cbSerialization);
-        return ERROR_BUSY;
-    }
-    SecureZeroMemory(&g_Submit, sizeof(g_Submit));
-    g_Submit.Pending = TRUE;
-    g_Submit.Status = Status;
-    g_Submit.SubStatus = SubStatus;
-    if (NT_SUCCESS(Status))
-    {
-        g_Submit.Token = Token;
-        g_Submit.LogonId = LogonId;
-        WlHlCopyString(&Logon.UserName, g_Submit.User, ARRAYSIZE(g_Submit.User));
-        WlHlCopyString(&Logon.LogonDomainName, g_Submit.Domain, ARRAYSIZE(g_Submit.Domain));
-        /* The network-provider notification (MPR) still wants the password; it is wiped after use. */
-        WlHlCopyString(&Logon.Password, g_Submit.Password, ARRAYSIZE(g_Submit.Password));
-    }
-    LeaveCriticalSection(&g_SubmitLock);
-
     CredSerFree(Msv, MsvSize);
-    CredSerFree(Copy, cbSerialization);
-    SetEvent(g_SubmitEvent);
-    return ERROR_SUCCESS;
+    if (NT_SUCCESS(Status) && !WlHlTokenHasLogonSid(*Token))
+        ERR("WL: logon token carries no logon SID; AllowAccessOnSession will refuse it\n");
+    return Status;
 }
 
-static DWORD
-WlHlActionHandler(
-    _In_ PWLUI_LAUNCH_STATE State,
-    _In_ WLUI_AUTH_ROLE Role,
-    _In_ DWORD Action)
+/* msgina lsa.c MyChangePassword: the MSV1_0 change request, built from the captured copy. */
+static NTSTATUS
+WlHlLsaChangePassword(
+    _In_ const CREDSER_CHANGE_PASSWORD *Change)
 {
-    UNREFERENCED_PARAMETER(State);
-    UNREFERENCED_PARAMETER(Role);
+    const UNICODE_STRING *Values[4] = { &Change->DomainName, &Change->AccountName,
+                                        &Change->OldPassword, &Change->NewPassword };
+    PMSV1_0_CHANGEPASSWORD_REQUEST Request;
+    PMSV1_0_CHANGEPASSWORD_RESPONSE Response = NULL;
+    UNICODE_STRING *Fields[4];
+    ULONG Size, ResponseSize = 0, i;
+    NTSTATUS Status, Protocol = STATUS_SUCCESS;
+    PWSTR Ptr;
 
-    if (Action != WluiActionShutdown && Action != WluiActionRestart && Action != WluiActionCancel)
-        return ERROR_INVALID_PARAMETER;
-    g_PendingAction = Action;
-    SetEvent(g_SubmitEvent);
-    return ERROR_SUCCESS;
+    Size = sizeof(*Request);
+    for (i = 0; i < ARRAYSIZE(Values); i++)
+        Size += Values[i]->Length + sizeof(WCHAR);
+    Request = LocalAlloc(LMEM_FIXED | LMEM_ZEROINIT, Size);
+    if (Request == NULL)
+        return STATUS_NO_MEMORY;
+
+    Request->MessageType = MsV1_0ChangePassword;
+    Request->Impersonating = FALSE;
+    Fields[0] = &Request->DomainName;
+    Fields[1] = &Request->AccountName;
+    Fields[2] = &Request->OldPassword;
+    Fields[3] = &Request->NewPassword;
+    Ptr = (PWSTR)(Request + 1);
+    for (i = 0; i < ARRAYSIZE(Values); i++)
+    {
+        Fields[i]->Length = Values[i]->Length;
+        Fields[i]->MaximumLength = Values[i]->Length + sizeof(WCHAR);
+        Fields[i]->Buffer = Ptr;
+        CopyMemory(Ptr, Values[i]->Buffer, Values[i]->Length);
+        Ptr += Values[i]->Length / sizeof(WCHAR) + 1;
+    }
+
+    Status = LsaCallAuthenticationPackage(g_Lsa, g_MsvPackage, Request, Size,
+                                          (PVOID *)&Response, &ResponseSize, &Protocol);
+    SecureZeroMemory(Request, Size);
+    LocalFree(Request);
+    if (Response)
+        LsaFreeReturnBuffer(Response);
+    return NT_SUCCESS(Status) ? Protocol : Status;
 }
 
-/* ---- the logged-out SAS ------------------------------------------------------- */
-
-static BOOL
-WlHlDisableCad(VOID)
-{
-    DWORD Value = 0, Size = sizeof(Value);
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
-                     L"DisableCAD", RRF_RT_REG_DWORD, NULL, &Value, &Size) != ERROR_SUCCESS)
-        Value = 0;
-    return Value != 0;
-}
+/* ---- commands and events to the SAS thread --------------------------------------- */
 
 static VOID
 WlHlPost(
@@ -325,8 +315,6 @@ WlHlPost(
 {
     WLUI_COMMAND Command;
 
-    if (g_Launch == NULL)
-        return;
     ZeroMemory(&Command, sizeof(Command));
     Command.Type = Type;
     Command.Scenario = Scenario;
@@ -335,30 +323,360 @@ WlHlPost(
     Command.SubStatus = SubStatus;
     if (User) StringCchCopyW(Command.User, ARRAYSIZE(Command.User), User);
     if (Text) StringCchCopyW(Command.Text, ARRAYSIZE(Command.Text), Text);
-    WlHostPost(g_Launch, &Command);
+
+    /* RPC threads post results while the SAS thread may be swapping hosts. */
+    EnterCriticalSection(&g_LaunchLock);
+    if (g_Launch != NULL)
+        WlHostPost(g_Launch, &Command);
+    LeaveCriticalSection(&g_LaunchLock);
+    SecureZeroMemory(&Command, sizeof(Command));
 }
 
-/* Brings up a host asking for logon credentials, reusing a live one. */
-static BOOL
-WlHlEnsureHost(VOID)
+static VOID
+WlHlPostResource(
+    _In_ WLUI_COMMAND_TYPE Type,
+    _In_ DWORD Flags,
+    _In_ UINT StringId)
 {
-    BOOL Terminal = FALSE;
+    WCHAR Text[WLUI_MAX_TEXT];
 
-    if (g_Launch != NULL && !WlHostHasEnded(g_Launch, NULL, NULL))
-        return TRUE;
-    if (g_Launch != NULL)
+    if (LoadStringW(hAppInstance, StringId, Text, ARRAYSIZE(Text)) == 0)
+        Text[0] = UNICODE_NULL;
+    WlHlPost(Type, g_HostScenario, Flags, 0, 0, NULL, Text);
+}
+
+/* Events for the SAS thread; it replays them through WlHostOnEvent (sas.c). */
+static VOID
+WlHlPostEvent(
+    _In_ DWORD Event)
+{
+    if (g_Session != NULL && g_Session->SASWindow != NULL)
+        PostMessageW(g_Session->SASWindow, WL_WM_HOST_EVENT, Event, 0);
+}
+
+static VOID
+WlHlOnHostEnded(
+    _In_ PWLHOST_LAUNCH Launch)
+{
+    UNREFERENCED_PARAMETER(Launch);
+    WlHlPostEvent(WLHOST_EVENT_ENDED);
+}
+
+/* ---- submits (RPC threads) ------------------------------------------------------- */
+
+/* Parks a logon result for WlHostLoggedOutSas; it is the only consumer. */
+static VOID
+WlHlFinishLogon(
+    _In_ NTSTATUS Status,
+    _In_ NTSTATUS SubStatus,
+    _In_opt_ HANDLE Token,
+    _In_ const LUID *LogonId,
+    _In_ const CREDSER_LOGON *Logon)
+{
+    EnterCriticalSection(&g_SubmitLock);
+    if (!g_Accepting)
     {
-        WlHostStop(g_Launch);
-        g_Launch = NULL;
+        /* The SAS thread stopped waiting meanwhile: nobody would ever consume this logon. */
+        LeaveCriticalSection(&g_SubmitLock);
+        if (Token)
+            CloseHandle(Token);
+        return;
+    }
+    SecureZeroMemory(&g_Submit, sizeof(g_Submit));
+    g_Submit.Pending = TRUE;
+    g_Submit.Status = Status;
+    g_Submit.SubStatus = SubStatus;
+    g_Submit.MustChange = WlHlMustChange(Status, SubStatus);
+    if (NT_SUCCESS(Status))
+    {
+        g_Submit.Token = Token;
+        g_Submit.LogonId = *LogonId;
+        WlHlCopyString(&Logon->UserName, g_Submit.User, ARRAYSIZE(g_Submit.User));
+        WlHlCopyString(&Logon->LogonDomainName, g_Submit.Domain, ARRAYSIZE(g_Submit.Domain));
+        /* The network-provider notification (MPR) still wants the password; it is wiped after use. */
+        WlHlCopyString(&Logon->Password, g_Submit.Password, ARRAYSIZE(g_Submit.Password));
+    }
+    LeaveCriticalSection(&g_SubmitLock);
+    SetEvent(g_SubmitEvent);
+}
+
+/* An unlock has no waiting thread: the verdict goes to the SAS window as an event. */
+static VOID
+WlHlFinishUnlock(
+    _In_ NTSTATUS Status,
+    _In_ NTSTATUS SubStatus,
+    _In_opt_ HANDLE Token)
+{
+    BOOL Same;
+
+    if (WlHlMustChange(Status, SubStatus))
+    {
+        if (Token)
+            CloseHandle(Token);
+        WlHlPostEvent(WLHOST_EVENT_MUST_CHANGE);
+        return;
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        WlHlPost(WluiCmdReportResult, WLHL_CPUS_UNLOCK, 0, Status, SubStatus, NULL, NULL);
+        return;
     }
 
-    g_Launch = WlHostStart(WLHL_CPUS_LOGON, &Terminal);
-    if (g_Launch == NULL)
-        return FALSE;                   /* N4: the terminal state is drawn by a later commit */
+    Same = WlHlSameTokenUser(Token, g_Session->UserToken);
+    CloseHandle(Token);                 /* the session keeps its own token; this one only answered */
+    if (Same)
+    {
+        WlHlPostEvent(WLHOST_EVENT_UNLOCK);
+        return;
+    }
+    /* Another account, administrator or not: the forced-logoff confirmation is Phase 4 UI. */
+    ERR("WL: unlock refused: credentials belong to another account\n");
+    WlHlPostResource(WluiCmdReportResult, 0, IDS_UNLOCKONLYSESSIONUSER);
+}
 
-    if (!WlHostWaitReady(g_Launch, WLHL_READY_MS))
-        WARN("WL: logon UI not ready after %u ms, requesting credentials anyway\n", WLHL_READY_MS);
-    WlHlPost(WluiCmdRequestCredentials, WLHL_CPUS_LOGON, WlHlDisableCad() ? WLUI_FLAG_DISABLE_CAD : 0, 0, 0, NULL, NULL);
+static DWORD
+WlHlHandleLogon(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ DWORD Size,
+    _In_ BOOL Unlock)
+{
+    CREDSER_LOGON Logon;
+    HANDLE Token = NULL;
+    LUID LogonId;
+    NTSTATUS Status, SubStatus = STATUS_SUCCESS;
+
+    if (!NT_SUCCESS(CredSerUnpackLogon(Copy, Size, &Logon)))
+        return ERROR_INVALID_PARAMETER;
+    Status = WlHlLsaLogon(&Logon, Unlock, &Token, &LogonId, &SubStatus);
+    if (Unlock)
+        WlHlFinishUnlock(Status, SubStatus, Token);
+    else
+        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon);
+    return ERROR_SUCCESS;
+}
+
+/* A change the host was asked for; on success the interrupted logon or unlock continues
+ * with the new password, as Windows does. */
+static DWORD
+WlHlHandleChange(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ DWORD Size,
+    _In_ DWORD Resume)
+{
+    CREDSER_CHANGE_PASSWORD Change;
+    CREDSER_LOGON Logon;
+    HANDLE Token = NULL;
+    LUID LogonId;
+    NTSTATUS Status, SubStatus = STATUS_SUCCESS;
+
+    if (!NT_SUCCESS(CredSerUnpackChangePassword(Copy, Size, &Change)))
+        return ERROR_INVALID_PARAMETER;
+    Status = WlHlLsaChangePassword(&Change);
+    if (!NT_SUCCESS(Status))
+    {
+        WlHlPost(WluiCmdReportResult, WLHL_CPUS_CHANGE_PASSWORD, 0, Status, 0, NULL, NULL);
+        return ERROR_SUCCESS;
+    }
+
+    ZeroMemory(&Logon, sizeof(Logon));
+    Logon.MessageType = KerbInteractiveLogon;
+    Logon.LogonDomainName = Change.DomainName;
+    Logon.UserName = Change.AccountName;
+    Logon.Password = Change.NewPassword;
+    Status = WlHlLsaLogon(&Logon, Resume == WLHL_CPUS_UNLOCK, &Token, &LogonId, &SubStatus);
+    if (Resume == WLHL_CPUS_UNLOCK)
+        WlHlFinishUnlock(Status, SubStatus, Token);
+    else
+        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon);
+    return ERROR_SUCCESS;
+}
+
+/* The page winlogon asked for is the only one whose submission is taken; the host never picks. */
+static BOOL
+WlHlScenarioExpected(
+    _In_ DWORD Scenario)
+{
+    LOGON_STATE State = g_Session->LogonState;
+
+    switch (Scenario)
+    {
+        case WLHL_CPUS_LOGON:
+            return g_ChangeFor == 0 && g_Accepting;
+        case WLHL_CPUS_UNLOCK:
+            return g_ChangeFor == 0 && (State == STATE_LOCKED || State == STATE_LOCKED_SAS);
+        case WLHL_CPUS_CHANGE_PASSWORD:
+            return g_ChangeFor != 0;
+        default:
+            return FALSE;
+    }
+}
+
+/* Runs on an RPC thread: the serialization is untrusted input (PHASE3-PLAN §5.1, Q1). */
+static DWORD
+WlHlSubmitHandler(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ WLUI_AUTH_ROLE Role,
+    _In_ DWORD Scenario,
+    _In_ const GUID *ProviderClsid,
+    _In_ DWORD AuthenticationPackage,
+    _In_reads_bytes_(cbSerialization) const BYTE *Serialization,
+    _In_ DWORD cbSerialization)
+{
+    PVOID Copy = NULL;
+    DWORD Error, Resume;
+
+    UNREFERENCED_PARAMETER(State);
+    UNREFERENCED_PARAMETER(Role);
+
+    if (Scenario != WLHL_CPUS_LOGON && Scenario != WLHL_CPUS_UNLOCK && Scenario != WLHL_CPUS_CHANGE_PASSWORD)
+        return ERROR_NOT_SUPPORTED;
+    if (!g_Connected || !CredSerIsKnownPackage(&g_Packages, AuthenticationPackage))
+        return ERROR_INVALID_PARAMETER;
+    if (!WlHlProviderRegistered(ProviderClsid))
+        return ERROR_ACCESS_DENIED;
+    if (Serialization == NULL || cbSerialization == 0 || cbSerialization > CREDSER_MAX_BLOB_SIZE)
+        return ERROR_INVALID_PARAMETER;
+
+    /* One submit at a time, and only for the page winlogon is showing (R2). */
+    EnterCriticalSection(&g_SubmitLock);
+    if (g_SubmitBusy || g_Submit.Pending || !WlHlScenarioExpected(Scenario))
+    {
+        LeaveCriticalSection(&g_SubmitLock);
+        return ERROR_BUSY;
+    }
+    g_SubmitBusy = TRUE;
+    Resume = g_ChangeFor;
+    LeaveCriticalSection(&g_SubmitLock);
+
+    /* One private copy; every later step reads only the copy. */
+    if (!NT_SUCCESS(CredSerCapture(Serialization, cbSerialization, &Copy)))
+        Error = ERROR_INVALID_PARAMETER;
+    else if (Scenario == WLHL_CPUS_CHANGE_PASSWORD)
+        Error = WlHlHandleChange(Copy, cbSerialization, Resume);
+    else
+        Error = WlHlHandleLogon(Copy, cbSerialization, Scenario == WLHL_CPUS_UNLOCK);
+    CredSerFree(Copy, cbSerialization);
+
+    EnterCriticalSection(&g_SubmitLock);
+    g_SubmitBusy = FALSE;
+    LeaveCriticalSection(&g_SubmitLock);
+    return Error;
+}
+
+static DWORD
+WlHlActionHandler(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ WLUI_AUTH_ROLE Role,
+    _In_ DWORD Action)
+{
+    UNREFERENCED_PARAMETER(State);
+    UNREFERENCED_PARAMETER(Role);
+
+    if (Action != WluiActionShutdown && Action != WluiActionRestart && Action != WluiActionCancel)
+        return ERROR_INVALID_PARAMETER;
+    if (Action == WluiActionCancel)
+        return ERROR_SUCCESS;
+
+    EnterCriticalSection(&g_SubmitLock);
+    if (g_Accepting)
+    {
+        /* WlHostLoggedOutSas is waiting and returns the action to DispatchSAS itself. */
+        g_PendingAction = Action;
+        SetEvent(g_SubmitEvent);
+    }
+    else
+    {
+        WlHlPostEvent(Action == WluiActionShutdown ? WLHOST_EVENT_SHUTDOWN : WLHOST_EVENT_RESTART);
+    }
+    LeaveCriticalSection(&g_SubmitLock);
+    return ERROR_SUCCESS;
+}
+
+/* ---- the live host (SAS thread) ---------------------------------------------------- */
+
+static BOOL
+WlHlDisableCad(VOID)
+{
+    DWORD Value = 0, Size = sizeof(Value);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"DisableCAD",
+                     RRF_RT_REG_DWORD, NULL, &Value, &Size) != ERROR_SUCCESS)
+        Value = 0;
+    return Value != 0;
+}
+
+/* P2: how long a lock or logoff waits for the host's first frame before switching anyway. */
+static DWORD
+WlHlLockReadyMs(VOID)
+{
+    DWORD Value = 0, Size = sizeof(Value);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"LockReadyTimeoutMs",
+                     RRF_RT_REG_DWORD, NULL, &Value, &Size) != ERROR_SUCCESS || Value > 60000)
+        Value = WLHL_LOCK_READY_MS;
+    return Value;
+}
+
+static BOOL
+WlHlHostLive(VOID)
+{
+    return g_Launch != NULL && !WlHostHasEnded(g_Launch, NULL, NULL);
+}
+
+static VOID
+WlHlStopHost(VOID)
+{
+    PWLHOST_LAUNCH Old;
+
+    EnterCriticalSection(&g_LaunchLock);
+    Old = g_Launch;
+    g_Launch = NULL;
+    g_HostScenario = 0;
+    LeaveCriticalSection(&g_LaunchLock);
+    if (Old != NULL)
+        WlHostStop(Old);
+}
+
+/* Brings up a host for Scenario (0: status only). A live host is kept when it already shows
+ * Scenario, or when it was status-only and the logon page is wanted (the host builds its
+ * providers at the first RequestCredentials); any other change means a fresh host. */
+static BOOL
+WlHlEnsureHost(
+    _In_ DWORD Scenario,
+    _In_ DWORD Flags,
+    _In_ DWORD ReadyMs)
+{
+    PWLHOST_LAUNCH Launch;
+    BOOL Terminal = FALSE;
+
+    EnterCriticalSection(&g_SubmitLock);
+    if (Scenario != WLHL_CPUS_CHANGE_PASSWORD)
+        g_ChangeFor = 0;
+    LeaveCriticalSection(&g_SubmitLock);
+
+    if (WlHlHostLive())
+    {
+        if (Scenario == 0 || g_HostScenario == Scenario)
+            return TRUE;
+        if (g_HostScenario == 0 && Scenario == WLHL_CPUS_LOGON)
+        {
+            g_HostScenario = Scenario;
+            WlHlPost(WluiCmdRequestCredentials, Scenario, Flags, 0, 0, NULL, NULL);
+            return TRUE;
+        }
+    }
+    WlHlStopHost();
+
+    Launch = WlHostStart(Scenario ? Scenario : WLHL_CPUS_LOGON, &Terminal);
+    if (Launch == NULL)
+        return FALSE;                   /* N4: the terminal state is drawn by a later commit */
+    EnterCriticalSection(&g_LaunchLock);
+    g_Launch = Launch;
+    g_HostScenario = Scenario;
+    LeaveCriticalSection(&g_LaunchLock);
+
+    if (!WlHostWaitReady(Launch, ReadyMs))
+        WARN("WL: logon UI not ready after %lu ms, continuing anyway\n", ReadyMs);
+    if (Scenario != 0)
+        WlHlPost(WluiCmdRequestCredentials, Scenario, Flags, 0, 0, NULL, NULL);
     return TRUE;
 }
 
@@ -378,17 +696,38 @@ WlHlSetAccepting(
     LeaveCriticalSection(&g_SubmitLock);
 }
 
-/* With CAD disabled the credential page is the notice: enter the logged-out SAS by ourselves. */
+VOID
+WlHostAttach(
+    _In_ PWLSESSION Session)
+{
+    g_Session = Session;
+    InitializeCriticalSection(&g_SubmitLock);
+    InitializeCriticalSection(&g_LaunchLock);
+    g_SubmitEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    WluiSetSubmitHandler(WlHlSubmitHandler);
+    WluiSetActionHandler(WlHlActionHandler);
+    WlHostSetEndedCallback(WlHlOnHostEnded);
+}
+
+/* ---- the logged-out SAS ------------------------------------------------------- */
+
+/* With CAD disabled the credential page is the notice: enter the logged-out SAS by ourselves.
+ * With CAD enabled the screen stays as it is until the user's SAS (the CAD page is Phase 4). */
 VOID
 WlHostDisplaySasNotice(
     _In_ PWLSESSION Session)
 {
     if (!WlHlDisableCad())
-        return;
-    if (WlHostIsTerminal())
     {
-        /* N4: posting again would spin; a real SAS is the only way on until the dialog of commit 10. */
-        ERR("WL: logon UI is in its terminal state; waiting for a user SAS\n");
+        /* A host still up from a logoff keeps showing a notice text instead of a stale status. */
+        if (WlHlHostLive())
+            WlHlPostResource(WluiCmdDisplayStatus, 0, IDS_PRESSCTRLALTDELETE);
+        return;
+    }
+    if (WlHostIsTerminal() || g_LsaBroken)
+    {
+        /* N4 or no LSA: posting again would spin; a user SAS is the only way on (N4 dialog: commit 10). */
+        ERR("WL: logon UI cannot come up (%s); waiting for a user SAS\n", g_LsaBroken ? "no LSA" : "terminal state");
         return;
     }
     Session->HostAutoSas = TRUE;
@@ -402,17 +741,17 @@ WlHostLoggedOutSas(
     HANDLE Waits[2];
     BOOL UserSas = !Session->HostAutoSas;
     DWORD Result = WLX_SAS_ACTION_NONE;
+    DWORD CadFlag = WlHlDisableCad() ? WLUI_FLAG_DISABLE_CAD : 0;
 
     Session->HostAutoSas = FALSE;
-    if (!WlHlConnectLsa())
+    g_LsaBroken = !WlHlConnectLsa() || g_SubmitEvent == NULL;
+    if (g_LsaBroken)
         return WLX_SAS_ACTION_NONE;
-    WluiSetSubmitHandler(WlHlSubmitHandler);
-    WluiSetActionHandler(WlHlActionHandler);
 
     /* Only a SAS the user typed resets the levels; the self-posted one must not (R3). */
     if (UserSas)
         WlHostOnSas();
-    if (!WlHlEnsureHost())
+    if (!WlHlEnsureHost(WLHL_CPUS_LOGON, CadFlag, WLHL_READY_MS))
         return WLX_SAS_ACTION_NONE;
     WlHlSetAccepting(TRUE);
 
@@ -427,15 +766,17 @@ WlHostLoggedOutSas(
         if (Which == WAIT_OBJECT_0 + 1)
         {
             /* The host died or hung; the level machine already chose the next tier. */
-            if (!WlHlEnsureHost())
+            if (!WlHlEnsureHost(WLHL_CPUS_LOGON, CadFlag, WLHL_READY_MS))
                 break;
             continue;
         }
 
+        EnterCriticalSection(&g_SubmitLock);
         if (g_PendingAction != 0)
         {
             DWORD Action = g_PendingAction;
             g_PendingAction = 0;
+            LeaveCriticalSection(&g_SubmitLock);
             if (Action == WluiActionShutdown)
             {
                 Result = WLX_SAS_ACTION_SHUTDOWN_POWER_OFF;
@@ -448,8 +789,6 @@ WlHostLoggedOutSas(
             }
             continue;
         }
-
-        EnterCriticalSection(&g_SubmitLock);
         if (!g_Submit.Pending)
         {
             LeaveCriticalSection(&g_SubmitLock);
@@ -457,12 +796,22 @@ WlHostLoggedOutSas(
         }
         g_Submit.Pending = FALSE;
 
+        if (g_Submit.MustChange)
+        {
+            /* Expired password: the change page takes over and the logon resumes after it. */
+            g_ChangeFor = WLHL_CPUS_LOGON;
+            LeaveCriticalSection(&g_SubmitLock);
+            if (!WlHlEnsureHost(WLHL_CPUS_CHANGE_PASSWORD, WLUI_FLAG_FORCED_CHANGE | CadFlag, WLHL_READY_MS))
+                break;
+            continue;
+        }
+
         if (!NT_SUCCESS(g_Submit.Status))
         {
             NTSTATUS Status = g_Submit.Status, SubStatus = g_Submit.SubStatus;
             LeaveCriticalSection(&g_SubmitLock);
             /* The provider owns the wording of its result (STATUS_LOGON_FAILURE and friends). */
-            WlHlPost(WluiCmdReportResult, WLHL_CPUS_LOGON, 0, Status, SubStatus, NULL, NULL);
+            WlHlPost(WluiCmdReportResult, g_HostScenario, 0, Status, SubStatus, NULL, NULL);
             continue;
         }
 
@@ -480,9 +829,10 @@ WlHostLoggedOutSas(
             Session->Profile->dwType = WLX_PROFILE_TYPE_V2_0;   /* local account: default paths */
         SecureZeroMemory(g_Submit.Password, sizeof(g_Submit.Password));
         g_Submit.Token = NULL;
+        g_ChangeFor = 0;
         LeaveCriticalSection(&g_SubmitLock);
 
-        WlHlPost(WluiCmdDisplayWelcome, WLHL_CPUS_LOGON, WLUI_FLAG_SPINNER, 0, 0, Session->MprNotifyInfo.pszUserName, NULL);
+        WlHlPost(WluiCmdDisplayWelcome, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, Session->MprNotifyInfo.pszUserName, NULL);
         Result = WLX_SAS_ACTION_LOGON;
         break;
     }
@@ -491,13 +841,99 @@ WlHostLoggedOutSas(
     return Result;
 }
 
-/* ---- status and hand-offs used by HandleLogon -------------------------------- */
+/* ---- lock, unlock, screen saver (no thread waits: events come back through the SAS window) ---- */
 
+/* P2: the unlock page is requested and waited for within a bound; the caller switches to the
+ * Winlogon desktop whether or not the host made it, so the lock never depends on the host. */
+VOID
+WlHostLock(
+    _In_ PWLSESSION Session)
+{
+    UNREFERENCED_PARAMETER(Session);
+    if (!WlHlEnsureHost(WLHL_CPUS_UNLOCK, 0, WlHlLockReadyMs()))
+        ERR("WL: no logon UI for the locked station; it stays locked without a page\n");
+}
+
+/* The locked station asked for a password change before it may be unlocked. */
+VOID
+WlHostMustChange(
+    _In_ PWLSESSION Session)
+{
+    UNREFERENCED_PARAMETER(Session);
+    EnterCriticalSection(&g_SubmitLock);
+    g_ChangeFor = WLHL_CPUS_UNLOCK;
+    LeaveCriticalSection(&g_SubmitLock);
+    WlHlEnsureHost(WLHL_CPUS_CHANGE_PASSWORD, WLUI_FLAG_FORCED_CHANGE, WlHlLockReadyMs());
+}
+
+/* The live host left outside a logged-out SAS: bring back the page the state needs. */
+VOID
+WlHostRelaunch(
+    _In_ PWLSESSION Session)
+{
+    if (WlHlHostLive())
+        return;                         /* a stale notice from a host we replaced ourselves */
+
+    switch (Session->LogonState)
+    {
+        case STATE_LOCKED:
+        case STATE_LOCKED_SAS:
+            WlHostLock(Session);        /* §8.10 b: the station stays locked whatever comes up */
+            break;
+        case STATE_LOGGED_OFF:
+            WlHlStopHost();
+            WlHostDisplaySasNotice(Session);
+            break;
+        default:
+            break;                      /* LOGGED_OFF_SAS: the waiting loop owns it; logged on: nothing to show */
+    }
+}
+
+/* msgina WlxScreenSaverNotify: policy first, then the user's own setting under impersonation. */
+BOOL
+WlHostScreenSaverSecure(
+    _In_ PWLSESSION Session)
+{
+    WCHAR Text[8];
+    DWORD Value = 0, Size = sizeof(Text), Type;
+    HKEY hUser, hKey;
+    BOOL Secure = FALSE;
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Policies\\Microsoft\\Windows\\Control Panel\\Desktop",
+                     L"ScreenSaverIsSecure", RRF_RT_REG_SZ | RRF_RT_REG_DWORD, &Type, Text, &Size) == ERROR_SUCCESS)
+        return Type == REG_DWORD ? *(PDWORD)Text != 0 : _wtoi(Text) != 0;
+
+    if (Session->UserToken == NULL || !ImpersonateLoggedOnUser(Session->UserToken))
+        return FALSE;
+    if (RegOpenCurrentUser(KEY_READ, &hUser) == ERROR_SUCCESS)
+    {
+        if (RegOpenKeyExW(hUser, L"Control Panel\\Desktop", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+        {
+            Size = sizeof(Text) - sizeof(WCHAR);
+            if (RegQueryValueExW(hKey, L"ScreenSaverIsSecure", NULL, &Type, (PBYTE)Text, &Size) == ERROR_SUCCESS)
+            {
+                Text[Size / sizeof(WCHAR)] = UNICODE_NULL;
+                Secure = (Type == REG_DWORD) ? (*(PDWORD)Text != 0) : (_wtoi(Text) != 0);
+            }
+            RegCloseKey(hKey);
+        }
+        RegCloseKey(hUser);
+    }
+    RevertToSelf();
+    UNREFERENCED_PARAMETER(Value);
+    return Secure;
+}
+
+/* ---- status and hand-offs used by HandleLogon, HandleLogoff and HandleShutdown ------- */
+
+/* A status page needs a host; logoff and shutdown start one when none is up (bounded, P2). */
 VOID
 WlHostStatus(
     _In_ PCWSTR Text)
 {
-    WlHlPost(WluiCmdDisplayStatus, WLHL_CPUS_LOGON, WLUI_FLAG_SPINNER, 0, 0, NULL, Text);
+    if (!WlHlHostLive() && !WlHlEnsureHost(0, 0, WlHlLockReadyMs()))
+        return;
+    WlHlPost(WluiCmdDisplayStatus, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, NULL, Text);
 }
 
 /* Theme service wait msgina did before starting the shell (shsvcs ordinal 2). */
@@ -520,20 +956,16 @@ WlHostThemeWait(VOID)
 VOID
 WlHostBeforeDesktopSwitch(VOID)
 {
-    if (g_Launch == NULL)
+    if (!WlHlHostLive())
         return;
-    WlHlPost(WluiCmdReadyForDesktopSwitch, WLHL_CPUS_LOGON, 0, 0, 0, NULL, NULL);
+    WlHlPost(WluiCmdReadyForDesktopSwitch, g_HostScenario, 0, 0, 0, NULL, NULL);
     WaitForSingleObject(WlHostEndedEvent(g_Launch), WLHL_FADE_WAIT_MS);
 }
 
 VOID
 WlHostAfterDesktopSwitch(VOID)
 {
-    if (g_Launch != NULL)
-    {
-        WlHostStop(g_Launch);
-        g_Launch = NULL;
-    }
+    WlHlStopHost();
 }
 
 /* A logon that failed after authentication: tell the host, keep it for the next attempt. */
@@ -541,7 +973,7 @@ VOID
 WlHostLogonFailed(
     _In_ NTSTATUS Status)
 {
-    WlHlPost(WluiCmdReportResult, WLHL_CPUS_LOGON, 0, Status, 0, NULL, NULL);
+    WlHlPost(WluiCmdReportResult, g_HostScenario, 0, Status, 0, NULL, NULL);
 }
 
 /* ---- WLX duties absorbed from msgina --------------------------------------------- */

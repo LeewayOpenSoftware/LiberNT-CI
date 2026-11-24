@@ -65,6 +65,13 @@ WINE_DEFAULT_DEBUG_CHANNEL(winlogon);
 #include "resource.h"
 
 #define WL_WM_SETUP_DONE (WM_USER + 0x0100)
+/* Posted to the SAS window by hostlogon.c from RPC and supervisor threads (wParam = WLHOST_EVENT_*). */
+#define WL_WM_HOST_EVENT (WM_USER + 0x0101)
+#define WLHOST_EVENT_ENDED          1   /* the live host left; relaunch per state */
+#define WLHOST_EVENT_UNLOCK         2   /* a verified unlock for the session user */
+#define WLHOST_EVENT_SHUTDOWN       3   /* power flyout while locked or logged off outside a SAS */
+#define WLHOST_EVENT_RESTART        4
+#define WLHOST_EVENT_MUST_CHANGE    5   /* the unlock credentials must change their password first */
 
 typedef BOOL (WINAPI * PFWLXNEGOTIATE)  (DWORD, DWORD *);
 typedef BOOL (WINAPI * PFWLXINITIALIZE) (LPWSTR, HANDLE, PVOID, PVOID, PVOID *);
@@ -395,9 +402,14 @@ WluiSetActionHandler(
 /* hostlaunch.c */
 #include <wlrecovery.h>
 typedef struct _WLHOST_LAUNCH *PWLHOST_LAUNCH;
+typedef VOID (*WLHOST_ENDED_CALLBACK)(_In_ PWLHOST_LAUNCH Launch);
 
 VOID
 WlHostInit(VOID);
+
+VOID
+WlHostSetEndedCallback(
+    _In_opt_ WLHOST_ENDED_CALLBACK Callback);
 
 VOID
 WlHostOnSas(VOID);
@@ -439,8 +451,28 @@ WlHostStop(
     _In_ PWLHOST_LAUNCH Launch);
 
 /* hostlogon.c */
+VOID
+WlHostAttach(
+    _In_ PWLSESSION Session);
+
 DWORD
 WlHostLoggedOutSas(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostLock(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostMustChange(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostRelaunch(
+    _In_ PWLSESSION Session);
+
+BOOL
+WlHostScreenSaverSecure(
     _In_ PWLSESSION Session);
 
 VOID
