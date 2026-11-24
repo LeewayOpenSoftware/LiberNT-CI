@@ -15,8 +15,8 @@
 DBG_DEFAULT_CHANNEL(GdiFont);
 
 #define TAG_UMFD                'dfmU'
-#define UMFD_REQUEST_TIMEOUT_MS 2000
 #define UMFD_SERVE_WAIT_MS      30000
+#define UMFD_VALIDATE_TIMEOUT_MS 60000  /* opening every face and rendering every glyph once */
 
 typedef enum _UMFD_SLOT_STATE
 {
@@ -30,6 +30,7 @@ typedef struct _UMFD_CHANNEL
 {
     FAST_MUTEX Lock;
     PEPROCESS Host;             /* referenced while registered */
+    BOOLEAN EverRegistered;     /* after the first host, losing it refuses fonts */
     BOOLEAN ServeActive;
     ULONG NextRequestId;
     KEVENT SlotFree;            /* one request at a time */
@@ -238,6 +239,7 @@ UmfdpRegister(_In_ INT InSize, _In_opt_ LPSTR UnsafeIn)
     else
     {
         g_Umfd->Host = Process;
+        g_Umfd->EverRegistered = TRUE;
         g_Umfd->ServeActive = FALSE;
         KeClearEvent(&g_Umfd->RequestPosted);
         Process = NULL;
@@ -522,6 +524,8 @@ UmfdCallHost(
     _In_ ULONG FontId,
     _In_reads_bytes_opt_(cbIn) const VOID *pIn,
     _In_ ULONG cbIn,
+    _In_ PEPROCESS ExpectedHost,
+    _In_ ULONG TimeoutMs,
     _Outptr_result_maybenull_ PUMFD_HEADER *ppReply)
 {
     PUMFD_HEADER Request, Reply = NULL;
@@ -551,7 +555,7 @@ UmfdCallHost(
     if (cbIn)
         RtlCopyMemory(Request + 1, pIn, cbIn);
 
-    Timeout.QuadPart = -(LONGLONG)UMFD_REQUEST_TIMEOUT_MS * 10000;
+    Timeout.QuadPart = -(LONGLONG)TimeoutMs * 10000;
     Status = KeWaitForSingleObject(&g_Umfd->SlotFree, Executive, KernelMode, FALSE, &Timeout);
     if (Status != STATUS_SUCCESS)
     {
@@ -561,7 +565,8 @@ UmfdCallHost(
 
     ExAcquireFastMutex(&g_Umfd->Lock);
     UmfdpDropDeadHostLocked(&Dead);
-    if (g_Umfd->Host == NULL)
+    /* The request may name addresses that are valid only in the host the caller chose */
+    if (g_Umfd->Host == NULL || g_Umfd->Host != ExpectedHost)
     {
         ExReleaseFastMutex(&g_Umfd->Lock);
         KeSetEvent(&g_Umfd->SlotFree, IO_NO_INCREMENT, FALSE);
@@ -638,4 +643,99 @@ UmfdProcessCleanup(_In_ PEPROCESS Process)
 
     if (Host)
         ObDereferenceObject(Host);
+}
+
+/*
+ * Mode 1: the host opens every face of the file and renders every glyph once
+ * before the kernel parses it. A filter, not isolation: it only catches files
+ * that fail deterministically in the same FreeType build.
+ *
+ * The caller holds no lock (U1). Nothing it read under a lock is used after
+ * the wait: the font bytes are its own buffer, so there is nothing to revalidate.
+ */
+UMFD_VERDICT
+UmfdValidateFont(_In_reads_bytes_(cbFont) const VOID *pFont, _In_ SIZE_T cbFont)
+{
+    PEPROCESS Host = NULL, Dead;
+    PVOID Section = NULL, SystemView = NULL, HostView = NULL;
+    LARGE_INTEGER MaxSize;
+    SIZE_T ViewSize = 0;
+    UMFD_LOAD_REQUEST Load;
+    PUMFD_HEADER Reply = NULL;
+    const UMFD_LOAD_REPLY *Result;
+    BOOLEAN EverRegistered;
+    NTSTATUS Status;
+
+    if (g_UmfdMode != 1)
+        return UmfdNoHost;
+
+    ExAcquireFastMutex(&g_Umfd->Lock);
+    UmfdpDropDeadHostLocked(&Dead);
+    EverRegistered = g_Umfd->EverRegistered;
+    if (g_Umfd->Host)
+    {
+        Host = g_Umfd->Host;
+        ObReferenceObject(Host);
+    }
+    ExReleaseFastMutex(&g_Umfd->Lock);
+    if (Dead)
+        ObDereferenceObject(Dead);
+
+    /* Fonts loaded before the first host keep the kernel path; after that, no host means no font */
+    if (Host == NULL)
+        return EverRegistered ? UmfdRejected : UmfdNoHost;
+
+    /* Never wait for the host under the USER lock: refuse instead */
+    if (UserIsEntered() || cbFont == 0 || cbFont > MAXLONG)
+    {
+        ObDereferenceObject(Host);
+        return UmfdRejected;
+    }
+
+    /* A private copy: the host never sees the kernel's buffer, and cannot write to its view */
+    MaxSize.QuadPart = cbFont;
+    Status = MmCreateSection(&Section, SECTION_ALL_ACCESS, NULL, &MaxSize, PAGE_READWRITE, SEC_COMMIT, NULL, NULL);
+    if (NT_SUCCESS(Status))
+        Status = MmMapViewInSystemSpace(Section, &SystemView, &ViewSize);
+    if (NT_SUCCESS(Status))
+    {
+        RtlCopyMemory(SystemView, pFont, cbFont);
+        MmUnmapViewInSystemSpace(SystemView);
+        ViewSize = 0;
+        Status = MmMapViewOfSection(Section, Host, &HostView, 0, 0, NULL, &ViewSize, ViewUnmap, 0, PAGE_READONLY);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        Load.ViewBase = (ULONG64)(ULONG_PTR)HostView;
+        Load.ViewSize = cbFont;
+        Load.FaceIndex = -1;
+        Load.Flags = UMFD_LOAD_VALIDATE_ONLY;
+        Status = UmfdCallHost(UMFD_OP_LOAD, 0, &Load, sizeof(Load), Host, UMFD_VALIDATE_TIMEOUT_MS, &Reply);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        /* The host's status is only a verdict: never passed on as the caller's NTSTATUS */
+        Result = (const UMFD_LOAD_REPLY *)(Reply + 1);
+        if (!NT_SUCCESS(Reply->Status) || Reply->cbPayload != sizeof(*Result) ||
+            Result->NumFaces == 0 || Result->NumFaces > UMFD_MAX_FACES)
+        {
+            Status = STATUS_INVALID_IMAGE_FORMAT;
+        }
+    }
+
+    if (Reply)
+        UmfdFreeReply(Reply);
+    /* A host that died with the view mapped took its address space with it */
+    if (HostView)
+        MmUnmapViewOfSection(Host, HostView);
+    if (Section)
+        ObDereferenceObject(Section);
+    ObDereferenceObject(Host);
+
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("Font refused by the font driver host (0x%lx)\n", Status);
+        return UmfdRejected;
+    }
+    return UmfdAccepted;
 }
