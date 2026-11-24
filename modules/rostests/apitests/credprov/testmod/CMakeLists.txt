@@ -8,7 +8,7 @@ add_rostests_file(TARGET credprov_testmod)
 
 spec2def(credprov_absent.dll absent.spec ADD_IMPORTLIB)
 add_library(credprov_absent MODULE absent.c ${CMAKE_CURRENT_BINARY_DIR}/credprov_absent.def)
-set_module_type(credprov_absent win32dll)
+set_module_type(credprov_absent win32dll ENTRYPOINT 0)
 add_importlibs(credprov_absent kernel32)
 
 spec2def(credprov_testdep.dll testdep.spec)
