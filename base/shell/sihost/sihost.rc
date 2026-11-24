@@ -1,0 +1,14 @@
+/*
+ * PROJECT:     LiberNT Shell Infrastructure Host
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Shell Infrastructure Host resources
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+#include <windef.h>
+#include <winuser.h>
+
+#define REACTOS_STR_FILE_DESCRIPTION    "Shell Infrastructure Host"
+#define REACTOS_STR_INTERNAL_NAME       "sihost"
+#define REACTOS_STR_ORIGINAL_FILENAME   "sihost.exe"
+#include <reactos/version.rc>
