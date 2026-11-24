@@ -1253,6 +1253,13 @@ jobs:
         Get-ChildItem -Recurse "$out/modules/rostests/tests" -File |
             Where-Object { $_.Name -in 'lowil.exe', 'elevadm.exe' } |
             ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
+        # credprov_apitest needs its harness, test modules and the hooked credprovs build beside it.
+        if (Test-Path "$out/modules/rostests/apitests/credprov") {
+            Get-ChildItem -Recurse "$out/modules/rostests/apitests/credprov" -File |
+                Where-Object { $_.Extension -in '.exe', '.dll' } |
+                ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
+            Copy-Item -Verbose -ErrorAction Stop "$out/dll/win32/credprovs/credprovs_test.dll" apitests-out/amd64/
+        }
         Get-ChildItem -Recurse apitests-out | Select-Object -First 100
 
     - name: Upload the apitests binaries
