@@ -458,6 +458,9 @@ DimFadeQueryInterface(
     _In_ REFIID riid,
     _Out_ void **ppvObject)
 {
+    if (!ppvObject)
+        return E_POINTER;
+
     if (IsEqualIID(riid, &IID_IUnknown))
     {
         *ppvObject = This;
@@ -559,6 +562,7 @@ ShellShutdownDialog(
     DWORD ShutdownOptions, Action, Result;
     IUnknown *FadeHandler = NULL;
     HWND hDimWindow = NULL;
+    HWND hDialogOwner;
 
     UNREFERENCED_PARAMETER(pUserName);
 
@@ -569,13 +573,29 @@ ShellShutdownDialog(
 
     /* Dim the desktop behind the dialog; the dim window owns the dialog so it
      * stays above the topmost overlay. Falls back to no dim on failure. */
-    if (SUCCEEDED(ShellDimScreen(&FadeHandler, &hDimWindow)))
-        Result = LogonUiPowerDialog(hDimWindow, ShutdownOptions, &Action);
-    else
-        Result = LogonUiPowerDialog(hWndParent, ShutdownOptions, &Action);
+    hDialogOwner = SUCCEEDED(ShellDimScreen(&FadeHandler, &hDimWindow)) ? hDimWindow : hWndParent;
+
+    /* The dialog's owner is the dim window, not the caller, so keep the
+     * caller's modality: disable it for the dialog, re-enable it before the
+     * dim comes down, then hand activation back to it. */
+    if (FadeHandler && hWndParent)
+        EnableWindow(hWndParent, FALSE);
+
+    Result = LogonUiPowerDialog(hDialogOwner, ShutdownOptions, &Action);
+
+    if (FadeHandler && hWndParent)
+        EnableWindow(hWndParent, TRUE);
 
     if (FadeHandler)
         FadeHandler->lpVtbl->Release(FadeHandler);
+
+    if (FadeHandler && hWndParent)
+    {
+        if (GetWindowThreadProcessId(hWndParent, NULL) == GetCurrentThreadId())
+            SetActiveWindow(hWndParent);
+        else
+            SetForegroundWindow(hWndParent);
+    }
 
     if (Result)
         SaveShutdownSelState(HKEY_CURRENT_USER, Action);
