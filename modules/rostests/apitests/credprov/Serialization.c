@@ -396,6 +396,108 @@ TestFuzz(void)
     trace("fuzz: %lu of 10000 mutations accepted\n", Accepted);
 }
 
+static NTSTATUS
+UnpackGenericGuarded(_In_reads_bytes_(Size) const VOID *Blob, _In_ ULONG Size, _Out_ PCREDSER_GENERIC Generic)
+{
+    GUARDED Guarded;
+    NTSTATUS Status;
+
+    if (!GuardedPlace(&Guarded, Blob, Size))
+        return STATUS_NO_MEMORY;
+    Status = CredSerUnpackGeneric(Size ? Guarded.Data : NULL, Size, Generic);
+    GuardedFree(&Guarded);
+    return Status;
+}
+
+typedef struct _GENERIC_LAYOUT
+{
+    ULONG Reserved;
+    GUID Type;
+    UNICODE_STRING UserName;
+    UNICODE_STRING Password;
+} GENERIC_LAYOUT;
+
+static VOID
+ExpectBadGeneric(_In_reads_bytes_(Size) const VOID *Blob, _In_ ULONG Size, _In_ PCSTR What)
+{
+    CREDSER_GENERIC Generic;
+    ok(UnpackGenericGuarded(Blob, Size, &Generic) == STATUS_INVALID_PARAMETER, "%s was accepted\n", What);
+}
+
+static VOID
+TestGeneric(void)
+{
+    UCHAR Valid[512], Blob[8192];
+    GENERIC_LAYOUT *Packed = (GENERIC_LAYOUT *)Blob;
+    CREDSER_GENERIC Generic;
+    WCHAR Long[CREDSER_MAX_GENERIC_USER_CHARS + 2];
+    ULONG Size, Cut, Round, Accepted = 0, Bad = 0, i;
+    GUARDED Guarded;
+
+    Size = sizeof(Valid);
+    ok_ntstatus(CredSerPackGeneric(L"DOM\\user", L"pw", Valid, &Size), STATUS_SUCCESS);
+    ok_long(Size, sizeof(GENERIC_LAYOUT) + 20);
+    ok(CredSerIsGeneric(Valid, Size), "a packed generic buffer is not recognized\n");
+    ok_ntstatus(UnpackGenericGuarded(Valid, Size, &Generic), STATUS_SUCCESS);
+    ok_ntstatus(CredSerUnpackGeneric(Valid, Size, &Generic), STATUS_SUCCESS);
+    ok(StringIs(&Generic.UserName, L"DOM\\user") && StringIs(&Generic.Password, L"pw"), "generic round trip mismatch\n");
+#define RESET() CopyMemory(Blob, Valid, Size)
+
+    ok(!CredSerIsGeneric(Valid, sizeof(GENERIC_LAYOUT) - 1), "a short generic header is recognized\n");
+    RESET(); Packed->Reserved = 2; ExpectBadGeneric(Blob, Size, "a nonzero reserved field");
+    RESET(); Packed->Type.Data1 ^= 1; ExpectBadGeneric(Blob, Size, "another type GUID");
+    RESET(); Packed->UserName.Length = Packed->UserName.MaximumLength + 2;
+    ExpectBadGeneric(Blob, Size, "Length > MaximumLength");
+    RESET(); Packed->UserName.Length -= 1; Packed->UserName.MaximumLength -= 1;
+    ExpectBadGeneric(Blob, Size, "an odd length");
+    RESET(); Packed->Password.Length += 2; Packed->Password.MaximumLength += 2;
+    ExpectBadGeneric(Blob, Size, "a string past the end");
+    RESET(); Packed->UserName.Buffer = (PWSTR)(ULONG_PTR)0xFFF0; ExpectBadGeneric(Blob, Size, "an offset past the end");
+    RESET(); Packed->UserName.Buffer = (PWSTR)(ULONG_PTR)0xFFFFFFF0; ExpectBadGeneric(Blob, Size, "a wrapping offset");
+    RESET(); Packed->UserName.Buffer = (PWSTR)(ULONG_PTR)4; ExpectBadGeneric(Blob, Size, "an offset inside the header");
+    RESET(); Packed->UserName.Buffer = (PWSTR)((ULONG_PTR)Packed->UserName.Buffer + 1);
+    ExpectBadGeneric(Blob, Size, "an unaligned offset");
+    RESET(); Packed->Password.Buffer = Packed->UserName.Buffer; ExpectBadGeneric(Blob, Size, "overlapping strings");
+    RESET(); ((PWCHAR)(Blob + (ULONG_PTR)Packed->UserName.Buffer))[1] = 0;
+    ExpectBadGeneric(Blob, Size, "a NUL inside the user name");
+    RESET(); ((PWCHAR)(Blob + (ULONG_PTR)Packed->Password.Buffer))[0] = 0;
+    ok_ntstatus(UnpackGenericGuarded(Blob, Size, &Generic), STATUS_SUCCESS);
+    for (Cut = 0; Cut < Size; Cut++)
+        ExpectBadGeneric(Valid, Cut, "a truncated generic buffer");
+    ok_ntstatus(CredSerUnpackGeneric(Valid, CREDSER_MAX_BLOB_SIZE + 1, &Generic), STATUS_INVALID_PARAMETER);
+
+    for (i = 0; i < ARRAYSIZE(Long) - 1; i++)
+        Long[i] = L'a';
+    Long[CREDSER_MAX_GENERIC_USER_CHARS] = 0;
+    Size = sizeof(Blob);
+    ok_ntstatus(CredSerPackGeneric(Long, L"pw", Blob, &Size), STATUS_SUCCESS);
+    ok_ntstatus(UnpackGenericGuarded(Blob, Size, &Generic), STATUS_SUCCESS);
+    Long[CREDSER_MAX_GENERIC_USER_CHARS] = L'a';
+    Long[CREDSER_MAX_GENERIC_USER_CHARS + 1] = 0;
+    Size = sizeof(Blob);
+    ok_ntstatus(CredSerPackGeneric(Long, L"pw", Blob, &Size), STATUS_INVALID_PARAMETER);
+#undef RESET
+
+    Size = sizeof(Valid);
+    CredSerPackGeneric(L"someuser", L"password", Valid, &Size);
+    if (!GuardedPlace(&Guarded, Valid, Size))
+        return;
+    for (Round = 0; Round < 5000; Round++)
+    {
+        CopyMemory(Guarded.Data, Valid, Size);
+        for (i = 1 + FuzzNext() % 8; i; i--)
+            Guarded.Data[FuzzNext() % Size] = (UCHAR)FuzzNext();
+        if (!NT_SUCCESS(CredSerUnpackGeneric(Guarded.Data, Size, &Generic)))
+            continue;
+        Accepted++;
+        if (!Within(&Generic.UserName, Guarded.Data, Size) || !Within(&Generic.Password, Guarded.Data, Size))
+            Bad++;
+    }
+    GuardedFree(&Guarded);
+    ok_long(Bad, 0);
+    trace("generic fuzz: %lu of 5000 mutations accepted\n", Accepted);
+}
+
 static VOID
 TestCaptureAndFree(void)
 {
@@ -425,5 +527,6 @@ START_TEST(Serialization)
     TestMalformedLogon();
     TestMalformedChangePassword();
     TestFuzz();
+    TestGeneric();
     TestCaptureAndFree();
 }

@@ -18,6 +18,14 @@ extern "C" {
 #define CREDSER_MAX_NAME_CHARS      256
 #define CREDSER_MAX_PASSWORD_CHARS  256
 #define CREDSER_MAX_BLOB_SIZE       (64 * 1024)
+#define CREDSER_MAX_GENERIC_USER_CHARS      513
+#define CREDSER_MAX_GENERIC_PASSWORD_CHARS  1280
+
+typedef struct _CREDSER_GENERIC
+{
+    UNICODE_STRING UserName;
+    UNICODE_STRING Password;
+} CREDSER_GENERIC, *PCREDSER_GENERIC;
 
 typedef struct _CREDSER_PACKAGES
 {
@@ -77,6 +85,14 @@ CredSerPackChangePassword(
     _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
     _Inout_ PULONG BufferSize);
 
+/* The credui generic-credential layout (CRED_PACK_GENERIC_CREDENTIALS). */
+NTSTATUS
+CredSerPackGeneric(
+    _In_ PCWSTR UserName,
+    _In_ PCWSTR Password,
+    _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
+    _Inout_ PULONG BufferSize);
+
 /* Callers capture untrusted input once and unpack only the copy. */
 NTSTATUS
 CredSerCapture(
@@ -101,6 +117,17 @@ CredSerUnpackChangePassword(
     _In_reads_bytes_(Size) const VOID *Copy,
     _In_ ULONG Size,
     _Out_ PCREDSER_CHANGE_PASSWORD Change);
+
+BOOLEAN
+CredSerIsGeneric(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ ULONG Size);
+
+NTSTATUS
+CredSerUnpackGeneric(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ ULONG Size,
+    _Out_ PCREDSER_GENERIC Generic);
 
 /* Free *Msv with CredSerFree(*Msv, *Size). */
 NTSTATUS

@@ -19,6 +19,17 @@ typedef struct _CREDSER_RANGE
     ULONG End;
 } CREDSER_RANGE;
 
+typedef struct _CREDSER_GENERIC_PACKED
+{
+    ULONG Reserved;
+    GUID Type;
+    UNICODE_STRING UserName;
+    UNICODE_STRING Password;
+} CREDSER_GENERIC_PACKED;
+
+static const GUID CredSerGenericType =
+    {0x2a818d91, 0x248e, 0x4af7, {0xb2, 0x0f, 0x09, 0xf6, 0xc1, 0xfd, 0x80, 0x76}};
+
 static SIZE_T
 CredSerStringBytes(_In_opt_ PCWSTR String)
 {
@@ -160,6 +171,60 @@ CredSerPackChangePassword(
     CredSerPutString(Buffer, &Offset, &Request->AccountName, AccountName, AccountBytes, FALSE);
     CredSerPutString(Buffer, &Offset, &Request->OldPassword, OldPassword, OldBytes, FALSE);
     CredSerPutString(Buffer, &Offset, &Request->NewPassword, NewPassword, NewBytes, FALSE);
+
+    *BufferSize = (ULONG)Total;
+    return STATUS_SUCCESS;
+}
+
+static VOID
+CredSerPutRaw(
+    _Inout_ PUCHAR Base,
+    _Inout_ PULONG Offset,
+    _Out_ PUNICODE_STRING Target,
+    _In_ PCWSTR Source,
+    _In_ SIZE_T Bytes)
+{
+    Target->Length = Target->MaximumLength = (USHORT)Bytes;
+    Target->Buffer = (PWSTR)(ULONG_PTR)*Offset;
+    CopyMemory(Base + *Offset, Source, Bytes);
+    *Offset += (ULONG)Bytes;
+}
+
+NTSTATUS
+CredSerPackGeneric(
+    _In_ PCWSTR UserName,
+    _In_ PCWSTR Password,
+    _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
+    _Inout_ PULONG BufferSize)
+{
+    CREDSER_GENERIC_PACKED *Packed;
+    SIZE_T UserBytes, PasswordBytes, Total;
+    ULONG Offset;
+
+    if (!UserName || !Password || !BufferSize)
+        return STATUS_INVALID_PARAMETER;
+
+    UserBytes = CredSerStringBytes(UserName);
+    PasswordBytes = CredSerStringBytes(Password);
+    if (!CredSerFitsLimit(UserBytes, CREDSER_MAX_GENERIC_USER_CHARS) ||
+        !CredSerFitsLimit(PasswordBytes, CREDSER_MAX_GENERIC_PASSWORD_CHARS))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Total = sizeof(CREDSER_GENERIC_PACKED) + UserBytes + PasswordBytes;
+    if (!Buffer || *BufferSize < Total)
+    {
+        *BufferSize = (ULONG)Total;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    ZeroMemory(Buffer, Total);
+    Packed = Buffer;
+    Packed->Type = CredSerGenericType;
+    Offset = sizeof(CREDSER_GENERIC_PACKED);
+    CredSerPutRaw(Buffer, &Offset, &Packed->UserName, UserName, UserBytes);
+    CredSerPutRaw(Buffer, &Offset, &Packed->Password, Password, PasswordBytes);
 
     *BufferSize = (ULONG)Total;
     return STATUS_SUCCESS;
@@ -355,6 +420,46 @@ CredSerUnpackChangePassword(
         Status = STATUS_INVALID_PARAMETER;
     if (!NT_SUCCESS(Status))
         ZeroMemory(Change, sizeof(*Change));
+    return Status;
+}
+
+BOOLEAN
+CredSerIsGeneric(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ ULONG Size)
+{
+    const CREDSER_GENERIC_PACKED *Packed = Copy;
+
+    return Copy && Size >= sizeof(CREDSER_GENERIC_PACKED) && !Packed->Reserved &&
+           !memcmp(&Packed->Type, &CredSerGenericType, sizeof(GUID));
+}
+
+NTSTATUS
+CredSerUnpackGeneric(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ ULONG Size,
+    _Out_ PCREDSER_GENERIC Generic)
+{
+    const CREDSER_GENERIC_PACKED *Packed = Copy;
+    CREDSER_RANGE Ranges[2];
+    const ULONG HeaderSize = sizeof(CREDSER_GENERIC_PACKED);
+    NTSTATUS Status;
+
+    if (!Generic)
+        return STATUS_INVALID_PARAMETER;
+    ZeroMemory(Generic, sizeof(*Generic));
+    if (Size > CREDSER_MAX_BLOB_SIZE || !CredSerIsGeneric(Copy, Size))
+        return STATUS_INVALID_PARAMETER;
+
+    Status = CredSerCheckString(Copy, Size, HeaderSize, &Packed->UserName, CREDSER_MAX_GENERIC_USER_CHARS,
+                                FALSE, TRUE, &Ranges[0], &Generic->UserName);
+    if (NT_SUCCESS(Status))
+        Status = CredSerCheckString(Copy, Size, HeaderSize, &Packed->Password, CREDSER_MAX_GENERIC_PASSWORD_CHARS,
+                                    FALSE, FALSE, &Ranges[1], &Generic->Password);
+    if (NT_SUCCESS(Status) && !CredSerRangesDisjoint(Ranges, ARRAYSIZE(Ranges)))
+        Status = STATUS_INVALID_PARAMETER;
+    if (!NT_SUCCESS(Status))
+        ZeroMemory(Generic, sizeof(*Generic));
     return Status;
 }
 

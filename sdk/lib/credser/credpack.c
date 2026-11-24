@@ -18,15 +18,35 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(credui);
 
-#define CREDPACK_UNSUPPORTED_FLAGS \
-    (CRED_PACK_PROTECTED_CREDENTIALS | CRED_PACK_WOW_BUFFER | CRED_PACK_GENERIC_CREDENTIALS | \
-     CRED_PACK_ID_PROVIDER_CREDENTIALS)
+#define CREDPACK_UNSUPPORTED_FLAGS (CRED_PACK_WOW_BUFFER | CRED_PACK_ID_PROVIDER_CREDENTIALS)
 
 static BOOL
 CredPackFail(_In_ DWORD Error)
 {
     SetLastError(Error);
     return FALSE;
+}
+
+static BOOL
+CredPackGeneric(
+    _In_ LPWSTR pszUserName,
+    _In_ LPWSTR pszPassword,
+    _Out_writes_bytes_opt_(*pcbPackedCredentials) PBYTE pPackedCredentials,
+    _Inout_ DWORD *pcbPackedCredentials)
+{
+    ULONG Size = pPackedCredentials ? *pcbPackedCredentials : 0;
+    NTSTATUS Status;
+
+    Status = CredSerPackGeneric(pszUserName, pszPassword, pPackedCredentials, &Size);
+    if (Status == STATUS_BUFFER_TOO_SMALL)
+    {
+        *pcbPackedCredentials = Size;
+        return CredPackFail(ERROR_INSUFFICIENT_BUFFER);
+    }
+    if (!NT_SUCCESS(Status))
+        return CredPackFail(ERROR_INVALID_PARAMETER);
+    /* Windows leaves *pcbPackedCredentials at the caller's buffer size when a generic pack succeeds. */
+    return TRUE;
 }
 
 BOOL WINAPI
@@ -50,8 +70,16 @@ CredPackAuthenticationBufferW(
         return CredPackFail(ERROR_INVALID_PARAMETER);
     if (dwFlags & CREDPACK_UNSUPPORTED_FLAGS)
     {
-        /* TODO: protected, WOW, generic and identity-provider buffers. */
+        /* TODO: WOW and identity-provider buffers. */
         FIXME("unsupported flags %08lx\n", dwFlags);
+        return CredPackFail(ERROR_NOT_SUPPORTED);
+    }
+    if (dwFlags & CRED_PACK_GENERIC_CREDENTIALS)
+        return CredPackGeneric(pszUserName, pszPassword, pPackedCredentials, pcbPackedCredentials);
+    if (dwFlags & CRED_PACK_PROTECTED_CREDENTIALS)
+    {
+        /* TODO: protect the password once advapi32 has CredProtectW. */
+        FIXME("protected credentials are not supported\n");
         return CredPackFail(ERROR_NOT_SUPPORTED);
     }
 
@@ -104,6 +132,37 @@ CredUnPackCopy(_Out_writes_opt_(Capacity) LPWSTR Out, _In_ DWORD Capacity,
     return TRUE;
 }
 
+static BOOL
+CredUnPackGeneric(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ DWORD Size,
+    _Out_writes_opt_(*pcchMaxUserName) LPWSTR pszUserName,
+    _Inout_ DWORD *pcchMaxUserName,
+    _Inout_opt_ DWORD *pcchMaxDomainName,
+    _Out_writes_opt_(*pcchMaxPassword) LPWSTR pszPassword,
+    _Inout_ DWORD *pcchMaxPassword)
+{
+    CREDSER_GENERIC Generic;
+    DWORD NeedUser, NeedPassword;
+    BOOL Ret;
+
+    if (!NT_SUCCESS(CredSerUnpackGeneric(Copy, Size, &Generic)))
+        return CredPackFail(ERROR_INVALID_PARAMETER);
+
+    NeedUser = Generic.UserName.Length / sizeof(WCHAR) + 1;
+    NeedPassword = Generic.Password.Length / sizeof(WCHAR) + 1;
+    Ret = *pcchMaxUserName >= NeedUser && *pcchMaxPassword >= NeedPassword &&
+          CredUnPackCopy(pszUserName, *pcchMaxUserName, NULL, &Generic.UserName) &&
+          CredUnPackCopy(pszPassword, *pcchMaxPassword, NULL, &Generic.Password);
+
+    *pcchMaxUserName = NeedUser;
+    *pcchMaxPassword = NeedPassword;
+    /* Windows reports no domain for a generic buffer, on success as well. */
+    if (pcchMaxDomainName)
+        *pcchMaxDomainName = 0;
+    return Ret ? TRUE : CredPackFail(ERROR_INSUFFICIENT_BUFFER);
+}
+
 BOOL WINAPI
 CredUnPackAuthenticationBufferW(
     DWORD dwFlags,
@@ -131,6 +190,13 @@ CredUnPackAuthenticationBufferW(
     Status = CredSerCapture(pAuthBuffer, cbAuthBuffer, &Copy);
     if (!NT_SUCCESS(Status))
         return CredPackFail(ERROR_INVALID_PARAMETER);
+    if (CredSerIsGeneric(Copy, cbAuthBuffer))
+    {
+        Ret = CredUnPackGeneric(Copy, cbAuthBuffer, pszUserName, pcchMaxUserName, pcchMaxDomainName, pszPassword,
+                                pcchMaxPassword);
+        CredSerFree(Copy, cbAuthBuffer);
+        return Ret;
+    }
     Status = CredSerUnpackLogon(Copy, cbAuthBuffer, &Logon);
     if (!NT_SUCCESS(Status))
     {
