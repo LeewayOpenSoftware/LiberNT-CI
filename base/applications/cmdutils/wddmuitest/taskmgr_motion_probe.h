@@ -364,7 +364,7 @@ RunTaskmgrMotionProbe(const RECT *WorkArea, BOOL Pacing)
     else
     {
         if (!GetSystemDirectoryW(Path, ARRAYSIZE(Path) - 32)) goto Error;
-        lstrcatW(Path, L"\\taskmgr11.exe");
+        lstrcatW(Path, L"\\taskmgr.exe");
         if (!CreateProcessW(Path, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &Startup, &Process))
             goto Error;
         CloseHandle(Process.hThread);

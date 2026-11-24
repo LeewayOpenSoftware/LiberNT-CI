@@ -1389,7 +1389,7 @@ RunTaskmgrPerf(BOOL ProfileDrag, BOOL PreciseTimer)
         if (Profiler) FreeLibrary(Profiler);
         return 1;
     }
-    lstrcatW(Path, L"\\taskmgr11.exe");
+    lstrcatW(Path, L"\\taskmgr.exe");
     TestPrint("TASKMGR_PERF_BEGIN processors=%lu\n", System.dwNumberOfProcessors);
     for (Phase = 0; Phase < ARRAYSIZE(Names); ++Phase)
     {
