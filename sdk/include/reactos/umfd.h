@@ -46,6 +46,7 @@ typedef struct _UMFD_HEADER
 /* UMFD_OP_LOAD: the font file as a read-only view win32k mapped into the host */
 #define UMFD_LOAD_VALIDATE_ONLY 0x00000001
 #define UMFD_MAX_FACES          4096
+#define UMFD_LOAD_BUDGET_MS     20000   /* the host rejects a file it cannot finish in this time */
 
 typedef struct _UMFD_LOAD_REQUEST
 {

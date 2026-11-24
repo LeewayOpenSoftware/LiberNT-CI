@@ -23,7 +23,8 @@ UmfdExtEscape(
     _In_ INT OutSize,
     _Out_opt_ LPSTR UnsafeOut);
 
-/* Sends one request to ExpectedHost and waits for its reply; the caller must hold no USER or font lock */
+/* Sends one request to ExpectedHost and waits for its reply; the caller must hold no USER or font lock.
+   HostView: a view the request names; on a timeout after delivery the channel takes it (set to NULL) */
 NTSTATUS
 UmfdCallHost(
     _In_ USHORT Op,
@@ -32,6 +33,7 @@ UmfdCallHost(
     _In_ ULONG cbIn,
     _In_ PEPROCESS ExpectedHost,
     _In_ ULONG TimeoutMs,
+    _Inout_opt_ PVOID *HostView,
     _Outptr_result_maybenull_ PUMFD_HEADER *ppReply);
 
 VOID UmfdFreeReply(_In_ PUMFD_HEADER Reply);

@@ -16,7 +16,7 @@ DBG_DEFAULT_CHANNEL(GdiFont);
 
 #define TAG_UMFD                'dfmU'
 #define UMFD_SERVE_WAIT_MS      30000
-#define UMFD_VALIDATE_TIMEOUT_MS 60000  /* opening every face and rendering every glyph once */
+#define UMFD_VALIDATE_TIMEOUT_MS 60000  /* slot wait plus reply; the host gives up at UMFD_LOAD_BUDGET_MS */
 
 typedef enum _UMFD_SLOT_STATE
 {
@@ -42,6 +42,7 @@ typedef struct _UMFD_CHANNEL
     NTSTATUS SlotStatus;
     PUMFD_HEADER Request;       /* owned by the slot until SERVE takes it */
     PUMFD_HEADER Reply;
+    PVOID ParkedView;           /* a timed-out request's view, unmapped at the host's next SERVE */
 } UMFD_CHANNEL, *PUMFD_CHANNEL;
 
 /* One channel per win32k instance (single session today); waitable objects live in nonpaged pool */
@@ -101,6 +102,8 @@ UmfdpChannelDownLocked(VOID)
     PEPROCESS Host = g_Umfd->Host;
 
     g_Umfd->Host = NULL;
+    /* The host exits on any SERVE failure but a timeout, taking the view with it */
+    g_Umfd->ParkedView = NULL;
     if (g_Umfd->SlotState == UmfdSlotPosted || g_Umfd->SlotState == UmfdSlotTaken)
     {
         /* Fail the outstanding request now, not at its timeout */
@@ -305,6 +308,7 @@ UmfdpServe(_In_ INT InSize, _In_opt_ LPSTR UnsafeIn, _In_ INT OutSize, _Out_opt_
 {
     PEPROCESS Process = PsGetCurrentProcess();
     PUMFD_HEADER Incoming, Request = NULL;
+    PVOID Parked;
     LARGE_INTEGER Timeout;
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG cbRequest = 0;
@@ -329,7 +333,13 @@ UmfdpServe(_In_ INT InSize, _In_opt_ LPSTR UnsafeIn, _In_ INT OutSize, _Out_opt_
         return 0;
     }
     g_Umfd->ServeActive = TRUE;
+    Parked = g_Umfd->ParkedView;
+    g_Umfd->ParkedView = NULL;
     ExReleaseFastMutex(&g_Umfd->Lock);
+
+    /* The single-threaded host is back in SERVE, so it is done reading that view */
+    if (Parked)
+        MmUnmapViewOfSection(Process, Parked);
 
     _SEH2_TRY
     {
@@ -518,6 +528,16 @@ UmfdExtEscape(
     return 0;
 }
 
+/* Relative timeout for what is left until Deadline (interrupt time); 0 once it has passed */
+static PLARGE_INTEGER
+UmfdpRemaining(_In_ ULONGLONG Deadline, _Out_ PLARGE_INTEGER Timeout)
+{
+    ULONGLONG Now = KeQueryInterruptTime();
+
+    Timeout->QuadPart = (Now >= Deadline) ? 0 : -(LONGLONG)(Deadline - Now);
+    return Timeout;
+}
+
 NTSTATUS
 UmfdCallHost(
     _In_ USHORT Op,
@@ -526,11 +546,13 @@ UmfdCallHost(
     _In_ ULONG cbIn,
     _In_ PEPROCESS ExpectedHost,
     _In_ ULONG TimeoutMs,
+    _Inout_opt_ PVOID *HostView,
     _Outptr_result_maybenull_ PUMFD_HEADER *ppReply)
 {
     PUMFD_HEADER Request, Reply = NULL;
     PEPROCESS Dead;
     LARGE_INTEGER Timeout;
+    ULONGLONG Deadline;
     NTSTATUS Status;
 
     *ppReply = NULL;
@@ -555,8 +577,10 @@ UmfdCallHost(
     if (cbIn)
         RtlCopyMemory(Request + 1, pIn, cbIn);
 
-    Timeout.QuadPart = -(LONGLONG)TimeoutMs * 10000;
-    Status = KeWaitForSingleObject(&g_Umfd->SlotFree, Executive, KernelMode, FALSE, &Timeout);
+    /* One deadline for the slot wait and the reply wait together */
+    Deadline = KeQueryInterruptTime() + (ULONGLONG)TimeoutMs * 10000;
+    Status = KeWaitForSingleObject(&g_Umfd->SlotFree, Executive, KernelMode, FALSE,
+                                   UmfdpRemaining(Deadline, &Timeout));
     if (Status != STATUS_SUCCESS)
     {
         ExFreePoolWithTag(Request, TAG_UMFD);
@@ -588,7 +612,7 @@ UmfdCallHost(
     KeSetEvent(&g_Umfd->RequestPosted, IO_NO_INCREMENT, FALSE);
     ExReleaseFastMutex(&g_Umfd->Lock);
 
-    KeWaitForSingleObject(&g_Umfd->ReplyReady, Executive, KernelMode, FALSE, &Timeout);
+    KeWaitForSingleObject(&g_Umfd->ReplyReady, Executive, KernelMode, FALSE, UmfdpRemaining(Deadline, &Timeout));
 
     ExAcquireFastMutex(&g_Umfd->Lock);
     if (g_Umfd->SlotState == UmfdSlotDone)
@@ -600,6 +624,13 @@ UmfdCallHost(
     {
         /* The id dies with the slot, so a late reply is dropped */
         Status = STATUS_IO_TIMEOUT;
+        /* Delivered and maybe still being read: never unmap it under the host */
+        if (g_Umfd->SlotState == UmfdSlotTaken && HostView && *HostView)
+        {
+            if (g_Umfd->ParkedView == NULL)
+                g_Umfd->ParkedView = *HostView;
+            *HostView = NULL;
+        }
     }
     Request = g_Umfd->Request;
     g_Umfd->Request = NULL;
@@ -650,6 +681,9 @@ UmfdProcessCleanup(_In_ PEPROCESS Process)
  * before the kernel parses it. A filter, not isolation: it only catches files
  * that fail deterministically in the same FreeType build.
  *
+ * Every font add is serialised through the one slot. After the first host, a
+ * dead host means every font is refused until a new host registers.
+ *
  * The caller holds no lock (U1). Nothing it read under a lock is used after
  * the wait: the font bytes are its own buffer, so there is nothing to revalidate.
  */
@@ -692,7 +726,7 @@ UmfdValidateFont(_In_reads_bytes_(cbFont) const VOID *pFont, _In_ SIZE_T cbFont)
         return UmfdRejected;
     }
 
-    /* A private copy: the host never sees the kernel's buffer, and cannot write to its view */
+    /* A private copy: the host never sees the kernel's buffer, and nothing reads the view back */
     MaxSize.QuadPart = cbFont;
     Status = MmCreateSection(&Section, SECTION_ALL_ACCESS, NULL, &MaxSize, PAGE_READWRITE, SEC_COMMIT, NULL, NULL);
     if (NT_SUCCESS(Status))
@@ -710,7 +744,8 @@ UmfdValidateFont(_In_reads_bytes_(cbFont) const VOID *pFont, _In_ SIZE_T cbFont)
         Load.ViewSize = cbFont;
         Load.FaceIndex = -1;
         Load.Flags = UMFD_LOAD_VALIDATE_ONLY;
-        Status = UmfdCallHost(UMFD_OP_LOAD, 0, &Load, sizeof(Load), Host, UMFD_VALIDATE_TIMEOUT_MS, &Reply);
+        Status = UmfdCallHost(UMFD_OP_LOAD, 0, &Load, sizeof(Load), Host, UMFD_VALIDATE_TIMEOUT_MS,
+                              &HostView, &Reply);
     }
     if (NT_SUCCESS(Status))
     {
@@ -725,7 +760,7 @@ UmfdValidateFont(_In_reads_bytes_(cbFont) const VOID *pFont, _In_ SIZE_T cbFont)
 
     if (Reply)
         UmfdFreeReply(Reply);
-    /* A host that died with the view mapped took its address space with it */
+    /* Not delivered, answered, or the host is gone; a parked view is the channel's now */
     if (HostView)
         MmUnmapViewOfSection(Host, HostView);
     if (Section)
