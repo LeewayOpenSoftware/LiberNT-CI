@@ -326,6 +326,26 @@ Test_Providers(PCWSTR Exe, PCWSTR Endpoint, PSID Own, PCWSTR Trace)
     Code = WaitExit(Process, 5000);
     ok(Code == 0, "hang-startup run exit %lu\n", Code);
 
+    /* R4: a provider that is merely slow delivers its page after the fallback took over;
+     * that late page is dropped, the fallback page stands, and the host still exits 0. */
+    ResetRun();
+    DeleteFileW(Trace);
+    g_Faults = 0;
+    SetEnvironmentVariableW(L"CREDPROV_TESTMOD_MODE", L"slow-startup");
+    Process = LaunchHost(Exe, Endpoint, Own, Trace, NULL);
+    SetEnvironmentVariableW(L"CREDPROV_TESTMOD_MODE", NULL);
+    ok(Process != NULL, "launch (slow-startup)\n");
+    ok(WaitForSingleObject(g_ReadyEvent, 5000) == WAIT_OBJECT_0, "no Ready (slow-startup)\n");
+    PostCmd(WluiCmdRequestCredentials, 0, NULL, NULL);
+    Sleep(17000);   /* 10 s deadline, fallback page, then the slow thread's late page at ~13 s */
+    ok(g_Faults == 1, "slow-startup fault reports %ld (expected 1)\n", g_Faults);
+    ok(IsEqualGUID(&g_FaultClsid, &CLSID_NULL), "slow-startup fault CLSID is not CLSID_NULL\n");
+    ok(TraceHas(Trace, "providers 1"), "no fallback enumeration after the slow start-up\n");
+    ok(TraceHas(Trace, "page-dropped"), "the late page of the slow thread was not dropped\n");
+    PostCmd(WluiCmdDismiss, 0, NULL, NULL);
+    Code = WaitExit(Process, 5000);
+    ok(Code == 0, "slow-startup run exit %lu (expected 0, not 3)\n", Code);
+
     /* A provider that hangs in GetSerialization is dropped within the call timeout; the
      * host reports it, stays alive and comes back with the remaining provider's page. */
     ResetRun();

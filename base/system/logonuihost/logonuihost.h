@@ -72,6 +72,7 @@ typedef struct _LUH_FIELD
 
 typedef struct _LUH_PAGE
 {
+    PVOID Owner;                /* the provider thread that built it; stale pages are dropped */
     DWORD Scenario;
     DWORD Count;
     DWORD SubmitField;

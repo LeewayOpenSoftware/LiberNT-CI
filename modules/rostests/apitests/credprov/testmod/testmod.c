@@ -257,9 +257,12 @@ Provider_GetFieldDescriptorAt(ICredentialProvider *iface, DWORD dwIndex, CREDENT
 static HRESULT WINAPI
 Provider_GetCredentialCount(ICredentialProvider *iface, DWORD *pdwCount, DWORD *pdwDefault, BOOL *pbAutoLogonWithDefault)
 {
-    /* hang-startup: wedge before any credential exists, where the host cannot name a CLSID. */
+    /* hang-startup: wedge before any credential exists, where the host cannot name a CLSID.
+     * slow-startup: answer late, after the host has already moved on to its fallback tier. */
     if (wcscmp(TestMode(), L"hang-startup") == 0)
         Sleep(INFINITE);
+    if (wcscmp(TestMode(), L"slow-startup") == 0)
+        Sleep(13000);
     *pdwCount = TestMode()[0] ? 1 : 0;
     *pdwDefault = CREDENTIAL_PROVIDER_NO_DEFAULT;
     *pbAutoLogonWithDefault = FALSE;

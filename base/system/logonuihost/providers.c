@@ -363,14 +363,14 @@ ProviderThread(
     hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     if (FAILED(hr))
     {
-        PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_FAILED, 0);
+        PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_FAILED, (LPARAM)T);
         return 0;
     }
 
     Events = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Events));
     if (Events == NULL)
     {
-        PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_FAILED, 0);
+        PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_FAILED, (LPARAM)T);
         CoUninitialize();
         return 0;
     }
@@ -391,23 +391,29 @@ ProviderThread(
         ICredentialProviderCredentialEvents_Release(&Events->ICredentialProviderCredentialEvents_iface);
         CredProvHostFreeProviders(T->Set);
         T->Set = NULL;
-        PostMessageW(g_Window, WM_LUH_PAGE, Why, 0);
+        /* A thread the UI already gave up on must not steer it; the UI re-checks the owner. */
+        if (!T->Abandoned)
+            PostMessageW(g_Window, WM_LUH_PAGE, Why, (LPARAM)T);
         CoUninitialize();
         return 0;
     }
 
     /* The page is handed to the UI thread, which frees it when it tears the page down. */
     {
-        PLUH_PAGE Page = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Page));
+        PLUH_PAGE Page = T->Abandoned ? NULL : HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Page));
         if (Page != NULL)
         {
             BuildPage(T, Page);
-            if (!PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_READY, (LPARAM)Page))
+            Page->Owner = T;
+            if (T->Abandoned || !PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_READY, (LPARAM)Page))
+            {
+                SecureZeroMemory(Page, sizeof(*Page));
                 HeapFree(GetProcessHeap(), 0, Page);
+            }
         }
-        else
+        else if (!T->Abandoned)
         {
-            PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_FAILED, 0);
+            PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_FAILED, (LPARAM)T);
         }
     }
 

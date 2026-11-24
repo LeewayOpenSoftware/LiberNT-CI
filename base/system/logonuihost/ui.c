@@ -598,6 +598,20 @@ LuhWindowProc(
         }
 
         case WM_LUH_PAGE:
+        {
+            /* A slow start-up thread may still deliver after the UI moved on: its page is
+             * dropped and the current thread's deadline is left running. */
+            PVOID Owner = (wParam == LUH_PAGE_READY && lParam) ? ((PLUH_PAGE)lParam)->Owner : (PVOID)lParam;
+            if (!LuhProvidersIsCurrent(Owner))
+            {
+                if (wParam == LUH_PAGE_READY && lParam)
+                {
+                    SecureZeroMemory((PVOID)lParam, sizeof(LUH_PAGE));
+                    HeapFree(GetProcessHeap(), 0, (PVOID)lParam);
+                }
+                LuhTrace("page-dropped", NULL);
+                return 0;
+            }
             KillTimer(Window, LUH_TIMER_STARTUP);
             if (wParam == LUH_PAGE_READY && lParam)
             {
@@ -613,6 +627,7 @@ LuhWindowProc(
                 LuhBeginExit(Window, WluiExitProviderInitFailed, LUH_EXIT_NOT_SUPPORTED);
             }
             return 0;
+        }
 
         case WM_LUH_FIELD:
         {
