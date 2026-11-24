@@ -34,7 +34,7 @@ WriteString(LPCWSTR pszKey, LPCWSTR pszValue, LPCWSTR pszData)
     HKEY hKey;
     if (!pszData[0] || RegCreateKeyExW(HKEY_CURRENT_USER, pszKey, 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL))
         return;
-    RegSetValueExW(hKey, pszValue, 0, REG_SZ, (const BYTE *)pszData, (lstrlenW(pszData) + 1) * sizeof(WCHAR));
+    RegSetValueExW(hKey, pszValue, 0, REG_SZ, reinterpret_cast<const BYTE *>(pszData), (lstrlenW(pszData) + 1) * sizeof(WCHAR));
     RegCloseKey(hKey);
 }
 
@@ -115,6 +115,7 @@ TestMonitors(IDesktopWallpaper *pdw)
     ok_hr(hr, S_OK);
     ok(cMonitors >= 1, "Expected at least one monitor, got %u\n", cMonitors);
 
+    LPWSTR Ids[16] = { NULL };
     for (UINT i = 0; i < cMonitors; ++i)
     {
         pszId = NULL;
@@ -124,13 +125,23 @@ TestMonitors(IDesktopWallpaper *pdw)
         if (!pszId)
             continue;
 
+        /* IDs are opaque but must be unique and round-trip through GetMonitorRECT. */
+        for (UINT j = 0; j < i && j < ARRAYSIZE(Ids); ++j)
+            ok(!Ids[j] || lstrcmpiW(Ids[j], pszId), "Monitors %u and %u share the ID '%ls'\n", j, i, pszId);
+
         SetRectEmpty(&rc);
         hr = pdw->GetMonitorRECT(pszId, &rc);
         ok_hr(hr, S_OK);
         ok(rc.right > rc.left && rc.bottom > rc.top, "Monitor %u rect is empty (%ld,%ld)-(%ld,%ld)\n",
            i, rc.left, rc.top, rc.right, rc.bottom);
-        CoTaskMemFree(pszId);
+
+        if (i < ARRAYSIZE(Ids))
+            Ids[i] = pszId;
+        else
+            CoTaskMemFree(pszId);
     }
+    for (UINT i = 0; i < ARRAYSIZE(Ids); ++i)
+        CoTaskMemFree(Ids[i]);
 
     pszId = (LPWSTR)(ULONG_PTR)1;
     hr = pdw->GetMonitorDevicePathAt(cMonitors, &pszId);
@@ -222,9 +233,12 @@ TestPosition(IDesktopWallpaper *pdw)
         ok(Position == Positions[i], "GetPosition returned %d, expected %d\n", Position, Positions[i]);
     }
 
-    /* Span is optional until win32k gains a span mode. */
+    /* Orosi's win32k has no span mode yet. */
     hr = pdw->SetPosition(DWPOS_SPAN);
-    ok(hr == S_OK || hr == HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED), "SetPosition(DWPOS_SPAN) returned 0x%lx\n", hr);
+    if (is_reactos())
+        ok_hr(hr, HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
+    else
+        ok_hr(hr, S_OK);
 
     hr = pdw->SetPosition((DESKTOP_WALLPAPER_POSITION)(DWPOS_SPAN + 1));
     ok(FAILED(hr), "SetPosition(invalid) returned 0x%lx\n", hr);
@@ -270,7 +284,7 @@ START_TEST(DesktopWallpaper)
     hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     ok_hr(hr, S_OK);
 
-    hr = CoCreateInstance(CLSID_DesktopWallpaper, NULL, CLSCTX_INPROC_SERVER, IID_IDesktopWallpaper, reinterpret_cast<void **>(&pdw));
+    hr = CoCreateInstance(CLSID_DesktopWallpaper, NULL, CLSCTX_ALL, IID_IDesktopWallpaper, reinterpret_cast<void **>(&pdw));
     if (FAILED(hr) && GetNTVersion() < _WIN32_WINNT_WIN8)
     {
         skip("IDesktopWallpaper needs Windows 8 or later (0x%lx)\n", hr);
