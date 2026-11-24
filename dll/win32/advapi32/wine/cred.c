@@ -2164,3 +2164,320 @@ BOOL WINAPI CredIsMarshaledCredentialA(LPCSTR name)
     free(nameW);
     return res;
 }
+
+/* Windows marks protected credentials with "@@D" and these control characters. */
+static const WCHAR cred_protect_prefix[] = {'@', '@', 'D', 7, 8, 12, 10, 13};
+#define CRED_PROTECT_PREFIX_LEN ARRAY_SIZE(cred_protect_prefix)
+
+static UINT cred_encoded_len(UINT bytes)
+{
+    return bytes / 3 * 4 + (bytes % 3 ? bytes % 3 + 1 : 0);
+}
+
+static DWORD cred_protected_blob(const WCHAR *str, BYTE **blob, DWORD *blob_len)
+{
+    UINT len = lstrlenW(str), enc;
+
+    *blob = NULL;
+    *blob_len = 0;
+    if (len <= CRED_PROTECT_PREFIX_LEN || memcmp(str, cred_protect_prefix, sizeof(cred_protect_prefix)))
+        return ERROR_INVALID_DATA;
+    enc = len - CRED_PROTECT_PREFIX_LEN;
+    if (enc % 4 == 1)
+        return ERROR_INVALID_DATA;
+    *blob_len = enc / 4 * 3 + (enc % 4 ? enc % 4 - 1 : 0);
+    if (!(*blob = malloc(*blob_len + 3)))
+        return ERROR_OUTOFMEMORY;
+    if (!cred_decode(str + CRED_PROTECT_PREFIX_LEN, enc, (char *)*blob))
+    {
+        free(*blob);
+        *blob = NULL;
+        return ERROR_INVALID_DATA;
+    }
+    return ERROR_SUCCESS;
+}
+
+static HANDLE cred_revert_to_self(BOOL as_self)
+{
+    HANDLE token = NULL;
+
+    if (as_self && OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &token) &&
+        !SetThreadToken(NULL, NULL))
+    {
+        CloseHandle(token);
+        token = NULL;
+    }
+    return token;
+}
+
+static void cred_restore_token(HANDLE token)
+{
+    if (!token)
+        return;
+    SetThreadToken(NULL, token);
+    CloseHandle(token);
+}
+
+/******************************************************************************
+ * CredProtectW [ADVAPI32.@]
+ */
+BOOL WINAPI CredProtectW(BOOL as_self, LPWSTR creds, DWORD cch, LPWSTR out, DWORD *out_cch,
+                         CRED_PROTECTION_TYPE *type)
+{
+    BYTE *blob;
+    DWORD blob_len, need, err;
+    HANDLE token;
+
+    TRACE("(%d, %p, %lu, %p, %p, %p)\n", as_self, creds, cch, out, out_cch, type);
+
+    if (!creds || !out_cch || cch > MAXDWORD / sizeof(WCHAR))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    token = cred_revert_to_self(as_self);
+    err = cred_dpapi_protect((const BYTE *)creds, cch * sizeof(WCHAR), &blob, &blob_len);
+    cred_restore_token(token);
+    if (err != ERROR_SUCCESS)
+    {
+        SetLastError(err);
+        return FALSE;
+    }
+
+    need = CRED_PROTECT_PREFIX_LEN + cred_encoded_len(blob_len) + 1;
+    if (!out || *out_cch < need)
+    {
+        free(blob);
+        *out_cch = need;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    memcpy(out, cred_protect_prefix, sizeof(cred_protect_prefix));
+    out[CRED_PROTECT_PREFIX_LEN + cred_encode((const char *)blob, blob_len, out + CRED_PROTECT_PREFIX_LEN)] = 0;
+    free(blob);
+    /* Windows reports 0 characters after protecting an empty count. */
+    *out_cch = cch ? need : 0;
+    if (type)
+        *type = CredUserProtection;
+    return TRUE;
+}
+
+/******************************************************************************
+ * CredUnprotectW [ADVAPI32.@]
+ */
+BOOL WINAPI CredUnprotectW(BOOL as_self, LPWSTR prot, DWORD cch, LPWSTR out, DWORD *out_cch)
+{
+    BYTE *blob, *plain;
+    DWORD blob_len, plain_len, chars, need, err;
+    HANDLE token;
+
+    TRACE("(%d, %p, %lu, %p, %p)\n", as_self, prot, cch, out, out_cch);
+
+    if (!prot || !out_cch)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    err = cred_protected_blob(prot, &blob, &blob_len);
+    if (err == ERROR_INVALID_DATA)
+    {
+        /* Windows returns a string that is not protected unchanged. */
+        if (!out || *out_cch < cch)
+        {
+            *out_cch = cch;
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            return FALSE;
+        }
+        memcpy(out, prot, cch * sizeof(WCHAR));
+        *out_cch = cch;
+        return TRUE;
+    }
+    if (err != ERROR_SUCCESS)
+    {
+        SetLastError(err);
+        return FALSE;
+    }
+
+    token = cred_revert_to_self(as_self);
+    err = cred_dpapi_unprotect(blob, blob_len, &plain, &plain_len);
+    cred_restore_token(token);
+    free(blob);
+    if (err != ERROR_SUCCESS)
+    {
+        SetLastError(err);
+        return FALSE;
+    }
+
+    chars = plain_len / sizeof(WCHAR);
+    need = (chars && !((const WCHAR *)plain)[chars - 1]) ? chars : chars + 1;
+    if (!out || *out_cch < need)
+    {
+        SecureZeroMemory(plain, plain_len);
+        free(plain);
+        *out_cch = need;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    memcpy(out, plain, chars * sizeof(WCHAR));
+    out[need - 1] = 0;
+    SecureZeroMemory(plain, plain_len);
+    free(plain);
+    *out_cch = chars;
+    return TRUE;
+}
+
+/******************************************************************************
+ * CredIsProtectedW [ADVAPI32.@]
+ */
+BOOL WINAPI CredIsProtectedW(LPWSTR prot, CRED_PROTECTION_TYPE *type)
+{
+    BYTE *blob;
+    DWORD blob_len;
+
+    TRACE("(%p, %p)\n", prot, type);
+
+    if (!prot || !type)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    *type = cred_protected_blob(prot, &blob, &blob_len) == ERROR_SUCCESS ? CredUserProtection : CredUnprotected;
+    free(blob);
+    return TRUE;
+}
+
+static WCHAR *cred_strdup_aw(const char *str, DWORD cch, DWORD *wide_cch)
+{
+    WCHAR *wide;
+    int len = cch ? MultiByteToWideChar(CP_ACP, 0, str, cch, NULL, 0) : 0;
+
+    if (!(wide = malloc((len + 1) * sizeof(WCHAR))))
+        return NULL;
+    if (len)
+        MultiByteToWideChar(CP_ACP, 0, str, cch, wide, len);
+    wide[len] = 0;
+    *wide_cch = len;
+    return wide;
+}
+
+static void cred_free_secret(WCHAR *str, DWORD cch)
+{
+    if (!str)
+        return;
+    SecureZeroMemory(str, (cch + 1) * sizeof(WCHAR));
+    free(str);
+}
+
+/******************************************************************************
+ * CredProtectA [ADVAPI32.@]
+ */
+BOOL WINAPI CredProtectA(BOOL as_self, LPSTR creds, DWORD cch, LPSTR out, DWORD *out_cch,
+                         CRED_PROTECTION_TYPE *type)
+{
+    WCHAR *credsW, *outW = NULL;
+    DWORD credsW_cch, n;
+    BOOL ret;
+
+    TRACE("(%d, %p, %lu, %p, %p, %p)\n", as_self, creds, cch, out, out_cch, type);
+
+    if (!creds || !out_cch)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!(credsW = cred_strdup_aw(creds, cch, &credsW_cch)))
+    {
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    n = *out_cch;
+    if (out && n && !(outW = malloc(n * sizeof(WCHAR))))
+    {
+        cred_free_secret(credsW, credsW_cch);
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    ret = CredProtectW(as_self, credsW, credsW_cch, outW, &n, type);
+    if (ret)
+        WideCharToMultiByte(CP_ACP, 0, outW, -1, out, *out_cch, NULL, NULL);
+    *out_cch = n;
+    free(outW);
+    cred_free_secret(credsW, credsW_cch);
+    return ret;
+}
+
+/******************************************************************************
+ * CredUnprotectA [ADVAPI32.@]
+ */
+BOOL WINAPI CredUnprotectA(BOOL as_self, LPSTR prot, DWORD cch, LPSTR out, DWORD *out_cch)
+{
+    WCHAR *protW, *outW = NULL;
+    DWORD protW_cch, n, alloc;
+    BOOL ret;
+    int len;
+
+    TRACE("(%d, %p, %lu, %p, %p)\n", as_self, prot, cch, out, out_cch);
+
+    if (!prot || !out_cch)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!(protW = cred_strdup_aw(prot, cch, &protW_cch)))
+    {
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    n = alloc = *out_cch;
+    if (out && n && !(outW = malloc(n * sizeof(WCHAR))))
+    {
+        cred_free_secret(protW, protW_cch);
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    ret = CredUnprotectW(as_self, protW, protW_cch, outW, &n);
+    if (ret && n)
+    {
+        len = WideCharToMultiByte(CP_ACP, 0, outW, n, out, *out_cch, NULL, NULL);
+        if (!len)
+        {
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            ret = FALSE;
+        }
+        n = len;
+    }
+    *out_cch = n;
+    if (outW)
+    {
+        SecureZeroMemory(outW, alloc * sizeof(WCHAR));
+        free(outW);
+    }
+    cred_free_secret(protW, protW_cch);
+    return ret;
+}
+
+/******************************************************************************
+ * CredIsProtectedA [ADVAPI32.@]
+ */
+BOOL WINAPI CredIsProtectedA(LPSTR prot, CRED_PROTECTION_TYPE *type)
+{
+    WCHAR *protW;
+    DWORD protW_cch;
+    BOOL ret;
+
+    TRACE("(%p, %p)\n", prot, type);
+
+    if (!prot || !type)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!(protW = cred_strdup_aw(prot, lstrlenA(prot) + 1, &protW_cch)))
+    {
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    ret = CredIsProtectedW(protW, type);
+    free(protW);
+    return ret;
+}

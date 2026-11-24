@@ -4,6 +4,7 @@ add_subdirectory(testmod)
 
 list(APPEND SOURCE
     Abi.c
+    CredProtect.c
     CredUIPack.c
     Framework.c
     PasswordProvider.c
