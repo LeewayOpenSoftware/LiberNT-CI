@@ -6,7 +6,7 @@
 #define IDS_STATUS                  103
 #define IDS_COMPLETED               104
 #define IDS_CONTROL_FAILED          105
-#define IDS_CONTROL_NO_DATA         106
+#define IDS_DBFLAG_INVALID          106
 #define IDS_FLAGS                   107
 #define IDS_CONNECTION              108
 #define IDS_TRUSTED_DC_NAME         109

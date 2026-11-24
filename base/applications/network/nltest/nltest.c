@@ -229,12 +229,9 @@ NetlogonControl(DWORD FunctionCode, DWORD QueryLevel, PBYTE Data, PBYTE *Buffer)
     if (Status != NERR_Success)
         return Fail(IDS_CONTROL_FAILED, Status);
 
-    /* A server that reports success without an information block is not trusted */
+    /* A server that reports success without an information block is a failure of the call */
     if (*Buffer == NULL)
-    {
-        ConResPuts(StdOut, IDS_CONTROL_NO_DATA);
-        return ERROR_INVALID_DATA;
-    }
+        return Fail(IDS_CONTROL_FAILED, ERROR_INVALID_DATA);
     return NERR_Success;
 }
 
@@ -351,8 +348,14 @@ DoFindUser(PCWSTR UserName)
 static DWORD
 DoDbFlag(PCWSTR HexFlags)
 {
-    DWORD Flags = wcstoul(HexFlags, NULL, 16);
+    PWSTR End;
+    DWORD Flags = wcstoul(HexFlags, &End, 16);
 
+    if (*HexFlags == UNICODE_NULL || *End != UNICODE_NULL)
+    {
+        ConResPuts(StdOut, IDS_DBFLAG_INVALID);
+        return ERROR_INVALID_PARAMETER;
+    }
     return DoControlLevel1(NETLOGON_CONTROL_SET_DBFLAG, (PBYTE)&Flags);
 }
 
@@ -368,7 +371,10 @@ DoDcName(PCWSTR DomainName)
     if (Status != NERR_Success)
         return Fail(IDS_GETDCNAME_FAILED, Status);
 
-    ConResPrintf(StdOut, IDS_PDC_FOR_DOMAIN, DomainName, Buffer ? (PWSTR)Buffer : L"");
+    if (Buffer == NULL)
+        return Fail(IDS_GETDCNAME_FAILED, ERROR_INVALID_DATA);
+
+    ConResPrintf(StdOut, IDS_PDC_FOR_DOMAIN, DomainName, (PWSTR)Buffer);
     NetApiBufferFree(Buffer);
     ConResPuts(StdOut, IDS_COMPLETED);
     return NERR_Success;
@@ -392,10 +398,7 @@ DoDsGetDc(PCWSTR DomainName, PCWSTR SiteName, PCWSTR AccountName, ULONG Flags)
     if (Status != NERR_Success)
         return Fail(IDS_DSGETDC_FAILED, Status);
     if (Info == NULL)
-    {
-        ConResPuts(StdOut, IDS_CONTROL_NO_DATA);
-        return ERROR_INVALID_DATA;
-    }
+        return Fail(IDS_DSGETDC_FAILED, ERROR_INVALID_DATA);
 
     Guid = GuidToString(&Info->DomainGuid);
     FormatDcFlags(Info->Flags, FlagNames, ARRAYSIZE(FlagNames));
@@ -426,10 +429,7 @@ DoDcList(PCWSTR DomainName)
     if (Status != NERR_Success)
         return Fail(IDS_DCLIST_NO_DC, Status);
     if (Dc == NULL)
-    {
-        ConResPuts(StdOut, IDS_CONTROL_NO_DATA);
-        return ERROR_INVALID_DATA;
-    }
+        return Fail(IDS_DCLIST_NO_DC, ERROR_INVALID_DATA);
 
     if (Dc->Flags & DS_DS_FLAG)
         ConResPrintf(StdOut, IDS_DCLIST_FROM, DomainName, Dc->DomainControllerName);
@@ -470,7 +470,10 @@ DoDsGetSite(VOID)
     if (Status != NERR_Success)
         return Fail(IDS_SITE_FAILED, Status);
 
-    ConResPrintf(StdOut, IDS_NAME_LINE, SiteName ? SiteName : L"");
+    if (SiteName == NULL)
+        return Fail(IDS_SITE_FAILED, ERROR_INVALID_DATA);
+
+    ConResPrintf(StdOut, IDS_NAME_LINE, SiteName);
     NetApiBufferFree(SiteName);
     ConResPuts(StdOut, IDS_COMPLETED);
     return NERR_Success;
@@ -586,7 +589,10 @@ DoParentDomain(VOID)
     if (Status != NERR_Success)
         return Fail(IDS_PARENT_FAILED, Status);
 
-    ConResPrintf(StdOut, IDS_PARENT_DOMAIN, DomainName ? DomainName : L"", (ULONG)PdcSameSite);
+    if (DomainName == NULL)
+        return Fail(IDS_PARENT_FAILED, ERROR_INVALID_DATA);
+
+    ConResPrintf(StdOut, IDS_PARENT_DOMAIN, DomainName, (ULONG)PdcSameSite);
     NetApiBufferFree(DomainName);
     ConResPuts(StdOut, IDS_COMPLETED);
     return NERR_Success;
@@ -730,11 +736,11 @@ DoDsGetForestTrustInfo(PCWSTR DomainName, BOOL UpdateTdo)
     if (Status != NERR_Success)
         return Fail(IDS_FTI_FAILED, Status);
 
-    if (Info)
-    {
-        PrintForestTrustInfo(Info);
-        NetApiBufferFree(Info);
-    }
+    if (Info == NULL)
+        return Fail(IDS_FTI_FAILED, ERROR_INVALID_DATA);
+
+    PrintForestTrustInfo(Info);
+    NetApiBufferFree(Info);
     ConResPuts(StdOut, IDS_COMPLETED);
     return NERR_Success;
 }
@@ -787,11 +793,16 @@ DoLsaQueryForestTrustInfo(PCWSTR ForestName)
         return Status;
     }
 
-    if (Info)
+    if (Info == NULL)
     {
-        PrintForestTrustInfo(Info);
-        LsaFreeMemory(Info);
+        LsaClose(Policy);
+        ConResPuts(StdOut, IDS_LSA_QUERY_FAILED);
+        PrintStatus(ERROR_INVALID_DATA);
+        return ERROR_INVALID_DATA;
     }
+
+    PrintForestTrustInfo(Info);
+    LsaFreeMemory(Info);
     LsaClose(Policy);
     ConResPuts(StdOut, IDS_COMPLETED);
     return NERR_Success;

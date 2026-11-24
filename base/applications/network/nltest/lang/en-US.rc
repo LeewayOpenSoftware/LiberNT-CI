@@ -58,7 +58,7 @@ BEGIN
     IDS_STATUS "Status = %lu 0x%lx %s\n"
     IDS_COMPLETED "The command completed successfully\n"
     IDS_CONTROL_FAILED "I_NetLogonControl failed: "
-    IDS_CONTROL_NO_DATA "The server returned success but no information\n"
+    IDS_DBFLAG_INVALID "/DBFLAG:<HexFlags> must be a hexadecimal number.\n"
     IDS_FLAGS "Flags: %lx%s\n"
     IDS_CONNECTION "Connection "
     IDS_TRUSTED_DC_NAME "Trusted DC Name %s \n"

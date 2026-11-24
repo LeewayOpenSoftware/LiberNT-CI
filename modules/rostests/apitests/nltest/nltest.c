@@ -139,6 +139,25 @@ static void test_no_dc_verb(const char *args, const char *failure_prefix, BOOL e
     free_output(output);
 }
 
+/* A workgroup machine has no trusts: the real failure or an empty list, never an entry */
+static void test_domain_trusts(void)
+{
+    DWORD exit_code;
+    char *output = run_nltest("/domain_trusts", &exit_code);
+
+    if (!output)
+    {
+        skip("nltest /domain_trusts could not be started\n");
+        return;
+    }
+    if (exit_code != 0)
+        ok(starts_with(output, "Enumerating domain trusts failed: Status = "), "/domain_trusts: %s\n", output);
+    else
+        ok(starts_with(output, "List of domain trusts:"), "/domain_trusts: %s\n", output);
+    ok(strstr(output, "    0: ") == NULL, "/domain_trusts listed a trust without a DC: %s\n", output);
+    free_output(output);
+}
+
 START_TEST(nltest)
 {
     DWORD exit_code;
@@ -182,14 +201,21 @@ START_TEST(nltest)
     ok(strstr(output, "/2015 ") != NULL || strstr(output, "/2014 ") != NULL, "/time: not a 2014/2015 date: %s\n", output);
     free_output(output);
 
+    /* /DBFLAG rejects a non-hex value before any RPC */
+    output = run_nltest("/dbflag:zz", &exit_code);
+    ok(exit_code == ERROR_INVALID_PARAMETER, "/dbflag:zz: exit code %lu\n", exit_code);
+    ok(starts_with(output, "/DBFLAG:<HexFlags> must be"), "/dbflag:zz: %s\n", output);
+    free_output(output);
+
     if (domain_joined())
     {
         skip("domain member: the no-DC error paths are not exercised here\n");
         return;
     }
 
-    /* Workgroup: every DC-bound verb fails honestly. Without a running Netlogon
-     * service the status is exactly Windows 11's 1722; with one, any real error. */
+    /* Workgroup: every DC-bound verb fails honestly under its own prefix. Without a
+     * running Netlogon service the status is exactly Windows 11's 1722; with one it is
+     * whatever the server returns, including ERROR_INVALID_DATA for success without data. */
     no_netlogon = !netlogon_running();
     trace("Netlogon service running: %s\n", no_netlogon ? "no" : "yes");
     test_no_dc_verb("/sc_query:WORKGROUP", "I_NetLogonControl failed: Status = ", no_netlogon);
@@ -198,5 +224,5 @@ START_TEST(nltest)
     test_no_dc_verb("/dclist:WORKGROUP", "Cannot find DC to get DC list from. Status = ", no_netlogon);
     test_no_dc_verb("/dcname:WORKGROUP", "NetGetDCName failed: Status = ", no_netlogon);
     test_no_dc_verb("/dsgetsite", "Getting site name failed: Status = ", no_netlogon);
-    test_no_dc_verb("/domain_trusts", "Enumerating domain trusts failed: Status = ", no_netlogon);
+    test_domain_trusts();
 }
