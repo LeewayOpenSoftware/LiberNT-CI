@@ -160,8 +160,8 @@ jobs:
       - name: Install pinned Rust toolchain and host build tools
         run: |
           rustup toolchain install 1.97.1 --profile minimal
-          sudo apt-get update
-          sudo apt-get install -y g++ cmake ninja-build pkg-config libfuse3-dev
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y g++ cmake ninja-build pkg-config libfuse3-dev
       - name: Fetch the decoder rig at the pinned SHA (public LiberNT-CI)
         run: |
           mkdir -p "$RUNNER_TEMP/rig" && cd "$RUNNER_TEMP/rig" && git init -q
@@ -191,7 +191,7 @@ jobs:
       - name: Install pinned Rust toolchain + host build tools
         run: |
           rustup toolchain install 1.97.1 --profile minimal
-          sudo apt-get update && sudo apt-get install -y g++ gcc
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y g++ gcc
       - name: Fetch the C special-pool engine at the pinned SHA (public LiberNT-CI)
         run: |
           mkdir -p "$RUNNER_TEMP/sp" && cd "$RUNNER_TEMP/sp" && git init -q

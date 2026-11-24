@@ -30,7 +30,7 @@ jobs:
         run: |
           rustup toolchain install nightly-2026-05-24 --profile minimal --component rust-src --component llvm-tools
           cargo +nightly-2026-05-24 install cargo-fuzz --locked
-          sudo apt-get update && sudo apt-get install -y clang gcc
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update && sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y clang gcc
 
       - name: Stage tools/rust-poc without the kernel .cargo config (host fuzz build)
         # The kernel .cargo/config.toml forces the custom kernel target + build-std on everything
