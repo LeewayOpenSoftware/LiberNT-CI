@@ -840,11 +840,11 @@ DpapiReleaseSidLock(
     RtlLeaveCriticalSection(&DpapiSidLockListLock);
 }
 
-/* Build <profile>\AppData\Roaming\Microsoft\Protect\<SID> from ProfileList. */
 static
 NTSTATUS
-DpapiGetUserProtectDir(
+DpapiGetUserProtectPath(
     _In_ PSID Sid,
+    _In_ BOOLEAN WithSidDir,
     _Out_writes_bytes_(DirLength) PWCHAR Dir,
     _In_ ULONG DirLength)
 {
@@ -877,13 +877,44 @@ DpapiGetUserProtectDir(
     if (Result != ERROR_SUCCESS)
         return STATUS_OBJECT_NAME_NOT_FOUND;
 
-    Length = _snwprintf(Dir, DirLength / sizeof(WCHAR),
-                        L"%s\\AppData\\Roaming\\Microsoft\\Protect\\%wZ",
-                        ProfilePath, &SidUnicode);
+    if (WithSidDir)
+    {
+        Length = _snwprintf(Dir, DirLength / sizeof(WCHAR),
+                            L"%s\\AppData\\Roaming\\Microsoft\\Protect\\%wZ",
+                            ProfilePath, &SidUnicode);
+    }
+    else
+    {
+        Length = _snwprintf(Dir, DirLength / sizeof(WCHAR),
+                            L"%s\\AppData\\Roaming\\Microsoft\\Protect",
+                            ProfilePath);
+    }
     if (Length < 0 || (ULONG)(Length + 1) * sizeof(WCHAR) > DirLength)
         return STATUS_NAME_TOO_LONG;
 
     return STATUS_SUCCESS;
+}
+
+/* Build <profile>\AppData\Roaming\Microsoft\Protect\<SID> from ProfileList. */
+static
+NTSTATUS
+DpapiGetUserProtectDir(
+    _In_ PSID Sid,
+    _Out_writes_bytes_(DirLength) PWCHAR Dir,
+    _In_ ULONG DirLength)
+{
+    return DpapiGetUserProtectPath(Sid, TRUE, Dir, DirLength);
+}
+
+/* The credhist lives at the Protect root (Win11 layout, C3). */
+static
+NTSTATUS
+DpapiGetUserProtectRoot(
+    _In_ PSID Sid,
+    _Out_writes_bytes_(DirLength) PWCHAR Dir,
+    _In_ ULONG DirLength)
+{
+    return DpapiGetUserProtectPath(Sid, FALSE, Dir, DirLength);
 }
 
 /* DACL for a per-user key file, the credhist or the SID dir: SYSTEM,
@@ -1121,6 +1152,11 @@ DpapiSecureWriteFile(
     ULONG RenameInfoSize;
     NTSTATUS Status;
 
+    /* SYSTEM-mode writes go through the verified handle tree (DpapiSysWrite);
+     * a path-based SYSTEM write cannot be made reparse-safe (C1). */
+    if (IoMode != DpapiIoImpersonated)
+        return STATUS_INVALID_PARAMETER;
+
     _snwprintf(TempName, ARRAYSIZE(TempName), L"tmp%lx%lx",
                GetCurrentProcessId(), GetTickCount64() & 0xffffffff);
 
@@ -1128,23 +1164,14 @@ DpapiSecureWriteFile(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    if (IoMode == DpapiIoSystem)
+    _snwprintf(TempPath, ARRAYSIZE(TempPath), L"%s\\%s", Dir, TempName);
+    FileHandle = CreateFileW(TempPath, FILE_GENERIC_WRITE | DELETE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (FileHandle == INVALID_HANDLE_VALUE)
     {
-        Status = DpapiOpenNoReparse(DirHandle, TempName,
-                                    FILE_GENERIC_WRITE | DELETE,
-                                    FILE_CREATE, FILE_NON_DIRECTORY_FILE, &FileHandle);
-    }
-    else
-    {
-        _snwprintf(TempPath, ARRAYSIZE(TempPath), L"%s\\%s", Dir, TempName);
-        FileHandle = CreateFileW(TempPath, FILE_GENERIC_WRITE | DELETE,
-                                 FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                 NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (FileHandle == INVALID_HANDLE_VALUE)
-        {
-            FileHandle = NULL;
-            Status = RtlGetLastNtStatus();
-        }
+        FileHandle = NULL;
+        Status = RtlGetLastNtStatus();
     }
     if (!NT_SUCCESS(Status))
         goto done;
@@ -1154,6 +1181,8 @@ DpapiSecureWriteFile(
 
     Status = NtWriteFile(FileHandle, NULL, NULL, NULL, &IoStatusBlock,
                          (PVOID)Data, DataLength, NULL, NULL);
+    if (NT_SUCCESS(Status) && IoStatusBlock.Information != DataLength)
+        Status = STATUS_UNEXPECTED_IO_ERROR;
     if (!NT_SUCCESS(Status))
         goto done;
 
@@ -1184,12 +1213,52 @@ done:
     return Status;
 }
 
-/* Read a whole file. SYSTEM mode refuses reparse points (D2). */
+#define DPAPI_CREDHIST_MAX_ENTRIES 4096
+#define DPAPI_CREDHIST_MAX_SIZE    (12 + DPAPI_CREDHIST_MAX_ENTRIES * \
+                                    DPAPI_CREDHIST_ENTRY_SIZE)
+
+/* Overflow-safe credhist file validation: exact layout, capped count (C5). */
+static
+NTSTATUS
+DpapiCredhistValidate(
+    _In_reads_bytes_(Length) PBYTE Data,
+    _In_ ULONG Length,
+    _Out_ PULONG Count)
+{
+    ULONG Magic, Version, Entries;
+    ULONGLONG Expected;
+
+    if (Length < 12)
+        return STATUS_UNSUCCESSFUL;
+
+    RtlCopyMemory(&Magic, Data, 4);
+    RtlCopyMemory(&Version, Data + 4, 4);
+    RtlCopyMemory(&Entries, Data + 8, 4);
+    if (Magic != DPAPI_CREDHIST_MAGIC || Version != DPAPI_CREDHIST_VERSION ||
+        Entries > DPAPI_CREDHIST_MAX_ENTRIES)
+    {
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    Expected = 12ULL + (ULONGLONG)Entries * DPAPI_CREDHIST_ENTRY_SIZE;
+    if (Expected != Length)
+        return STATUS_UNSUCCESSFUL;
+
+    *Count = Entries;
+    return STATUS_SUCCESS;
+}
+
+/* Read a whole file with size checks (C5): refuse HighPart, cap at MaxSize,
+ * require exactly ExpectedSize when it is nonzero, and verify the read
+ * length. Used in the impersonated mode; the SYSTEM mode reads through the
+ * verified handles instead (DpapiSysRead). */
 static
 NTSTATUS
 DpapiSecureReadFile(
     _In_ PCWSTR Path,
     _In_ DPAPI_IO_MODE IoMode,
+    _In_ ULONG MaxSize,
+    _In_ ULONG ExpectedSize,
     _Outptr_result_bytebuffer_(*DataLength) PBYTE *Data,
     _Out_ PULONG DataLength)
 {
@@ -1203,32 +1272,29 @@ DpapiSecureReadFile(
     *DataLength = 0;
 
     if (IoMode == DpapiIoSystem)
+        return STATUS_INVALID_PARAMETER;
+
+    FileHandle = CreateFileW(Path, FILE_GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE,
+                             NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (FileHandle == INVALID_HANDLE_VALUE)
     {
-        Status = DpapiOpenNoReparse(NULL, Path, FILE_GENERIC_READ,
-                                    FILE_OPEN, FILE_NON_DIRECTORY_FILE, &FileHandle);
+        FileHandle = NULL;
+        return RtlGetLastNtStatus();
     }
-    else
-    {
-        FileHandle = CreateFileW(Path, FILE_GENERIC_READ,
-                                 FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                 NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (FileHandle == INVALID_HANDLE_VALUE)
-        {
-            FileHandle = NULL;
-            Status = RtlGetLastNtStatus();
-        }
-        else
-        {
-            Status = STATUS_SUCCESS;
-        }
-    }
-    if (!NT_SUCCESS(Status))
-        return Status;
 
     Status = NtQueryInformationFile(FileHandle, &IoStatusBlock, &StandardInfo,
                                     sizeof(StandardInfo), FileStandardInformation);
     if (!NT_SUCCESS(Status))
         goto done;
+
+    if (StandardInfo.EndOfFile.HighPart != 0 ||
+        StandardInfo.EndOfFile.LowPart > MaxSize ||
+        (ExpectedSize != 0 && StandardInfo.EndOfFile.LowPart != ExpectedSize))
+    {
+        Status = STATUS_FILE_TOO_LARGE;
+        goto done;
+    }
 
     Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0,
                              StandardInfo.EndOfFile.LowPart != 0
@@ -1241,6 +1307,8 @@ DpapiSecureReadFile(
 
     Status = NtReadFile(FileHandle, NULL, NULL, NULL, &IoStatusBlock,
                         Buffer, StandardInfo.EndOfFile.LowPart, NULL, NULL);
+    if (NT_SUCCESS(Status) && IoStatusBlock.Information != StandardInfo.EndOfFile.LowPart)
+        Status = STATUS_UNEXPECTED_IO_ERROR;
     if (!NT_SUCCESS(Status))
         goto done;
 
@@ -1251,6 +1319,253 @@ DpapiSecureReadFile(
 done:
     if (Buffer != NULL)
         RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+    if (FileHandle != NULL)
+        NtClose(FileHandle);
+    return Status;
+}
+
+/* SYSTEM-mode I/O works exclusively through this verified handle tree (C1):
+ * the profile root is opened as an NT path, then every component down to
+ * Protect\<SID> is opened relative to the previous handle with a reparse
+ * refusal, so no path string after the root and no junction can redirect a
+ * create, read or rename. */
+typedef struct _DPAPI_PROTECT_TREE
+{
+    HANDLE RootHandle;
+    HANDLE ProtectHandle;
+    HANDLE SidHandle;
+} DPAPI_PROTECT_TREE;
+
+static
+VOID
+DpapiCloseProtectTree(
+    _Inout_ DPAPI_PROTECT_TREE *Tree);
+
+static
+NTSTATUS
+DpapiOpenTreeStep(
+    _In_ HANDLE Parent,
+    _In_ PCWSTR Name,
+    _Out_ PHANDLE Next)
+{
+    return DpapiOpenNoReparse(Parent, Name, FILE_LIST_DIRECTORY,
+                              FILE_OPEN, FILE_DIRECTORY_FILE, Next);
+}
+
+static
+NTSTATUS
+DpapiOpenProtectTree(
+    _In_ PSID Sid,
+    _Out_ DPAPI_PROTECT_TREE *Tree)
+{
+    WCHAR SidString[64];
+    UNICODE_STRING SidUnicode;
+    WCHAR KeyPath[256];
+    WCHAR ProfilePath[MAX_PATH];
+    DWORD ProfilePathSize = sizeof(ProfilePath);
+    WCHAR NtPath[MAX_PATH + 8];
+    LSTATUS Result;
+    HKEY Key;
+    NTSTATUS Status;
+
+    Tree->RootHandle = NULL;
+    Tree->ProtectHandle = NULL;
+    Tree->SidHandle = NULL;
+
+    RtlInitEmptyUnicodeString(&SidUnicode, SidString, sizeof(SidString));
+    if (!NT_SUCCESS(RtlConvertSidToUnicodeString(&SidUnicode, Sid, FALSE)))
+        return STATUS_UNSUCCESSFUL;
+
+    _snwprintf(KeyPath, ARRAYSIZE(KeyPath),
+               L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\%wZ",
+               &SidUnicode);
+    Result = RegOpenKeyExW(HKEY_LOCAL_MACHINE, KeyPath, 0, KEY_READ, &Key);
+    if (Result != ERROR_SUCCESS)
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+
+    Result = RegGetValueW(Key, NULL, L"ProfileImagePath", RRF_RT_REG_EXPAND_SZ,
+                          NULL, ProfilePath, &ProfilePathSize);
+    RegCloseKey(Key);
+    if (Result != ERROR_SUCCESS)
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+
+    _snwprintf(NtPath, ARRAYSIZE(NtPath), L"\\??\\%s", ProfilePath);
+    Status = DpapiOpenNoReparse(NULL, NtPath, FILE_LIST_DIRECTORY,
+                                FILE_OPEN, FILE_DIRECTORY_FILE, &Tree->RootHandle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = DpapiOpenTreeStep(Tree->RootHandle, L"AppData", &Tree->ProtectHandle);
+    if (NT_SUCCESS(Status))
+    {
+        HANDLE Next = NULL;
+
+        Status = DpapiOpenTreeStep(Tree->ProtectHandle, L"Roaming", &Next);
+        if (NT_SUCCESS(Status))
+        {
+            NtClose(Tree->ProtectHandle);
+            Tree->ProtectHandle = Next;
+            Status = DpapiOpenTreeStep(Tree->ProtectHandle, L"Microsoft", &Next);
+        }
+        if (NT_SUCCESS(Status))
+        {
+            NtClose(Tree->ProtectHandle);
+            Tree->ProtectHandle = Next;
+            Status = DpapiOpenTreeStep(Tree->ProtectHandle, L"Protect", &Next);
+        }
+        if (NT_SUCCESS(Status))
+        {
+            NtClose(Tree->ProtectHandle);
+            Tree->ProtectHandle = Next;
+            Status = DpapiOpenTreeStep(Tree->ProtectHandle, SidString, &Tree->SidHandle);
+        }
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        DpapiCloseProtectTree(Tree);
+        return Status;
+    }
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+DpapiCloseProtectTree(
+    _Inout_ DPAPI_PROTECT_TREE *Tree)
+{
+    if (Tree->SidHandle != NULL)
+        NtClose(Tree->SidHandle);
+    if (Tree->ProtectHandle != NULL)
+        NtClose(Tree->ProtectHandle);
+    if (Tree->RootHandle != NULL)
+        NtClose(Tree->RootHandle);
+    Tree->RootHandle = NULL;
+    Tree->ProtectHandle = NULL;
+    Tree->SidHandle = NULL;
+}
+
+/* Read Name relative to a verified directory handle with the C5 size checks. */
+static
+NTSTATUS
+DpapiSysRead(
+    _In_ HANDLE DirHandle,
+    _In_ PCWSTR Name,
+    _In_ ULONG MaxSize,
+    _In_ ULONG ExpectedSize,
+    _Outptr_result_bytebuffer_(*DataLength) PBYTE *Data,
+    _Out_ PULONG DataLength)
+{
+    HANDLE FileHandle;
+    IO_STATUS_BLOCK IoStatusBlock;
+    FILE_STANDARD_INFORMATION StandardInfo;
+    PBYTE Buffer = NULL;
+    NTSTATUS Status;
+
+    *Data = NULL;
+    *DataLength = 0;
+
+    Status = DpapiOpenNoReparse(DirHandle, Name, FILE_GENERIC_READ,
+                                FILE_OPEN, FILE_NON_DIRECTORY_FILE, &FileHandle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = NtQueryInformationFile(FileHandle, &IoStatusBlock, &StandardInfo,
+                                    sizeof(StandardInfo), FileStandardInformation);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    if (StandardInfo.EndOfFile.HighPart != 0 ||
+        StandardInfo.EndOfFile.LowPart > MaxSize ||
+        (ExpectedSize != 0 && StandardInfo.EndOfFile.LowPart != ExpectedSize))
+    {
+        Status = STATUS_FILE_TOO_LARGE;
+        goto done;
+    }
+
+    Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0,
+                             StandardInfo.EndOfFile.LowPart != 0
+                             ? StandardInfo.EndOfFile.LowPart : 1);
+    if (Buffer == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto done;
+    }
+
+    Status = NtReadFile(FileHandle, NULL, NULL, NULL, &IoStatusBlock,
+                        Buffer, StandardInfo.EndOfFile.LowPart, NULL, NULL);
+    if (NT_SUCCESS(Status) && IoStatusBlock.Information != StandardInfo.EndOfFile.LowPart)
+        Status = STATUS_UNEXPECTED_IO_ERROR;
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    *Data = Buffer;
+    *DataLength = StandardInfo.EndOfFile.LowPart;
+    Buffer = NULL;
+
+done:
+    if (Buffer != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+    NtClose(FileHandle);
+    return Status;
+}
+
+/* Write Name relative to a verified directory handle by temp plus rename by
+ * handle, re-applying the SD (the rename would otherwise drop it). */
+static
+NTSTATUS
+DpapiSysWrite(
+    _In_ HANDLE DirHandle,
+    _In_ PCWSTR Name,
+    _In_reads_bytes_(DataLength) PBYTE Data,
+    _In_ ULONG DataLength,
+    _In_opt_ PSECURITY_DESCRIPTOR Sd)
+{
+    WCHAR TempName[64];
+    HANDLE FileHandle = NULL;
+    IO_STATUS_BLOCK IoStatusBlock;
+    FILE_RENAME_INFORMATION *RenameInfo = NULL;
+    ULONG RenameInfoSize;
+    NTSTATUS Status;
+
+    _snwprintf(TempName, ARRAYSIZE(TempName), L"tmp%lx%lx",
+               GetCurrentProcessId(), GetTickCount64() & 0xffffffff);
+
+    Status = DpapiOpenNoReparse(DirHandle, TempName,
+                                FILE_GENERIC_WRITE | DELETE,
+                                FILE_CREATE, FILE_NON_DIRECTORY_FILE, &FileHandle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (Sd != NULL)
+        NtSetSecurityObject(FileHandle, DACL_SECURITY_INFORMATION, Sd);
+
+    Status = NtWriteFile(FileHandle, NULL, NULL, NULL, &IoStatusBlock,
+                         (PVOID)Data, DataLength, NULL, NULL);
+    if (NT_SUCCESS(Status) && IoStatusBlock.Information != DataLength)
+        Status = STATUS_UNEXPECTED_IO_ERROR;
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    RenameInfoSize = sizeof(FILE_RENAME_INFORMATION) +
+                     (ULONG)wcslen(Name) * sizeof(WCHAR);
+    RenameInfo = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, RenameInfoSize);
+    if (RenameInfo == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto done;
+    }
+
+    RenameInfo->ReplaceIfExists = TRUE;
+    RenameInfo->RootDirectory = DirHandle;
+    RenameInfo->FileNameLength = (ULONG)wcslen(Name) * sizeof(WCHAR);
+    RtlCopyMemory(RenameInfo->FileName, Name, RenameInfo->FileNameLength);
+
+    Status = NtSetInformationFile(FileHandle, &IoStatusBlock, RenameInfo,
+                                  RenameInfoSize, FileRenameInformation);
+
+done:
+    if (RenameInfo != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, RenameInfo);
     if (FileHandle != NULL)
         NtClose(FileHandle);
     return Status;
@@ -1413,23 +1728,17 @@ DpapiReadPreferred(
     ULONG DataLength;
     NTSTATUS Status;
 
+    if (IoMode != DpapiIoImpersonated)
+        return STATUS_INVALID_PARAMETER;
+
     _snwprintf(Path, ARRAYSIZE(Path), L"%s\\Preferred", Dir);
-    Status = DpapiSecureReadFile(Path, IoMode, &Data, &DataLength);
+    Status = DpapiSecureReadFile(Path, IoMode, 24, 24, &Data, &DataLength);
     if (!NT_SUCCESS(Status))
         return Status;
 
-    if (DataLength == 24)
-    {
-        RtlCopyMemory(KeyGuid, Data, 16);
-        Status = STATUS_SUCCESS;
-    }
-    else
-    {
-        Status = STATUS_UNSUCCESSFUL;
-    }
-
+    RtlCopyMemory(KeyGuid, Data, 16);
     RtlFreeHeap(RtlGetProcessHeap(), 0, Data);
-    return Status;
+    return STATUS_SUCCESS;
 }
 
 static
@@ -1584,6 +1893,7 @@ static
 NTSTATUS
 DpapiOpenMasterKey(
     _In_ PCWSTR Dir,
+    _In_ PCWSTR ProtectRoot,
     _In_ PSID Sid,
     _In_ PLSA_STRING CurrentPrekey,
     _In_ const GUID *KeyGuid,
@@ -1599,20 +1909,19 @@ DpapiOpenMasterKey(
     PBYTE Credhist = NULL;
     ULONG CredhistLength;
     UCHAR Digest[DPAPI_DIGEST_SIZE];
-    ULONG Magic, Version, Count, Index;
+    ULONG Count, Index;
     NTSTATUS Status;
+
+    if (IoMode != DpapiIoImpersonated)
+        return STATUS_INVALID_PARAMETER;
 
     DpapiFormatKeyGuid(KeyGuid, Name);
     _snwprintf(Path, ARRAYSIZE(Path), L"%s\\%s", Dir, Name);
 
-    Status = DpapiSecureReadFile(Path, IoMode, &KeyFile, &KeyFileLength);
+    Status = DpapiSecureReadFile(Path, IoMode, DPAPI_KEYFILE_SIZE, DPAPI_KEYFILE_SIZE,
+                                 &KeyFile, &KeyFileLength);
     if (!NT_SUCCESS(Status))
         return Status;
-    if (KeyFileLength != DPAPI_KEYFILE_SIZE)
-    {
-        Status = STATUS_UNSUCCESSFUL;
-        goto done;
-    }
 
     Status = DpapiDecryptKeyFile(CurrentPrekey, KeyFile, MasterKey);
     if (Status != STATUS_WRONG_PASSWORD)
@@ -1620,20 +1929,13 @@ DpapiOpenMasterKey(
 
     /* The password changed since this key was written: walk credhist from the
      * newest entry backwards. The digest that decrypts the newest entry is the
-     * current password digest (the first bytes of CurrentPrekey). */
-    _snwprintf(CredhistPath, ARRAYSIZE(CredhistPath), L"%s\\..\\CREDHIST", Dir);
-    Status = DpapiSecureReadFile(CredhistPath, IoMode, &Credhist, &CredhistLength);
-    if (!NT_SUCCESS(Status) || CredhistLength < 12)
-    {
-        Status = STATUS_WRONG_PASSWORD;
-        goto done;
-    }
-
-    RtlCopyMemory(&Magic, Credhist, 4);
-    RtlCopyMemory(&Version, Credhist + 4, 4);
-    RtlCopyMemory(&Count, Credhist + 8, 4);
-    if (Magic != DPAPI_CREDHIST_MAGIC || Version != DPAPI_CREDHIST_VERSION ||
-        12 + Count * DPAPI_CREDHIST_ENTRY_SIZE != CredhistLength)
+     * current password digest (the first bytes of CurrentPrekey). Credhist
+     * lives at the Protect root (C3), never inside <SID>. */
+    _snwprintf(CredhistPath, ARRAYSIZE(CredhistPath), L"%s\\CREDHIST", ProtectRoot);
+    Status = DpapiSecureReadFile(CredhistPath, IoMode, DPAPI_CREDHIST_MAX_SIZE, 0,
+                                 &Credhist, &CredhistLength);
+    if (!NT_SUCCESS(Status) ||
+        !NT_SUCCESS(DpapiCredhistValidate(Credhist, CredhistLength, &Count)))
     {
         Status = STATUS_WRONG_PASSWORD;
         goto done;
@@ -1710,6 +2012,7 @@ static
 NTSTATUS
 DpapiGetOrCreateMasterKey(
     _In_ PCWSTR Dir,
+    _In_ PCWSTR ProtectRoot,
     _In_ PSID Sid,
     _In_ PLSA_STRING CurrentPrekey,
     _In_ DPAPI_IO_MODE IoMode,
@@ -1729,8 +2032,8 @@ DpapiGetOrCreateMasterKey(
     Status = DpapiReadPreferred(Dir, IoMode, KeyGuid);
     if (NT_SUCCESS(Status))
     {
-        Status = DpapiOpenMasterKey(Dir, Sid, CurrentPrekey, KeyGuid, IoMode, TRUE,
-                                    MasterKey);
+        Status = DpapiOpenMasterKey(Dir, ProtectRoot, Sid, CurrentPrekey, KeyGuid,
+                                    IoMode, TRUE, MasterKey);
         if (NT_SUCCESS(Status))
             return Status;
         if (Status != STATUS_WRONG_PASSWORD && Status != STATUS_OBJECT_NAME_NOT_FOUND &&
@@ -1787,14 +2090,16 @@ DpapiGetOrCreateMasterKey(
                     PBYTE OtherFile = NULL;
                     ULONG OtherLength;
 
-                    Status = DpapiSecureReadFile(Path, IoMode, &OtherFile, &OtherLength);
-                    if (NT_SUCCESS(Status) && OtherLength == DPAPI_KEYFILE_SIZE)
+                    Status = DpapiSecureReadFile(Path, IoMode, DPAPI_KEYFILE_SIZE,
+                                                 DPAPI_KEYFILE_SIZE,
+                                                 &OtherFile, &OtherLength);
+                    if (NT_SUCCESS(Status))
                         Status = DpapiDecryptKeyFile(CurrentPrekey, OtherFile, MasterKey);
                     if (OtherFile != NULL)
                         RtlFreeHeap(RtlGetProcessHeap(), 0, OtherFile);
                     if (Status == STATUS_WRONG_PASSWORD)
-                        Status = DpapiOpenMasterKey(Dir, Sid, CurrentPrekey, KeyGuid,
-                                                    IoMode, TRUE, MasterKey);
+                        Status = DpapiOpenMasterKey(Dir, ProtectRoot, Sid, CurrentPrekey,
+                                                    KeyGuid, IoMode, TRUE, MasterKey);
                 }
             }
             if (NT_SUCCESS(Status))
@@ -1809,42 +2114,31 @@ DpapiGetOrCreateMasterKey(
     return Status;
 }
 
-/* Append a credhist entry, rewriting the file through temp plus rename (D2).
- * Whole-file rewrite keeps the on-disk layout canonical (header + entries). */
+/* Append a credhist entry through the verified Protect handle (C1/C3),
+ * rewriting the file through temp plus rename. Whole-file rewrite keeps the
+ * on-disk layout canonical (header + entries). */
 static
 NTSTATUS
 DpapiCredhistAppend(
-    _In_ PCWSTR ProtectRoot,
-    _In_ DPAPI_IO_MODE IoMode,
+    _In_ HANDLE ProtectHandle,
     _In_reads_bytes_(DPAPI_DIGEST_SIZE) const UCHAR *OldDigest,
     _In_reads_bytes_(DPAPI_DIGEST_SIZE) const UCHAR *NewDigest,
-    _In_opt_ PSID OwnerSid)
+    _In_ PSID OwnerSid)
 {
-    WCHAR Path[MAX_PATH * 2];
     PBYTE OldFile = NULL;
     ULONG OldLength = 0;
     PBYTE NewFile = NULL;
     ULONG Count = 0;
     ULONG NewLength;
     PSECURITY_DESCRIPTOR Sd = NULL;
+    ULONG SdSize = 0;
     NTSTATUS Status;
 
-    _snwprintf(Path, ARRAYSIZE(Path), L"%s\\CREDHIST", ProtectRoot);
-    Status = DpapiSecureReadFile(Path, IoMode, &OldFile, &OldLength);
+    Status = DpapiSysRead(ProtectHandle, L"CREDHIST", DPAPI_CREDHIST_MAX_SIZE, 0,
+                          &OldFile, &OldLength);
     if (NT_SUCCESS(Status))
     {
-        ULONG Magic, Version;
-
-        if (OldLength < 12)
-        {
-            Status = STATUS_UNSUCCESSFUL;
-            goto done;
-        }
-        RtlCopyMemory(&Magic, OldFile, 4);
-        RtlCopyMemory(&Version, OldFile + 4, 4);
-        RtlCopyMemory(&Count, OldFile + 8, 4);
-        if (Magic != DPAPI_CREDHIST_MAGIC || Version != DPAPI_CREDHIST_VERSION ||
-            12 + Count * DPAPI_CREDHIST_ENTRY_SIZE != OldLength)
+        if (!NT_SUCCESS(DpapiCredhistValidate(OldFile, OldLength, &Count)))
         {
             Status = STATUS_UNSUCCESSFUL;
             goto done;
@@ -1884,16 +2178,11 @@ DpapiCredhistAppend(
     if (!NT_SUCCESS(Status))
         goto done;
 
-    if (OwnerSid != NULL)
-    {
-        ULONG SdSize = 0;
+    Status = DpapiCreateUserKeySd(OwnerSid, &Sd, &SdSize);
+    if (!NT_SUCCESS(Status))
+        goto done;
 
-        Status = DpapiCreateUserKeySd(OwnerSid, &Sd, &SdSize);
-        if (!NT_SUCCESS(Status))
-            goto done;
-    }
-
-    Status = DpapiSecureWriteFile(ProtectRoot, L"CREDHIST", NewFile, NewLength, IoMode, Sd);
+    Status = DpapiSysWrite(ProtectHandle, L"CREDHIST", NewFile, NewLength, Sd);
 
 done:
     if (Sd != NULL)
@@ -2075,7 +2364,9 @@ done:
 
 /* Q8 re-key entry point, called by msv1_0 after a successful interactive
  * password change. Credhist is extended FIRST (D4) so every master key left
- * under the old password stays reachable even if a re-encrypt fails. */
+ * under the old password stays reachable even if a re-encrypt fails. All I/O
+ * goes through the verified handle tree (C1): no path strings after the
+ * profile root, no junction can redirect a create or rename. */
 NTSTATUS
 LsapDpapiOnPasswordChange(
     _In_ PUNICODE_STRING DomainName,
@@ -2083,14 +2374,13 @@ LsapDpapiOnPasswordChange(
     _In_reads_bytes_(DPAPI_DIGEST_SIZE) const UCHAR *OldDigest,
     _In_reads_bytes_(DPAPI_DIGEST_SIZE) const UCHAR *NewDigest)
 {
+    DPAPI_PROTECT_TREE Tree;
     PSID Sid = NULL;
-    WCHAR Dir[MAX_PATH * 2];
-    WCHAR Pattern[MAX_PATH * 2];
     LSA_STRING OldPrekey = {0}, NewPrekey = {0};
-    WIN32_FIND_DATAW FindData;
-    HANDLE FindHandle = INVALID_HANDLE_VALUE;
     PSECURITY_DESCRIPTOR Sd = NULL;
     ULONG SdSize = 0;
+    PBYTE DirBuffer = NULL;
+    ULONG DirBufferSize = 64 * 1024;
     NTSTATUS Status, KeyStatus;
 
     UNREFERENCED_PARAMETER(DomainName);
@@ -2102,82 +2392,115 @@ LsapDpapiOnPasswordChange(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Status = DpapiGetUserProtectDir(Sid, Dir, sizeof(Dir));
+    /* No user token here: open the whole tree under the SYSTEM rules (C1). */
+    Status = DpapiOpenProtectTree(Sid, &Tree);
     if (!NT_SUCCESS(Status))
         goto done;
 
-    /* No user token here: the SYSTEM file-I/O rules apply throughout (D2). */
     Status = DpapiAcquireSidLock(Sid);
     if (!NT_SUCCESS(Status))
-        goto done;
-
-    KeyStatus = DpapiCredhistAppend(Dir, DpapiIoSystem, OldDigest, NewDigest, Sid);
-    if (!NT_SUCCESS(KeyStatus))
     {
-        /* Without the chain the old keys may still re-encrypt below; a total
-         * credhist failure just loses the fallback, so continue. */
-        Status = KeyStatus;
+        DpapiCloseProtectTree(&Tree);
+        goto done;
     }
 
+    /* D4: the chain first, so a key that fails to re-encrypt stays reachable. */
+    KeyStatus = DpapiCredhistAppend(Tree.ProtectHandle, OldDigest, NewDigest, Sid);
+    if (!NT_SUCCESS(KeyStatus))
+        Status = KeyStatus;
+
     if (NT_SUCCESS(DpapiBuildUserPrekey(OldDigest, Sid, &OldPrekey)) &&
-        NT_SUCCESS(DpapiBuildUserPrekey(NewDigest, Sid, &NewPrekey)))
+        NT_SUCCESS(DpapiBuildUserPrekey(NewDigest, Sid, &NewPrekey)) &&
+        NT_SUCCESS(DpapiCreateUserKeySd(Sid, &Sd, &SdSize)))
     {
-        if (NT_SUCCESS(DpapiCreateUserKeySd(Sid, &Sd, &SdSize)))
+        /* Enumerate the key files on the verified <SID> handle (C1); a planted
+         * junction or directory fails the no-reparse open and is skipped. */
+        DirBuffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, DirBufferSize);
+        if (DirBuffer != NULL)
         {
-            _snwprintf(Pattern, ARRAYSIZE(Pattern), L"%s\\*", Dir);
-            FindHandle = FindFirstFileW(Pattern, &FindData);
-            if (FindHandle != INVALID_HANDLE_VALUE)
+            IO_STATUS_BLOCK IoStatusBlock;
+            BOOLEAN Restart = TRUE;
+
+            while (NT_SUCCESS(NtQueryDirectoryFile(Tree.SidHandle, NULL, NULL, NULL,
+                                                   &IoStatusBlock, DirBuffer,
+                                                   DirBufferSize,
+                                                   FileDirectoryInformation, FALSE,
+                                                   NULL, Restart)))
             {
+                PFILE_DIRECTORY_INFORMATION Entry;
+                ULONG_PTR Offset = 0;
+
+                Restart = FALSE;
                 do
                 {
-                    WCHAR Path[MAX_PATH * 2];
+                    WCHAR Name[64];
                     PBYTE KeyFile = NULL;
                     ULONG KeyFileLength;
                     BYTE MasterKey[DPAPI_MASTER_KEY_SIZE];
                     PBYTE NewFile = NULL;
 
-                    if (wcslen(FindData.cFileName) != 36)
-                        continue;
+                    Entry = (PFILE_DIRECTORY_INFORMATION)(DirBuffer + Offset);
+                    if (Entry->FileNameLength >= sizeof(Name))
+                        break;
+                    RtlCopyMemory(Name, Entry->FileName, Entry->FileNameLength);
+                    Name[Entry->FileNameLength / sizeof(WCHAR)] = UNICODE_NULL;
 
-                    _snwprintf(Path, ARRAYSIZE(Path), L"%s\%s", Dir, FindData.cFileName);
-                    if (!NT_SUCCESS(DpapiSecureReadFile(Path, DpapiIoSystem,
-                                                        &KeyFile, &KeyFileLength)))
-                        continue;
-                    if (KeyFileLength != DPAPI_KEYFILE_SIZE ||
-                        !NT_SUCCESS(DpapiDecryptKeyFile(&OldPrekey, KeyFile, MasterKey)))
+                    /* Key files are GUID-named (36 chars); skip Preferred and
+                     * any temp residue. */
+                    if (wcslen(Name) == 36 &&
+                        NT_SUCCESS(DpapiSysRead(Tree.SidHandle, Name,
+                                                DPAPI_KEYFILE_SIZE, DPAPI_KEYFILE_SIZE,
+                                                &KeyFile, &KeyFileLength)))
                     {
+                        if (NT_SUCCESS(DpapiDecryptKeyFile(&OldPrekey, KeyFile,
+                                                           MasterKey)))
+                        {
+                            NewFile = RtlAllocateHeap(RtlGetProcessHeap(), 0,
+                                                      DPAPI_KEYFILE_SIZE);
+                            if (NewFile != NULL)
+                            {
+                                NTSTATUS WriteStatus;
+
+                                if (NT_SUCCESS(DpapiEncryptKeyFile(&NewPrekey,
+                                                                   MasterKey,
+                                                                   NewFile)))
+                                {
+                                    WriteStatus = DpapiSysWrite(Tree.SidHandle, Name,
+                                                                NewFile,
+                                                                DPAPI_KEYFILE_SIZE,
+                                                                Sd);
+                                    if (!NT_SUCCESS(WriteStatus) &&
+                                        NT_SUCCESS(Status))
+                                    {
+                                        Status = WriteStatus;
+                                    }
+                                }
+                                RtlSecureZeroMemory(NewFile, DPAPI_KEYFILE_SIZE);
+                                RtlFreeHeap(RtlGetProcessHeap(), 0, NewFile);
+                            }
+                        }
                         RtlSecureZeroMemory(KeyFile, KeyFileLength);
                         RtlFreeHeap(RtlGetProcessHeap(), 0, KeyFile);
-                        continue;
+                        RtlSecureZeroMemory(MasterKey, sizeof(MasterKey));
                     }
-                    RtlSecureZeroMemory(KeyFile, KeyFileLength);
-                    RtlFreeHeap(RtlGetProcessHeap(), 0, KeyFile);
 
-                    NewFile = RtlAllocateHeap(RtlGetProcessHeap(), 0, DPAPI_KEYFILE_SIZE);
-                    if (NewFile == NULL)
-                        continue;
-                    if (NT_SUCCESS(DpapiEncryptKeyFile(&NewPrekey, MasterKey, NewFile)))
-                    {
-                        NTSTATUS WriteStatus;
+                    if (Entry->NextEntryOffset == 0)
+                        break;
+                    Offset += Entry->NextEntryOffset;
+                } while (TRUE);
 
-                        WriteStatus = DpapiSecureWriteFile(Dir, FindData.cFileName,
-                                                           NewFile, DPAPI_KEYFILE_SIZE,
-                                                           DpapiIoSystem, Sd);
-                        if (!NT_SUCCESS(WriteStatus) && NT_SUCCESS(Status))
-                            Status = WriteStatus;
-                    }
-                    RtlSecureZeroMemory(NewFile, DPAPI_KEYFILE_SIZE);
-                    RtlFreeHeap(RtlGetProcessHeap(), 0, NewFile);
-                    RtlSecureZeroMemory(MasterKey, sizeof(MasterKey));
-                } while (FindNextFileW(FindHandle, &FindData));
-                FindClose(FindHandle);
+                if (IoStatusBlock.Information == 0)
+                    break;
             }
         }
     }
 
     DpapiReleaseSidLock(Sid);
+    DpapiCloseProtectTree(&Tree);
 
 done:
+    if (DirBuffer != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, DirBuffer);
     if (Sd != NULL)
         RtlFreeHeap(RtlGetProcessHeap(), 0, Sd);
     if (OldPrekey.Buffer != NULL)
@@ -2239,6 +2562,7 @@ DpapiProtectForUser(
 
     {
         WCHAR Dir[MAX_PATH * 2];
+        WCHAR ProtectRoot[MAX_PATH * 2];
 
         /* Dir creation and key loading run under the caller's token (D2). */
         if (RpcImpersonateClient(NULL) != RPC_S_OK)
@@ -2249,10 +2573,13 @@ DpapiProtectForUser(
 
         Status = DpapiGetUserProtectDir(Op.Sid, Dir, sizeof(Dir));
         if (NT_SUCCESS(Status))
+            Status = DpapiGetUserProtectRoot(Op.Sid, ProtectRoot, sizeof(ProtectRoot));
+        if (NT_SUCCESS(Status))
             Status = DpapiAcquireSidLock(Op.Sid);
         if (NT_SUCCESS(Status))
         {
-            Status = DpapiGetOrCreateMasterKey(Dir, Op.Sid, &Prekey, DpapiIoImpersonated,
+            Status = DpapiGetOrCreateMasterKey(Dir, ProtectRoot, Op.Sid, &Prekey,
+                                               DpapiIoImpersonated,
                                                &Op.KeyGuid, MasterKey);
             DpapiReleaseSidLock(Op.Sid);
         }
@@ -2374,13 +2701,17 @@ DpapiUnprotectForUser(
             goto done;
         }
 
+        WCHAR ProtectRoot[MAX_PATH * 2];
+
         Status = DpapiGetUserProtectDir(Op.Sid, Dir, sizeof(Dir));
+        if (NT_SUCCESS(Status))
+            Status = DpapiGetUserProtectRoot(Op.Sid, ProtectRoot, sizeof(ProtectRoot));
         if (NT_SUCCESS(Status))
             Status = DpapiAcquireSidLock(Op.Sid);
         if (NT_SUCCESS(Status))
         {
-            Status = DpapiOpenMasterKey(Dir, Op.Sid, &Prekey, &KeyGuid, DpapiIoImpersonated,
-                                        TRUE, MasterKey);
+            Status = DpapiOpenMasterKey(Dir, ProtectRoot, Op.Sid, &Prekey, &KeyGuid,
+                                        DpapiIoImpersonated, TRUE, MasterKey);
             DpapiReleaseSidLock(Op.Sid);
         }
         RpcRevertToSelf();
