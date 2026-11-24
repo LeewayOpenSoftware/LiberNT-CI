@@ -2391,7 +2391,7 @@ static void apply_config( struct console *console, const struct console_config *
     if (console->window->transparency != (BOOL)config->transparency)
     {
         console->window->transparency = config->transparency;
-        console->window->backdrop_set = FALSE;
+        if (config->transparency) console->window->backdrop_set = FALSE;
         update_content_backdrop( console );
         if (console->win) InvalidateRect( console->win, NULL, TRUE );
     }
