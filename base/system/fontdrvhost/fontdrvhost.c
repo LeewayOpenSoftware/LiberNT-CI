@@ -12,6 +12,7 @@
 #undef WIN32_NO_STATUS
 #include <ntstatus.h>
 #include <reactos/umfd.h>
+#include <pseh/pseh2.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
@@ -19,8 +20,14 @@ INT WINAPI NtGdiExtEscape(HDC hdc, PWCHAR pDriver, INT nDriver, INT Escape,
                           INT InSize, LPSTR InData, INT OutSize, LPSTR OutData);
 
 #define VALIDATE_PPEM 32
+#define VALIDATE_MAX_GLYPHS (4 * 1024 * 1024)   /* summed over every face of one file */
 
-static FT_Library g_Library;
+typedef struct _BUDGET
+{
+    DWORD Start;
+    ULONG Glyphs;
+} BUDGET;
+
 static UMFD_HEADER g_Request[64 * 1024 / sizeof(UMFD_HEADER)];
 
 static struct
@@ -29,15 +36,23 @@ static struct
     UMFD_LOAD_REPLY Load;
 } g_Reply;
 
+/* Fail-closed: a file too slow or too large to check is refused, never waved through */
+static BOOL
+OverBudget(BUDGET *Budget)
+{
+    return GetTickCount() - Budget->Start > UMFD_LOAD_BUDGET_MS;
+}
+
 /* Opens one face and renders each of its glyphs once at a fixed size */
 static BOOL
-ValidateFace(const FT_Byte *pFile, FT_Long cbFile, FT_Long Index, FT_Long *pNumFaces)
+ValidateFace(FT_Library Library, const FT_Byte *pFile, FT_Long cbFile, FT_Long Index,
+             BUDGET *Budget, FT_Long *pNumFaces)
 {
     FT_Face Face;
     FT_Long Glyph;
     BOOL Ok = TRUE;
 
-    if (FT_New_Memory_Face(g_Library, pFile, cbFile, Index, &Face))
+    if (OverBudget(Budget) || FT_New_Memory_Face(Library, pFile, cbFile, Index, &Face))
         return FALSE;
     *pNumFaces = Face->num_faces;
 
@@ -48,7 +63,8 @@ ValidateFace(const FT_Byte *pFile, FT_Long cbFile, FT_Long Index, FT_Long *pNumF
 
     for (Glyph = 0; Ok && Glyph < Face->num_glyphs; ++Glyph)
     {
-        if (FT_Load_Glyph(Face, (FT_UInt)Glyph, FT_LOAD_DEFAULT) ||
+        if (++Budget->Glyphs > VALIDATE_MAX_GLYPHS || OverBudget(Budget) ||
+            FT_Load_Glyph(Face, (FT_UInt)Glyph, FT_LOAD_DEFAULT) ||
             FT_Render_Glyph(Face->glyph, FT_RENDER_MODE_NORMAL))
         {
             Ok = FALSE;
@@ -59,13 +75,35 @@ ValidateFace(const FT_Byte *pFile, FT_Long cbFile, FT_Long Index, FT_Long *pNumF
     return Ok;
 }
 
+static LONG
+ValidateFile(FT_Library Library, const FT_Byte *pFile, FT_Long cbFile, ULONG *pNumFaces)
+{
+    BUDGET Budget = { GetTickCount(), 0 };
+    FT_Long NumFaces = 0, Face, Count;
+
+    if (!ValidateFace(Library, pFile, cbFile, 0, &Budget, &NumFaces) ||
+        NumFaces <= 0 || NumFaces > UMFD_MAX_FACES)
+    {
+        return STATUS_INVALID_IMAGE_FORMAT;
+    }
+    for (Face = 1; Face < NumFaces; ++Face)
+    {
+        if (!ValidateFace(Library, pFile, cbFile, Face, &Budget, &Count))
+            return STATUS_INVALID_IMAGE_FORMAT;
+    }
+    *pNumFaces = (ULONG)NumFaces;
+    return STATUS_SUCCESS;
+}
+
 /* Returns the NTSTATUS for the reply header */
 static LONG
 HandleLoad(const UMFD_HEADER *Request, UMFD_LOAD_REPLY *Result)
 {
     const UMFD_LOAD_REQUEST *Load = (const UMFD_LOAD_REQUEST *)(Request + 1);
-    const FT_Byte *pFile;
-    FT_Long NumFaces = 0, Face, Count;
+    FT_Library Library;
+    ULONG NumFaces = 0;
+    LONG Status;
+    BOOL Faulted = FALSE;
 
     if (Request->cbPayload != sizeof(*Load) || !(Load->Flags & UMFD_LOAD_VALIDATE_ONLY) ||
         Load->FaceIndex != -1 || Load->ViewSize == 0 || Load->ViewSize > MAXLONG)
@@ -73,20 +111,30 @@ HandleLoad(const UMFD_HEADER *Request, UMFD_LOAD_REPLY *Result)
         return STATUS_INVALID_PARAMETER;
     }
 
-    /* win32k's read-only copy of the file, mapped into this process */
-    pFile = (const FT_Byte *)(ULONG_PTR)Load->ViewBase;
-    if (!ValidateFace(pFile, (FT_Long)Load->ViewSize, 0, &NumFaces) ||
-        NumFaces <= 0 || NumFaces > UMFD_MAX_FACES)
-    {
-        return STATUS_INVALID_IMAGE_FORMAT;
-    }
-    for (Face = 1; Face < NumFaces; ++Face)
-    {
-        if (!ValidateFace(pFile, (FT_Long)Load->ViewSize, Face, &Count))
-            return STATUS_INVALID_IMAGE_FORMAT;
-    }
+    /* A library per file, so a fault in one cannot leave state behind for the next */
+    if (FT_Init_FreeType(&Library))
+        return STATUS_NO_MEMORY;
 
-    Result->NumFaces = (ULONG)NumFaces;
+    /* win32k's read-only copy of the file, mapped into this process; a fault costs this file only */
+    _SEH2_TRY
+    {
+        Status = ValidateFile(Library, (const FT_Byte *)(ULONG_PTR)Load->ViewBase,
+                              (FT_Long)Load->ViewSize, &NumFaces);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = STATUS_INVALID_IMAGE_FORMAT;
+        Faulted = TRUE;
+    }
+    _SEH2_END;
+
+    /* After a fault its state cannot be trusted: abandoned, not freed */
+    if (!Faulted)
+        FT_Done_FreeType(Library);
+    if (Status < 0)
+        return Status;
+
+    Result->NumFaces = NumFaces;
     Result->Reserved = 0;
     return STATUS_SUCCESS;
 }
@@ -105,9 +153,6 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCm
     /* The host defines no options */
     if (lpCmdLine && *lpCmdLine)
         return ERROR_INVALID_PARAMETER;
-
-    if (FT_Init_FreeType(&g_Library))
-        return ERROR_NOT_ENOUGH_MEMORY;
 
     g_Reply.Header.Magic = UMFD_MAGIC;
     g_Reply.Header.Version = UMFD_VERSION;
@@ -147,8 +192,6 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCm
         }
         cbReply = (INT)(sizeof(UMFD_HEADER) + g_Reply.Header.cbPayload);
     }
-
-    FT_Done_FreeType(g_Library);
 
     /* Not started as the registered host, or the channel is off or gone: do not pretend to serve */
     if (Error == ERROR_NOT_SUPPORTED)
