@@ -273,6 +273,46 @@ START_TEST(schtasks)
     r = run_command("schtasks /delete /f /tn wine\\wineonce");
     ok(r == 0, "/delete wineonce: r = %lu\n", r);
 
+    /* /change /tr must really rewrite the Exec action: read it back, never 0 with nothing done. */
+    r = run_command("schtasks /create /tn wine\\winetr /sc ONCE /st 00:00 /tr notepad.exe /f");
+    ok(r == 0, "/create winetr: r = %lu\n", r);
+    r = run_command("schtasks /change /tn wine\\winetr /tr \"calc.exe /x\"");
+    ok(r == 0, "/change /tr: r = %lu\n", r);
+    {
+        IRegisteredTask *task = NULL;
+        ITaskDefinition *def = NULL;
+        IActionCollection *actions = NULL;
+        IAction *action = NULL;
+        IExecAction *exec = NULL;
+        BSTR path = NULL, args = NULL;
+        WCHAR *name = a2w("wine\\winetr");
+
+        hres = ITaskFolder_GetTask(root, name, &task);
+        ok(hres == S_OK, "GetTask(winetr) failed: %08lx\n", hres);
+        if (task) hres = IRegisteredTask_get_Definition(task, &def);
+        if (def) hres = ITaskDefinition_get_Actions(def, &actions);
+        if (actions) hres = IActionCollection_get_Item(actions, 1, &action);
+        if (action) hres = IAction_QueryInterface(action, &IID_IExecAction, (void **)&exec);
+        ok(exec != NULL, "no Exec action after /change /tr: %08lx\n", hres);
+        if (exec)
+        {
+            hres = IExecAction_get_Path(exec, &path);
+            ok(hres == S_OK && path && !wcscmp(path, L"calc.exe"), "Path = %s\n", wine_dbgstr_w(path));
+            hres = IExecAction_get_Arguments(exec, &args);
+            ok(hres == S_OK && args && !wcscmp(args, L"/x"), "Arguments = %s\n", wine_dbgstr_w(args));
+            SysFreeString(path);
+            SysFreeString(args);
+            IExecAction_Release(exec);
+        }
+        if (action) IAction_Release(action);
+        if (actions) IActionCollection_Release(actions);
+        if (def) ITaskDefinition_Release(def);
+        if (task) IRegisteredTask_Release(task);
+        HeapFree(GetProcessHeap(), 0, name);
+    }
+    r = run_command("schtasks /delete /f /tn wine\\winetr");
+    ok(r == 0, "/delete winetr: r = %lu\n", r);
+
     /* /ru SYSTEM: the task must register with the LocalSystem principal (the Phase-2 parity gap). */
     if (is_process_elevated())
     {

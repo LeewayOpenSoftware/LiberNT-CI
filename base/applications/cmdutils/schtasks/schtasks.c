@@ -135,10 +135,92 @@ static BSTR read_file_to_bstr(const WCHAR *file_name)
     return ret;
 }
 
+/* Split "/tr" into the command and its arguments; *cmd stays NULL when nothing had to be cut off. */
+static BOOL split_command(const WCHAR *tr, WCHAR **cmd, const WCHAR **args)
+{
+    const WCHAR *start = tr, *end = NULL, *rest = NULL;
+
+    *cmd = NULL;
+    *args = NULL;
+    if (tr[0] == '"') {
+        start = tr + 1;
+        end = wcschr(start, '"');
+        if (!end) { FIXME("Unterminated quote in /tr %s\n", debugstr_w(tr)); return FALSE; }
+        rest = end + 1;
+    } else if ((end = wcschr(tr, ' '))) {
+        rest = end + 1;
+    }
+    if (end) {
+        size_t cl = end - start;
+        if (!(*cmd = HeapAlloc(GetProcessHeap(), 0, (cl + 1) * sizeof(WCHAR)))) return FALSE;
+        memcpy(*cmd, start, cl * sizeof(WCHAR)); (*cmd)[cl] = 0;
+        while (*rest == ' ') rest++;
+        *args = rest;
+    }
+    return TRUE;
+}
+
+/* /change /tr: rewrite the first Exec action and re-register the definition in place. */
+static BOOL change_action(IRegisteredTask *task, const WCHAR *task_name, const WCHAR *tr)
+{
+    ITaskDefinition *def = NULL;
+    IActionCollection *actions = NULL;
+    IAction *action = NULL;
+    IExecAction *exec = NULL;
+    ITaskFolder *root = NULL;
+    IRegisteredTask *updated = NULL;
+    WCHAR *cmd = NULL;
+    const WCHAR *args = NULL;
+    BSTR str = NULL, path = NULL, arguments = NULL;
+    VARIANT v_user, v_pwd, v_sddl;
+    HRESULT hres;
+    BOOL ret = FALSE;
+
+    if (!split_command(tr, &cmd, &args)) return FALSE;
+
+    hres = IRegisteredTask_get_Definition(task, &def);
+    if (FAILED(hres)) { FIXME("get_Definition failed: %08lx\n", hres); goto done; }
+    hres = ITaskDefinition_get_Actions(def, &actions);
+    if (FAILED(hres)) { FIXME("get_Actions failed: %08lx\n", hres); goto done; }
+    hres = IActionCollection_get_Item(actions, 1, &action);
+    if (FAILED(hres)) hres = IActionCollection_Create(actions, TASK_ACTION_EXEC, &action);
+    if (FAILED(hres)) { FIXME("No Exec action to change: %08lx\n", hres); goto done; }
+    hres = IAction_QueryInterface(action, &IID_IExecAction, (void **)&exec);
+    if (FAILED(hres)) { FIXME("The first action is not an Exec action: %08lx\n", hres); goto done; }
+
+    path = SysAllocString(cmd ? cmd : tr);
+    if (args && *args) arguments = SysAllocString(args);
+    hres = IExecAction_put_Path(exec, path);
+    if (SUCCEEDED(hres)) hres = IExecAction_put_Arguments(exec, arguments);
+    if (FAILED(hres)) { FIXME("Changing the action failed: %08lx\n", hres); goto done; }
+
+    root = get_tasks_root_folder();
+    if (!root) goto done;
+    V_VT(&v_user) = VT_EMPTY; V_VT(&v_pwd) = VT_EMPTY; V_VT(&v_sddl) = VT_EMPTY;
+    str = SysAllocString(task_name);
+    hres = ITaskFolder_RegisterTaskDefinition(root, str, def, TASK_UPDATE, v_user, v_pwd,
+                                              TASK_LOGON_NONE, v_sddl, &updated);
+    if (FAILED(hres)) { FIXME("RegisterTaskDefinition failed: %08lx\n", hres); goto done; }
+    ret = TRUE;
+
+done:
+    if (updated) IRegisteredTask_Release(updated);
+    SysFreeString(str);
+    SysFreeString(path);
+    SysFreeString(arguments);
+    if (root) ITaskFolder_Release(root);
+    if (exec) IExecAction_Release(exec);
+    if (action) IAction_Release(action);
+    if (actions) IActionCollection_Release(actions);
+    if (def) ITaskDefinition_Release(def);
+    HeapFree(GetProcessHeap(), 0, cmd);
+    return ret;
+}
+
 static int change_command(int argc, WCHAR *argv[])
 {
     BOOL have_option = FALSE, enable = FALSE;
-    const WCHAR *task_name = NULL;
+    const WCHAR *task_name = NULL, *tr = NULL;
     IRegisteredTask *task;
     HRESULT hres;
 
@@ -168,7 +250,7 @@ static int change_command(int argc, WCHAR *argv[])
                 return 1;
             }
 
-            FIXME("Unsupported /tr option %s\n", debugstr_w(argv[1]));
+            tr = argv[1];
             have_option = TRUE;
             argc -= 2;
             argv += 2;
@@ -199,6 +281,11 @@ static int change_command(int argc, WCHAR *argv[])
             FIXME("put_Enabled failed: %08lx\n", hres);
             return 1;
         }
+    }
+
+    if (tr && !change_action(task, task_name, tr)) {
+        IRegisteredTask_Release(task);
+        return 1;
     }
 
     IRegisteredTask_Release(task);
@@ -427,26 +514,7 @@ static int create_command(int argc, WCHAR *argv[])
     if (!interval) interval = 1;
 
     /* Split /tr into command + arguments for the Exec action (the service quotes Command separately). */
-    if (tr[0] == '"') {
-        const WCHAR *end = wcschr(tr + 1, '"');
-        if (!end) { FIXME("Unterminated quote in /tr %s\n", debugstr_w(tr)); return 1; }
-        {
-            size_t cl = end - (tr + 1);
-            if (!(cmd_only = HeapAlloc(GetProcessHeap(), 0, (cl + 1) * sizeof(WCHAR)))) goto done;
-            memcpy(cmd_only, tr + 1, cl * sizeof(WCHAR)); cmd_only[cl] = 0;
-            args_for_xml = end + 1;
-            while (*args_for_xml == ' ') args_for_xml++;
-        }
-    } else {
-        const WCHAR *sp = wcschr(tr, ' ');
-        if (sp) {
-            size_t cl = sp - tr;
-            if (!(cmd_only = HeapAlloc(GetProcessHeap(), 0, (cl + 1) * sizeof(WCHAR)))) goto done;
-            memcpy(cmd_only, tr, cl * sizeof(WCHAR)); cmd_only[cl] = 0;
-            args_for_xml = sp + 1;
-            while (*args_for_xml == ' ') args_for_xml++;
-        }
-    }
+    if (!split_command(tr, &cmd_only, &args_for_xml)) return 1;
     cmd_for_xml = cmd_only ? cmd_only : tr;
 
     tn_esc = xml_escape(task_name);
