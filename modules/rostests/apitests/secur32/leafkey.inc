@@ -1,5 +1,6 @@
 /* Test-only RSA 2048 key as a CAPI PRIVATEKEYBLOB (CALG_RSA_SIGN),
- * generated for this test so the leaf key never needs exporting. */
+ * generated for this test so the leaf key never needs exporting.
+ * Not a secret: it guards nothing and exists only for this test. */
 static const BYTE LeafKeyBlob[] =
 {
     0x07, 0x02, 0x00, 0x00, 0x00, 0x24, 0x00, 0x00, 0x52, 0x53, 0x41, 0x32,

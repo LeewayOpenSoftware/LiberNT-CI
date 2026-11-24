@@ -146,14 +146,8 @@ out:
     return ok;
 }
 
-/* Collect the certificates the peer sent into a memory store. crt is the
- * verify callback's chain head: walking it reaches the intermediates even
- * mid-handshake, when ssl->session (and thus mbedtls_ssl_get_peer_cert) is
- * not populated yet. Passed to CertGetCertificateChain as part of the
- * additional store, so the chain builds from the handshake itself; AIA
- * retrieval stays as the fallback. Mirrors Windows, where schannel hands
- * the peer certificates to the chain engine instead of relying on issuer
- * URLs. */
+/* Collect the certificates the peer sent (crt = the verify callback's
+ * chain head) into a memory store for CertGetCertificateChain. */
 static HCERTSTORE schan_peer_store(mbedtls_x509_crt *peer)
 {
     HCERTSTORE store;
