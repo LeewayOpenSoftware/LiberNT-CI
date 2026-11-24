@@ -43,7 +43,7 @@ typedef struct _UMFD_CHANNEL
     PUMFD_HEADER Reply;
 } UMFD_CHANNEL, *PUMFD_CHANNEL;
 
-/* win32k globals are per session, as session space is on Windows; waitable objects live in nonpaged pool */
+/* One channel per win32k instance (single session today); waitable objects live in nonpaged pool */
 static PUMFD_CHANNEL g_Umfd;
 static ULONG g_UmfdMode;
 
@@ -210,7 +210,8 @@ UmfdpRegister(_In_ INT InSize, _In_opt_ LPSTR UnsafeIn)
         return 0;
     }
 
-    Status = ObReferenceObjectByHandle((HANDLE)(ULONG_PTR)Reg.ProcessHandle, PROCESS_QUERY_LIMITED_INFORMATION,
+    /* Every full-access handle carries this right; the limited one is not in a pre-Vista PROCESS_ALL_ACCESS */
+    Status = ObReferenceObjectByHandle((HANDLE)(ULONG_PTR)Reg.ProcessHandle, PROCESS_QUERY_INFORMATION,
                                        *PsProcessType, UserMode, (PVOID *)&Process, NULL);
     if (!NT_SUCCESS(Status))
     {
@@ -286,6 +287,17 @@ UmfdpUnregister(VOID)
     return 1;
 }
 
+static BOOLEAN
+UmfdpIsValidHeader(_In_ const UMFD_HEADER *Header, _In_ INT InSize)
+{
+    if (Header->Magic != UMFD_MAGIC || Header->Version != UMFD_VERSION ||
+        Header->cbPayload != (ULONG)InSize - sizeof(UMFD_HEADER))
+    {
+        return FALSE;
+    }
+    return Header->RequestId != 0 || InSize == (INT)sizeof(UMFD_HEADER);
+}
+
 static INT
 UmfdpServe(_In_ INT InSize, _In_opt_ LPSTR UnsafeIn, _In_ INT OutSize, _Out_opt_ LPSTR UnsafeOut)
 {
@@ -296,6 +308,8 @@ UmfdpServe(_In_ INT InSize, _In_opt_ LPSTR UnsafeIn, _In_ INT OutSize, _Out_opt_
     ULONG cbRequest = 0;
     ULONG RequestId = 0;
 
+    UMFD_HEADER Header;
+
     if (InSize < (INT)sizeof(UMFD_HEADER) || InSize > UMFD_MAX_MESSAGE || UnsafeIn == NULL ||
         OutSize < (INT)sizeof(UMFD_HEADER) || UnsafeOut == NULL)
     {
@@ -303,48 +317,70 @@ UmfdpServe(_In_ INT InSize, _In_opt_ LPSTR UnsafeIn, _In_ INT OutSize, _Out_opt_
         return 0;
     }
 
-    Incoming = ExAllocatePoolWithTag(PagedPool, InSize, TAG_UMFD);
-    if (Incoming == NULL)
+    /* Who is calling comes first: a non-host never makes win32k allocate or copy */
+    ExAcquireFastMutex(&g_Umfd->Lock);
+    if (g_Umfd->Host != Process || g_Umfd->ServeActive)
     {
-        EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        Status = (g_Umfd->Host != Process) ? STATUS_ACCESS_DENIED : STATUS_DEVICE_BUSY;
+        ExReleaseFastMutex(&g_Umfd->Lock);
+        SetLastNtError(Status);
         return 0;
     }
+    g_Umfd->ServeActive = TRUE;
+    ExReleaseFastMutex(&g_Umfd->Lock);
+
     _SEH2_TRY
     {
         ProbeForRead(UnsafeIn, InSize, 1);
-        RtlCopyMemory(Incoming, UnsafeIn, InSize);
+        RtlCopyMemory(&Header, UnsafeIn, sizeof(Header));
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END;
-    if (NT_SUCCESS(Status) &&
-        (Incoming->Magic != UMFD_MAGIC || Incoming->Version != UMFD_VERSION ||
-         Incoming->cbPayload != (ULONG)InSize - sizeof(UMFD_HEADER)))
-    {
+
+    /* A SERVE without a reply is exactly one header */
+    Incoming = NULL;
+    if (NT_SUCCESS(Status) && !UmfdpIsValidHeader(&Header, InSize))
         Status = STATUS_INVALID_PARAMETER;
-    }
-    if (!NT_SUCCESS(Status))
+    if (NT_SUCCESS(Status) && Header.RequestId != 0)
     {
-        ExFreePoolWithTag(Incoming, TAG_UMFD);
-        SetLastNtError(Status);
-        return 0;
+        Incoming = ExAllocatePoolWithTag(PagedPool, InSize, TAG_UMFD);
+        if (Incoming == NULL)
+            Status = STATUS_NO_MEMORY;
+    }
+    if (Incoming)
+    {
+        _SEH2_TRY
+        {
+            RtlCopyMemory(Incoming, UnsafeIn, InSize);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+        /* The buffer is the host's to change between copies: check the captured one */
+        if (NT_SUCCESS(Status) && (!UmfdpIsValidHeader(Incoming, InSize) || Incoming->RequestId == 0))
+            Status = STATUS_INVALID_PARAMETER;
     }
 
     ExAcquireFastMutex(&g_Umfd->Lock);
-    if (g_Umfd->Host != Process || g_Umfd->ServeActive)
+    if (NT_SUCCESS(Status) && g_Umfd->Host != Process)
+        Status = STATUS_PORT_DISCONNECTED;
+    if (!NT_SUCCESS(Status))
     {
-        Status = (g_Umfd->Host != Process) ? STATUS_ACCESS_DENIED : STATUS_DEVICE_BUSY;
+        g_Umfd->ServeActive = FALSE;
         ExReleaseFastMutex(&g_Umfd->Lock);
-        ExFreePoolWithTag(Incoming, TAG_UMFD);
+        if (Incoming)
+            ExFreePoolWithTag(Incoming, TAG_UMFD);
         SetLastNtError(Status);
         return 0;
     }
-    g_Umfd->ServeActive = TRUE;
 
     /* A reply counts only for the one outstanding request; a late or stale one is dropped */
-    if (Incoming->RequestId != 0 && g_Umfd->SlotState == UmfdSlotTaken &&
+    if (Incoming && g_Umfd->SlotState == UmfdSlotTaken &&
         Incoming->RequestId == g_Umfd->SlotRequestId && Incoming->Op == g_Umfd->SlotOp)
     {
         g_Umfd->Reply = Incoming;
@@ -436,8 +472,11 @@ UmfdpServe(_In_ INT InSize, _In_opt_ LPSTR UnsafeIn, _In_ INT OutSize, _Out_opt_
 
     if (Status != STATUS_SUCCESS)
     {
-        /* An idle timeout fails with STATUS_TIMEOUT's error: the host just calls SERVE again */
-        SetLastNtError(Status);
+        /* An idle timeout fails with WAIT_TIMEOUT: the host just calls SERVE again */
+        if (Status == STATUS_TIMEOUT)
+            EngSetLastError(WAIT_TIMEOUT);
+        else
+            SetLastNtError(Status);
         return 0;
     }
     return (INT)cbRequest;
