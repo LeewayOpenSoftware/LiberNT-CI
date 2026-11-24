@@ -517,6 +517,10 @@ jobs:
         else
           ninja -C "$OUT" -k0
         fi
+        # credprovs_test.dll lives under dll/, outside modules/rostests/all; the apitests artifact needs it.
+        if ninja -C "$OUT" -t targets all | grep -q "^credprovs_test:"; then
+          ninja -C "$OUT" credprovs_test
+        fi
 
     - name: Collect the kmtests binaries
       # kmtest.exe + kmtest_drv.sys (and the standalone test drivers) for a lab
@@ -1213,6 +1217,8 @@ jobs:
     - name: Build the test suite
       shell: cmd
       run: |
+        :: credprovs_test.dll lives under dll/, outside modules/rostests/all; the apitests artifact needs it.
+        ninja -C ${{steps.configure.outputs.outdir}} -t targets all | findstr /B /C:"credprovs_test:" >nul && (ninja -C ${{steps.configure.outputs.outdir}} credprovs_test || exit /b 1)
         :: The per-directory target of the Ninja generator; without it, build everything.
         ninja -C ${{steps.configure.outputs.outdir}} -t targets all | findstr /B /C:"modules/rostests/all:" >nul
         if %ERRORLEVEL% EQU 0 (ninja -C ${{steps.configure.outputs.outdir}} -k0 modules/rostests/all) else (ninja -C ${{steps.configure.outputs.outdir}} -k0)
