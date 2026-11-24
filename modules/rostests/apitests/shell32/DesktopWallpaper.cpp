@@ -145,11 +145,69 @@ TestMonitors(IDesktopWallpaper *pdw)
 
     pszId = (LPWSTR)(ULONG_PTR)1;
     hr = pdw->GetMonitorDevicePathAt(cMonitors, &pszId);
-    ok(FAILED(hr), "GetMonitorDevicePathAt(%u) returned 0x%lx\n", cMonitors, hr);
+    ok_hr(hr, E_FAIL);
     ok(pszId == NULL, "Expected NULL, got %p\n", pszId);
 
     hr = pdw->GetMonitorRECT(L"\\\\?\\NoSuchMonitor#0", &rc);
     ok(FAILED(hr), "GetMonitorRECT(unknown) returned 0x%lx\n", hr);
+}
+
+static void
+ExpectState(IDesktopWallpaper *pdw, LPCWSTR pszBitmap, BOOL bEnabled, LPCSTR pszWhen)
+{
+    DESKTOP_SLIDESHOW_STATE State = (DESKTOP_SLIDESHOW_STATE)-1;
+    LPWSTR pszWallpaper = NULL;
+    HRESULT hr;
+
+    hr = pdw->GetStatus(&State);
+    ok_hr(hr, S_OK);
+    ok(State == (bEnabled ? DSS_ENABLED : 0), "%s: state 0x%x\n", pszWhen, State);
+    /* The chosen wallpaper is reported whether or not the desktop shows it. */
+    hr = pdw->GetWallpaper(NULL, &pszWallpaper);
+    ok_hr(hr, S_OK);
+    ok(pszWallpaper && !lstrcmpiW(pszWallpaper, pszBitmap), "%s: GetWallpaper returned '%ls'\n", pszWhen, pszWallpaper);
+    CoTaskMemFree(pszWallpaper);
+}
+
+/* Win11: Enable(FALSE) empties the live and the saved wallpaper and persists. */
+static void
+TestDisable(IDesktopWallpaper *pdw, LPCWSTR pszBitmap)
+{
+    CComPtr<IDesktopWallpaper> pOther;
+    WCHAR szSpi[MAX_PATH], szReg[MAX_PATH];
+    HRESULT hr;
+
+    ExpectState(pdw, pszBitmap, TRUE, "enabled");
+
+    hr = pdw->Enable(FALSE);
+    ok_hr(hr, S_OK);
+    SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szSpi), szSpi, 0);
+    ok(szSpi[0] == UNICODE_NULL, "Wallpaper still '%ls' after Enable(FALSE)\n", szSpi);
+    ReadString(szDesktopKey, L"Wallpaper", szReg, ARRAYSIZE(szReg));
+    ok(szReg[0] == UNICODE_NULL, "Enable(FALSE) left the saved wallpaper '%ls'\n", szReg);
+    ExpectState(pdw, pszBitmap, FALSE, "disabled");
+
+    hr = CoCreateInstance(CLSID_DesktopWallpaper, NULL, CLSCTX_ALL, IID_IDesktopWallpaper, reinterpret_cast<void **>(&pOther));
+    ok_hr(hr, S_OK);
+    if (SUCCEEDED(hr))
+        ExpectState(pOther, pszBitmap, FALSE, "disabled, new instance");
+
+    /* Changing the position does not bring the wallpaper back. */
+    hr = pdw->SetPosition(DWPOS_FILL);
+    ok_hr(hr, S_OK);
+    SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szSpi), szSpi, 0);
+    ok(szSpi[0] == UNICODE_NULL, "SetPosition re-enabled the wallpaper '%ls'\n", szSpi);
+    ExpectState(pdw, pszBitmap, FALSE, "disabled, after SetPosition");
+
+    hr = pdw->Enable(TRUE);
+    ok_hr(hr, S_OK);
+    SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szSpi), szSpi, 0);
+    /* Win11 shows a transcoded copy; Orosi applies the file itself. */
+    if (is_reactos())
+        ok(!lstrcmpiW(szSpi, pszBitmap), "Wallpaper is '%ls' after Enable(TRUE)\n", szSpi);
+    else
+        ok(szSpi[0] != UNICODE_NULL, "No wallpaper after Enable(TRUE)\n");
+    ExpectState(pdw, pszBitmap, TRUE, "enabled again");
 }
 
 static void
@@ -167,7 +225,7 @@ TestWallpaper(IDesktopWallpaper *pdw, LPCWSTR pszBitmap)
     /* A missing file must fail and leave the wallpaper as it was. */
     SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szBefore), szBefore, 0);
     hr = pdw->SetWallpaper(NULL, L"C:\\DoesNotExist\\NoSuchWallpaper.bmp");
-    ok(FAILED(hr), "SetWallpaper(missing file) returned 0x%lx\n", hr);
+    ok_hr(hr, HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND));
     SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szSpi), szSpi, 0);
     ok(!lstrcmpiW(szSpi, szBefore), "Wallpaper changed to '%ls'\n", szSpi);
 
@@ -197,17 +255,7 @@ TestWallpaper(IDesktopWallpaper *pdw, LPCWSTR pszBitmap)
     hr = pdw->SetWallpaper(L"\\\\?\\NoSuchMonitor#0", pszBitmap);
     ok(FAILED(hr), "SetWallpaper(unknown monitor) returned 0x%lx\n", hr);
 
-    /* Disabling empties the live wallpaper; enabling restores the saved one. */
-    hr = pdw->Enable(FALSE);
-    ok_hr(hr, S_OK);
-    SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szSpi), szSpi, 0);
-    ok(szSpi[0] == UNICODE_NULL, "Wallpaper still '%ls' after Enable(FALSE)\n", szSpi);
-    ReadString(szDesktopKey, L"Wallpaper", szReg, ARRAYSIZE(szReg));
-    ok(!lstrcmpiW(szReg, pszBitmap), "Enable(FALSE) changed the saved wallpaper to '%ls'\n", szReg);
-    hr = pdw->Enable(TRUE);
-    ok_hr(hr, S_OK);
-    SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szSpi), szSpi, 0);
-    ok(!lstrcmpiW(szSpi, pszBitmap), "Wallpaper is '%ls' after Enable(TRUE)\n", szSpi);
+    TestDisable(pdw, pszBitmap);
 }
 
 static void
@@ -258,20 +306,39 @@ TestBackgroundColor(IDesktopWallpaper *pdw)
     hr = pdw->GetBackgroundColor(&cr);
     ok_hr(hr, S_OK);
     ok(cr == RGB(0x12, 0x34, 0x56), "GetBackgroundColor returned 0x%06lx\n", cr);
-    ok(GetSysColor(COLOR_DESKTOP) == RGB(0x12, 0x34, 0x56), "COLOR_DESKTOP is 0x%06lx\n", GetSysColor(COLOR_DESKTOP));
+    /* Win11 left COLOR_DESKTOP unchanged in the parity run. */
+    if (is_reactos())
+        ok(GetSysColor(COLOR_DESKTOP) == RGB(0x12, 0x34, 0x56), "COLOR_DESKTOP is 0x%06lx\n", GetSysColor(COLOR_DESKTOP));
+
+    hr = pdw->SetBackgroundColor(0x01000000);
+    ok_hr(hr, S_OK);
 }
 
 static void
 TestSlideshow(IDesktopWallpaper *pdw)
 {
     DESKTOP_SLIDESHOW_STATE State = (DESKTOP_SLIDESHOW_STATE)-1;
+    DESKTOP_SLIDESHOW_OPTIONS Options = (DESKTOP_SLIDESHOW_OPTIONS)-1;
+    IShellItemArray *pItems = NULL;
+    UINT uTick = (UINT)-1;
     HRESULT hr;
 
     hr = pdw->GetStatus(NULL);
     ok(FAILED(hr), "GetStatus(NULL) returned 0x%lx\n", hr);
     hr = pdw->GetStatus(&State);
     ok_hr(hr, S_OK);
-    ok(!(State & DSS_SLIDESHOW), "No slideshow was configured, state 0x%x\n", State);
+    ok(State == DSS_ENABLED, "No slideshow was configured, state 0x%x\n", State);
+
+    /* With no slideshow configured (Win11 parity run values). */
+    hr = pdw->GetSlideshow(&pItems);
+    ok_hr(hr, S_FALSE);
+    if (pItems)
+        pItems->Release();
+    hr = pdw->GetSlideshowOptions(&Options, &uTick);
+    ok_hr(hr, S_OK);
+    ok(Options == 0 && uTick == 0, "GetSlideshowOptions returned 0x%x, %u\n", Options, uTick);
+    hr = pdw->AdvanceSlideshow(NULL, DSD_FORWARD);
+    ok_hr(hr, E_UNEXPECTED);
 }
 
 START_TEST(DesktopWallpaper)

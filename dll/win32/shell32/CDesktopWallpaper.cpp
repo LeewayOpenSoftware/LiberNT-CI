@@ -13,6 +13,10 @@ WINE_DEFAULT_DEBUG_CHANNEL(shell_ad);
 
 #define MAX_WALLPAPER_MONITORS 16
 
+/* While disabled, the wallpaper Enable(TRUE) brings back; present only then. */
+static const WCHAR szWallpapersKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Wallpapers";
+static const WCHAR szDisabledValue[] = L"DisabledWallpaperPath";
+
 typedef struct _WALLPAPER_MONITOR
 {
     WCHAR szId[CCHDEVICENAME];  /* MONITORINFOEXW::szDevice */
@@ -85,6 +89,43 @@ CheckMonitorId(LPCWSTR pszId)
     return S_OK;
 }
 
+static BOOL
+GetDisabledWallpaper(LPWSTR pszPath, DWORD cchPath)
+{
+    DWORD cb = cchPath * sizeof(WCHAR);
+    return RegGetValueW(HKEY_CURRENT_USER, szWallpapersKey, szDisabledValue,
+                        RRF_RT_REG_SZ, NULL, pszPath, &cb) == ERROR_SUCCESS;
+}
+
+static HRESULT
+SetDisabledWallpaper(LPCWSTR pszPath)
+{
+    LSTATUS Status;
+    HKEY hKey;
+
+    Status = RegCreateKeyExW(HKEY_CURRENT_USER, szWallpapersKey, 0, NULL, 0,
+                             KEY_SET_VALUE, NULL, &hKey, NULL);
+    if (Status != ERROR_SUCCESS)
+        return HRESULT_FROM_WIN32(Status);
+    Status = RegSetValueExW(hKey, szDisabledValue, 0, REG_SZ, reinterpret_cast<const BYTE *>(pszPath),
+                            (lstrlenW(pszPath) + 1) * sizeof(WCHAR));
+    RegCloseKey(hKey);
+    return HRESULT_FROM_WIN32(Status);
+}
+
+static HRESULT
+ApplyWallpaper(LPCWSTR pszPath)
+{
+    if (!SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, const_cast<LPWSTR>(pszPath),
+                               SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
+    {
+        HRESULT hr = HResultFromLastError();
+        ERR("SPI_SETDESKWALLPAPER failed for '%ls': 0x%lx\n", pszPath, hr);
+        return hr;
+    }
+    return S_OK;
+}
+
 static HRESULT
 CreateActiveDesktop(IActiveDesktop **ppActiveDesktop)
 {
@@ -98,6 +139,7 @@ CreateActiveDesktop(IActiveDesktop **ppActiveDesktop)
 /* Win32k keeps a single wallpaper, so a monitor ID selects every monitor. */
 HRESULT WINAPI CDesktopWallpaper::SetWallpaper(LPCWSTR monitorID, LPCWSTR wallpaper)
 {
+    WCHAR szDisabled[MAX_PATH];
     HRESULT hr;
 
     TRACE("(%ls, %ls)\n", monitorID, wallpaper);
@@ -116,19 +158,20 @@ HRESULT WINAPI CDesktopWallpaper::SetWallpaper(LPCWSTR monitorID, LPCWSTR wallpa
     {
         DWORD dwAttributes = GetFileAttributesW(wallpaper);
         if (dwAttributes == INVALID_FILE_ATTRIBUTES)
+        {
+            /* Win11 answers ERROR_FILE_NOT_FOUND for a missing directory too. */
+            if (GetLastError() == ERROR_PATH_NOT_FOUND)
+                return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
             return HResultFromLastError();
+        }
         if (dwAttributes & FILE_ATTRIBUTE_DIRECTORY)
             return E_INVALIDARG;
     }
 
-    if (!SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, const_cast<LPWSTR>(wallpaper),
-                               SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
-    {
-        hr = HResultFromLastError();
-        ERR("SPI_SETDESKWALLPAPER failed for '%ls': 0x%lx\n", wallpaper, hr);
-        return hr;
-    }
-    return S_OK;
+    /* A disabled desktop stays blank; the new path waits for Enable(TRUE). */
+    if (GetDisabledWallpaper(szDisabled, ARRAYSIZE(szDisabled)))
+        return SetDisabledWallpaper(wallpaper);
+    return ApplyWallpaper(wallpaper);
 }
 
 HRESULT WINAPI CDesktopWallpaper::GetWallpaper(LPCWSTR monitorID, LPWSTR *wallpaper)
@@ -145,6 +188,9 @@ HRESULT WINAPI CDesktopWallpaper::GetWallpaper(LPCWSTR monitorID, LPWSTR *wallpa
     if (FAILED(hr))
         return hr;
 
+    /* Win11 keeps reporting the chosen wallpaper while the desktop is disabled. */
+    if (GetDisabledWallpaper(szCurrent, ARRAYSIZE(szCurrent)))
+        return SHStrDupW(szCurrent, wallpaper);
     if (!SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szCurrent), szCurrent, 0))
         return HResultFromLastError();
     return SHStrDupW(szCurrent, wallpaper);
@@ -160,7 +206,7 @@ HRESULT WINAPI CDesktopWallpaper::GetMonitorDevicePathAt(UINT monitorIndex, LPWS
         return E_POINTER;
     *monitorID = NULL;
     if (monitorIndex >= EnumWallpaperMonitors(List, ARRAYSIZE(List)))
-        return E_INVALIDARG;
+        return E_FAIL;  /* Win11 parity */
     return SHStrDupW(List[monitorIndex].szId, monitorID);
 }
 
@@ -204,8 +250,8 @@ HRESULT WINAPI CDesktopWallpaper::SetBackgroundColor(COLORREF color)
 
     TRACE("(0x%08lx)\n", color);
 
-    if (color & 0xFF000000)
-        return E_INVALIDARG;
+    /* Win11 accepts and ignores the high byte. */
+    color &= 0x00FFFFFF;
     if (!SetSysColors(1, &iElement, &color))
         return HResultFromLastError();
 
@@ -301,12 +347,15 @@ HRESULT WINAPI CDesktopWallpaper::SetSlideshow(IShellItemArray *items)
     return E_NOTIMPL;
 }
 
+/* With no slideshow configured, the getters answer like Win11. */
 HRESULT WINAPI CDesktopWallpaper::GetSlideshow(IShellItemArray **items)
 {
-    FIXME("(%p): slideshow not implemented\n", items);
-    if (items)
-        *items = NULL;
-    return E_NOTIMPL;
+    TRACE("(%p)\n", items);
+
+    if (!items)
+        return E_POINTER;
+    *items = NULL;
+    return S_FALSE;
 }
 
 HRESULT WINAPI CDesktopWallpaper::SetSlideshowOptions(DESKTOP_SLIDESHOW_OPTIONS options, UINT slideshowTick)
@@ -317,48 +366,68 @@ HRESULT WINAPI CDesktopWallpaper::SetSlideshowOptions(DESKTOP_SLIDESHOW_OPTIONS 
 
 HRESULT WINAPI CDesktopWallpaper::GetSlideshowOptions(DESKTOP_SLIDESHOW_OPTIONS *options, UINT *slideshowTick)
 {
-    FIXME("(%p, %p): slideshow not implemented\n", options, slideshowTick);
-    return E_NOTIMPL;
+    TRACE("(%p, %p)\n", options, slideshowTick);
+
+    if (!options || !slideshowTick)
+        return E_POINTER;
+    *options = (DESKTOP_SLIDESHOW_OPTIONS)0;
+    *slideshowTick = 0;
+    return S_OK;
 }
 
 HRESULT WINAPI CDesktopWallpaper::AdvanceSlideshow(LPCWSTR monitorID, DESKTOP_SLIDESHOW_DIRECTION direction)
 {
-    FIXME("(%ls, %d): slideshow not implemented\n", monitorID, direction);
-    return E_NOTIMPL;
+    TRACE("(%ls, %d)\n", monitorID, direction);
+    return E_UNEXPECTED;
 }
 
 HRESULT WINAPI CDesktopWallpaper::GetStatus(DESKTOP_SLIDESHOW_STATE *state)
 {
+    WCHAR szDisabled[MAX_PATH];
+
     TRACE("(%p)\n", state);
 
     if (!state)
         return E_POINTER;
-    /* No slideshow can run yet, so none of the DSS_* bits apply. */
-    *state = (DESKTOP_SLIDESHOW_STATE)0;
+    /* No slideshow can run yet, so only DSS_ENABLED applies. */
+    if (GetDisabledWallpaper(szDisabled, ARRAYSIZE(szDisabled)))
+        *state = (DESKTOP_SLIDESHOW_STATE)0;
+    else
+        *state = DSS_ENABLED;
     return S_OK;
 }
 
-/* Disabling only empties the live wallpaper; the saved path brings it back. */
+/* Like Win11, disabling empties both the live and the saved wallpaper; the
+ * chosen path is kept aside so GetWallpaper and Enable(TRUE) still see it. */
 HRESULT WINAPI CDesktopWallpaper::Enable(BOOL enable)
 {
     WCHAR szWallpaper[MAX_PATH];
-    DWORD cb = sizeof(szWallpaper);
-    LSTATUS Status;
+    HKEY hKey;
+    HRESULT hr;
 
     TRACE("(%d)\n", enable);
 
-    szWallpaper[0] = UNICODE_NULL;
-    if (enable)
+    if (!GetDisabledWallpaper(szWallpaper, ARRAYSIZE(szWallpaper)))
     {
-        Status = RegGetValueW(HKEY_CURRENT_USER, L"Control Panel\\Desktop", L"Wallpaper",
-                              RRF_RT_REG_SZ, NULL, szWallpaper, &cb);
-        if (Status == ERROR_FILE_NOT_FOUND)
+        if (enable)
             return S_OK;
-        if (Status != ERROR_SUCCESS)
-            return HRESULT_FROM_WIN32(Status);
+        if (!SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szWallpaper), szWallpaper, 0))
+            return HResultFromLastError();
+        hr = SetDisabledWallpaper(szWallpaper);
+        if (FAILED(hr))
+            return hr;
+        return ApplyWallpaper(L"");
     }
+    if (!enable)
+        return S_OK;
 
-    if (!SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, szWallpaper, SPIF_SENDCHANGE))
-        return HResultFromLastError();
+    hr = ApplyWallpaper(szWallpaper);
+    if (FAILED(hr))
+        return hr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, szWallpapersKey, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        RegDeleteValueW(hKey, szDisabledValue);
+        RegCloseKey(hKey);
+    }
     return S_OK;
 }
