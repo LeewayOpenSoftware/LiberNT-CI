@@ -13,6 +13,7 @@ static HANDLE g_PullThread;
 static HANDLE g_StopEvent;
 static HWND g_Window;
 static LONG g_IpcLostPosted;
+static DWORD g_PendingLoss;         /* a loss seen before the window existed */
 
 BOOL
 LuhIpcConnect(VOID)
@@ -36,7 +37,14 @@ LuhIpcLost(
 
     StringCchPrintfW(Text, ARRAYSIZE(Text), L"%lu", Error);
     LuhTrace("ipc-lost", Text);
-    if (InterlockedExchange(&g_IpcLostPosted, 1) == 0 && g_Window)
+    /* Ready can fail while the window is still being created: keep that loss for LuhIpcStart. */
+    if (g_Window == NULL)
+    {
+        if (g_PendingLoss == 0)
+            g_PendingLoss = Error ? Error : ERROR_GEN_FAILURE;
+        return;
+    }
+    if (InterlockedExchange(&g_IpcLostPosted, 1) == 0)
         PostMessageW(g_Window, WM_LUH_IPC_LOST, Error, 0);
 }
 
@@ -96,6 +104,12 @@ LuhIpcStart(
     _In_ HWND Window)
 {
     g_Window = Window;
+    if (g_PendingLoss != 0)
+    {
+        DWORD Error = g_PendingLoss;
+        g_PendingLoss = 0;
+        LuhIpcLost(Error);
+    }
     g_StopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (g_StopEvent == NULL)
         return FALSE;
@@ -106,12 +120,16 @@ LuhIpcStart(
 VOID
 LuhIpcStop(VOID)
 {
+    BOOL ThreadGone = TRUE;
+
     if (g_StopEvent)
         SetEvent(g_StopEvent);
     if (g_PullThread)
     {
-        /* The thread may sit inside a 30 s server wait; the process is leaving anyway. */
-        WaitForSingleObject(g_PullThread, 500);
+        /* The thread usually sits inside the server's 30 s wait with the binding in use.
+         * Freeing that binding under it would be a use-after-free, so when it has not
+         * returned the binding is left for process exit to reclaim. */
+        ThreadGone = (WaitForSingleObject(g_PullThread, 500) == WAIT_OBJECT_0);
         CloseHandle(g_PullThread);
         g_PullThread = NULL;
     }
@@ -120,9 +138,11 @@ LuhIpcStop(VOID)
         CloseHandle(g_StopEvent);
         g_StopEvent = NULL;
     }
-    WluiDisconnect(&g_Connection);
+    if (ThreadGone)
+        WluiDisconnect(&g_Connection);
 }
 
+/* Synchronous on purpose: a UI thread that cannot complete this call is what winlogon counts as a hang. */
 VOID
 LuhIpcHeartbeat(VOID)
 {

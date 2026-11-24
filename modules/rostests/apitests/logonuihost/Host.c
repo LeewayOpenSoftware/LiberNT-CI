@@ -301,6 +301,31 @@ START_TEST(Host)
     Code = WaitExit(Process, 5000);
     ok(Code == 0, "run 2 exit %lu\n", Code);
 
+    /* R1: a Dismiss always lands while the pull thread sits in a server wait; teardown must not
+     * free the binding under that call. Twenty times in a row, the exit is 0, never 4. */
+    {
+        int Run, Bad = 0;
+        for (Run = 0; Run < 20; Run++)
+        {
+            ResetRun();
+            Process = LaunchHost(Exe, Endpoint, Own, Trace, NULL);
+            if (Process == NULL || WaitForSingleObject(g_ReadyEvent, 5000) != WAIT_OBJECT_0)
+            {
+                Bad++;
+                if (Process) WaitExit(Process, 1000);
+                continue;
+            }
+            PostCmd(WluiCmdDismiss, 0, NULL, NULL);
+            Code = WaitExit(Process, 5000);
+            if (Code != 0 || g_ExitReason != WluiExitDismissed)
+            {
+                trace("dismiss run %d: exit %lu reason %lu\n", Run, Code, g_ExitReason);
+                Bad++;
+            }
+        }
+        ok(Bad == 0, "%d of 20 dismiss-under-wait runs failed\n", Bad);
+    }
+
     /* Run 3: credentials are not supported by this host build; it says so and leaves. */
     ResetRun();
     Process = LaunchHost(Exe, Endpoint, Own, Trace, NULL);
