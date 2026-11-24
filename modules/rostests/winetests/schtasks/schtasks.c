@@ -206,6 +206,7 @@ START_TEST(schtasks)
     static WCHAR wineW[] = L"\\wine";
     static WCHAR wine_testW[] = L"\\wine\\test";
     DWORD r;
+    HRESULT hres;
 
     if (!is_process_elevated() && !is_win10_plus())
     {
@@ -258,13 +259,39 @@ START_TEST(schtasks)
     ok(r == 1, "r = %lu\n", r); /* task already exists */
 
     r = run_command("schtasks /create /tn wine\\winetest");
-    ok(r == E_FAIL, "r = %lx\n", r); /* missing arguments */
+    ok(r == 1, "r = %lu\n", r); /* missing /sc or /xml */
 
     r = run_command("schtasks /Delete /f /tn wine\\winetest");
     ok(r == 0, "r = %lu\n", r);
 
     r = DeleteFileA("test.xml");
     ok(r, "DeleteFileA failed: %lu\n", GetLastError());
+
+    /* Option form: build the task from /sc + /tr (no /xml), as Win11 schtasks does. */
+    r = run_command("schtasks /create /tn wine\\wineonce /sc ONCE /st 00:00 /tr notepad.exe /f");
+    ok(r == 0, "/create /sc ONCE: r = %lu\n", r);
+    r = run_command("schtasks /delete /f /tn wine\\wineonce");
+    ok(r == 0, "/delete wineonce: r = %lu\n", r);
+
+    /* /ru SYSTEM: the task must register with the LocalSystem principal (the Phase-2 parity gap). */
+    if (is_process_elevated())
+    {
+        IRegisteredTask *task = NULL;
+        WCHAR *name = a2w("wine\\winesvc");
+
+        r = run_command("schtasks /create /tn wine\\winesvc /sc ONCE /st 00:00 /tr notepad.exe /ru SYSTEM /f");
+        ok(r == 0, "/create /ru SYSTEM: r = %lu\n", r);
+
+        hres = ITaskFolder_GetTask(root, name, &task);
+        ok(hres == S_OK, "GetTask(winesvc) failed: %08lx\n", hres);
+        if (task) IRegisteredTask_Release(task);
+        HeapFree(GetProcessHeap(), 0, name);
+
+        r = run_command("schtasks /delete /f /tn wine\\winesvc");
+        ok(r == 0, "/delete winesvc: r = %lu\n", r);
+    }
+    else
+        skip("creating a task that runs as SYSTEM requires elevation\n");
 
     r = ITaskFolder_DeleteFolder(root, wine_testW, 0);
     ok(r == S_OK, "DeleteFolder(\\wine\\test) failed: %lx\n", r);
