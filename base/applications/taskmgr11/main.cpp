@@ -961,9 +961,49 @@ static void EnableDebugPrivilege(void)
     CloseHandle(token);
 }
 
+/* As on Windows, the SysWOW64 taskmgr.exe only hands over to the native Task Manager;
+   Sysnative reaches the real System32 from a WoW64 process whatever the redirection state. */
+static BOOL RelaunchNative(int nCmdShow)
+{
+    BOOL wow = FALSE;
+    if (!IsWow64Process(GetCurrentProcess(), &wow) || !wow)
+        return FALSE;
+
+    WCHAR exe[MAX_PATH];
+    UINT n = GetSystemWindowsDirectoryW(exe, _countof(exe));
+    if (n == 0 || n >= _countof(exe) ||
+        FAILED(StringCchCatW(exe, _countof(exe), L"\\Sysnative\\taskmgr.exe")))
+        return FALSE;
+
+    const WCHAR* args = PathGetArgsW(GetCommandLineW());
+    size_t cch = wcslen(exe) + wcslen(args) + 4;
+    WCHAR* cmd = (WCHAR*)HeapAlloc(GetProcessHeap(), 0, cch * sizeof(WCHAR));
+    if (!cmd)
+        return FALSE;
+    StringCchPrintfW(cmd, cch, L"\"%s\"%s%s", exe, *args ? L" " : L"", args);
+
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = (WORD)nCmdShow;
+    BOOL ok = CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+    HeapFree(GetProcessHeap(), 0, cmd);
+    if (!ok)
+        return FALSE;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return TRUE;
+}
+
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int nCmdShow)
 {
     (void)hPrev;
+
+    /* before the instance mutex, so the native one can take it */
+    if (RelaunchNative(nCmdShow))
+        return 0;
 
     /* single instance */
     HANDLE mutex = CreateMutexW(NULL, TRUE, L"Local\\ROS_TaskMgr");
