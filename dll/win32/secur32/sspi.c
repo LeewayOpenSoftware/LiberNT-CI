@@ -1096,8 +1096,10 @@ BOOLEAN WINAPI GetUserNameExW(
     {
     case NameSamCompatible:
         {
-            WCHAR samname[UNLEN + 1 + MAX_COMPUTERNAME_LENGTH + 1];
-            WCHAR domain[MAX_COMPUTERNAME_LENGTH + 1];
+            /* Domains can exceed DNLEN: virtual service domains such as
+             * "Font Driver Host" (16) overflow a NetBIOS-sized buffer. */
+            WCHAR samname[256 + 1 + UNLEN + 1];
+            WCHAR domain[256];
             WCHAR account[UNLEN + 1];
             DWORD domainLen, accountLen, len;
             HANDLE token = NULL;
