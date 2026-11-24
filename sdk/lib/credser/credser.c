@@ -19,6 +19,17 @@ typedef struct _CREDSER_RANGE
     ULONG End;
 } CREDSER_RANGE;
 
+typedef struct _CREDSER_GENERIC_PACKED
+{
+    ULONG Reserved;
+    GUID Type;
+    UNICODE_STRING UserName;
+    UNICODE_STRING Password;
+} CREDSER_GENERIC_PACKED;
+
+static const GUID CredSerGenericType =
+    {0x2a818d91, 0x248e, 0x4af7, {0xb2, 0x0f, 0x09, 0xf6, 0xc1, 0xfd, 0x80, 0x76}};
+
 static SIZE_T
 CredSerStringBytes(_In_opt_ PCWSTR String)
 {
@@ -59,13 +70,17 @@ CredSerPutString(
     }
 }
 
+static const CREDSER_LIMITS CredSerDefaultLimits =
+    {CREDSER_MAX_NAME_CHARS, CREDSER_MAX_NAME_CHARS, CREDSER_MAX_PASSWORD_CHARS};
+
 NTSTATUS
-CredSerPackLogon(
+CredSerPackLogonEx(
     _In_ KERB_LOGON_SUBMIT_TYPE MessageType,
     _In_opt_ PCWSTR LogonDomainName,
     _In_ PCWSTR UserName,
     _In_ PCWSTR Password,
     _In_opt_ const LUID *LogonId,
+    _In_ const CREDSER_LIMITS *Limits,
     _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
     _Inout_ PULONG BufferSize)
 {
@@ -73,7 +88,7 @@ CredSerPackLogon(
     SIZE_T DomainBytes, UserBytes, PasswordBytes, Total;
     ULONG Offset;
 
-    if (!UserName || !Password || !BufferSize)
+    if (!UserName || !Password || !Limits || !BufferSize)
         return STATUS_INVALID_PARAMETER;
     if (MessageType != KerbInteractiveLogon && MessageType != KerbWorkstationUnlockLogon)
         return STATUS_INVALID_PARAMETER;
@@ -82,9 +97,9 @@ CredSerPackLogon(
     UserBytes = CredSerStringBytes(UserName);
     PasswordBytes = CredSerStringBytes(Password);
     if (!UserBytes ||
-        !CredSerFitsLimit(DomainBytes, CREDSER_MAX_NAME_CHARS) ||
-        !CredSerFitsLimit(UserBytes, CREDSER_MAX_NAME_CHARS) ||
-        !CredSerFitsLimit(PasswordBytes, CREDSER_MAX_PASSWORD_CHARS))
+        !CredSerFitsLimit(DomainBytes, Limits->DomainChars) ||
+        !CredSerFitsLimit(UserBytes, Limits->UserChars) ||
+        !CredSerFitsLimit(PasswordBytes, Limits->PasswordChars))
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -110,6 +125,20 @@ CredSerPackLogon(
 
     *BufferSize = (ULONG)Total;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+CredSerPackLogon(
+    _In_ KERB_LOGON_SUBMIT_TYPE MessageType,
+    _In_opt_ PCWSTR LogonDomainName,
+    _In_ PCWSTR UserName,
+    _In_ PCWSTR Password,
+    _In_opt_ const LUID *LogonId,
+    _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
+    _Inout_ PULONG BufferSize)
+{
+    return CredSerPackLogonEx(MessageType, LogonDomainName, UserName, Password, LogonId, &CredSerDefaultLimits,
+                              Buffer, BufferSize);
 }
 
 NTSTATUS
@@ -160,6 +189,60 @@ CredSerPackChangePassword(
     CredSerPutString(Buffer, &Offset, &Request->AccountName, AccountName, AccountBytes, FALSE);
     CredSerPutString(Buffer, &Offset, &Request->OldPassword, OldPassword, OldBytes, FALSE);
     CredSerPutString(Buffer, &Offset, &Request->NewPassword, NewPassword, NewBytes, FALSE);
+
+    *BufferSize = (ULONG)Total;
+    return STATUS_SUCCESS;
+}
+
+static VOID
+CredSerPutRaw(
+    _Inout_ PUCHAR Base,
+    _Inout_ PULONG Offset,
+    _Out_ PUNICODE_STRING Target,
+    _In_ PCWSTR Source,
+    _In_ SIZE_T Bytes)
+{
+    Target->Length = Target->MaximumLength = (USHORT)Bytes;
+    Target->Buffer = (PWSTR)(ULONG_PTR)*Offset;
+    CopyMemory(Base + *Offset, Source, Bytes);
+    *Offset += (ULONG)Bytes;
+}
+
+NTSTATUS
+CredSerPackGeneric(
+    _In_ PCWSTR UserName,
+    _In_ PCWSTR Password,
+    _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
+    _Inout_ PULONG BufferSize)
+{
+    CREDSER_GENERIC_PACKED *Packed;
+    SIZE_T UserBytes, PasswordBytes, Total;
+    ULONG Offset;
+
+    if (!UserName || !Password || !BufferSize)
+        return STATUS_INVALID_PARAMETER;
+
+    UserBytes = CredSerStringBytes(UserName);
+    PasswordBytes = CredSerStringBytes(Password);
+    if (!CredSerFitsLimit(UserBytes, CREDSER_MAX_GENERIC_USER_CHARS) ||
+        !CredSerFitsLimit(PasswordBytes, CREDSER_MAX_GENERIC_PASSWORD_CHARS))
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    Total = sizeof(CREDSER_GENERIC_PACKED) + UserBytes + PasswordBytes;
+    if (!Buffer || *BufferSize < Total)
+    {
+        *BufferSize = (ULONG)Total;
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    ZeroMemory(Buffer, Total);
+    Packed = Buffer;
+    Packed->Type = CredSerGenericType;
+    Offset = sizeof(CREDSER_GENERIC_PACKED);
+    CredSerPutRaw(Buffer, &Offset, &Packed->UserName, UserName, UserBytes);
+    CredSerPutRaw(Buffer, &Offset, &Packed->Password, Password, PasswordBytes);
 
     *BufferSize = (ULONG)Total;
     return STATUS_SUCCESS;
@@ -269,9 +352,10 @@ CredSerRangesDisjoint(_In_reads_(Count) const CREDSER_RANGE *Ranges, _In_ ULONG 
 }
 
 NTSTATUS
-CredSerUnpackLogon(
+CredSerUnpackLogonEx(
     _In_reads_bytes_(Size) const VOID *Copy,
     _In_ ULONG Size,
+    _In_ const CREDSER_LIMITS *Limits,
     _Out_ PCREDSER_LOGON Logon)
 {
     const KERB_INTERACTIVE_UNLOCK_LOGON *Packed = Copy;
@@ -282,7 +366,7 @@ CredSerUnpackLogon(
     if (!Logon)
         return STATUS_INVALID_PARAMETER;
     ZeroMemory(Logon, sizeof(*Logon));
-    if (!Copy || Size < sizeof(KERB_INTERACTIVE_LOGON) || Size > CREDSER_MAX_BLOB_SIZE)
+    if (!Copy || !Limits || Size < sizeof(KERB_INTERACTIVE_LOGON) || Size > CREDSER_MAX_BLOB_SIZE)
         return STATUS_INVALID_PARAMETER;
 
     switch (Packed->Logon.MessageType)
@@ -300,13 +384,13 @@ CredSerUnpackLogon(
     }
 
     Status = CredSerCheckString(Copy, Size, HeaderSize, &Packed->Logon.LogonDomainName,
-                                CREDSER_MAX_NAME_CHARS, FALSE, TRUE, &Ranges[0], &Logon->LogonDomainName);
+                                Limits->DomainChars, FALSE, TRUE, &Ranges[0], &Logon->LogonDomainName);
     if (NT_SUCCESS(Status))
         Status = CredSerCheckString(Copy, Size, HeaderSize, &Packed->Logon.UserName,
-                                    CREDSER_MAX_NAME_CHARS, TRUE, TRUE, &Ranges[1], &Logon->UserName);
+                                    Limits->UserChars, TRUE, TRUE, &Ranges[1], &Logon->UserName);
     if (NT_SUCCESS(Status))
         Status = CredSerCheckString(Copy, Size, HeaderSize, &Packed->Logon.Password,
-                                    CREDSER_MAX_PASSWORD_CHARS, FALSE, FALSE, &Ranges[2], &Logon->Password);
+                                    Limits->PasswordChars, FALSE, FALSE, &Ranges[2], &Logon->Password);
     if (NT_SUCCESS(Status) && !CredSerRangesDisjoint(Ranges, ARRAYSIZE(Ranges)))
         Status = STATUS_INVALID_PARAMETER;
     if (!NT_SUCCESS(Status))
@@ -319,6 +403,15 @@ CredSerUnpackLogon(
     if (Logon->MessageType == KerbWorkstationUnlockLogon)
         Logon->LogonId = Packed->LogonId;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+CredSerUnpackLogon(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ ULONG Size,
+    _Out_ PCREDSER_LOGON Logon)
+{
+    return CredSerUnpackLogonEx(Copy, Size, &CredSerDefaultLimits, Logon);
 }
 
 NTSTATUS
@@ -355,6 +448,46 @@ CredSerUnpackChangePassword(
         Status = STATUS_INVALID_PARAMETER;
     if (!NT_SUCCESS(Status))
         ZeroMemory(Change, sizeof(*Change));
+    return Status;
+}
+
+BOOLEAN
+CredSerIsGeneric(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ ULONG Size)
+{
+    const CREDSER_GENERIC_PACKED *Packed = Copy;
+
+    return Copy && Size >= sizeof(CREDSER_GENERIC_PACKED) && !Packed->Reserved &&
+           !memcmp(&Packed->Type, &CredSerGenericType, sizeof(GUID));
+}
+
+NTSTATUS
+CredSerUnpackGeneric(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ ULONG Size,
+    _Out_ PCREDSER_GENERIC Generic)
+{
+    const CREDSER_GENERIC_PACKED *Packed = Copy;
+    CREDSER_RANGE Ranges[2];
+    const ULONG HeaderSize = sizeof(CREDSER_GENERIC_PACKED);
+    NTSTATUS Status;
+
+    if (!Generic)
+        return STATUS_INVALID_PARAMETER;
+    ZeroMemory(Generic, sizeof(*Generic));
+    if (Size > CREDSER_MAX_BLOB_SIZE || !CredSerIsGeneric(Copy, Size))
+        return STATUS_INVALID_PARAMETER;
+
+    Status = CredSerCheckString(Copy, Size, HeaderSize, &Packed->UserName, CREDSER_MAX_GENERIC_USER_CHARS,
+                                FALSE, TRUE, &Ranges[0], &Generic->UserName);
+    if (NT_SUCCESS(Status))
+        Status = CredSerCheckString(Copy, Size, HeaderSize, &Packed->Password, CREDSER_MAX_GENERIC_PASSWORD_CHARS,
+                                    FALSE, FALSE, &Ranges[1], &Generic->Password);
+    if (NT_SUCCESS(Status) && !CredSerRangesDisjoint(Ranges, ARRAYSIZE(Ranges)))
+        Status = STATUS_INVALID_PARAMETER;
+    if (!NT_SUCCESS(Status))
+        ZeroMemory(Generic, sizeof(*Generic));
     return Status;
 }
 

@@ -122,9 +122,13 @@
 @ stub CredGetTargetInfoW
 @ stdcall CredIsMarshaledCredentialA(str)
 @ stdcall CredIsMarshaledCredentialW(wstr)
+@ stdcall CredIsProtectedA(str ptr)
+@ stdcall CredIsProtectedW(wstr ptr)
 @ stdcall CredMarshalCredentialA(long ptr str)
 @ stdcall CredMarshalCredentialW(long ptr wstr)
 @ stub CredProfileLoaded
+@ stdcall CredProtectA(long str long ptr ptr ptr)
+@ stdcall CredProtectW(long wstr long ptr ptr ptr)
 @ stdcall CredReadA(str long long ptr)
 @ stdcall CredReadDomainCredentialsA(ptr long ptr ptr)
 @ stdcall CredReadDomainCredentialsW(ptr long ptr ptr)
@@ -133,6 +137,8 @@
 @ stub CredRenameW
 @ stdcall CredUnmarshalCredentialA(str ptr ptr)
 @ stdcall CredUnmarshalCredentialW(wstr ptr ptr)
+@ stdcall CredUnprotectA(long str long ptr ptr)
+@ stdcall CredUnprotectW(long wstr long ptr ptr)
 @ stdcall CredWriteA(ptr long)
 @ stub CredWriteDomainCredentialsA
 @ stub CredWriteDomainCredentialsW

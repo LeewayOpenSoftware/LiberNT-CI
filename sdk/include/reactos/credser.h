@@ -18,6 +18,24 @@ extern "C" {
 #define CREDSER_MAX_NAME_CHARS      256
 #define CREDSER_MAX_PASSWORD_CHARS  256
 #define CREDSER_MAX_BLOB_SIZE       (64 * 1024)
+#define CREDSER_MAX_GENERIC_USER_CHARS      513
+#define CREDSER_MAX_GENERIC_PASSWORD_CHARS  256
+#define CREDSER_MAX_CREDUI_USER_CHARS       513
+/* Bounded by CREDSER_MAX_BLOB_SIZE; Windows accepts up to 32767. */
+#define CREDSER_MAX_CREDUI_PASSWORD_CHARS   30000
+
+typedef struct _CREDSER_LIMITS
+{
+    ULONG DomainChars;
+    ULONG UserChars;
+    ULONG PasswordChars;
+} CREDSER_LIMITS, *PCREDSER_LIMITS;
+
+typedef struct _CREDSER_GENERIC
+{
+    UNICODE_STRING UserName;
+    UNICODE_STRING Password;
+} CREDSER_GENERIC, *PCREDSER_GENERIC;
 
 typedef struct _CREDSER_PACKAGES
 {
@@ -68,12 +86,32 @@ CredSerPackLogon(
     _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
     _Inout_ PULONG BufferSize);
 
+/* CredSerPackLogon and CredSerUnpackLogon use CREDSER_MAX_NAME_CHARS and CREDSER_MAX_PASSWORD_CHARS. */
+NTSTATUS
+CredSerPackLogonEx(
+    _In_ KERB_LOGON_SUBMIT_TYPE MessageType,
+    _In_opt_ PCWSTR LogonDomainName,
+    _In_ PCWSTR UserName,
+    _In_ PCWSTR Password,
+    _In_opt_ const LUID *LogonId,
+    _In_ const CREDSER_LIMITS *Limits,
+    _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
+    _Inout_ PULONG BufferSize);
+
 NTSTATUS
 CredSerPackChangePassword(
     _In_opt_ PCWSTR DomainName,
     _In_ PCWSTR AccountName,
     _In_ PCWSTR OldPassword,
     _In_ PCWSTR NewPassword,
+    _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
+    _Inout_ PULONG BufferSize);
+
+/* The credui generic-credential layout (CRED_PACK_GENERIC_CREDENTIALS). */
+NTSTATUS
+CredSerPackGeneric(
+    _In_ PCWSTR UserName,
+    _In_ PCWSTR Password,
     _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
     _Inout_ PULONG BufferSize);
 
@@ -97,10 +135,28 @@ CredSerUnpackLogon(
     _Out_ PCREDSER_LOGON Logon);
 
 NTSTATUS
+CredSerUnpackLogonEx(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ ULONG Size,
+    _In_ const CREDSER_LIMITS *Limits,
+    _Out_ PCREDSER_LOGON Logon);
+
+NTSTATUS
 CredSerUnpackChangePassword(
     _In_reads_bytes_(Size) const VOID *Copy,
     _In_ ULONG Size,
     _Out_ PCREDSER_CHANGE_PASSWORD Change);
+
+BOOLEAN
+CredSerIsGeneric(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ ULONG Size);
+
+NTSTATUS
+CredSerUnpackGeneric(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ ULONG Size,
+    _Out_ PCREDSER_GENERIC Generic);
 
 /* Free *Msv with CredSerFree(*Msv, *Size). */
 NTSTATUS
