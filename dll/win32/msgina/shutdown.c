@@ -11,6 +11,8 @@
 
 #include "msgina.h"
 #include <ndk/pofuncs.h>
+#include <wingdi.h>
+#include <objbase.h>
 #include "logonui.h"
 
 /**
@@ -402,6 +404,155 @@ GetAllowedShutdownOptions(
     return Options;
 }
 
+#define DIM_SCREEN_ALPHA 150
+
+static const WCHAR DimScreenClassName[] = L"MsginaDimScreen";
+
+static LRESULT CALLBACK
+DimScreenWndProc(
+    _In_ HWND hWnd,
+    _In_ UINT uMsg,
+    _In_ WPARAM wParam,
+    _In_ LPARAM lParam)
+{
+    if (uMsg == WM_PAINT)
+    {
+        PAINTSTRUCT ps;
+        HDC hDC = BeginPaint(hWnd, &ps);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        FillRect(hDC, &rc, GetStockObject(BLACK_BRUSH));
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+    return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+}
+
+static BOOL
+EnsureDimScreenClass(VOID)
+{
+    WNDCLASSW wc;
+
+    ZeroMemory(&wc, sizeof(wc));
+    wc.lpfnWndProc = DimScreenWndProc;
+    wc.hInstance = hDllInstance;
+    wc.lpszClassName = DimScreenClassName;
+    wc.hbrBackground = GetStockObject(BLACK_BRUSH);
+
+    if (RegisterClassW(&wc))
+        return TRUE;
+    return GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+}
+
+/* Fade handler: an IUnknown whose last release tears the dim window down. */
+typedef struct _DIM_FADE_HANDLER
+{
+    const IUnknownVtbl *Vtbl;
+    LONG RefCount;
+    HWND hWnd;
+} DIM_FADE_HANDLER, *PDIM_FADE_HANDLER;
+
+static HRESULT STDMETHODCALLTYPE
+DimFadeQueryInterface(
+    _In_ IUnknown *This,
+    _In_ REFIID riid,
+    _Out_ void **ppvObject)
+{
+    if (!ppvObject)
+        return E_POINTER;
+
+    if (IsEqualIID(riid, &IID_IUnknown))
+    {
+        *ppvObject = This;
+        This->lpVtbl->AddRef(This);
+        return S_OK;
+    }
+    *ppvObject = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG STDMETHODCALLTYPE
+DimFadeAddRef(
+    _In_ IUnknown *This)
+{
+    return InterlockedIncrement(&((PDIM_FADE_HANDLER)This)->RefCount);
+}
+
+static ULONG STDMETHODCALLTYPE
+DimFadeRelease(
+    _In_ IUnknown *This)
+{
+    PDIM_FADE_HANDLER Handler = (PDIM_FADE_HANDLER)This;
+    LONG RefCount = InterlockedDecrement(&Handler->RefCount);
+
+    if (RefCount == 0)
+    {
+        if (Handler->hWnd)
+            DestroyWindow(Handler->hWnd);
+        HeapFree(GetProcessHeap(), 0, Handler);
+    }
+    return RefCount;
+}
+
+static const IUnknownVtbl DimFadeVtbl =
+{
+    DimFadeQueryInterface,
+    DimFadeAddRef,
+    DimFadeRelease
+};
+
+HRESULT
+WINAPI
+ShellDimScreen(
+    _Out_ IUnknown **ppUnknown,
+    _Out_ HWND *phWindow)
+{
+    PDIM_FADE_HANDLER Handler;
+    HWND hWnd;
+    INT x, y, cx, cy;
+
+    if (!ppUnknown || !phWindow)
+        return E_POINTER;
+
+    *ppUnknown = NULL;
+    *phWindow = NULL;
+
+    if (!EnsureDimScreenClass())
+        return E_FAIL;
+
+    x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
+    hWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                           DimScreenClassName, NULL, WS_POPUP,
+                           x, y, cx, cy,
+                           NULL, NULL, hDllInstance, NULL);
+    if (!hWnd)
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    /* Semi-transparent black overlay dims the desktop behind the dialog. */
+    SetLayeredWindowAttributes(hWnd, 0, DIM_SCREEN_ALPHA, LWA_ALPHA);
+    ShowWindow(hWnd, SW_SHOW);
+    UpdateWindow(hWnd);
+
+    Handler = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Handler));
+    if (!Handler)
+    {
+        DestroyWindow(hWnd);
+        return E_OUTOFMEMORY;
+    }
+
+    Handler->Vtbl = &DimFadeVtbl;
+    Handler->RefCount = 1;
+    Handler->hWnd = hWnd;
+
+    *ppUnknown = (IUnknown *)Handler;
+    *phWindow = hWnd;
+    return S_OK;
+}
+
 DWORD WINAPI
 ShellShutdownDialog(
     _In_ HWND hWndParent,
@@ -409,6 +560,9 @@ ShellShutdownDialog(
     _In_ DWORD dwExcludeOptions)
 {
     DWORD ShutdownOptions, Action, Result;
+    IUnknown *FadeHandler = NULL;
+    HWND hDimWindow = NULL;
+    HWND hDialogOwner;
 
     UNREFERENCED_PARAMETER(pUserName);
 
@@ -417,7 +571,32 @@ ShellShutdownDialog(
     if (Action == 0)
         Action = WLX_SAS_ACTION_SHUTDOWN_POWER_OFF;
 
-    Result = LogonUiPowerDialog(hWndParent, ShutdownOptions, &Action);
+    /* Dim the desktop behind the dialog; the dim window owns the dialog so it
+     * stays above the topmost overlay. Falls back to no dim on failure. */
+    hDialogOwner = SUCCEEDED(ShellDimScreen(&FadeHandler, &hDimWindow)) ? hDimWindow : hWndParent;
+
+    /* The dialog's owner is the dim window, not the caller, so keep the
+     * caller's modality: disable it for the dialog, re-enable it before the
+     * dim comes down, then hand activation back to it. */
+    if (FadeHandler && hWndParent)
+        EnableWindow(hWndParent, FALSE);
+
+    Result = LogonUiPowerDialog(hDialogOwner, ShutdownOptions, &Action);
+
+    if (FadeHandler && hWndParent)
+        EnableWindow(hWndParent, TRUE);
+
+    if (FadeHandler)
+        FadeHandler->lpVtbl->Release(FadeHandler);
+
+    if (FadeHandler && hWndParent)
+    {
+        if (GetWindowThreadProcessId(hWndParent, NULL) == GetCurrentThreadId())
+            SetActiveWindow(hWndParent);
+        else
+            SetForegroundWindow(hWndParent);
+    }
+
     if (Result)
         SaveShutdownSelState(HKEY_CURRENT_USER, Action);
 
