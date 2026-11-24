@@ -2169,31 +2169,60 @@ BOOL WINAPI CredIsMarshaledCredentialA(LPCSTR name)
 static const WCHAR cred_protect_prefix[] = {'@', '@', 'D', 7, 8, 12, 10, 13};
 #define CRED_PROTECT_PREFIX_LEN ARRAY_SIZE(cred_protect_prefix)
 
+/* Marker + encoded (length field + DPAPI header 44 + MAC 64 + CBC padding 16 + 32767 chars and NUL); longer is not protected. */
+#define CRED_PROTECT_MAX_CHARS \
+    (CRED_PROTECT_PREFIX_LEN + (sizeof(DWORD) + 44 + 64 + 16 + (32767 + 1) * sizeof(WCHAR) + 2) / 3 * 4)
+
 static UINT cred_encoded_len(UINT bytes)
 {
     return bytes / 3 * 4 + (bytes % 3 ? bytes % 3 + 1 : 0);
 }
 
+/* Like Windows, a protected string is read up to its terminator whatever count the caller passes. */
+static UINT cred_bounded_len(const WCHAR *str)
+{
+    UINT len = 0;
+
+    while (len <= CRED_PROTECT_MAX_CHARS && str[len])
+        len++;
+    return len;
+}
+
+/* The payload is the DPAPI blob length followed by the blob. A string whose marker, alphabet or
+ * length does not match is not protected text. */
 static DWORD cred_protected_blob(const WCHAR *str, BYTE **blob, DWORD *blob_len)
 {
-    UINT len = lstrlenW(str), enc;
+    UINT len = cred_bounded_len(str), enc, decoded;
+    DWORD stored;
+    BYTE *buf;
 
     *blob = NULL;
     *blob_len = 0;
-    if (len <= CRED_PROTECT_PREFIX_LEN || memcmp(str, cred_protect_prefix, sizeof(cred_protect_prefix)))
+    if (len > CRED_PROTECT_MAX_CHARS || len <= CRED_PROTECT_PREFIX_LEN ||
+        memcmp(str, cred_protect_prefix, sizeof(cred_protect_prefix)))
         return ERROR_INVALID_DATA;
     enc = len - CRED_PROTECT_PREFIX_LEN;
     if (enc % 4 == 1)
         return ERROR_INVALID_DATA;
-    *blob_len = enc / 4 * 3 + (enc % 4 ? enc % 4 - 1 : 0);
-    if (!(*blob = malloc(*blob_len + 3)))
+    decoded = enc / 4 * 3 + (enc % 4 ? enc % 4 - 1 : 0);
+    if (decoded <= sizeof(DWORD))
+        return ERROR_INVALID_DATA;
+    if (!(buf = malloc(decoded + 3)))
         return ERROR_OUTOFMEMORY;
-    if (!cred_decode(str + CRED_PROTECT_PREFIX_LEN, enc, (char *)*blob))
+    if (!cred_decode(str + CRED_PROTECT_PREFIX_LEN, enc, (char *)buf))
     {
-        free(*blob);
-        *blob = NULL;
+        free(buf);
         return ERROR_INVALID_DATA;
     }
+    memcpy(&stored, buf, sizeof(stored));
+    if (stored != decoded - sizeof(DWORD))
+    {
+        free(buf);
+        return ERROR_INVALID_DATA;
+    }
+    memmove(buf, buf + sizeof(DWORD), stored);
+    *blob = buf;
+    *blob_len = stored;
     return ERROR_SUCCESS;
 }
 
@@ -2224,7 +2253,7 @@ static void cred_restore_token(HANDLE token)
 BOOL WINAPI CredProtectW(BOOL as_self, LPWSTR creds, DWORD cch, LPWSTR out, DWORD *out_cch,
                          CRED_PROTECTION_TYPE *type)
 {
-    BYTE *blob;
+    BYTE *blob, *payload;
     DWORD blob_len, need, err;
     HANDLE token;
 
@@ -2244,17 +2273,34 @@ BOOL WINAPI CredProtectW(BOOL as_self, LPWSTR creds, DWORD cch, LPWSTR out, DWOR
         return FALSE;
     }
 
-    need = CRED_PROTECT_PREFIX_LEN + cred_encoded_len(blob_len) + 1;
-    if (!out || *out_cch < need)
+    if (!(payload = malloc(sizeof(DWORD) + blob_len)))
     {
         free(blob);
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    memcpy(payload, &blob_len, sizeof(DWORD));
+    memcpy(payload + sizeof(DWORD), blob, blob_len);
+    free(blob);
+
+    need = CRED_PROTECT_PREFIX_LEN + cred_encoded_len(sizeof(DWORD) + blob_len) + 1;
+    if (need - 1 > CRED_PROTECT_MAX_CHARS)
+    {
+        free(payload);
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!out || *out_cch < need)
+    {
+        free(payload);
         *out_cch = need;
         SetLastError(ERROR_INSUFFICIENT_BUFFER);
         return FALSE;
     }
     memcpy(out, cred_protect_prefix, sizeof(cred_protect_prefix));
-    out[CRED_PROTECT_PREFIX_LEN + cred_encode((const char *)blob, blob_len, out + CRED_PROTECT_PREFIX_LEN)] = 0;
-    free(blob);
+    out[CRED_PROTECT_PREFIX_LEN + cred_encode((const char *)payload, sizeof(DWORD) + blob_len,
+                                              out + CRED_PROTECT_PREFIX_LEN)] = 0;
+    free(payload);
     /* Windows reports 0 characters after protecting an empty count. */
     *out_cch = cch ? need : 0;
     if (type)

@@ -174,6 +174,80 @@ TestIsProtected(void)
     ok_err(ERROR_INVALID_PARAMETER);
 }
 
+/* advapi32's cap (marker + encoded largest blob) is 87560 characters. */
+#define OVER_CAP_CHARS 87561
+
+static VOID
+ExpectVerbatim(_In_ LPWSTR String, _In_ PCSTR What)
+{
+    DWORD Cch = lstrlenW(String) + 1, Chars = Cch;
+    LPWSTR Out = HeapAlloc(GetProcessHeap(), 0, Cch * sizeof(WCHAR));
+
+    ExpectType(String, CredUnprotected, What);
+    if (!Out)
+        return;
+    ok(pUnprotectW(FALSE, String, Cch, Out, &Chars), "unprotect of %s failed: %lu\n", What, GetLastError());
+    ok(!wcscmp(Out, String), "%s did not come back unchanged\n", What);
+    ok(Chars == Cch, "%s: count %lu, expected %lu\n", What, Chars, Cch);
+    HeapFree(GetProcessHeap(), 0, Out);
+}
+
+static VOID
+TestCorrupted(void)
+{
+    WCHAR P[2048], C[2048], Out[2048];
+    LPWSTR Big;
+    DWORD Chars, Len, i;
+
+    if (!Protect(L"pw", 3, P, ARRAYSIZE(P), &Chars))
+        return;
+    Len = lstrlenW(P);
+
+    lstrcpyW(C, P);
+    C[20] = (C[20] == L'A') ? L'B' : L'A';
+    ExpectType(C, CredUserProtection, "a flipped payload character");
+    Chars = ARRAYSIZE(Out);
+    SetLastError(0xdeadbeef);
+    ok(!pUnprotectW(FALSE, C, Len + 1, Out, &Chars), "unprotect of a flipped payload character succeeded\n");
+
+    lstrcpyW(C, P);
+    C[20] = L'!';
+    ExpectVerbatim(C, "a character outside the alphabet");
+    lstrcpyW(C, P);
+    C[Len - 1] = 0;
+    ExpectVerbatim(C, "text truncated by one");
+    lstrcpyW(C, P);
+    C[Len - 4] = 0;
+    ExpectVerbatim(C, "text truncated by four");
+    lstrcpyW(C, P);
+    lstrcatW(C, L"AAAA");
+    ExpectVerbatim(C, "text with four extra characters");
+    lstrcpyW(C, P);
+    C[3] = L'X';
+    ExpectVerbatim(C, "a broken marker");
+
+    Big = HeapAlloc(GetProcessHeap(), 0, (OVER_CAP_CHARS + 1) * sizeof(WCHAR));
+    if (Big)
+    {
+        memcpy(Big, Prefix, sizeof(Prefix));
+        for (i = ARRAYSIZE(Prefix); i < OVER_CAP_CHARS; i++)
+            Big[i] = L'A';
+        Big[OVER_CAP_CHARS] = UNICODE_NULL;
+        ExpectVerbatim(Big, "text one character over the protected-length cap");
+        HeapFree(GetProcessHeap(), 0, Big);
+    }
+
+    Chars = ARRAYSIZE(Out);
+    ok(pUnprotectW(FALSE, P, 10, Out, &Chars), "unprotect with a count of ten failed\n");
+    ok(!wcscmp(Out, L"pw"), "a count of ten changed the result: '%ls'\n", Out);
+    Chars = ARRAYSIZE(Out);
+    ok(pUnprotectW(FALSE, P, 0, Out, &Chars), "unprotect with a zero count failed\n");
+    ok(!wcscmp(Out, L"pw"), "a zero count changed the result: '%ls'\n", Out);
+    Chars = ARRAYSIZE(Out);
+    ok(pUnprotectW(FALSE, P, 1, Out, &Chars), "unprotect with a count of one failed\n");
+    ok(!wcscmp(Out, L"pw"), "a count of one changed the result: '%ls'\n", Out);
+}
+
 static VOID
 TestProtectA(void)
 {
@@ -204,5 +278,6 @@ START_TEST(CredProtect)
     TestProtect();
     TestUnprotect();
     TestIsProtected();
+    TestCorrupted();
     TestProtectA();
 }
