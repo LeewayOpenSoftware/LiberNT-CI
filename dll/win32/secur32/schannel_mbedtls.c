@@ -75,7 +75,8 @@ static const uint16_t small_key_sig_algs[] =
  * TLS layer records the errors and applies policy. Returns 0 when the chain
  * builds and the SSL policy (including hostname) passes. */
 static int schan_verify_cert_der(const unsigned char *der, size_t der_len,
-                                 const char *hostname, DWORD *chain_error, DWORD *policy_error)
+                                 HCERTSTORE hPeerStore, const char *hostname,
+                                 DWORD *chain_error, DWORD *policy_error)
 {
     PCCERT_CONTEXT leaf = NULL;
     HCERTSTORE collection = NULL;
@@ -103,6 +104,8 @@ static int schan_verify_cert_der(const unsigned char *der, size_t der_len,
         *chain_error = (DWORD)-2;
         return -1;
     }
+    if (hPeerStore)
+        CertAddStoreToCollection(collection, hPeerStore, 0, 0);
     CertAddStoreToCollection(collection, CertOpenSystemStoreA(0, "ROOT"), 0, 0);
 
     memset(&para, 0, sizeof(para));
@@ -143,6 +146,36 @@ out:
     return ok;
 }
 
+/* Collect the certificates the peer sent into a memory store. crt is the
+ * verify callback's chain head: walking it reaches the intermediates even
+ * mid-handshake, when ssl->session (and thus mbedtls_ssl_get_peer_cert) is
+ * not populated yet. Passed to CertGetCertificateChain as part of the
+ * additional store, so the chain builds from the handshake itself; AIA
+ * retrieval stays as the fallback. Mirrors Windows, where schannel hands
+ * the peer certificates to the chain engine instead of relying on issuer
+ * URLs. */
+static HCERTSTORE schan_peer_store(mbedtls_x509_crt *peer)
+{
+    HCERTSTORE store;
+    const mbedtls_x509_crt *crt;
+
+    store = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0,
+                          CERT_STORE_CREATE_NEW_FLAG, NULL);
+    if (!store)
+        return NULL;
+    for (crt = peer; crt; crt = crt->next)
+    {
+        if (!CertAddEncodedCertificateToStore(store, X509_ASN_ENCODING,
+                                              crt->raw.p, crt->raw.len,
+                                              CERT_STORE_ADD_ALWAYS, NULL))
+        {
+            CertCloseStore(store, 0);
+            return NULL;
+        }
+    }
+    return store;
+}
+
 /* mbedtls verify callback. Called per depth; the leaf verdict comes from
  * crypt32, and mbedtls's own findings are cleared because its CA list is
  * empty by design (crypt32 owns trust). A failed crypt32 check sets a fatal
@@ -150,6 +183,8 @@ out:
 static int schan_verify_crypt32_cb(void *ctx, mbedtls_x509_crt *crt, int depth, uint32_t *flags)
 {
     MBEDTLS_SESSION *s = ctx;
+    HCERTSTORE peer = NULL;
+    int ret;
 
     if (depth != 0)
     {
@@ -157,8 +192,12 @@ static int schan_verify_crypt32_cb(void *ctx, mbedtls_x509_crt *crt, int depth, 
         return 0;
     }
 
-    if (schan_verify_cert_der(crt->raw.p, crt->raw.len, s->ssl.hostname,
-                              &s->verify_chain_error, &s->verify_policy_error))
+    peer = schan_peer_store(crt);
+    ret = schan_verify_cert_der(crt->raw.p, crt->raw.len, peer, s->ssl.hostname,
+                                &s->verify_chain_error, &s->verify_policy_error);
+    if (peer)
+        CertCloseStore(peer, 0);
+    if (ret)
     {
         ERR("schan_verify_crypt32_cb: crypt32 verification failed (chain %#lx, policy %#lx)\n",
             s->verify_chain_error, s->verify_policy_error);
