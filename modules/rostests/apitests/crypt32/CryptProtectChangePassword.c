@@ -303,16 +303,24 @@ START_TEST(CryptProtectChangePassword)
     }
 
 done:
+    /* R4: DeleteProfileW only for an account the test created - a supplied
+     * DPAPI_CHANGE_USER account keeps its profile and DPAPI keys. */
     if (ProfileLoaded)
     {
         UnloadUserProfile(Token1, Profile.hProfile);
-        if (SidString)
+        if (Created && SidString)
             DeleteProfileW(SidString, NULL, NULL);
     }
     if (SidString)
         LocalFree(SidString);
     if (Created)
         ok(DeleteScratchAccount(Account), "NetUserDel failed\n");
+    else
+    {
+        /* Leave a supplied account on its original password; the restore
+         * doubles as a second re-key round (result ignored). */
+        ChangePasswordViaMsv1_0(L"", Account, Password2, Password1);
+    }
     if (Blob.pbData)
         LocalFree(Blob.pbData);
     if (Token2)
