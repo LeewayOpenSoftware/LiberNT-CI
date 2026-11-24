@@ -134,7 +134,7 @@ static void PageRect(HWND hwnd, RECT* r)
 /*  Settings                                                           */
 /* ------------------------------------------------------------------ */
 
-static const WCHAR* SETTINGS_KEY = L"Software\\ReactOS\\TaskMgr11";
+static const WCHAR* SETTINGS_KEY = L"Software\\ReactOS\\TaskMgr";
 
 static DWORD RegReadDw(HKEY hk, const WCHAR* name, DWORD def)
 {
@@ -966,7 +966,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int 
     (void)hPrev;
 
     /* single instance */
-    HANDLE mutex = CreateMutexW(NULL, TRUE, L"Local\\ROS_TaskMgr11");
+    HANDLE mutex = CreateMutexW(NULL, TRUE, L"Local\\ROS_TaskMgr");
     if (mutex && GetLastError() == ERROR_ALREADY_EXISTS)
     {
         HWND prev = FindWindowW(FRAME_CLASS, NULL);

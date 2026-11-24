@@ -261,8 +261,8 @@ add_livecd_shortcut("ReactX Diagnostic"
 add_livecd_shortcut("Task Manager"
     "shell:system\\taskmgr.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
-add_livecd_shortcut("Task Manager 11"
-    "shell:system\\taskmgr11.exe" ICON_INDEX 0
+add_livecd_shortcut("Task Manager (Classic)"
+    "shell:system\\orosi_platform\\taskmgr_classic.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("LntGet"
     "shell:system\\lntget.exe" ICON_INDEX 0 CMDLINE_ARGS "gui"

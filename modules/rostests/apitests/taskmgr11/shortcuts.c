@@ -50,10 +50,10 @@ START_TEST(shortcuts)
         return;
     }
 
-    ok(FindShortcutTitle(Inf, L"taskmgr.exe", Classic, _countof(Classic)),
+    ok(FindShortcutTitle(Inf, L"taskmgr.exe", Modern, _countof(Modern)),
        "taskmgr.exe has no System Tools shortcut\n");
-    ok(FindShortcutTitle(Inf, L"taskmgr11.exe", Modern, _countof(Modern)),
-       "taskmgr11.exe has no System Tools shortcut\n");
+    ok(FindShortcutTitle(Inf, L"orosi_platform\\taskmgr_classic.exe", Classic, _countof(Classic)),
+       "orosi_platform\\taskmgr_classic.exe has no System Tools shortcut\n");
     ok(Classic[0] != UNICODE_NULL && Modern[0] != UNICODE_NULL,
        "a task manager shortcut has no name\n");
     ok(_wcsicmp(Classic, Modern) != 0,

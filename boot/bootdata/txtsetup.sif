@@ -601,6 +601,7 @@ system32\sndvol32.exe
 system32\sol.exe
 system32\drwtsn32.exe
 system32\oobe\oobe.exe
+system32\taskmgr11.exe
 DiagnosticData,dir
 
 [Strings]

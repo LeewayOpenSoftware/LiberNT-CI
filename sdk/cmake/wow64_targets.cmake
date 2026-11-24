@@ -106,7 +106,7 @@ set(WOW64_I386_EXECUTABLES
     svchost
     taskkill
     tasklist
-    taskmgr
+    taskmgr11
     tcpsvcs
     timeout
     tracert
