@@ -355,7 +355,9 @@ ScControl(LPCTSTR Server,       // remote machine name
     }
     else
     {
+        /* Unknown command: Win11 exits ERROR_INVALID_COMMAND_LINE (1639). */
         MainUsage();
+        return ERROR_INVALID_COMMAND_LINE;
     }
 
     return g_ScLastError;
@@ -370,7 +372,7 @@ int _tmain(int argc, LPCTSTR argv[])
     if (argc < 2)
     {
         MainUsage();
-        return -1;
+        return ERROR_INVALID_COMMAND_LINE;
     }
 
     /* get server name */
@@ -379,7 +381,7 @@ int _tmain(int argc, LPCTSTR argv[])
         if (argc < 3)
         {
             MainUsage();
-            return -1;
+            return ERROR_INVALID_COMMAND_LINE;
         }
 
         Server = argv[1];
