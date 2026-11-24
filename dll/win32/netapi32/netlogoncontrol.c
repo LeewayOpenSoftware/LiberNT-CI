@@ -12,26 +12,6 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(netapi32);
 
-/* FunctionCodes whose request carries a data block, per the
- * NETLOGON_CONTROL_DATA_INFORMATION switch cases in netlogon.idl. */
-static BOOL
-NetpLogonControlNeedsData(_In_ DWORD FunctionCode)
-{
-    switch (FunctionCode)
-    {
-        case NETLOGON_CONTROL_REDISCOVER:  /* 5     -> TrustedDomainName */
-        case NETLOGON_CONTROL_TC_QUERY:    /* 6     -> TrustedDomainName */
-        case 8:                            /* FIND_USER        -> UserName */
-        case 9:                            /* CHANGE_PASSWORD  -> TrustedDomainName */
-        case 10:                           /* TC_VERIFY        -> TrustedDomainName */
-        case NETLOGON_CONTROL_SET_DBFLAG:  /* 65534 -> DebugFlag */
-            return TRUE;
-
-        default:
-            return FALSE;
-    }
-}
-
 NET_API_STATUS
 WINAPI
 I_NetLogonControl2(
@@ -42,6 +22,7 @@ I_NetLogonControl2(
     _Out_ PBYTE *Buffer)
 {
     NETLOGON_CONTROL_QUERY_INFORMATION QueryInfo;
+    NETLOGON_CONTROL_DATA_INFORMATION DataInfo;
     NET_API_STATUS status;
 
     TRACE("I_NetLogonControl2(%s, %lu, %lu, %p, %p)\n",
@@ -55,8 +36,37 @@ I_NetLogonControl2(
     if (QueryLevel < 1 || QueryLevel > 4)
         return ERROR_INVALID_LEVEL;
 
-    if (Data == NULL && NetpLogonControlNeedsData(FunctionCode))
-        return ERROR_INVALID_PARAMETER;
+    /* Data is a top-level [ref] parameter of NetrLogonControl2, so it must never
+     * be NULL on the wire. Build a local union from the caller's value for the
+     * FunctionCodes that carry one (NETLOGON_CONTROL_DATA_INFORMATION switch
+     * cases in netlogon.idl) and always pass its address. */
+    ZeroMemory(&DataInfo, sizeof(DataInfo));
+    switch (FunctionCode)
+    {
+        case NETLOGON_CONTROL_REDISCOVER:  /* 5 */
+        case NETLOGON_CONTROL_TC_QUERY:    /* 6 */
+        case 9:                            /* CHANGE_PASSWORD */
+        case 10:                           /* TC_VERIFY */
+            if (Data == NULL)
+                return ERROR_INVALID_PARAMETER;
+            DataInfo.TrustedDomainName = *(LPWSTR *)Data;
+            break;
+
+        case 8:                            /* FIND_USER */
+            if (Data == NULL)
+                return ERROR_INVALID_PARAMETER;
+            DataInfo.UserName = *(LPWSTR *)Data;
+            break;
+
+        case NETLOGON_CONTROL_SET_DBFLAG:  /* 65534 */
+            if (Data == NULL)
+                return ERROR_INVALID_PARAMETER;
+            DataInfo.DebugFlag = *(DWORD *)Data;
+            break;
+
+        default:
+            break;   /* this FunctionCode carries no data; the union stays empty */
+    }
 
     QueryInfo.NetlogonInfo1 = NULL;
 
@@ -65,7 +75,7 @@ I_NetLogonControl2(
         status = NetrLogonControl2((LOGONSRV_HANDLE)ServerName,
                                    FunctionCode,
                                    QueryLevel,
-                                   (PNETLOGON_CONTROL_DATA_INFORMATION)Data,
+                                   &DataInfo,
                                    &QueryInfo);
     }
     RpcExcept(EXCEPTION_EXECUTE_HANDLER)

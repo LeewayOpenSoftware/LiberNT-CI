@@ -9,6 +9,7 @@
 #include <apitest.h>
 #include <lmcons.h>
 #include <lmaccess.h>
+#include <lmapibuf.h>
 #include <lmerr.h>
 
 START_TEST(I_NetLogonControl)
@@ -40,6 +41,16 @@ START_TEST(I_NetLogonControl)
     status = I_NetLogonControl2(NULL, NETLOGON_CONTROL_REDISCOVER, 2, NULL, &Buffer);
     ok(status == ERROR_INVALID_PARAMETER, "REDISCOVER no data: got %lu\n", status);
     ok(Buffer == NULL, "REDISCOVER no data: Buffer %p\n", Buffer);
+
+    /* F1 regression: QUERY carries no data, but NetrLogonControl2's Data is a
+     * [ref] pointer, so the wrapper must pass a non-NULL block. A NULL would come
+     * back as RPC_X_NULL_REF_POINTER (1780); without a server we expect an RPC
+     * "server unavailable"-class error (or a real answer), never 1780. */
+    Buffer = NULL;
+    status = I_NetLogonControl2(NULL, NETLOGON_CONTROL_QUERY, 1, NULL, &Buffer);
+    ok(status != RPC_X_NULL_REF_POINTER, "QUERY no data: got %lu (must not be 1780)\n", status);
+    if (status == NERR_Success && Buffer != NULL)
+        NetApiBufferFree(Buffer);
 
     /* --- I_NetLogonControl --- */
 
