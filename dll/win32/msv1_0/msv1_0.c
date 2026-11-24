@@ -1339,7 +1339,8 @@ MsvpStoreDpapiCredential(
     NTSTATUS Status;
 
     if (DispatchTable.AddCredential == NULL || LogonId == NULL ||
-        Password == NULL || Password->Buffer == NULL)
+        Password == NULL || (Password->Length != 0 && (Password->Buffer == NULL || (Password->Length & 1) ||
+                                                       Password->Length > Password->MaximumLength)))
     {
         return;
     }
@@ -1350,8 +1351,10 @@ MsvpStoreDpapiCredential(
         return;
     }
 
+    /* A blank password hashes zero bytes, as on Windows; the pointer only has to be non-NULL for CryptHashData. */
     if (!CryptCreateHash(Provider, CALG_SHA1, 0, 0, &Hash) ||
-        !CryptHashData(Hash, (const BYTE *)Password->Buffer, Password->Length, 0) ||
+        !CryptHashData(Hash, Password->Length ? (const BYTE *)Password->Buffer : (const BYTE *)L"",
+                       Password->Length, 0) ||
         !CryptGetHashParam(Hash, HP_HASHVAL, Digest, &DigestLength, 0) ||
         DigestLength != sizeof(Digest))
     {
@@ -2203,8 +2206,8 @@ LsaApLogonUserEx2(IN PLSA_CLIENT_REQUEST ClientRequest,
 
     SessionCreated = !ExistingLogon;
 
-    /* Give DPAPI its per-session pre-key while the password is still in memory */
-    if (SessionCreated && LogonPwdData.PlainPwd != NULL)
+    /* Give DPAPI its per-session pre-key while the password is still in memory; a blank network password gets none */
+    if (SessionCreated && LogonPwdData.PlainPwd != NULL && (LogonPwdData.PlainPwd->Length != 0 || LogonType != Network))
         MsvpStoreDpapiCredential(LogonId, LogonPwdData.PlainPwd);
 
     /* Network and guest logons get no reusable credential */
