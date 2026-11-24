@@ -375,6 +375,9 @@ ExitProcessCallback(PEPROCESS Process)
     IntCompositionCleanupProcess(Process);
     IntDCompositionCleanupProcess(ppiCurrent);
 
+    /* A dying font driver host fails its queued requests now */
+    UmfdProcessCleanup(Process);
+
     /* Cleanup USER info, which still uses the GDI objects of its windows */
     UserProcessDestroy(Process);
 
