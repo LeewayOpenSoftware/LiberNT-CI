@@ -34,6 +34,9 @@ typedef enum _WLIMG_STATUS
  * verifies it through that handle and returns the handle on success.
  * The caller keeps the handle open until CreateProcess has returned, then
  * CloseHandle()s it; that is what pins the verified bytes to the launch.
+ * ImagePath must be the very string later passed as lpApplicationName: the
+ * path the handle resolved to has to match it, so 8.3 aliases, ":stream"
+ * names and paths through a junction or symlink are WlImgBadPath.
  * On any status other than WlImgOk, *ImageHandle is INVALID_HANDLE_VALUE.
  */
 WLIMG_STATUS

@@ -64,10 +64,35 @@ WlImgpIsAbsoluteWithoutDotDot(
     {
         if (p[0] == L'\\' && p[1] == L'.' && p[2] == L'.' && (p[3] == L'\\' || p[3] == UNICODE_NULL))
             return FALSE;
-        if (*p == L'/')
+        /* A second colon names an alternate data stream, never a logon binary. */
+        if (*p == L'/' || (*p == L':' && p != Path + 1))
             return FALSE;
     }
     return TRUE;
+}
+
+static PCWSTR
+WlImgpStripPrefix(
+    _In_ PCWSTR Path)
+{
+    if (Path[0] == L'\\' && Path[1] == L'\\' && Path[2] == L'?' && Path[3] == L'\\')
+        return Path + 4;
+    return Path;
+}
+
+/* The path the handle really opened must be the one the caller will launch. */
+static BOOL
+WlImgpFinalPathMatches(
+    _In_ HANDLE File,
+    _In_ PCWSTR ImagePath)
+{
+    WCHAR Final[MAX_PATH + 8];
+    DWORD Length;
+
+    Length = GetFinalPathNameByHandleW(File, Final, ARRAYSIZE(Final), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (Length == 0 || Length >= ARRAYSIZE(Final))
+        return FALSE;
+    return _wcsicmp(WlImgpStripPrefix(Final), WlImgpStripPrefix(ImagePath)) == 0;
 }
 
 static BOOL
@@ -191,9 +216,14 @@ Fail:
     return FALSE;
 }
 
-/* TRUE when some trustee outside SYSTEM/Administrators/TrustedInstaller gets WriteMask bits. */
+/*
+ * TRUE when anyone outside SYSTEM/Administrators/TrustedInstaller can change the
+ * object: an owner outside that set (owners hold WRITE_DAC implicitly), a NULL
+ * DACL, an ACE type we cannot evaluate, or an allow ACE with WriteMask bits.
+ */
 static BOOL
-WlImgpDaclGrantsWriteToOthers(
+WlImgpSecurityAllowsOthers(
+    _In_opt_ PSID Owner,
     _In_opt_ PACL Dacl,
     _In_ ACCESS_MASK WriteMask)
 {
@@ -202,12 +232,14 @@ WlImgpDaclGrantsWriteToOthers(
     BOOL Result = TRUE;
     DWORD i;
 
-    /* A NULL DACL grants everyone full access. */
-    if (Dacl == NULL)
-        return TRUE;
-
     if (!WlImgpBuildAllowedSids(&System, &Admins, &TrustedInstaller))
         return TRUE;
+
+    if (Owner == NULL || Dacl == NULL ||
+        !(EqualSid(Owner, System) || EqualSid(Owner, Admins) || EqualSid(Owner, TrustedInstaller)))
+    {
+        goto Done;
+    }
 
     Result = FALSE;
     for (i = 0; i < Dacl->AceCount; i++)
@@ -223,11 +255,18 @@ WlImgpDaclGrantsWriteToOthers(
             break;
         }
 
+        /* Deny entries only take access away; any other non-plain type (callback,
+         * object, compound) may grant it in ways not evaluated here: fail closed. */
+        if (Header->AceType == ACCESS_DENIED_ACE_TYPE)
+            continue;
+        if (Header->AceType != ACCESS_ALLOWED_ACE_TYPE)
+        {
+            Result = TRUE;
+            break;
+        }
+
         /* Inherit-only entries do not apply to this object itself. */
         if (Header->AceFlags & INHERIT_ONLY_ACE)
-            continue;
-
-        if (Header->AceType != ACCESS_ALLOWED_ACE_TYPE)
             continue;
 
         Ace = (PACCESS_ALLOWED_ACE)Header;
@@ -244,6 +283,7 @@ WlImgpDaclGrantsWriteToOthers(
         break;
     }
 
+Done:
     LocalFree(System);
     LocalFree(Admins);
     LocalFree(TrustedInstaller);
@@ -257,16 +297,17 @@ WlImgpVerifyObjectDacl(
     _In_ WLIMG_STATUS WritableStatus)
 {
     PACL Dacl = NULL;
+    PSID Owner = NULL;
     PSECURITY_DESCRIPTOR Sd = NULL;
     WLIMG_STATUS Status;
 
-    if (GetSecurityInfo(Object, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                        NULL, NULL, &Dacl, NULL, &Sd) != ERROR_SUCCESS)
+    if (GetSecurityInfo(Object, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                        &Owner, NULL, &Dacl, NULL, &Sd) != ERROR_SUCCESS)
     {
         return WlImgInternalError;
     }
 
-    Status = WlImgpDaclGrantsWriteToOthers(Dacl, WriteMask) ? WritableStatus : WlImgOk;
+    Status = WlImgpSecurityAllowsOthers(Owner, Dacl, WriteMask) ? WritableStatus : WlImgOk;
 
     LocalFree(Sd);
     return Status;
@@ -334,6 +375,12 @@ WlImgOpenVerified(
         goto Fail;
     }
     if (Info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))
+    {
+        Status = WlImgBadPath;
+        goto Fail;
+    }
+
+    if (!WlImgpFinalPathMatches(File, ImagePath))
     {
         Status = WlImgBadPath;
         goto Fail;
