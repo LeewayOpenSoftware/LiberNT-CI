@@ -551,6 +551,7 @@ WinMain(
     WLSession->DialogTimeout = 120; /* 2 minutes */
     WLSession->UseLogonUI = ReadUseLogonUISelector();
     TRACE("WL: UseLogonUI selector = %d\n", WLSession->UseLogonUI);
+    WlHostInit();
 
     /* Initialize the dialog tracking list */
     InitDialogListHead();

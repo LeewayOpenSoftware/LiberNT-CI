@@ -396,6 +396,9 @@ WluiSetActionHandler(
 typedef struct _WLHOST_LAUNCH *PWLHOST_LAUNCH;
 
 VOID
+WlHostInit(VOID);
+
+VOID
 WlHostOnSas(VOID);
 
 PWLHOST_LAUNCH

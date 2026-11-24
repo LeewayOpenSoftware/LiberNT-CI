@@ -16,6 +16,7 @@
 #define WLHOST_HANG_MS        (3 * WLHOST_HEARTBEAT_MS)   /* three missed beats */
 #define WLHOST_STARTUP_MS     10000  /* before Ready a host may still be loading providers */
 #define WLHOST_DISMISS_MS     3000
+#define WLHOST_SUPERVISOR_MS  5000   /* past this the entry is leaked, never freed under the supervisor */
 #define WLHOST_LOGONUI_EXE    L"logonuihost.exe"
 #define WLHOST_RECOVERY_EXE   L"logonrecovery.exe"
 
@@ -40,8 +41,42 @@ struct _WLHOST_LAUNCH
     BOOL Terminated;
 };
 
+/* The level machine is touched by the SAS thread and by every supervisor thread. */
 static WLREC_STATE g_Recovery;
-static BOOL g_RecoveryInitialized;
+static CRITICAL_SECTION g_RecoveryLock;
+
+static WLREC_ACTION
+WlHostRecNext(VOID)
+{
+    WLREC_ACTION Action;
+    EnterCriticalSection(&g_RecoveryLock);
+    Action = WlRecNextAction(&g_Recovery);
+    LeaveCriticalSection(&g_RecoveryLock);
+    return Action;
+}
+
+/* Records an end and returns the level name for the log line, under one lock hold. */
+static PCWSTR
+WlHostRecEnd(
+    _In_ WLREC_END End)
+{
+    PCWSTR Name;
+    EnterCriticalSection(&g_RecoveryLock);
+    WlRecOnEnd(&g_Recovery, End);
+    Name = WlRecLevelName(WlRecLevel(&g_Recovery));
+    LeaveCriticalSection(&g_RecoveryLock);
+    return Name;
+}
+
+static PCWSTR
+WlHostRecLevelName(VOID)
+{
+    PCWSTR Name;
+    EnterCriticalSection(&g_RecoveryLock);
+    Name = WlRecLevelName(WlRecLevel(&g_Recovery));
+    LeaveCriticalSection(&g_RecoveryLock);
+    return Name;
+}
 
 /* ---- event log ------------------------------------------------------------- */
 
@@ -68,14 +103,18 @@ WlHostLog(
 /* ---- launching --------------------------------------------------------------- */
 
 VOID
+WlHostInit(VOID)
+{
+    InitializeCriticalSection(&g_RecoveryLock);
+    WlRecInit(&g_Recovery, NULL);
+}
+
+VOID
 WlHostOnSas(VOID)
 {
-    if (!g_RecoveryInitialized)
-    {
-        WlRecInit(&g_Recovery, NULL);
-        g_RecoveryInitialized = TRUE;
-    }
+    EnterCriticalSection(&g_RecoveryLock);
     WlRecOnSas(&g_Recovery);
+    LeaveCriticalSection(&g_RecoveryLock);
 }
 
 static BOOL
@@ -212,12 +251,10 @@ WlHostStart(
     _Out_ PBOOL Terminal)
 {
     *Terminal = FALSE;
-    if (!g_RecoveryInitialized)
-        WlHostOnSas();
 
     for (;;)
     {
-        WLREC_ACTION Action = WlRecNextAction(&g_Recovery);
+        WLREC_ACTION Action = WlHostRecNext();
         WLREC_END Failure;
         PWLHOST_LAUNCH Launch;
         WCHAR Text[96];
@@ -233,9 +270,8 @@ WlHostStart(
         if (Launch != NULL)
             return Launch;
 
-        WlRecOnEnd(&g_Recovery, Failure);
         StringCchPrintfW(Text, ARRAYSIZE(Text), L"logon UI tier could not start (%s); now at %s",
-                         WlRecEndName(Failure), WlRecLevelName(WlRecLevel(&g_Recovery)));
+                         WlRecEndName(Failure), WlHostRecEnd(Failure));
         WlHostLog(EVENTLOG_WARNING_TYPE, Text);
     }
 }
@@ -263,8 +299,8 @@ WlHostSupervisor(
             GetExitCodeProcess(Launch->Process, &ExitCode);
             if (Launch->Terminated)
                 End = WlRecEndNormal;           /* we ended it ourselves */
-            else if (ExitCode == WLHOST_EXIT_OK)
-                End = WlRecEndNormal;
+            else if (ExitCode == WLHOST_EXIT_OK && WluiLaunchExited(Launch->State, NULL))
+                End = WlRecEndNormal;           /* a bare exit 0 without Exiting is a crash */
             else if (ExitCode == WLHOST_EXIT_NOT_SUPPORTED)
                 End = WlRecEndProvidersMissing; /* the host could not bring up a credential tier */
             else
@@ -297,10 +333,9 @@ WlHostSupervisor(
 
     Launch->End = End;
     Launch->ExitCode = ExitCode;
-    if (!Launch->Terminated || End == WlRecEndHang)
-        WlRecOnEnd(&g_Recovery, End);
     StringCchPrintfW(Text, ARRAYSIZE(Text), L"logon UI pid %lu ended: %s (exit %lu), level %s",
-                     Launch->Pid, WlRecEndName(End), ExitCode, WlRecLevelName(WlRecLevel(&g_Recovery)));
+                     Launch->Pid, WlRecEndName(End), ExitCode,
+                     (!Launch->Terminated || End == WlRecEndHang) ? WlHostRecEnd(End) : WlHostRecLevelName());
     WlHostLog(End == WlRecEndNormal ? EVENTLOG_INFORMATION_TYPE : EVENTLOG_WARNING_TYPE, Text);
     SetEvent(Launch->EndedEvent);
     return 0;
@@ -372,7 +407,14 @@ WlHostStop(
     }
     if (Launch->Supervisor)
     {
-        WaitForSingleObject(Launch->Supervisor, 5000);
+        /* The supervisor may be inside an event-log RPC; freeing under it would be a
+         * use-after-free, and winlogon must never wait on the event log. Leak instead. */
+        if (WaitForSingleObject(Launch->Supervisor, WLHOST_SUPERVISOR_MS) != WAIT_OBJECT_0)
+        {
+            ERR("WL: logon UI pid %lu supervisor still busy after %u ms; entry leaked\n",
+                Launch->Pid, WLHOST_SUPERVISOR_MS);
+            return;
+        }
         CloseHandle(Launch->Supervisor);
     }
 
