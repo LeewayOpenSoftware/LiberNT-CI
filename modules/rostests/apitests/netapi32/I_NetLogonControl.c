@@ -1,8 +1,10 @@
 /*
  * PROJECT:     ReactOS netapi32.dll API Tests
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Tests for I_NetLogonControl / I_NetLogonControl2 parameter
- *              validation (the paths that return before any RPC, so no DC).
+ * PURPOSE:     Tests that I_NetLogonControl / I_NetLogonControl2 match Win11's
+ *              client-side behaviour: only I_NetLogonControl2's level range is
+ *              checked locally, everything else is passed to the RPC layer. The
+ *              wire-bound asserts hold with or without a domain controller.
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -19,11 +21,12 @@ START_TEST(I_NetLogonControl)
 
     /* --- I_NetLogonControl2 --- */
 
-    /* NULL output buffer is rejected. */
+    /* NULL Buffer is not rejected client-side; the call reaches the RPC layer. */
     status = I_NetLogonControl2(NULL, NETLOGON_CONTROL_QUERY, 1, NULL, NULL);
-    ok(status == ERROR_INVALID_PARAMETER, "NULL Buffer: got %lu\n", status);
+    ok(status != ERROR_INVALID_PARAMETER && status != ERROR_INVALID_LEVEL,
+       "NULL Buffer: client-rejected %lu\n", status);
 
-    /* QueryLevel 0 is out of range (valid 1..4) and the buffer is cleared. */
+    /* QueryLevel 0 is out of range (valid 1..4): rejected client-side, Buffer cleared. */
     Buffer = (PBYTE)(ULONG_PTR)0xdeadbeef;
     status = I_NetLogonControl2(NULL, NETLOGON_CONTROL_QUERY, 0, NULL, &Buffer);
     ok(status == ERROR_INVALID_LEVEL, "QueryLevel 0: got %lu\n", status);
@@ -35,32 +38,36 @@ START_TEST(I_NetLogonControl)
     ok(status == ERROR_INVALID_LEVEL, "QueryLevel 5: got %lu\n", status);
     ok(Buffer == NULL, "QueryLevel 5: Buffer %p\n", Buffer);
 
-    /* A data-bearing FunctionCode (REDISCOVER) with NULL data is rejected
-     * before the wire. */
+    /* REDISCOVER with NULL Data is not rejected client-side; it reaches the wire and
+     * the caller's Buffer is left untouched unless the call actually succeeds. */
     Buffer = (PBYTE)(ULONG_PTR)0xdeadbeef;
     status = I_NetLogonControl2(NULL, NETLOGON_CONTROL_REDISCOVER, 2, NULL, &Buffer);
-    ok(status == ERROR_INVALID_PARAMETER, "REDISCOVER no data: got %lu\n", status);
-    ok(Buffer == NULL, "REDISCOVER no data: Buffer %p\n", Buffer);
+    ok(status != ERROR_INVALID_PARAMETER && status != ERROR_INVALID_LEVEL,
+       "REDISCOVER no data: client-rejected %lu\n", status);
+    ok(Buffer == (PBYTE)(ULONG_PTR)0xdeadbeef || status == NERR_Success,
+       "REDISCOVER no data: Buffer %p\n", Buffer);
 
-    /* F1 regression: QUERY carries no data, but NetrLogonControl2's Data is a
-     * [ref] pointer, so the wrapper must pass a non-NULL block. A NULL would come
-     * back as RPC_X_NULL_REF_POINTER (1780); without a server we expect an RPC
-     * "server unavailable"-class error (or a real answer), never 1780. */
+    /* F1 regression: QUERY carries no data, but Data is a [ref] param, so the wrapper
+     * must pass a non-NULL block, else RPC_X_NULL_REF_POINTER (1780). */
     Buffer = NULL;
     status = I_NetLogonControl2(NULL, NETLOGON_CONTROL_QUERY, 1, NULL, &Buffer);
     ok(status != RPC_X_NULL_REF_POINTER, "QUERY no data: got %lu (must not be 1780)\n", status);
     if (status == NERR_Success && Buffer != NULL)
         NetApiBufferFree(Buffer);
 
-    /* --- I_NetLogonControl --- */
+    /* --- I_NetLogonControl (old API: no client-side validation at all) --- */
 
-    /* NULL output buffer is rejected. */
+    /* NULL Buffer is not rejected client-side. */
     status = I_NetLogonControl(NULL, NETLOGON_CONTROL_QUERY, 1, NULL);
-    ok(status == ERROR_INVALID_PARAMETER, "I_NetLogonControl NULL Buffer: got %lu\n", status);
+    ok(status != ERROR_INVALID_PARAMETER && status != ERROR_INVALID_LEVEL,
+       "I_NetLogonControl NULL Buffer: client-rejected %lu\n", status);
 
-    /* Out-of-range QueryLevel is rejected and the buffer cleared. */
+    /* The old API does not range-check the level; it reaches the wire and the
+     * caller's Buffer is left untouched unless the call succeeds. */
     Buffer = (PBYTE)(ULONG_PTR)0xdeadbeef;
     status = I_NetLogonControl(NULL, NETLOGON_CONTROL_QUERY, 99, &Buffer);
-    ok(status == ERROR_INVALID_LEVEL, "I_NetLogonControl level 99: got %lu\n", status);
-    ok(Buffer == NULL, "I_NetLogonControl level 99: Buffer %p\n", Buffer);
+    ok(status != ERROR_INVALID_PARAMETER && status != ERROR_INVALID_LEVEL,
+       "I_NetLogonControl level 99: client-rejected %lu\n", status);
+    ok(Buffer == (PBYTE)(ULONG_PTR)0xdeadbeef || status == NERR_Success,
+       "I_NetLogonControl level 99: Buffer %p\n", Buffer);
 }

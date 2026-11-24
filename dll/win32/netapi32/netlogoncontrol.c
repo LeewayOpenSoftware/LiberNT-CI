@@ -28,16 +28,16 @@ I_NetLogonControl2(
     TRACE("I_NetLogonControl2(%s, %lu, %lu, %p, %p)\n",
           debugstr_w(ServerName), FunctionCode, QueryLevel, Data, Buffer);
 
-    if (Buffer == NULL)
-        return ERROR_INVALID_PARAMETER;
-
-    *Buffer = NULL;
-
+    /* Win11 range-checks the level client-side (and clears Buffer); everything else
+     * is validated server-side, so this is the only check that returns before RPC. */
     if (QueryLevel < 1 || QueryLevel > 4)
+    {
+        *Buffer = NULL;
         return ERROR_INVALID_LEVEL;
+    }
 
-    /* NetrLogonControl2's Data is a top-level [ref] param: never NULL on the wire.
-     * Build the union from the caller's value per FunctionCode; always pass &DataInfo. */
+    /* Data is an embedded pointer in the [ref] union, so NULL is legal: fill the arm
+     * only when the caller supplied one, and always pass &DataInfo (keeps F1 fixed). */
     ZeroMemory(&DataInfo, sizeof(DataInfo));
     switch (FunctionCode)
     {
@@ -45,21 +45,18 @@ I_NetLogonControl2(
         case NETLOGON_CONTROL_TC_QUERY:    /* 6 */
         case 9:                            /* CHANGE_PASSWORD */
         case 10:                           /* TC_VERIFY */
-            if (Data == NULL)
-                return ERROR_INVALID_PARAMETER;
-            DataInfo.TrustedDomainName = *(LPWSTR *)Data;
+            if (Data != NULL)
+                DataInfo.TrustedDomainName = *(LPWSTR *)Data;
             break;
 
         case 8:                            /* FIND_USER */
-            if (Data == NULL)
-                return ERROR_INVALID_PARAMETER;
-            DataInfo.UserName = *(LPWSTR *)Data;
+            if (Data != NULL)
+                DataInfo.UserName = *(LPWSTR *)Data;
             break;
 
         case NETLOGON_CONTROL_SET_DBFLAG:  /* 65534 */
-            if (Data == NULL)
-                return ERROR_INVALID_PARAMETER;
-            DataInfo.DebugFlag = *(DWORD *)Data;
+            if (Data != NULL)
+                DataInfo.DebugFlag = *(DWORD *)Data;
             break;
 
         default:
@@ -82,8 +79,8 @@ I_NetLogonControl2(
     }
     RpcEndExcept;
 
-    /* Every query level shares the union's pointer slot; the server allocated the
-     * NETLOGON_INFO_* block, which the caller releases with NetApiBufferFree. */
+    /* Win11 leaves the caller's Buffer untouched unless the call succeeds; the
+     * server-allocated NETLOGON_INFO_* block is freed by the caller (NetApiBufferFree). */
     if (status == NERR_Success)
         *Buffer = (PBYTE)QueryInfo.NetlogonInfo1;
 
@@ -104,14 +101,8 @@ I_NetLogonControl(
     TRACE("I_NetLogonControl(%s, %lu, %lu, %p)\n",
           debugstr_w(ServerName), FunctionCode, QueryLevel, Buffer);
 
-    if (Buffer == NULL)
-        return ERROR_INVALID_PARAMETER;
-
-    *Buffer = NULL;
-
-    if (QueryLevel < 1 || QueryLevel > 4)
-        return ERROR_INVALID_LEVEL;
-
+    /* The old API does no client-side validation, not even the level range:
+     * everything is decided server-side over RPC. Buffer is written only on success. */
     QueryInfo.NetlogonInfo1 = NULL;
 
     RpcTryExcept
