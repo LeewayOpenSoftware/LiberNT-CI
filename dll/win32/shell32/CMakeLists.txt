@@ -26,6 +26,8 @@ list(APPEND SOURCE
     brfolder.cpp
     CActiveDesktop.cpp
     CActiveDesktop.h
+    CDesktopWallpaper.cpp
+    CDesktopWallpaper.h
     CIDLDataObj.cpp
     CNamespaceTreeControl.cpp
     changenotify.cpp

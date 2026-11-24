@@ -22,6 +22,7 @@ IDR_REBARBANDSITE REGISTRY "res/rgs/rebarbandsite.rgs"
 IDR_USERNOTIFICATION REGISTRY "res/rgs/usernotification.rgs"
 IDR_SHELL REGISTRY "res/rgs/shell.rgs"
 IDR_ACTIVEDESKTOP REGISTRY "res/rgs/activedesktop.rgs"
+IDR_DESKTOPWALLPAPER REGISTRY "res/rgs/desktopwallpaper.rgs"
 IDR_SENDTOMENU REGISTRY "res/rgs/sendtomenu.rgs"
 IDR_COPYASPATHMENU REGISTRY "res/rgs/copyaspathmenu.rgs"
 // startmenupin.rgs is licensed in startmenupin.rgs.license; RGS does not accept comments.

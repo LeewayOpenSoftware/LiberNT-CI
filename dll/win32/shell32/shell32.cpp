@@ -356,6 +356,7 @@ class CShell32Module : public CComModule
 
 BEGIN_OBJECT_MAP(ObjectMap)
     OBJECT_ENTRY(CLSID_ActiveDesktop, CActiveDesktop)
+    OBJECT_ENTRY(CLSID_DesktopWallpaper, CDesktopWallpaper)
     OBJECT_ENTRY(CLSID_ShellFileDefExt, CFileDefExt)
     OBJECT_ENTRY(CLSID_ShellDrvDefExt, CDrvDefExt)
     OBJECT_ENTRY(CLSID_Shell, CShellDispatch)

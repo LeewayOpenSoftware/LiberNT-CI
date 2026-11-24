@@ -63,6 +63,7 @@
 #include "shresdef.h"
 #include "wine/cpanel.h"
 #include "CActiveDesktop.h"
+#include "CDesktopWallpaper.h"
 #include "CEnumIDListBase.h"
 #include "shfldr.h"
 #include "CShellItem.h"

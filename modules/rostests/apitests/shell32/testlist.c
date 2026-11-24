@@ -7,6 +7,7 @@ extern void func_AddCommas(void);
 extern void func_AssocCreateElement(void);
 extern void func_AssocCreateForClasses(void);
 extern void func_DefaultProperties(void);
+extern void func_DesktopWallpaper(void);
 extern void func_ILLoadFromStreamEx(void);
 extern void func_ItemPropertyStores(void);
 extern void func_LocalizedName(void);
@@ -111,6 +112,7 @@ const struct test winetest_testlist[] =
     { "AssocCreateElement", func_AssocCreateElement },
     { "AssocCreateForClasses", func_AssocCreateForClasses },
     { "DefaultProperties", func_DefaultProperties },
+    { "DesktopWallpaper", func_DesktopWallpaper },
     { "ILLoadFromStreamEx", func_ILLoadFromStreamEx },
     { "ItemPropertyStores", func_ItemPropertyStores },
     { "LocalizedName", func_LocalizedName },
