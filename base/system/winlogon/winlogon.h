@@ -431,6 +431,44 @@ VOID
 WlHostStop(
     _In_ PWLHOST_LAUNCH Launch);
 
+/* hostlogon.c */
+DWORD
+WlHostLoggedOutSas(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostDisplaySasNotice(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostStatus(
+    _In_ PCWSTR Text);
+
+VOID
+WlHostThemeWait(VOID);
+
+VOID
+WlHostBeforeDesktopSwitch(VOID);
+
+VOID
+WlHostAfterDesktopSwitch(VOID);
+
+VOID
+WlHostLogonFailed(
+    _In_ NTSTATUS Status);
+
+BOOL
+WlHostStartApplication(
+    _In_ PWLSESSION Session,
+    _In_ PCWSTR Desktop,
+    _In_opt_ PVOID Environment,
+    _In_ PCWSTR Command);
+
+BOOL
+WlHostActivateUserShell(
+    _In_ PWLSESSION Session,
+    _In_opt_ PVOID Environment);
+
 /* rpcserver.c */
 BOOL
 StartRpcServer(VOID);

@@ -345,10 +345,18 @@ DisplayStatusMessage(
 {
     WCHAR StatusMsg[MAX_PATH];
 
-    if (Session->Gina.Version < WLX_VERSION_1_3)
+    if (Session->SuppressStatus)
         return TRUE;
 
-    if (Session->SuppressStatus)
+    if (Session->UseLogonUI)
+    {
+        /* The host shows status in place; it keeps the text until the next command. */
+        if (LoadStringW(hAppInstance, ResourceId, StatusMsg, MAX_PATH) != 0)
+            WlHostStatus(StatusMsg);
+        return TRUE;
+    }
+
+    if (Session->Gina.Version < WLX_VERSION_1_3)
         return TRUE;
 
     if (LoadStringW(hAppInstance, ResourceId, StatusMsg, MAX_PATH) == 0)
@@ -362,7 +370,8 @@ BOOL
 RemoveStatusMessage(
     IN PWLSESSION Session)
 {
-    if (Session->Gina.Version < WLX_VERSION_1_3)
+    /* In host mode the status lives in the host window until the next command replaces it. */
+    if (Session->UseLogonUI || Session->Gina.Version < WLX_VERSION_1_3)
         return TRUE;
 
     return Session->Gina.Functions.WlxRemoveStatusMessage(Session->Gina.Context);
@@ -578,8 +587,12 @@ WinMain(
     /* Init Notifications */
     InitNotifications();
 
-    /* Load and initialize gina */
-    if (!GinaInit(WLSession))
+    /* Load and initialize gina; host mode has none, the logon UI is a supervised process. */
+    if (WLSession->UseLogonUI)
+    {
+        LogonStage("host-mode");
+    }
+    else if (!GinaInit(WLSession))
     {
         ERR("WL: Failed to initialize Gina\n");
         // FIXME: Retrieve the real name of the GINA DLL we were trying to load.
