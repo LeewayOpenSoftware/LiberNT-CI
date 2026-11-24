@@ -10,6 +10,23 @@
 
 #include "precomp.h"
 
+/* Q8: msv1_0 delay-imports lsasrv; lsasrv extends the user's DPAPI credhist
+ * and re-encrypts the master keys after a successful password change. */
+NTSTATUS
+LsapDpapiOnPasswordChange(
+    _In_ PUNICODE_STRING DomainName,
+    _In_ PUNICODE_STRING AccountName,
+    _In_reads_bytes_(20) const UCHAR *OldDigest,
+    _In_reads_bytes_(20) const UCHAR *NewDigest);
+
+static
+VOID
+MsvpNotifyDpapiPasswordChange(
+    _In_ PUNICODE_STRING DomainName,
+    _In_ PUNICODE_STRING AccountName,
+    _In_ PUNICODE_STRING OldPassword,
+    _In_ PUNICODE_STRING NewPassword);
+
 WINE_DEFAULT_DEBUG_CHANNEL(msv1_0);
 
 typedef struct _LSA_TOKEN_INFORMATION_V1
@@ -732,9 +749,15 @@ MsvpChangePasswordWorker(IN PLSA_CLIENT_REQUEST ClientRequest,
     if (!NT_SUCCESS(Status))
         TRACE("SamrUnicodeChangePasswordUser2 failed (Status %08lx)\n", Status);
     else
+    {
         MsvpRefreshNtOwfCredential(&RequestBuffer->AccountName,
                                    &RequestBuffer->DomainName,
                                    (const UCHAR *)&NewNtPassword);
+        MsvpNotifyDpapiPasswordChange(&RequestBuffer->DomainName,
+                                      &RequestBuffer->AccountName,
+                                      &RequestBuffer->OldPassword,
+                                      &RequestBuffer->NewPassword);
+    }
 
 done:
     RtlSecureZeroMemory(&PasswordBuffer, sizeof(PasswordBuffer));
@@ -1324,16 +1347,63 @@ static ULONG MsvAuthenticationPackageId = 0;
  */
 #define MSV1_0_DPAPI_PRIMARY_KEY "Primary"
 
+/* SHA-1 of the UTF-16 password: the DPAPI pre-key digest (a blank password hashes zero bytes, as on Windows). */
+static
+BOOLEAN
+MsvpHashPasswordForDpapi(
+    _In_ PUNICODE_STRING Password,
+    _Out_writes_bytes_(20) UCHAR *Digest)
+{
+    HCRYPTPROV Provider = 0;
+    HCRYPTHASH Hash = 0;
+    DWORD DigestLength = 20;
+    BOOLEAN Ok;
+
+    Ok = CryptAcquireContextW(&Provider, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT) &&
+         CryptCreateHash(Provider, CALG_SHA1, 0, 0, &Hash) &&
+         CryptHashData(Hash,
+                       Password->Length ? (const BYTE *)Password->Buffer : (const BYTE *)L"",
+                       Password->Length, 0) &&
+         CryptGetHashParam(Hash, HP_HASHVAL, Digest, &DigestLength, 0) &&
+         DigestLength == 20;
+
+    if (Hash != 0)
+        CryptDestroyHash(Hash);
+    if (Provider != 0)
+        CryptReleaseContext(Provider, 0);
+    return Ok;
+}
+
+/* Q8: the password changed, so lsasrv extends the credhist chain and
+ * re-encrypts the user's master keys. Digests only, never the passwords. */
+static
+VOID
+MsvpNotifyDpapiPasswordChange(
+    _In_ PUNICODE_STRING DomainName,
+    _In_ PUNICODE_STRING AccountName,
+    _In_ PUNICODE_STRING OldPassword,
+    _In_ PUNICODE_STRING NewPassword)
+{
+    UCHAR OldDigest[20];
+    UCHAR NewDigest[20];
+
+    if (MsvpHashPasswordForDpapi(OldPassword, OldDigest) &&
+        MsvpHashPasswordForDpapi(NewPassword, NewDigest))
+    {
+        LsapDpapiOnPasswordChange(DomainName, AccountName, OldDigest, NewDigest);
+    }
+
+    RtlSecureZeroMemory(OldDigest, sizeof(OldDigest));
+    RtlSecureZeroMemory(NewDigest, sizeof(NewDigest));
+}
+
 static
 VOID
 MsvpStoreDpapiCredential(
     _In_ PLUID LogonId,
     _In_ PUNICODE_STRING Password)
 {
-    HCRYPTPROV Provider = 0;
-    HCRYPTHASH Hash = 0;
-    BYTE Digest[20];
-    DWORD DigestLength = sizeof(Digest);
+    UCHAR Digest[20];
     LSA_STRING KeyValue;
     LSA_STRING Credential;
     NTSTATUS Status;
@@ -1345,21 +1415,10 @@ MsvpStoreDpapiCredential(
         return;
     }
 
-    if (!CryptAcquireContextW(&Provider, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT))
-    {
-        TRACE("CryptAcquireContextW failed (Error %lu)\n", GetLastError());
-        return;
-    }
-
-    /* A blank password hashes zero bytes, as on Windows; the pointer only has to be non-NULL for CryptHashData. */
-    if (!CryptCreateHash(Provider, CALG_SHA1, 0, 0, &Hash) ||
-        !CryptHashData(Hash, Password->Length ? (const BYTE *)Password->Buffer : (const BYTE *)L"",
-                       Password->Length, 0) ||
-        !CryptGetHashParam(Hash, HP_HASHVAL, Digest, &DigestLength, 0) ||
-        DigestLength != sizeof(Digest))
+    if (!MsvpHashPasswordForDpapi(Password, Digest))
     {
         TRACE("SHA-1 of the logon password failed (Error %lu)\n", GetLastError());
-        goto done;
+        return;
     }
 
     RtlInitString(&KeyValue, MSV1_0_DPAPI_PRIMARY_KEY);
@@ -1374,11 +1433,6 @@ MsvpStoreDpapiCredential(
     if (!NT_SUCCESS(Status))
         TRACE("AddCredential failed (Status 0x%08lx)\n", Status);
 
-done:
-    if (Hash != 0)
-        CryptDestroyHash(Hash);
-    if (Provider != 0)
-        CryptReleaseContext(Provider, 0);
     RtlSecureZeroMemory(Digest, sizeof(Digest));
 }
 
