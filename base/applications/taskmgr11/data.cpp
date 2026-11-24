@@ -109,7 +109,7 @@ struct AppHistDiskRow
 };
 
 static const WCHAR* APP_HISTORY_KEY =
-    L"Software\\ReactOS\\TaskMgr11\\AppHistory";
+    L"Software\\ReactOS\\TaskMgr\\AppHistory";
 static const DWORD APP_HISTORY_VERSION = 1;
 static const DWORD APP_HISTORY_MAX_ROWS = 256;
 
