@@ -12,4 +12,6 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 STRINGTABLE
 BEGIN
     IDS_CREATE_SUCCESS "SUCCESS: The scheduled task ""%s"" has successfully been created.\n"
+    IDS_DELETE_SUCCESS "SUCCESS: The scheduled task ""%s"" was successfully deleted.\n"
+    IDS_CHANGE_SUCCESS "SUCCESS: The parameters of scheduled task ""%s"" have been changed.\n"
 END

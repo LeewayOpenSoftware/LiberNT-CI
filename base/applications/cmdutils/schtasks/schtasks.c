@@ -29,12 +29,12 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(schtasks);
 
-/* The success line the Windows tool prints after /create */
-static void print_created(const WCHAR *task_name)
+/* The success line the Windows tool prints after a verb completes */
+static void print_success(UINT id, const WCHAR *task_name)
 {
     WCHAR fmt[256];
 
-    if (LoadStringW(GetModuleHandleW(NULL), IDS_CREATE_SUCCESS, fmt, sizeof(fmt)/sizeof(fmt[0])))
+    if (LoadStringW(GetModuleHandleW(NULL), id, fmt, sizeof(fmt)/sizeof(fmt[0])))
         wprintf(fmt, task_name);
 }
 
@@ -202,6 +202,7 @@ static int change_command(int argc, WCHAR *argv[])
     }
 
     IRegisteredTask_Release(task);
+    print_success(IDS_CHANGE_SUCCESS, task_name);
     return 0;
 }
 
@@ -412,7 +413,7 @@ static int create_command(int argc, WCHAR *argv[])
         ITaskFolder_Release(root);
         if (FAILED(hres)) return 1;
         IRegisteredTask_Release(task);
-        print_created(task_name);
+        print_success(IDS_CREATE_SUCCESS, task_name);
         return 0;
     }
 
@@ -555,7 +556,7 @@ static int create_command(int argc, WCHAR *argv[])
     ITaskFolder_Release(root);
     if (SUCCEEDED(hres)) {
         IRegisteredTask_Release(task);
-        print_created(task_name);
+        print_success(IDS_CREATE_SUCCESS, task_name);
         ret = 0;
     }
 
@@ -617,6 +618,7 @@ static int delete_command(int argc, WCHAR *argv[])
     if (FAILED(hres))
         return 1;
 
+    print_success(IDS_DELETE_SUCCESS, task_name);
     return 0;
 }
 
