@@ -58,6 +58,8 @@ typedef struct _PWCREDENTIAL
 extern HINSTANCE CredProvsInstance;
 extern LONG CredProvsObjects;
 
+BOOL PasswordProvider_IsKnownFieldId(_In_ DWORD Id);
+
 HRESULT PasswordProvider_Create(_In_ REFIID riid, _Outptr_ void **ppv);
 HRESULT PasswordCredential_Create(_In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenario,
                                   _In_opt_ ICredentialProviderUser *User,

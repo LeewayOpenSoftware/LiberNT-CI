@@ -47,6 +47,19 @@ static const struct
     { PWFIELD_PROVIDER_LABEL,   CPFT_SMALL_TEXT,      IDS_PROVIDER_LABEL,   &CPFG_CREDENTIAL_PROVIDER_LABEL },
 };
 
+BOOL
+PasswordProvider_IsKnownFieldId(_In_ DWORD Id)
+{
+    DWORD Index;
+
+    for (Index = 0; Index < ARRAYSIZE(FieldTable); Index++)
+    {
+        if (FieldTable[Index].Id == Id)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 HRESULT
 PasswordProvider_DupString(_In_ PCWSTR Source, _Outptr_ LPWSTR *Out)
 {

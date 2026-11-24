@@ -336,6 +336,17 @@ TestTiles(void)
         ok(FindField(Provider, CPFT_SMALL_TEXT, &CPFG_CREDENTIAL_PROVIDER_LABEL, &LabelField), "no provider label\n");
         ok_long(LabelField, 15);
 
+        /* F1: the FieldTable gaps (5-11, 13, 14) are not fields. */
+        ok_hr(ICredentialProviderCredential_GetFieldState(Credential, 5, &State, &Interactive), E_INVALIDARG);
+        ok_hr(ICredentialProviderCredential_GetFieldState(Credential, 13, &State, &Interactive), E_INVALIDARG);
+        {
+            LPWSTR GapString = NULL;
+            ok_hr(ICredentialProviderCredential_GetStringValue(Credential, 5, &GapString), E_INVALIDARG);
+            ok(GapString == NULL, "gap ID 5 returned a string\n");
+            ok_hr(ICredentialProviderCredential_GetStringValue(Credential, 13, &GapString), E_INVALIDARG);
+            ok(GapString == NULL, "gap ID 13 returned a string\n");
+        }
+
         ok_hr(ICredentialProviderCredential_GetSubmitButtonValue(Credential, SubmitField, &Adjacent), S_OK);
         ok_long(Adjacent, PasswordField);
         ok_hr(ICredentialProviderCredential_GetFieldState(Credential, UserField, &State, &Interactive), S_OK);

@@ -150,7 +150,7 @@ Credential_GetFieldState(ICredentialProviderCredential2 *iface, DWORD dwFieldID,
 
     if (!pcpfs || !pcpfis)
         return E_POINTER;
-    if (dwFieldID >= PWFIELD_COUNT)
+    if (!PasswordProvider_IsKnownFieldId(dwFieldID))
         return E_INVALIDARG;
 
     *pcpfis = CPFIS_NONE;
@@ -191,7 +191,7 @@ Credential_GetStringValue(ICredentialProviderCredential2 *iface, DWORD dwFieldID
     if (!ppsz)
         return E_POINTER;
     *ppsz = NULL;
-    if (dwFieldID >= PWFIELD_COUNT || dwFieldID == PWFIELD_SUBMIT)
+    if (!PasswordProvider_IsKnownFieldId(dwFieldID) || dwFieldID == PWFIELD_SUBMIT)
         return E_INVALIDARG;
     return PasswordProvider_DupString(This->Text[dwFieldID], ppsz);
 }
@@ -248,6 +248,8 @@ Credential_SetStringValue(ICredentialProviderCredential2 *iface, DWORD dwFieldID
     SIZE_T Chars;
 
     if (!psz)
+        return E_INVALIDARG;
+    if (!PasswordProvider_IsKnownFieldId(dwFieldID))
         return E_INVALIDARG;
     if (dwFieldID != PWFIELD_USER_NAME && !IsSecretField(dwFieldID))
         return E_INVALIDARG;
@@ -502,6 +504,8 @@ Options_GetFieldOptions(ICredentialProviderCredentialWithFieldOptions *iface, DW
 {
     if (!options)
         return E_POINTER;
+    if (!PasswordProvider_IsKnownFieldId(fieldID))
+        return E_INVALIDARG;
     *options = IsSecretField(fieldID) ? CPCFO_ENABLE_PASSWORD_REVEAL : CPCFO_NONE;
     return S_OK;
 }
