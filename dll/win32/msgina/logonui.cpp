@@ -138,6 +138,18 @@ static RECT g_CoverStatus;
 static PVOID volatile g_CoverPending;
 static HWND g_LockWindow;
 
+static BOOL
+CoverPostStatus(VOID)
+{
+#if DBG
+    /* Fault injection for tests: exercise the reclaim path on post failure. */
+    WCHAR Probe[2];
+    if (GetEnvironmentVariableW(L"MSGINA_COVER_FAIL_POST", Probe, 2) != 0)
+        return FALSE;
+#endif
+    return PostMessageW(g_Cover, WM_LOGONUI_COVER_STATUS, 0, 0);
+}
+
 static HBITMAP
 CreateDib(int Width, int Height, UINT32 **Bits)
 {
@@ -2569,7 +2581,7 @@ LogonUiCoverSetStatus(_In_opt_ PCWSTR Message)
     Old = (PWSTR)InterlockedExchangePointer(&g_CoverPending, Copy);
     if (Old)
         HeapFree(GetProcessHeap(), 0, Old);
-    if (!PostMessageW(g_Cover, WM_LOGONUI_COVER_STATUS, 0, 0))
+    if (!CoverPostStatus())
     {
         /* The cover went away in between: take the copy back so it is not leaked. */
         Old = (PWSTR)InterlockedExchangePointer(&g_CoverPending, NULL);
