@@ -68,7 +68,7 @@ NetrLogonUasLogon(
     _Out_ PNETLOGON_VALIDATION_UAS_INFO *ValidationInformation)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -82,7 +82,7 @@ NetrLogonUasLogoff(
     _Out_ PNETLOGON_LOGOFF_UAS_INFO LogoffInformation)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -101,7 +101,7 @@ NetrLogonSamLogon(
     _Out_ UCHAR *Authoritative)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -117,7 +117,7 @@ NetrLogonSamLogoff(
     _In_ PNETLOGON_LEVEL LogonInformation)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -131,7 +131,7 @@ NetrServerReqChallenge(
     _Out_ PNETLOGON_CREDENTIAL ServerChallenge)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -147,7 +147,7 @@ NetrServerAuthenticate(
     _Out_ PNETLOGON_CREDENTIAL ServerCredential)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -164,7 +164,7 @@ NetrServerPasswordSet(
     _In_ PENCRYPTED_NT_OWF_PASSWORD UasNewPassword)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -182,7 +182,7 @@ NetrDatabaseDeltas(
     _In_ DWORD PreferredMaximumLength)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -200,7 +200,7 @@ NetrDatabaseSync(
     _In_ DWORD PreferredMaximumLength)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -222,7 +222,7 @@ NetrAccountDeltas(
     _Out_ PUAS_INFO_0 NextRecordId)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -244,7 +244,7 @@ NetrAccountSync(
     _Out_ PUAS_INFO_0 LastRecordId)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -257,7 +257,7 @@ NetrGetDCName(
     _Out_ wchar_t **Buffer)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -271,7 +271,7 @@ NetrLogonControl(
     _Out_ PNETLOGON_CONTROL_QUERY_INFORMATION Buffer)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -284,7 +284,7 @@ NetrGetAnyDCName(
     _Out_ wchar_t **Buffer)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -299,7 +299,7 @@ NetrLogonControl2(
     _Out_ PNETLOGON_CONTROL_QUERY_INFORMATION Buffer)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -316,7 +316,7 @@ NetrServerAuthenticate2(
     _Inout_ ULONG *NegotiateFlags)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -335,7 +335,7 @@ NetrDatabaseSync2(
     _In_ DWORD PreferredMaximumLength)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -352,7 +352,7 @@ NetrDatabaseRedo(
     _Out_ PNETLOGON_DELTA_ENUM_ARRAY *DeltaArray)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -367,7 +367,7 @@ NetrLogonControl2Ex(
     _Out_ PNETLOGON_CONTROL_QUERY_INFORMATION Buffer)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -379,7 +379,7 @@ NetrEnumerateTrustedDomains(
     _Out_ PDOMAIN_NAME_BUFFER DomainNameBuffer)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -395,7 +395,7 @@ DsrGetDcName(
     _Out_ PDOMAIN_CONTROLLER_INFOW *DomainControllerInfo)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -411,7 +411,7 @@ NetrLogonGetCapabilities(
     _Out_ PNETLOGON_CAPABILITIES ServerCapabilities)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -424,7 +424,7 @@ NetrLogonSetServiceBits(
     _In_ DWORD ServiceBits)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -437,7 +437,7 @@ NetrLogonGetTrustRid(
     _Out_ ULONG *Rid)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -453,7 +453,7 @@ NetrLogonComputeServerDigest(
     _Out_ CHAR OldMessageDigest[16])
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -469,7 +469,7 @@ NetrLogonComputeClientDigest(
     _Out_ CHAR OldMessageDigest[16])
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -487,7 +487,7 @@ NetrServerAuthenticate3(
     _Out_ ULONG *AccountRid)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -503,7 +503,7 @@ DsrGetDcNameEx(
     _Out_ PDOMAIN_CONTROLLER_INFOW *DomainControllerInfo)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -515,7 +515,7 @@ DsrGetSiteName(
     _Out_ wchar_t **SiteName)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -532,7 +532,7 @@ NetrLogonGetDomainInfo(
     _Out_ PNETLOGON_DOMAIN_INFORMATION DomBuffer)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -549,7 +549,7 @@ NetrServerPasswordSet2(
     _In_ PNL_TRUST_PASSWORD ClearNewPassword)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -566,7 +566,7 @@ NetrServerPasswordGet(
     _Out_ PENCRYPTED_NT_OWF_PASSWORD EncryptedNtOwfPassword)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -582,7 +582,7 @@ NetrLogonSendToSam(
     _In_ ULONG OpaqueBufferSize)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -596,7 +596,7 @@ DsrAddressToSiteNamesW(
     _Out_ PNL_SITE_NAME_ARRAY *SiteNames)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -627,7 +627,7 @@ NetrLogonGetTimeServiceParentDomain(
     _Out_ int *PdcSameSite)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -639,7 +639,7 @@ NetrEnumerateTrustedDomainsEx(
     _Out_ PNETLOGON_TRUSTED_DOMAIN_ARRAY Domains)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -653,7 +653,7 @@ DsrAddressToSiteNamesExW(
     _Out_ PNL_SITE_NAME_EX_ARRAY *SiteNames)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -665,7 +665,7 @@ DsrGetDcSiteCoverageW(
     _Out_ PNL_SITE_NAME_ARRAY *SiteNames)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -684,7 +684,7 @@ NetrLogonSamLogonEx(
     _Inout_ ULONG *ExtraFlags)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -697,7 +697,7 @@ DsrEnumerateDomainTrusts(
     _Out_ PNETLOGON_TRUSTED_DOMAIN_ARRAY Domains)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -712,7 +712,7 @@ DsrDeregisterDnsHostRecords(
     _In_ wchar_t *DnsHostName)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -730,7 +730,7 @@ NetrServerTrustPasswordsGet(
     _Out_ PENCRYPTED_NT_OWF_PASSWORD EncryptedOldOwfPassword)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -744,7 +744,7 @@ DsrGetForestTrustInformation(
     _Out_ PLSA_FOREST_TRUST_INFORMATION *ForestTrustInfo)
 {
     UNIMPLEMENTED;
-    return 0;
+    return ERROR_NOT_SUPPORTED;
 }
 
 
@@ -760,7 +760,7 @@ NetrGetForestTrustInformation(
     _Out_ PLSA_FOREST_TRUST_INFORMATION *ForestTrustInfo)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -780,7 +780,7 @@ NetrLogonSamLogonWithFlags(
     _Inout_ ULONG *ExtraFlags)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 
@@ -799,7 +799,7 @@ NetrServerGetTrustInfo(
     _Out_ PNL_GENERIC_RPC_DATA *TrustInfo)
 {
     UNIMPLEMENTED;
-    return 0;
+    return STATUS_NOT_SUPPORTED;
 }
 
 /* EOF */
