@@ -262,6 +262,7 @@ typedef struct _WLSESSION
 
     /* Experimental LogonUI-mode selector (Winlogon\UseLogonUI), read once at start */
     BOOL UseLogonUI;
+    BOOL HostAutoSas;           /* the pending SAS came from hostlogon.c, not from the user */
 } WLSESSION, *PWLSESSION;
 
 typedef enum _NOTIFICATION_TYPE
@@ -400,6 +401,9 @@ WlHostInit(VOID);
 
 VOID
 WlHostOnSas(VOID);
+
+BOOL
+WlHostIsTerminal(VOID);
 
 PWLHOST_LAUNCH
 WlHostStart(

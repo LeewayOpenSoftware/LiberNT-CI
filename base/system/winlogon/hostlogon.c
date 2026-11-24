@@ -38,6 +38,8 @@ static HANDLE g_SubmitEvent;
 static WLHL_SUBMIT g_Submit;
 static DWORD g_PendingAction;           /* WLUI_ACTION from the host's power flyout */
 static PWLHOST_LAUNCH g_Launch;         /* the live host, if any */
+static BOOL g_Accepting;                /* the SAS thread is waiting for a submit (R2) */
+static BOOL g_SubmitBusy;               /* a submit is between the gate and the slot */
 
 /* ---- LSA ---------------------------------------------------------------------- */
 
@@ -116,6 +118,66 @@ WlHlCopyString(
     Dest[Count] = UNICODE_NULL;
 }
 
+/* msgina lsa.c MyLogonUser: lsasrv adds no logon SID itself and AllowAccessOnSession needs one. */
+static PTOKEN_GROUPS
+WlHlBuildLogonGroups(VOID)
+{
+    SID_IDENTIFIER_AUTHORITY NtAuthority = { SECURITY_NT_AUTHORITY };
+    SID_IDENTIFIER_AUTHORITY LocalAuthority = { SECURITY_LOCAL_SID_AUTHORITY };
+    PSID LogonSid = NULL, LocalSid = NULL;
+    PTOKEN_GROUPS Groups = NULL;
+    LUID LogonLuid;
+
+    AllocateLocallyUniqueId(&LogonLuid);
+    if (!AllocateAndInitializeSid(&NtAuthority, SECURITY_LOGON_IDS_RID_COUNT, SECURITY_LOGON_IDS_RID,
+                                  LogonLuid.HighPart, LogonLuid.LowPart, 0, 0, 0, 0, 0, &LogonSid) ||
+        !AllocateAndInitializeSid(&LocalAuthority, 1, SECURITY_LOCAL_RID, 0, 0, 0, 0, 0, 0, 0, &LocalSid) ||
+        (Groups = LocalAlloc(LMEM_FIXED | LMEM_ZEROINIT, FIELD_OFFSET(TOKEN_GROUPS, Groups[2]))) == NULL)
+    {
+        if (LogonSid) FreeSid(LogonSid);
+        if (LocalSid) FreeSid(LocalSid);
+        return NULL;
+    }
+    Groups->GroupCount = 2;
+    Groups->Groups[0].Sid = LogonSid;
+    Groups->Groups[0].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_LOGON_ID;
+    Groups->Groups[1].Sid = LocalSid;
+    Groups->Groups[1].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT;
+    return Groups;
+}
+
+static VOID
+WlHlFreeLogonGroups(
+    _In_opt_ PTOKEN_GROUPS Groups)
+{
+    if (Groups == NULL)
+        return;
+    FreeSid(Groups->Groups[0].Sid);
+    FreeSid(Groups->Groups[1].Sid);
+    LocalFree(Groups);
+}
+
+static BOOL
+WlHlTokenHasLogonSid(
+    _In_ HANDLE Token)
+{
+    PTOKEN_GROUPS Groups;
+    DWORD Size = 0, i;
+    BOOL Found = FALSE;
+
+    GetTokenInformation(Token, TokenGroups, NULL, 0, &Size);
+    Groups = LocalAlloc(LMEM_FIXED, Size);
+    if (Groups == NULL || !GetTokenInformation(Token, TokenGroups, Groups, Size, &Size))
+    {
+        LocalFree(Groups);
+        return FALSE;
+    }
+    for (i = 0; i < Groups->GroupCount && !Found; i++)
+        Found = (Groups->Groups[i].Attributes & SE_GROUP_LOGON_ID) != 0;
+    LocalFree(Groups);
+    return Found;
+}
+
 /* Runs on an RPC thread: the serialization is untrusted input (PHASE3-PLAN §5.1, Q1). */
 static DWORD
 WlHlSubmitHandler(
@@ -129,6 +191,7 @@ WlHlSubmitHandler(
 {
     CREDSER_LOGON Logon;
     PMSV1_0_INTERACTIVE_LOGON Msv = NULL;
+    PTOKEN_GROUPS Groups;
     ULONG MsvSize = 0, ProfileSize = 0;
     PVOID Copy = NULL, Profile = NULL;
     LSA_STRING Origin;
@@ -150,6 +213,16 @@ WlHlSubmitHandler(
     if (Serialization == NULL || cbSerialization == 0 || cbSerialization > CREDSER_MAX_BLOB_SIZE)
         return ERROR_INVALID_PARAMETER;
 
+    /* A logon runs only while the SAS thread waits for one, and one at a time (R2). */
+    EnterCriticalSection(&g_SubmitLock);
+    if (!g_Accepting || g_SubmitBusy || g_Submit.Pending)
+    {
+        LeaveCriticalSection(&g_SubmitLock);
+        return ERROR_BUSY;
+    }
+    g_SubmitBusy = TRUE;
+    LeaveCriticalSection(&g_SubmitLock);
+
     /* One private copy; every later step reads only the copy. */
     Status = CredSerCapture(Serialization, cbSerialization, &Copy);
     if (NT_SUCCESS(Status))
@@ -159,6 +232,9 @@ WlHlSubmitHandler(
     if (!NT_SUCCESS(Status))
     {
         CredSerFree(Copy, cbSerialization);
+        EnterCriticalSection(&g_SubmitLock);
+        g_SubmitBusy = FALSE;
+        LeaveCriticalSection(&g_SubmitLock);
         return ERROR_INVALID_PARAMETER;
     }
 
@@ -166,12 +242,28 @@ WlHlSubmitHandler(
     CopyMemory(Source.SourceName, "User32  ", TOKEN_SOURCE_LENGTH);
     AllocateLocallyUniqueId(&Source.SourceIdentifier);
 
-    Status = LsaLogonUser(g_Lsa, &Origin, Interactive, g_MsvPackage, Msv, MsvSize, NULL, &Source,
-                          &Profile, &ProfileSize, &LogonId, &Token, &Quotas, &SubStatus);
+    Groups = WlHlBuildLogonGroups();
+    Status = Groups ? LsaLogonUser(g_Lsa, &Origin, Interactive, g_MsvPackage, Msv, MsvSize, Groups, &Source,
+                                   &Profile, &ProfileSize, &LogonId, &Token, &Quotas, &SubStatus)
+                    : (NTSTATUS)STATUS_NO_MEMORY;
+    WlHlFreeLogonGroups(Groups);
     if (Profile)
         LsaFreeReturnBuffer(Profile);
+    if (NT_SUCCESS(Status) && !WlHlTokenHasLogonSid(Token))
+        ERR("WL: logon token carries no logon SID; AllowAccessOnSession will refuse it\n");
 
     EnterCriticalSection(&g_SubmitLock);
+    g_SubmitBusy = FALSE;
+    if (!g_Accepting)
+    {
+        /* The SAS thread stopped waiting meanwhile: nobody would ever consume this logon. */
+        LeaveCriticalSection(&g_SubmitLock);
+        if (Token)
+            CloseHandle(Token);
+        CredSerFree(Msv, MsvSize);
+        CredSerFree(Copy, cbSerialization);
+        return ERROR_BUSY;
+    }
     SecureZeroMemory(&g_Submit, sizeof(g_Submit));
     g_Submit.Pending = TRUE;
     g_Submit.Status = Status;
@@ -227,6 +319,7 @@ WlHlPost(
     _In_ DWORD Scenario,
     _In_ DWORD Flags,
     _In_ LONG Status,
+    _In_ LONG SubStatus,
     _In_opt_ PCWSTR User,
     _In_opt_ PCWSTR Text)
 {
@@ -239,6 +332,7 @@ WlHlPost(
     Command.Scenario = Scenario;
     Command.Flags = Flags;
     Command.Status = Status;
+    Command.SubStatus = SubStatus;
     if (User) StringCchCopyW(Command.User, ARRAYSIZE(Command.User), User);
     if (Text) StringCchCopyW(Command.Text, ARRAYSIZE(Command.Text), Text);
     WlHostPost(g_Launch, &Command);
@@ -264,8 +358,24 @@ WlHlEnsureHost(VOID)
 
     if (!WlHostWaitReady(g_Launch, WLHL_READY_MS))
         WARN("WL: logon UI not ready after %u ms, requesting credentials anyway\n", WLHL_READY_MS);
-    WlHlPost(WluiCmdRequestCredentials, WLHL_CPUS_LOGON, WlHlDisableCad() ? WLUI_FLAG_DISABLE_CAD : 0, 0, NULL, NULL);
+    WlHlPost(WluiCmdRequestCredentials, WLHL_CPUS_LOGON, WlHlDisableCad() ? WLUI_FLAG_DISABLE_CAD : 0, 0, 0, NULL, NULL);
     return TRUE;
+}
+
+/* While accepting, submits may park a logon in the slot; afterwards a leftover one is closed. */
+static VOID
+WlHlSetAccepting(
+    _In_ BOOL Accepting)
+{
+    EnterCriticalSection(&g_SubmitLock);
+    g_Accepting = Accepting;
+    if (!Accepting)
+    {
+        if (g_Submit.Token)
+            CloseHandle(g_Submit.Token);
+        SecureZeroMemory(&g_Submit, sizeof(g_Submit));
+    }
+    LeaveCriticalSection(&g_SubmitLock);
 }
 
 /* With CAD disabled the credential page is the notice: enter the logged-out SAS by ourselves. */
@@ -273,8 +383,16 @@ VOID
 WlHostDisplaySasNotice(
     _In_ PWLSESSION Session)
 {
-    if (WlHlDisableCad())
-        PostMessageW(Session->SASWindow, WLX_WM_SAS, WLX_SAS_TYPE_CTRL_ALT_DEL, 0);
+    if (!WlHlDisableCad())
+        return;
+    if (WlHostIsTerminal())
+    {
+        /* N4: posting again would spin; a real SAS is the only way on until the dialog of commit 10. */
+        ERR("WL: logon UI is in its terminal state; waiting for a user SAS\n");
+        return;
+    }
+    Session->HostAutoSas = TRUE;
+    PostMessageW(Session->SASWindow, WLX_WM_SAS, WLX_SAS_TYPE_CTRL_ALT_DEL, 0);
 }
 
 DWORD
@@ -282,15 +400,21 @@ WlHostLoggedOutSas(
     _In_ PWLSESSION Session)
 {
     HANDLE Waits[2];
+    BOOL UserSas = !Session->HostAutoSas;
+    DWORD Result = WLX_SAS_ACTION_NONE;
 
+    Session->HostAutoSas = FALSE;
     if (!WlHlConnectLsa())
         return WLX_SAS_ACTION_NONE;
     WluiSetSubmitHandler(WlHlSubmitHandler);
     WluiSetActionHandler(WlHlActionHandler);
 
-    WlHostOnSas();
+    /* Only a SAS the user typed resets the levels; the self-posted one must not (R3). */
+    if (UserSas)
+        WlHostOnSas();
     if (!WlHlEnsureHost())
         return WLX_SAS_ACTION_NONE;
+    WlHlSetAccepting(TRUE);
 
     for (;;)
     {
@@ -304,7 +428,7 @@ WlHostLoggedOutSas(
         {
             /* The host died or hung; the level machine already chose the next tier. */
             if (!WlHlEnsureHost())
-                return WLX_SAS_ACTION_NONE;
+                break;
             continue;
         }
 
@@ -313,9 +437,15 @@ WlHostLoggedOutSas(
             DWORD Action = g_PendingAction;
             g_PendingAction = 0;
             if (Action == WluiActionShutdown)
-                return WLX_SAS_ACTION_SHUTDOWN_POWER_OFF;
+            {
+                Result = WLX_SAS_ACTION_SHUTDOWN_POWER_OFF;
+                break;
+            }
             if (Action == WluiActionRestart)
-                return WLX_SAS_ACTION_SHUTDOWN_REBOOT;
+            {
+                Result = WLX_SAS_ACTION_SHUTDOWN_REBOOT;
+                break;
+            }
             continue;
         }
 
@@ -329,10 +459,10 @@ WlHostLoggedOutSas(
 
         if (!NT_SUCCESS(g_Submit.Status))
         {
-            NTSTATUS Status = g_Submit.Status;
+            NTSTATUS Status = g_Submit.Status, SubStatus = g_Submit.SubStatus;
             LeaveCriticalSection(&g_SubmitLock);
             /* The provider owns the wording of its result (STATUS_LOGON_FAILURE and friends). */
-            WlHlPost(WluiCmdReportResult, WLHL_CPUS_LOGON, 0, Status, NULL, NULL);
+            WlHlPost(WluiCmdReportResult, WLHL_CPUS_LOGON, 0, Status, SubStatus, NULL, NULL);
             continue;
         }
 
@@ -352,9 +482,13 @@ WlHostLoggedOutSas(
         g_Submit.Token = NULL;
         LeaveCriticalSection(&g_SubmitLock);
 
-        WlHlPost(WluiCmdDisplayWelcome, WLHL_CPUS_LOGON, WLUI_FLAG_SPINNER, 0, Session->MprNotifyInfo.pszUserName, NULL);
-        return WLX_SAS_ACTION_LOGON;
+        WlHlPost(WluiCmdDisplayWelcome, WLHL_CPUS_LOGON, WLUI_FLAG_SPINNER, 0, 0, Session->MprNotifyInfo.pszUserName, NULL);
+        Result = WLX_SAS_ACTION_LOGON;
+        break;
     }
+
+    WlHlSetAccepting(FALSE);
+    return Result;
 }
 
 /* ---- status and hand-offs used by HandleLogon -------------------------------- */
@@ -363,7 +497,7 @@ VOID
 WlHostStatus(
     _In_ PCWSTR Text)
 {
-    WlHlPost(WluiCmdDisplayStatus, WLHL_CPUS_LOGON, WLUI_FLAG_SPINNER, 0, NULL, Text);
+    WlHlPost(WluiCmdDisplayStatus, WLHL_CPUS_LOGON, WLUI_FLAG_SPINNER, 0, 0, NULL, Text);
 }
 
 /* Theme service wait msgina did before starting the shell (shsvcs ordinal 2). */
@@ -388,7 +522,7 @@ WlHostBeforeDesktopSwitch(VOID)
 {
     if (g_Launch == NULL)
         return;
-    WlHlPost(WluiCmdReadyForDesktopSwitch, WLHL_CPUS_LOGON, 0, 0, NULL, NULL);
+    WlHlPost(WluiCmdReadyForDesktopSwitch, WLHL_CPUS_LOGON, 0, 0, 0, NULL, NULL);
     WaitForSingleObject(WlHostEndedEvent(g_Launch), WLHL_FADE_WAIT_MS);
 }
 
@@ -407,7 +541,7 @@ VOID
 WlHostLogonFailed(
     _In_ NTSTATUS Status)
 {
-    WlHlPost(WluiCmdReportResult, WLHL_CPUS_LOGON, 0, Status, NULL, NULL);
+    WlHlPost(WluiCmdReportResult, WLHL_CPUS_LOGON, 0, Status, 0, NULL, NULL);
 }
 
 /* ---- WLX duties absorbed from msgina --------------------------------------------- */
@@ -474,7 +608,7 @@ WlHostActivateUserShell(
         return FALSE;
     }
     RegCloseKey(hKey);
-    Raw[MAX_PATH] = UNICODE_NULL;
+    Raw[Size / sizeof(WCHAR) < MAX_PATH ? Size / sizeof(WCHAR) : MAX_PATH] = UNICODE_NULL;  /* the value may lack its NUL */
     if (ExpandEnvironmentStringsW(Raw, Expanded, ARRAYSIZE(Expanded)) == 0)
         return FALSE;
 

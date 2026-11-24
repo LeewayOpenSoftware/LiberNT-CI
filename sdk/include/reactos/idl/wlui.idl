@@ -44,6 +44,7 @@ typedef struct _WLUI_COMMAND
     DWORD Scenario;
     DWORD Flags;
     LONG Status;
+    LONG SubStatus;         /* ReportResult: the LSA sub-status (expired password, restrictions) */
     DWORD Sequence;
     WCHAR User[256];
     WCHAR Text[256];

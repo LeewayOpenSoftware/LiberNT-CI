@@ -65,14 +65,14 @@ WlDisplaySasNotice(IN PWLSESSION Session)
     if (Session->UseLogonUI)
         WlHostDisplaySasNotice(Session);
     else
-        WlDisplaySasNotice(Session);
+        Session->Gina.Functions.WlxDisplaySASNotice(Session->Gina.Context);
 }
 
 static VOID
 WlDisplayLockedNotice(IN PWLSESSION Session)
 {
     if (!Session->UseLogonUI)
-        WlDisplayLockedNotice(Session);
+        Session->Gina.Functions.WlxDisplayLockedNotice(Session->Gina.Context);
 }
 
 static BOOL
@@ -98,7 +98,7 @@ static VOID
 WlGinaShutdown(IN PWLSESSION Session, IN DWORD wlxAction)
 {
     if (!Session->UseLogonUI)
-        WlGinaShutdown(Session, wlxAction);
+        Session->Gina.Functions.WlxShutdown(Session->Gina.Context, wlxAction);
 }
 
 static BOOL

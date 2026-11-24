@@ -394,7 +394,7 @@ LuhHandleCommand(
         case WluiCmdReportResult:
             /* The provider owns the wording for its own result; winlogon's text is the fallback. */
             Status[0] = UNICODE_NULL;
-            if (g_Ui.ProvidersStarted && LuhProviderReportResult(Command->Status, 0, Status, ARRAYSIZE(Status)) && Status[0])
+            if (g_Ui.ProvidersStarted && LuhProviderReportResult(Command->Status, Command->SubStatus, Status, ARRAYSIZE(Status)) && Status[0])
                 StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Status);
             else
                 StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Command->Text);

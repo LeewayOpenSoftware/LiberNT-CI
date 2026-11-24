@@ -117,6 +117,18 @@ WlHostOnSas(VOID)
     LeaveCriticalSection(&g_RecoveryLock);
 }
 
+/* N4 reached: nothing launches again until a real SAS (the N4 dialog is a later commit). */
+BOOL
+WlHostIsTerminal(VOID)
+{
+    BOOL Terminal;
+
+    EnterCriticalSection(&g_RecoveryLock);
+    Terminal = (WlRecLevel(&g_Recovery) == WlRecLevel4);
+    LeaveCriticalSection(&g_RecoveryLock);
+    return Terminal;
+}
+
 static BOOL
 WlHostBuildPath(
     _In_ PCWSTR Image,
