@@ -110,18 +110,25 @@ RunInstallReactOS(INT argc, WCHAR* argv[])
 /* Called from wmainCRTStartup */
 INT wmain(INT argc, WCHAR* argv[])
 {
-    LPWSTR CmdLine, p;
+    LPWSTR Switch;
 
-    // NOTE: Temporary, until we correctly use argc/argv.
-    CmdLine = GetCommandLineW();
-    DPRINT("CmdLine: <%S>\n", CmdLine);
-
-    p = wcschr(CmdLine, L'-');
-    if (p == NULL)
+    /* Read the setup switch from argv instead of scanning the raw command line.
+     * The second stage is launched as "<sysdir>\oobe\setup.exe" -target (see
+     * base/setup/libernt/libernt.c, RunTargetConfiguration), so the command
+     * line begins with a quoted full path. A bare wcschr(CmdLine, L'-') would
+     * match the first '-' inside that path when the install directory contains
+     * one, making -target parse as an unknown switch; setup would then skip the
+     * install and the wallpaper host would never start or stop. argv[0] is the
+     * program name, so the switch is argv[1]. */
+    if (argc < 2)
         return ERROR_INVALID_PARAMETER;
-    p++;
 
-    if (_wcsicmp(p, L"target") == 0 || _wcsicmp(p, L"mini") == 0)
+    Switch = argv[1];
+    if (*Switch == L'-' || *Switch == L'/')
+        Switch++;
+    DPRINT("Setup switch: <%S>\n", Switch);
+
+    if (_wcsicmp(Switch, L"target") == 0 || _wcsicmp(Switch, L"mini") == 0)
     {
         INT RetVal;
 
