@@ -1,4 +1,5 @@
 
+add_subdirectory(harness)
 add_subdirectory(testmod)
 
 list(APPEND SOURCE
