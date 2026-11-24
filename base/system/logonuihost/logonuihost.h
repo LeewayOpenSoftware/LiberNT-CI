@@ -53,6 +53,7 @@ extern WLUI_CONNECTION g_Connection;
 
 #define LUH_PROVIDER_CALL_MS 10000
 #define LUH_FAULT_TIMEOUT    1
+#define LUH_FAULT_STARTUP    2
 #define LUH_MAX_FIELDS       32
 #define LUH_FIELD_TEXT       256
 
@@ -88,6 +89,7 @@ typedef enum _LUH_FIELD_UPDATE_KIND
 
 typedef struct _LUH_FIELD_UPDATE
 {
+    PVOID Owner;                /* the provider thread whose credential sent it */
     DWORD Field;
     LUH_FIELD_UPDATE_KIND Kind;
     DWORD Value;
@@ -106,6 +108,9 @@ typedef enum _LUH_SUBMIT_RESULT
 /* providers.c */
 BOOL LuhProvidersStart(_In_ HWND Window);
 VOID LuhProvidersStop(VOID);
+/* No page within the deadline: TRUE when restarted in fallback, FALSE when nothing is left to try. */
+BOOL LuhProvidersStartupTimeout(VOID);
+BOOL LuhProvidersIsCurrent(_In_ PVOID Owner);
 BOOL LuhProviderSetString(_In_ DWORD Field, _In_ PCWSTR Text);
 LUH_SUBMIT_RESULT LuhProviderSubmit(_Out_writes_(StatusChars) PWSTR StatusText, _In_ SIZE_T StatusChars);
 BOOL LuhProviderReportResult(_In_ NTSTATUS Status, _In_ NTSTATUS SubStatus,

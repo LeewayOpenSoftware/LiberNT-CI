@@ -68,7 +68,14 @@ typedef struct _LUH_EVENTS
 {
     ICredentialProviderCredentialEvents ICredentialProviderCredentialEvents_iface;
     LONG RefCount;
+    PLUH_PROVIDER_THREAD Owner;     /* updates from an abandoned thread's credential are dropped */
 } LUH_EVENTS;
+
+static LUH_EVENTS *
+EventsFrom(ICredentialProviderCredentialEvents *iface)
+{
+    return CONTAINING_RECORD(iface, LUH_EVENTS, ICredentialProviderCredentialEvents_iface);
+}
 
 static HRESULT WINAPI Events_QueryInterface(ICredentialProviderCredentialEvents *iface, REFIID riid, void **ppv)
 {
@@ -99,14 +106,20 @@ static ULONG WINAPI Events_Release(ICredentialProviderCredentialEvents *iface)
 
 static VOID
 PostFieldUpdate(
+    _In_ LUH_EVENTS *Events,
     _In_ DWORD Field,
     _In_ LUH_FIELD_UPDATE_KIND Kind,
     _In_ DWORD Value,
     _In_opt_ PCWSTR Text)
 {
-    PLUH_FIELD_UPDATE Update = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Update));
+    PLUH_FIELD_UPDATE Update;
+
+    if (Events->Owner == NULL || Events->Owner->Abandoned || Events->Owner != g_Current)
+        return;
+    Update = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Update));
     if (Update == NULL)
         return;
+    Update->Owner = Events->Owner;
     Update->Field = Field;
     Update->Kind = Kind;
     Update->Value = Value;
@@ -119,28 +132,28 @@ PostFieldUpdate(
 static HRESULT WINAPI Events_SetFieldState(ICredentialProviderCredentialEvents *iface,
     ICredentialProviderCredential *pcpc, DWORD dwFieldID, CREDENTIAL_PROVIDER_FIELD_STATE cpfs)
 {
-    PostFieldUpdate(dwFieldID, LuhFieldState, cpfs, NULL);
+    PostFieldUpdate(EventsFrom(iface), dwFieldID, LuhFieldState, cpfs, NULL);
     return S_OK;
 }
 
 static HRESULT WINAPI Events_SetFieldInteractiveState(ICredentialProviderCredentialEvents *iface,
     ICredentialProviderCredential *pcpc, DWORD dwFieldID, CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE cpfis)
 {
-    PostFieldUpdate(dwFieldID, LuhFieldInteractive, cpfis, NULL);
+    PostFieldUpdate(EventsFrom(iface), dwFieldID, LuhFieldInteractive, cpfis, NULL);
     return S_OK;
 }
 
 static HRESULT WINAPI Events_SetFieldString(ICredentialProviderCredentialEvents *iface,
     ICredentialProviderCredential *pcpc, DWORD dwFieldID, LPCWSTR psz)
 {
-    PostFieldUpdate(dwFieldID, LuhFieldText, 0, psz ? psz : L"");
+    PostFieldUpdate(EventsFrom(iface), dwFieldID, LuhFieldText, 0, psz ? psz : L"");
     return S_OK;
 }
 
 static HRESULT WINAPI Events_SetFieldCheckbox(ICredentialProviderCredentialEvents *iface,
     ICredentialProviderCredential *pcpc, DWORD dwFieldID, BOOL bChecked, LPCWSTR pszLabel)
 {
-    PostFieldUpdate(dwFieldID, LuhFieldCheckbox, bChecked ? 1 : 0, pszLabel);
+    PostFieldUpdate(EventsFrom(iface), dwFieldID, LuhFieldCheckbox, bChecked ? 1 : 0, pszLabel);
     return S_OK;
 }
 
@@ -363,6 +376,7 @@ ProviderThread(
     }
     Events->ICredentialProviderCredentialEvents_iface.lpVtbl = &EventsVtbl;
     Events->RefCount = 1;
+    Events->Owner = T;
 
     /* The host runs as SYSTEM and never impersonates (Q3), so the class lookup is not
      * steerable by a user hive; the fallback never touches the class registration (Q5). */
@@ -465,6 +479,13 @@ LuhProvidersStop(VOID)
     /* An abandoned thread keeps its handles; the process is about to leave. */
 }
 
+BOOL
+LuhProvidersIsCurrent(
+    _In_ PVOID Owner)
+{
+    return Owner != NULL && Owner == g_Current && !g_Current->Abandoned;
+}
+
 /* A provider that does not answer in time is dropped; the host carries on without it. */
 static VOID
 ProviderFault(
@@ -484,6 +505,70 @@ ProviderFault(
         g_Current = StartProviderThread();   /* re-enumerates without the faulted provider */
 }
 
+/*
+ * No page arrived in time, so some provider wedged during start-up where the
+ * CLSID cannot be told. Try once more with the fallback tier (the direct-loaded
+ * PasswordProvider only); when that also fails there is nothing left to show.
+ */
+BOOL
+LuhProvidersStartupTimeout(VOID)
+{
+    PLUH_PROVIDER_THREAD T = g_Current;
+
+    LuhTrace("provider-fault", L"startup timeout");
+    WluiClientReportProviderFault(&g_Connection, &CLSID_NULL, LUH_FAULT_STARTUP);
+    if (T != NULL)
+    {
+        T->Abandoned = TRUE;
+        SetEvent(T->StopEvent);
+    }
+    if (g_Options.Fallback)
+    {
+        g_Current = NULL;
+        return FALSE;
+    }
+    g_Options.Fallback = TRUE;
+    g_Current = StartProviderThread();
+    return g_Current != NULL;
+}
+
+/*
+ * Waits for the provider thread with a bound, servicing sent messages so provider
+ * UI owned by our window cannot deadlock against us, and sending the heartbeat from
+ * inside the wait: this thread is provably alive here, and winlogon's hang window
+ * (three missed 2 s beats) is shorter than the 10 s call bound.
+ */
+static BOOL
+WaitForProvider(
+    _In_ PLUH_PROVIDER_THREAD T)
+{
+    ULONGLONG Start = GetTickCount64(), LastBeat = Start;
+
+    for (;;)
+    {
+        ULONGLONG Elapsed = GetTickCount64() - Start;
+        DWORD Slice;
+        DWORD Result;
+
+        if (Elapsed >= LUH_PROVIDER_CALL_MS)
+            return FALSE;
+        Slice = (DWORD)min(LUH_PROVIDER_CALL_MS - Elapsed, 500);
+        Result = MsgWaitForMultipleObjects(1, &T->DoneEvent, FALSE, Slice, QS_SENDMESSAGE);
+        if (Result == WAIT_OBJECT_0)
+            return TRUE;
+        if (Result == WAIT_OBJECT_0 + 1)
+        {
+            MSG Msg;
+            PeekMessageW(&Msg, NULL, 0, 0, PM_NOREMOVE);   /* delivers sent messages only */
+        }
+        if (GetTickCount64() - LastBeat >= LUH_HEARTBEAT_MS)
+        {
+            LuhIpcHeartbeat();
+            LastBeat = GetTickCount64();
+        }
+    }
+}
+
 static BOOL
 ProviderCall(
     _Inout_ LUH_REQUEST *Request)
@@ -495,7 +580,7 @@ ProviderCall(
 
     T->Request = *Request;
     SetEvent(T->RequestEvent);
-    if (WaitForSingleObject(T->DoneEvent, LUH_PROVIDER_CALL_MS) != WAIT_OBJECT_0)
+    if (!WaitForProvider(T))
     {
         ProviderFault(T);
         return FALSE;

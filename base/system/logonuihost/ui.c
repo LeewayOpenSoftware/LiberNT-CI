@@ -14,6 +14,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_TIMER_HEARTBEAT 1
 #define LUH_TIMER_SPINNER   2
 #define LUH_TIMER_FADE      3
+#define LUH_TIMER_STARTUP   4   /* a page must arrive within the provider call bound */
 #define LUH_SPINNER_MS      50
 
 #define LUH_ID_FIELD_BASE   1000
@@ -318,6 +319,7 @@ ProviderGone:
     StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"Please wait");
     g_Ui.Detail[0] = UNICODE_NULL;
     LuhSetSpinner(Window, TRUE);
+    SetTimer(Window, LUH_TIMER_STARTUP, LUH_PROVIDER_CALL_MS, NULL);
     InvalidateRect(Window, NULL, TRUE);
 }
 
@@ -415,6 +417,8 @@ LuhHandleCommand(
                 g_Ui.ProvidersStarted = LuhProvidersStart(Window);
                 if (!g_Ui.ProvidersStarted)
                     LuhBeginExit(Window, WluiExitProviderInitFailed, LUH_EXIT_NOT_SUPPORTED);
+                else
+                    SetTimer(Window, LUH_TIMER_STARTUP, LUH_PROVIDER_CALL_MS, NULL);
             }
             InvalidateRect(Window, NULL, TRUE);
             break;
@@ -538,6 +542,15 @@ LuhWindowProc(
                 g_Ui.SpinnerAngle = (g_Ui.SpinnerAngle + 45) % 360;
                 InvalidateRect(Window, NULL, FALSE);
             }
+            else if (wParam == LUH_TIMER_STARTUP)
+            {
+                /* Start-up wedged somewhere a CLSID cannot be named: one fallback try, then give up. */
+                KillTimer(Window, LUH_TIMER_STARTUP);
+                if (LuhProvidersStartupTimeout())
+                    SetTimer(Window, LUH_TIMER_STARTUP, LUH_PROVIDER_CALL_MS, NULL);
+                else
+                    LuhBeginExit(Window, WluiExitProviderInitFailed, LUH_EXIT_NOT_SUPPORTED);
+            }
             else if (wParam == LUH_TIMER_FADE)
             {
                 g_Ui.FadeStep++;
@@ -585,6 +598,7 @@ LuhWindowProc(
         }
 
         case WM_LUH_PAGE:
+            KillTimer(Window, LUH_TIMER_STARTUP);
             if (wParam == LUH_PAGE_READY && lParam)
             {
                 LuhSetSpinner(Window, FALSE);
@@ -605,7 +619,9 @@ LuhWindowProc(
             PLUH_FIELD_UPDATE Update = (PLUH_FIELD_UPDATE)lParam;
             if (Update)
             {
-                LuhApplyFieldUpdate(Update);
+                /* An abandoned thread's credential may still post; only the current one may touch the page. */
+                if (LuhProvidersIsCurrent(Update->Owner))
+                    LuhApplyFieldUpdate(Update);
                 SecureZeroMemory(Update, sizeof(*Update));
                 HeapFree(GetProcessHeap(), 0, Update);
             }
@@ -631,6 +647,7 @@ LuhWindowProc(
             KillTimer(Window, LUH_TIMER_HEARTBEAT);
             KillTimer(Window, LUH_TIMER_SPINNER);
             KillTimer(Window, LUH_TIMER_FADE);
+            KillTimer(Window, LUH_TIMER_STARTUP);
             PostQuitMessage(g_Ui.ExitCode);
             return 0;
     }

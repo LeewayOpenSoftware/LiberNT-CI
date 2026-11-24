@@ -293,12 +293,38 @@ Test_Providers(PCWSTR Exe, PCWSTR Endpoint, PSID Own, PCWSTR Trace)
     Code = WaitExit(Process, 5000);
     ok(Code == 0, "fallback exit %lu\n", Code);
 
+    RegisterTestProvider(FALSE);        /* a crashed earlier run must not leave it behind */
     Registered = RegisterTestProvider(TRUE);
     if (!Registered)
     {
         skip("cannot register credprov_testmod (not elevated, or not built)\n");
         return;
     }
+
+    /* R1: a provider wedged during start-up (before any credential exists) cannot be named;
+     * the host reports a start-up fault with CLSID_NULL and comes back in the fallback tier. */
+    ResetRun();
+    DeleteFileW(Trace);
+    g_Faults = 0;
+    SetEnvironmentVariableW(L"CREDPROV_TESTMOD_MODE", L"hang-startup");
+    Process = LaunchHost(Exe, Endpoint, Own, Trace, NULL);
+    SetEnvironmentVariableW(L"CREDPROV_TESTMOD_MODE", NULL);
+    ok(Process != NULL, "launch (hang-startup)\n");
+    ok(WaitForSingleObject(g_ReadyEvent, 5000) == WAIT_OBJECT_0, "no Ready (hang-startup)\n");
+    PostCmd(WluiCmdRequestCredentials, 0, NULL, NULL);
+    {
+        DWORD Started = GetTickCount();
+        while (g_Faults == 0 && GetTickCount() - Started < 15000)
+            Sleep(200);
+        Sleep(3000);    /* the fallback enumeration and its page */
+    }
+    ok(g_Faults == 1, "start-up fault reports %ld (expected 1)\n", g_Faults);
+    ok(IsEqualGUID(&g_FaultClsid, &CLSID_NULL), "start-up fault CLSID is not CLSID_NULL\n");
+    ok(TraceHas(Trace, "providers 1"), "fallback enumeration after the start-up fault not seen\n");
+    ok(TraceHas(Trace, "page "), "no fallback page after the start-up fault\n");
+    PostCmd(WluiCmdDismiss, 0, NULL, NULL);
+    Code = WaitExit(Process, 5000);
+    ok(Code == 0, "hang-startup run exit %lu\n", Code);
 
     /* A provider that hangs in GetSerialization is dropped within the call timeout; the
      * host reports it, stays alive and comes back with the remaining provider's page. */
