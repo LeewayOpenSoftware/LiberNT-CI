@@ -1,0 +1,113 @@
+/*
+ * PROJECT:     LiberNT Logon Server Test Utility
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     English resources
+ * TRANSLATORS:
+ */
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+STRINGTABLE
+BEGIN
+    IDS_USAGE "Usage: nltest [/OPTIONS]\n\
+\n\
+\n\
+    /SERVER:<ServerName> - Specify <ServerName>\n\
+\n\
+    /QUERY - Query <ServerName> netlogon service\n\
+    /REPL - Force partial sync on <ServerName> BDC\n\
+    /SYNC - Force full sync on <ServerName> BDC\n\
+    /PDC_REPL - Force UAS change message from <ServerName> PDC\n\
+\n\
+    /SC_QUERY:<DomainName> - Query secure channel for <Domain> on <ServerName>\n\
+    /SC_RESET:<DomainName>[\\<DcName>] - Reset secure channel for <Domain> on <ServerName> to <DcName>\n\
+    /SC_VERIFY:<DomainName> - Verify secure channel for <Domain> on <ServerName>\n\
+    /SC_CHANGE_PWD:<DomainName> - Change a secure channel password for <Domain> on <ServerName>\n\
+    /DCLIST:<DomainName> - Get list of DC's for <DomainName>\n\
+    /DCNAME:<DomainName> - Get the PDC name for <DomainName>\n\
+    /DSGETDC:<DomainName> - Call DsGetDcName /PDC /DS /DSP /GC /KDC\n\
+        /TIMESERV /GTIMESERV /WS /NETBIOS /DNS /IP /FORCE /WRITABLE /AVOIDSELF /LDAPONLY /BACKG /DS_6 /DS_8 /DS_9 /DS_10 /DS_13\n\
+        /KEYLIST /TRY_NEXT_CLOSEST_SITE /SITE:<SiteName> /ACCOUNT:<AccountName> /RET_DNS /RET_NETBIOS\n\
+    /DSGETFTI:<DomainName> - Call DsGetForestTrustInformation\n\
+        /UPDATE_TDO\n\
+    /LSAQUERYFTI:<TrustedForest> - Call LsaQueryForestTrustInformation\n\
+    /DSGETSITE - Call DsGetSiteName\n\
+    /DSGETSITECOV - Call DsGetDcSiteCoverage\n\
+    /DSADDRESSTOSITE:[MachineName] - Call DsAddressToSiteNamesEx\n\
+        /ADDRESSES:<Address1,Address2,...>\n\
+    /PARENTDOMAIN - Get the name of the parent domain of this machine\n\
+    /FINDUSER:<User> - See which trusted domain will log on <User>\n\
+    /TRANSPORT_NOTIFY - Notify netlogon of new transport\n\
+\n\
+    /DBFLAG:<HexFlags> - New debug flag\n\
+\n\
+    /TIME:<Hex LSL> <Hex MSL> - Convert NT GMT time to ascii\n\
+    /LOGON_QUERY - Query number of cumulative logon attempts\n\
+    /DOMAIN_TRUSTS - Query domain trusts on <ServerName>\n\
+        /PRIMARY /FOREST /DIRECT_OUT /DIRECT_IN /ALL_TRUSTS /V\n\
+    /DSREGDNS - Force registration of all DC-specific DNS records\n\
+    /DSDEREGDNS:<DnsHostName> - Deregister DC-specific DNS records for specified DC\n\
+        /DOM:<DnsDomainName> /DOMGUID:<DomainGuid> /DSAGUID:<DsaGuid>\n\
+    /DSQUERYDNS - Query the status of the last update for all DC-specific DNS records\n\
+\n\
+    /SHUTDOWN:<Reason> [<Seconds>] - Shutdown <ServerName> for <Reason>\n\
+    /SHUTDOWN_ABORT - Abort a system shutdown\n\
+\n"
+    IDS_NO_PARAMETERS "No parameters specified. Use /? for help on command line parameters.\n"
+    IDS_INVALID_SERVER "Invalid server name\n"
+    IDS_STATUS "Status = %lu 0x%lx %s\n"
+    IDS_COMPLETED "The command completed successfully\n"
+    IDS_CONTROL_FAILED "I_NetLogonControl failed: "
+    IDS_CONTROL_NO_DATA "The server returned success but no information\n"
+    IDS_FLAGS "Flags: %lx%s\n"
+    IDS_CONNECTION "Connection "
+    IDS_TRUSTED_DC_NAME "Trusted DC Name %s \n"
+    IDS_TRUSTED_DC_STATUS "Trusted DC Connection Status "
+    IDS_TRUST_VERIFICATION "Trust Verification "
+    IDS_DOMAIN_NAME "Domain Name: %s\n"
+    IDS_LOGON_ATTEMPTS "Number of attempted logons: %lu\n"
+    IDS_DNS_UPDATE_FAILED "There was a failure in the last update for one of the DC-specific DNS records\n"
+    IDS_DNS_UPDATE_OK "There was no failure in the last update for all DC-specific DNS records\n"
+    IDS_GETDCNAME_FAILED "NetGetDCName failed: "
+    IDS_PDC_FOR_DOMAIN "PDC for Domain %s is %s\n"
+    IDS_DSGETDC_FAILED "Getting DC name failed: "
+    IDS_DC_INFO "           DC: %s\n      Address: %s\n     Dom Guid: %s\n     Dom Name: %s\n  Forest Name: %s\n Dc Site Name: %s\nOur Site Name: %s\n        Flags:%s\n"
+    IDS_DCLIST_NO_DC "Cannot find DC to get DC list from. "
+    IDS_DCLIST_FROM "Get list of DCs in domain '%s' from '%s'.\n"
+    IDS_DCLIST_PRE2000 "Domain '%s' is pre Windows 2000 domain.  (Using NetServerEnum).\n"
+    IDS_DCLIST_ENUM_FAILED "NetServerEnum failed: "
+    IDS_DCLIST_HEADER "List of DCs in Domain %s\n"
+    IDS_DCLIST_ENTRY "    \\\\%s%s\n"
+    IDS_SITE_FAILED "Getting site name failed: "
+    IDS_SITECOV_FAILED "Getting DC site coverage failed: "
+    IDS_NAME_LINE "%s\n"
+    IDS_ADDR_TO_SITE_FAILED "Address to Site names translation failed: "
+    IDS_ADDR_TO_SITE_LINE "%s: %s (%s)\n"
+    IDS_ADDR_INVALID "Unable to get addresses for %s. "
+    IDS_ADDRESSES_REQUIRED "/ADDRESSES:<Address1,Address2,...> must be specified\n"
+    IDS_WINSOCK_FAILED "Cannot initialize winsock: "
+    IDS_PARENT_FAILED "Getting parent domain failed: "
+    IDS_PARENT_DOMAIN "%s. (%lu)\n"
+    IDS_TRUSTS_FAILED "Enumerating domain trusts failed: "
+    IDS_TRUSTS_HEADER "List of domain trusts:\n"
+    IDS_TRUST_ENTRY "%5lu: %s %s%s\n"
+    IDS_TRUST_GUID "        Dom Guid: %s\n"
+    IDS_TRUST_SID "        Dom Sid: %s\n"
+    IDS_FTI_FAILED "Getting forest trust information failed: "
+    IDS_FTI_TLN "TLN: %.*s\n"
+    IDS_FTI_TLN_EX "TLN Ex: %.*s\n"
+    IDS_FTI_DOMAIN "Dom: %.*s (%.*s)\n"
+    IDS_FTI_INVALID "Invalid Type: %ld\n"
+    IDS_LSA_CONNECT_FAILED "Failed to connect to the LSA database on the specified server\n"
+    IDS_LSA_QUERY_FAILED "Failed to query forest trust information for the specified trusted forest\n"
+    IDS_LSA_FOREST_REQUIRED "You must specify the name of a trusted forest\n"
+    IDS_TIME_LINE "%lx %lx = %02u/%02u/%04u %02u:%02u:%02u\n"
+    IDS_TIME_CONVERT_FAILED "Can't convert time from GMT to Local time\n"
+    IDS_SHUTDOWN_FAILED "Initiating system shutdown failed: "
+    IDS_SHUTDOWN_SECONDS "Second argument to /SHUTDOWN: must be a number.\n\n"
+    IDS_SHUTDOWN_ABORT_FAILED "AbortSystemShutdown failed: "
+    IDS_DEREGDNS_FAILED "Deregistering DNS host records failed: "
+    IDS_INVALID_DOMAIN_GUID "ERROR: Invalid Domain GUID specified\n"
+    IDS_INVALID_DSA_GUID "ERROR: Invalid DSA GUID specified\n"
+    IDS_NOT_ENOUGH_MEMORY "Not enough memory\n"
+END
