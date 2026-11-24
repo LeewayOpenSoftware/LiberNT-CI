@@ -223,6 +223,32 @@ TestBuiltinAlias(PCWSTR SidString)
     LocalFree(Sid);
 }
 
+/* Well-known SIDs of the NT Authority must report the "NT AUTHORITY" domain,
+ * not the machine name (whoami parity for SYSTEM / LOCAL SERVICE / ...). */
+static VOID
+TestNtAuthorityDomain(PCWSTR SidString, PCWSTR ExpectedName)
+{
+    WCHAR Name[256], Domain[256];
+    DWORD cchName = ARRAYSIZE(Name), cchDomain = ARRAYSIZE(Domain);
+    SID_NAME_USE Use = SidTypeUnknown;
+    PSID Sid = NULL;
+    BOOL Ret;
+
+    ok(ConvertStringSidToSidW(SidString, &Sid), "%s: ConvertStringSidToSidW failed: %lu\n",
+       wine_dbgstr_w(SidString), GetLastError());
+    if (!Sid)
+        return;
+
+    Ret = LookupAccountSidW(NULL, Sid, Name, &cchName, Domain, &cchDomain, &Use);
+    ok(Ret, "%s: lookup failed with error %lu\n", wine_dbgstr_w(SidString), GetLastError());
+    if (Ret)
+    {
+        ok(!wcscmp(Name, ExpectedName), "%s: name is %s\n", wine_dbgstr_w(SidString), wine_dbgstr_w(Name));
+        ok(!wcscmp(Domain, L"NT AUTHORITY"), "%s: domain is %s\n", wine_dbgstr_w(SidString), wine_dbgstr_w(Domain));
+    }
+    LocalFree(Sid);
+}
+
 START_TEST(LookupAccountSid)
 {
     ULONG i;
@@ -233,6 +259,12 @@ START_TEST(LookupAccountSid)
         TestUnmappedSid(UnmappedSids[i]);
     TestLookupAccountSidLocal();
     TestLocalSystemUse();
+    TestNtAuthorityDomain(L"S-1-5-19", L"LOCAL SERVICE");
+    TestNtAuthorityDomain(L"S-1-5-20", L"NETWORK SERVICE");
+    TestNtAuthorityDomain(L"S-1-5-11", L"Authenticated Users");
+    TestNtAuthorityDomain(L"S-1-5-2", L"NETWORK");
+    TestNtAuthorityDomain(L"S-1-5-4", L"INTERACTIVE");
+    TestNtAuthorityDomain(L"S-1-5-6", L"SERVICE");
     TestBuiltinAlias(L"S-1-5-32-558");
     TestBuiltinAlias(L"S-1-5-32-559");
 }
