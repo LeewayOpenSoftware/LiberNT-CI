@@ -9,6 +9,8 @@
 #include <wincrypt.h>
 #include <ntsecapi.h>
 #include <ntstatus.h>
+#include <userenv.h>
+#include <sddl.h>
 #include <lm.h>
 
 static const BYTE ChangeSecret[] = { 'q', '8', 0, 'r', 'e', 'k', 'e', 'y', 0x42 };
@@ -154,6 +156,41 @@ ChangePasswordViaMsv1_0(_In_ PCWSTR Domain,
     return Ok;
 }
 
+/* LoadUserProfileW needs SeRestorePrivilege and SeBackupPrivilege enabled. */
+static BOOL
+EnableProfilePrivileges(void)
+{
+    HANDLE Token;
+    TOKEN_PRIVILEGES Privileges;
+    LUID Luid;
+    ULONG Index;
+    static const PCWSTR Names[] = { L"SeRestorePrivilege", L"SeBackupPrivilege" };
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &Token))
+        return FALSE;
+
+    Privileges.PrivilegeCount = 0;
+    for (Index = 0; Index < ARRAYSIZE(Names); Index++)
+    {
+        if (LookupPrivilegeValueW(NULL, Names[Index], &Luid))
+        {
+            Privileges.Privileges[Privileges.PrivilegeCount].Luid = Luid;
+            Privileges.Privileges[Privileges.PrivilegeCount].Attributes = SE_PRIVILEGE_ENABLED;
+            Privileges.PrivilegeCount++;
+        }
+    }
+
+    if (Privileges.PrivilegeCount != ARRAYSIZE(Names) ||
+        !AdjustTokenPrivileges(Token, TRUE, &Privileges, 0, NULL, NULL) ||
+        GetLastError() != ERROR_SUCCESS)
+    {
+        CloseHandle(Token);
+        return FALSE;
+    }
+    CloseHandle(Token);
+    return TRUE;
+}
+
 static BOOL
 MakeScratchAccount(_In_ PCWSTR Name, _In_ PCWSTR Password)
 {
@@ -177,8 +214,10 @@ DeleteScratchAccount(_In_ PCWSTR Name)
 START_TEST(CryptProtectChangePassword)
 {
     WCHAR Account[64], Password1[64], Password2[64];
-    BOOL Created = FALSE;
+    PROFILEINFOW Profile = { 0 };
+    BOOL Created = FALSE, ProfileLoaded = FALSE;
     HANDLE Token1 = NULL, Token2 = NULL;
+    LPWSTR SidString = NULL;
     DATA_BLOB Blob = { 0 };
 
     if (!GetEnv(L"DPAPI_CHANGE_USER", Account, ARRAYSIZE(Account)))
@@ -204,13 +243,42 @@ START_TEST(CryptProtectChangePassword)
     }
     wcscpy(Password2, L"q8Second#2");
 
-    /* Logon with password 1 and protect a blob (creates the master key). */
+    /* Logon with password 1 and protect a blob (creates the master key). The
+     * profile must be loaded or a fresh account has no ProfileList entry and
+     * the protect fails as a test failure instead of exercising the re-key. */
     if (!LogonUserW(Account, L".", Password1, LOGON32_LOGON_INTERACTIVE,
                     LOGON32_PROVIDER_DEFAULT, &Token1))
     {
         skip("LogonUser(%ls) failed, error %lu\n", Account, GetLastError());
         goto done;
     }
+
+    if (!EnableProfilePrivileges())
+    {
+        skip("SeRestore/SeBackup enable failed (not elevated?)\n");
+        goto done;
+    }
+
+    Profile.dwSize = sizeof(Profile);
+    Profile.dwFlags = PI_NOUI;
+    Profile.lpUserName = Account;
+    if (!LoadUserProfileW(Token1, &Profile))
+    {
+        skip("LoadUserProfileW failed, error %lu\n", GetLastError());
+        goto done;
+    }
+    ProfileLoaded = TRUE;
+    ok(Profile.hProfile != NULL, "LoadUserProfileW returned no profile handle\n");
+
+    {
+        BYTE TokenBuffer[256];
+        TOKEN_USER *TokenInfo = (TOKEN_USER *)TokenBuffer;
+        DWORD Size;
+
+        if (GetTokenInformation(Token1, TokenUser, TokenBuffer, sizeof(TokenBuffer), &Size))
+            ConvertSidToStringSidW(TokenInfo->User.Sid, &SidString);
+    }
+
     ok(ProtectAndCompare(Token1, &Blob), "protect under password 1 failed, error %lu\n",
        GetLastError());
 
@@ -234,10 +302,17 @@ START_TEST(CryptProtectChangePassword)
         ok(0, "LogonUser with the new password failed, error %lu\n", GetLastError());
     }
 
+done:
+    if (ProfileLoaded)
+    {
+        UnloadUserProfile(Token1, Profile.hProfile);
+        if (SidString)
+            DeleteProfileW(SidString, NULL, NULL);
+    }
+    if (SidString)
+        LocalFree(SidString);
     if (Created)
         ok(DeleteScratchAccount(Account), "NetUserDel failed\n");
-
-done:
     if (Blob.pbData)
         LocalFree(Blob.pbData);
     if (Token2)

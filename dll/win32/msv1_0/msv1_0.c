@@ -1884,7 +1884,6 @@ MsvpRefreshCredentialsForAccount(
         PLOGON_LIST_ENTRY LogonEntry = CONTAINING_RECORD(CurrentEntry,
                                                          LOGON_LIST_ENTRY,
                                                          ListEntry);
-
         if (RtlEqualUnicodeString(&LogonEntry->UserName, AccountName, TRUE) &&
             (DomainName->Length == 0 ||
              RtlEqualUnicodeString(&LogonEntry->LogonDomainName, DomainName, TRUE) ||
@@ -1896,6 +1895,9 @@ MsvpRefreshCredentialsForAccount(
         CurrentEntry = CurrentEntry->Flink;
     }
     RtlReleaseResource(&LogonListResource);
+    if (CurrentEntry != &LogonListHead)
+        TRACE("MsvpRefreshCredentialsForAccount: more than %u sessions, capping\n",
+              ARRAYSIZE(Sessions));
 
     for (Index = 0; Index < SessionCount; Index++)
     {

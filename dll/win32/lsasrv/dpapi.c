@@ -1536,8 +1536,14 @@ DpapiSysWrite(
     if (!NT_SUCCESS(Status))
         return Status;
 
+    /* R3: a key file or credhist without the explicit DACL is the D2
+     * violation; fail the write rather than leave the inherited DACL. */
     if (Sd != NULL)
-        NtSetSecurityObject(FileHandle, DACL_SECURITY_INFORMATION, Sd);
+    {
+        Status = NtSetSecurityObject(FileHandle, DACL_SECURITY_INFORMATION, Sd);
+        if (!NT_SUCCESS(Status))
+            goto done;
+    }
 
     Status = NtWriteFile(FileHandle, NULL, NULL, NULL, &IoStatusBlock,
                          (PVOID)Data, DataLength, NULL, NULL);
@@ -1562,8 +1568,20 @@ DpapiSysWrite(
 
     Status = NtSetInformationFile(FileHandle, &IoStatusBlock, RenameInfo,
                                   RenameInfoSize, FileRenameInformation);
+    if (NT_SUCCESS(Status))
+        TempName[0] = UNICODE_NULL;
 
 done:
+    /* R3: leave no tmp residue in the user's directory on failure. */
+    if (!NT_SUCCESS(Status) && TempName[0] != UNICODE_NULL)
+    {
+        FILE_DISPOSITION_INFORMATION Disposition;
+        IO_STATUS_BLOCK DeleteIosb;
+
+        Disposition.DeleteFile = TRUE;
+        NtSetInformationFile(FileHandle, &DeleteIosb, &Disposition,
+                             sizeof(Disposition), FileDispositionInformation);
+    }
     if (RenameInfo != NULL)
         RtlFreeHeap(RtlGetProcessHeap(), 0, RenameInfo);
     if (FileHandle != NULL)
@@ -2440,48 +2458,52 @@ LsapDpapiOnPasswordChange(
                     PBYTE NewFile = NULL;
 
                     Entry = (PFILE_DIRECTORY_INFORMATION)(DirBuffer + Offset);
-                    if (Entry->FileNameLength >= sizeof(Name))
-                        break;
-                    RtlCopyMemory(Name, Entry->FileName, Entry->FileNameLength);
-                    Name[Entry->FileNameLength / sizeof(WCHAR)] = UNICODE_NULL;
 
-                    /* Key files are GUID-named (36 chars); skip Preferred and
-                     * any temp residue. */
-                    if (wcslen(Name) == 36 &&
-                        NT_SUCCESS(DpapiSysRead(Tree.SidHandle, Name,
-                                                DPAPI_KEYFILE_SIZE, DPAPI_KEYFILE_SIZE,
-                                                &KeyFile, &KeyFileLength)))
+                    /* R1: a long name skips THIS entry only; the rest of the
+                     * batch must still re-key (the user owns this dir). */
+                    if (Entry->FileNameLength < sizeof(Name))
                     {
-                        if (NT_SUCCESS(DpapiDecryptKeyFile(&OldPrekey, KeyFile,
-                                                           MasterKey)))
-                        {
-                            NewFile = RtlAllocateHeap(RtlGetProcessHeap(), 0,
-                                                      DPAPI_KEYFILE_SIZE);
-                            if (NewFile != NULL)
-                            {
-                                NTSTATUS WriteStatus;
+                        RtlCopyMemory(Name, Entry->FileName, Entry->FileNameLength);
+                        Name[Entry->FileNameLength / sizeof(WCHAR)] = UNICODE_NULL;
 
-                                if (NT_SUCCESS(DpapiEncryptKeyFile(&NewPrekey,
-                                                                   MasterKey,
-                                                                   NewFile)))
+                        /* Key files are GUID-named (36 chars); skip Preferred
+                         * and any temp residue. */
+                        if (wcslen(Name) == 36 &&
+                            NT_SUCCESS(DpapiSysRead(Tree.SidHandle, Name,
+                                                    DPAPI_KEYFILE_SIZE, DPAPI_KEYFILE_SIZE,
+                                                    &KeyFile, &KeyFileLength)))
+                        {
+                            if (NT_SUCCESS(DpapiDecryptKeyFile(&OldPrekey, KeyFile,
+                                                               MasterKey)))
+                            {
+                                NewFile = RtlAllocateHeap(RtlGetProcessHeap(), 0,
+                                                          DPAPI_KEYFILE_SIZE);
+                                if (NewFile != NULL)
                                 {
-                                    WriteStatus = DpapiSysWrite(Tree.SidHandle, Name,
-                                                                NewFile,
-                                                                DPAPI_KEYFILE_SIZE,
-                                                                Sd);
-                                    if (!NT_SUCCESS(WriteStatus) &&
-                                        NT_SUCCESS(Status))
+                                    NTSTATUS WriteStatus;
+
+                                    if (NT_SUCCESS(DpapiEncryptKeyFile(&NewPrekey,
+                                                                       MasterKey,
+                                                                       NewFile)))
                                     {
-                                        Status = WriteStatus;
+                                        WriteStatus = DpapiSysWrite(Tree.SidHandle, Name,
+                                                                    NewFile,
+                                                                    DPAPI_KEYFILE_SIZE,
+                                                                    Sd);
+                                        if (!NT_SUCCESS(WriteStatus) &&
+                                            NT_SUCCESS(Status))
+                                        {
+                                            Status = WriteStatus;
+                                        }
                                     }
+                                    RtlSecureZeroMemory(NewFile, DPAPI_KEYFILE_SIZE);
+                                    RtlFreeHeap(RtlGetProcessHeap(), 0, NewFile);
                                 }
-                                RtlSecureZeroMemory(NewFile, DPAPI_KEYFILE_SIZE);
-                                RtlFreeHeap(RtlGetProcessHeap(), 0, NewFile);
                             }
+                            RtlSecureZeroMemory(KeyFile, KeyFileLength);
+                            RtlFreeHeap(RtlGetProcessHeap(), 0, KeyFile);
+                            RtlSecureZeroMemory(MasterKey, sizeof(MasterKey));
                         }
-                        RtlSecureZeroMemory(KeyFile, KeyFileLength);
-                        RtlFreeHeap(RtlGetProcessHeap(), 0, KeyFile);
-                        RtlSecureZeroMemory(MasterKey, sizeof(MasterKey));
                     }
 
                     if (Entry->NextEntryOffset == 0)
