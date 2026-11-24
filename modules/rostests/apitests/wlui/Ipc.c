@@ -9,6 +9,7 @@
 #include <sddl.h>
 #include <strsafe.h>
 #include <wluiclient.h>
+#include <wluiauth.h>
 
 /* The server stubs (wlui_s.c) call these; their header repeats the client types, so take the ifspec alone. */
 extern RPC_IF_HANDLE wlui_v1_0_s_ifspec;
@@ -109,12 +110,22 @@ StartTestServer(
         return FALSE;
 
     Status = RpcServerUseProtseqEpW(L"ncalrpc", RPC_C_PROTSEQ_MAX_REQS_DEFAULT, (RPC_WSTR)Endpoint, Sd);
-    LocalFree(Sd);
     ok(Status == RPC_S_OK, "UseProtseqEp %lu\n", Status);
+    if (Status == RPC_S_OK)
+    {
+        /* A second, named-pipe listener: the interface must still refuse calls that arrive on it. */
+        WCHAR Pipe[96];
+        StringCchPrintfW(Pipe, ARRAYSIZE(Pipe), L"\\pipe\\%s", Endpoint);
+        Status = RpcServerUseProtseqEpW(L"ncacn_np", RPC_C_PROTSEQ_MAX_REQS_DEFAULT, (RPC_WSTR)Pipe, Sd);
+        ok(Status == RPC_S_OK, "UseProtseqEp(ncacn_np) %lu\n", Status);
+    }
+    LocalFree(Sd);
     if (Status != RPC_S_OK)
         return FALSE;
-    Status = RpcServerRegisterIf(wlui_v1_0_s_ifspec, NULL, NULL);
-    ok(Status == RPC_S_OK, "RegisterIf %lu\n", Status);
+    /* Registered exactly as winlogon does: local only, and the callback keeps it on ncalrpc. */
+    Status = RpcServerRegisterIfEx(wlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
+                                   RPC_C_LISTEN_MAX_CALLS_DEFAULT, WluiServerIfCallback);
+    ok(Status == RPC_S_OK, "RegisterIfEx %lu\n", Status);
     if (Status != RPC_S_OK)
         return FALSE;
     Status = RpcServerListen(1, 4, TRUE);
@@ -190,6 +201,34 @@ Test_ServerCheckAndWire(void)
         ok(g_Calls == 0, "impostor server received %ld call(s)\n", g_Calls);
     }
     WluiDisconnect(&C);
+
+    /* R1: the same interface reached over ncacn_np is refused by the interface callback
+     * before any handler runs, even for a caller that could pass the authorizer. */
+    {
+        RPC_WSTR StringBinding = NULL;
+        RPC_BINDING_HANDLE Np = NULL;
+        WCHAR Pipe[96];
+        DWORD NpError = 0;
+
+        StringCchPrintfW(Pipe, ARRAYSIZE(Pipe), L"\\pipe\\%s", Endpoint);
+        ok(RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncacn_np", (RPC_WSTR)L".", (RPC_WSTR)Pipe, NULL,
+                                    &StringBinding) == RPC_S_OK, "np compose\n");
+        ok(RpcBindingFromStringBindingW(StringBinding, &Np) == RPC_S_OK, "np binding\n");
+        RpcStringFreeW(&StringBinding);
+        g_Calls = 0;
+        RpcTryExcept
+        {
+            NpError = WluiHeartbeat(Np, Id);
+        }
+        RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+        {
+            NpError = RpcExceptionCode();
+        }
+        RpcEndExcept;
+        ok(NpError == RPC_S_ACCESS_DENIED, "over ncacn_np: %lu (expected 5)\n", NpError);
+        ok(g_Calls == 0, "ncacn_np call reached a handler (%ld)\n", g_Calls);
+        RpcBindingFree(&Np);
+    }
 
     /* The wire, against the server we own: name our own SID and every call goes through. */
     g_Calls = 0;

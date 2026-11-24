@@ -12,29 +12,7 @@
 #include <sddl.h>
 #include <wlui_s.h>
 
-#define WLUI_COMMAND_QUEUE_LENGTH 8
-#define WLUI_COMMAND_WAIT_MS      30000
-
-/* Per-launch state; the launch table keeps a pointer to it as the entry context. */
-struct _WLUI_LAUNCH_STATE
-{
-    LONG RefCount;
-    BOOL Dead;
-    GUID LaunchId;
-    HANDLE ReadyEvent;
-    HANDLE QueueSemaphore;
-    CRITICAL_SECTION Lock;
-    BOOL Ready;
-    BOOL Exiting;
-    WLUI_EXIT_REASON ExitReason;
-    ULONGLONG LastHeartbeat;
-    GUID LastFaultClsid;
-    DWORD LastFaultReason;
-    WLUI_COMMAND Queue[WLUI_COMMAND_QUEUE_LENGTH];
-    ULONG Head;
-    ULONG Count;
-    DWORD NextSequence;
-};
+#define WLUI_COMMAND_WAIT_MS 30000
 
 static WLUI_LAUNCH_TABLE g_LaunchTable;
 static CRITICAL_SECTION g_StateLock;      /* serializes lookups against unregistering */
@@ -42,21 +20,7 @@ static BOOL g_ServerStarted;
 static WLUI_SUBMIT_HANDLER g_SubmitHandler;
 static WLUI_ACTION_HANDLER g_ActionHandler;
 
-/* ---- lifetime ------------------------------------------------------------ */
-
-static VOID
-WluiStateRelease(
-    _In_ PWLUI_LAUNCH_STATE State)
-{
-    if (InterlockedDecrement(&State->RefCount) != 0)
-        return;
-
-    DeleteCriticalSection(&State->Lock);
-    if (State->ReadyEvent) CloseHandle(State->ReadyEvent);
-    if (State->QueueSemaphore) CloseHandle(State->QueueSemaphore);
-    SecureZeroMemory(State, sizeof(*State));
-    HeapFree(GetProcessHeap(), 0, State);
-}
+/* ---- what the rest of winlogon uses --------------------------------------- */
 
 PWLUI_LAUNCH_STATE
 WluiLaunchRegister(
@@ -71,20 +35,9 @@ WluiLaunchRegister(
     if (!g_ServerStarted)
         return NULL;
 
-    State = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*State));
+    State = WluiStateCreate(sizeof(WLUI_COMMAND));
     if (State == NULL)
         return NULL;
-
-    State->RefCount = 1;
-    InitializeCriticalSection(&State->Lock);
-    State->ReadyEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
-    State->QueueSemaphore = CreateSemaphoreW(NULL, 0, WLUI_COMMAND_QUEUE_LENGTH + 1, NULL);
-    State->LastHeartbeat = GetTickCount64();
-    if (State->ReadyEvent == NULL || State->QueueSemaphore == NULL)
-    {
-        WluiStateRelease(State);
-        return NULL;
-    }
 
     EnterCriticalSection(&g_StateLock);
     if (!WluiLaunchTableAdd(&g_LaunchTable, Pid, Sid, Role, State, LaunchId))
@@ -106,40 +59,25 @@ WluiLaunchUnregister(
 {
     EnterCriticalSection(&g_StateLock);
     WluiLaunchTableRemove(&g_LaunchTable, &State->LaunchId);
-    State->Dead = TRUE;
+    WluiStateMarkDead(State);
     LeaveCriticalSection(&g_StateLock);
-
-    /* Wake a blocked WaitForCommand so it returns instead of outliving the launch. */
-    ReleaseSemaphore(State->QueueSemaphore, 1, NULL);
-    SetEvent(State->ReadyEvent);
     WluiStateRelease(State);
 }
-
-/* ---- what the rest of winlogon uses --------------------------------------- */
 
 BOOL
 WluiLaunchPostCommand(
     _In_ PWLUI_LAUNCH_STATE State,
-    _In_ const WLUI_COMMAND *Command)
+    _In_ const struct _WLUI_COMMAND *Command)
 {
-    BOOL Queued = FALSE;
+    WLUI_COMMAND Copy = *Command;
 
-    EnterCriticalSection(&State->Lock);
-    if (!State->Dead && State->Count < WLUI_COMMAND_QUEUE_LENGTH)
+    Copy.Sequence = (DWORD)InterlockedIncrement(&State->SequenceCounter);
+    if (!WluiStatePost(State, &Copy, sizeof(Copy)))
     {
-        ULONG Slot = (State->Head + State->Count) % WLUI_COMMAND_QUEUE_LENGTH;
-        State->Queue[Slot] = *Command;
-        State->Queue[Slot].Sequence = ++State->NextSequence;
-        State->Count++;
-        Queued = TRUE;
+        ERR("WL: wlui command %u dropped (queue full or launch dead)\n", Copy.Type);
+        return FALSE;
     }
-    LeaveCriticalSection(&State->Lock);
-
-    if (Queued)
-        ReleaseSemaphore(State->QueueSemaphore, 1, NULL);
-    else
-        ERR("WL: wlui command %u dropped (queue full or launch dead)\n", Command->Type);
-    return Queued;
+    return TRUE;
 }
 
 BOOL
@@ -147,25 +85,14 @@ WluiLaunchWaitReady(
     _In_ PWLUI_LAUNCH_STATE State,
     _In_ DWORD TimeoutMs)
 {
-    BOOL Ready;
-
-    if (WaitForSingleObject(State->ReadyEvent, TimeoutMs) != WAIT_OBJECT_0)
-        return FALSE;
-    EnterCriticalSection(&State->Lock);
-    Ready = State->Ready && !State->Dead;
-    LeaveCriticalSection(&State->Lock);
-    return Ready;
+    return WluiStateWaitReady(State, TimeoutMs);
 }
 
 ULONGLONG
 WluiLaunchLastHeartbeat(
     _In_ PWLUI_LAUNCH_STATE State)
 {
-    ULONGLONG Last;
-    EnterCriticalSection(&State->Lock);
-    Last = State->LastHeartbeat;
-    LeaveCriticalSection(&State->Lock);
-    return Last;
+    return WluiStateLastHeartbeat(State);
 }
 
 BOOL
@@ -173,12 +100,7 @@ WluiLaunchExited(
     _In_ PWLUI_LAUNCH_STATE State,
     _Out_opt_ DWORD *Reason)
 {
-    BOOL Exiting;
-    EnterCriticalSection(&State->Lock);
-    Exiting = State->Exiting;
-    if (Reason) *Reason = (DWORD)State->ExitReason;
-    LeaveCriticalSection(&State->Lock);
-    return Exiting;
+    return WluiStateExited(State, Reason);
 }
 
 VOID
@@ -220,10 +142,12 @@ WluiServerStart(VOID)
         return FALSE;
     }
 
-    Status = RpcServerRegisterIf(wlui_v1_0_s_ifspec, NULL, NULL);
+    /* The interface would otherwise answer on \pipe\winreg too; the callback keeps it on ncalrpc. */
+    Status = RpcServerRegisterIfEx(wlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
+                                   RPC_C_LISTEN_MAX_CALLS_DEFAULT, WluiServerIfCallback);
     if (Status != RPC_S_OK)
     {
-        ERR("WL: RpcServerRegisterIf(wlui) failed (Status %lx)\n", Status);
+        ERR("WL: RpcServerRegisterIfEx(wlui) failed (Status %lx)\n", Status);
         return FALSE;
     }
 
@@ -286,7 +210,7 @@ WluiAuthorizeCall(
     if (Result == WluiAuthOk && Context != NULL && !((PWLUI_LAUNCH_STATE)Context)->Dead)
     {
         *State = Context;
-        InterlockedIncrement(&(*State)->RefCount);
+        WluiStateAddRef(*State);
     }
     else if (Result == WluiAuthOk)
     {
@@ -302,15 +226,6 @@ WluiAuthorizeCall(
     return ERROR_SUCCESS;
 }
 
-static VOID
-WluiTouchHeartbeat(
-    _In_ PWLUI_LAUNCH_STATE State)
-{
-    EnterCriticalSection(&State->Lock);
-    State->LastHeartbeat = GetTickCount64();
-    LeaveCriticalSection(&State->Lock);
-}
-
 DWORD
 __stdcall
 WluiReady(
@@ -324,12 +239,7 @@ WluiReady(
     if (Error != ERROR_SUCCESS)
         return Error;
 
-    EnterCriticalSection(&State->Lock);
-    State->Ready = TRUE;
-    State->LastHeartbeat = GetTickCount64();
-    LeaveCriticalSection(&State->Lock);
-    SetEvent(State->ReadyEvent);
-
+    WluiStateSetReady(State);
     WluiStateRelease(State);
     return ERROR_SUCCESS;
 }
@@ -347,7 +257,7 @@ WluiHeartbeat(
     if (Error != ERROR_SUCCESS)
         return Error;
 
-    WluiTouchHeartbeat(State);
+    WluiStateTouch(State);
     WluiStateRelease(State);
     return ERROR_SUCCESS;
 }
@@ -361,6 +271,7 @@ WluiWaitForCommand(
 {
     PWLUI_LAUNCH_STATE State;
     DWORD Error;
+    BOOL Got;
 
     ZeroMemory(Command, sizeof(*Command));
     Command->Type = WluiCmdNone;
@@ -369,22 +280,10 @@ WluiWaitForCommand(
     if (Error != ERROR_SUCCESS)
         return Error;
 
-    if (WaitForSingleObject(State->QueueSemaphore, WLUI_COMMAND_WAIT_MS) == WAIT_OBJECT_0)
-    {
-        EnterCriticalSection(&State->Lock);
-        if (State->Dead)
-        {
-            Error = ERROR_OPERATION_ABORTED;   /* the launch ended while we waited */
-        }
-        else if (State->Count > 0)
-        {
-            *Command = State->Queue[State->Head];
-            SecureZeroMemory(&State->Queue[State->Head], sizeof(WLUI_COMMAND));
-            State->Head = (State->Head + 1) % WLUI_COMMAND_QUEUE_LENGTH;
-            State->Count--;
-        }
-        LeaveCriticalSection(&State->Lock);
-    }
+    /* One wait per launch pins one server thread at most (ERROR_BUSY to a second). */
+    Error = WluiStateWait(State, WLUI_COMMAND_WAIT_MS, Command, sizeof(*Command), &Got);
+    if (Error == ERROR_SUCCESS && !Got)
+        Command->Type = WluiCmdNone;
 
     WluiStateRelease(State);
     return Error;
@@ -459,10 +358,7 @@ WluiReportProviderFault(
     if (Error != ERROR_SUCCESS)
         return Error;
 
-    EnterCriticalSection(&State->Lock);
-    State->LastFaultClsid = ProviderClsid;
-    State->LastFaultReason = Reason;
-    LeaveCriticalSection(&State->Lock);
+    WluiStateRecordFault(State, &ProviderClsid, Reason);
     ERR("WL: credential provider {%08lX-...} discarded by the host (reason %lu)\n",
         ProviderClsid.Data1, Reason);
 
@@ -484,10 +380,7 @@ WluiExiting(
     if (Error != ERROR_SUCCESS)
         return Error;
 
-    EnterCriticalSection(&State->Lock);
-    State->Exiting = TRUE;
-    State->ExitReason = Reason;
-    LeaveCriticalSection(&State->Lock);
+    WluiStateSetExiting(State, (DWORD)Reason);
     TRACE("WL: wlui launch exiting (reason %u)\n", Reason);
 
     WluiStateRelease(State);

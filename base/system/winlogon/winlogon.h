@@ -334,7 +334,6 @@ CallNotificationDlls(
 /* rpclogonui.c */
 #include <wluiauth.h>
 struct _WLUI_COMMAND;
-typedef struct _WLUI_LAUNCH_STATE *PWLUI_LAUNCH_STATE;
 
 typedef DWORD (*WLUI_SUBMIT_HANDLER)(
     _In_ PWLUI_LAUNCH_STATE State,

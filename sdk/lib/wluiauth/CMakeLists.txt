@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     wluiauth.c
+    wluistate.c
     wluiauth.h)
 
 add_library(wluiauth ${SOURCE})

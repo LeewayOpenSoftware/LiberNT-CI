@@ -17,6 +17,9 @@ extern "C" {
 
 #define WLUI_DEFAULT_ENDPOINT L"wlui"
 
+/* This library defines MIDL_user_allocate/MIDL_user_free for its stubs; a consumer
+ * that links another RPC client must not define them a second time. */
+
 typedef struct _WLUI_CONNECTION
 {
     RPC_BINDING_HANDLE Binding;

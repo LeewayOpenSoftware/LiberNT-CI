@@ -11,7 +11,7 @@ list(APPEND SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/wlui_s.c)
 
 add_executable(wlui_apitest ${SOURCE})
-target_link_libraries(wlui_apitest wluiclient wine)
+target_link_libraries(wlui_apitest wluiclient wluiauth wine)
 set_module_type(wlui_apitest win32cui)
 add_importlibs(wlui_apitest rpcrt4 advapi32 msvcrt kernel32 ntdll)
 add_rostests_file(TARGET wlui_apitest)

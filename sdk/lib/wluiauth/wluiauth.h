@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <rpc.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -96,6 +98,61 @@ WluiAuthorize(
     _Out_opt_ PVOID *Context);
 
 PCWSTR NTAPI WluiAuthResultName(_In_ WLUI_AUTH_RESULT Result);
+
+/*
+ * Per-launch state (wluistate.c): what winlogon keeps for one launched process.
+ * Items in the command queue are opaque fixed-size blocks (the server stores
+ * WLUI_COMMAND), so this library needs nothing from the IDL.
+ */
+#define WLUI_STATE_QUEUE_LENGTH 8
+
+typedef struct _WLUI_LAUNCH_STATE
+{
+    LONG RefCount;
+    BOOL Dead;
+    GUID LaunchId;
+    HANDLE ReadyEvent;
+    HANDLE QueueSemaphore;
+    CRITICAL_SECTION Lock;
+    BOOL Ready;
+    BOOL Exiting;
+    BOOL Waiting;            /* one outstanding wait per launch */
+    DWORD ExitReason;
+    ULONGLONG LastHeartbeat;
+    GUID LastFaultClsid;
+    DWORD LastFaultReason;
+    LONG SequenceCounter;
+    SIZE_T ItemSize;
+    ULONG Head;
+    ULONG Count;
+    PBYTE Queue;             /* WLUI_STATE_QUEUE_LENGTH * ItemSize bytes */
+} WLUI_LAUNCH_STATE, *PWLUI_LAUNCH_STATE;
+
+PWLUI_LAUNCH_STATE NTAPI WluiStateCreate(_In_ SIZE_T ItemSize);
+VOID NTAPI WluiStateAddRef(_In_ PWLUI_LAUNCH_STATE State);
+VOID NTAPI WluiStateRelease(_In_ PWLUI_LAUNCH_STATE State);
+/* Marks the launch over and wakes a blocked wait; the caller drops its reference afterwards. */
+VOID NTAPI WluiStateMarkDead(_In_ PWLUI_LAUNCH_STATE State);
+
+BOOL NTAPI WluiStatePost(_In_ PWLUI_LAUNCH_STATE State, _In_reads_bytes_(Size) const VOID *Item, _In_ SIZE_T Size);
+/*
+ * Blocks up to TimeoutMs for an item. ERROR_SUCCESS with *Got FALSE on timeout,
+ * ERROR_BUSY when another wait is outstanding, ERROR_OPERATION_ABORTED when the
+ * launch died while waiting.
+ */
+DWORD NTAPI WluiStateWait(_In_ PWLUI_LAUNCH_STATE State, _In_ DWORD TimeoutMs,
+                          _Out_writes_bytes_(Size) VOID *Item, _In_ SIZE_T Size, _Out_ PBOOL Got);
+
+VOID NTAPI WluiStateSetReady(_In_ PWLUI_LAUNCH_STATE State);
+BOOL NTAPI WluiStateWaitReady(_In_ PWLUI_LAUNCH_STATE State, _In_ DWORD TimeoutMs);
+VOID NTAPI WluiStateTouch(_In_ PWLUI_LAUNCH_STATE State);
+ULONGLONG NTAPI WluiStateLastHeartbeat(_In_ PWLUI_LAUNCH_STATE State);
+VOID NTAPI WluiStateSetExiting(_In_ PWLUI_LAUNCH_STATE State, _In_ DWORD Reason);
+BOOL NTAPI WluiStateExited(_In_ PWLUI_LAUNCH_STATE State, _Out_opt_ PDWORD Reason);
+VOID NTAPI WluiStateRecordFault(_In_ PWLUI_LAUNCH_STATE State, _In_ const GUID *Clsid, _In_ DWORD Reason);
+
+/* Interface callback for RpcServerRegisterIfEx: accepts a call only when it arrived over ncalrpc. */
+RPC_STATUS RPC_ENTRY WluiServerIfCallback(_In_ RPC_IF_HANDLE Interface, _In_ void *Context);
 
 #ifdef __cplusplus
 }

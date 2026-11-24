@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     Authorize.c
+    LaunchState.c
     testlist.c)
 
 add_executable(wluiauth_apitest ${SOURCE})
