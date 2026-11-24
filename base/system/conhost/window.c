@@ -65,6 +65,7 @@ struct console_window
 #endif
 
     BOOL              quick_edit;      /* whether mouse ops are sent to app or used for content selection */
+    BOOL              transparency;    /* content backdrop blur */
     unsigned int      menu_mask;       /* MK_CONTROL MK_SHIFT mask to drive submenu opening */
     COORD             win_pos;         /* position (in cells) of visible part of screen buffer in window */
     unsigned int      win_width;       /* size (in cells) of visible part of window (width & height) */
@@ -102,6 +103,7 @@ struct console_config
     unsigned int  insert_mode;    /* TRUE to insert text at the cursor location; FALSE to overwrite it */
     unsigned int  menu_mask;      /* MK_CONTROL MK_SHIFT mask to drive submenu opening */
     unsigned int  quick_edit;     /* whether mouse ops are sent to app or used for content selection */
+    unsigned int  transparency;   /* content backdrop blur on (1) or off (0) */
     unsigned int  sb_width;       /* active screen buffer width */
     unsigned int  sb_height;      /* active screen buffer height */
     unsigned int  win_width;      /* size (in cells) of visible part of window (width & height) */
@@ -240,6 +242,10 @@ static void load_registry_key( HKEY key, struct console_config *config )
         config->quick_edit = val;
 
     count = sizeof(val);
+    if (!RegQueryValueExW( key, L"Transparency", 0, &type, (BYTE *)&val, &count ))
+        config->transparency = val != 0;
+
+    count = sizeof(val);
     if (!RegQueryValueExW( key, L"ScreenBufferSize", 0, &type, (BYTE *)&val, &count ))
     {
         config->sb_height = HIWORD(val);
@@ -292,6 +298,7 @@ static void load_config( const WCHAR *key_name, struct console_config *config )
 #else
     config->quick_edit   = 0;
 #endif
+    config->transparency = 1;
     config->sb_height    = 150;
     config->sb_width     = 80;
 #ifdef __REACTOS__
@@ -430,6 +437,12 @@ static void save_registry_key( HKEY key, const struct console_config *config, BO
     {
         val = config->quick_edit;
         RegSetValueExW( key, L"QuickEdit", 0, REG_DWORD, (BYTE *)&val, sizeof(val) );
+    }
+
+    if (save_all || config->transparency != default_config.transparency)
+    {
+        val = config->transparency;
+        RegSetValueExW( key, L"Transparency", 0, REG_DWORD, (BYTE *)&val, sizeof(val) );
     }
 
     if (save_all || config->sb_width != default_config.sb_width ||
@@ -688,6 +701,15 @@ static void update_content_backdrop( struct console *console )
     COLORREF fill;
 
     if (!console->win || !console->active) return;
+    if (!console->window->transparency)
+    {
+        if (console->window->backdrop_set)
+        {
+            DwmSettingsClearContentBackdrop( console->win );
+            console->window->backdrop_set = FALSE;
+        }
+        return;
+    }
     fill = console->active->color_map[(console->active->attr >> 4) & 0x0f];
     if (console->window->backdrop_set && console->window->backdrop == fill) return;
     if (DwmSettingsSetContentBackdrop( console->win, fill, 192 ))
@@ -1887,6 +1909,8 @@ static INT_PTR WINAPI option_dialog_proc( HWND dialog, UINT msg, WPARAM wparam, 
                              (di->config.menu_mask & MK_SHIFT) ? BST_CHECKED : BST_UNCHECKED, 0 );
         SendDlgItemMessageW( dialog, IDC_OPT_QUICK_EDIT, BM_SETCHECK,
                              (di->config.quick_edit) ? BST_CHECKED : BST_UNCHECKED, 0 );
+        SendDlgItemMessageW( dialog, IDC_OPT_TRANSPARENCY, BM_SETCHECK,
+                             (di->config.transparency) ? BST_CHECKED : BST_UNCHECKED, 0 );
         return FALSE; /* because we set the focus */
 
     case WM_COMMAND:
@@ -1938,6 +1962,8 @@ static INT_PTR WINAPI option_dialog_proc( HWND dialog, UINT msg, WPARAM wparam, 
 
             val = (IsDlgButtonChecked( dialog, IDC_OPT_QUICK_EDIT ) & BST_CHECKED) != 0;
             di->config.quick_edit = val;
+
+            di->config.transparency = (IsDlgButtonChecked( dialog, IDC_OPT_TRANSPARENCY ) & BST_CHECKED) != 0;
 
             SetWindowLongPtrW( dialog, DWLP_MSGRESULT, PSNRET_NOERROR );
             return TRUE;
@@ -2362,6 +2388,13 @@ static void apply_config( struct console *console, const struct console_config *
     console->window->menu_mask     = config->menu_mask;
     console->window->quick_edit    = config->quick_edit;
 #ifdef __REACTOS__
+    if (console->window->transparency != (BOOL)config->transparency)
+    {
+        console->window->transparency = config->transparency;
+        if (config->transparency) console->window->backdrop_set = FALSE;
+        update_content_backdrop( console );
+        if (console->win) InvalidateRect( console->win, NULL, TRUE );
+    }
     if (config->quick_edit) console->mode |= ENABLE_QUICK_EDIT_MODE | ENABLE_EXTENDED_FLAGS;
     else console->mode &= ~ENABLE_QUICK_EDIT_MODE;
 #endif
@@ -2443,6 +2476,7 @@ static void current_config( struct console *console, struct console_config *conf
 
     config->menu_mask     = console->window->menu_mask;
     config->quick_edit    = console->window->quick_edit;
+    config->transparency  = console->window->transparency;
     config->close_on_exit = console->window->close_on_exit;
 
     config->edition_mode = console->edition_mode;

@@ -164,6 +164,7 @@ void Settings_Load(void)
         st.navExpanded = RegReadDw(hk, L"NavExpanded", 0);
         st.noEffPrompt = RegReadDw(hk, L"NoEfficiencyPrompt", 0);
         st.fullAcctName = RegReadDw(hk, L"FullAccountName", 0);
+        st.noBlur = RegReadDw(hk, L"NoTransparency", 0);
         st.perfResource = RegReadDw(hk, L"PerfResource", 0);
         st.perfIndex = RegReadDw(hk, L"PerfIndex", 0);
 
@@ -194,6 +195,7 @@ void Settings_Save(void)
     WR(L"NavExpanded", st.navExpanded);
     WR(L"NoEfficiencyPrompt", st.noEffPrompt);
     WR(L"FullAccountName", st.fullAcctName);
+    WR(L"NoTransparency", st.noBlur);
     WR(L"PerfResource", st.perfResource);
     WR(L"PerfIndex", st.perfIndex);
 #undef WR
