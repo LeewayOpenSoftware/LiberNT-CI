@@ -5,13 +5,8 @@
  *              test-only fault-injection seam.
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * Include <windows.h> before this header.
- *
- * The core of the host lives in WallpaperHostRun() so the fault test can drive
- * it directly. WPH_FAULT_INJECTION is defined ONLY by the wallpaperhost_faulttest
- * build (modules/rostests/apitests/wallpaperhost); the production wallpaperhost.exe
- * never defines it, so none of the injection code below is compiled into the
- * shipped binary. This is the same discipline as credprovs_test.dll.
+ * Include <windows.h> first. WPH_FAULT_INJECTION is defined only by the
+ * wallpaperhost_faulttest build, never by production.
  */
 
 #ifndef _OROSI_WALLPAPERHOST_H_

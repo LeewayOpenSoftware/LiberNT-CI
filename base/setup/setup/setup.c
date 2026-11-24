@@ -112,14 +112,8 @@ INT wmain(INT argc, WCHAR* argv[])
 {
     LPWSTR Switch;
 
-    /* Read the setup switch from argv instead of scanning the raw command line.
-     * The second stage is launched as "<sysdir>\oobe\setup.exe" -target (see
-     * base/setup/libernt/libernt.c, RunTargetConfiguration), so the command
-     * line begins with a quoted full path. A bare wcschr(CmdLine, L'-') would
-     * match the first '-' inside that path when the install directory contains
-     * one, making -target parse as an unknown switch; setup would then skip the
-     * install and the wallpaper host would never start or stop. argv[0] is the
-     * program name, so the switch is argv[1]. */
+    /* Read the switch from argv[1]: argv[0] is a quoted full path that may
+     * contain '-', which a raw wcschr(CmdLine, L'-') would match by mistake. */
     if (argc < 2)
         return ERROR_INVALID_PARAMETER;
 

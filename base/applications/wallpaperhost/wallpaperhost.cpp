@@ -22,8 +22,12 @@
 
 #ifndef WPH_FAULT_INJECTION
 static const WCHAR g_szWindowClass[] = L"OrosiWallpaperHostWindow";
-#endif
 static const WCHAR g_szSingleInstanceMutex[] = L"Local\\OrosiWallpaperHost";
+#else
+/* Test-unique name so a real running host does not force every case to "already
+ * running". */
+static const WCHAR g_szSingleInstanceMutex[] = L"Local\\OrosiWallpaperHost.faulttest";
+#endif
 
 static void
 Log(LPCWSTR Format, ...)
@@ -81,12 +85,8 @@ SessionWindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 }
 #endif /* !WPH_FAULT_INJECTION */
 
-/*
- * Each fallible step of the host runs through a seam helper. In the production
- * build the helper is simply the real call. Under WPH_FAULT_INJECTION (the test
- * build only) it first honours g_WphInject, so every exit code can be reached
- * deterministically without real COM, a real desktop or a real session end.
- */
+/* Seam helpers: the real call in production; under WPH_FAULT_INJECTION (test
+ * build only) they first honour g_WphInject so every exit code is reachable. */
 
 static HANDLE
 WphAcquireSingleInstance(BOOL *pbAlreadyRunning)

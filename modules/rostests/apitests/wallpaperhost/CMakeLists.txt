@@ -1,11 +1,6 @@
 
-# Deterministic exit-code coverage for wallpaperhost.exe. The host core
-# (base/applications/wallpaperhost/wallpaperhost.cpp) is compiled here with
-# WPH_FAULT_INJECTION so each failure path can be forced without real COM.
-# The production wallpaperhost target never defines that macro, so the shipped
-# binary contains none of the injection code (credprovs_test.dll discipline).
-# This module is a test artifact (add_rostests_file) and is never installed to
-# the system image.
+# Test-only: builds the host core with WPH_FAULT_INJECTION to force each exit
+# code. Never installed (add_rostests_file), so production ships no injection code.
 
 list(APPEND SOURCE
     wallpaperhost_faulttest.cpp
