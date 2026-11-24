@@ -279,6 +279,31 @@ static void build_days_of_week(WCHAR *out, size_t count, const WCHAR *d)
         }
 }
 
+/* /st is HH:MM[:SS]; reject out-of-range fields (Win11: "Invalid Start Time"). */
+static BOOL valid_time(const WCHAR *s)
+{
+    const WCHAR *c = wcschr(s, ':'), *c2;
+    unsigned int hh, mm, ss = 0;
+
+    if (!c) return FALSE;
+    hh = wcstoul(s, NULL, 10);
+    mm = wcstoul(c + 1, NULL, 10);
+    if ((c2 = wcschr(c + 1, ':'))) ss = wcstoul(c2 + 1, NULL, 10);
+    return hh <= 23 && mm <= 59 && ss <= 59;
+}
+
+/* /sd is MM/DD/YYYY; reject out-of-range month/day (Win11: "Invalid Start Date"). */
+static BOOL valid_date(const WCHAR *s)
+{
+    const WCHAR *b = wcschr(s, '/');
+    unsigned int mo, dd;
+
+    if (!b) return FALSE;
+    mo = wcstoul(s, NULL, 10);
+    dd = wcstoul(b + 1, NULL, 10);
+    return mo >= 1 && mo <= 12 && dd >= 1 && dd <= 31;
+}
+
 static int create_command(int argc, WCHAR *argv[])
 {
     const WCHAR *task_name = NULL, *xml_file = NULL, *tr = NULL, *sc = NULL;
@@ -299,49 +324,68 @@ static int create_command(int argc, WCHAR *argv[])
 
     while (argc) {
         if (!wcsicmp(argv[0], L"/xml")) {
-            if (argc < 2) { FIXME("Missing /xml value\n"); return 1; }
-            if (xml_file) { FIXME("Duplicated /xml argument\n"); return 1; }
-            xml_file = argv[1]; argc -= 2; argv += 2;
+            if (argc < 2) {
+                FIXME("Missing /xml value\n");
+                return 1;
+            }
+
+            if (xml_file) {
+                FIXME("Duplicated /xml argument\n");
+                return 1;
+            }
+
+            xml_file = argv[1];
+            argc -= 2;
+            argv += 2;
         } else if (!wcsicmp(argv[0], L"/tn")) {
-            if (argc < 2) { FIXME("Missing /tn value\n"); return 1; }
-            if (task_name) { FIXME("Duplicated /tn argument\n"); return 1; }
-            task_name = argv[1]; argc -= 2; argv += 2;
-        } else if (!wcsicmp(argv[0], L"/tr")) {
-            if (argc < 2) { FIXME("Missing /tr value\n"); return 1; }
-            tr = argv[1]; argc -= 2; argv += 2;
-        } else if (!wcsicmp(argv[0], L"/sc")) {
-            if (argc < 2) { FIXME("Missing /sc value\n"); return 1; }
-            sc = argv[1]; argc -= 2; argv += 2;
-        } else if (!wcsicmp(argv[0], L"/mo")) {
-            if (argc < 2) { FIXME("Missing /mo value\n"); return 1; }
-            mo = argv[1]; argc -= 2; argv += 2;
-        } else if (!wcsicmp(argv[0], L"/st")) {
-            if (argc < 2) { FIXME("Missing /st value\n"); return 1; }
-            st = argv[1]; argc -= 2; argv += 2;
-        } else if (!wcsicmp(argv[0], L"/sd")) {
-            if (argc < 2) { FIXME("Missing /sd value\n"); return 1; }
-            sd = argv[1]; argc -= 2; argv += 2;
-        } else if (!wcsicmp(argv[0], L"/d")) {
-            if (argc < 2) { FIXME("Missing /d value\n"); return 1; }
-            days = argv[1]; argc -= 2; argv += 2;
-        } else if (!wcsicmp(argv[0], L"/ru")) {
-            if (argc < 2) { FIXME("Missing /ru value\n"); return 1; }
-            ru = argv[1]; argc -= 2; argv += 2;
-        } else if (!wcsicmp(argv[0], L"/rp")) {
-            if (argc < 2) { FIXME("Missing /rp value\n"); return 1; }
-            rp = argv[1]; argc -= 2; argv += 2;
-        } else if (!wcsicmp(argv[0], L"/rl")) {
-            if (argc < 2) { FIXME("Missing /rl value\n"); return 1; }
-            rl = argv[1]; argc -= 2; argv += 2;
+            if (argc < 2) {
+                FIXME("Missing /tn value\n");
+                return 1;
+            }
+
+            if (task_name) {
+                FIXME("Duplicated /tn argument\n");
+                return 1;
+            }
+
+            task_name = argv[1];
+            argc -= 2;
+            argv += 2;
         } else if (!wcsicmp(argv[0], L"/f")) {
-            flags = TASK_CREATE_OR_UPDATE; argc--; argv++;
+            flags = TASK_CREATE_OR_UPDATE;
+            argc--;
+            argv++;
+        } else if (!wcsicmp(argv[0], L"/tr") || !wcsicmp(argv[0], L"/sc") ||
+                   !wcsicmp(argv[0], L"/mo") || !wcsicmp(argv[0], L"/st") ||
+                   !wcsicmp(argv[0], L"/sd") || !wcsicmp(argv[0], L"/d") ||
+                   !wcsicmp(argv[0], L"/ru") || !wcsicmp(argv[0], L"/rp") ||
+                   !wcsicmp(argv[0], L"/rl")) {
+            if (argc < 2) {
+                FIXME("Missing %s value\n", debugstr_w(argv[0]));
+                return 1;
+            }
+
+            if (!wcsicmp(argv[0], L"/tr")) tr = argv[1];
+            else if (!wcsicmp(argv[0], L"/sc")) sc = argv[1];
+            else if (!wcsicmp(argv[0], L"/mo")) mo = argv[1];
+            else if (!wcsicmp(argv[0], L"/st")) st = argv[1];
+            else if (!wcsicmp(argv[0], L"/sd")) sd = argv[1];
+            else if (!wcsicmp(argv[0], L"/d")) days = argv[1];
+            else if (!wcsicmp(argv[0], L"/ru")) ru = argv[1];
+            else if (!wcsicmp(argv[0], L"/rp")) rp = argv[1];
+            else rl = argv[1];
+            argc -= 2;
+            argv += 2;
         } else {
             FIXME("Unsupported argument %s\n", debugstr_w(argv[0]));
             return 1;
         }
     }
 
-    if (!task_name) { FIXME("Missing /tn argument\n"); return 1; }
+    if (!task_name) {
+        FIXME("Missing /tn argument\n");
+        return 1;
+    }
 
     /* /xml: register the task definition from the file verbatim. */
     if (xml_file) {
@@ -364,6 +408,8 @@ static int create_command(int argc, WCHAR *argv[])
     /* Option form: build a task definition from /sc, /tr, /ru, ... as Win11 schtasks does. */
     if (!sc) { FIXME("Missing /sc or /xml argument\n"); return 1; }
     if (!tr) { FIXME("Missing /tr argument\n"); return 1; }
+    if (st && !valid_time(st)) { FIXME("Invalid /st value %s\n", debugstr_w(st)); return 1; }
+    if (sd && !valid_date(sd)) { FIXME("Invalid /sd value %s\n", debugstr_w(sd)); return 1; }
 
     interval = mo ? wcstoul(mo, NULL, 10) : 0;
     if (!interval) interval = 1;
@@ -371,7 +417,8 @@ static int create_command(int argc, WCHAR *argv[])
     /* Split /tr into command + arguments for the Exec action (the service quotes Command separately). */
     if (tr[0] == '"') {
         const WCHAR *end = wcschr(tr + 1, '"');
-        if (end) {
+        if (!end) { FIXME("Unterminated quote in /tr %s\n", debugstr_w(tr)); return 1; }
+        {
             size_t cl = end - (tr + 1);
             if (!(cmd_only = HeapAlloc(GetProcessHeap(), 0, (cl + 1) * sizeof(WCHAR)))) goto done;
             memcpy(cmd_only, tr + 1, cl * sizeof(WCHAR)); cmd_only[cl] = 0;
@@ -396,7 +443,7 @@ static int create_command(int argc, WCHAR *argv[])
     if (!tn_esc || !cmd_esc) goto done;
 
     if (ru) {
-        if (!wcsicmp(ru, L"SYSTEM") || !wcsicmp(ru, L"NT AUTHORITY\\SYSTEM"))
+        if (!*ru || !wcsicmp(ru, L"SYSTEM") || !wcsicmp(ru, L"NT AUTHORITY\\SYSTEM"))
             { sid = L"S-1-5-18"; logon = L"ServiceAccount"; logon_param = TASK_LOGON_SERVICE_ACCOUNT; }
         else if (!wcsicmp(ru, L"LOCAL SERVICE") || !wcsicmp(ru, L"NT AUTHORITY\\LOCAL SERVICE"))
             { sid = L"S-1-5-19"; logon = L"ServiceAccount"; logon_param = TASK_LOGON_SERVICE_ACCOUNT; }
@@ -489,7 +536,11 @@ static int create_command(int argc, WCHAR *argv[])
     SysFreeString(str);
     SysFreeString(xml);
     if (V_VT(&v_user) == VT_BSTR) SysFreeString(V_BSTR(&v_user));
-    if (V_VT(&v_pwd) == VT_BSTR) SysFreeString(V_BSTR(&v_pwd));
+    if (V_VT(&v_pwd) == VT_BSTR) {
+        /* do not leave a second copy of the password on the heap */
+        SecureZeroMemory(V_BSTR(&v_pwd), SysStringByteLen(V_BSTR(&v_pwd)));
+        SysFreeString(V_BSTR(&v_pwd));
+    }
     ITaskFolder_Release(root);
     if (SUCCEEDED(hres)) {
         IRegisteredTask_Release(task);

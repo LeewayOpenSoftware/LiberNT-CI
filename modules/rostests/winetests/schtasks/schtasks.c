@@ -277,13 +277,40 @@ START_TEST(schtasks)
     if (is_process_elevated())
     {
         IRegisteredTask *task = NULL;
+        ITaskDefinition *def = NULL;
+        IPrincipal *principal = NULL;
+        TASK_LOGON_TYPE logon = TASK_LOGON_NONE;
         WCHAR *name = a2w("wine\\winesvc");
+        BSTR user_id = NULL;
 
         r = run_command("schtasks /create /tn wine\\winesvc /sc ONCE /st 00:00 /tr notepad.exe /ru SYSTEM /f");
         ok(r == 0, "/create /ru SYSTEM: r = %lu\n", r);
 
         hres = ITaskFolder_GetTask(root, name, &task);
         ok(hres == S_OK, "GetTask(winesvc) failed: %08lx\n", hres);
+        if (task)
+        {
+            hres = IRegisteredTask_get_Definition(task, &def);
+            ok(hres == S_OK, "get_Definition failed: %08lx\n", hres);
+        }
+        if (def)
+        {
+            hres = ITaskDefinition_get_Principal(def, &principal);
+            ok(hres == S_OK, "get_Principal failed: %08lx\n", hres);
+        }
+        if (principal)
+        {
+            hres = IPrincipal_get_UserId(principal, &user_id);
+            ok(hres == S_OK, "get_UserId failed: %08lx\n", hres);
+            ok(user_id && (!wcscmp(user_id, L"S-1-5-18") || !wcsicmp(user_id, L"SYSTEM")),
+               "UserId = %s, expected SYSTEM\n", wine_dbgstr_w(user_id));
+            SysFreeString(user_id);
+            hres = IPrincipal_get_LogonType(principal, &logon);
+            ok(hres == S_OK, "get_LogonType failed: %08lx\n", hres);
+            ok(logon == TASK_LOGON_SERVICE_ACCOUNT, "LogonType = %d, expected ServiceAccount\n", logon);
+            IPrincipal_Release(principal);
+        }
+        if (def) ITaskDefinition_Release(def);
         if (task) IRegisteredTask_Release(task);
         HeapFree(GetProcessHeap(), 0, name);
 
@@ -291,7 +318,12 @@ START_TEST(schtasks)
         ok(r == 0, "/delete winesvc: r = %lu\n", r);
     }
     else
-        skip("creating a task that runs as SYSTEM requires elevation\n");
+    {
+        /* A non-elevated caller must not be able to register a task that runs as SYSTEM;
+         * the server denies it and schtasks returns 1 (the authorization check, client side). */
+        r = run_command("schtasks /create /tn wine\\winesvc /sc ONCE /st 00:00 /tr notepad.exe /ru SYSTEM /f");
+        ok(r == 1, "/ru SYSTEM from a non-elevated caller should fail: r = %lu\n", r);
+    }
 
     r = ITaskFolder_DeleteFolder(root, wine_testW, 0);
     ok(r == S_OK, "DeleteFolder(\\wine\\test) failed: %lx\n", r);
