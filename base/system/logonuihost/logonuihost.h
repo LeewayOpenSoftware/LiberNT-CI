@@ -7,6 +7,8 @@
 
 #pragma once
 
+#define COBJMACROS
+#define CONST_VTABLE
 #include <windows.h>
 #include <strsafe.h>
 #include <wluiclient.h>
@@ -40,6 +42,75 @@ extern WLUI_CONNECTION g_Connection;
 /* Window messages the IPC thread posts to the UI thread; lParam owns a heap WLUI_COMMAND. */
 #define WM_LUH_COMMAND      (WM_APP + 1)
 #define WM_LUH_IPC_LOST     (WM_APP + 2)
+/* From the provider thread: the page model is ready (lParam = PLUH_PAGE) or not (wParam says why). */
+#define WM_LUH_PAGE         (WM_APP + 3)
+/* From the events sink: a field changed; lParam owns a heap LUH_FIELD_UPDATE. */
+#define WM_LUH_FIELD        (WM_APP + 4)
+
+#define LUH_PAGE_READY      0
+#define LUH_PAGE_FAILED     1   /* no provider offered a credential */
+#define LUH_PAGE_POLICY     2   /* policy forbids the only credential left (plan §8.10 c) */
+
+#define LUH_PROVIDER_CALL_MS 10000
+#define LUH_FAULT_TIMEOUT    1
+#define LUH_MAX_FIELDS       32
+#define LUH_FIELD_TEXT       256
+
+#include <credentialprovider.h>
+
+typedef struct _LUH_FIELD
+{
+    DWORD Id;
+    CREDENTIAL_PROVIDER_FIELD_TYPE Type;
+    CREDENTIAL_PROVIDER_FIELD_STATE State;
+    CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE Interactive;
+    WCHAR Label[LUH_FIELD_TEXT];
+    WCHAR Value[LUH_FIELD_TEXT];
+    HWND Control;
+} LUH_FIELD, *PLUH_FIELD;
+
+typedef struct _LUH_PAGE
+{
+    DWORD Scenario;
+    DWORD Count;
+    DWORD SubmitField;
+    DWORD SubmitAdjacentTo;
+    LUH_FIELD Fields[LUH_MAX_FIELDS];
+} LUH_PAGE, *PLUH_PAGE;
+
+typedef enum _LUH_FIELD_UPDATE_KIND
+{
+    LuhFieldText = 1,
+    LuhFieldState,
+    LuhFieldInteractive,
+    LuhFieldCheckbox
+} LUH_FIELD_UPDATE_KIND;
+
+typedef struct _LUH_FIELD_UPDATE
+{
+    DWORD Field;
+    LUH_FIELD_UPDATE_KIND Kind;
+    DWORD Value;
+    WCHAR Text[LUH_FIELD_TEXT];
+} LUH_FIELD_UPDATE, *PLUH_FIELD_UPDATE;
+
+typedef enum _LUH_SUBMIT_RESULT
+{
+    LuhSubmitSent = 0,      /* serialization handed to winlogon; wait for ReportResult */
+    LuhSubmitNotFinished,   /* the provider wants more input */
+    LuhSubmitRefused,       /* winlogon refused the submission */
+    LuhSubmitFailed,        /* the provider failed */
+    LuhSubmitProviderGone   /* the provider timed out and was dropped */
+} LUH_SUBMIT_RESULT;
+
+/* providers.c */
+BOOL LuhProvidersStart(_In_ HWND Window);
+VOID LuhProvidersStop(VOID);
+BOOL LuhProviderSetString(_In_ DWORD Field, _In_ PCWSTR Text);
+LUH_SUBMIT_RESULT LuhProviderSubmit(_Out_writes_(StatusChars) PWSTR StatusText, _In_ SIZE_T StatusChars);
+BOOL LuhProviderReportResult(_In_ NTSTATUS Status, _In_ NTSTATUS SubStatus,
+                             _Out_writes_(StatusChars) PWSTR StatusText, _In_ SIZE_T StatusChars);
+VOID LuhProviderDeselect(VOID);
 
 /* main.c */
 BOOL LuhParseCommandLine(_In_ int argc, _In_reads_(argc) WCHAR **argv, _Out_ PLUH_OPTIONS Options);

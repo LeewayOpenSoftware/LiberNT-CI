@@ -80,24 +80,184 @@ Provider_UnAdvise(ICredentialProvider *iface)
     return S_OK;
 }
 
+/*
+ * A credential exists only when CREDPROV_TESTMOD_MODE is set in the environment, so the
+ * framework tests keep seeing a provider with no tiles. Modes: ok (asks for more input),
+ * hang (GetSerialization never returns), crash (GetSerialization faults).
+ */
+static const WCHAR *
+TestMode(void)
+{
+    static WCHAR Mode[16];
+    if (!GetEnvironmentVariableW(L"CREDPROV_TESTMOD_MODE", Mode, ARRAYSIZE(Mode)))
+        Mode[0] = 0;
+    return Mode;
+}
+
+typedef struct _TEST_CREDENTIAL
+{
+    ICredentialProviderCredential ICredentialProviderCredential_iface;
+    LONG Ref;
+} TEST_CREDENTIAL;
+
+static const struct { DWORD Id; CREDENTIAL_PROVIDER_FIELD_TYPE Type; const WCHAR *Label; } TestFields[] =
+{
+    { 1, CPFT_EDIT_TEXT,     L"User name" },
+    { 2, CPFT_PASSWORD_TEXT, L"Password" },
+    { 3, CPFT_SUBMIT_BUTTON, L"Submit" },
+};
+
+static LPWSTR
+DupString(const WCHAR *Text)
+{
+    SIZE_T Bytes = (wcslen(Text) + 1) * sizeof(WCHAR);
+    LPWSTR Copy = CoTaskMemAlloc(Bytes);
+    if (Copy)
+        CopyMemory(Copy, Text, Bytes);
+    return Copy;
+}
+
+static HRESULT WINAPI
+Credential_QueryInterface(ICredentialProviderCredential *iface, REFIID riid, void **ppv)
+{
+    if (IsEqualGUID(riid, &IID_IUnknown) || IsEqualGUID(riid, &IID_ICredentialProviderCredential))
+    {
+        *ppv = iface;
+        ICredentialProviderCredential_AddRef(iface);
+        return S_OK;
+    }
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI
+Credential_AddRef(ICredentialProviderCredential *iface)
+{
+    return InterlockedIncrement(&CONTAINING_RECORD(iface, TEST_CREDENTIAL, ICredentialProviderCredential_iface)->Ref);
+}
+
+static ULONG WINAPI
+Credential_Release(ICredentialProviderCredential *iface)
+{
+    TEST_CREDENTIAL *This = CONTAINING_RECORD(iface, TEST_CREDENTIAL, ICredentialProviderCredential_iface);
+    ULONG Ref = InterlockedDecrement(&This->Ref);
+    if (!Ref)
+        HeapFree(GetProcessHeap(), 0, This);
+    return Ref;
+}
+
+static HRESULT WINAPI Credential_Advise(ICredentialProviderCredential *iface, ICredentialProviderCredentialEvents *pcpce) { return S_OK; }
+static HRESULT WINAPI Credential_UnAdvise(ICredentialProviderCredential *iface) { return S_OK; }
+static HRESULT WINAPI Credential_SetSelected(ICredentialProviderCredential *iface, BOOL *pbAutoLogon) { *pbAutoLogon = FALSE; return S_OK; }
+static HRESULT WINAPI Credential_SetDeselected(ICredentialProviderCredential *iface) { return S_OK; }
+
+static HRESULT WINAPI
+Credential_GetFieldState(ICredentialProviderCredential *iface, DWORD dwFieldID,
+                         CREDENTIAL_PROVIDER_FIELD_STATE *pcpfs, CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE *pcpfis)
+{
+    if (dwFieldID < 1 || dwFieldID > ARRAYSIZE(TestFields))
+        return E_INVALIDARG;
+    *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+    *pcpfis = CPFIS_NONE;
+    return S_OK;
+}
+
+static HRESULT WINAPI
+Credential_GetStringValue(ICredentialProviderCredential *iface, DWORD dwFieldID, LPWSTR *ppsz)
+{
+    if (dwFieldID < 1 || dwFieldID > ARRAYSIZE(TestFields))
+        return E_INVALIDARG;
+    *ppsz = DupString(TestFields[dwFieldID - 1].Label);
+    return *ppsz ? S_OK : E_OUTOFMEMORY;
+}
+
+static HRESULT WINAPI Credential_GetBitmapValue(ICredentialProviderCredential *iface, DWORD dwFieldID, HBITMAP *phbmp) { return E_NOTIMPL; }
+static HRESULT WINAPI Credential_GetCheckboxValue(ICredentialProviderCredential *iface, DWORD dwFieldID, BOOL *pbChecked, LPWSTR *ppszLabel) { return E_NOTIMPL; }
+
+static HRESULT WINAPI
+Credential_GetSubmitButtonValue(ICredentialProviderCredential *iface, DWORD dwFieldID, DWORD *pdwAdjacentTo)
+{
+    if (dwFieldID != 3)
+        return E_INVALIDARG;
+    *pdwAdjacentTo = 2;
+    return S_OK;
+}
+
+static HRESULT WINAPI Credential_GetComboBoxValueCount(ICredentialProviderCredential *iface, DWORD dwFieldID, DWORD *pcItems, DWORD *pdwSelectedItem) { return E_NOTIMPL; }
+static HRESULT WINAPI Credential_GetComboBoxValueAt(ICredentialProviderCredential *iface, DWORD dwFieldID, DWORD dwItem, LPWSTR *ppszItem) { return E_NOTIMPL; }
+static HRESULT WINAPI Credential_SetStringValue(ICredentialProviderCredential *iface, DWORD dwFieldID, LPCWSTR psz) { return (dwFieldID == 1 || dwFieldID == 2) ? S_OK : E_INVALIDARG; }
+static HRESULT WINAPI Credential_SetCheckboxValue(ICredentialProviderCredential *iface, DWORD dwFieldID, BOOL bChecked) { return E_NOTIMPL; }
+static HRESULT WINAPI Credential_SetComboBoxSelectedValue(ICredentialProviderCredential *iface, DWORD dwFieldID, DWORD dwSelectedItem) { return E_NOTIMPL; }
+static HRESULT WINAPI Credential_CommandLinkClicked(ICredentialProviderCredential *iface, DWORD dwFieldID) { return E_NOTIMPL; }
+
+static HRESULT WINAPI
+Credential_GetSerialization(ICredentialProviderCredential *iface, CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE *pcpgsr,
+                            CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION *pcpcs, LPWSTR *ppszOptionalStatusText,
+                            CREDENTIAL_PROVIDER_STATUS_ICON *pcpsiOptionalStatusIcon)
+{
+    const WCHAR *Mode = TestMode();
+
+    if (wcscmp(Mode, L"hang") == 0)
+        Sleep(INFINITE);
+    if (wcscmp(Mode, L"crash") == 0)
+        *(volatile int *)0 = 1;
+
+    ZeroMemory(pcpcs, sizeof(*pcpcs));
+    *pcpgsr = CPGSR_NO_CREDENTIAL_NOT_FINISHED;
+    *ppszOptionalStatusText = DupString(L"testmod: nothing to submit");
+    *pcpsiOptionalStatusIcon = CPSI_NONE;
+    return S_OK;
+}
+
+static HRESULT WINAPI
+Credential_ReportResult(ICredentialProviderCredential *iface, NTSTATUS ntsStatus, NTSTATUS ntsSubstatus,
+                        LPWSTR *ppszOptionalStatusText, CREDENTIAL_PROVIDER_STATUS_ICON *pcpsiOptionalStatusIcon)
+{
+    *ppszOptionalStatusText = NULL;
+    *pcpsiOptionalStatusIcon = CPSI_NONE;
+    return S_OK;
+}
+
+static const ICredentialProviderCredentialVtbl CredentialVtbl =
+{
+    Credential_QueryInterface, Credential_AddRef, Credential_Release, Credential_Advise, Credential_UnAdvise,
+    Credential_SetSelected, Credential_SetDeselected, Credential_GetFieldState, Credential_GetStringValue,
+    Credential_GetBitmapValue, Credential_GetCheckboxValue, Credential_GetSubmitButtonValue,
+    Credential_GetComboBoxValueCount, Credential_GetComboBoxValueAt, Credential_SetStringValue,
+    Credential_SetCheckboxValue, Credential_SetComboBoxSelectedValue, Credential_CommandLinkClicked,
+    Credential_GetSerialization, Credential_ReportResult,
+};
+
 static HRESULT WINAPI
 Provider_GetFieldDescriptorCount(ICredentialProvider *iface, DWORD *pdwCount)
 {
-    *pdwCount = 0;
+    *pdwCount = TestMode()[0] ? ARRAYSIZE(TestFields) : 0;
     return S_OK;
 }
 
 static HRESULT WINAPI
 Provider_GetFieldDescriptorAt(ICredentialProvider *iface, DWORD dwIndex, CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR **ppcpfd)
 {
+    CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR *Desc;
+
     *ppcpfd = NULL;
-    return E_INVALIDARG;
+    if (!TestMode()[0] || dwIndex >= ARRAYSIZE(TestFields))
+        return E_INVALIDARG;
+    Desc = CoTaskMemAlloc(sizeof(*Desc));
+    if (!Desc)
+        return E_OUTOFMEMORY;
+    ZeroMemory(Desc, sizeof(*Desc));
+    Desc->dwFieldID = TestFields[dwIndex].Id;
+    Desc->cpft = TestFields[dwIndex].Type;
+    Desc->pszLabel = DupString(TestFields[dwIndex].Label);
+    *ppcpfd = Desc;
+    return S_OK;
 }
 
 static HRESULT WINAPI
 Provider_GetCredentialCount(ICredentialProvider *iface, DWORD *pdwCount, DWORD *pdwDefault, BOOL *pbAutoLogonWithDefault)
 {
-    *pdwCount = 0;
+    *pdwCount = TestMode()[0] ? 1 : 0;
     *pdwDefault = CREDENTIAL_PROVIDER_NO_DEFAULT;
     *pbAutoLogonWithDefault = FALSE;
     return S_OK;
@@ -106,8 +266,18 @@ Provider_GetCredentialCount(ICredentialProvider *iface, DWORD *pdwCount, DWORD *
 static HRESULT WINAPI
 Provider_GetCredentialAt(ICredentialProvider *iface, DWORD dwIndex, ICredentialProviderCredential **ppcpc)
 {
+    TEST_CREDENTIAL *Credential;
+
     *ppcpc = NULL;
-    return E_INVALIDARG;
+    if (!TestMode()[0] || dwIndex != 0)
+        return E_INVALIDARG;
+    Credential = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Credential));
+    if (!Credential)
+        return E_OUTOFMEMORY;
+    Credential->ICredentialProviderCredential_iface.lpVtbl = &CredentialVtbl;
+    Credential->Ref = 1;
+    *ppcpc = &Credential->ICredentialProviderCredential_iface;
+    return S_OK;
 }
 
 static const ICredentialProviderVtbl ProviderVtbl =

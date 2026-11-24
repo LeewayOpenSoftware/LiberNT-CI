@@ -13,6 +13,6 @@ list(APPEND SOURCE
 add_executable(logonuihost_apitest ${SOURCE})
 target_link_libraries(logonuihost_apitest wluiclient wluiauth wine)
 set_module_type(logonuihost_apitest win32cui)
-add_importlibs(logonuihost_apitest rpcrt4 advapi32 user32 msvcrt kernel32 ntdll)
-add_dependencies(logonuihost_apitest logonuihost_test)
+add_importlibs(logonuihost_apitest rpcrt4 ole32 advapi32 user32 msvcrt kernel32 ntdll)
+add_dependencies(logonuihost_apitest logonuihost_test credprov_testmod)
 add_rostests_file(TARGET logonuihost_apitest)

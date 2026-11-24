@@ -18,6 +18,8 @@ extern RPC_IF_HANDLE wlui_v1_0_s_ifspec;
 static PWLUI_LAUNCH_STATE g_State;      /* command queue the host pulls from */
 static HANDLE g_ReadyEvent, g_ExitEvent;
 static LONG g_Heartbeats;
+static LONG g_Faults;
+static GUID g_FaultClsid;
 static DWORD g_ExitReason = 0xFFFFFFFF;
 static GUID g_ExpectedId;
 static LONG g_WrongId;
@@ -57,6 +59,9 @@ DWORD __stdcall WluiRequestAction(handle_t h, GUID LaunchId, WLUI_ACTION Action)
 
 DWORD __stdcall WluiReportProviderFault(handle_t h, GUID LaunchId, GUID ProviderClsid, DWORD Reason)
 {
+    CheckId(&LaunchId);
+    g_FaultClsid = ProviderClsid;
+    InterlockedIncrement(&g_Faults);
     return ERROR_SUCCESS;
 }
 
@@ -215,6 +220,153 @@ ResetRun(void)
     while (WluiStateWait(g_State, 0, &Drain, sizeof(Drain), &Got) == ERROR_SUCCESS && Got) {}
 }
 
+/* ---- credential providers in the host ---------------------------------------- */
+
+/* The test provider and its CLSID key, as the credprov Framework test registers them. Its GUID
+ * string sorts before the PasswordProvider's, so the host selects its credential first. */
+#include <initguid.h>
+DEFINE_GUID(CLSID_CredProvTestProvider, 0x5e0a4b7c, 0x2d3f, 0x4c61, 0x9a, 0x0e, 0x7b, 0x21, 0x3c, 0x94, 0xd8, 0x01);
+#define AUTH_KEY L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Authentication"
+#define PROVIDERS_KEY AUTH_KEY L"\\Credential Providers"
+
+static BOOL
+ClsidString(REFCLSID Clsid, PWSTR Out, SIZE_T Count)
+{
+    return StringFromGUID2(Clsid, Out, (int)Count) > 0;
+}
+
+static BOOL
+RegisterTestProvider(BOOL Register)
+{
+    WCHAR Guid[40], Key[256], Dll[MAX_PATH];
+    HKEY h;
+    PWSTR Slash;
+
+    ClsidString(&CLSID_CredProvTestProvider, Guid, ARRAYSIZE(Guid));
+    if (!GetModuleFileNameW(NULL, Dll, ARRAYSIZE(Dll)) || !(Slash = wcsrchr(Dll, L'\\')))
+        return FALSE;
+    Slash[1] = UNICODE_NULL;
+    StringCchCatW(Dll, ARRAYSIZE(Dll), L"credprov_testmod.dll");
+    if (GetFileAttributesW(Dll) == INVALID_FILE_ATTRIBUTES)
+        return FALSE;
+
+    StringCchPrintfW(Key, ARRAYSIZE(Key), L"SOFTWARE\\Classes\\CLSID\\%s\\InprocServer32", Guid);
+    if (!Register)
+    {
+        RegDeleteKeyW(HKEY_LOCAL_MACHINE, Key);
+        StringCchPrintfW(Key, ARRAYSIZE(Key), L"SOFTWARE\\Classes\\CLSID\\%s", Guid);
+        RegDeleteKeyW(HKEY_LOCAL_MACHINE, Key);
+        StringCchPrintfW(Key, ARRAYSIZE(Key), PROVIDERS_KEY L"\\%s", Guid);
+        RegDeleteKeyW(HKEY_LOCAL_MACHINE, Key);
+        return TRUE;
+    }
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, Key, 0, NULL, 0, KEY_SET_VALUE, NULL, &h, NULL) != ERROR_SUCCESS)
+        return FALSE;
+    RegSetValueExW(h, NULL, 0, REG_SZ, (const BYTE *)Dll, (DWORD)((wcslen(Dll) + 1) * sizeof(WCHAR)));
+    RegSetValueExW(h, L"ThreadingModel", 0, REG_SZ, (const BYTE *)L"Both", sizeof(L"Both"));
+    RegCloseKey(h);
+    StringCchPrintfW(Key, ARRAYSIZE(Key), PROVIDERS_KEY L"\\%s", Guid);
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, Key, 0, NULL, 0, KEY_SET_VALUE, NULL, &h, NULL) != ERROR_SUCCESS)
+        return FALSE;
+    RegCloseKey(h);
+    return TRUE;
+}
+
+static void
+Test_Providers(PCWSTR Exe, PCWSTR Endpoint, PSID Own, PCWSTR Trace)
+{
+    HANDLE Process;
+    DWORD Code;
+    BOOL Registered;
+
+    /* Fallback: only the system PasswordProvider, and a page comes up. */
+    ResetRun();
+    DeleteFileW(Trace);
+    Process = LaunchHost(Exe, Endpoint, Own, Trace, L"/fallback");
+    ok(Process != NULL, "launch (fallback)\n");
+    ok(WaitForSingleObject(g_ReadyEvent, 5000) == WAIT_OBJECT_0, "no Ready (fallback)\n");
+    PostCmd(WluiCmdRequestCredentials, WLUI_FLAG_FALLBACK, NULL, NULL);
+    Sleep(3000);
+    ok(TraceHas(Trace, "providers 1"), "fallback did not enumerate exactly one provider\n");
+    ok(TraceHas(Trace, "page "), "fallback showed no credential page\n");
+    PostCmd(WluiCmdDismiss, 0, NULL, NULL);
+    Code = WaitExit(Process, 5000);
+    ok(Code == 0, "fallback exit %lu\n", Code);
+
+    Registered = RegisterTestProvider(TRUE);
+    if (!Registered)
+    {
+        skip("cannot register credprov_testmod (not elevated, or not built)\n");
+        return;
+    }
+
+    /* A provider that hangs in GetSerialization is dropped within the call timeout; the
+     * host reports it, stays alive and comes back with the remaining provider's page. */
+    ResetRun();
+    DeleteFileW(Trace);
+    g_Faults = 0;
+    SetEnvironmentVariableW(L"CREDPROV_TESTMOD_MODE", L"hang");
+    Process = LaunchHost(Exe, Endpoint, Own, Trace, NULL);
+    SetEnvironmentVariableW(L"CREDPROV_TESTMOD_MODE", NULL);
+    ok(Process != NULL, "launch (hang)\n");
+    ok(WaitForSingleObject(g_ReadyEvent, 5000) == WAIT_OBJECT_0, "no Ready (hang)\n");
+    PostCmd(WluiCmdRequestCredentials, 0, NULL, NULL);
+    Sleep(2500);
+    ok(TraceHas(Trace, "page 3"), "test provider page not shown first\n");
+    /* Submitting drives GetSerialization, which hangs. */
+    {
+        HWND Page = NULL;
+        DWORD Started = GetTickCount();
+        while (!Page && GetTickCount() - Started < 3000)
+        {
+            Page = FindWindowW(L"LiberNT_LogonUIHost", NULL);
+            if (!Page) Sleep(100);
+        }
+        ok(Page != NULL, "host window not found\n");
+        if (Page)
+        {
+            HWND Button = FindWindowExW(Page, NULL, L"BUTTON", L"Submit");
+            ok(Button != NULL, "submit button not found\n");
+            if (Button)
+                PostMessageW(Page, WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(Button), BN_CLICKED), (LPARAM)Button);
+        }
+    }
+    {
+        DWORD Started = GetTickCount();
+        while (g_Faults == 0 && GetTickCount() - Started < 15000)
+            Sleep(200);
+    }
+    ok(g_Faults == 1, "provider fault reports %ld (expected 1)\n", g_Faults);
+    ok(IsEqualGUID(&g_FaultClsid, &CLSID_CredProvTestProvider), "fault CLSID is not the test provider\n");
+    g_Heartbeats = 0;
+    Sleep(4500);
+    ok(g_Heartbeats >= 1, "host stopped heartbeating after the fault\n");
+    ok(TraceHas(Trace, "provider-fault"), "fault not traced\n");
+    PostCmd(WluiCmdDismiss, 0, NULL, NULL);
+    Code = WaitExit(Process, 5000);
+    ok(Code == 0, "hang run exit %lu\n", Code);
+
+    /* A provider that faults takes the process down; the filter exits without a dump. */
+    ResetRun();
+    DeleteFileW(Trace);
+    SetEnvironmentVariableW(L"CREDPROV_TESTMOD_MODE", L"crash");
+    Process = LaunchHost(Exe, Endpoint, Own, Trace, NULL);
+    SetEnvironmentVariableW(L"CREDPROV_TESTMOD_MODE", NULL);
+    ok(WaitForSingleObject(g_ReadyEvent, 5000) == WAIT_OBJECT_0, "no Ready (crash)\n");
+    PostCmd(WluiCmdRequestCredentials, 0, NULL, NULL);
+    Sleep(2500);
+    {
+        HWND Page = FindWindowW(L"LiberNT_LogonUIHost", NULL);
+        HWND Button = Page ? FindWindowExW(Page, NULL, L"BUTTON", L"Submit") : NULL;
+        if (Button)
+            PostMessageW(Page, WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(Button), BN_CLICKED), (LPARAM)Button);
+    }
+    Code = WaitExit(Process, 15000);
+    ok(Code == 4, "crash run exit %lu (expected 4)\n", Code);
+
+    RegisterTestProvider(FALSE);
+}
+
 /* ---- tests ------------------------------------------------------------------ */
 
 START_TEST(Host)
@@ -337,6 +489,8 @@ START_TEST(Host)
     ok(Code == 3, "run 3 exit %lu\n", Code);
 
     ok(g_WrongId == 0, "%ld call(s) with a wrong launch id\n", g_WrongId);
+
+    Test_Providers(Exe, Endpoint, Own, Trace);
 
     RpcMgmtStopServerListening(NULL);
     RpcServerUnregisterIf(wlui_v1_0_s_ifspec, NULL, TRUE);
