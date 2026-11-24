@@ -19,7 +19,17 @@ extern "C" {
 #define CREDSER_MAX_PASSWORD_CHARS  256
 #define CREDSER_MAX_BLOB_SIZE       (64 * 1024)
 #define CREDSER_MAX_GENERIC_USER_CHARS      513
-#define CREDSER_MAX_GENERIC_PASSWORD_CHARS  1280
+#define CREDSER_MAX_GENERIC_PASSWORD_CHARS  256
+#define CREDSER_MAX_CREDUI_USER_CHARS       513
+/* Bounded by CREDSER_MAX_BLOB_SIZE; Windows accepts up to 32767. */
+#define CREDSER_MAX_CREDUI_PASSWORD_CHARS   30000
+
+typedef struct _CREDSER_LIMITS
+{
+    ULONG DomainChars;
+    ULONG UserChars;
+    ULONG PasswordChars;
+} CREDSER_LIMITS, *PCREDSER_LIMITS;
 
 typedef struct _CREDSER_GENERIC
 {
@@ -76,6 +86,18 @@ CredSerPackLogon(
     _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
     _Inout_ PULONG BufferSize);
 
+/* CredSerPackLogon and CredSerUnpackLogon use CREDSER_MAX_NAME_CHARS and CREDSER_MAX_PASSWORD_CHARS. */
+NTSTATUS
+CredSerPackLogonEx(
+    _In_ KERB_LOGON_SUBMIT_TYPE MessageType,
+    _In_opt_ PCWSTR LogonDomainName,
+    _In_ PCWSTR UserName,
+    _In_ PCWSTR Password,
+    _In_opt_ const LUID *LogonId,
+    _In_ const CREDSER_LIMITS *Limits,
+    _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
+    _Inout_ PULONG BufferSize);
+
 NTSTATUS
 CredSerPackChangePassword(
     _In_opt_ PCWSTR DomainName,
@@ -110,6 +132,13 @@ NTSTATUS
 CredSerUnpackLogon(
     _In_reads_bytes_(Size) const VOID *Copy,
     _In_ ULONG Size,
+    _Out_ PCREDSER_LOGON Logon);
+
+NTSTATUS
+CredSerUnpackLogonEx(
+    _In_reads_bytes_(Size) const VOID *Copy,
+    _In_ ULONG Size,
+    _In_ const CREDSER_LIMITS *Limits,
     _Out_ PCREDSER_LOGON Logon);
 
 NTSTATUS

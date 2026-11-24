@@ -475,7 +475,7 @@ TestGeneric(void)
     Long[CREDSER_MAX_GENERIC_USER_CHARS] = L'a';
     Long[CREDSER_MAX_GENERIC_USER_CHARS + 1] = 0;
     Size = sizeof(Blob);
-    ok_ntstatus(CredSerPackGeneric(Long, L"pw", Blob, &Size), STATUS_INVALID_PARAMETER);
+    ok_ntstatus(CredSerPackGeneric(Long, L"pw", Blob, &Size), STATUS_NOT_SUPPORTED);
 #undef RESET
 
     Size = sizeof(Valid);

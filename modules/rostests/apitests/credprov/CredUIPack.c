@@ -276,6 +276,162 @@ TestUnPackGeneric(void)
     ok_long(cchDomain, 64);
 }
 
+static LPWSTR
+Repeat(_In_ WCHAR Char, _In_ DWORD Count)
+{
+    LPWSTR String = HeapAlloc(GetProcessHeap(), 0, (Count + 1) * sizeof(WCHAR));
+    DWORD i;
+
+    if (!String)
+        return NULL;
+    for (i = 0; i < Count; i++)
+        String[i] = Char;
+    String[Count] = UNICODE_NULL;
+    return String;
+}
+
+static VOID
+ExpectCap(_In_ DWORD Flags, _In_ DWORD UserChars, _In_ DWORD PasswordChars, _In_ DWORD Error)
+{
+    static BYTE Blob[8192];
+    LPWSTR User = Repeat(L'u', UserChars), Password = Repeat(L'p', PasswordChars);
+    DWORD Size;
+    BOOL Ret;
+
+    if (!User || !Password)
+    {
+        skip("out of memory\n");
+        goto Done;
+    }
+    Size = 0;
+    SetLastError(0xdeadbeef);
+    ok(!pPack(Flags, User, Password, NULL, &Size), "size query for %lu/%lu succeeded\n", UserChars, PasswordChars);
+    if (Error == ERROR_SUCCESS)
+    {
+        ok_err(ERROR_INSUFFICIENT_BUFFER);
+        ok(Size != 0, "size query for %lu/%lu returned 0\n", UserChars, PasswordChars);
+    }
+    else
+    {
+        ok(GetLastError() == Error, "size query for %lu/%lu: error %lu, expected %lu\n", UserChars, PasswordChars,
+           GetLastError(), Error);
+        ok_long(Size, 0);
+    }
+    Size = sizeof(Blob);
+    SetLastError(0xdeadbeef);
+    Ret = pPack(Flags, User, Password, Blob, &Size);
+    if (Error == ERROR_SUCCESS)
+        ok(Ret, "pack of %lu/%lu failed: %lu\n", UserChars, PasswordChars, GetLastError());
+    else
+        ok(!Ret && GetLastError() == Error, "pack of %lu/%lu: %d, error %lu, expected %lu\n", UserChars,
+           PasswordChars, Ret, GetLastError(), Error);
+
+Done:
+    HeapFree(GetProcessHeap(), 0, User);
+    HeapFree(GetProcessHeap(), 0, Password);
+}
+
+static VOID
+TestCaps(void)
+{
+    ExpectCap(CRED_PACK_GENERIC_CREDENTIALS, 513, 2, ERROR_SUCCESS);
+    ExpectCap(CRED_PACK_GENERIC_CREDENTIALS, 514, 2, ERROR_NOT_SUPPORTED);
+    ExpectCap(CRED_PACK_GENERIC_CREDENTIALS, 4, 256, ERROR_SUCCESS);
+    ExpectCap(CRED_PACK_GENERIC_CREDENTIALS, 4, 257, ERROR_NOT_SUPPORTED);
+    ExpectCap(0, 513, 2, ERROR_SUCCESS);
+    ExpectCap(0, 4, 1281, ERROR_SUCCESS);
+    ExpectCap(CRED_PACK_PROTECTED_CREDENTIALS, 4, 256, ERROR_SUCCESS);
+}
+
+static VOID
+TestKerbUserCap(void)
+{
+    LPWSTR User = Repeat(L'u', 514);
+    DWORD Size = 0;
+
+    if (!User)
+        return;
+    SetLastError(0xdeadbeef);
+    ok(!pPack(0, User, L"pw", NULL, &Size), "size query for a 514-character user succeeded\n");
+    ok_err(ERROR_NO_SYSTEM_RESOURCES);
+    ok_long(Size, 0);
+    HeapFree(GetProcessHeap(), 0, User);
+}
+
+static VOID
+TestProtected(void)
+{
+    BYTE Blob[4096], Again[8192];
+    const KERB_INTERACTIVE_UNLOCK_LOGON *Packed = (const KERB_INTERACTIVE_UNLOCK_LOGON *)Blob;
+    WCHAR User[64], Domain[64], Password[2048];
+    DWORD Size, AgainSize, cchUser, cchDomain, cchPassword;
+    CRED_PROTECTION_TYPE Type;
+    const WCHAR *Text;
+
+    Size = sizeof(Blob);
+    if (!pPack(CRED_PACK_PROTECTED_CREDENTIALS, L"user", L"pw", Blob, &Size))
+    {
+        ok(0, "protected pack failed: %lu\n", GetLastError());
+        return;
+    }
+    ok_long(Packed->Logon.MessageType, KerbInteractiveLogon);
+    CheckString(Blob, &Packed->Logon.UserName, L"user", HEADER, "protected user");
+    ok((ULONG_PTR)Packed->Logon.Password.Buffer == HEADER + 10, "protected password offset %Iu\n",
+       (ULONG_PTR)Packed->Logon.Password.Buffer);
+    ok(Packed->Logon.Password.MaximumLength == Packed->Logon.Password.Length + sizeof(WCHAR),
+       "protected password MaximumLength %u, Length %u\n", Packed->Logon.Password.MaximumLength,
+       Packed->Logon.Password.Length);
+    ok_long(Size, HEADER + 10 + Packed->Logon.Password.MaximumLength);
+    Text = (const WCHAR *)(Blob + HEADER + 10);
+    ok(Packed->Logon.Password.Length > 16 && !wcsncmp(Text, L"@@D", 3), "the password was not protected\n");
+
+    cchUser = cchDomain = 64;
+    cchPassword = ARRAYSIZE(Password);
+    ok(pUnPack(0, Blob, Size, User, &cchUser, Domain, &cchDomain, Password, &cchPassword),
+       "unpack without the protected flag failed: %lu\n", GetLastError());
+    ok(CredIsProtectedW(Password, &Type) && Type == CredUserProtection, "flag 0 did not return protected text\n");
+    ok_long(cchPassword, Packed->Logon.Password.Length / sizeof(WCHAR) + 1);
+
+    cchUser = cchDomain = 64;
+    cchPassword = ARRAYSIZE(Password);
+    ok(pUnPack(CRED_PACK_PROTECTED_CREDENTIALS, Blob, Size, User, &cchUser, Domain, &cchDomain, Password,
+               &cchPassword), "protected unpack failed: %lu\n", GetLastError());
+    ok(!wcscmp(User, L"user"), "user '%ls'\n", User);
+    ok(!wcscmp(Password, L"pw"), "password '%ls'\n", Password);
+    ok_long(cchUser, 6);
+    ok_long(cchPassword, 3);
+
+    cchUser = cchDomain = 64;
+    cchPassword = 2;
+    SetLastError(0xdeadbeef);
+    ok(!pUnPack(CRED_PACK_PROTECTED_CREDENTIALS, Blob, Size, User, &cchUser, Domain, &cchDomain, Password,
+                &cchPassword), "protected unpack into a short password buffer succeeded\n");
+    ok_err(ERROR_INSUFFICIENT_BUFFER);
+    ok_long(cchPassword, 3);
+
+    cchUser = cchDomain = 64;
+    cchPassword = ARRAYSIZE(Password);
+    ok(pUnPack(0, Blob, Size, User, &cchUser, Domain, &cchDomain, Password, &cchPassword), "unpack failed\n");
+    AgainSize = sizeof(Again);
+    ok(pPack(CRED_PACK_PROTECTED_CREDENTIALS, L"user", Password, Again, &AgainSize),
+       "protected pack of protected text failed: %lu\n", GetLastError());
+    ok(AgainSize > Size, "protected text was not protected again (%lu, %lu)\n", AgainSize, Size);
+    cchUser = cchDomain = 64;
+    cchPassword = ARRAYSIZE(Password);
+    ok(pUnPack(CRED_PACK_PROTECTED_CREDENTIALS, Again, AgainSize, User, &cchUser, Domain, &cchDomain, Password,
+               &cchPassword), "protected unpack of a double protection failed\n");
+    ok(CredIsProtectedW(Password, &Type) && Type == CredUserProtection, "one unpack peeled more than one layer\n");
+
+    Size = sizeof(Blob);
+    ok(pPack(0, L"user", L"pw", Blob, &Size), "pack failed\n");
+    cchUser = cchDomain = 64;
+    cchPassword = ARRAYSIZE(Password);
+    ok(pUnPack(CRED_PACK_PROTECTED_CREDENTIALS, Blob, Size, User, &cchUser, Domain, &cchDomain, Password,
+               &cchPassword), "protected unpack of a plain password failed\n");
+    ok(!wcscmp(Password, L"pw"), "password '%ls'\n", Password);
+    ok_long(cchPassword, 3);
+}
+
 START_TEST(CredUIPack)
 {
     WCHAR Path[MAX_PATH];
@@ -297,4 +453,7 @@ START_TEST(CredUIPack)
     TestUnPack();
     TestPackGeneric();
     TestUnPackGeneric();
+    TestCaps();
+    TestKerbUserCap();
+    TestProtected();
 }
