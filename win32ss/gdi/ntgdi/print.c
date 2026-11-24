@@ -95,6 +95,10 @@ NtGdiExtEscape(
    PPDEVOBJ ppdev;
    PSURFACE psurf;
 
+   /* The font driver host channel never reaches a device */
+   if (UMFD_IS_ESCAPE(Escape))
+      return UmfdExtEscape(hDC, pDriver, Escape, InSize, UnsafeInData, OutSize, UnsafeOutData);
+
    /* These escapes mutate compositor/display ownership state and are an
     * internal win32k -> CDD channel. Letting an arbitrary ExtEscape caller
     * issue them can hide the cursor, suppress scan-out, or replace DWM's
