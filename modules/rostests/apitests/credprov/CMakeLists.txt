@@ -1,8 +1,10 @@
 
+add_subdirectory(testmod)
 
 list(APPEND SOURCE
     Abi.c
     CredUIPack.c
+    Framework.c
     PasswordProvider.c
     Serialization.c
     testlist.c)
