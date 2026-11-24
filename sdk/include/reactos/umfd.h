@@ -43,6 +43,24 @@ typedef struct _UMFD_HEADER
     ULONG cbPayload;
 } UMFD_HEADER, *PUMFD_HEADER;
 
+/* UMFD_OP_LOAD: the font file as a read-only view win32k mapped into the host */
+#define UMFD_LOAD_VALIDATE_ONLY 0x00000001
+#define UMFD_MAX_FACES          4096
+
+typedef struct _UMFD_LOAD_REQUEST
+{
+    ULONG64 ViewBase;
+    ULONG64 ViewSize;
+    LONG FaceIndex;     /* -1: every face in the file */
+    ULONG Flags;
+} UMFD_LOAD_REQUEST, *PUMFD_LOAD_REQUEST;
+
+typedef struct _UMFD_LOAD_REPLY
+{
+    ULONG NumFaces;
+    ULONG Reserved;
+} UMFD_LOAD_REPLY, *PUMFD_LOAD_REPLY;
+
 /* UMFD_ESCAPE_REGISTER input; the caller needs SeTcbPrivilege */
 typedef struct _UMFD_REGISTER
 {

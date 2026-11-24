@@ -35,9 +35,20 @@ static BOOL run_host(const WCHAR *args, DWORD *exit_code)
     return exited;
 }
 
+/* HKLM\SOFTWARE\Leeway\Win32k\UmfdMode as win32k read it at boot (missing means 0) */
+static DWORD umfd_mode(void)
+{
+    DWORD mode = 0, size = sizeof(mode);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Leeway\\Win32k", L"UmfdMode",
+                     RRF_RT_REG_DWORD, NULL, &mode, &size) != ERROR_SUCCESS)
+        return 0;
+    return mode;
+}
+
 START_TEST(fontdrvhost)
 {
-    DWORD code;
+    DWORD code, expected;
 
     GetSystemDirectoryW(host_path, MAX_PATH);
     lstrcatW(host_path, L"\\fontdrvhost.exe");
@@ -47,13 +58,15 @@ START_TEST(fontdrvhost)
         return;
     }
 
-    /* Outside its launcher the host never stays resident and never reports success */
+    /* Outside its launcher the host never stays resident and never reports success:
+       with the channel off it is refused, with it on it is not the registered host */
+    expected = (umfd_mode() == 1) ? ERROR_ACCESS_DENIED : ERROR_NOT_SUPPORTED;
     if (run_host(NULL, &code))
     {
         ok(code != 0, "host without arguments exited with success\n");
         trace("no arguments: exit code %lu\n", code);
         if (is_reactos())
-            ok_dec(code, ERROR_NOT_SUPPORTED);
+            ok_dec(code, expected);
     }
 
     if (run_host(L"/x", &code))
