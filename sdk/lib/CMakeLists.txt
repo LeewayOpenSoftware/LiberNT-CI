@@ -92,6 +92,8 @@ if(REACTOS_USE_WDDM)
 endif()
 add_subdirectory(wdmguid)
 add_subdirectory(wlimgcheck)
+add_subdirectory(wluiauth)
+add_subdirectory(wluiclient)
 add_subdirectory(wmcodecdspuuid)
 
 else()

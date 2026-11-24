@@ -331,6 +331,66 @@ CallNotificationDlls(
     PWLSESSION pSession,
     NOTIFICATION_TYPE Type);
 
+/* rpclogonui.c */
+#include <wluiauth.h>
+struct _WLUI_COMMAND;
+typedef struct _WLUI_LAUNCH_STATE *PWLUI_LAUNCH_STATE;
+
+typedef DWORD (*WLUI_SUBMIT_HANDLER)(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ WLUI_AUTH_ROLE Role,
+    _In_ DWORD Scenario,
+    _In_ const GUID *ProviderClsid,
+    _In_ DWORD AuthenticationPackage,
+    _In_reads_bytes_(cbSerialization) const BYTE *Serialization,
+    _In_ DWORD cbSerialization);
+
+typedef DWORD (*WLUI_ACTION_HANDLER)(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ WLUI_AUTH_ROLE Role,
+    _In_ DWORD Action);
+
+BOOL
+WluiServerStart(VOID);
+
+PWLUI_LAUNCH_STATE
+WluiLaunchRegister(
+    _In_ DWORD Pid,
+    _In_ PSID Sid,
+    _In_ WLUI_AUTH_ROLE Role,
+    _Out_ GUID *LaunchId);
+
+VOID
+WluiLaunchUnregister(
+    _In_ PWLUI_LAUNCH_STATE State);
+
+BOOL
+WluiLaunchPostCommand(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ const struct _WLUI_COMMAND *Command);
+
+BOOL
+WluiLaunchWaitReady(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ DWORD TimeoutMs);
+
+ULONGLONG
+WluiLaunchLastHeartbeat(
+    _In_ PWLUI_LAUNCH_STATE State);
+
+BOOL
+WluiLaunchExited(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _Out_opt_ DWORD *Reason);
+
+VOID
+WluiSetSubmitHandler(
+    _In_opt_ WLUI_SUBMIT_HANDLER Handler);
+
+VOID
+WluiSetActionHandler(
+    _In_opt_ WLUI_ACTION_HANDLER Handler);
+
 /* rpcserver.c */
 BOOL
 StartRpcServer(VOID);

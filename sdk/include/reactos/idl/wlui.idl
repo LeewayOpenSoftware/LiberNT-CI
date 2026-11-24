@@ -1,0 +1,146 @@
+/*
+ * PROJECT:     LiberNT winlogon
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Internal interface between winlogon and the processes it
+ *              launches on the Winlogon desktop (LogonUIHost, LogonRecovery).
+ *              Orosi-defined; it is not Microsoft's private LogonUI protocol.
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+#include <ms-dtyp.idl>
+
+/* Who the launched process is, decided by winlogon at launch, never by the caller. */
+typedef enum _WLUI_ROLE
+{
+    WluiRoleNone = 0,
+    WluiRoleHost = 1,       /* LogonUIHost.exe: credential providers, full UI */
+    WluiRoleRecovery = 2    /* LogonRecovery.exe: minimal dialog, no providers */
+} WLUI_ROLE;
+
+/* Commands winlogon hands to the launched process through WluiWaitForCommand. */
+typedef enum _WLUI_COMMAND_TYPE
+{
+    WluiCmdNone = 0,                    /* the wait timed out; call again */
+    WluiCmdRequestCredentials = 1,      /* Scenario = CPUS_*, Flags = WLUI_FLAG_* */
+    WluiCmdDisplayStatus = 2,           /* Text, Flags bit WLUI_FLAG_SPINNER */
+    WluiCmdDisplayWelcome = 3,          /* User */
+    WluiCmdReportResult = 4,            /* Status = NTSTATUS of the last submit, Text = message */
+    WluiCmdReadyForDesktopSwitch = 5,   /* fade, then exit after the fade completes */
+    WluiCmdDismiss = 6                  /* close the UI and exit */
+} WLUI_COMMAND_TYPE;
+
+const unsigned long WLUI_FLAG_FALLBACK      = 0x00000001;  /* PasswordProvider only (N2) */
+const unsigned long WLUI_FLAG_DISABLE_CAD   = 0x00000002;
+const unsigned long WLUI_FLAG_LEGAL_NOTICE  = 0x00000004;
+const unsigned long WLUI_FLAG_SPINNER       = 0x00000008;
+const unsigned long WLUI_FLAG_FORCED_CHANGE = 0x00000010;  /* password expired: change is mandatory */
+
+const unsigned long WLUI_MAX_TEXT = 256;
+const unsigned long WLUI_MAX_SERIALIZATION = 65536;
+
+typedef struct _WLUI_COMMAND
+{
+    WLUI_COMMAND_TYPE Type;
+    DWORD Scenario;
+    DWORD Flags;
+    LONG Status;
+    DWORD Sequence;
+    WCHAR User[256];
+    WCHAR Text[256];
+} WLUI_COMMAND;
+
+/* Reasons a launched process gives when it leaves on its own. */
+typedef enum _WLUI_EXIT_REASON
+{
+    WluiExitNormal = 0,
+    WluiExitAfterDesktopSwitch = 1,
+    WluiExitDismissed = 2,
+    WluiExitProviderInitFailed = 3,
+    WluiExitInternalError = 4
+} WLUI_EXIT_REASON;
+
+/* Actions the UI asks winlogon to perform on the user's behalf. */
+typedef enum _WLUI_ACTION
+{
+    WluiActionShutdown = 1,
+    WluiActionRestart = 2,
+    WluiActionCancel = 3
+} WLUI_ACTION;
+
+[
+    uuid(6D4B1C2E-9A7F-4E51-B3C8-2F0E5A7D9C11),
+    version(1.0),
+    pointer_default(unique),
+    endpoint("ncalrpc:[wlui]")
+#ifndef __midl
+    ,explicit_handle
+#endif
+]
+interface wlui
+{
+    /*
+     * Every call carries the LaunchId winlogon gave the process on its command
+     * line. The server accepts a call only when the caller's PID and user SID
+     * match the launch entry that owns that LaunchId; the role comes from the
+     * same entry (the caller never states it).
+     */
+
+    /* Function 0: the first frame is painted (host) or the dialog is shown (recovery). */
+    DWORD
+    __stdcall
+    WluiReady(
+        [in] handle_t hBinding,
+        [in] GUID LaunchId);
+
+    /* Function 1: sent by the UI thread every 2 s; three missed beats mean a hang. */
+    DWORD
+    __stdcall
+    WluiHeartbeat(
+        [in] handle_t hBinding,
+        [in] GUID LaunchId);
+
+    /* Function 2: blocks until winlogon has a command or the server-side wait expires. */
+    DWORD
+    __stdcall
+    WluiWaitForCommand(
+        [in] handle_t hBinding,
+        [in] GUID LaunchId,
+        [out] WLUI_COMMAND *Command);
+
+    /* Function 3: a provider serialization for the given scenario (untrusted input). */
+    DWORD
+    __stdcall
+    WluiSubmitSerialization(
+        [in] handle_t hBinding,
+        [in] GUID LaunchId,
+        [in] DWORD Scenario,
+        [in] GUID ProviderClsid,
+        [in] DWORD AuthenticationPackage,
+        [in, range(0, WLUI_MAX_SERIALIZATION)] DWORD cbSerialization,
+        [in, size_is(cbSerialization)] const byte *Serialization);
+
+    /* Function 4: shutdown, restart or cancel, as the user chose in the UI. */
+    DWORD
+    __stdcall
+    WluiRequestAction(
+        [in] handle_t hBinding,
+        [in] GUID LaunchId,
+        [in] WLUI_ACTION Action);
+
+    /* Function 5: a provider was discarded (load failure, hang, refused scenario). */
+    DWORD
+    __stdcall
+    WluiReportProviderFault(
+        [in] handle_t hBinding,
+        [in] GUID LaunchId,
+        [in] GUID ProviderClsid,
+        [in] DWORD Reason);
+
+    /* Function 6: the process is leaving on its own. */
+    DWORD
+    __stdcall
+    WluiExiting(
+        [in] handle_t hBinding,
+        [in] GUID LaunchId,
+        [in] WLUI_EXIT_REASON Reason);
+}
