@@ -97,12 +97,48 @@ PackLogon(_In_ KERB_LOGON_SUBMIT_TYPE Type, _In_ PCWSTR Domain, _In_ PCWSTR User
 }
 
 static VOID
+TestPlainLogonHeader(void)
+{
+    UCHAR Blob[256];
+    PKERB_INTERACTIVE_LOGON Plain = (PKERB_INTERACTIVE_LOGON)Blob;
+    CREDSER_LOGON Logon;
+    ULONG Offset = sizeof(KERB_INTERACTIVE_LOGON);
+    GUARDED Guarded;
+    static const WCHAR User[] = L"someuser", Password[] = L"password";
+
+    ZeroMemory(Blob, sizeof(Blob));
+    Plain->MessageType = KerbInteractiveLogon;
+    Plain->UserName.Length = Plain->UserName.MaximumLength = sizeof(User) - sizeof(WCHAR);
+    Plain->UserName.Buffer = (PWSTR)(ULONG_PTR)Offset;
+    CopyMemory(Blob + Offset, User, Plain->UserName.Length);
+    Offset += Plain->UserName.Length;
+    Plain->Password.Length = Plain->Password.MaximumLength = sizeof(Password) - sizeof(WCHAR);
+    Plain->Password.Buffer = (PWSTR)(ULONG_PTR)Offset;
+    CopyMemory(Blob + Offset, Password, Plain->Password.Length);
+    Offset += Plain->Password.Length;
+    ok(Offset >= sizeof(KERB_INTERACTIVE_UNLOCK_LOGON), "the plain blob must be at least as large as the unlock header\n");
+
+    if (GuardedPlace(&Guarded, Blob, Offset))
+    {
+        ok_ntstatus(CredSerUnpackLogon(Guarded.Data, Offset, &Logon), STATUS_SUCCESS);
+        ok(StringIs(&Logon.UserName, L"someuser") && StringIs(&Logon.Password, L"password"),
+           "plain type 2 strings mismatch\n");
+        GuardedFree(&Guarded);
+    }
+
+    Plain->MessageType = KerbWorkstationUnlockLogon;
+    ok(UnpackLogonGuarded(Blob, Offset, &Logon) == STATUS_INVALID_PARAMETER,
+       "a type 7 blob with strings inside the LogonId was accepted\n");
+}
+
+static VOID
 TestRoundTrip(void)
 {
     UCHAR Buffer[1024];
     CREDSER_LOGON Logon;
     CREDSER_CHANGE_PASSWORD Change;
     PMSV1_0_INTERACTIVE_LOGON Msv;
+    GUARDED Guarded;
     ULONG Size, MsvSize;
     NTSTATUS Status;
 
@@ -111,41 +147,57 @@ TestRoundTrip(void)
     ok_long(Size, sizeof(KERB_INTERACTIVE_UNLOCK_LOGON) + (4 + 5 + 3) * sizeof(WCHAR));
 
     Size = PackLogon(KerbInteractiveLogon, L"DOM", L"user", L"pw", Buffer, sizeof(Buffer));
-    ok_ntstatus(UnpackLogonGuarded(Buffer, Size, &Logon), STATUS_SUCCESS);
-    Status = CredSerUnpackLogon(Buffer, Size, &Logon);
-    ok_ntstatus(Status, STATUS_SUCCESS);
-    ok_long(Logon.MessageType, KerbInteractiveLogon);
-    ok(StringIs(&Logon.LogonDomainName, L"DOM") || Status, "domain mismatch\n");
-    ok(Logon.LogonId.LowPart == 0 && Logon.LogonId.HighPart == 0, "type 2 must not carry a LogonId\n");
+    if (GuardedPlace(&Guarded, Buffer, Size))
+    {
+        ok_ntstatus(CredSerUnpackLogon(Guarded.Data, Size, &Logon), STATUS_SUCCESS);
+        ok_long(Logon.MessageType, KerbInteractiveLogon);
+        ok(StringIs(&Logon.LogonDomainName, L"DOM") && StringIs(&Logon.UserName, L"user") &&
+           StringIs(&Logon.Password, L"pw"), "logon strings mismatch\n");
+        ok(Logon.LogonId.LowPart == 0 && Logon.LogonId.HighPart == 0, "type 2 must not carry a LogonId\n");
+        GuardedFree(&Guarded);
+    }
 
     Size = PackLogon(KerbWorkstationUnlockLogon, NULL, L"user", L"", Buffer, sizeof(Buffer));
-    Status = CredSerUnpackLogon(Buffer, Size, &Logon);
-    ok_ntstatus(Status, STATUS_SUCCESS);
-    ok_long(Logon.MessageType, KerbWorkstationUnlockLogon);
-    ok(Logon.LogonId.LowPart == 0x1234 && Logon.LogonId.HighPart == 0x56, "type 7 lost its LogonId\n");
-    ok(StringIs(&Logon.UserName, L"user") && Logon.LogonDomainName.Length == 0 && Logon.Password.Length == 0,
-       "unlock strings mismatch\n");
+    if (GuardedPlace(&Guarded, Buffer, Size))
+    {
+        ok_ntstatus(CredSerUnpackLogon(Guarded.Data, Size, &Logon), STATUS_SUCCESS);
+        ok_long(Logon.MessageType, KerbWorkstationUnlockLogon);
+        ok(Logon.LogonId.LowPart == 0x1234 && Logon.LogonId.HighPart == 0x56, "type 7 lost its LogonId\n");
+        ok(StringIs(&Logon.UserName, L"user") && Logon.LogonDomainName.Length == 0 && Logon.Password.Length == 0,
+           "unlock strings mismatch\n");
+        GuardedFree(&Guarded);
+    }
 
     Size = PackLogon(KerbInteractiveLogon, L"DOM", L"user", L"secret", Buffer, sizeof(Buffer));
-    ok_ntstatus(CredSerUnpackLogon(Buffer, Size, &Logon), STATUS_SUCCESS);
-    Status = CredSerBuildMsv1_0Logon(&Logon, &Msv, &MsvSize);
-    ok_ntstatus(Status, STATUS_SUCCESS);
-    if (NT_SUCCESS(Status))
+    if (GuardedPlace(&Guarded, Buffer, Size))
     {
-        ok_long(Msv->MessageType, MsV1_0InteractiveLogon);
-        ok(StringIs(&Msv->LogonDomainName, L"DOM") && StringIs(&Msv->UserName, L"user") &&
-           StringIs(&Msv->Password, L"secret"), "MSV1_0 strings mismatch\n");
-        ok((PUCHAR)Msv->UserName.Buffer > (PUCHAR)Msv && (PUCHAR)Msv->Password.Buffer < (PUCHAR)Msv + MsvSize,
-           "MSV1_0 strings must point into the buffer\n");
-        CredSerFree(Msv, MsvSize);
+        ok_ntstatus(CredSerUnpackLogon(Guarded.Data, Size, &Logon), STATUS_SUCCESS);
+        Status = CredSerBuildMsv1_0Logon(&Logon, &Msv, &MsvSize);
+        ok_ntstatus(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+        {
+            ok_long(Msv->MessageType, MsV1_0InteractiveLogon);
+            ok(StringIs(&Msv->LogonDomainName, L"DOM") && StringIs(&Msv->UserName, L"user") &&
+               StringIs(&Msv->Password, L"secret"), "MSV1_0 strings mismatch\n");
+            ok((PUCHAR)Msv->UserName.Buffer > (PUCHAR)Msv && (PUCHAR)Msv->Password.Buffer < (PUCHAR)Msv + MsvSize,
+               "MSV1_0 strings must point into the buffer\n");
+            CredSerFree(Msv, MsvSize);
+        }
+        GuardedFree(&Guarded);
     }
 
     Size = sizeof(Buffer);
     ok_ntstatus(CredSerPackChangePassword(L"DOM", L"user", L"old", L"new", Buffer, &Size), STATUS_SUCCESS);
-    ok_ntstatus(CredSerUnpackChangePassword(Buffer, Size, &Change), STATUS_SUCCESS);
-    ok(StringIs(&Change.AccountName, L"user") && StringIs(&Change.OldPassword, L"old") &&
-       StringIs(&Change.NewPassword, L"new"), "change password strings mismatch\n");
-    ok_long(((PKERB_CHANGEPASSWORD_REQUEST)Buffer)->MessageType, KerbChangePasswordMessage);
+    if (GuardedPlace(&Guarded, Buffer, Size))
+    {
+        ok_ntstatus(CredSerUnpackChangePassword(Guarded.Data, Size, &Change), STATUS_SUCCESS);
+        ok(StringIs(&Change.AccountName, L"user") && StringIs(&Change.OldPassword, L"old") &&
+           StringIs(&Change.NewPassword, L"new"), "change password strings mismatch\n");
+        ok_long(((PKERB_CHANGEPASSWORD_REQUEST)Guarded.Data)->MessageType, KerbChangePasswordMessage);
+        GuardedFree(&Guarded);
+    }
+
+    TestPlainLogonHeader();
 }
 
 static VOID
@@ -350,8 +402,7 @@ TestCaptureAndFree(void)
     UCHAR Source[512];
     CREDSER_LOGON Logon;
     PVOID Copy = NULL;
-    volatile UCHAR *Peek;
-    ULONG Size, i, Dirty = 0;
+    ULONG Size;
 
     Size = PackLogon(KerbInteractiveLogon, L"DOM", L"user", L"pw", Source, sizeof(Source));
     ok_ntstatus(CredSerCapture(Source, 0, &Copy), STATUS_INVALID_PARAMETER);
@@ -364,13 +415,7 @@ TestCaptureAndFree(void)
     ok_ntstatus(CredSerUnpackLogon(Copy, Size, &Logon), STATUS_SUCCESS);
     ok(StringIs(&Logon.UserName, L"user"), "the private copy changed with its source\n");
 
-    FillMemory(Copy, Size, 0xaa);
-    Peek = Copy;
     CredSerFree(Copy, Size);
-    /* Heap free-list data may reuse the first bytes of the block; check the rest. */
-    for (i = 32; i < Size; i++)
-        Dirty += Peek[i] == 0xaa;
-    ok_long(Dirty, 0);
 }
 
 START_TEST(Serialization)

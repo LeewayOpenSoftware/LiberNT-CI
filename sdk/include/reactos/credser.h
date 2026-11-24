@@ -77,6 +77,7 @@ CredSerPackChangePassword(
     _Out_writes_bytes_opt_(*BufferSize) PVOID Buffer,
     _Inout_ PULONG BufferSize);
 
+/* Callers capture untrusted input once and unpack only the copy. */
 NTSTATUS
 CredSerCapture(
     _In_reads_bytes_(Size) const VOID *Source,
@@ -88,6 +89,7 @@ CredSerFree(
     _In_opt_ _Post_invalid_ PVOID Copy,
     _In_ ULONG Size);
 
+/* The unpacked strings point into Copy and are invalid after CredSerFree(Copy). */
 NTSTATUS
 CredSerUnpackLogon(
     _In_reads_bytes_(Size) const VOID *Copy,
@@ -100,6 +102,7 @@ CredSerUnpackChangePassword(
     _In_ ULONG Size,
     _Out_ PCREDSER_CHANGE_PASSWORD Change);
 
+/* Free *Msv with CredSerFree(*Msv, *Size). */
 NTSTATUS
 CredSerBuildMsv1_0Logon(
     _In_ const CREDSER_LOGON *Logon,

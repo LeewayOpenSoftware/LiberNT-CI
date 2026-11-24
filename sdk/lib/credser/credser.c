@@ -288,8 +288,7 @@ CredSerUnpackLogon(
     switch (Packed->Logon.MessageType)
     {
         case KerbInteractiveLogon:
-            HeaderSize = Size >= sizeof(KERB_INTERACTIVE_UNLOCK_LOGON) ?
-                         sizeof(KERB_INTERACTIVE_UNLOCK_LOGON) : sizeof(KERB_INTERACTIVE_LOGON);
+            HeaderSize = sizeof(KERB_INTERACTIVE_LOGON);
             break;
         case KerbWorkstationUnlockLogon:
             if (Size < sizeof(KERB_INTERACTIVE_UNLOCK_LOGON))

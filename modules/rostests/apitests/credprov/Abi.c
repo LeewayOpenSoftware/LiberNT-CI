@@ -91,13 +91,86 @@ TestGuids(void)
 }
 
 static void
+TestCredentialVtable(_In_ ICredentialProvider *Provider, _In_ DWORD PasswordField, _In_ DWORD SubmitField)
+{
+    ICredentialProviderCredential *Credential = NULL;
+    ICredentialProviderCredential2 *Credential2 = NULL;
+    IUnknown *Options = NULL;
+    CREDENTIAL_PROVIDER_FIELD_STATE State;
+    CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE Interactive;
+    CREDENTIAL_PROVIDER_GET_SERIALIZATION_RESPONSE Response;
+    CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION Cs;
+    CREDENTIAL_PROVIDER_STATUS_ICON Icon;
+    LPWSTR Text = NULL, Sid = NULL;
+    DWORD Adjacent = ~0u;
+    BOOL AutoLogon = TRUE;
+    HRESULT hr;
+
+    ok_hr(ICredentialProvider_GetCredentialAt(Provider, 0, &Credential), S_OK);
+    if (!Credential)
+        return;
+
+    ok_hr(ICredentialProviderCredential_QueryInterface(Credential, &IID_ICredentialProviderCredential2,
+                                                       (void **)&Credential2), S_OK);
+    if (Credential2)
+    {
+        ok_hr(ICredentialProviderCredential2_GetUserSid(Credential2, &Sid), S_FALSE);
+        CoTaskMemFree(Sid);
+        ICredentialProviderCredential2_Release(Credential2);
+    }
+    hr = ICredentialProviderCredential_QueryInterface(Credential, &IID_ICredentialProviderCredentialWithFieldOptions,
+                                                      (void **)&Options);
+    ok_hr(hr, S_OK);
+    if (Options)
+    {
+        ICredentialProviderCredentialWithFieldOptions *WithOptions = (ICredentialProviderCredentialWithFieldOptions *)Options;
+        CREDENTIAL_PROVIDER_CREDENTIAL_FIELD_OPTIONS FieldOptions = 0xdead;
+
+        ok_hr(ICredentialProviderCredentialWithFieldOptions_GetFieldOptions(WithOptions, PasswordField, &FieldOptions), S_OK);
+        ok_long(FieldOptions, CPCFO_ENABLE_PASSWORD_REVEAL);
+        FieldOptions = 0xdead;
+        ok_hr(ICredentialProviderCredentialWithFieldOptions_GetFieldOptions(WithOptions, SubmitField, &FieldOptions), S_OK);
+        ok_long(FieldOptions, CPCFO_NONE);
+        FieldOptions = 0xdead;
+        ok_hr(ICredentialProviderCredentialWithFieldOptions_GetFieldOptions(WithOptions, 1000, &FieldOptions), S_OK);
+        ok_long(FieldOptions, CPCFO_NONE);
+        IUnknown_Release(Options);
+    }
+
+    ok_hr(ICredentialProviderCredential_SetSelected(Credential, &AutoLogon), S_OK);
+    ok(!AutoLogon, "SetSelected asked for auto logon\n");
+    ok_hr(ICredentialProviderCredential_GetFieldState(Credential, PasswordField, &State, &Interactive), S_OK);
+    ok_hr(ICredentialProviderCredential_GetStringValue(Credential, PasswordField, &Text), S_OK);
+    ok(Text && !Text[0], "the password field must start empty\n");
+    CoTaskMemFree(Text);
+    ok_hr(ICredentialProviderCredential_GetSubmitButtonValue(Credential, SubmitField, &Adjacent), S_OK);
+    ok_long(Adjacent, PasswordField);
+    ok_hr(ICredentialProviderCredential_SetStringValue(Credential, PasswordField, L""), S_OK);
+
+    ZeroMemory(&Cs, sizeof(Cs));
+    Text = NULL;
+    hr = ICredentialProviderCredential_GetSerialization(Credential, &Response, &Cs, &Text, &Icon);
+    ok_hr(hr, S_OK);
+    ok(Response <= CPGSR_RETURN_NO_CREDENTIAL_FINISHED, "response %d\n", Response);
+    CoTaskMemFree(Text);
+    CoTaskMemFree(Cs.rgbSerialization);
+
+    Text = NULL;
+    ok_hr(ICredentialProviderCredential_ReportResult(Credential, 0, 0, &Text, &Icon), S_OK);
+    CoTaskMemFree(Text);
+    ok_hr(ICredentialProviderCredential_SetDeselected(Credential), S_OK);
+    ok_hr(ICredentialProviderCredential_UnAdvise(Credential), S_OK);
+    ICredentialProviderCredential_Release(Credential);
+}
+
+static void
 TestPasswordProviderVtable(void)
 {
     ICredentialProvider *Provider = NULL;
     ICredentialProviderSetUserArray *SetUserArray = NULL;
     IUnknown *Unknown = NULL;
     CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR *Field;
-    DWORD Count = 0, Default = 0, i;
+    DWORD Count = 0, Default = 0, i, PasswordField = ~0u, SubmitField = ~0u;
     BOOL AutoLogon = TRUE, SawPassword = FALSE;
     HRESULT hr;
 
@@ -135,7 +208,12 @@ TestPasswordProviderVtable(void)
         ok(Field->dwFieldID < 64, "field %lu has id %lu\n", i, Field->dwFieldID);
         ok(Field->cpft > CPFT_INVALID && Field->cpft <= CPFT_SUBMIT_BUTTON, "field %lu has type %d\n", i, Field->cpft);
         if (Field->cpft == CPFT_PASSWORD_TEXT && IsEqualGUID(&Field->guidFieldType, &CPFG_LOGON_PASSWORD))
+        {
             SawPassword = TRUE;
+            PasswordField = Field->dwFieldID;
+        }
+        if (Field->cpft == CPFT_SUBMIT_BUTTON && SubmitField == ~0u)
+            SubmitField = Field->dwFieldID;
         CoTaskMemFree(Field->pszLabel);
         CoTaskMemFree(Field);
     }
@@ -145,6 +223,8 @@ TestPasswordProviderVtable(void)
     hr = ICredentialProvider_GetCredentialCount(Provider, &Count, &Default, &AutoLogon);
     ok_hr(hr, S_OK);
     ok(!AutoLogon, "CREDUI must not auto logon\n");
+    if (SUCCEEDED(hr) && Count)
+        TestCredentialVtable(Provider, PasswordField, SubmitField);
 
     ICredentialProvider_Release(Provider);
 }
