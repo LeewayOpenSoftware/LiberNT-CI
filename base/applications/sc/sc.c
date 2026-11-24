@@ -11,6 +11,10 @@
 
 SC_HANDLE hSCManager;
 
+/* First Win32 error reported during the command, returned as the process exit
+ * code so sc matches Win11 (0 on success, e.g. 1053/1060 on failure). */
+DWORD g_ScLastError = ERROR_SUCCESS;
+
 VOID
 ReportLastError(VOID)
 {
@@ -20,6 +24,9 @@ ReportLastError(VOID)
     DWORD ErrorCode = GetLastError();
     if (ErrorCode != ERROR_SUCCESS)
     {
+        if (g_ScLastError == ERROR_SUCCESS)
+            g_ScLastError = ErrorCode;
+
         RetVal = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
                                FORMAT_MESSAGE_FROM_SYSTEM |
                                FORMAT_MESSAGE_IGNORE_INSERTS,
@@ -351,7 +358,7 @@ ScControl(LPCTSTR Server,       // remote machine name
         MainUsage();
     }
 
-    return 0;
+    return g_ScLastError;
 }
 
 int _tmain(int argc, LPCTSTR argv[])
