@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     DsRoleGetPrimaryDomainInformation.c
+    I_NetLogonControl.c
     NetUserDelete.c
     NetLocalGroupAddMembers.c
     NetUserEnum.c

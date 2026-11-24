@@ -29,6 +29,7 @@ list(APPEND SOURCE
     netapi32.c
     netbios.c
     netlogon.c
+    netlogoncontrol.c
     obsolete.c
     schedule.c
     srvsvc.c

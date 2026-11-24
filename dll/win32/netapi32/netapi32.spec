@@ -69,8 +69,8 @@
 @ stub I_NetGetForestTrustInformation
 @ stub I_NetListCanonicalize
 @ stub I_NetListTraverse
-@ stub I_NetLogonControl2
-@ stub I_NetLogonControl
+@ stdcall I_NetLogonControl2(wstr long long ptr ptr)
+@ stdcall I_NetLogonControl(wstr long long ptr)
 @ stub I_NetLogonGetDomainInfo
 @ stub I_NetLogonSamLogoff
 @ stub I_NetLogonSamLogon

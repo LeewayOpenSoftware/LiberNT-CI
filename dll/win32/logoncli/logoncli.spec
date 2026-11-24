@@ -25,3 +25,6 @@
 @ stdcall NetGetDCName(wstr wstr ptr) netapi32.NetGetDCName
 @ stdcall NetLogonGetTimeServiceParentDomain(wstr ptr ptr) netapi32.NetLogonGetTimeServiceParentDomain
 @ stdcall NetLogonSetServiceBits(wstr long long) netapi32.NetLogonSetServiceBits
+# Netlogon control client wrappers. Ordinals 45/46 match Win11 logoncli.dll.
+@ stdcall -ordinal 45 I_NetLogonControl(wstr long long ptr) netapi32.I_NetLogonControl
+@ stdcall -ordinal 46 I_NetLogonControl2(wstr long long ptr ptr) netapi32.I_NetLogonControl2
