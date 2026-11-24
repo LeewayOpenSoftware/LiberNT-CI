@@ -13,6 +13,8 @@
 #include <ntstatus.h>
 #include <reactos/umfd.h>
 #include <pseh/pseh2.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
@@ -35,6 +37,35 @@ static struct
     UMFD_HEADER Header;
     UMFD_LOAD_REPLY Load;
 } g_Reply;
+
+/* The tree's static FreeType leaves its debug output to each consumer */
+void
+FT_Message(const char *format, ...)
+{
+    char buffer[512];
+    va_list args;
+
+    va_start(args, format);
+    _vsnprintf(buffer, sizeof(buffer) - 1, format, args);
+    va_end(args);
+    buffer[sizeof(buffer) - 1] = 0;
+    OutputDebugStringA(buffer);
+}
+
+/* An assertion inside FreeType becomes an exception, so HandleLoad refuses that one file */
+void
+FT_Panic(const char *format, ...)
+{
+    char buffer[512];
+    va_list args;
+
+    va_start(args, format);
+    _vsnprintf(buffer, sizeof(buffer) - 1, format, args);
+    va_end(args);
+    buffer[sizeof(buffer) - 1] = 0;
+    OutputDebugStringA(buffer);
+    RaiseException(STATUS_ASSERTION_FAILURE, EXCEPTION_NONCONTINUABLE, 0, NULL);
+}
 
 /* Fail-closed: a file too slow or too large to check is refused, never waved through */
 static BOOL
