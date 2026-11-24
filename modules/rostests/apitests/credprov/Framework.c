@@ -94,6 +94,35 @@ RemoveEntry(_In_ HKEY Root, _In_ PCWSTR Parent, _In_ REFCLSID Clsid)
     RegDeleteTreeW(Root, Key);
 }
 
+static VOID
+JunkKey(_In_ PCWSTR Parent, _Out_writes_(Chars) LPWSTR Out, _In_ DWORD Chars)
+{
+    _snwprintf(Out, Chars, L"%s\\%s", Parent, L"00000000000000000000000000000000000000000000000000000000000000000000000000000000");
+    Out[Chars - 1] = UNICODE_NULL;
+}
+
+static BOOL
+AddJunk(_In_ PCWSTR Parent)
+{
+    WCHAR Key[MAX_PATH];
+    HKEY Handle;
+
+    JunkKey(Parent, Key, ARRAYSIZE(Key));
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, Key, 0, NULL, 0, KEY_SET_VALUE, NULL, &Handle, NULL))
+        return FALSE;
+    RegCloseKey(Handle);
+    return TRUE;
+}
+
+static VOID
+RemoveJunk(_In_ PCWSTR Parent)
+{
+    WCHAR Key[MAX_PATH];
+
+    JunkKey(Parent, Key, ARRAYSIZE(Key));
+    RegDeleteTreeW(HKEY_LOCAL_MACHINE, Key);
+}
+
 static ULONG
 FindProvider(_In_ PCPH_PROVIDER_SET Set, _In_ REFCLSID Clsid)
 {
@@ -211,8 +240,8 @@ TestEnumeration(void)
 static VOID
 TestPolicy(void)
 {
-    WCHAR Old[4096], Value[64];
-    DWORD OldSize = sizeof(Old), OldType = 0;
+    WCHAR Old[4096], Value[64], *Long;
+    DWORD OldSize = sizeof(Old), OldType = 0, i;
     BOOL HadOld;
     PCPH_PROVIDER_SET Set;
     HKEY Key;
@@ -248,6 +277,24 @@ TestPolicy(void)
         pFree(Set);
     }
 
+    Long = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 6000 * sizeof(WCHAR));
+    if (Long)
+    {
+        for (i = 0; i < 5000; i++)
+            Long[i] = L' ';
+        wcscpy(Long + 5000, Value);
+        RegSetValueExW(Key, L"ExcludedCredentialProviders", 0, REG_SZ, (const BYTE *)Long,
+                       (DWORD)(wcslen(Long) + 1) * sizeof(WCHAR));
+        Set = Enumerate(CPUS_LOGON, CPH_FLAG_FALLBACK);
+        if (Set)
+        {
+            ok_long(Set->Count, 0);
+            ok(Set->PolicyDeniesPassword, "an oversized exclusion value must still exclude\n");
+            pFree(Set);
+        }
+        HeapFree(GetProcessHeap(), 0, Long);
+    }
+
     if (HadOld)
         RegSetValueExW(Key, L"ExcludedCredentialProviders", 0, OldType, (const BYTE *)Old, OldSize);
     else
@@ -276,28 +323,47 @@ AceAllowsWrite(_In_ PACL Dacl, _In_ PSID Sid)
 }
 
 static VOID
-TestRegistryAcl(void)
+CheckKeyAcl(_In_ PCWSTR Path)
 {
     static const PCWSTR Sids[] = { L"S-1-5-32-545", L"S-1-5-11", L"S-1-1-0", L"S-1-5-4" };
+    WCHAR Name[MAX_PATH];
     PSECURITY_DESCRIPTOR Sd = NULL;
     PACL Dacl = NULL;
+    PWCHAR Cut;
     PSID Sid;
     ULONG i;
     DWORD Error;
 
-    Error = GetNamedSecurityInfoW(L"MACHINE\\" PROVIDERS_KEY, SE_REGISTRY_KEY, DACL_SECURITY_INFORMATION, NULL, NULL,
-                                  &Dacl, NULL, &Sd);
+    _snwprintf(Name, ARRAYSIZE(Name), L"MACHINE\\%s", Path);
+    Name[ARRAYSIZE(Name) - 1] = UNICODE_NULL;
+    for (;;)
+    {
+        Error = GetNamedSecurityInfoW(Name, SE_REGISTRY_KEY, DACL_SECURITY_INFORMATION, NULL, NULL, &Dacl, NULL, &Sd);
+        if (Error != ERROR_FILE_NOT_FOUND || !(Cut = wcsrchr(Name, L'\\')))
+            break;
+        *Cut = UNICODE_NULL;
+    }
     ok_long(Error, ERROR_SUCCESS);
     if (Error)
         return;
+    trace("ACL of %ls\n", Name);
     for (i = 0; i < ARRAYSIZE(Sids); i++)
     {
         if (!ConvertStringSidToSidW(Sids[i], &Sid))
             continue;
-        ok(!AceAllowsWrite(Dacl, Sid), "%ls may write the credential provider list\n", Sids[i]);
+        ok(!AceAllowsWrite(Dacl, Sid), "%ls may write %ls\n", Sids[i], Name);
         LocalFree(Sid);
     }
     LocalFree(Sd);
+}
+
+static VOID
+TestRegistryAcl(void)
+{
+    CheckKeyAcl(PROVIDERS_KEY);
+    CheckKeyAcl(FILTERS_KEY);
+    CheckKeyAcl(EXCLUDE_KEY);
+    CheckKeyAcl(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System");
 }
 
 START_TEST(Framework)
@@ -320,7 +386,8 @@ START_TEST(Framework)
     trace("testing %ls\n", Path);
     TestRegistryAcl();
 
-    Registered = RegisterServer(&CLSID_CredProvTestProvider, L"credprov_testmod.dll") &&
+    Registered = AddJunk(PROVIDERS_KEY) && AddJunk(FILTERS_KEY) &&
+                 RegisterServer(&CLSID_CredProvTestProvider, L"credprov_testmod.dll") &&
                  RegisterServer(&CLSID_CredProvTestFilter, L"credprov_testmod.dll") &&
                  RegisterServer(&CLSID_CredProvTestDependent, L"credprov_testdep.dll") &&
                  RegisterServer(&CLSID_CredProvTestMissing, L"credprov_notthere.dll") &&
@@ -348,6 +415,8 @@ START_TEST(Framework)
     RemoveEntry(HKEY_LOCAL_MACHINE, PROVIDERS_KEY, &CLSID_CredProvTestMissing);
     RemoveEntry(HKEY_LOCAL_MACHINE, FILTERS_KEY, &CLSID_CredProvTestFilter);
     RemoveEntry(HKEY_CURRENT_USER, PROVIDERS_KEY, &CLSID_CredProvTestUserOnly);
+    RemoveJunk(PROVIDERS_KEY);
+    RemoveJunk(FILTERS_KEY);
     UnregisterServer(&CLSID_CredProvTestProvider);
     UnregisterServer(&CLSID_CredProvTestFilter);
     UnregisterServer(&CLSID_CredProvTestDependent);

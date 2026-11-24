@@ -54,17 +54,26 @@ IsSubkeyDisabled(_In_ HKEY Parent, _In_ PCWSTR Name)
 static BOOL
 IsPolicyExcluded(_In_ REFCLSID Clsid)
 {
-    WCHAR List[4096], *Item, *End, Saved;
-    DWORD Size = sizeof(List) - sizeof(WCHAR), Type;
+    WCHAR *List = NULL, *Item, *End, Saved;
+    DWORD Size = 0, Type, Error;
     CLSID Excluded;
     HKEY Key;
     BOOL Ret = FALSE;
 
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, ExcludePolicyKey, 0, KEY_QUERY_VALUE, &Key) != ERROR_SUCCESS)
         return FALSE;
-    ZeroMemory(List, sizeof(List));
-    if (RegQueryValueExW(Key, L"ExcludedCredentialProviders", NULL, &Type, (PBYTE)List, &Size) == ERROR_SUCCESS &&
-        (Type == REG_SZ || Type == REG_EXPAND_SZ))
+    Error = RegQueryValueExW(Key, L"ExcludedCredentialProviders", NULL, &Type, NULL, &Size);
+    while (Error == ERROR_SUCCESS || Error == ERROR_MORE_DATA)
+    {
+        HeapFree(GetProcessHeap(), 0, List);
+        List = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size + 2 * sizeof(WCHAR));
+        if (!List)
+            break;
+        Error = RegQueryValueExW(Key, L"ExcludedCredentialProviders", NULL, &Type, (PBYTE)List, &Size);
+        if (Error == ERROR_SUCCESS)
+            break;
+    }
+    if (List && Error == ERROR_SUCCESS && (Type == REG_SZ || Type == REG_EXPAND_SZ))
     {
         for (Item = List; *Item && !Ret; Item = End)
         {
@@ -79,6 +88,7 @@ IsPolicyExcluded(_In_ REFCLSID Clsid)
             *End = Saved;
         }
     }
+    HeapFree(GetProcessHeap(), 0, List);
     RegCloseKey(Key);
     return Ret;
 }
@@ -125,7 +135,7 @@ static VOID
 ReadCandidates(_Inout_ PCPH_PROVIDER_SET Set, _Out_ CPH_CANDIDATES *Candidates)
 {
     WCHAR Name[64];
-    DWORD Index, Chars;
+    DWORD Index, Chars, Error;
     CLSID Clsid;
     HKEY Key;
 
@@ -135,8 +145,14 @@ ReadCandidates(_Inout_ PCPH_PROVIDER_SET Set, _Out_ CPH_CANDIDATES *Candidates)
     for (Index = 0; Candidates->Count < CPH_MAX_PROVIDERS; Index++)
     {
         Chars = ARRAYSIZE(Name);
-        if (RegEnumKeyExW(Key, Index, Name, &Chars, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+        Error = RegEnumKeyExW(Key, Index, Name, &Chars, NULL, NULL, NULL, NULL);
+        if (Error == ERROR_NO_MORE_ITEMS)
             break;
+        if (Error != ERROR_SUCCESS)
+        {
+            WARN("skipping subkey %lu: %lu\n", Index, Error);
+            continue;
+        }
         if (FAILED(CLSIDFromString(Name, &Clsid)))
             continue;
         if (IsSubkeyDisabled(Key, Name))
@@ -160,7 +176,7 @@ static ULONG
 LoadFilters(_Out_writes_(Max) ICredentialProviderFilter **Filters, _In_ ULONG Max)
 {
     WCHAR Name[64];
-    DWORD Index, Chars;
+    DWORD Index, Chars, Error;
     ULONG Count = 0;
     CLSID Clsid;
     HKEY Key;
@@ -171,8 +187,14 @@ LoadFilters(_Out_writes_(Max) ICredentialProviderFilter **Filters, _In_ ULONG Ma
     for (Index = 0; Count < Max; Index++)
     {
         Chars = ARRAYSIZE(Name);
-        if (RegEnumKeyExW(Key, Index, Name, &Chars, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+        Error = RegEnumKeyExW(Key, Index, Name, &Chars, NULL, NULL, NULL, NULL);
+        if (Error == ERROR_NO_MORE_ITEMS)
             break;
+        if (Error != ERROR_SUCCESS)
+        {
+            WARN("skipping subkey %lu: %lu\n", Index, Error);
+            continue;
+        }
         if (FAILED(CLSIDFromString(Name, &Clsid)) || IsSubkeyDisabled(Key, Name))
             continue;
         hr = CoCreateInstance(&Clsid, NULL, CLSCTX_INPROC_SERVER, &IID_ICredentialProviderFilter,
@@ -194,6 +216,7 @@ ApplyFilters(_Inout_ PCPH_PROVIDER_SET Set, _Inout_ CPH_CANDIDATES *Candidates,
 {
     ICredentialProviderFilter *Filters[CPH_MAX_PROVIDERS];
     BOOL Allow[CPH_MAX_PROVIDERS];
+    CLSID Clsids[CPH_MAX_PROVIDERS];
     ULONG FilterCount, i, j;
 
     if (!Candidates->Count)
@@ -202,7 +225,8 @@ ApplyFilters(_Inout_ PCPH_PROVIDER_SET Set, _Inout_ CPH_CANDIDATES *Candidates,
     for (i = 0; i < FilterCount; i++)
     {
         CopyMemory(Allow, Candidates->Allow, Candidates->Count * sizeof(BOOL));
-        if (SUCCEEDED(ICredentialProviderFilter_Filter(Filters[i], Scenario, ScenarioFlags, Candidates->Clsid,
+        CopyMemory(Clsids, Candidates->Clsid, Candidates->Count * sizeof(CLSID));
+        if (SUCCEEDED(ICredentialProviderFilter_Filter(Filters[i], Scenario, ScenarioFlags, Clsids,
                                                        Allow, Candidates->Count)))
         {
             for (j = 0; j < Candidates->Count; j++)
