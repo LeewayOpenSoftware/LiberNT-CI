@@ -57,6 +57,26 @@ LogonStage(
     OutputDebugStringA(Line);
 }
 
+/* Read once at start: the logon mode must never flip mid-session. */
+static
+BOOL
+ReadUseLogonUISelector(VOID)
+{
+    DWORD Value = 0, Size = sizeof(Value);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                     L"UseLogonUI",
+                     RRF_RT_REG_DWORD,
+                     NULL,
+                     &Value,
+                     &Size) != ERROR_SUCCESS)
+    {
+        Value = 0;
+    }
+    return (Value != 0);
+}
+
 /**
  * @brief
  * Duplicates the given string, allocating a buffer on the heap.
@@ -520,6 +540,8 @@ WinMain(
 
     ZeroMemory(WLSession, sizeof(WLSESSION));
     WLSession->DialogTimeout = 120; /* 2 minutes */
+    WLSession->UseLogonUI = ReadUseLogonUISelector();
+    TRACE("WL: UseLogonUI selector = %d\n", WLSession->UseLogonUI);
 
     /* Initialize the dialog tracking list */
     InitDialogListHead();

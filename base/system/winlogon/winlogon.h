@@ -259,6 +259,9 @@ typedef struct _WLSESSION
     DWORD Options;
     WLX_MPR_NOTIFY_INFO MprNotifyInfo;
     PWLX_PROFILE_V2_0 Profile;
+
+    /* Experimental LogonUI-mode selector (Winlogon\UseLogonUI), read once at start */
+    BOOL UseLogonUI;
 } WLSESSION, *PWLSESSION;
 
 typedef enum _NOTIFICATION_TYPE
