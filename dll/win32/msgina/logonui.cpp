@@ -141,7 +141,7 @@ static HWND g_LockWindow;
 static BOOL
 CoverPostStatus(VOID)
 {
-#if DBG
+#ifdef MSGINA_TEST_HOOKS
     /* Fault injection for tests: exercise the reclaim path on post failure. */
     WCHAR Probe[2];
     if (GetEnvironmentVariableW(L"MSGINA_COVER_FAIL_POST", Probe, 2) != 0)
