@@ -32,7 +32,8 @@ I_NetLogonControl2(
      * is validated server-side, so this is the only check that returns before RPC. */
     if (QueryLevel < 1 || QueryLevel > 4)
     {
-        *Buffer = NULL;
+        if (Buffer != NULL)
+            *Buffer = NULL;
         return ERROR_INVALID_LEVEL;
     }
 
@@ -79,10 +80,14 @@ I_NetLogonControl2(
     }
     RpcEndExcept;
 
-    /* Win11 leaves the caller's Buffer untouched unless the call succeeds; the
-     * server-allocated NETLOGON_INFO_* block is freed by the caller (NetApiBufferFree). */
+    /* A NULL Buffer no longer rejects client-side, so on success free the server block here rather than leak it. */
     if (status == NERR_Success)
-        *Buffer = (PBYTE)QueryInfo.NetlogonInfo1;
+    {
+        if (Buffer != NULL)
+            *Buffer = (PBYTE)QueryInfo.NetlogonInfo1;
+        else
+            NetApiBufferFree(QueryInfo.NetlogonInfo1);
+    }
 
     return status;
 }
@@ -119,7 +124,12 @@ I_NetLogonControl(
     RpcEndExcept;
 
     if (status == NERR_Success)
-        *Buffer = (PBYTE)QueryInfo.NetlogonInfo1;
+    {
+        if (Buffer != NULL)
+            *Buffer = (PBYTE)QueryInfo.NetlogonInfo1;
+        else
+            NetApiBufferFree(QueryInfo.NetlogonInfo1);
+    }
 
     return status;
 }
