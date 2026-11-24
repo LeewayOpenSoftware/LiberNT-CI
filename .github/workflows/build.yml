@@ -549,6 +549,11 @@ jobs:
         if [ -d "$OUT/_wow64_i386/modules/rostests/tests" ]; then
           find "$OUT/_wow64_i386/modules/rostests/tests" -type f \( -name 'lowil.exe' -o -name 'elevadm.exe' \) -exec cp -v {} apitests-out/wow64/ \;
         fi
+        # credprov_apitest needs its harness, test modules and the hooked credprovs build beside it.
+        if [ -d "$OUT/modules/rostests/apitests/credprov" ]; then
+          find "$OUT/modules/rostests/apitests/credprov" -type f \( -name '*.exe' -o -name '*.dll' \) -exec cp -v {} apitests-out/amd64/ \;
+          cp -v "$OUT/dll/win32/credprovs/credprovs_test.dll" apitests-out/amd64/
+        fi
         ls -lR apitests-out | head -100
 
     - name: Upload the apitests binaries
