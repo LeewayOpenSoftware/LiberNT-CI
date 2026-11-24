@@ -92,9 +92,25 @@ CheckMonitorId(LPCWSTR pszId)
 static BOOL
 GetDisabledWallpaper(LPWSTR pszPath, DWORD cchPath)
 {
+    WCHAR szLive[MAX_PATH];
     DWORD cb = cchPath * sizeof(WCHAR);
-    return RegGetValueW(HKEY_CURRENT_USER, szWallpapersKey, szDisabledValue,
-                        RRF_RT_REG_SZ, NULL, pszPath, &cb) == ERROR_SUCCESS;
+    HKEY hKey;
+
+    if (RegGetValueW(HKEY_CURRENT_USER, szWallpapersKey, szDisabledValue,
+                     RRF_RT_REG_SZ, NULL, pszPath, &cb) != ERROR_SUCCESS)
+        return FALSE;
+
+    /* Someone else (desk.cpl, a theme, any SPI caller) set a wallpaper since; drop the stale marker. */
+    if (SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szLive), szLive, 0) && szLive[0] != UNICODE_NULL)
+    {
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, szWallpapersKey, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS)
+        {
+            RegDeleteValueW(hKey, szDisabledValue);
+            RegCloseKey(hKey);
+        }
+        return FALSE;
+    }
+    return TRUE;
 }
 
 static HRESULT

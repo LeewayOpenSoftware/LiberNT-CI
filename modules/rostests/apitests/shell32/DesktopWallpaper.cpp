@@ -199,6 +199,13 @@ TestDisable(IDesktopWallpaper *pdw, LPCWSTR pszBitmap)
     ok(szSpi[0] == UNICODE_NULL, "SetPosition re-enabled the wallpaper '%ls'\n", szSpi);
     ExpectState(pdw, pszBitmap, FALSE, "disabled, after SetPosition");
 
+    /* Not in the dwprobe run: SetWallpaper while disabled keeps the desktop blank. */
+    hr = pdw->SetWallpaper(NULL, pszBitmap);
+    ok_hr(hr, S_OK);
+    SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szSpi), szSpi, 0);
+    ok(szSpi[0] == UNICODE_NULL, "SetWallpaper re-enabled the wallpaper '%ls'\n", szSpi);
+    ExpectState(pdw, pszBitmap, FALSE, "disabled, after SetWallpaper");
+
     hr = pdw->Enable(TRUE);
     ok_hr(hr, S_OK);
     SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szSpi), szSpi, 0);
@@ -208,6 +215,12 @@ TestDisable(IDesktopWallpaper *pdw, LPCWSTR pszBitmap)
     else
         ok(szSpi[0] != UNICODE_NULL, "No wallpaper after Enable(TRUE)\n");
     ExpectState(pdw, pszBitmap, TRUE, "enabled again");
+
+    /* A wallpaper set behind the interface's back ends the disabled state. */
+    hr = pdw->Enable(FALSE);
+    ok_hr(hr, S_OK);
+    SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, (PVOID)pszBitmap, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+    ExpectState(pdw, pszBitmap, TRUE, "disabled, then SPI_SETDESKWALLPAPER");
 }
 
 static void
