@@ -7,31 +7,32 @@
 
 #include <apitest.h>
 #include <windows.h>
-#include <ntstatus.h>
 
 static WCHAR host_path[MAX_PATH];
 
-/* Starts the host and returns its exit code, or STILL_ACTIVE if it did not exit in time */
-static DWORD run_host(const WCHAR *args)
+/* Starts the host; TRUE with its exit code if it exited within 10 s */
+static BOOL run_host(const WCHAR *args, DWORD *exit_code)
 {
     WCHAR cmdline[MAX_PATH + 64];
     STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi;
-    DWORD exit_code = STILL_ACTIVE;
+    BOOL exited = FALSE;
 
     wsprintfW(cmdline, L"\"%s\"%s%s", host_path, args ? L" " : L"", args ? args : L"");
     if (!CreateProcessW(host_path, cmdline, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
     {
         ok(0, "CreateProcessW(%S) failed: %lu\n", cmdline, GetLastError());
-        return STILL_ACTIVE;
+        return FALSE;
     }
     if (WaitForSingleObject(pi.hProcess, 10000) == WAIT_OBJECT_0)
-        GetExitCodeProcess(pi.hProcess, &exit_code);
+        exited = GetExitCodeProcess(pi.hProcess, exit_code);
     else
+        ok(0, "%S is still running after 10 s\n", cmdline);
+    if (!exited)
         TerminateProcess(pi.hProcess, 0);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    return exit_code;
+    return exited;
 }
 
 START_TEST(fontdrvhost)
@@ -47,17 +48,19 @@ START_TEST(fontdrvhost)
     }
 
     /* Outside its launcher the host never stays resident and never reports success */
-    code = run_host(NULL);
-    ok(code != STILL_ACTIVE, "host without arguments is still running after 10 s\n");
-    ok(code != 0, "host without arguments exited with success\n");
-    trace("no arguments: exit code %lu\n", code);
-    if (is_reactos())
-        ok_dec(code, ERROR_NOT_SUPPORTED);
+    if (run_host(NULL, &code))
+    {
+        ok(code != 0, "host without arguments exited with success\n");
+        trace("no arguments: exit code %lu\n", code);
+        if (is_reactos())
+            ok_dec(code, ERROR_NOT_SUPPORTED);
+    }
 
-    code = run_host(L"/x");
-    ok(code != STILL_ACTIVE, "host with an argument is still running after 10 s\n");
-    ok(code != 0, "host with an argument exited with success\n");
-    trace("one argument: exit code %lu\n", code);
-    if (is_reactos())
-        ok_dec(code, ERROR_INVALID_PARAMETER);
+    if (run_host(L"/x", &code))
+    {
+        ok(code != 0, "host with an argument exited with success\n");
+        trace("one argument: exit code %lu\n", code);
+        if (is_reactos())
+            ok_dec(code, ERROR_INVALID_PARAMETER);
+    }
 }
