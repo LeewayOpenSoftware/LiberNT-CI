@@ -517,6 +517,10 @@ jobs:
         else
           ninja -C "$OUT" -k0
         fi
+        # credprovs_test.dll lives under dll/, outside modules/rostests/all; the apitests artifact needs it.
+        if ninja -C "$OUT" -t targets all | grep -q "^credprovs_test:"; then
+          ninja -C "$OUT" credprovs_test
+        fi
 
     - name: Collect the kmtests binaries
       # kmtest.exe + kmtest_drv.sys (and the standalone test drivers) for a lab
@@ -548,6 +552,11 @@ jobs:
         find "$OUT/modules/rostests/tests" -type f \( -name 'lowil.exe' -o -name 'elevadm.exe' \) -exec cp -v {} apitests-out/amd64/ \;
         if [ -d "$OUT/_wow64_i386/modules/rostests/tests" ]; then
           find "$OUT/_wow64_i386/modules/rostests/tests" -type f \( -name 'lowil.exe' -o -name 'elevadm.exe' \) -exec cp -v {} apitests-out/wow64/ \;
+        fi
+        # credprov_apitest needs its harness, test modules and the hooked credprovs build beside it.
+        if [ -d "$OUT/modules/rostests/apitests/credprov" ]; then
+          find "$OUT/modules/rostests/apitests/credprov" -type f \( -name '*.exe' -o -name '*.dll' \) -exec cp -v {} apitests-out/amd64/ \;
+          cp -v "$OUT/dll/win32/credprovs/credprovs_test.dll" apitests-out/amd64/
         fi
         ls -lR apitests-out | head -100
 
@@ -1208,6 +1217,8 @@ jobs:
     - name: Build the test suite
       shell: cmd
       run: |
+        :: credprovs_test.dll lives under dll/, outside modules/rostests/all; the apitests artifact needs it.
+        ninja -C ${{steps.configure.outputs.outdir}} -t targets all | findstr /B /C:"credprovs_test:" >nul && (ninja -C ${{steps.configure.outputs.outdir}} credprovs_test || exit /b 1)
         :: The per-directory target of the Ninja generator; without it, build everything.
         ninja -C ${{steps.configure.outputs.outdir}} -t targets all | findstr /B /C:"modules/rostests/all:" >nul
         if %ERRORLEVEL% EQU 0 (ninja -C ${{steps.configure.outputs.outdir}} -k0 modules/rostests/all) else (ninja -C ${{steps.configure.outputs.outdir}} -k0)
@@ -1248,6 +1259,13 @@ jobs:
         Get-ChildItem -Recurse "$out/modules/rostests/tests" -File |
             Where-Object { $_.Name -in 'lowil.exe', 'elevadm.exe' } |
             ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
+        # credprov_apitest needs its harness, test modules and the hooked credprovs build beside it.
+        if (Test-Path "$out/modules/rostests/apitests/credprov") {
+            Get-ChildItem -Recurse "$out/modules/rostests/apitests/credprov" -File |
+                Where-Object { $_.Extension -in '.exe', '.dll' } |
+                ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
+            Copy-Item -Verbose -ErrorAction Stop "$out/dll/win32/credprovs/credprovs_test.dll" apitests-out/amd64/
+        }
         Get-ChildItem -Recurse apitests-out | Select-Object -First 100
 
     - name: Upload the apitests binaries

@@ -1,0 +1,32 @@
+HKCR
+{
+    NoRemove CLSID
+    {
+        ForceRemove '{60B78E88-EAD8-445C-9CFD-0B87F74EA6CD}' = s 'PasswordProvider'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Apartment' }
+        }
+    }
+}
+HKLM
+{
+    NoRemove Software
+    {
+        NoRemove Microsoft
+        {
+            NoRemove Windows
+            {
+                NoRemove CurrentVersion
+                {
+                    NoRemove Authentication
+                    {
+                        NoRemove 'Credential Providers'
+                        {
+                            ForceRemove '{60B78E88-EAD8-445C-9CFD-0B87F74EA6CD}' = s 'PasswordProvider'
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -37,6 +37,8 @@ add_subdirectory(comdlg32)
 add_subdirectory(coml2)
 add_subdirectory(compstui)
 add_subdirectory(coremessaging)
+add_subdirectory(credprovhost)
+add_subdirectory(credprovs)
 add_subdirectory(credui)
 if(ARCH STREQUAL "i386")
     add_subdirectory(crtdll) # only built on x86

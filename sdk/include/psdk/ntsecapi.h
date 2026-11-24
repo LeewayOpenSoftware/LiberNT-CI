@@ -194,6 +194,10 @@ typedef LSA_STRING STRING, *PSTRING ;
 typedef enum _KERB_LOGON_SUBMIT_TYPE
 {
   KerbInteractiveLogon = 2,
+  KerbSmartCardLogon = 6,
+  KerbWorkstationUnlockLogon = 7,
+  KerbSmartCardUnlockLogon = 8,
+  KerbProxyLogon = 9,
   KerbS4ULogon = 12,
   KerbTicketLogon = 10,
   KerbTicketUnlockLogon = 11
@@ -440,6 +444,62 @@ typedef struct _KERB_INTERACTIVE_LOGON {
   UNICODE_STRING UserName;
   UNICODE_STRING Password;
 } KERB_INTERACTIVE_LOGON, *PKERB_INTERACTIVE_LOGON;
+
+typedef struct _KERB_INTERACTIVE_UNLOCK_LOGON {
+  KERB_INTERACTIVE_LOGON Logon;
+  LUID LogonId;
+} KERB_INTERACTIVE_UNLOCK_LOGON, *PKERB_INTERACTIVE_UNLOCK_LOGON;
+
+typedef enum _KERB_PROTOCOL_MESSAGE_TYPE {
+  KerbDebugRequestMessage = 0,
+  KerbQueryTicketCacheMessage,
+  KerbChangeMachinePasswordMessage,
+  KerbVerifyPacMessage,
+  KerbRetrieveTicketMessage,
+  KerbUpdateAddressesMessage,
+  KerbPurgeTicketCacheMessage,
+  KerbChangePasswordMessage,
+  KerbRetrieveEncodedTicketMessage,
+  KerbDecryptDataMessage,
+  KerbAddBindingCacheEntryMessage,
+  KerbSetPasswordMessage,
+  KerbSetPasswordExMessage,
+  KerbVerifyCredentialsMessage,
+  KerbQueryTicketCacheExMessage,
+  KerbPurgeTicketCacheExMessage,
+  KerbRefreshSmartcardCredentialsMessage,
+  KerbAddExtraCredentialsMessage,
+  KerbQuerySupplementalCredentialsMessage,
+  KerbTransferCredentialsMessage,
+  KerbQueryTicketCacheEx2Message,
+  KerbSubmitTicketMessage,
+  KerbAddExtraCredentialsExMessage,
+  KerbQueryKdcProxyCacheMessage,
+  KerbPurgeKdcProxyCacheMessage,
+  KerbQueryTicketCacheEx3Message,
+  KerbCleanupMachinePkinitCredsMessage,
+  KerbAddBindingCacheEntryExMessage,
+  KerbQueryBindingCacheMessage,
+  KerbPurgeBindingCacheMessage,
+  KerbPinKdcMessage,
+  KerbUnpinAllKdcsMessage,
+  KerbQueryDomainExtendedPoliciesMessage,
+  KerbQueryS4U2ProxyCacheMessage,
+  KerbRetrieveKeyTabMessage,
+  KerbRefreshPolicyMessage,
+  KerbPrintCloudKerberosDebugMessage,
+  KerbNetworkTicketLogonMessage,
+  KerbNlChangeMachinePasswordMessage
+} KERB_PROTOCOL_MESSAGE_TYPE, *PKERB_PROTOCOL_MESSAGE_TYPE;
+
+typedef struct _KERB_CHANGEPASSWORD_REQUEST {
+  KERB_PROTOCOL_MESSAGE_TYPE MessageType;
+  UNICODE_STRING DomainName;
+  UNICODE_STRING AccountName;
+  UNICODE_STRING OldPassword;
+  UNICODE_STRING NewPassword;
+  BOOLEAN Impersonating;
+} KERB_CHANGEPASSWORD_REQUEST, *PKERB_CHANGEPASSWORD_REQUEST;
 typedef struct _MSV1_0_INTERACTIVE_LOGON {
   MSV1_0_LOGON_SUBMIT_TYPE MessageType;
   UNICODE_STRING LogonDomainName;
