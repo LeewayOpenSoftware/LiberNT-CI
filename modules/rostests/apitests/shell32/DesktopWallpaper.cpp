@@ -270,7 +270,7 @@ START_TEST(DesktopWallpaper)
     hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     ok_hr(hr, S_OK);
 
-    hr = CoCreateInstance(CLSID_DesktopWallpaper, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARG(IDesktopWallpaper, &pdw));
+    hr = CoCreateInstance(CLSID_DesktopWallpaper, NULL, CLSCTX_INPROC_SERVER, IID_IDesktopWallpaper, reinterpret_cast<void **>(&pdw));
     if (FAILED(hr) && GetNTVersion() < _WIN32_WINNT_WIN8)
     {
         skip("IDesktopWallpaper needs Windows 8 or later (0x%lx)\n", hr);

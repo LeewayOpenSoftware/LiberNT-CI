@@ -15,9 +15,16 @@ WINE_DEFAULT_DEBUG_CHANNEL(shell_ad);
 
 typedef struct _WALLPAPER_MONITOR
 {
-    WCHAR szId[128];      /* DISPLAY_DEVICEW::DeviceID */
-    WCHAR szAdapter[32];  /* DISPLAY_DEVICEW::DeviceName of the adapter */
+    WCHAR szId[CCHDEVICENAME];  /* MONITORINFOEXW::szDevice */
+    RECT rcMonitor;
 } WALLPAPER_MONITOR;
+
+typedef struct _WALLPAPER_MONITOR_LIST
+{
+    WALLPAPER_MONITOR *pList;
+    UINT cMax;
+    UINT cFound;
+} WALLPAPER_MONITOR_LIST;
 
 static HRESULT
 HResultFromLastError(VOID)
@@ -26,46 +33,32 @@ HResultFromLastError(VOID)
     return dwError ? HRESULT_FROM_WIN32(dwError) : E_FAIL;
 }
 
-/* Active monitors on adapters attached to the desktop, keyed by their device
- * interface path. An adapter without an enumerable monitor stands in for one. */
+static BOOL CALLBACK
+AddWallpaperMonitor(HMONITOR hMonitor, HDC hdc, LPRECT prc, LPARAM lParam)
+{
+    WALLPAPER_MONITOR_LIST *pList = reinterpret_cast<WALLPAPER_MONITOR_LIST *>(lParam);
+    MONITORINFOEXW Info;
+
+    Info.cbSize = sizeof(Info);
+    if (GetMonitorInfoW(hMonitor, reinterpret_cast<LPMONITORINFO>(&Info)))
+    {
+        WALLPAPER_MONITOR *pEntry = &pList->pList[pList->cFound++];
+        StringCchCopyW(pEntry->szId, ARRAYSIZE(pEntry->szId), Info.szDevice);
+        pEntry->rcMonitor = Info.rcMonitor;
+    }
+    return pList->cFound < pList->cMax;
+}
+
+/* Monitors of the desktop, keyed by their display device name. Callers
+ * treat the ID as opaque, so it need not be the device interface path. */
 static UINT
 EnumWallpaperMonitors(WALLPAPER_MONITOR *pList, UINT cMax)
 {
-    DISPLAY_DEVICEW Adapter, Monitor;
-    UINT cFound = 0;
+    WALLPAPER_MONITOR_LIST List = { pList, cMax, 0 };
 
-    Adapter.cb = sizeof(Adapter);
-    for (DWORD iAdapter = 0; cFound < cMax && EnumDisplayDevicesW(NULL, iAdapter, &Adapter, 0); ++iAdapter)
-    {
-        BOOL bHasMonitor = FALSE;
-
-        if (!(Adapter.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP))
-            continue;
-
-        Monitor.cb = sizeof(Monitor);
-        for (DWORD iMonitor = 0;
-             cFound < cMax && EnumDisplayDevicesW(Adapter.DeviceName, iMonitor, &Monitor, EDD_GET_DEVICE_INTERFACE_NAME);
-             ++iMonitor)
-        {
-            if (!(Monitor.StateFlags & DISPLAY_DEVICE_ACTIVE))
-                continue;
-
-            StringCchCopyW(pList[cFound].szId, ARRAYSIZE(pList[cFound].szId),
-                           Monitor.DeviceID[0] ? Monitor.DeviceID : Monitor.DeviceName);
-            StringCchCopyW(pList[cFound].szAdapter, ARRAYSIZE(pList[cFound].szAdapter), Adapter.DeviceName);
-            ++cFound;
-            bHasMonitor = TRUE;
-        }
-
-        if (!bHasMonitor && cFound < cMax)
-        {
-            StringCchCopyW(pList[cFound].szId, ARRAYSIZE(pList[cFound].szId), Adapter.DeviceName);
-            StringCchCopyW(pList[cFound].szAdapter, ARRAYSIZE(pList[cFound].szAdapter), Adapter.DeviceName);
-            ++cFound;
-        }
-    }
-
-    return cFound;
+    if (cMax)
+        EnumDisplayMonitors(NULL, NULL, AddWallpaperMonitor, reinterpret_cast<LPARAM>(&List));
+    return List.cFound;
 }
 
 static INT
@@ -186,7 +179,6 @@ HRESULT WINAPI CDesktopWallpaper::GetMonitorDevicePathCount(UINT *count)
 HRESULT WINAPI CDesktopWallpaper::GetMonitorRECT(LPCWSTR monitorID, RECT *displayRect)
 {
     WALLPAPER_MONITOR List[MAX_WALLPAPER_MONITORS];
-    DEVMODEW DevMode;
     INT iMonitor;
 
     TRACE("(%ls, %p)\n", monitorID, displayRect);
@@ -199,14 +191,7 @@ HRESULT WINAPI CDesktopWallpaper::GetMonitorRECT(LPCWSTR monitorID, RECT *displa
     if (iMonitor < 0)
         return E_INVALIDARG;
 
-    ZeroMemory(&DevMode, sizeof(DevMode));
-    DevMode.dmSize = sizeof(DevMode);
-    if (!EnumDisplaySettingsW(List[iMonitor].szAdapter, ENUM_CURRENT_SETTINGS, &DevMode))
-        return HResultFromLastError();
-
-    SetRect(displayRect, DevMode.dmPosition.x, DevMode.dmPosition.y,
-            DevMode.dmPosition.x + (LONG)DevMode.dmPelsWidth,
-            DevMode.dmPosition.y + (LONG)DevMode.dmPelsHeight);
+    *displayRect = List[iMonitor].rcMonitor;
     return S_OK;
 }
 
