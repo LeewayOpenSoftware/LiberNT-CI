@@ -225,6 +225,7 @@ struct Settings
     BOOL  navExpanded;
     BOOL  noEffPrompt;   /* don't ask again        */
     BOOL  fullAcctName;
+    BOOL  noBlur;        /* opaque window background, no backdrop blur */
     /* Which resource the Performance page was last showing, so reopening
      * Task Manager comes back to it: the resource kind plus which one of
      * that kind, because disk 2 and GPU 1 are both "index 1". */
