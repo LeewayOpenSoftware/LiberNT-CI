@@ -36,10 +36,8 @@ I_NetLogonControl2(
     if (QueryLevel < 1 || QueryLevel > 4)
         return ERROR_INVALID_LEVEL;
 
-    /* Data is a top-level [ref] parameter of NetrLogonControl2, so it must never
-     * be NULL on the wire. Build a local union from the caller's value for the
-     * FunctionCodes that carry one (NETLOGON_CONTROL_DATA_INFORMATION switch
-     * cases in netlogon.idl) and always pass its address. */
+    /* NetrLogonControl2's Data is a top-level [ref] param: never NULL on the wire.
+     * Build the union from the caller's value per FunctionCode; always pass &DataInfo. */
     ZeroMemory(&DataInfo, sizeof(DataInfo));
     switch (FunctionCode)
     {
