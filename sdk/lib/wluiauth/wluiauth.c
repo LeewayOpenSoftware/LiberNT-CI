@@ -60,9 +60,11 @@ WluiLaunchTableAdd(
     _In_ PSID Sid,
     _In_ WLUI_AUTH_ROLE Role,
     _In_opt_ PVOID Context,
+    _In_opt_ const GUID *RequestedId,
     _Out_ GUID *LaunchId)
 {
     PWLUI_LAUNCH_ENTRY Entry = NULL;
+    static const GUID Null = { 0 };
     DWORD SidLength;
     ULONG i;
 
@@ -78,11 +80,24 @@ WluiLaunchTableAdd(
     if (SidLength > SECURITY_MAX_SID_SIZE)
         return FALSE;
 
+    if (RequestedId != NULL)
+    {
+        if (IsEqualGUID(RequestedId, &Null))
+            return FALSE;
+        *LaunchId = *RequestedId;
+    }
     /* rpcrt4, not ole32: winlogon already links it and the id only needs to be unique locally. */
-    if (UuidCreate(LaunchId) != RPC_S_OK)
+    else if (UuidCreate(LaunchId) != RPC_S_OK)
         return FALSE;
 
     EnterCriticalSection(&Table->Lock);
+    /* A requested id must not collide with a live entry. */
+    if (WluiFindLocked(Table, LaunchId) != NULL)
+    {
+        LeaveCriticalSection(&Table->Lock);
+        ZeroMemory(LaunchId, sizeof(*LaunchId));
+        return FALSE;
+    }
     for (i = 0; i < WLUI_MAX_LAUNCHES; i++)
     {
         if (!Table->Entries[i].InUse)

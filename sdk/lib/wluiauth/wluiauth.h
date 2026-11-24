@@ -64,7 +64,11 @@ typedef struct _WLUI_LAUNCH_TABLE
 VOID NTAPI WluiLaunchTableInit(_Out_ PWLUI_LAUNCH_TABLE Table);
 VOID NTAPI WluiLaunchTableDelete(_Inout_ PWLUI_LAUNCH_TABLE Table);
 
-/* Records a launch winlogon just made; LaunchId is generated here and handed to the child. */
+/*
+ * Records a launch winlogon just made. The id is generated here unless the caller
+ * supplies one (winlogon generates it before CreateProcess so it can sit on the
+ * child's command line, then registers the PID while the child is suspended).
+ */
 BOOL
 NTAPI
 WluiLaunchTableAdd(
@@ -73,6 +77,7 @@ WluiLaunchTableAdd(
     _In_ PSID Sid,
     _In_ WLUI_AUTH_ROLE Role,
     _In_opt_ PVOID Context,
+    _In_opt_ const GUID *RequestedId,
     _Out_ GUID *LaunchId);
 
 BOOL

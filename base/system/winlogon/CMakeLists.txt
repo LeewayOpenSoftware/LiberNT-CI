@@ -9,6 +9,7 @@ add_rpc_files(server
 
 list(APPEND SOURCE
     environment.c
+    hostlaunch.c
     notify.c
     rpclogonui.c
     rpcserver.c
@@ -25,7 +26,7 @@ list(APPEND SOURCE
 
 add_rc_deps(winlogon.rc ${CMAKE_CURRENT_SOURCE_DIR}/res/winlogon.ico)
 add_executable(winlogon ${SOURCE} winlogon.rc)
-target_link_libraries(winlogon wine win32ksys wluiauth ${PSEH_LIB})
+target_link_libraries(winlogon wine win32ksys wluiauth wlimgcheck wlrecovery ${PSEH_LIB})
 set_module_type(winlogon win32gui)
 add_importlibs(winlogon user32 advapi32 userenv secur32 rpcrt4 mpr msvcrt kernel32 ntdll)
 add_pch(winlogon winlogon.h SOURCE)

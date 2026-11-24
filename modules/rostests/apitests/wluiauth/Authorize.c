@@ -32,12 +32,12 @@ START_TEST(Authorize)
     WluiLaunchTableInit(&Table);
 
     /* Add rejects garbage. */
-    ok(!WluiLaunchTableAdd(&Table, 0, g_System, WluiAuthRoleHost, NULL, &Host), "pid 0 accepted\n");
-    ok(!WluiLaunchTableAdd(&Table, 100, NULL, WluiAuthRoleHost, NULL, &Host), "NULL sid accepted\n");
-    ok(!WluiLaunchTableAdd(&Table, 100, g_System, (WLUI_AUTH_ROLE)7, NULL, &Host), "bad role accepted\n");
+    ok(!WluiLaunchTableAdd(&Table, 0, g_System, WluiAuthRoleHost, NULL, NULL, &Host), "pid 0 accepted\n");
+    ok(!WluiLaunchTableAdd(&Table, 100, NULL, WluiAuthRoleHost, NULL, NULL, &Host), "NULL sid accepted\n");
+    ok(!WluiLaunchTableAdd(&Table, 100, g_System, (WLUI_AUTH_ROLE)7, NULL, NULL, &Host), "bad role accepted\n");
 
-    ok(WluiLaunchTableAdd(&Table, 100, g_System, WluiAuthRoleHost, &Marker, &Host), "add host\n");
-    ok(WluiLaunchTableAdd(&Table, 200, g_System, WluiAuthRoleRecovery, NULL, &Recovery), "add recovery\n");
+    ok(WluiLaunchTableAdd(&Table, 100, g_System, WluiAuthRoleHost, &Marker, NULL, &Host), "add host\n");
+    ok(WluiLaunchTableAdd(&Table, 200, g_System, WluiAuthRoleRecovery, NULL, NULL, &Recovery), "add recovery\n");
     ok(!IsEqualGUID(&Host, &Recovery), "launch ids must differ\n");
 
     /* Exact match: pid, sid and launch id. */
@@ -76,11 +76,22 @@ START_TEST(Authorize)
     ok(WluiAuthorize(&Table, 100, g_System, &Host, WluiOpReady, NULL, NULL) == WluiAuthUnknownLaunch, "after remove\n");
     {
         GUID Again;
-        ok(WluiLaunchTableAdd(&Table, 100, g_Admins, WluiAuthRoleHost, NULL, &Again), "re-add pid 100\n");
+        ok(WluiLaunchTableAdd(&Table, 100, g_Admins, WluiAuthRoleHost, NULL, NULL, &Again), "re-add pid 100\n");
         ok(!IsEqualGUID(&Again, &Host), "stale id reused\n");
         ok(WluiAuthorize(&Table, 100, g_System, &Again, WluiOpReady, NULL, NULL) == WluiAuthSidMismatch,
            "old sid against new launch\n");
         ok(WluiAuthorize(&Table, 100, g_Admins, &Again, WluiOpReady, NULL, NULL) == WluiAuthOk, "new launch\n");
+    }
+
+    /* A caller-supplied id is honoured, must be non-null, and must not collide with a live entry. */
+    {
+        GUID Wanted = { 0xCAFEF00D, 0x1, 0x2, { 9, 9, 9, 9, 9, 9, 9, 9 } }, Got, Null = { 0 };
+        ok(WluiLaunchTableAdd(&Table, 300, g_System, WluiAuthRoleHost, NULL, &Wanted, &Got), "requested id\n");
+        ok(IsEqualGUID(&Got, &Wanted), "requested id not used\n");
+        ok(!WluiLaunchTableAdd(&Table, 301, g_System, WluiAuthRoleHost, NULL, &Wanted, &Got), "duplicate requested id accepted\n");
+        ok(!WluiLaunchTableAdd(&Table, 302, g_System, WluiAuthRoleHost, NULL, &Null, &Got), "null requested id accepted\n");
+        ok(WluiAuthorize(&Table, 300, g_System, &Wanted, WluiOpReady, NULL, NULL) == WluiAuthOk, "requested id authorizes\n");
+        ok(WluiLaunchTableRemove(&Table, &Wanted), "remove requested\n");
     }
 
     /* The table is bounded. */
@@ -90,7 +101,7 @@ START_TEST(Authorize)
         WluiLaunchTableDelete(&Table);
         WluiLaunchTableInit(&Table);
         for (i = 0; i <= WLUI_MAX_LAUNCHES; i++)
-            Added += WluiLaunchTableAdd(&Table, 1000 + i, g_System, WluiAuthRoleHost, NULL, &Ids[i]) ? 1 : 0;
+            Added += WluiLaunchTableAdd(&Table, 1000 + i, g_System, WluiAuthRoleHost, NULL, NULL, &Ids[i]) ? 1 : 0;
         ok(Added == WLUI_MAX_LAUNCHES, "added %lu\n", Added);
     }
 

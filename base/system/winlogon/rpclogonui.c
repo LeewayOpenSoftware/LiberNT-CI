@@ -27,6 +27,7 @@ WluiLaunchRegister(
     _In_ DWORD Pid,
     _In_ PSID Sid,
     _In_ WLUI_AUTH_ROLE Role,
+    _In_opt_ const GUID *RequestedId,
     _Out_ GUID *LaunchId)
 {
     PWLUI_LAUNCH_STATE State;
@@ -40,7 +41,7 @@ WluiLaunchRegister(
         return NULL;
 
     EnterCriticalSection(&g_StateLock);
-    if (!WluiLaunchTableAdd(&g_LaunchTable, Pid, Sid, Role, State, LaunchId))
+    if (!WluiLaunchTableAdd(&g_LaunchTable, Pid, Sid, Role, State, RequestedId, LaunchId))
     {
         LeaveCriticalSection(&g_StateLock);
         WluiStateRelease(State);

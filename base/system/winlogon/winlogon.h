@@ -357,6 +357,7 @@ WluiLaunchRegister(
     _In_ DWORD Pid,
     _In_ PSID Sid,
     _In_ WLUI_AUTH_ROLE Role,
+    _In_opt_ const GUID *RequestedId,
     _Out_ GUID *LaunchId);
 
 VOID
@@ -389,6 +390,46 @@ WluiSetSubmitHandler(
 VOID
 WluiSetActionHandler(
     _In_opt_ WLUI_ACTION_HANDLER Handler);
+
+/* hostlaunch.c */
+#include <wlrecovery.h>
+typedef struct _WLHOST_LAUNCH *PWLHOST_LAUNCH;
+
+VOID
+WlHostOnSas(VOID);
+
+PWLHOST_LAUNCH
+WlHostStart(
+    _In_ DWORD Scenario,
+    _Out_ PBOOL Terminal);
+
+BOOL
+WlHostWaitReady(
+    _In_ PWLHOST_LAUNCH Launch,
+    _In_ DWORD TimeoutMs);
+
+BOOL
+WlHostPost(
+    _In_ PWLHOST_LAUNCH Launch,
+    _In_ const struct _WLUI_COMMAND *Command);
+
+HANDLE
+WlHostEndedEvent(
+    _In_ PWLHOST_LAUNCH Launch);
+
+BOOL
+WlHostHasEnded(
+    _In_ PWLHOST_LAUNCH Launch,
+    _Out_opt_ WLREC_END *End,
+    _Out_opt_ PDWORD ExitCode);
+
+PWLUI_LAUNCH_STATE
+WlHostState(
+    _In_ PWLHOST_LAUNCH Launch);
+
+VOID
+WlHostStop(
+    _In_ PWLHOST_LAUNCH Launch);
 
 /* rpcserver.c */
 BOOL
