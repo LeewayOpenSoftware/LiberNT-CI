@@ -31,18 +31,20 @@ struct _PWPROVIDER
 
 static const struct
 {
+    DWORD Id;
     CREDENTIAL_PROVIDER_FIELD_TYPE Type;
     UINT Label;
     const GUID *FieldType;
-} FieldTable[PWFIELD_COUNT] =
+} FieldTable[] =
 {
-    { CPFT_LARGE_TEXT,      IDS_FRIENDLY_NAME,    &GUID_NULL },
-    { CPFT_EDIT_TEXT,       IDS_USERNAME,         &CPFG_LOGON_USERNAME },
-    { CPFT_PASSWORD_TEXT,   IDS_PASSWORD,         &CPFG_LOGON_PASSWORD },
-    { CPFT_PASSWORD_TEXT,   IDS_NEW_PASSWORD,     &GUID_NULL },
-    { CPFT_PASSWORD_TEXT,   IDS_CONFIRM_PASSWORD, &GUID_NULL },
-    { CPFT_SUBMIT_BUTTON,   IDS_SUBMIT,           &GUID_NULL },
-    { CPFT_SMALL_TEXT,      IDS_PROVIDER_LABEL,   &CPFG_CREDENTIAL_PROVIDER_LABEL },
+    /* IDs 0-4, 12 and 15 are the Win11 password provider FieldTable. */
+    { PWFIELD_FRIENDLY_NAME,    CPFT_LARGE_TEXT,      IDS_FRIENDLY_NAME,    &GUID_NULL },
+    { PWFIELD_USER_NAME,        CPFT_EDIT_TEXT,       IDS_USERNAME,         &CPFG_LOGON_USERNAME },
+    { PWFIELD_PASSWORD,         CPFT_PASSWORD_TEXT,   IDS_PASSWORD,         &CPFG_LOGON_PASSWORD },
+    { PWFIELD_NEW_PASSWORD,     CPFT_PASSWORD_TEXT,   IDS_NEW_PASSWORD,     &GUID_NULL },
+    { PWFIELD_CONFIRM_PASSWORD, CPFT_PASSWORD_TEXT,   IDS_CONFIRM_PASSWORD, &GUID_NULL },
+    { PWFIELD_SUBMIT,           CPFT_SUBMIT_BUTTON,   IDS_SUBMIT,           &GUID_NULL },
+    { PWFIELD_PROVIDER_LABEL,   CPFT_SMALL_TEXT,      IDS_PROVIDER_LABEL,   &CPFG_CREDENTIAL_PROVIDER_LABEL },
 };
 
 HRESULT
@@ -266,7 +268,7 @@ Provider_GetFieldDescriptorCount(ICredentialProvider *iface, DWORD *pdwCount)
 {
     if (!pdwCount)
         return E_POINTER;
-    *pdwCount = PWFIELD_COUNT;
+    *pdwCount = ARRAYSIZE(FieldTable);
     return S_OK;
 }
 
@@ -280,13 +282,13 @@ Provider_GetFieldDescriptorAt(ICredentialProvider *iface, DWORD dwIndex, CREDENT
     if (!ppcpfd)
         return E_POINTER;
     *ppcpfd = NULL;
-    if (dwIndex >= PWFIELD_COUNT)
+    if (dwIndex >= ARRAYSIZE(FieldTable))
         return E_INVALIDARG;
 
     Desc = CoTaskMemAlloc(sizeof(*Desc));
     if (!Desc)
         return E_OUTOFMEMORY;
-    Desc->dwFieldID = dwIndex;
+    Desc->dwFieldID = FieldTable[dwIndex].Id;
     Desc->cpft = FieldTable[dwIndex].Type;
     Desc->guidFieldType = *FieldTable[dwIndex].FieldType;
     if (!LoadStringW(CredProvsInstance, FieldTable[dwIndex].Label, Label, ARRAYSIZE(Label)))
