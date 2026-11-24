@@ -23,10 +23,20 @@
 
 #include "initguid.h"
 #include "taskschd.h"
+#include "resource.h"
 
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(schtasks);
+
+/* The success line the Windows tool prints after /create */
+static void print_created(const WCHAR *task_name)
+{
+    WCHAR fmt[256];
+
+    if (LoadStringW(GetModuleHandleW(NULL), IDS_CREATE_SUCCESS, fmt, sizeof(fmt)/sizeof(fmt[0])))
+        wprintf(fmt, task_name);
+}
 
 static ITaskFolder *get_tasks_root_folder(void)
 {
@@ -402,6 +412,7 @@ static int create_command(int argc, WCHAR *argv[])
         ITaskFolder_Release(root);
         if (FAILED(hres)) return 1;
         IRegisteredTask_Release(task);
+        print_created(task_name);
         return 0;
     }
 
@@ -544,6 +555,7 @@ static int create_command(int argc, WCHAR *argv[])
     ITaskFolder_Release(root);
     if (SUCCEEDED(hres)) {
         IRegisteredTask_Release(task);
+        print_created(task_name);
         ret = 0;
     }
 
