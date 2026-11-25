@@ -728,12 +728,13 @@ IntDefWindowProc(
    switch (Msg)
    {
       case WM_GETDPISCALEDSIZE:
-         /* The default keeps the current window size. */
-         return TRUE;
+         /* FALSE requests the system's default linear scaling. */
+         return FALSE;
 
       case WM_DPICHANGED:
          if (lParam)
          {
+            /* lParam is a captured RECT for this message (see g_MsgMemory). */
             PRECT Suggested = (PRECT)lParam;
             co_WinPosSetWindowPos(Wnd, NULL,
                                   Suggested->left, Suggested->top,

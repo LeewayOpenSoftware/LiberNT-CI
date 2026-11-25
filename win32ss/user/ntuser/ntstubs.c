@@ -1541,30 +1541,53 @@ NtUserEnableNonClientDpiScaling(_In_ HWND hWnd)
 static VOID
 IntNotifyDpiChildren(_In_ PWND Parent, _In_ UINT Dpi, _In_ UINT Message)
 {
-    PWND Child;
+    HWND *List;
+    UINT Index;
 
-    for (Child = Parent->spwndChild; Child; Child = Child->spwndNext)
+    if (!Parent || !IntIsWindow(UserHMGetHandle(Parent))) return;
+    List = IntWinListChildren(Parent);
+    if (!List) return;
+    for (Index = 0; List[Index]; ++Index)
     {
+        PWND Child = ValidateHwndNoErr(List[Index]);
+        USER_REFERENCE_ENTRY Ref;
+        HWND hChild;
+
+        if (!Child || Child->spwndParent != Parent) continue;
+        hChild = UserHMGetHandle(Child);
+        UserRefObjectCo(Child, &Ref);
         if (NTUSER_DPI_CONTEXT_GET_VERSION(Child->DpiContext) == 2)
-            co_IntSendMessage(UserHMGetHandle(Child), Message, MAKELONG(Dpi, Dpi), 0);
-        IntNotifyDpiChildren(Child, Dpi, Message);
+            co_IntSendMessage(hChild, Message, MAKELONG(Dpi, Dpi), 0);
+        if (IntIsWindow(UserHMGetHandle(Parent)) && IntIsWindow(hChild))
+            IntNotifyDpiChildren(Child, Dpi, Message);
+        UserDerefObjectCo(Child);
+        if (!IntIsWindow(UserHMGetHandle(Parent))) break;
     }
+    ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
 }
 
 static VOID
 IntUpdateDpiChildren(_In_ PWND Parent, _In_ UINT Dpi)
 {
-    PWND Child;
-    RECT Suggested;
+    HWND *List;
+    UINT Index;
 
-    for (Child = Parent->spwndChild; Child; Child = Child->spwndNext)
+    if (!Parent || !IntIsWindow(UserHMGetHandle(Parent))) return;
+    List = IntWinListChildren(Parent);
+    if (!List) return;
+    for (Index = 0; List[Index]; ++Index)
     {
+        PWND Child = ValidateHwndNoErr(List[Index]);
+        USER_REFERENCE_ENTRY Ref;
+
+        if (!Child || Child->spwndParent != Parent) continue;
+        UserRefObjectCo(Child, &Ref);
         Child->Dpi = Dpi;
-        Suggested = Child->rcWindow;
-        co_IntSendMessage(UserHMGetHandle(Child), WM_DPICHANGED,
-                          MAKELONG(Dpi, Dpi), (LPARAM)&Suggested);
-        IntUpdateDpiChildren(Child, Dpi);
+        if (IntIsWindow(List[Index]))
+            IntUpdateDpiChildren(Child, Dpi);
+        UserDerefObjectCo(Child);
     }
+    ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
 }
 
 static BOOL
@@ -1572,27 +1595,37 @@ IntWindowDpiChanged(_In_ PWND Window, _In_ UINT Dpi)
 {
     RECT Suggested = Window->rcWindow;
     SIZE ScaledSize;
+    UINT OldDpi = IntGetWindowDpiValue(Window);
     ULONG Version = NTUSER_DPI_CONTEXT_GET_VERSION(Window->DpiContext);
+
+    if (!OldDpi) OldDpi = 96;
+    Suggested.left = MulDiv(Suggested.left, Dpi, OldDpi);
+    Suggested.top = MulDiv(Suggested.top, Dpi, OldDpi);
+    Suggested.right = MulDiv(Suggested.right, Dpi, OldDpi);
+    Suggested.bottom = MulDiv(Suggested.bottom, Dpi, OldDpi);
 
     if (Version == 2)
     {
-        ScaledSize.cx = Suggested.right - Suggested.left;
-        ScaledSize.cy = Suggested.bottom - Suggested.top;
+        ScaledSize.cx = MulDiv(Window->rcWindow.right - Window->rcWindow.left, Dpi, OldDpi);
+        ScaledSize.cy = MulDiv(Window->rcWindow.bottom - Window->rcWindow.top, Dpi, OldDpi);
         if (co_IntSendMessage(UserHMGetHandle(Window), WM_GETDPISCALEDSIZE,
                               MAKELONG(Dpi, Dpi), (LPARAM)&ScaledSize))
         {
             Suggested.right = Suggested.left + ScaledSize.cx;
             Suggested.bottom = Suggested.top + ScaledSize.cy;
         }
+        if (!IntIsWindow(UserHMGetHandle(Window))) return FALSE;
         IntNotifyDpiChildren(Window, Dpi, WM_DPICHANGED_BEFOREPARENT);
+        if (!IntIsWindow(UserHMGetHandle(Window))) return FALSE;
     }
 
     Window->Dpi = Dpi;
     co_IntSendMessage(UserHMGetHandle(Window), WM_DPICHANGED,
                       MAKELONG(Dpi, Dpi), (LPARAM)&Suggested);
-    IntUpdateDpiChildren(Window, Dpi);
+    if (IntIsWindow(UserHMGetHandle(Window)))
+        IntUpdateDpiChildren(Window, Dpi);
 
-    if (Version == 2)
+    if (Version == 2 && IntIsWindow(UserHMGetHandle(Window)))
         IntNotifyDpiChildren(Window, Dpi, WM_DPICHANGED_AFTERPARENT);
     return TRUE;
 }
@@ -1603,6 +1636,7 @@ NtUserForceWindowToDpiForTest(_In_ HWND hWnd, _In_ UINT Dpi)
 {
     PWND Window;
     PPROCESSINFO CurrentProcess;
+    USER_REFERENCE_ENTRY WindowRef;
     ULONG Awareness;
     BOOL Ret = FALSE;
 
@@ -1642,7 +1676,9 @@ NtUserForceWindowToDpiForTest(_In_ HWND hWnd, _In_ UINT Dpi)
         goto Cleanup;
     }
 
+    UserRefObjectCo(Window, &WindowRef);
     Ret = IntWindowDpiChanged(Window, Dpi);
+    UserDerefObjectCo(Window);
 
 Cleanup:
     UserLeave();

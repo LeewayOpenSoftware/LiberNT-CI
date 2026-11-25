@@ -10,13 +10,14 @@ typedef BOOL (WINAPI *PFORCEWINDOWTODPIFORTEST)(HWND, UINT);
 
 static UINT MessageLog[32];
 static UINT MessageCount;
+static HWND TrackedChild;
+static UINT ChildDpiChangedCount;
 
 static LRESULT CALLBACK
 DpiWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
 {
     UNREFERENCED_PARAMETER(hWnd);
     UNREFERENCED_PARAMETER(wParam);
-    UNREFERENCED_PARAMETER(lParam);
 
     if (Msg == WM_GETDPISCALEDSIZE ||
         Msg == WM_DPICHANGED ||
@@ -25,6 +26,7 @@ DpiWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
     {
         if (MessageCount < ARRAYSIZE(MessageLog)) MessageLog[MessageCount++] = Msg;
     }
+    if (hWnd == TrackedChild && Msg == WM_DPICHANGED) ChildDpiChangedCount++;
 
     return DefWindowProcW(hWnd, Msg, wParam, lParam);
 }
@@ -64,6 +66,8 @@ TestNotificationOrder(PFORCEWINDOWTODPIFORTEST ForceWindowToDpiForTest,
     DPI_AWARENESS_CONTEXT PreviousContext;
     HWND Parent, Child;
     UINT Dpi;
+    UINT OldDpi;
+    RECT BeforeRect, AfterRect, ChildBefore, ChildAfter;
     BOOL Result;
 
     PreviousContext = SetThreadDpiAwarenessContext(Context);
@@ -83,6 +87,14 @@ TestNotificationOrder(PFORCEWINDOWTODPIFORTEST ForceWindowToDpiForTest,
     else Dpi += 24;
 
     MessageCount = 0;
+    ChildDpiChangedCount = 0;
+    TrackedChild = Child;
+    GetWindowRect(Parent, &BeforeRect);
+    GetWindowRect(Child, &ChildBefore);
+    OldDpi = GetDpiForWindow(Parent);
+    if (!OldDpi) OldDpi = 96;
+    ok(DefWindowProcW(Parent, WM_DPICHANGED, Dpi, (LPARAM)1) == 0,
+       "DefWindowProcW dereferenced an invalid WM_DPICHANGED lParam\n");
     Result = ForceWindowToDpiForTest(Parent, Dpi);
     ok(Result, "ForceWindowToDpiForTest failed for context %p, error %lu\n", Context, GetLastError());
     if (Result && Context == DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE)
@@ -90,6 +102,15 @@ TestNotificationOrder(PFORCEWINDOWTODPIFORTEST ForceWindowToDpiForTest,
         ok(MessageCount >= 1 && MessageLog[0] == WM_DPICHANGED,
            "PMv1 message order started with %#x, count %u\n",
            MessageCount ? MessageLog[0] : 0, MessageCount);
+        GetWindowRect(Parent, &AfterRect);
+        ok(abs((AfterRect.right - AfterRect.left) - MulDiv(BeforeRect.right - BeforeRect.left, Dpi, OldDpi)) <= 1 &&
+           abs((AfterRect.bottom - AfterRect.top) - MulDiv(BeforeRect.bottom - BeforeRect.top, Dpi, OldDpi)) <= 1,
+           "PMv1 suggested rectangle was not linearly scaled (%ldx%ld -> %ldx%ld)\n",
+           BeforeRect.right - BeforeRect.left, BeforeRect.bottom - BeforeRect.top,
+           AfterRect.right - AfterRect.left, AfterRect.bottom - AfterRect.top);
+        GetWindowRect(Child, &ChildAfter);
+        ok(ChildDpiChangedCount == 0, "PMv1 child received WM_DPICHANGED\n");
+        ok(EqualRect(&ChildBefore, &ChildAfter), "PMv1 child position changed\n");
     }
     else if (Result)
     {
@@ -108,6 +129,7 @@ TestNotificationOrder(PFORCEWINDOWTODPIFORTEST ForceWindowToDpiForTest,
 cleanup:
     if (Child != NULL) DestroyWindow(Child);
     if (Parent != NULL) DestroyWindow(Parent);
+    TrackedChild = NULL;
     SetThreadDpiAwarenessContext(PreviousContext);
 }
 
