@@ -34,6 +34,31 @@ typedef BOOL (WINAPI *PFN_GetProcessInformation)(HANDLE, PROCESS_INFORMATION_CLA
 static PFN_QueryFullProcessImageNameW pQueryFullProcessImageNameW;
 static PFN_IsHungAppWindow pIsHungAppWindow;
 static PFN_IsWow64Process pIsWow64Process;
+
+/* In the 32-bit build a native System32 path is redirected to SysWOW64; version and icon
+   lookups read it through Sysnative, which the WoW64 file layer maps back for that open only. */
+static const WCHAR* NativeLookupPath(const WCHAR* path, WCHAR* buf, size_t cch)
+{
+    static int isWow64 = -1;
+    if (isWow64 < 0)
+    {
+        BOOL wow = FALSE;
+        isWow64 = (IsWow64Process(GetCurrentProcess(), &wow) && wow) ? 1 : 0;
+    }
+    if (!isWow64)
+        return path;
+
+    WCHAR windir[MAX_PATH], system32[MAX_PATH];
+    UINT n = GetSystemWindowsDirectoryW(windir, _countof(windir));
+    if (n == 0 || n >= _countof(windir) ||
+        FAILED(StringCchPrintfW(system32, _countof(system32), L"%s\\System32\\", windir)))
+        return path;
+    size_t len = wcslen(system32);
+    if (_wcsnicmp(path, system32, len) != 0 ||
+        FAILED(StringCchPrintfW(buf, cch, L"%s\\Sysnative\\%s", windir, path + len)))
+        return path;
+    return buf;
+}
 static PFN_GetProcessInformation pGetProcessInformation;
 
 /* ProcessPowerThrottlingState (Win10 EcoQoS); harmless failure elsewhere */
@@ -3012,13 +3037,16 @@ static void ResolveExtra(ProcRow& p)
 
     if (x->path[0])
     {
+        WCHAR nativePath[MAX_PATH + 8];
+        const WCHAR* lookup = NativeLookupPath(x->path, nativePath, _countof(nativePath));
+
         /* description from version resource */
         DWORD dummy;
-        DWORD cb = GetFileVersionInfoSizeW(x->path, &dummy);
+        DWORD cb = GetFileVersionInfoSizeW(lookup, &dummy);
         if (cb && cb < 256 * 1024)
         {
             void* blk = HeapAlloc(GetProcessHeap(), 0, cb);
-            if (blk && GetFileVersionInfoW(x->path, 0, cb, blk))
+            if (blk && GetFileVersionInfoW(lookup, 0, cb, blk))
             {
                 struct LANGCP { WORD lang, cp; } *lc = NULL;
                 UINT lcLen = 0;
@@ -3047,7 +3075,7 @@ static void ResolveExtra(ProcRow& p)
         /* small icon */
         SHFILEINFOW sfi;
         ZeroMemory(&sfi, sizeof(sfi));
-        if (SHGetFileInfoW(x->path, 0, &sfi, sizeof(sfi), SHGFI_ICON | SHGFI_SMALLICON))
+        if (SHGetFileInfoW(lookup, 0, &sfi, sizeof(sfi), SHGFI_ICON | SHGFI_SMALLICON))
             x->icon = sfi.hIcon;
     }
 
@@ -3059,6 +3087,8 @@ static void ResolveExtra(ProcRow& p)
 BOOL GetFileCompany(const WCHAR* path, WCHAR* buf, int cch)
 {
     buf[0] = 0;
+    WCHAR nativePath[MAX_PATH + 8];
+    path = NativeLookupPath(path, nativePath, _countof(nativePath));
     DWORD dummy;
     DWORD cb = GetFileVersionInfoSizeW(path, &dummy);
     if (!cb || cb > 256 * 1024) return FALSE;
@@ -4249,9 +4279,11 @@ static void LoadAppHistoryIcon(AppHistRow* history)
     if (!history->path[0])
         return;
 
+    WCHAR nativePath[MAX_PATH + 8];
+    const WCHAR* lookup = NativeLookupPath(history->path, nativePath, _countof(nativePath));
     SHFILEINFOW fileInfo;
     ZeroMemory(&fileInfo, sizeof(fileInfo));
-    if (SHGetFileInfoW(history->path, 0, &fileInfo, sizeof(fileInfo),
+    if (SHGetFileInfoW(lookup, 0, &fileInfo, sizeof(fileInfo),
                        SHGFI_ICON | SHGFI_SMALLICON))
     {
         history->icon = fileInfo.hIcon;
