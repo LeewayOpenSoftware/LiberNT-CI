@@ -528,16 +528,8 @@ START_TEST(Host)
         ok(Bad == 0, "%d of 20 dismiss-under-wait runs failed\n", Bad);
     }
 
-    /* Run 3: credentials are not supported by this host build; it says so and leaves. */
-    ResetRun();
-    Process = LaunchHost(Exe, Endpoint, Own, Trace, NULL);
-    ok(WaitForSingleObject(g_ReadyEvent, 5000) == WAIT_OBJECT_0, "no Ready (3)\n");
-    PostCmd(WluiCmdRequestCredentials, 0, NULL, NULL);
-    ok(WaitForSingleObject(g_ExitEvent, 5000) == WAIT_OBJECT_0, "no Exiting after request\n");
-    ok(g_ExitReason == WluiExitProviderInitFailed, "request reason %lu\n", g_ExitReason);
-    Code = WaitExit(Process, 5000);
-    ok(Code == 3, "run 3 exit %lu\n", Code);
-
+    /* A RequestCredentials brings up a page since the host got its credential providers
+     * (Test_Providers covers it, and the not-supported exit when no tier can be instantiated). */
     ok(g_WrongId == 0, "%ld call(s) with a wrong launch id\n", g_WrongId);
 
     Test_Providers(Exe, Endpoint, Own, Trace);
