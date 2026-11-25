@@ -1083,15 +1083,29 @@ WlHostLoggedOutSas(
         Waits[1] = WlHostEndedEvent(g_Launch);
         /* Posted messages keep flowing to the SAS window: win32k posts the shutdown notification
          * (WM_LOGONNOTIFY) there and a plain wait starved it (leg finding 2). A second SAS is
-         * ignored in STATE_LOGGED_OFF_SAS, so dispatching here cannot nest this loop. */
+         * ignored in STATE_LOGGED_OFF_SAS, but a logoff, shutdown or lock notification runs its
+         * whole action nested in here; the state check after the loop is the guard. */
         Which = MsgWaitForMultipleObjects(2, Waits, FALSE, INFINITE, QS_ALLINPUT);
         if (Which == WAIT_OBJECT_0 + 2)
         {
             MSG Msg;
-            while (PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
+            BOOL Quit = FALSE;
+            while (!Quit && PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
             {
+                if (Msg.message == WM_QUIT)
+                {
+                    PostQuitMessage((int)Msg.wParam);   /* belongs to winlogon's main loop */
+                    Quit = TRUE;
+                    break;
+                }
                 TranslateMessage(&Msg);
                 DispatchMessageW(&Msg);
+            }
+            if (Quit || Session->LogonState != STATE_LOGGED_OFF_SAS || g_Launch == NULL)
+            {
+                /* The nested action ended the SAS, or the host is gone: this wait is over. */
+                WlHlSetAccepting(FALSE);
+                return WLX_SAS_ACTION_NONE;
             }
             continue;
         }
