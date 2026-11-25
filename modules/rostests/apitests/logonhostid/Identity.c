@@ -6,6 +6,7 @@
  */
 
 #include <apitest.h>
+#include <winuser.h>
 #include <tlhelp32.h>
 
 static DWORD
