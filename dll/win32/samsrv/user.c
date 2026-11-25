@@ -609,6 +609,70 @@ done:
 }
 
 
+/* TRUE when any account already stores a password encrypted with a SamKey */
+static
+BOOLEAN
+SampHasEncryptedPasswords(VOID)
+{
+    LPCWSTR Names[] = {L"NTPwd", L"NTPwdHistory", L"LMPwd", L"LMPwdHistory"};
+    HANDLE UsersKeyHandle = NULL;
+    HANDLE UserKeyHandle;
+    WCHAR KeyName[64];
+    PVOID Data;
+    ULONG Length;
+    ULONG Index;
+    ULONG Name;
+    BOOLEAN Found = FALSE;
+    NTSTATUS Status;
+
+    Status = SampRegOpenKey(NULL,
+                            L"\\Registry\\Machine\\SAM\\SAM\\Domains\\Account\\Users",
+                            KEY_READ,
+                            &UsersKeyHandle);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    for (Index = 0; !Found; Index++)
+    {
+        if (!NT_SUCCESS(SampRegEnumerateSubKey(UsersKeyHandle, Index, ARRAYSIZE(KeyName), KeyName)))
+            break;
+
+        if (_wcsicmp(KeyName, L"Names") == 0)
+            continue;
+
+        if (!NT_SUCCESS(SampRegOpenKey(UsersKeyHandle, KeyName, KEY_QUERY_VALUE, &UserKeyHandle)))
+            continue;
+
+        for (Name = 0; Name < ARRAYSIZE(Names) && !Found; Name++)
+        {
+            /* An encrypted value is the revision, an IV, then whole cipher blocks */
+            Length = 0;
+            Status = SampRegQueryValue(UserKeyHandle, Names[Name], NULL, NULL, &Length);
+            if (!NT_SUCCESS(Status) ||
+                Length < sizeof(ULONG) + 2 * SAM_PASSWORD_IV_SIZE ||
+                ((Length - sizeof(ULONG)) % SAM_PASSWORD_IV_SIZE) != 0)
+                continue;
+
+            Data = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length);
+            if (Data == NULL)
+                continue;
+
+            Status = SampRegQueryValue(UserKeyHandle, Names[Name], NULL, Data, &Length);
+            if (NT_SUCCESS(Status) && Length >= sizeof(ULONG) &&
+                *(PULONG)Data == SAM_PASSWORD_ENCRYPTION_REVISION)
+                Found = TRUE;
+
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Data);
+        }
+
+        SampRegCloseKey(&UserKeyHandle);
+    }
+
+    SampRegCloseKey(&UsersKeyHandle);
+    return Found;
+}
+
+
 NTSTATUS
 SampInitPasswordEncryption(VOID)
 {
@@ -655,6 +719,15 @@ SampInitPasswordEncryption(VOID)
                                &Length);
     if (!NT_SUCCESS(Status) || Length != sizeof(KeyData))
     {
+        /* A new key cannot decrypt the stored passwords; never replace a lost one */
+        if (SampHasEncryptedPasswords())
+        {
+            ERR("The password encryption key (Lsa\\SamKey) is missing or invalid, but the SAM holds encrypted passwords; SAM does not start\n");
+            NtClose(KeyHandle);
+            return STATUS_INTERNAL_DB_CORRUPTION;
+        }
+
+        WARN("Creating a new password encryption key (no stored passwords use one)\n");
         Status = BCryptGenRandom(NULL,
                                  KeyData,
                                  sizeof(KeyData),

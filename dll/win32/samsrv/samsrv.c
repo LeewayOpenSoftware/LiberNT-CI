@@ -109,6 +109,8 @@ SamIInitialize(VOID)
         return Status;
 
     PasswordStatus = SampInitPasswordEncryption();
+    if (PasswordStatus == STATUS_INTERNAL_DB_CORRUPTION)
+        return PasswordStatus;
 
     if (SampIsSetupRunning())
     {
