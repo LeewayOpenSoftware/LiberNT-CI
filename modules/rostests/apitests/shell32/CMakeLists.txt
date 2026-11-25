@@ -7,6 +7,7 @@ list(APPEND SOURCE
     AssocCreateElement.cpp
     AssocCreateForClasses.cpp
     DefaultProperties.cpp
+    DesktopWallpaper.cpp
     ILLoadFromStreamEx.cpp
     ItemPropertyStores.cpp
     LocalizedName.cpp
