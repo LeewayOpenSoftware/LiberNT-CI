@@ -383,6 +383,11 @@ IniCacheGetKeyName(
         {
             continue;
         }
+        if (*Ptr == '[')
+        {
+            /* A section header, not a key: hand it back to the caller */
+            break;
+        }
 
         *NamePtr = Ptr;
 
@@ -462,7 +467,7 @@ IniCacheGetKeyValue(
     {
         /* Get data */
         *DataPtr = Ptr;
-        while (*Ptr != 0 && *Ptr != '\r' && *Ptr != ';')
+        while (*Ptr != 0 && *Ptr != '\r' && *Ptr != '\n' && *Ptr != ';')
         {
             Ptr++;
             Size++;
@@ -551,11 +556,28 @@ IniCacheLoadFromMemory(
             Ptr = IniCacheGetKeyName(Ptr,
                                      &KeyName,
                                      &KeyNameSize);
+            if (!Ptr || !*Ptr || !KeyName)
+                continue;
+            if (KeyNameSize == 0)
+            {
+                /* Not a "name=value" line: skip it and go on with the next one */
+                while (*Ptr != 0 && *Ptr != '\n')
+                    Ptr++;
+                continue;
+            }
 
             Ptr = IniCacheGetKeyValue(Ptr,
                                       &KeyValue,
                                       &KeyValueSize,
                                       String);
+            if (!Ptr)
+            {
+                /* No '=' after the name: skip this line and go on with the next one */
+                Ptr = KeyName + KeyNameSize;
+                while (*Ptr != 0 && *Ptr != '\n')
+                    Ptr++;
+                continue;
+            }
 
             DPRINT("'%.*s' = '%.*s'\n", KeyNameSize, KeyName, KeyValueSize, KeyValue);
 
