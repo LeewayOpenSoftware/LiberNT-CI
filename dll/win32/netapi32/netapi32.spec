@@ -1,27 +1,27 @@
 @ stub CredpValidateTargetName
-@ stdcall DsAddressToSiteNamesA(str long ptr str)
-@ stdcall DsAddressToSiteNamesExA(str long ptr str str)
-@ stdcall DsAddressToSiteNamesExW(wstr long ptr wstr wstr)
-@ stdcall DsAddressToSiteNamesW(wstr long ptr wstr)
-@ stdcall DsDeregisterDnsHostRecordsA(str str ptr ptr str)
-@ stdcall DsDeregisterDnsHostRecordsW(wstr wstr ptr ptr wstr)
-8 stdcall DsEnumerateDomainTrustsA(str long ptr ptr)
-9 stdcall DsEnumerateDomainTrustsW(wstr long ptr ptr)
+@ stdcall DsAddressToSiteNamesA(str long ptr str) logoncli.DsAddressToSiteNamesA
+@ stdcall DsAddressToSiteNamesExA(str long ptr str str) logoncli.DsAddressToSiteNamesExA
+@ stdcall DsAddressToSiteNamesExW(wstr long ptr wstr wstr) logoncli.DsAddressToSiteNamesExW
+@ stdcall DsAddressToSiteNamesW(wstr long ptr wstr) logoncli.DsAddressToSiteNamesW
+@ stdcall DsDeregisterDnsHostRecordsA(str str ptr ptr str) logoncli.DsDeregisterDnsHostRecordsA
+@ stdcall DsDeregisterDnsHostRecordsW(wstr wstr ptr ptr wstr) logoncli.DsDeregisterDnsHostRecordsW
+8 stdcall DsEnumerateDomainTrustsA(str long ptr ptr) logoncli.DsEnumerateDomainTrustsA
+9 stdcall DsEnumerateDomainTrustsW(wstr long ptr ptr) logoncli.DsEnumerateDomainTrustsW
 @ stub DsGetDcCloseW
-@ stdcall DsGetDcNameA(str str ptr str long ptr)
-@ stdcall DsGetDcNameW(wstr wstr ptr wstr long ptr)
-@ stdcall DsGetDcNameWithAccountA(str str long str ptr str long ptr)
-@ stdcall DsGetDcNameWithAccountW(wstr wstr long wstr ptr wstr long ptr)
+@ stdcall DsGetDcNameA(str str ptr str long ptr) logoncli.DsGetDcNameA
+@ stdcall DsGetDcNameW(wstr wstr ptr wstr long ptr) logoncli.DsGetDcNameW
+@ stdcall DsGetDcNameWithAccountA(str str long str ptr str long ptr) logoncli.DsGetDcNameWithAccountA
+@ stdcall DsGetDcNameWithAccountW(wstr wstr long wstr ptr wstr long ptr) logoncli.DsGetDcNameWithAccountW
 @ stub DsGetDcNextA
 @ stub DsGetDcNextW
-@ stdcall DsGetDcOpenA(str long str ptr str long ptr)
-@ stdcall DsGetDcOpenW(wstr long wstr ptr wstr long ptr)
-@ stdcall DsGetDcSiteCoverageA(str ptr str)
-@ stdcall DsGetDcSiteCoverageW(wstr ptr wstr)
-@ stdcall DsGetForestTrustInformationW(wstr wstr long ptr)
-@ stdcall DsGetSiteNameA(str ptr)
-@ stdcall DsGetSiteNameW(wstr ptr)
-@ stdcall DsMergeForestTrustInformationW(wstr ptr ptr ptr)
+@ stdcall DsGetDcOpenA(str long str ptr str long ptr) logoncli.DsGetDcOpenA
+@ stdcall DsGetDcOpenW(wstr long wstr ptr wstr long ptr) logoncli.DsGetDcOpenW
+@ stdcall DsGetDcSiteCoverageA(str ptr str) logoncli.DsGetDcSiteCoverageA
+@ stdcall DsGetDcSiteCoverageW(wstr ptr wstr) logoncli.DsGetDcSiteCoverageW
+@ stdcall DsGetForestTrustInformationW(wstr wstr long ptr) logoncli.DsGetForestTrustInformationW
+@ stdcall DsGetSiteNameA(str ptr) logoncli.DsGetSiteNameA
+@ stdcall DsGetSiteNameW(wstr ptr) logoncli.DsGetSiteNameW
+@ stdcall DsMergeForestTrustInformationW(wstr ptr ptr ptr) logoncli.DsMergeForestTrustInformationW
 @ stub DsRoleAbortDownlevelServerUpgrade
 @ stub DsRoleCancel
 @ stub DsRoleDcAsDc
@@ -36,8 +36,8 @@
 @ stub DsRoleIfmHandleFree
 @ stub DsRoleServerSaveStateForUpgrade
 @ stub DsRoleUpgradeDownlevelServer
-@ stdcall DsValidateSubnetNameA(str)
-@ stdcall DsValidateSubnetNameW(wstr)
+@ stdcall DsValidateSubnetNameA(str) logoncli.DsValidateSubnetNameA
+@ stdcall DsValidateSubnetNameW(wstr) logoncli.DsValidateSubnetNameW
 @ stub I_BrowserDebugCall
 @ stdcall I_BrowserDebugTrace(wstr str)
 @ stdcall I_BrowserQueryEmulatedDomains(wstr ptr ptr)
@@ -140,15 +140,15 @@
 @ stdcall NetDfsSetSecurity(wstr ptr ptr)
 @ stdcall NetDfsSetStdContainerSecurity(wstr ptr ptr)
 @ stdcall NetEnumerateComputerNames(wstr long long ptr ptr)
-@ stdcall NetEnumerateTrustedDomains(wstr ptr)
+@ stdcall NetEnumerateTrustedDomains(wstr ptr) logoncli.NetEnumerateTrustedDomains
 @ stdcall NetErrorLogClear(wstr wstr ptr)
 @ stdcall NetErrorLogRead(wstr wstr ptr long ptr long long ptr long ptr ptr)
 @ stdcall NetErrorLogWrite(ptr long wstr ptr long ptr long ptr)
 @ stdcall NetFileClose(wstr long)
 @ stdcall NetFileEnum(wstr wstr wstr long ptr long ptr ptr ptr)
 @ stdcall NetFileGetInfo(wstr long long ptr)
-@ stdcall NetGetAnyDCName(wstr wstr ptr)
-@ stdcall NetGetDCName(wstr wstr ptr)
+@ stdcall NetGetAnyDCName(wstr wstr ptr) logoncli.NetGetAnyDCName
+@ stdcall NetGetDCName(wstr wstr ptr) logoncli.NetGetDCName
 @ stdcall NetGetDisplayInformationIndex(wstr long wstr ptr)
 @ stdcall NetGetJoinInformation(wstr ptr ptr)
 @ stdcall NetGetJoinableOUs(wstr wstr wstr wstr ptr ptr)
@@ -173,8 +173,8 @@
 @ stdcall NetLocalGroupGetMembers(wstr wstr long ptr long ptr ptr ptr)
 @ stdcall NetLocalGroupSetInfo(wstr wstr long ptr ptr)
 @ stdcall NetLocalGroupSetMembers(wstr wstr long ptr long)
-@ stdcall NetLogonGetTimeServiceParentDomain(wstr ptr ptr)
-@ stdcall NetLogonSetServiceBits(wstr long long)
+@ stdcall NetLogonGetTimeServiceParentDomain(wstr ptr ptr) logoncli.NetLogonGetTimeServiceParentDomain
+@ stdcall NetLogonSetServiceBits(wstr long long) logoncli.NetLogonSetServiceBits
 @ stdcall NetMessageBufferSend(wstr wstr wstr ptr long)
 @ stdcall NetMessageNameAdd(wstr wstr)
 @ stdcall NetMessageNameDel(wstr wstr)
