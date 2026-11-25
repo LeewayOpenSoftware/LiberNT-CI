@@ -62,6 +62,10 @@ typedef struct _UMFD_LOAD_REPLY
     ULONG Reserved;
 } UMFD_LOAD_REPLY, *PUMFD_LOAD_REPLY;
 
+/* Each faulted file abandons one FT_Library; at this count the host exits and its launcher starts a fresh one */
+#define UMFD_HOST_MAX_FAULTS    32
+#define UMFD_HOST_EXIT_RECYCLE  0x55460010
+
 /* UMFD_ESCAPE_REGISTER input; the caller needs SeTcbPrivilege */
 typedef struct _UMFD_REGISTER
 {

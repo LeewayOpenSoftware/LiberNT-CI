@@ -12,6 +12,7 @@ extern void func_fontdrvhost(void);
 extern void func_umfd_channel(void);
 extern void func_umfd_exit(void);
 extern void func_umfd_freeze(void);
+extern void func_umfd_recycle(void);
 
 const struct test winetest_testlist[] =
 {
@@ -19,5 +20,6 @@ const struct test winetest_testlist[] =
     { "umfd_channel", func_umfd_channel },
     { "umfd_exit", func_umfd_exit },
     { "umfd_freeze", func_umfd_freeze },
+    { "umfd_recycle", func_umfd_recycle },
     { 0, 0 }
 };

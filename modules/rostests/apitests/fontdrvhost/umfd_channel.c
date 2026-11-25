@@ -401,3 +401,31 @@ START_TEST(umfd_exit)
     CloseHandle(host);
     restore_host();
 }
+
+START_TEST(umfd_recycle)
+{
+    HANDLE host;
+    DWORD ms, code = 0, i, accepted = 0;
+
+    if (!can_run())
+        return;
+    host = start_host();
+    if (!host)
+        return;
+
+    /* Faults below the limit cost one refusal each and keep the host */
+    for (i = 1; i < UMFD_HOST_MAX_FAULTS; ++i)
+        accepted += add_command(UMFD_TEST_CRASH, 0, &ms);
+    ok(accepted == 0, "%lu crashing files were accepted\n", accepted);
+    ok(host_alive(host, &code), "the host exited after %u faults: exit 0x%lx\n", UMFD_HOST_MAX_FAULTS - 1, code);
+    ok(add_font(good_font, good_size, &ms) > 0, "a good font was refused below the fault limit\n");
+
+    /* The fault at the limit is refused at once and the host exits with the recycle code */
+    ok(add_command(UMFD_TEST_CRASH, 0, &ms) == 0, "the crashing file at the limit was accepted\n");
+    ok(ms < 10000, "the refusal at the limit took %lu ms\n", ms);
+    ok(WaitForSingleObject(host, 10000) == WAIT_OBJECT_0, "the host did not exit at the fault limit\n");
+    ok(GetExitCodeProcess(host, &code) && code == UMFD_HOST_EXIT_RECYCLE, "host exit 0x%lx\n", code);
+    ok(add_font(good_font, good_size, &ms) == 0, "a font was accepted with no host\n");
+    CloseHandle(host);
+    restore_host();
+}

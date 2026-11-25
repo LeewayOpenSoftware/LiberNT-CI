@@ -32,6 +32,7 @@ typedef struct _BUDGET
 } BUDGET;
 
 static UMFD_HEADER g_Request[64 * 1024 / sizeof(UMFD_HEADER)];
+static ULONG g_Faults;
 
 static struct
 {
@@ -232,6 +233,8 @@ HandleLoad(const UMFD_HEADER *Request, UMFD_LOAD_REPLY *Result)
     /* After a fault its state cannot be trusted: abandoned, not freed */
     if (!Faulted)
         FT_Done_FreeType(Library);
+    else if (++g_Faults >= UMFD_HOST_MAX_FAULTS)
+        ExitProcess(UMFD_HOST_EXIT_RECYCLE);    /* win32k refuses the open request, as it would this file */
     if (Status < 0)
         return Status;
 
