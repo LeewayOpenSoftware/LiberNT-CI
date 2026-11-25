@@ -20,9 +20,6 @@
 #define WLR_FLAGS_WARNING       2           /* -f: warning icon, as observed */
 #define WLR_ACTION_SHUTDOWN     3           /* -a: the only observed scenario */
 
-static HANDLE g_ReminderProcess;
-static DWORD g_ReminderPid;
-
 static BOOL
 WlrImagePath(
     _Out_writes_(MAX_PATH) PWSTR Path)
@@ -127,6 +124,7 @@ WlrSpawn(
 /* The persistent reminder of a pending timed shutdown or restart. FALSE = use the inline dialog. */
 BOOL
 WlrShowShutdownReminder(
+    _Out_ PWLR_REMINDER Reminder,
     _In_opt_ PCWSTR Message,
     _In_ ULONG TimeoutSeconds,
     _In_ BOOL Reboot)
@@ -134,7 +132,8 @@ WlrShowShutdownReminder(
     WCHAR Title[128], Format[128], Time[32], Body[512];
     WCHAR Arguments[1600];
 
-    if (g_ReminderProcess != NULL || TimeoutSeconds == 0)
+    ZeroMemory(Reminder, sizeof(*Reminder));
+    if (TimeoutSeconds == 0)
         return FALSE;
 
     if (LoadStringW(hAppInstance, IDS_REMINDER_TITLE, Title, ARRAYSIZE(Title)) == 0)
@@ -171,20 +170,32 @@ WlrShowShutdownReminder(
         FAILED(StringCchCatW(Arguments, ARRAYSIZE(Arguments), L" -a 3")))
         return FALSE;
 
-    return WlrSpawn(Arguments, &g_ReminderProcess, &g_ReminderPid);
+    return WlrSpawn(Arguments, &Reminder->Process, &Reminder->Pid);
 }
 
-/* Signals the child's stop event: the dialog exits 995. Never waits on anything the child owns. */
+/* Signals the child's stop event: the dialog exits 995. Never waits on anything the child owns;
+ * the only wait is a short retry while the child is still creating its event. */
 VOID
-WlrDismissShutdownReminder(VOID)
+WlrDismissShutdownReminder(
+    _Inout_ PWLR_REMINDER Reminder)
 {
     WCHAR Name[96];
-    HANDLE Event;
+    HANDLE Event = NULL;
+    DWORD Error = ERROR_SUCCESS, Try;
 
-    if (g_ReminderProcess == NULL)
+    if (Reminder->Process == NULL)
         return;
-    StringCchPrintfW(Name, ARRAYSIZE(Name), L"%s%lu", WLR_STOP_EVENT_PREFIX, g_ReminderPid);
-    Event = OpenEventW(EVENT_MODIFY_STATE, FALSE, Name);
+    StringCchPrintfW(Name, ARRAYSIZE(Name), L"%s%lu", WLR_STOP_EVENT_PREFIX, Reminder->Pid);
+    for (Try = 0; Try < 20 && Event == NULL; Try++)
+    {
+        Event = OpenEventW(EVENT_MODIFY_STATE, FALSE, Name);
+        if (Event != NULL)
+            break;
+        Error = GetLastError();
+        if (Error != ERROR_FILE_NOT_FOUND || WaitForSingleObject(Reminder->Process, 0) != WAIT_TIMEOUT)
+            break;                      /* not a start-up race: the child is gone or the name is foreign */
+        Sleep(100);
+    }
     if (Event != NULL)
     {
         SetEvent(Event);
@@ -193,11 +204,11 @@ WlrDismissShutdownReminder(VOID)
     else
     {
         /* The event is the child's; without it the user closes the dialog by hand. */
-        WARN("WL: wlrmdr pid %lu has no stop event (%lu)\n", g_ReminderPid, GetLastError());
+        WARN("WL: wlrmdr pid %lu has no stop event (%lu)\n", Reminder->Pid, Error);
     }
-    CloseHandle(g_ReminderProcess);
-    g_ReminderProcess = NULL;
-    g_ReminderPid = 0;
+    CloseHandle(Reminder->Process);
+    Reminder->Process = NULL;
+    Reminder->Pid = 0;
 }
 
 /* shutdown /a: the two-minute silent instance Windows spawns after the abort. */

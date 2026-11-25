@@ -536,14 +536,22 @@ WlHostActivateUserShell(
     _In_opt_ PVOID Environment);
 
 /* reminder.c */
+typedef struct _WLR_REMINDER
+{
+    HANDLE Process;             /* held so the PID cannot be reused under us */
+    DWORD Pid;
+} WLR_REMINDER, *PWLR_REMINDER;
+
 BOOL
 WlrShowShutdownReminder(
+    _Out_ PWLR_REMINDER Reminder,
     _In_opt_ PCWSTR Message,
     _In_ ULONG TimeoutSeconds,
     _In_ BOOL Reboot);
 
 VOID
-WlrDismissShutdownReminder(VOID);
+WlrDismissShutdownReminder(
+    _Inout_ PWLR_REMINDER Reminder);
 
 VOID
 WlrShowAbortNotice(VOID);
