@@ -16,6 +16,7 @@ EXTERN NtContinue:PROC
 EXTERN LdrpInit:PROC
 EXTERN ZwCallbackReturn:PROC
 EXTERN RtlRaiseStatus:PROC
+EXTERN KiUserCallbackExceptionHandler:PROC
 
 .data
 
@@ -116,7 +117,12 @@ PUBLIC KiRaiseUserExceptionDispatcher
 .ENDP
 
 PUBLIC KiUserCallbackDispatcher
+#ifdef _USE_ML
+KiUserCallbackDispatcher PROC FRAME:KiUserCallbackExceptionHandler
+#else
 .PROC KiUserCallbackDispatcher
+.seh_handler KiUserCallbackExceptionHandler, @except, @unwind
+#endif
 
     /* The stack is set up with a UCALLOUT_FRAME */
     /* The frame ends with a MACHINE_FRAME. */
@@ -139,13 +145,16 @@ AlignmentOk:
     mov edx, [rsp + CkLength]
     mov r8d, [rsp + CkApiNumber]
 
-    /* Get the callback table */
+    /* Get the callback table; a process that never loaded user32 has none */
     mov rax, gs:[TePeb]
     mov r9, [rax + PeKernelCallbackTable]
+    test r9, r9
+    jz NoCallbackTable
 
     /* Call the routine */
     call qword ptr [r9 + r8 * 8]
 
+CallbackReturn:
     /* Return from callback */
     xor ecx, ecx
     xor edx, edx
@@ -161,7 +170,22 @@ StatusRaise:
     call RtlRaiseStatus
     jmp StatusRaise
 
+NoCallbackTable:
+    /* No table to dispatch to: raise inside the callback frame, so the dispatcher's own handler ends the
+       process the way it ends any callback exception nothing handled (as on the Win11 lab VM) */
+    mov ecx, STATUS_NOT_IMPLEMENTED
+    call RtlRaiseStatus
+    jmp NoCallbackTable
+
+#ifdef _USE_ML
+KiUserCallbackDispatcher ENDP
+#else
+/* Emit handler data after the prolog directives so unwind codes are retained. */
+.seh_handlerdata
+.long 0
+.text
 .ENDP
+#endif
 
 /*
     BOOLEAN
