@@ -128,6 +128,9 @@ InitializeGreCSRSS(VOID)
         return FALSE;
     }
 
+    /* Off unless HKLM\SOFTWARE\Leeway\Win32k\UmfdMode asks for it */
+    UmfdInitialize();
+
     return TRUE;
 }
 
