@@ -5,6 +5,7 @@ list(APPEND SOURCE
     NetLocalGroupAddMembers.c
     NetUserEnum.c
     NetUserGetLocalGroups.c
+    NetUserModals.c
     NetUserMustChange.c
     testlist.c)
 
