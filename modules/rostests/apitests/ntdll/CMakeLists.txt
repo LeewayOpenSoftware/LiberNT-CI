@@ -82,6 +82,7 @@ list(APPEND SOURCE
     NtAccessCheck.c
     NtAccessCheckByType.c
     NtAccessCheckByTypeResultList.c
+    NtAddAtomEx.c
     NtAdjustGroupsToken.c
     NtAdjustPrivilegesToken.c
     NtAllocateVirtualMemory.c
