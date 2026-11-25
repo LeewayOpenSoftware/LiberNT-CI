@@ -42,6 +42,12 @@ NtUserGetThreadDpiAwarenessContext(VOID);
 ULONG APIENTRY
 NtUserGetWindowDpiAwarenessContext(HWND hWnd);
 
+UINT APIENTRY
+NtUserGetDpiForWindow(HWND hWnd);
+
+BOOL APIENTRY
+NtUserEnableNonClientDpiScaling(HWND hWnd);
+
 ULONG APIENTRY
 NtUserSetProcessDpiAwarenessContext(ULONG DpiContext, ULONG Flags);
 
@@ -495,18 +501,7 @@ WINAPI
 GetDpiForWindow(
     _In_ HWND hWnd)
 {
-    DPI_AWARENESS_CONTEXT Context = GetWindowDpiAwarenessContext(hWnd);
-
-    if (!Context)
-        return 0;
-
-    if (User32IsDpiVirtualizationActive() &&
-        GetAwarenessFromDpiAwarenessContext(Context) == DPI_AWARENESS_UNAWARE)
-    {
-        return USER_DEFAULT_SCREEN_DPI;
-    }
-
-    return GetRawSystemDpi();
+    return NtUserGetDpiForWindow(hWnd);
 }
 
 BOOL
@@ -1032,7 +1027,7 @@ WINAPI
 EnableNonClientDpiScaling(
     _In_ HWND hWnd)
 {
-    return (BOOL)NtUserCallHwnd(hWnd, HWND_ROUTINE_ROS_ENABLENCDPISCALING);
+    return NtUserEnableNonClientDpiScaling(hWnd);
 }
 
 BOOL

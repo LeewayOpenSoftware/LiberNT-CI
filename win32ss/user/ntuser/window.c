@@ -1355,7 +1355,10 @@ co_IntSetParent(PWND Wnd, PWND WndNewParent)
    WndSetParent(Wnd, WndNewParent);
    if (WndNewParent && !UserIsDesktopWindow(WndNewParent) && !UserIsMessageWindow(WndNewParent) &&
        WndNewParent->DpiHostingBehavior != DPI_HOSTING_BEHAVIOR_MIXED)
+   {
       Wnd->DpiContext = WndNewParent->DpiContext;
+      Wnd->Dpi = WndNewParent->Dpi;
+   }
 
    if (Wnd->style & WS_CHILD &&
        Wnd->spwndOwner &&
@@ -2180,6 +2183,11 @@ PWND FASTCALL IntCreateWindow(CREATESTRUCTW* Cs,
       pWnd->DpiContext = pti->ppi->DpiContext;
    else
       pWnd->DpiContext = NTUSER_DPI_UNAWARE;
+   pWnd->Dpi = (gpsi && gpsi->dmLogPixels) ? gpsi->dmLogPixels : 96;
+   if (ParentWindow && !UserIsDesktopWindow(ParentWindow) && !UserIsMessageWindow(ParentWindow) &&
+       ParentWindow->DpiHostingBehavior != DPI_HOSTING_BEHAVIOR_MIXED)
+      pWnd->Dpi = ParentWindow->Dpi;
+   pWnd->NonClientDpiScaling = FALSE;
    pWnd->DpiHostingBehavior = pti->DpiHostingBehavior;
    WndSetLastActive(pWnd, pWnd);
    // Ramp up compatible version sets.

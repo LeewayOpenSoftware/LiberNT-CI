@@ -836,6 +836,8 @@ typedef struct _WND
 
     PVOID DialogPointer;
     ULONG DpiContext; /* Awareness context captured from the creating thread. */
+    UINT Dpi; /* Current per-window DPI; defaults to the system DPI. */
+    BOOLEAN NonClientDpiScaling;
     ULONG DpiHostingBehavior; /* DPI_HOSTING_BEHAVIOR of the creating thread. */
     ULONG DialogDpiChangeBehavior;
     ULONG DialogControlDpiChangeBehavior;
@@ -2867,6 +2869,18 @@ NtUserGetThreadDpiAwarenessContext(VOID);
 ULONG
 NTAPI
 NtUserGetWindowDpiAwarenessContext(_In_ HWND hWnd);
+
+UINT
+NTAPI
+NtUserGetDpiForWindow(_In_ HWND hWnd);
+
+BOOL
+NTAPI
+NtUserEnableNonClientDpiScaling(_In_ HWND hWnd);
+
+BOOL
+NTAPI
+NtUserForceWindowToDpiForTest(_In_ HWND hWnd, _In_ UINT Dpi);
 
 LONG
 NTAPI

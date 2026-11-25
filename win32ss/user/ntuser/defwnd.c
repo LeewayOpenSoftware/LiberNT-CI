@@ -727,6 +727,22 @@ IntDefWindowProc(
 
    switch (Msg)
    {
+      case WM_GETDPISCALEDSIZE:
+         /* The default keeps the current window size. */
+         return TRUE;
+
+      case WM_DPICHANGED:
+         if (lParam)
+         {
+            PRECT Suggested = (PRECT)lParam;
+            co_WinPosSetWindowPos(Wnd, NULL,
+                                  Suggested->left, Suggested->top,
+                                  Suggested->right - Suggested->left,
+                                  Suggested->bottom - Suggested->top,
+                                  SWP_NOZORDER | SWP_NOACTIVATE);
+         }
+         return 0;
+
       case WM_DEVICECHANGE:
             return TRUE;
 

@@ -756,6 +756,9 @@
     SVC_(GdiGetFontFileInfo, 5)
     SVC_(UserGetThreadDpiAwarenessContext, 0)
     SVC_(UserGetWindowDpiAwarenessContext, 1)
+    SVC_(UserGetDpiForWindow, 1)
+    SVC_(UserEnableNonClientDpiScaling, 1)
+    SVC_(UserForceWindowToDpiForTest, 2)
     SVC_(UserSetThreadDpiAwarenessContext, 1)
     /* WDDM 2.0 D3DKMT additions (ReactOS) */
     SVC_(GdiDdDDICreateSynchronizationObject2, 1)
