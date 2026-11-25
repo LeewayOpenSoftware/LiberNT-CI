@@ -597,10 +597,6 @@ CompleteProcessSecurity(
  * @param[in] ThreadSecurity
  * A pointer to a security descriptor that is for the thread.
  *
- * @param[in] DefaultSd
- * The token's default descriptor; supplies the owner, group or DACL a given
- * descriptor lacks.
- *
  * @return
  * Return TRUE if new security information has been set, FALSE
  * otherwise.
@@ -658,6 +654,10 @@ SetNewProcessObjectSecurityWorker(
     return SetKernelObjectSecurity(ObjectHandle, DACL_SECURITY_INFORMATION, Security);
 }
 
+/*
+ * Sets Security on the object, first completing a missing owner, group or DACL from
+ * DefaultSd, the token's default descriptor.
+ */
 static
 BOOL
 SetNewProcessObjectSecurity(
