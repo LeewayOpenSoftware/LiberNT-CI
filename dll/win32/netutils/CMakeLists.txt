@@ -1,5 +1,5 @@
 
-spec2def(netutils.dll netutils.spec)
+spec2def(netutils.dll netutils.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
     main.c
