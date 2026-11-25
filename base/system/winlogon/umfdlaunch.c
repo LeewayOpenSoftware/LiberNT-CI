@@ -9,6 +9,7 @@
 #include "winlogon.h"
 
 #include <sddl.h>
+#include <ndk/setypes.h>
 #include <wlimgcheck.h>
 #include <reactos/umfd.h>
 

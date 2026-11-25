@@ -562,7 +562,7 @@ static ULONG logon_sessions(void)
     ULONG count = 0;
     PLUID list = NULL;
 
-    if (LsaEnumerateLogonSessions(&count, &list) != STATUS_SUCCESS)
+    if (LsaEnumerateLogonSessions(&count, &list) != 0 /* STATUS_SUCCESS */)
         return 0;
     LsaFreeReturnBuffer(list);
     return count;
