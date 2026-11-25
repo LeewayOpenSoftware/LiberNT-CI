@@ -208,16 +208,20 @@ PostCmd(WLUI_COMMAND_TYPE Type, DWORD Flags, PCWSTR Text, PCWSTR User)
     ok(WluiStatePost(g_State, &Cmd, sizeof(Cmd)), "post %u\n", Type);
 }
 
+/* One launch state per run, as winlogon keeps one per launch: the previous host's abandoned
+ * WaitForCommand can sit in the old state for up to 2 s and would take the next command for a
+ * connection that is gone. The old state is marked dead (the stale wait returns
+ * ERROR_OPERATION_ABORTED) and left to process exit, since that handler may still be inside it. */
 static void
 ResetRun(void)
 {
-    WLUI_COMMAND Drain;
-    BOOL Got;
     ResetEvent(g_ReadyEvent);
     ResetEvent(g_ExitEvent);
     g_Heartbeats = 0;
     g_ExitReason = 0xFFFFFFFF;
-    while (WluiStateWait(g_State, 0, &Drain, sizeof(Drain), &Got) == ERROR_SUCCESS && Got) {}
+    if (g_State)
+        WluiStateMarkDead(g_State);
+    g_State = WluiStateCreate(sizeof(WLUI_COMMAND));
 }
 
 /* ---- credential providers in the host ---------------------------------------- */

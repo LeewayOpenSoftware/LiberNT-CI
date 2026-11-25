@@ -228,11 +228,13 @@ PostCmd(WLUI_COMMAND_TYPE Type, DWORD Scenario, DWORD Flags, LONG Status, PCWSTR
     ok(WluiStatePost(g_State, &Cmd, sizeof(Cmd)), "post %u\n", Type);
 }
 
+/* One launch state per run, as winlogon keeps one per launch: the previous twin's abandoned
+ * WaitForCommand can sit in the old state for up to 2 s and would take the next command for a
+ * connection that is gone. The old state is marked dead (the stale wait returns
+ * ERROR_OPERATION_ABORTED) and left to process exit, since that handler may still be inside it. */
 static void
 ResetRun(void)
 {
-    WLUI_COMMAND Drain;
-    BOOL Got;
     ResetEvent(g_ReadyEvent);
     ResetEvent(g_ExitEvent);
     ResetEvent(g_SubmitEvent);
@@ -241,7 +243,9 @@ ResetRun(void)
     g_Action = 0;
     g_SubmitSize = 0;
     SecureZeroMemory(g_SubmitBlob, sizeof(g_SubmitBlob));
-    while (WluiStateWait(g_State, 0, &Drain, sizeof(Drain), &Got) == ERROR_SUCCESS && Got) {}
+    if (g_State)
+        WluiStateMarkDead(g_State);
+    g_State = WluiStateCreate(sizeof(WLUI_COMMAND));
 }
 
 /* The blob winlogon would receive: captured, unpacked and mapped exactly as hostlogon.c does. */
@@ -361,11 +365,11 @@ START_TEST(Recovery)
      * validates and maps, zeroed buffers, a result, then Dismiss with exit 0. */
     ResetRun();
     DeleteFileW(Trace);
-    Process = Launch(Exe, Endpoint, Own, Trace, 1, L"/autosubmit:ORSI\\\\legtest;Pa55w.rd");
+    Process = Launch(Exe, Endpoint, Own, Trace, 1, L"/autosubmit:ORSI\\legtest;Pa55w.rd");
     ok(Process != NULL, "launch 1\n");
     ok(WaitForSingleObject(g_ReadyEvent, 5000) == WAIT_OBJECT_0, "no Ready\n");
-    ok(TraceHas(Trace, "ready"), "ready not traced\n");
     Sleep(4500);
+    ok(TraceHas(Trace, "ready"), "ready not traced\n");    /* written after the Ready call returns */
     ok(g_Heartbeats >= 1, "heartbeats %ld\n", g_Heartbeats);
     ok(g_SubmitSize == 0, "a submission before RequestCredentials\n");
     PostCmd(WluiCmdRequestCredentials, 1, 0, 0, NULL, NULL);
