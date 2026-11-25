@@ -105,6 +105,7 @@ WlUmfdMakeToken(
     PSID Low = NULL;
     HANDLE Base = NULL;
     DWORD i, Error = 0;
+    ULONG SessionId;
     BOOL Ok = FALSE;
 
     *Token = NULL;
@@ -126,9 +127,12 @@ WlUmfdMakeToken(
     if (CreateRestrictedToken(Base, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL,
                               ARRAYSIZE(Res), Res, Token))
     {
+        /* LogonUser tokens are in session 0; win32k accepts only a host in winlogon's own session */
+        SessionId = NtCurrentPeb()->SessionId;
         Label.Label.Sid = Low;
         Label.Label.Attributes = SE_GROUP_INTEGRITY;
-        Ok = SetTokenInformation(*Token, TokenIntegrityLevel, &Label, sizeof(Label) + GetLengthSid(Low));
+        Ok = SetTokenInformation(*Token, TokenSessionId, &SessionId, sizeof(SessionId)) &&
+             SetTokenInformation(*Token, TokenIntegrityLevel, &Label, sizeof(Label) + GetLengthSid(Low));
     }
     if (!Ok)
         Error = GetLastError();
