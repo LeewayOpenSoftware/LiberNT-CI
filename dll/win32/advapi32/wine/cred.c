@@ -103,7 +103,7 @@ static handle_t cred_dpapi_bind(void)
     qos.Version = RPC_C_SECURITY_QOS_VERSION_3;
     qos.Capabilities = RPC_C_QOS_CAPABILITIES_DEFAULT;
     qos.IdentityTracking = RPC_C_QOS_IDENTITY_STATIC;
-    qos.ImpersonationType = RPC_C_IMP_LEVEL_IDENTIFY;
+    qos.ImpersonationType = RPC_C_IMP_LEVEL_IMPERSONATE;   /* lsass does the key file I/O as the caller */
     qos.AdditionalSecurityInfoType = 0;
     qos.u.HttpCredentials = NULL;
     qos.Sid = (PSID)&LocalSystemSid;
