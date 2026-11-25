@@ -253,6 +253,12 @@ UmfdpRegister(_In_ INT InSize, _In_opt_ LPSTR UnsafeIn)
         ObDereferenceObject(Dead);
     if (Process)
         ObDereferenceObject(Process);
+    /* rtl has no Win32 code for this status; the launcher must tell a held channel from a failed launch */
+    if (Status == STATUS_ALREADY_REGISTERED)
+    {
+        EngSetLastError(ERROR_ALREADY_REGISTERED);
+        return 0;
+    }
     if (!NT_SUCCESS(Status))
     {
         SetLastNtError(Status);
