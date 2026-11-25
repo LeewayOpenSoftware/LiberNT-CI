@@ -821,7 +821,7 @@ BOOL UXTHEME_MicaDisabledByPolicy(void)
     DWORD value = 0, size = sizeof(value), type;
     LONG status;
 
-    status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, szThemeManager, 0, KEY_QUERY_VALUE, &key);
+    status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, szThemeManager, 0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
     if (status != ERROR_SUCCESS)
         return FALSE;
     status = RegQueryValueExW(key, L"DisableMica", NULL, &type, (LPBYTE)&value, &size);
@@ -838,7 +838,7 @@ BOOL UXTHEME_MicaCapable(void)
     if (!UXTHEME_CompositionAvailable())
         return FALSE;
     status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, szThemeManager,
-                           0, KEY_QUERY_VALUE, &key);
+                           0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
     if (status == ERROR_FILE_NOT_FOUND)
         return TRUE;
     if (status != ERROR_SUCCESS)

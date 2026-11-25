@@ -530,13 +530,13 @@ TrustReadMachineValue(LPCWSTR subkey, LPCWSTR value, DWORD type, PVOID data, DWO
     DWORD t, n = size;
     BOOL ok = FALSE;
 
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ, &gate) != ERROR_SUCCESS)
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ | KEY_WOW64_64KEY, &gate) != ERROR_SUCCESS)
         return FALSE;
     if (!TrustKeyProtected(gate))
         goto done;
     if (subkey)
     {
-        if (RegOpenKeyExW(gate, subkey, 0, KEY_READ, &key) != ERROR_SUCCESS || !TrustKeyProtected(key))
+        if (RegOpenKeyExW(gate, subkey, 0, KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS || !TrustKeyProtected(key))
             goto done;
     }
     ok = RegQueryValueExW(key ? key : gate, value, NULL, &t, data, &n) == ERROR_SUCCESS && t == type &&
@@ -819,7 +819,7 @@ ThemeTrustPublishBootFact(void)
         return FALSE;
     TrustEnablePrivilege(L"SeTakeOwnershipPrivilege", &previous, &previousSize, &adjusted);
     /* the hive gives the key an inherited descriptor (CREATOR OWNER full control): every boot sets the fixed one */
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ | KEY_CREATE_SUB_KEY | WRITE_DAC | WRITE_OWNER,
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ | KEY_CREATE_SUB_KEY | WRITE_DAC | WRITE_OWNER | KEY_WOW64_64KEY,
                       &gate) != ERROR_SUCCESS ||
         RegSetKeySecurity(gate, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                           sd) != ERROR_SUCCESS)
@@ -1085,7 +1085,7 @@ TrustV4Enabled(void)
      * the SY/BA-owned non-user-writable descriptor. Read the gate key once: if it is not protected (tampered or
      * unreadable) fail closed, so an admin EnableV4Privileged = 0 is never silently ignored; a protected key with
      * the value absent is the owner default (allowed), an explicit 0 forces it off. */
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ, &gate) != ERROR_SUCCESS)
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ | KEY_WOW64_64KEY, &gate) != ERROR_SUCCESS)
         return FALSE;
     allowed = TrustKeyProtected(gate);
     if (allowed)
@@ -1213,7 +1213,7 @@ TrustGuardEnter(LPCWSTR part, LPCWSTR name, UXT_GUARD *g, BOOL honourStale)
     StringCchPrintfW(g->value, ARRAY_SIZE(g->value), L"%08lX-%016I64X", GetCurrentProcessId(),
                      (ULONGLONG)self->CreateTime.QuadPart);
 
-    if (RegOpenKeyExW(g->root, g->subkey, 0, KEY_READ, &key) == ERROR_SUCCESS)
+    if (RegOpenKeyExW(g->root, g->subkey, 0, KEY_READ | (g->root == HKEY_LOCAL_MACHINE ? KEY_WOW64_64KEY : 0), &key) == ERROR_SUCCESS)
     {
         for (i = 0; hr == S_OK; i++)
         {
@@ -1255,7 +1255,7 @@ TrustGuardEnter(LPCWSTR part, LPCWSTR name, UXT_GUARD *g, BOOL honourStale)
     data.version = 1;
     data.reserved = 0;
     data.writtenAt = ((ULONGLONG)now.dwHighDateTime << 32) | now.dwLowDateTime;
-    if (RegCreateKeyExW(g->root, g->subkey, 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL) != ERROR_SUCCESS)
+    if (RegCreateKeyExW(g->root, g->subkey, 0, NULL, 0, KEY_SET_VALUE | (g->root == HKEY_LOCAL_MACHINE ? KEY_WOW64_64KEY : 0), NULL, &key, NULL) != ERROR_SUCCESS)
         return HRESULT_FROM_WIN32(ERROR_CANCELLED);         /* T-GUARD-4 */
     if (RegSetValueExW(key, g->value, 0, REG_BINARY, (const BYTE *)&data, sizeof(data)) != ERROR_SUCCESS)
     {
@@ -1274,7 +1274,7 @@ TrustGuardLeave(UXT_GUARD *g)
 
     if (!g->written)
         return;
-    if (RegOpenKeyExW(g->root, g->subkey, 0, KEY_SET_VALUE, &key) == ERROR_SUCCESS)
+    if (RegOpenKeyExW(g->root, g->subkey, 0, KEY_SET_VALUE | (g->root == HKEY_LOCAL_MACHINE ? KEY_WOW64_64KEY : 0), &key) == ERROR_SUCCESS)
     {
         RegDeleteValueW(key, g->value);
         RegCloseKey(key);
@@ -1287,7 +1287,10 @@ UXTHEME_TrustClearGuard(PTHEME_FILE tf)
 {
     if (!tf || !tf->szTrustGuard[0])
         return;
-    RegDeleteKeyW(tf->bTrustGuardMachine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, tf->szTrustGuard);
+    if (tf->bTrustGuardMachine)
+        RegDeleteKeyExW(HKEY_LOCAL_MACHINE, tf->szTrustGuard, KEY_WOW64_64KEY, 0);
+    else
+        RegDeleteKeyW(HKEY_CURRENT_USER, tf->szTrustGuard);
 }
 
 static BOOL
