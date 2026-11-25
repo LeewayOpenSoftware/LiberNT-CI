@@ -293,6 +293,40 @@ CreateShortcutsFromSection(
     return TRUE;
 }
 
+/* Links of programs an upgrade removes, listed in [ObsoleteShortcuts] as "<folder section> = <link name>":
+   only those names, and only links that exist, are deleted; nothing is created here. */
+static VOID
+DeleteObsoleteShortcuts(
+    _In_ HINF hinf,
+    _In_ LPCWSTR pszSection,
+    _In_ LPCWSTR pszFolder)
+{
+    INFCONTEXT Context;
+    WCHAR szFolderSection[MAX_PATH];
+    WCHAR szName[MAX_PATH];
+    WCHAR szLink[MAX_PATH];
+
+    if (!SetupFindFirstLine(hinf, L"ObsoleteShortcuts", NULL, &Context))
+        return;
+
+    do
+    {
+        if (!SetupGetStringFieldW(&Context, 0, szFolderSection, ARRAYSIZE(szFolderSection), NULL) ||
+            _wcsicmp(szFolderSection, pszSection) != 0 ||
+            !SetupGetStringFieldW(&Context, 1, szName, ARRAYSIZE(szName), NULL) ||
+            FAILED(StringCchPrintfW(szLink, ARRAYSIZE(szLink), L"%s\\%s.lnk", pszFolder, szName)))
+        {
+            continue;
+        }
+
+        if (GetFileAttributesW(szLink) == INVALID_FILE_ATTRIBUTES)
+            continue;
+
+        if (!DeleteFileW(szLink))
+            DPRINT1("Failed to delete the obsolete shortcut '%S' (error %lu)\n", szLink, GetLastError());
+    } while (SetupFindNextLine(&Context, &Context));
+}
+
 /* Profiles created before an upgrade hold copies of the Default user's links. */
 static VOID
 RefreshProfileShortcuts(
@@ -336,6 +370,7 @@ RefreshProfileShortcuts(
             SUCCEEDED(StringCchPrintfW(szFolder, ARRAYSIZE(szFolder), L"%s%s",
                                        szProfile, pszDefaultFolder + cchDefault)))
         {
+            DeleteObsoleteShortcuts(hinf, pszSection, szFolder);
             CreateShortcutsFromSection(NULL, NULL, hinf, pszSection, szFolder, TRUE);
         }
         RegCloseKey(hSid);
@@ -400,6 +435,8 @@ CreateShortcuts(
             continue;
         }
 
+        if (bUpgrade)
+            DeleteObsoleteShortcuts(hinf, szFolderSection, szPath);
         CreateShortcutsFromSection(pItemsData, pNotify, hinf, szFolderSection, szPath, FALSE);
         if (bUpgrade)
             RefreshProfileShortcuts(hinf, szFolderSection, szPath);
