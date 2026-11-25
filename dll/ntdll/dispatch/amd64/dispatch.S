@@ -139,13 +139,16 @@ AlignmentOk:
     mov edx, [rsp + CkLength]
     mov r8d, [rsp + CkApiNumber]
 
-    /* Get the callback table */
+    /* Get the callback table; a process that never loaded user32 has none */
     mov rax, gs:[TePeb]
     mov r9, [rax + PeKernelCallbackTable]
+    test r9, r9
+    jz NoCallbackTable
 
     /* Call the routine */
     call qword ptr [r9 + r8 * 8]
 
+CallbackReturn:
     /* Return from callback */
     xor ecx, ecx
     xor edx, edx
@@ -160,6 +163,11 @@ StatusRaise:
     mov ecx, esi
     call RtlRaiseStatus
     jmp StatusRaise
+
+NoCallbackTable:
+    /* Answer the kernel instead of faulting on the missing table */
+    mov eax, STATUS_NOT_IMPLEMENTED
+    jmp CallbackReturn
 
 .ENDP
 
