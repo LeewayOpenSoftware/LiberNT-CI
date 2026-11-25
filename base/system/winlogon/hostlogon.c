@@ -1392,7 +1392,7 @@ WlHostWaitDesktopSwitch(
     HANDLE Waits[2];
     DWORD Count, Timeout = WlHlDesktopSwitchTimeoutMs();
     ULONGLONG Start = GetTickCount64();
-    PCSTR Reason = "timeout";
+    PCSTR Reason = "desktop-switch-timeout";
     BOOL TimedOut = TRUE;
     MSG Msg;
 
@@ -1418,13 +1418,13 @@ WlHostWaitDesktopSwitch(
             break;
         if (Result == WAIT_FAILED)
         {
-            Reason = "wait failed";
+            Reason = "desktop-switch-wait-failed";
             TimedOut = FALSE;
             break;
         }
         if (Count > 0 && Waits[Result - WAIT_OBJECT_0] == g_SwitchEvent)
         {
-            Reason = "shell signalled";
+            Reason = "desktop-switch-signalled";
             TimedOut = FALSE;
             break;
         }
@@ -1434,7 +1434,7 @@ WlHostWaitDesktopSwitch(
         g_ShellProcess = NULL;
         if (ExitCode != 0)
         {
-            Reason = "shell failed";
+            Reason = "desktop-switch-shell-failed";
             TimedOut = FALSE;
             break;
         }
@@ -1442,7 +1442,8 @@ WlHostWaitDesktopSwitch(
 
     if (TimedOut)
         WARN("WL: desktop switch after %lu ms without the shell's signal\n", Timeout);
-    TRACE("WL: desktop switch: %s after %I64u ms\n", Reason, GetTickCount64() - Start);
+    TRACE("WL: %s after %I64u ms\n", Reason, GetTickCount64() - Start);
+    LogonStage(Reason);                 /* the leg reads the switch from COM1 (checklist B.3) */
     WlHlCloseSwitchHandles();
 }
 
