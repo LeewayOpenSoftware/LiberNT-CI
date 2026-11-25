@@ -24,6 +24,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_PAGE_WIDTH      360
 #define LUH_ROW_HEIGHT      30
 #define LUH_ROW_GAP         10
+#define LUH_TEXT_ABOVE_PAGE 100     /* title 40 + gap 8 + result 28 + 24 clearance over the first row */
 
 typedef struct _LUH_UI
 {
@@ -45,6 +46,7 @@ typedef struct _LUH_UI
     DWORD PendingScenario;  /* a RequestCredentials that arrived under the box */
     DWORD PendingFlags;
     PLUH_PAGE Page;         /* owned by providers.c; valid until the next WM_LUH_PAGE */
+    int PageTop;            /* y of the first field row; the title and the result sit above it */
     BOOL PageBusy;          /* a submission is with winlogon; controls disabled */
     HWND PolicyButtons[2];
 } LUH_UI;
@@ -169,6 +171,7 @@ LuhCreatePage(
 
     X = (Client.right - LUH_PAGE_WIDTH) / 2;
     Y = Client.bottom / 2 - (Rows * (LUH_ROW_HEIGHT + LUH_ROW_GAP)) / 2;
+    g_Ui.PageTop = Y;
 
     for (i = 0; i < Page->Count; i++)
     {
@@ -587,8 +590,9 @@ LuhPaint(
     SetBkMode(Dc, TRANSPARENT);
     SetTextColor(Dc, RGB(255, 255, 255));
 
-    /* With a credential page up, the text sits above it; otherwise it is centred. */
-    TextTop = g_Ui.Page ? Client.bottom / 2 - 160 : Client.bottom / 2 - 40;
+    /* With a credential page up, the text sits above its first row (the page grows with its
+     * label rows, a fixed offset put the result under the title); otherwise it is centred. */
+    TextTop = g_Ui.Page ? g_Ui.PageTop - LUH_TEXT_ABOVE_PAGE : Client.bottom / 2 - 40;
     Rect = Client;
     Rect.top = TextTop;
     Rect.bottom = Rect.top + 40;
