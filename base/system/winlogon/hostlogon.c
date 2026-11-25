@@ -567,12 +567,39 @@ WlHlSubmitHandler(
     return Error;
 }
 
+static BOOL WlHlDisableCad(VOID);
+
+/* msgina.c: HKLM Winlogon ShutdownWithoutLogon, workstation default TRUE. */
+static BOOL
+WlHlShutdownWithoutLogon(VOID)
+{
+    DWORD Value = 1, Size = sizeof(Value);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"ShutdownWithoutLogon",
+                     RRF_RT_REG_DWORD, NULL, &Value, &Size) != ERROR_SUCCESS)
+        Value = 1;
+    return Value != 0;
+}
+
+/* Flags for RequestCredentials that describe policy to the host; winlogon stays the gate. */
+static DWORD
+WlHlPolicyFlags(VOID)
+{
+    DWORD Flags = 0;
+    if (WlHlDisableCad())
+        Flags |= WLUI_FLAG_DISABLE_CAD;
+    if (!WlHlShutdownWithoutLogon())
+        Flags |= WLUI_FLAG_NO_POWER;
+    return Flags;
+}
+
 static DWORD
 WlHlActionHandler(
     _In_ PWLUI_LAUNCH_STATE State,
     _In_ WLUI_AUTH_ROLE Role,
     _In_ DWORD Action)
 {
+    LOGON_STATE LogonState;
+
     UNREFERENCED_PARAMETER(State);
     UNREFERENCED_PARAMETER(Role);
 
@@ -580,6 +607,16 @@ WlHlActionHandler(
         return ERROR_INVALID_PARAMETER;
     if (Action == WluiActionCancel)
         return ERROR_SUCCESS;
+
+    /* Nobody is signed in on the notice, the sign-in page or the locked station: policy decides. */
+    LogonState = g_Session->LogonState;
+    if ((LogonState == STATE_LOGGED_OFF || LogonState == STATE_LOGGED_OFF_SAS ||
+         LogonState == STATE_LOCKED || LogonState == STATE_LOCKED_SAS) &&
+        !WlHlShutdownWithoutLogon())
+    {
+        ERR("WL: power action %lu refused: ShutdownWithoutLogon is 0\n", Action);
+        return ERROR_ACCESS_DENIED;
+    }
 
     EnterCriticalSection(&g_SubmitLock);
     if (g_Accepting)
@@ -745,7 +782,7 @@ WlHostLoggedOutSas(
     HANDLE Waits[2];
     BOOL UserSas = !Session->HostAutoSas;
     DWORD Result = WLX_SAS_ACTION_NONE;
-    DWORD CadFlag = WlHlDisableCad() ? WLUI_FLAG_DISABLE_CAD : 0;
+    DWORD CadFlag = WlHlPolicyFlags();
 
     Session->HostAutoSas = FALSE;
     g_LsaBroken = !WlHlConnectLsa() || g_SubmitEvent == NULL;
@@ -854,8 +891,17 @@ WlHostLock(
     _In_ PWLSESSION Session)
 {
     UNREFERENCED_PARAMETER(Session);
-    if (!WlHlEnsureHost(WLHL_CPUS_UNLOCK, 0, WlHlLockReadyMs()))
+    if (!WlHlEnsureHost(WLHL_CPUS_UNLOCK, WlHlPolicyFlags() & WLUI_FLAG_NO_POWER, WlHlLockReadyMs()))
         ERR("WL: no logon UI for the locked station; it stays locked without a page\n");
+}
+
+/* A logoff that could not start: the user is still signed in, so the status must go. */
+VOID
+WlHostLogoffAborted(
+    _In_ PWLSESSION Session)
+{
+    WlHlStopHost();
+    SwitchDesktop(Session->ApplicationDesktop);
 }
 
 /* The locked station asked for a password change before it may be unlocked. */
@@ -867,7 +913,8 @@ WlHostMustChange(
     EnterCriticalSection(&g_SubmitLock);
     g_ChangeFor = WLHL_CPUS_UNLOCK;
     LeaveCriticalSection(&g_SubmitLock);
-    WlHlEnsureHost(WLHL_CPUS_CHANGE_PASSWORD, WLUI_FLAG_FORCED_CHANGE, WlHlLockReadyMs());
+    WlHlEnsureHost(WLHL_CPUS_CHANGE_PASSWORD, WLUI_FLAG_FORCED_CHANGE | (WlHlPolicyFlags() & WLUI_FLAG_NO_POWER),
+                   WlHlLockReadyMs());
 }
 
 /* The live host left outside a logged-out SAS: bring back the page the state needs. */

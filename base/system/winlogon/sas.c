@@ -1445,6 +1445,8 @@ HandleLogoff(
     if (!NT_SUCCESS(Status))
     {
         ERR("Failed to create Logoff security descriptor. Status 0x%08lx\n", Status);
+        if (Session->UseLogonUI)
+            WlHostLogoffAborted(Session);
         return Status;
     }
 
@@ -1458,6 +1460,8 @@ HandleLogoff(
     {
         ERR("Failed to start the Logoff thread, Status 0x%08lx\n", Status);
         DestroyLogoffSecurityAttributes(psa);
+        if (Session->UseLogonUI)
+            WlHostLogoffAborted(Session);
         return Status;
     }
 
@@ -1742,9 +1746,9 @@ DoGenericAction(
                 if (WlIsLockOk(Session))
                 {
                     Session->LogonState = STATE_LOCKED;
-                    if (Session->UseLogonUI)
-                        WlHostLock(Session);    /* bounded wait for the unlock page; the switch follows either way (P2) */
                     SwitchDesktop(Session->WinlogonDesktop);
+                    if (Session->UseLogonUI)
+                        WlHostLock(Session);    /* the lock is already in force; this only bounds when the page appears (P2) */
                     ReplyMessage(TRUE);
                     /* We may be on the Logged-On SAS dialog, in which case
                      * we need to close it if the lock action came via Win-L */

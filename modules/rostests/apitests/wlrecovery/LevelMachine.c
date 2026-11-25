@@ -105,6 +105,54 @@ START_TEST(LevelMachine)
     }
     ok(!S.Capped, "cap hit although the rate stayed below it\n");
 
+    /* Use is not a crash loop: 50 launches that each end normally within one minute (locks,
+     * unlocks, logons) never cap; a crash loop right after still caps at 10. */
+    g_Now = 12000000;
+    WlRecInit(&S, FakeClock);
+    for (i = 0; i < 50; i++)
+    {
+        ok(WlRecNextAction(&S) == WlRecActLaunchHost, "normal launch %d refused\n", i);
+        WlRecOnEnd(&S, WlRecEndNormal);
+        Advance(1000);
+    }
+    ok(!S.Capped && WlRecLevel(&S) == WlRecLevel1, "normal use capped or moved the level\n");
+    Launches = 0;
+    for (i = 0; i < 50; i++)
+    {
+        WlRecOnSas(&S);
+        if (WlRecNextAction(&S) != WlRecActTerminal)
+        {
+            Launches++;
+            WlRecOnEnd(&S, WlRecEndCrash);
+        }
+        Advance(500);
+    }
+    ok(Launches == WLREC_CAP_LAUNCHES - 1, "crash loop after normal use: %d launches (expected %d)\n", Launches, WLREC_CAP_LAUNCHES - 1);
+    ok(S.Capped, "crash loop after normal use did not cap\n");
+
+    /* A normal end between crashes restarts the count: 8 crashes, one launch that ends
+     * normally (the ninth), then 9 more crashes; without the reset the tenth launch caps. */
+    g_Now = 13000000;
+    WlRecInit(&S, FakeClock);
+    for (i = 0; i < WLREC_CAP_LAUNCHES - 2; i++)
+    {
+        WlRecOnSas(&S);
+        ok(WlRecNextAction(&S) != WlRecActTerminal, "crash %d before the normal end refused\n", i);
+        WlRecOnEnd(&S, WlRecEndCrash);
+        Advance(100);
+    }
+    WlRecOnSas(&S);
+    ok(WlRecNextAction(&S) != WlRecActTerminal, "launch for the normal end refused\n");
+    WlRecOnEnd(&S, WlRecEndNormal);
+    for (i = 0; i < WLREC_CAP_LAUNCHES - 1; i++)
+    {
+        WlRecOnSas(&S);
+        ok(WlRecNextAction(&S) != WlRecActTerminal, "crash %d after the normal end refused\n", i);
+        WlRecOnEnd(&S, WlRecEndCrash);
+        Advance(100);
+    }
+    ok(!S.Capped, "a normal end did not restart the count\n");
+
     ok(wcscmp(WlRecLevelName(WlRecLevel3), L"N3") == 0, "level name\n");
     ok(wcscmp(WlRecEndName(WlRecEndHang), L"hang") == 0, "end name\n");
 }

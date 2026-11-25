@@ -31,6 +31,7 @@ typedef struct _LUH_OPTIONS
     GUID LaunchId;
     DWORD Scenario;
     BOOL Fallback;
+    BOOL NoPower;           /* WLUI_FLAG_NO_POWER from the last RequestCredentials */
     PCWSTR Endpoint;            /* test build only; NULL means the production endpoint */
     BYTE ServerSid[SECURITY_MAX_SID_SIZE];
     PCWSTR TraceFile;           /* test build only */

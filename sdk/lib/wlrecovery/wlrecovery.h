@@ -68,7 +68,8 @@ VOID NTAPI WlRecOnSas(_Inout_ PWLREC_STATE State);
 /*
  * What to launch now. A launch action is counted against the global cap; when
  * the cap is reached the state drops to N4 and stays there, so the answer is
- * WlRecActTerminal, never a blank desktop.
+ * WlRecActTerminal, never a blank desktop. A normal end clears the count, so
+ * the cap sees only consecutive launches that never did their job.
  */
 WLREC_ACTION NTAPI WlRecNextAction(_Inout_ PWLREC_STATE State);
 

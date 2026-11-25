@@ -124,8 +124,18 @@ WlRecOnEnd(
 {
     BOOL Spent;
 
-    if (State->Capped || State->Level == WlRecLevel4 || End == WlRecEndNormal)
+    if (State->Capped || State->Level == WlRecLevel4)
         return;
+
+    if (End == WlRecEndNormal)
+    {
+        /* The cap measures a crash loop, not use: a launch that did its job (lock, logon,
+         * status page, dismiss) clears the history, so only launches with no normal end
+         * between them count towards it. */
+        State->LaunchCount = 0;
+        State->LaunchHead = 0;
+        return;
+    }
 
     switch (End)
     {

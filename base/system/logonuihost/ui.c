@@ -254,12 +254,16 @@ LuhShowPolicyPage(
     StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), L"Contact your administrator.");
     LuhSetSpinner(Window, FALSE);
     X = (Client.right - LUH_PAGE_WIDTH) / 2;
-    g_Ui.PolicyButtons[0] = CreateWindowExW(0, L"BUTTON", L"Restart", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                            X, Client.bottom / 2 + 60, LUH_PAGE_WIDTH / 2 - 5, LUH_ROW_HEIGHT,
-                                            Window, (HMENU)LUH_ID_RESTART, NULL, NULL);
-    g_Ui.PolicyButtons[1] = CreateWindowExW(0, L"BUTTON", L"Shut down", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                            X + LUH_PAGE_WIDTH / 2 + 5, Client.bottom / 2 + 60, LUH_PAGE_WIDTH / 2 - 5, LUH_ROW_HEIGHT,
-                                            Window, (HMENU)LUH_ID_SHUTDOWN, NULL, NULL);
+    /* ShutdownWithoutLogon=0: no power buttons; winlogon refuses the action anyway. */
+    if (!g_Options.NoPower)
+    {
+        g_Ui.PolicyButtons[0] = CreateWindowExW(0, L"BUTTON", L"Restart", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                                X, Client.bottom / 2 + 60, LUH_PAGE_WIDTH / 2 - 5, LUH_ROW_HEIGHT,
+                                                Window, (HMENU)LUH_ID_RESTART, NULL, NULL);
+        g_Ui.PolicyButtons[1] = CreateWindowExW(0, L"BUTTON", L"Shut down", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                                X + LUH_PAGE_WIDTH / 2 + 5, Client.bottom / 2 + 60, LUH_PAGE_WIDTH / 2 - 5, LUH_ROW_HEIGHT,
+                                                Window, (HMENU)LUH_ID_SHUTDOWN, NULL, NULL);
+    }
     LuhTrace("policy-page", NULL);
     InvalidateRect(Window, NULL, TRUE);
 }
@@ -409,6 +413,7 @@ LuhHandleCommand(
             g_Options.Scenario = Command->Scenario ? Command->Scenario : g_Options.Scenario;
             if (Command->Flags & WLUI_FLAG_FALLBACK)
                 g_Options.Fallback = TRUE;
+            g_Options.NoPower = (Command->Flags & WLUI_FLAG_NO_POWER) != 0;
             StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"");
             g_Ui.Detail[0] = UNICODE_NULL;
             LuhSetSpinner(Window, TRUE);

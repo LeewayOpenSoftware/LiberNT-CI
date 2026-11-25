@@ -468,6 +468,10 @@ WlHostMustChange(
     _In_ PWLSESSION Session);
 
 VOID
+WlHostLogoffAborted(
+    _In_ PWLSESSION Session);
+
+VOID
 WlHostRelaunch(
     _In_ PWLSESSION Session);
 

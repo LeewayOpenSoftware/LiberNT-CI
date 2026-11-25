@@ -34,6 +34,7 @@ const unsigned long WLUI_FLAG_DISABLE_CAD   = 0x00000002;
 const unsigned long WLUI_FLAG_LEGAL_NOTICE  = 0x00000004;
 const unsigned long WLUI_FLAG_SPINNER       = 0x00000008;
 const unsigned long WLUI_FLAG_FORCED_CHANGE = 0x00000010;  /* password expired: change is mandatory */
+const unsigned long WLUI_FLAG_NO_POWER      = 0x00000020;  /* ShutdownWithoutLogon=0: hide restart/shutdown */
 
 const unsigned long WLUI_MAX_TEXT = 256;
 const unsigned long WLUI_MAX_SERIALIZATION = 65536;
