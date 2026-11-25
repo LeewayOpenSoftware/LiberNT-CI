@@ -26,7 +26,7 @@ enum
     SID_HDR_START = 1, SID_STARTPAGE,
     SID_HDR_SPEED, SID_SPEED,
     SID_HDR_WINDOW, SID_ONTOP, SID_MINONUSE, SID_HIDEMIN,
-    SID_HDR_OTHER, SID_FULLACCT,
+    SID_HDR_OTHER, SID_FULLACCT, SID_NOBLUR,
 };
 
 static SetRow s_rows[] =
@@ -41,6 +41,7 @@ static SetRow s_rows[] =
     { RW_TOGGLE,   L"Hide when minimized", SID_HIDEMIN },
     { RW_HEADER,   L"Other options", SID_HDR_OTHER },
     { RW_TOGGLE,   L"Show full account name", SID_FULLACCT },
+    { RW_TOGGLE,   L"Transparency effects", SID_NOBLUR },
 };
 
 static const WCHAR* s_speedNames[] = { L"High", L"Normal", L"Low", L"Paused" };
@@ -64,6 +65,7 @@ struct SettingsPage : Page
         case SID_MINONUSE: return g_app.st.minOnUse;
         case SID_HIDEMIN:  return g_app.st.hideWhenMin;
         case SID_FULLACCT: return g_app.st.fullAcctName;
+        case SID_NOBLUR:   return !g_app.st.noBlur;
         }
         return FALSE;
     }
@@ -250,6 +252,10 @@ struct SettingsPage : Page
                 break;
             case SID_FULLACCT:
                 g_app.st.fullAcctName = !g_app.st.fullAcctName;
+                break;
+            case SID_NOBLUR:
+                g_app.st.noBlur = !g_app.st.noBlur;
+                App_ApplyTheme();
                 break;
             }
             ApplyChanged();

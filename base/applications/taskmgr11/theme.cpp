@@ -88,7 +88,8 @@ void Theme_Apply(BOOL dark, int dpi)
     Theme_Free();
     ZeroMemory(&g_t, sizeof(g_t));
     g_t.dark = dark;
-    if (!DwmSettingsLoadShellMaterial(dark ? DWM_COLOR_SCHEME_DARK : DWM_COLOR_SCHEME_LIGHT,
+    if (g_app.st.noBlur ||
+        !DwmSettingsLoadShellMaterial(dark ? DWM_COLOR_SCHEME_DARK : DWM_COLOR_SCHEME_LIGHT,
                                       &g_t.material, &g_t.materialOpacity))
         g_t.materialOpacity = -1;
 
@@ -126,7 +127,8 @@ void Theme_Apply(BOOL dark, int dpi)
     }
     else
     {
-        COLORREF base = g_t.materialOpacity >= 0 ? g_t.material : RGB(0x00, 0x00, 0x00);
+        COLORREF base = g_t.materialOpacity >= 0 ? g_t.material :
+                        g_app.st.noBlur ? RGB(0x20, 0x20, 0x20) : RGB(0x00, 0x00, 0x00);
         COLORREF white = RGB(0xFF, 0xFF, 0xFF);
         COLORREF highlight = GetSysColor(COLOR_HIGHLIGHT);
 
