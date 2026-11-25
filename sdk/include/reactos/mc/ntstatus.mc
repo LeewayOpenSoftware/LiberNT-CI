@@ -4139,6 +4139,14 @@ Language=English
 This operation is supported only when you are connected to the server.
 .
 
+MessageId=0x2e3
+Severity=Error
+Facility=System
+SymbolicName=STATUS_SAM_INIT_FAILURE
+Language=English
+The account database (SAM) could not be opened, so no one can sign in. Your accounts and passwords have not been changed. Error status 0x%x. Restore the system registry hive or contact your administrator.
+.
+
 MessageId=0x300
 Severity=Error
 Facility=System
