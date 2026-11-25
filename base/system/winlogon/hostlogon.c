@@ -1315,6 +1315,28 @@ WlHostThemeWait(VOID)
     FreeLibrary(Module);
 }
 
+/* msgina's InitThemeSupport also called shsvcs ordinal 1 (ThemeWatchForStart): when the Themes
+ * service signals its start event, that process installs the session's theme hooks and stays
+ * their server (win32k drops them when its last GUI thread exits). Without it no process ever
+ * installed them in host mode and every window was classic (VM leg finding 4). The module stays
+ * loaded: it owns the registered wait and its callback. */
+VOID
+WlHostThemeWatch(VOID)
+{
+    typedef BOOL (WINAPI *THEMEWATCH)(VOID);
+    HMODULE Module = LoadLibraryW(L"shsvcs.dll");
+    THEMEWATCH Watch;
+
+    if (Module == NULL)
+    {
+        ERR("WL: shsvcs.dll not loaded (error %lu); the session gets no theme hooks\n", GetLastError());
+        return;
+    }
+    Watch = (THEMEWATCH)GetProcAddress(Module, (LPCSTR)1);
+    if (Watch == NULL || !Watch())
+        ERR("WL: ThemeWatchForStart unavailable or failed; the session gets no theme hooks\n");
+}
+
 /* ---- the desktop switch (PHASE3-PLAN §6.3.1, commit 8) ---------------------------------- */
 
 /* ShellDesktopSwitchEvent for this logon: SYSTEM owns it, the user may only signal it. */

@@ -594,6 +594,7 @@ WinMain(
     if (WLSession->UseLogonUI)
     {
         LogonStage("host-mode");
+        WlHostThemeWatch();     /* msgina's WlxInitialize did this; winlogon hosts the theme hooks */
     }
     else if (!GinaInit(WLSession))
     {
