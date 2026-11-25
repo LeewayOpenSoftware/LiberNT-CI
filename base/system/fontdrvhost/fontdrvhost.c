@@ -15,6 +15,7 @@
 #include <pseh/pseh2.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
@@ -106,6 +107,72 @@ ValidateFace(FT_Library Library, const FT_Byte *pFile, FT_Long cbFile, FT_Long I
     return Ok;
 }
 
+#ifdef UMFD_TEST_HOOKS
+#include <reactos/umfdtest.h>
+
+static const BYTE *g_StalledView;
+
+/* Test images only: TRUE if the view is a test command, with the reply it gets */
+static BOOL
+TestHook(const BYTE *pView, ULONG64 cbView, ULONG *pNumFaces, LONG *pStatus)
+{
+    const UMFD_TEST_BLOB *Blob = (const UMFD_TEST_BLOB *)pView;
+    MEMORY_BASIC_INFORMATION Info;
+    volatile BYTE Sum = 0;
+    ULONG64 i;
+
+    /* win32k unmaps a stalled request's view at the SERVE after it, so it must be gone by now */
+    if (g_StalledView && g_StalledView != pView &&
+        (!VirtualQuery(g_StalledView, &Info, sizeof(Info)) || Info.State != MEM_FREE))
+    {
+        ExitProcess(UMFD_TEST_EXIT_VIEW_LEAKED);
+    }
+    g_StalledView = NULL;
+
+    if (cbView < sizeof(*Blob) || memcmp(Blob->Magic, UMFD_TEST_MAGIC, sizeof(Blob->Magic)) != 0)
+        return FALSE;
+
+    *pStatus = STATUS_SUCCESS;
+    *pNumFaces = 1;
+    switch (Blob->Command)
+    {
+        case UMFD_TEST_CRASH:
+            /* Param is 0: a real access violation the compiler cannot see coming */
+            *(volatile LONG *)(ULONG_PTR)Blob->Param = 0;
+            break;
+
+        case UMFD_TEST_STALL:
+            Sleep(Blob->Param);
+            /* By now win32k has given up on this request; the view must still be mapped */
+            _SEH2_TRY
+            {
+                for (i = 0; i < cbView; i += 4096)
+                    Sum += pView[i];
+                Sum += pView[cbView - 1];
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                ExitProcess(UMFD_TEST_EXIT_VIEW_GONE);
+            }
+            _SEH2_END;
+            g_StalledView = pView;
+            break;
+
+        case UMFD_TEST_FREEZE:
+            Sleep(Blob->Param);
+            ExitProcess(UMFD_TEST_EXIT_FROZEN);
+
+        case UMFD_TEST_EXIT:
+            ExitProcess(UMFD_TEST_EXIT_ON_REQUEST);
+
+        default:
+            *pStatus = STATUS_INVALID_PARAMETER;
+            break;
+    }
+    return TRUE;
+}
+#endif
+
 static LONG
 ValidateFile(FT_Library Library, const FT_Byte *pFile, FT_Long cbFile, ULONG *pNumFaces)
 {
@@ -149,6 +216,9 @@ HandleLoad(const UMFD_HEADER *Request, UMFD_LOAD_REPLY *Result)
     /* win32k's read-only copy of the file, mapped into this process; a fault costs this file only */
     _SEH2_TRY
     {
+#ifdef UMFD_TEST_HOOKS
+        if (!TestHook((const BYTE *)(ULONG_PTR)Load->ViewBase, Load->ViewSize, &NumFaces, &Status))
+#endif
         Status = ValidateFile(Library, (const FT_Byte *)(ULONG_PTR)Load->ViewBase,
                               (FT_Long)Load->ViewSize, &NumFaces);
     }

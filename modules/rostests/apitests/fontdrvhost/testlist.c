@@ -9,9 +9,15 @@
 #include <apitest.h>
 
 extern void func_fontdrvhost(void);
+extern void func_umfd_channel(void);
+extern void func_umfd_exit(void);
+extern void func_umfd_freeze(void);
 
 const struct test winetest_testlist[] =
 {
     { "fontdrvhost", func_fontdrvhost },
+    { "umfd_channel", func_umfd_channel },
+    { "umfd_exit", func_umfd_exit },
+    { "umfd_freeze", func_umfd_freeze },
     { 0, 0 }
 };
