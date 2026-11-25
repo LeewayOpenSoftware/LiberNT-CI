@@ -16,6 +16,7 @@
 #define TEST_USER L"LntMustChgTest"
 #define TEST_PASSWORD L"Lnt!MustChg#2026q"
 #define TEST_PASSWORD2 L"Lnt!MustChg#2026r"
+#define TEST_PASSWORD3 L"Lnt!MustChg#2026s"
 
 static
 PUSER_INFO_4
@@ -189,10 +190,14 @@ START_TEST(NetUserMustChange)
     NetApiBufferFree(Info);
     ok(TryLogon() == ERROR_PASSWORD_MUST_CHANGE, "Logon after net user /logonpasswordchg:yes did not report must-change\n");
 
-    /* net user <name> <password> sets the new password; must-change stays, as it is read back */
+    /* An admin "net user <name> <password>" sets it and clears must-change, as on Win11 */
     ok(RunNet(L"user " TEST_USER L" " TEST_PASSWORD2) == 0, "net user <name> <password> failed\n");
-    ok(TryLogonWith(TEST_PASSWORD2) == ERROR_PASSWORD_MUST_CHANGE, "The new password was not set\n");
+    ok(TryLogonWith(TEST_PASSWORD2) == ERROR_SUCCESS, "The admin reset did not set the password and clear must-change\n");
     ok(TryLogon() == ERROR_LOGON_FAILURE, "The old password still works\n");
+
+    /* With /logonpasswordchg:yes on the same line, must-change is set again */
+    ok(RunNet(L"user " TEST_USER L" " TEST_PASSWORD3 L" /logonpasswordchg:yes") == 0, "net user <name> <password> /logonpasswordchg:yes failed\n");
+    ok(TryLogonWith(TEST_PASSWORD3) == ERROR_PASSWORD_MUST_CHANGE, "The reset with /logonpasswordchg:yes did not keep must-change\n");
 
     ok(RunNet(L"user " TEST_USER L" /logonpasswordchg:maybe") != 0, "net user accepted /logonpasswordchg:maybe\n");
 

@@ -1257,6 +1257,10 @@ cmdUser(
 
         /* NetUserGetInfo never returns the password; set the one given */
         pUserInfo->usri4_password = lpPassword;
+
+        /* An admin reset ends must-change; /logonpasswordchg:yes below can set it again */
+        if (lpPassword != NULL)
+            pUserInfo->usri4_password_expired = FALSE;
     }
     else if (bAdd)
     {
