@@ -707,8 +707,8 @@ RtlpCreateAtomHandle(PRTL_ATOM_TABLE AtomTable, PRTL_ATOM_TABLE_ENTRY Entry)
    /* Calculate HandleIndex (by getting rid of the first two bits) */
    HandleIndex = (USHORT)((ULONG_PTR)Handle >> 2);
 
-   /* Index must be less than 0xC000 */
-   if (HandleIndex >= 0xC000)
+   /* Index must fit the string atom range */
+   if (HandleIndex >= 0x4000)
    {
        /* Destroy ex handle */
        ExDestroyHandle(AtomTable->ExHandleTable,
