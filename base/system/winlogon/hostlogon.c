@@ -10,6 +10,7 @@
 
 #include <rpc.h>
 #include <ntsecapi.h>
+#include <ndk/setypes.h>
 #include <credser.h>
 #include <wlui_s.h>
 #include <reactos/desktopready.h>

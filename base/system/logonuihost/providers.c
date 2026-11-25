@@ -9,7 +9,6 @@
 #include "logonuihost.h"
 #include <credprovhost.h>
 
-WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 
 #define LUH_MAX_FAULTS 16
 
