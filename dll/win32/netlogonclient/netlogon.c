@@ -8,14 +8,35 @@
 
 /* INCLUDES ******************************************************************/
 
-#include "netapi32.h"
+#include <wine/config.h>
+
+#include <limits.h>
+#include <stdarg.h>
+
+#define WIN32_NO_STATUS
+#define _INC_WINDOWS
+#define COM_NO_WINDOWS_H
+
+#include <windef.h>
+#include <winbase.h>
+#include <lmaccess.h>
+#include <lmapibuf.h>
+#include <lmerr.h>
+#include <ntsecapi.h>
 #include <winsock2.h>
 #include <rpc.h>
 #include <dsrole.h>
 #include <dsgetdc.h>
+
+#include <wine/debug.h>
+#include <wine/unicode.h>
+
+#define NTOS_MODE_USER
+#include <ndk/rtlfuncs.h>
+
 #include "netlogon_c.h"
 
-WINE_DEFAULT_DEBUG_CHANNEL(netapi32);
+WINE_DEFAULT_DEBUG_CHANNEL(logoncli);
 
 DWORD
 WINAPI
@@ -40,6 +61,58 @@ DsGetDcNameWithAccountW(
     _In_ LPCWSTR SiteName,
     _In_ ULONG Flags,
     _Out_ PDOMAIN_CONTROLLER_INFOW *DomainControllerInfo);
+
+static PSTR
+NlAllocAnsiStrFromWStr(
+    _In_ PWSTR InString)
+{
+    UNICODE_STRING UnicodeString;
+    ANSI_STRING AnsiString;
+    ULONG Size;
+    NET_API_STATUS NetStatus;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&UnicodeString, InString);
+    Size = RtlUnicodeStringToAnsiSize(&UnicodeString);
+    NetStatus = NetApiBufferAllocate(Size, (PVOID*)&AnsiString.Buffer);
+    if (NetStatus != NERR_Success)
+        return NULL;
+
+    Status = RtlUnicodeStringToAnsiString(&AnsiString, &UnicodeString, FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        NetApiBufferFree(AnsiString.Buffer);
+        return NULL;
+    }
+
+    return AnsiString.Buffer;
+}
+
+static PWSTR
+NlAllocWStrFromAnsiStr(
+    _In_ PSTR InString)
+{
+    ANSI_STRING AnsiString;
+    UNICODE_STRING UnicodeString;
+    ULONG Size;
+    NET_API_STATUS NetStatus;
+    NTSTATUS Status;
+
+    RtlInitAnsiString(&AnsiString, InString);
+    Size = RtlAnsiStringToUnicodeSize(&AnsiString);
+    NetStatus = NetApiBufferAllocate(Size, (PVOID*)&UnicodeString.Buffer);
+    if (NetStatus != NERR_Success)
+        return NULL;
+
+    Status = RtlAnsiStringToUnicodeString(&UnicodeString, &AnsiString, FALSE);
+    if (!NT_SUCCESS(Status))
+    {
+        NetApiBufferFree(UnicodeString.Buffer);
+        return NULL;
+    }
+
+    return UnicodeString.Buffer;
+}
 
 /* FUNCTIONS *****************************************************************/
 
@@ -128,7 +201,7 @@ DsAddressToSiteNamesA(
 
     if (ComputerName != NULL)
     {
-        pComputerNameW = NetpAllocWStrFromAnsiStr((PSTR)ComputerName);
+        pComputerNameW = NlAllocWStrFromAnsiStr((PSTR)ComputerName);
         if (pComputerNameW == NULL)
         {
             status = ERROR_NOT_ENOUGH_MEMORY;
@@ -306,7 +379,7 @@ DsAddressToSiteNamesExA(
 
     if (ComputerName != NULL)
     {
-        pComputerNameW = NetpAllocWStrFromAnsiStr((PSTR)ComputerName);
+        pComputerNameW = NlAllocWStrFromAnsiStr((PSTR)ComputerName);
         if (pComputerNameW == NULL)
         {
             status = ERROR_NOT_ENOUGH_MEMORY;
@@ -557,7 +630,7 @@ DsDeregisterDnsHostRecordsA(
 
     if (ServerName != NULL)
     {
-        pServerNameW = NetpAllocWStrFromAnsiStr((PSTR)ServerName);
+        pServerNameW = NlAllocWStrFromAnsiStr((PSTR)ServerName);
         if (pServerNameW == NULL)
         {
             status = ERROR_NOT_ENOUGH_MEMORY;
@@ -567,7 +640,7 @@ DsDeregisterDnsHostRecordsA(
 
     if (DnsDomainName != NULL)
     {
-        pDnsDomainNameW = NetpAllocWStrFromAnsiStr((PSTR)DnsDomainName);
+        pDnsDomainNameW = NlAllocWStrFromAnsiStr((PSTR)DnsDomainName);
         if (pDnsDomainNameW == NULL)
         {
             status = ERROR_NOT_ENOUGH_MEMORY;
@@ -575,7 +648,7 @@ DsDeregisterDnsHostRecordsA(
         }
     }
 
-    pDnsHostNameW = NetpAllocWStrFromAnsiStr((PSTR)DnsHostName);
+    pDnsHostNameW = NlAllocWStrFromAnsiStr((PSTR)DnsHostName);
     if (pDnsHostNameW == NULL)
     {
         status = ERROR_NOT_ENOUGH_MEMORY;
@@ -658,7 +731,7 @@ DsEnumerateDomainTrustsA(
 
     if (ServerName != NULL)
     {
-        pServerNameW = NetpAllocWStrFromAnsiStr((PSTR)ServerName);
+        pServerNameW = NlAllocWStrFromAnsiStr((PSTR)ServerName);
         if (pServerNameW == NULL)
         {
             status = ERROR_NOT_ENOUGH_MEMORY;
@@ -894,7 +967,7 @@ DsGetDcNameWithAccountA(
 
     if (ComputerName != NULL)
     {
-        pComputerNameW = NetpAllocWStrFromAnsiStr((PSTR)ComputerName);
+        pComputerNameW = NlAllocWStrFromAnsiStr((PSTR)ComputerName);
         if (pComputerNameW == NULL)
         {
             status = ERROR_NOT_ENOUGH_MEMORY;
@@ -904,7 +977,7 @@ DsGetDcNameWithAccountA(
 
     if (AccountName != NULL)
     {
-        pAccountNameW = NetpAllocWStrFromAnsiStr((PSTR)AccountName);
+        pAccountNameW = NlAllocWStrFromAnsiStr((PSTR)AccountName);
         if (pAccountNameW == NULL)
         {
             status = ERROR_NOT_ENOUGH_MEMORY;
@@ -912,14 +985,14 @@ DsGetDcNameWithAccountA(
         }
     }
 
-    pDomainNameW = NetpAllocWStrFromAnsiStr((PSTR)DomainName);
+    pDomainNameW = NlAllocWStrFromAnsiStr((PSTR)DomainName);
     if (pDomainNameW == NULL)
     {
         status = ERROR_NOT_ENOUGH_MEMORY;
         goto done;
     }
 
-    pSiteNameW = NetpAllocWStrFromAnsiStr((PSTR)SiteName);
+    pSiteNameW = NlAllocWStrFromAnsiStr((PSTR)SiteName);
     if (pSiteNameW == NULL)
     {
         status = ERROR_NOT_ENOUGH_MEMORY;
@@ -1191,7 +1264,7 @@ DsGetDcSiteCoverageA(
 
     if (ServerName != NULL)
     {
-        pServerNameW = NetpAllocWStrFromAnsiStr((PSTR)ServerName);
+        pServerNameW = NlAllocWStrFromAnsiStr((PSTR)ServerName);
         if (pServerNameW == NULL)
         {
             status = ERROR_NOT_ENOUGH_MEMORY;
@@ -1373,7 +1446,7 @@ DsGetSiteNameA(
 
     if (ComputerName != NULL)
     {
-        pComputerNameW = NetpAllocWStrFromAnsiStr((PSTR)ComputerName);
+        pComputerNameW = NlAllocWStrFromAnsiStr((PSTR)ComputerName);
         if (pComputerNameW == NULL)
         {
             status = ERROR_NOT_ENOUGH_MEMORY;
@@ -1386,7 +1459,7 @@ DsGetSiteNameA(
     if (status != ERROR_SUCCESS)
         goto done;
 
-    *SiteName = NetpAllocAnsiStrFromWStr(pSiteNameW);
+    *SiteName = NlAllocAnsiStrFromWStr(pSiteNameW);
     if (*SiteName == NULL)
     {
         status = ERROR_NOT_ENOUGH_MEMORY;
