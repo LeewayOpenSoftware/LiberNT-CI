@@ -125,6 +125,49 @@ START_TEST(NetUserModals)
         NetApiBufferFree(Info);
     }
 
+    /* Level 1004 (logoff) round trip, then level 0 puts the saved value back */
+    {
+        USER_MODALS_INFO_1004 Logoff = { 3600 };
+
+        Status = NetUserModalsSet(NULL, 1004, (LPBYTE)&Logoff, NULL);
+        ok(Status == NERR_Success, "NetUserModalsSet(1004) returned %lu\n", Status);
+        Info = GetModals0();
+        if (Info != NULL)
+        {
+            ok(Info->usrmod0_force_logoff == 3600, "force_logoff is %lu\n", Info->usrmod0_force_logoff);
+            NetApiBufferFree(Info);
+        }
+        Status = NetUserModalsSet(NULL, 0, (LPBYTE)Saved, NULL);
+        ok(Status == NERR_Success, "Restoring level 0 returned %lu\n", Status);
+    }
+
+    /* Level 3 (lockout) round trip, restored afterwards */
+    {
+        PUSER_MODALS_INFO_3 Lockout = NULL, Check = NULL;
+        USER_MODALS_INFO_3 New;
+
+        Status = NetUserModalsGet(NULL, 3, (LPBYTE *)&Lockout);
+        ok(Status == NERR_Success, "NetUserModalsGet(3) returned %lu\n", Status);
+        if (Lockout != NULL)
+        {
+            New.usrmod3_lockout_duration = 1800;
+            New.usrmod3_lockout_observation_window = 900;
+            New.usrmod3_lockout_threshold = 7;
+            Status = NetUserModalsSet(NULL, 3, (LPBYTE)&New, NULL);
+            ok(Status == NERR_Success, "NetUserModalsSet(3) returned %lu\n", Status);
+            if (NetUserModalsGet(NULL, 3, (LPBYTE *)&Check) == NERR_Success)
+            {
+                ok(Check->usrmod3_lockout_duration == 1800, "lockout_duration is %lu\n", Check->usrmod3_lockout_duration);
+                ok(Check->usrmod3_lockout_observation_window == 900, "observation_window is %lu\n", Check->usrmod3_lockout_observation_window);
+                ok(Check->usrmod3_lockout_threshold == 7, "lockout_threshold is %lu\n", Check->usrmod3_lockout_threshold);
+                NetApiBufferFree(Check);
+            }
+            Status = NetUserModalsSet(NULL, 3, (LPBYTE)Lockout, NULL);
+            ok(Status == NERR_Success, "Restoring level 3 returned %lu\n", Status);
+            NetApiBufferFree(Lockout);
+        }
+    }
+
     ok(NetUserModalsSet(NULL, 42, (LPBYTE)Saved, NULL) == ERROR_INVALID_LEVEL, "Level 42 was accepted\n");
 
     NetApiBufferFree(Saved);
