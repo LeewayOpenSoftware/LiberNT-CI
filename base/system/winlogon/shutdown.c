@@ -241,6 +241,22 @@ InitiateSystemShutdownThread(
     /* Default to initial dialog position */
     pShutdownParams->wpPos.length = 0;
 
+    /* The Windows shape first: wlrmdr as the signed-in user on the user's desktop, dismissed
+     * through its stop event when the countdown ends or the shutdown is aborted. When it
+     * cannot run (no user, no binary, launch failure) the inline dialog below serves as before. */
+    if (WlrShowShutdownReminder(pShutdownParams->pszMessage, pShutdownParams->dwTimeout,
+                                pShutdownParams->bRebootAfterShutdown))
+    {
+        while (pShutdownParams->bShuttingDown && pShutdownParams->dwTimeout > 0)
+        {
+            Sleep(1000);
+            pShutdownParams->dwTimeout--;
+        }
+        WlrDismissShutdownReminder();
+        if (!pShutdownParams->bShuttingDown)
+            WlrShowAbortNotice();
+    }
+    else
     /* Continuously display the shutdown dialog on the current input desktop */
     while (TRUE)
     {

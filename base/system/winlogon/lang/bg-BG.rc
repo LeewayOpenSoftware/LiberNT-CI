@@ -69,6 +69,9 @@ BEGIN
     IDS_LOGONUI_TERMINAL_MISSING "The sign-in components are missing from this installation. Repair the installation offline, then restart the computer."
     IDS_LOGONUI_TERMINAL_POLICY "Sign-in is not available on this computer. Policy requires a credential that the sign-in user interface cannot offer right now. Contact your administrator."
     IDS_SAFEMODEADMINSONLY "Only administrators can sign in while the computer is in safe mode."
+    IDS_REMINDER_TITLE "You're about to be signed out"
+    IDS_REMINDER_SHUTDOWN "Orosi will shut down in %s."
+    IDS_REMINDER_RESTART "Orosi will restart in %s."
 END
 
 STRINGTABLE

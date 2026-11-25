@@ -535,6 +535,19 @@ WlHostActivateUserShell(
     _In_ PWLSESSION Session,
     _In_opt_ PVOID Environment);
 
+/* reminder.c */
+BOOL
+WlrShowShutdownReminder(
+    _In_opt_ PCWSTR Message,
+    _In_ ULONG TimeoutSeconds,
+    _In_ BOOL Reboot);
+
+VOID
+WlrDismissShutdownReminder(VOID);
+
+VOID
+WlrShowAbortNotice(VOID);
+
 /* rpcserver.c */
 BOOL
 StartRpcServer(VOID);
