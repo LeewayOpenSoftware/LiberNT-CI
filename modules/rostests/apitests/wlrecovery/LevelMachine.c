@@ -153,6 +153,28 @@ START_TEST(LevelMachine)
     }
     ok(!S.Capped, "a normal end did not restart the count\n");
 
+    /* The budget on its own, as another launcher uses it: 5 in 10 minutes, reset on success. */
+    {
+        WLREC_BUDGET B;
+        WlRecBudgetInit(&B, 5, 10 * 60 * 1000);
+        g_Now = 20000000;
+        for (i = 0; i < 4; i++)
+        {
+            ok(WlRecBudgetAdmit(&B, g_Now), "budget launch %d refused\n", i);
+            Advance(1000);
+        }
+        ok(!WlRecBudgetAdmit(&B, g_Now), "budget admitted the fifth launch in the window\n");
+        WlRecBudgetReset(&B);
+        ok(WlRecBudgetAdmit(&B, g_Now), "budget refused a launch after a reset\n");
+        WlRecBudgetInit(&B, 5, 10 * 60 * 1000);
+        for (i = 0; i < 4; i++)
+            WlRecBudgetAdmit(&B, g_Now);
+        Advance(11 * 60 * 1000);
+        ok(WlRecBudgetAdmit(&B, g_Now), "budget refused a launch after the window moved\n");
+        WlRecBudgetInit(&B, 100, 1000);
+        ok(B.MaxLaunches == WLREC_BUDGET_RING, "budget did not clamp to the ring (%lu)\n", B.MaxLaunches);
+    }
+
     ok(wcscmp(WlRecLevelName(WlRecLevel3), L"N3") == 0, "level name\n");
     ok(wcscmp(WlRecEndName(WlRecEndHang), L"hang") == 0, "end name\n");
 }

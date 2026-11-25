@@ -47,15 +47,39 @@ typedef enum _WLREC_END
 
 typedef ULONGLONG (NTAPI *WLREC_CLOCK)(VOID);
 
+/*
+ * A launch budget: at most MaxLaunches launches inside WindowMs, counted only
+ * between resets. The level machine uses it for the LogonUI cap; other
+ * launchers (UMFD) use it with their own numbers. The ring holds the largest
+ * budget anyone uses.
+ */
+#define WLREC_BUDGET_RING   WLREC_CAP_LAUNCHES
+
+typedef struct _WLREC_BUDGET
+{
+    ULONG MaxLaunches;
+    ULONGLONG WindowMs;
+    ULONGLONG Times[WLREC_BUDGET_RING];
+    ULONG Head;
+    ULONG Count;
+} WLREC_BUDGET, *PWLREC_BUDGET;
+
+/* MaxLaunches above WLREC_BUDGET_RING is clamped to it. */
+VOID NTAPI WlRecBudgetInit(_Out_ PWLREC_BUDGET Budget, _In_ ULONG MaxLaunches, _In_ ULONGLONG WindowMs);
+
+/* Records a launch at Now; FALSE when it is the MaxLaunches-th inside the window (refuse it). */
+BOOL NTAPI WlRecBudgetAdmit(_Inout_ PWLREC_BUDGET Budget, _In_ ULONGLONG Now);
+
+/* A launch did its job: the history is cleared, so only consecutive failures count. */
+VOID NTAPI WlRecBudgetReset(_Inout_ PWLREC_BUDGET Budget);
+
 typedef struct _WLREC_STATE
 {
     WLREC_CLOCK Clock;
     WLREC_LEVEL Level;
     ULONG FaultCount;                               /* faults at the current level */
     ULONGLONG FaultTimes[WLREC_LEVEL_FAULTS];
-    ULONGLONG LaunchTimes[WLREC_CAP_LAUNCHES];      /* ring of recent launch times */
-    ULONG LaunchHead;
-    ULONG LaunchCount;
+    WLREC_BUDGET Budget;                            /* WLREC_CAP_LAUNCHES in WLREC_CAP_WINDOW_MS */
     BOOL Capped;                                    /* the global cap was hit: N4 until reboot */
     ULONG TotalLaunches;
 } WLREC_STATE, *PWLREC_STATE;

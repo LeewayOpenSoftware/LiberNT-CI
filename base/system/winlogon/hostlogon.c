@@ -23,6 +23,7 @@
 #define WLHL_CPUS_CHANGE_PASSWORD   3   /* CPUS_CHANGE_PASSWORD */
 
 #define WLHL_WINLOGON_KEY   L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
+#define WLHL_POLICY_KEY     L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System"
 
 typedef struct _WLHL_SUBMIT
 {
@@ -568,16 +569,28 @@ WlHlSubmitHandler(
 }
 
 static BOOL WlHlDisableCad(VOID);
+static VOID WlHlCloseSwitchHandles(VOID);
 
-/* msgina.c: HKLM Winlogon ShutdownWithoutLogon, workstation default TRUE. */
+/* Policy values live under Policies\System on Windows; the Winlogon key is the older place. */
+static DWORD
+WlHlPolicyDword(
+    _In_ PCWSTR Name,
+    _In_ DWORD Default)
+{
+    DWORD Value, Size = sizeof(Value);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_POLICY_KEY, Name, RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS)
+        return Value;
+    Size = sizeof(Value);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, Name, RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS)
+        return Value;
+    return Default;
+}
+
+/* msgina.c read it from the Winlogon key; workstation default TRUE. */
 static BOOL
 WlHlShutdownWithoutLogon(VOID)
 {
-    DWORD Value = 1, Size = sizeof(Value);
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"ShutdownWithoutLogon",
-                     RRF_RT_REG_DWORD, NULL, &Value, &Size) != ERROR_SUCCESS)
-        Value = 1;
-    return Value != 0;
+    return WlHlPolicyDword(L"ShutdownWithoutLogon", 1) != 0;
 }
 
 /* Flags for RequestCredentials that describe policy to the host; winlogon stays the gate. */
@@ -1018,11 +1031,7 @@ WlHostCreateDesktopSwitchEvent(
     SECURITY_ATTRIBUTES Sa;
     DWORD Length = 0, AclSize;
 
-    if (g_SwitchEvent)
-    {
-        CloseHandle(g_SwitchEvent);
-        g_SwitchEvent = NULL;
-    }
+    WlHlCloseSwitchHandles();
     if (Session->UserToken == NULL)
         return;
 
@@ -1067,11 +1076,26 @@ done:
 static DWORD
 WlHlDesktopSwitchTimeoutMs(VOID)
 {
-    DWORD Seconds = 0, Size = sizeof(Seconds);
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"DelayedDesktopSwitchTimeout",
-                     RRF_RT_REG_DWORD, NULL, &Seconds, &Size) != ERROR_SUCCESS || Seconds > WLHL_SWITCH_CAP_S)
+    DWORD Seconds = WlHlPolicyDword(L"DelayedDesktopSwitchTimeout", LIBERNT_DESKTOP_SWITCH_TIMEOUT_DEFAULT_S);
+    if (Seconds > WLHL_SWITCH_CAP_S)
         Seconds = LIBERNT_DESKTOP_SWITCH_TIMEOUT_DEFAULT_S;
     return Seconds * 1000;
+}
+
+/* Handles of the logon in progress; a logon that failed before the switch leaves them behind. */
+static VOID
+WlHlCloseSwitchHandles(VOID)
+{
+    if (g_SwitchEvent)
+    {
+        CloseHandle(g_SwitchEvent);
+        g_SwitchEvent = NULL;
+    }
+    if (g_ShellProcess)
+    {
+        CloseHandle(g_ShellProcess);
+        g_ShellProcess = NULL;
+    }
 }
 
 /* Waits for the first of: explorer's signal, a Userinit process that failed, the timeout.
@@ -1134,16 +1158,7 @@ WlHostWaitDesktopSwitch(
     if (TimedOut)
         WARN("WL: desktop switch after %lu ms without the shell's signal\n", Timeout);
     TRACE("WL: desktop switch: %s after %I64u ms\n", Reason, GetTickCount64() - Start);
-    if (g_ShellProcess)
-    {
-        CloseHandle(g_ShellProcess);
-        g_ShellProcess = NULL;
-    }
-    if (g_SwitchEvent)
-    {
-        CloseHandle(g_SwitchEvent);
-        g_SwitchEvent = NULL;
-    }
+    WlHlCloseSwitchHandles();
 }
 
 /* The desktop behind is painted: the host starts its fade and the switch follows at once. */
@@ -1170,6 +1185,7 @@ VOID
 WlHostLogonFailed(
     _In_ NTSTATUS Status)
 {
+    WlHlCloseSwitchHandles();
     WlHlPost(WluiCmdReportResult, g_HostScenario, 0, Status, 0, NULL, NULL);
 }
 

@@ -355,7 +355,8 @@ WlHostSupervisor(
     Launch->ExitCode = ExitCode;
     StringCchPrintfW(Text, ARRAYSIZE(Text), L"logon UI pid %lu ended: %s (exit %lu), level %s",
                      Launch->Pid, WlRecEndName(End), ExitCode,
-                     (!Launch->Terminated || End == WlRecEndHang) ? WlHostRecEnd(End) : WlHostRecLevelName());
+                     /* an end winlogon caused is a normal end for the budget: it only resets the count */
+                     (!Launch->Terminated || End == WlRecEndHang) ? WlHostRecEnd(End) : WlHostRecEnd(WlRecEndNormal));
     WlHostLog(End == WlRecEndNormal ? EVENTLOG_INFORMATION_TYPE : EVENTLOG_WARNING_TYPE, Text);
     SetEvent(Launch->EndedEvent);
     /* WlHostStop joins this thread before it frees the entry, so Launch is still valid here. */

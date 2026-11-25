@@ -25,6 +25,53 @@ WlRecInit(
     ZeroMemory(State, sizeof(*State));
     State->Clock = Clock ? Clock : WlRecDefaultClock;
     State->Level = WlRecLevel1;
+    WlRecBudgetInit(&State->Budget, WLREC_CAP_LAUNCHES, WLREC_CAP_WINDOW_MS);
+}
+
+/* ---- launch budget (shared with other supervised launchers) --------------------- */
+
+VOID
+NTAPI
+WlRecBudgetInit(
+    _Out_ PWLREC_BUDGET Budget,
+    _In_ ULONG MaxLaunches,
+    _In_ ULONGLONG WindowMs)
+{
+    ZeroMemory(Budget, sizeof(*Budget));
+    Budget->MaxLaunches = MaxLaunches > WLREC_BUDGET_RING ? WLREC_BUDGET_RING : MaxLaunches;
+    Budget->WindowMs = WindowMs;
+}
+
+BOOL
+NTAPI
+WlRecBudgetAdmit(
+    _Inout_ PWLREC_BUDGET Budget,
+    _In_ ULONGLONG Now)
+{
+    ULONG i, Recent = 0;
+
+    if (Budget->MaxLaunches == 0)
+        return TRUE;
+    Budget->Times[Budget->Head] = Now;
+    Budget->Head = (Budget->Head + 1) % Budget->MaxLaunches;
+    if (Budget->Count < Budget->MaxLaunches)
+        Budget->Count++;
+
+    for (i = 0; i < Budget->Count; i++)
+    {
+        if (Now - Budget->Times[i] <= Budget->WindowMs)
+            Recent++;
+    }
+    return Recent < Budget->MaxLaunches;
+}
+
+VOID
+NTAPI
+WlRecBudgetReset(
+    _Inout_ PWLREC_BUDGET Budget)
+{
+    Budget->Count = 0;
+    Budget->Head = 0;
 }
 
 static VOID
@@ -52,21 +99,8 @@ static BOOL
 WlRecCountLaunch(
     _Inout_ PWLREC_STATE State)
 {
-    ULONGLONG Now = State->Clock();
-    ULONG i, Recent = 0;
-
-    State->LaunchTimes[State->LaunchHead] = Now;
-    State->LaunchHead = (State->LaunchHead + 1) % WLREC_CAP_LAUNCHES;
-    if (State->LaunchCount < WLREC_CAP_LAUNCHES)
-        State->LaunchCount++;
     State->TotalLaunches++;
-
-    for (i = 0; i < State->LaunchCount; i++)
-    {
-        if (Now - State->LaunchTimes[i] <= WLREC_CAP_WINDOW_MS)
-            Recent++;
-    }
-    return Recent >= WLREC_CAP_LAUNCHES;
+    return !WlRecBudgetAdmit(&State->Budget, State->Clock());
 }
 
 WLREC_ACTION
@@ -132,8 +166,7 @@ WlRecOnEnd(
         /* The cap measures a crash loop, not use: a launch that did its job (lock, logon,
          * status page, dismiss) clears the history, so only launches with no normal end
          * between them count towards it. */
-        State->LaunchCount = 0;
-        State->LaunchHead = 0;
+        WlRecBudgetReset(&State->Budget);
         return;
     }
 
