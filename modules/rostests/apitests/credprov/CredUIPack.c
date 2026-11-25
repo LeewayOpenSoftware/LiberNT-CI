@@ -23,10 +23,10 @@ CheckString(_In_ const BYTE *Blob, _In_ const UNICODE_STRING *String, _In_opt_ P
 {
     SIZE_T Bytes = Expected ? wcslen(Expected) * sizeof(WCHAR) : 0;
 
-    ok(String->Length == Bytes, "%s Length %u, expected %Iu\n", What, String->Length, Bytes);
+    ok(String->Length == Bytes, "%s Length %u, expected %lu\n", What, String->Length, (ULONG)Bytes);
     ok(String->MaximumLength == (Expected ? Bytes + sizeof(WCHAR) : 0), "%s MaximumLength %u\n", What,
        String->MaximumLength);
-    ok((ULONG_PTR)String->Buffer == Offset, "%s offset %Iu, expected %Iu\n", What, (ULONG_PTR)String->Buffer, Offset);
+    ok((ULONG_PTR)String->Buffer == Offset, "%s offset %lu, expected %lu\n", What, (ULONG)(ULONG_PTR)String->Buffer, (ULONG)Offset);
     if (Expected && (ULONG_PTR)String->Buffer == Offset)
     {
         ok(!memcmp(Blob + Offset, Expected, Bytes), "%s text mismatch\n", What);
@@ -145,9 +145,9 @@ CheckRaw(_In_ const BYTE *Blob, _In_ const UNICODE_STRING *String, _In_ PCWSTR E
 {
     SIZE_T Bytes = wcslen(Expected) * sizeof(WCHAR);
 
-    ok(String->Length == Bytes, "%s Length %u, expected %Iu\n", What, String->Length, Bytes);
+    ok(String->Length == Bytes, "%s Length %u, expected %lu\n", What, String->Length, (ULONG)Bytes);
     ok(String->MaximumLength == Bytes, "%s MaximumLength %u\n", What, String->MaximumLength);
-    ok((ULONG_PTR)String->Buffer == Offset, "%s offset %Iu, expected %Iu\n", What, (ULONG_PTR)String->Buffer, Offset);
+    ok((ULONG_PTR)String->Buffer == Offset, "%s offset %lu, expected %lu\n", What, (ULONG)(ULONG_PTR)String->Buffer, (ULONG)Offset);
     if (Bytes && (ULONG_PTR)String->Buffer == Offset)
         ok(!memcmp(Blob + Offset, Expected, Bytes), "%s text mismatch\n", What);
 }
@@ -376,8 +376,8 @@ TestProtected(void)
     }
     ok_long(Packed->Logon.MessageType, KerbInteractiveLogon);
     CheckString(Blob, &Packed->Logon.UserName, L"user", HEADER, "protected user");
-    ok((ULONG_PTR)Packed->Logon.Password.Buffer == HEADER + 10, "protected password offset %Iu\n",
-       (ULONG_PTR)Packed->Logon.Password.Buffer);
+    ok((ULONG_PTR)Packed->Logon.Password.Buffer == HEADER + 10, "protected password offset %lu\n",
+       (ULONG)(ULONG_PTR)Packed->Logon.Password.Buffer);
     ok(Packed->Logon.Password.MaximumLength == Packed->Logon.Password.Length + sizeof(WCHAR),
        "protected password MaximumLength %u, Length %u\n", Packed->Logon.Password.MaximumLength,
        Packed->Logon.Password.Length);

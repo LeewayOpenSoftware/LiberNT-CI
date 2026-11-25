@@ -161,6 +161,9 @@ GetAccountFlags(ULONG AccountControl,
     if (AccountControl & USER_DONT_EXPIRE_PASSWORD)
         Flags |= UF_DONT_EXPIRE_PASSWD;
 
+    if (AccountControl & USER_PASSWORD_EXPIRED)
+        Flags |= UF_PASSWORD_EXPIRED;
+
 /*
     if (AccountControl & USER_ENCRYPTED_TEXT_PASSWORD_ALLOWED)
         Flags |= UF_ENCRYPTED_TEXT_PASSWORD_ALLOWED;
@@ -180,8 +183,6 @@ GetAccountFlags(ULONG AccountControl,
     if (AccountControl & USER_DONT_REQUIRE_PREAUTH)
         Flags |= UF_DONT_REQUIRE_PREAUTH;
 
-    if (AccountControl & USER_PASSWORD_EXPIRED)
-        Flags |= UF_PASSWORD_EXPIRED;
 */
 
     /* Set account type flags */
@@ -1757,6 +1758,7 @@ SetUserInfo(SAM_HANDLE UserHandle,
                 UserAllInfo.WhichFields |= USER_ALL_HOMEDIRECTORYDRIVE;
             }
 
+            /* Sent as given, as Win11 does: zero clears an expiry, nonzero sets must-change */
             UserAllInfo.PasswordExpired = (UserInfo3->usri3_password_expired != 0);
             UserAllInfo.WhichFields |= USER_ALL_PASSWORDEXPIRED;
             break;
@@ -1893,6 +1895,7 @@ SetUserInfo(SAM_HANDLE UserHandle,
                 UserAllInfo.WhichFields |= USER_ALL_HOMEDIRECTORYDRIVE;
             }
 
+            /* Sent as given, as Win11 does: zero clears an expiry, nonzero sets must-change */
             UserAllInfo.PasswordExpired = (UserInfo4->usri4_password_expired != 0);
             UserAllInfo.WhichFields |= USER_ALL_PASSWORDEXPIRED;
             break;

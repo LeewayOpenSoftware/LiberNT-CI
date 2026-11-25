@@ -13,6 +13,7 @@ extern void func_NetUserDelete(void);
 extern void func_NetLocalGroupAddMembers(void);
 extern void func_NetUserEnum(void);
 extern void func_NetUserGetLocalGroups(void);
+extern void func_NetUserMustChange(void);
 
 const struct test winetest_testlist[] =
 {
@@ -21,6 +22,7 @@ const struct test winetest_testlist[] =
     { "NetLocalGroupAddMembers", func_NetLocalGroupAddMembers },
     { "NetUserEnum", func_NetUserEnum },
     { "NetUserGetLocalGroups", func_NetUserGetLocalGroups },
+    { "NetUserMustChange", func_NetUserMustChange },
 
     { 0, 0 }
 };

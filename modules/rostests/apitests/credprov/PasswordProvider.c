@@ -360,10 +360,10 @@ TestTiles(void)
                                                            (void **)&Credential2), S_OK);
         if (Credential2)
         {
-            Sid = (LPWSTR)0xdeadbeef;
+            Sid = (LPWSTR)(ULONG_PTR)0xdeadbeef;
             ok_hr(ICredentialProviderCredential2_GetUserSid(Credential2, &Sid), WithUsers ? S_OK : S_FALSE);
             ok(WithUsers ? (Sid && !wcsncmp(Sid, L"S-1-5-", 6)) : !Sid, "unexpected SID %p\n", Sid);
-            if (Sid != (LPWSTR)0xdeadbeef)
+            if (Sid != (LPWSTR)(ULONG_PTR)0xdeadbeef)
                 CoTaskMemFree(Sid);
             ICredentialProviderCredential2_Release(Credential2);
         }
