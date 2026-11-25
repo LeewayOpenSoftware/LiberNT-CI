@@ -111,6 +111,8 @@ START_TEST(CreateProcessAsUserOwnerless)
     BYTE OwnerBuffer[sizeof(TOKEN_OWNER) + SECURITY_MAX_SID_SIZE];
     BYTE GroupBuffer[sizeof(TOKEN_PRIMARY_GROUP) + SECURITY_MAX_SID_SIZE];
     HANDLE hProcessToken, hToken;
+    PWSTR OwnerString = NULL, GroupString = NULL;
+    WCHAR FullSddl[256];
 
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY, &hProcessToken))
     {
@@ -128,9 +130,20 @@ START_TEST(CreateProcessAsUserOwnerless)
     ok(TokenSid(hToken, TokenOwner, OwnerBuffer, sizeof(OwnerBuffer)), "TokenOwner failed\n");
     ok(TokenSid(hToken, TokenPrimaryGroup, GroupBuffer, sizeof(GroupBuffer)), "TokenPrimaryGroup failed\n");
 
-    /* Owner and group given: unchanged behaviour */
-    TestCase(hToken, L"O:SYG:SYD:P(A;;GA;;;SY)(A;;GA;;;BA)", TRUE, TRUE,
-             ((PTOKEN_OWNER)OwnerBuffer)->Owner, ((PTOKEN_PRIMARY_GROUP)GroupBuffer)->PrimaryGroup);
+    /* Owner and group given: unchanged behaviour (the caller's own, as another owner needs privileges) */
+    if (ConvertSidToStringSidW(((PTOKEN_OWNER)OwnerBuffer)->Owner, &OwnerString) &&
+        ConvertSidToStringSidW(((PTOKEN_PRIMARY_GROUP)GroupBuffer)->PrimaryGroup, &GroupString))
+    {
+        StringCchPrintfW(FullSddl, ARRAYSIZE(FullSddl), L"O:%lsG:%lsD:P(A;;GA;;;SY)(A;;GA;;;BA)", OwnerString, GroupString);
+        TestCase(hToken, FullSddl, TRUE, TRUE,
+                 ((PTOKEN_OWNER)OwnerBuffer)->Owner, ((PTOKEN_PRIMARY_GROUP)GroupBuffer)->PrimaryGroup);
+    }
+    else
+    {
+        ok(0, "cannot format the token's owner and group, error %lu\n", GetLastError());
+    }
+    LocalFree(OwnerString);
+    LocalFree(GroupString);
     /* No owner and no group: Windows applies the token's */
     TestCase(hToken, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)", TRUE, FALSE,
              ((PTOKEN_OWNER)OwnerBuffer)->Owner, ((PTOKEN_PRIMARY_GROUP)GroupBuffer)->PrimaryGroup);
