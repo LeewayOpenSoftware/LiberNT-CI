@@ -1202,16 +1202,36 @@ SampIsUserLockedOut(IN PSAM_DOMAIN_FIXED_DATA DomainFixedData,
 }
 
 
+/* Same rule as the PasswordMustChange time that msv1_0 enforces at logon */
+static
+BOOLEAN
+SampIsPasswordExpired(IN PSAM_DOMAIN_FIXED_DATA DomainFixedData,
+                      IN PSAM_USER_FIXED_DATA UserFixedData,
+                      IN PLARGE_INTEGER CurrentTime)
+{
+    if ((UserFixedData->UserAccountControl & USER_DONT_EXPIRE_PASSWORD) ||
+        DomainFixedData->MaxPasswordAge.QuadPart == MINLONGLONG)
+        return FALSE;
+
+    if (UserFixedData->PasswordLastSet.QuadPart == 0)
+        return TRUE;
+
+    return CurrentTime->QuadPart >=
+           UserFixedData->PasswordLastSet.QuadPart - DomainFixedData->MaxPasswordAge.QuadPart;
+}
+
+
 ULONG
 SampGetUserAccountControl(IN PSAM_DB_OBJECT UserObject,
                           IN PSAM_USER_FIXED_DATA UserFixedData)
 {
     SAM_DOMAIN_FIXED_DATA DomainFixedData;
     LARGE_INTEGER CurrentTime;
+    ULONG Control;
     ULONG Length;
 
-    if (!(UserFixedData->UserAccountControl & USER_ACCOUNT_AUTO_LOCKED))
-        return UserFixedData->UserAccountControl;
+    /* USER_PASSWORD_EXPIRED is computed on every query and never stored */
+    Control = UserFixedData->UserAccountControl & ~USER_PASSWORD_EXPIRED;
 
     Length = sizeof(SAM_DOMAIN_FIXED_DATA);
     if (!NT_SUCCESS(SampGetObjectAttribute(UserObject->ParentObject,
@@ -1220,12 +1240,16 @@ SampGetUserAccountControl(IN PSAM_DB_OBJECT UserObject,
                                            &DomainFixedData,
                                            &Length)) ||
         !NT_SUCCESS(NtQuerySystemTime(&CurrentTime)))
-        return UserFixedData->UserAccountControl;
+        return Control;
 
-    if (SampIsUserLockedOut(&DomainFixedData, UserFixedData, &CurrentTime))
-        return UserFixedData->UserAccountControl;
+    if (SampIsPasswordExpired(&DomainFixedData, UserFixedData, &CurrentTime))
+        Control |= USER_PASSWORD_EXPIRED;
 
-    return UserFixedData->UserAccountControl & ~USER_ACCOUNT_AUTO_LOCKED;
+    if ((Control & USER_ACCOUNT_AUTO_LOCKED) &&
+        !SampIsUserLockedOut(&DomainFixedData, UserFixedData, &CurrentTime))
+        Control &= ~USER_ACCOUNT_AUTO_LOCKED;
+
+    return Control;
 }
 
 
@@ -1293,6 +1317,7 @@ SampMergeUserAccountControl(IN PSAM_DB_OBJECT UserObject,
 {
     ULONG CurrentControl;
 
+    UserAccountControl &= ~USER_PASSWORD_EXPIRED;
     CurrentControl = SampGetUserAccountControl(UserObject, UserFixedData);
 
     if ((CurrentControl & USER_ACCOUNT_AUTO_LOCKED) &&
