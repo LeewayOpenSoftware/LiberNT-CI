@@ -287,6 +287,92 @@ TestGlobalEffect(VOID)
     NtClose(GlobalEv);
 }
 
+/*
+ * P5 private device map: as SYSTEM \??\ already is \GLOBAL??, so give the process its own
+ * DosDevices directory holding an unsignalled event of the same name. Flag off should reach
+ * that one (state 0), flag on the \GLOBAL?? one (state 1). The map is restored to \GLOBAL??.
+ */
+static
+VOID
+TestGlobalEffectPrivateMap(VOID)
+{
+    UNICODE_STRING Name, LinkName;
+    OBJECT_ATTRIBUTES Oa;
+    HANDLE GlobalEv = NULL, PrivDir = NULL, PrivEv = NULL, GlobalDir = NULL, Link = NULL, H;
+    WCHAR Leaf[32], GlobalName[96], Target[96];
+    PROCESS_DEVICEMAP_INFORMATION Map;
+    EVENT_BASIC_INFORMATION Info;
+    ULONG Value, Pass;
+    NTSTATUS Status;
+
+    if (!HaveTcb)
+    {
+        skip("private device-map probe needs TCB (run as SYSTEM)\n");
+        return;
+    }
+    StringCchPrintfW(Leaf, _countof(Leaf), L"npsl-pm-%lu", HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    StringCchPrintfW(GlobalName, _countof(GlobalName), L"\\GLOBAL??\\%s", Leaf);
+    StringCchPrintfW(Target, _countof(Target), L"\\??\\%s", Leaf);
+
+    RtlInitUnicodeString(&Name, GlobalName);
+    InitializeObjectAttributes(&Oa, &Name, 0, NULL, NULL);
+    Status = NtCreateEvent(&GlobalEv, EVENT_ALL_ACCESS, &Oa, NotificationEvent, TRUE);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    RtlInitUnicodeString(&Name, L"\\GLOBAL??");
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = NtOpenDirectoryObject(&GlobalDir, DIRECTORY_TRAVERSE, &Oa);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    InitializeObjectAttributes(&Oa, NULL, 0, NULL, NULL);
+    Status = NtCreateDirectoryObject(&PrivDir, DIRECTORY_ALL_ACCESS, &Oa);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status) || !GlobalEv || !GlobalDir)
+        goto Cleanup;
+    RtlInitUnicodeString(&Name, Leaf);
+    InitializeObjectAttributes(&Oa, &Name, 0, PrivDir, NULL);
+    Status = NtCreateEvent(&PrivEv, EVENT_ALL_ACCESS, &Oa, NotificationEvent, FALSE);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    Map.Set.DirectoryHandle = PrivDir;
+    Status = NtSetInformationProcess(NtCurrentProcess(), ProcessDeviceMap, &Map, sizeof(Map.Set));
+    trace("PROBE set private device map -> 0x%lx\n", Status);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if (NT_SUCCESS(CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, Target, &Link)))
+    {
+        RtlInitUnicodeString(&LinkName, LastLink);
+        InitializeObjectAttributes(&Oa, &LinkName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        for (Pass = 0; Pass < 2; Pass++)
+        {
+            Value = Pass;
+            Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+            trace("PROBE privmap global=%lu -> 0x%lx\n", Value, Status);
+            Info.EventState = -1;
+            Status = NtOpenEvent(&H, EVENT_QUERY_STATE, &Oa);
+            if (NT_SUCCESS(Status))
+            {
+                NtQueryEvent(H, EventBasicInformation, &Info, sizeof(Info), NULL);
+                NtClose(H);
+            }
+            trace("PROBE privmap global=%lu open via link -> 0x%lx state=%ld (0 = private, 1 = \\GLOBAL??)\n",
+                  Value, Status, Info.EventState);
+        }
+        NtClose(Link);
+    }
+
+    Map.Set.DirectoryHandle = GlobalDir;
+    Status = NtSetInformationProcess(NtCurrentProcess(), ProcessDeviceMap, &Map, sizeof(Map.Set));
+    ok_hex(Status, STATUS_SUCCESS);
+
+Cleanup:
+    if (PrivEv) NtClose(PrivEv);
+    if (PrivDir) NtClose(PrivDir);
+    if (GlobalDir) NtClose(GlobalDir);
+    if (GlobalEv) NtClose(GlobalEv);
+}
+
 typedef struct _RACE { HANDLE Link; volatile LONG Stop; LONG Failures; LONG Opens; WCHAR Name[128]; } RACE;
 
 static
@@ -373,6 +459,7 @@ START_TEST(NtSetInformationSymbolicLink)
     TestPrivilege();
     TestOwnLinkNotGlobal();
     TestGlobalEffect();
+    TestGlobalEffectPrivateMap();
     TestAccessMaskEffect();
     TestConcurrency();
 }
