@@ -11,6 +11,7 @@
 #include <win32k.h>
 #include <reactos/buildno.h>
 #include <ndk/inbvfuncs.h>
+#include "wallpaperspan.h"
 DBG_DEFAULT_CHANNEL(UserDesktop);
 
 
@@ -2150,7 +2151,8 @@ IntPaintDesktopContent(HDC hDC)
         if ((gspv.hbmWallpaper == NULL ||
              (gspv.WallpaperMode != wmStretch &&
               gspv.WallpaperMode != wmFit &&
-              gspv.WallpaperMode != wmFill)) &&
+              gspv.WallpaperMode != wmFill &&
+              gspv.WallpaperMode != wmSpan)) &&
             UserIsEnteredExclusive())
         {
             IntFreeScaledWallpaper();
@@ -2169,10 +2171,38 @@ IntPaintDesktopContent(HDC hDC)
             INT OldStretchMode = 0;
             BOOL RestoreStretchMode = FALSE;
 
-            sz.cx = WndDesktop->rcWindow.right - WndDesktop->rcWindow.left;
-            sz.cy = WndDesktop->rcWindow.bottom - WndDesktop->rcWindow.top;
+            if (gspv.WallpaperMode == wmSpan)
+            {
+                /* Span fits one canvas: the virtual screen. TODO: D1 samples it per monitor. */
+                sz.cx = UserGetSystemMetrics(SM_CXVIRTUALSCREEN);
+                sz.cy = UserGetSystemMetrics(SM_CYVIRTUALSCREEN);
+            }
+            else
+            {
+                sz.cx = WndDesktop->rcWindow.right - WndDesktop->rcWindow.left;
+                sz.cy = WndDesktop->rcWindow.bottom - WndDesktop->rcWindow.top;
+            }
 
-            if (gspv.WallpaperMode == wmFit ||
+            if (gspv.WallpaperMode == wmSpan)
+            {
+                WALLPAPER_SPAN_LAYOUT SpanLayout;
+                RECTL VirtualBounds;
+
+                VirtualBounds.left = UserGetSystemMetrics(SM_XVIRTUALSCREEN);
+                VirtualBounds.top = UserGetSystemMetrics(SM_YVIRTUALSCREEN);
+                VirtualBounds.right = VirtualBounds.left + sz.cx;
+                VirtualBounds.bottom = VirtualBounds.top + sz.cy;
+                if (WallpaperSpanLayout(gspv.cxWallpaper, gspv.cyWallpaper, &VirtualBounds, &SpanLayout))
+                {
+                    scaledWidth = EngMulDiv(gspv.cxWallpaper, SpanLayout.ScaleNum, SpanLayout.ScaleDen);
+                    scaledHeight = EngMulDiv(gspv.cyWallpaper, SpanLayout.ScaleNum, SpanLayout.ScaleDen);
+                    wallpaperX = SpanLayout.Source.left;
+                    wallpaperY = SpanLayout.Source.top;
+                    wallpaperWidth = SpanLayout.Source.right - SpanLayout.Source.left;
+                    wallpaperHeight = SpanLayout.Source.bottom - SpanLayout.Source.top;
+                }
+            }
+            else if (gspv.WallpaperMode == wmFit ||
                 gspv.WallpaperMode == wmFill)
             {
                 int scaleNum, scaleDen;
@@ -2220,7 +2250,8 @@ IntPaintDesktopContent(HDC hDC)
 
             if (gspv.WallpaperMode == wmStretch ||
                 gspv.WallpaperMode == wmTile ||
-                gspv.WallpaperMode == wmFill)
+                gspv.WallpaperMode == wmFill ||
+                gspv.WallpaperMode == wmSpan)
             {
                 x = 0;
                 y = 0;
@@ -2258,7 +2289,8 @@ IntPaintDesktopContent(HDC hDC)
 
                 if (gspv.WallpaperMode == wmStretch ||
                     gspv.WallpaperMode == wmFit ||
-                    gspv.WallpaperMode == wmFill)
+                    gspv.WallpaperMode == wmFill ||
+                    gspv.WallpaperMode == wmSpan)
                 {
                     OldStretchMode = GreSetStretchBltMode(hDC, HALFTONE);
                     RestoreStretchMode = TRUE;
@@ -2316,7 +2348,8 @@ IntPaintDesktopContent(HDC hDC)
                                                gspv.cyWallpaper);
                     }
                 }
-                else if (gspv.WallpaperMode == wmFill)
+                else if (gspv.WallpaperMode == wmFill ||
+                    gspv.WallpaperMode == wmSpan)
                 {
                     if (Rect.right && Rect.bottom)
                     {
