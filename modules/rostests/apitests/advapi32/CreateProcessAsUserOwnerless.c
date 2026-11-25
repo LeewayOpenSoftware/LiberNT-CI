@@ -78,7 +78,7 @@ TestCase(
     ThreadAttributes.lpSecurityDescriptor = OnThread ? Sd : NULL;
 
     GetSystemDirectoryW(CommandLine, MAX_PATH);
-    StringCchCatW(CommandLine, ARRAYSIZE(CommandLine), L"\cmd.exe /c exit");
+    StringCchCatW(CommandLine, ARRAYSIZE(CommandLine), L"\\cmd.exe /c exit");
 
     SetLastError(0xdeadbeef);
     Result = CreateProcessAsUserW(hToken, NULL, CommandLine, &ProcessAttributes, &ThreadAttributes, FALSE,
