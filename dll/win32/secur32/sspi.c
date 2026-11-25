@@ -1096,30 +1096,68 @@ BOOLEAN WINAPI GetUserNameExW(
     {
     case NameSamCompatible:
         {
-            WCHAR samname[UNLEN + 1 + MAX_COMPUTERNAME_LENGTH + 1];
-            LPWSTR out;
-            DWORD len;
+            /* Domains can exceed DNLEN: virtual service domains such as
+             * "Font Driver Host" (16) overflow a NetBIOS-sized buffer. */
+            WCHAR samname[256 + 1 + UNLEN + 1];
+            WCHAR domain[256];
+            WCHAR account[UNLEN + 1];
+            DWORD domainLen, accountLen, len;
+            HANDLE token = NULL;
+            BOOL resolved = FALSE;
 
-            /* This assumes the current user is always a local account */
-            len = MAX_COMPUTERNAME_LENGTH + 1;
-            if (GetComputerNameW(samname, &len))
+            /* Resolve domain\account from the token SID so well-known accounts
+             * (e.g. NT AUTHORITY\SYSTEM) are not reported as <machine>\name. */
+            if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token) ||
+                OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
             {
-                out = samname + lstrlenW(samname);
-                *out++ = '\\';
-                len = UNLEN + 1;
-                if (GetUserNameW(out, &len))
-                {
-                    if (lstrlenW(samname) < *nSize)
-                    {
-                        lstrcpyW(lpNameBuffer, samname);
-                        *nSize = lstrlenW(samname);
-                        return TRUE;
-                    }
+                DWORD infoLen = 0;
+                PTOKEN_USER userInfo = NULL;
 
-                    SetLastError(ERROR_MORE_DATA);
-                    *nSize = lstrlenW(samname) + 1;
+                GetTokenInformation(token, TokenUser, NULL, 0, &infoLen);
+                if (infoLen != 0)
+                    userInfo = HeapAlloc(GetProcessHeap(), 0, infoLen);
+                if (userInfo != NULL &&
+                    GetTokenInformation(token, TokenUser, userInfo, infoLen, &infoLen))
+                {
+                    SID_NAME_USE use;
+                    domainLen = ARRAYSIZE(domain);
+                    accountLen = ARRAYSIZE(account);
+                    if (LookupAccountSidW(NULL, userInfo->User.Sid, account, &accountLen,
+                                          domain, &domainLen, &use))
+                        resolved = TRUE;
                 }
+                if (userInfo != NULL)
+                    HeapFree(GetProcessHeap(), 0, userInfo);
+                CloseHandle(token);
             }
+
+            if (resolved)
+            {
+                lstrcpyW(samname, domain);
+                lstrcatW(samname, L"\\");
+                lstrcatW(samname, account);
+            }
+            else
+            {
+                /* Fallback: assume the current user is a local account. */
+                len = MAX_COMPUTERNAME_LENGTH + 1;
+                if (!GetComputerNameW(samname, &len))
+                    return FALSE;
+                lstrcatW(samname, L"\\");
+                len = UNLEN + 1;
+                if (!GetUserNameW(samname + lstrlenW(samname), &len))
+                    return FALSE;
+            }
+
+            if (lstrlenW(samname) < *nSize)
+            {
+                lstrcpyW(lpNameBuffer, samname);
+                *nSize = lstrlenW(samname);
+                return TRUE;
+            }
+
+            SetLastError(ERROR_MORE_DATA);
+            *nSize = lstrlenW(samname) + 1;
             return FALSE;
         }
 

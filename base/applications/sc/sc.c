@@ -11,6 +11,10 @@
 
 SC_HANDLE hSCManager;
 
+/* First Win32 error reported during the command, returned as the process exit
+ * code so sc matches Win11 (0 on success, e.g. 1053/1060 on failure). */
+DWORD g_ScLastError = ERROR_SUCCESS;
+
 VOID
 ReportLastError(VOID)
 {
@@ -20,6 +24,9 @@ ReportLastError(VOID)
     DWORD ErrorCode = GetLastError();
     if (ErrorCode != ERROR_SUCCESS)
     {
+        if (g_ScLastError == ERROR_SUCCESS)
+            g_ScLastError = ErrorCode;
+
         RetVal = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
                                FORMAT_MESSAGE_FROM_SYSTEM |
                                FORMAT_MESSAGE_IGNORE_INSERTS,
@@ -348,10 +355,12 @@ ScControl(LPCTSTR Server,       // remote machine name
     }
     else
     {
+        /* Unknown command: Win11 exits ERROR_INVALID_COMMAND_LINE (1639). */
         MainUsage();
+        return ERROR_INVALID_COMMAND_LINE;
     }
 
-    return 0;
+    return g_ScLastError;
 }
 
 int _tmain(int argc, LPCTSTR argv[])
@@ -363,7 +372,7 @@ int _tmain(int argc, LPCTSTR argv[])
     if (argc < 2)
     {
         MainUsage();
-        return -1;
+        return ERROR_INVALID_COMMAND_LINE;
     }
 
     /* get server name */
@@ -372,7 +381,7 @@ int _tmain(int argc, LPCTSTR argv[])
         if (argc < 3)
         {
             MainUsage();
-            return -1;
+            return ERROR_INVALID_COMMAND_LINE;
         }
 
         Server = argv[1];
