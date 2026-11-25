@@ -1655,6 +1655,7 @@ HandleShutdown(
 
     /* Now we can shut down NT */
     TRACE("Shutting down NT...\n");
+    LogonStage("shutdown-final");   /* the recorder's harness mark: EMPTY after this is the kernel's (6.4) */
     RtlAdjustPrivilege(SE_SHUTDOWN_PRIVILEGE, TRUE, FALSE, &Old);
     if (wlxAction == WLX_SAS_ACTION_SHUTDOWN_REBOOT)
     {
