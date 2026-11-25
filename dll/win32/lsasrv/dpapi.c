@@ -38,8 +38,9 @@
 #define DPAPI_KEY_VERSION           1
 #define DPAPI_KEY_KDF_PBKDF2_SHA512 1
 #define DPAPI_KEY_ITERATIONS        DPAPI_PBKDF2_ITERATIONS
+#define DPAPI_KEY_CIPHER_SIZE       (DPAPI_MASTER_KEY_SIZE + 16)  /* CBC + PKCS7: one padding block */
 #define DPAPI_KEYFILE_SIZE          (4 + 4 + 4 + DPAPI_SALT_SIZE + DPAPI_IV_SIZE + \
-                                     DPAPI_MASTER_KEY_SIZE + DPAPI_MAC_SIZE)
+                                     DPAPI_KEY_CIPHER_SIZE + DPAPI_MAC_SIZE)
 #define DPAPI_CREDHIST_MAGIC        0x4843444C  /* 'LDCH' */
 #define DPAPI_CREDHIST_VERSION      1
 #define DPAPI_CREDHIST_ENTRY_SIZE   (DPAPI_SALT_SIZE + DPAPI_IV_SIZE + 32 + DPAPI_MAC_SIZE)
@@ -1677,7 +1678,7 @@ DpapiEncryptKeyFile(
                            &Cipher, &CipherLength);
     if (!NT_SUCCESS(Status))
         goto done;
-    if (CipherLength != DPAPI_MASTER_KEY_SIZE)
+    if (CipherLength != DPAPI_KEY_CIPHER_SIZE)
     {
         Status = STATUS_UNSUCCESSFUL;
         goto done;
@@ -1688,10 +1689,10 @@ DpapiEncryptKeyFile(
     RtlCopyMemory(KeyFile + 8, &Iterations, 4);
     RtlCopyMemory(KeyFile + 12, Salt, DPAPI_SALT_SIZE);
     RtlCopyMemory(KeyFile + 28, Iv, DPAPI_IV_SIZE);
-    RtlCopyMemory(KeyFile + 44, Cipher, DPAPI_MASTER_KEY_SIZE);
+    RtlCopyMemory(KeyFile + 44, Cipher, DPAPI_KEY_CIPHER_SIZE);
 
-    Status = DpapiMac(Derived + DPAPI_AES_KEY_SIZE, KeyFile, 44 + DPAPI_MASTER_KEY_SIZE,
-                      KeyFile + 44 + DPAPI_MASTER_KEY_SIZE);
+    Status = DpapiMac(Derived + DPAPI_AES_KEY_SIZE, KeyFile, 44 + DPAPI_KEY_CIPHER_SIZE,
+                      KeyFile + 44 + DPAPI_KEY_CIPHER_SIZE);
 
 done:
     RtlSecureZeroMemory(Derived, sizeof(Derived));
@@ -1729,14 +1730,14 @@ DpapiDecryptKeyFile(
         return Status;
 
     Status = DpapiMac(Derived + DPAPI_AES_KEY_SIZE, KeyFile,
-                      44 + DPAPI_MASTER_KEY_SIZE, Mac);
-    if (NT_SUCCESS(Status) && !DpapiEqualMac(Mac, KeyFile + 44 + DPAPI_MASTER_KEY_SIZE))
+                      44 + DPAPI_KEY_CIPHER_SIZE, Mac);
+    if (NT_SUCCESS(Status) && !DpapiEqualMac(Mac, KeyFile + 44 + DPAPI_KEY_CIPHER_SIZE))
         Status = STATUS_WRONG_PASSWORD;
 
     if (NT_SUCCESS(Status))
     {
         Status = DpapiAesCrypt(FALSE, Derived, KeyFile + 28, KeyFile + 44,
-                               DPAPI_MASTER_KEY_SIZE, &Plain, &PlainLength);
+                               DPAPI_KEY_CIPHER_SIZE, &Plain, &PlainLength);
         if (NT_SUCCESS(Status))
         {
             if (PlainLength != DPAPI_MASTER_KEY_SIZE)
@@ -2149,6 +2150,8 @@ DpapiGetOrCreateMasterKey(
             RtlFreeHeap(RtlGetProcessHeap(), 0, KeyFile);
         }
     }
+    if (!NT_SUCCESS(Status))
+        ERR("fresh master key under %s: 0x%08lx\n", debugstr_w(Dir), Status);
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, Sd);
     return Status;
