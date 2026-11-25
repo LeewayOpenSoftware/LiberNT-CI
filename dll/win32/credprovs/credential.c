@@ -426,6 +426,20 @@ Credential_ReportResult(ICredentialProviderCredential2 *iface, NTSTATUS ntsStatu
         Text = IDS_PASSWORD_CHANGED;
         Icon = CPSI_SUCCESS;
     }
+    else if (This->Scenario == CPUS_CHANGE_PASSWORD)
+    {
+        /* SAM's verdict on a change: the old password, the new one against policy, or anything else. */
+        if (ntsStatus == STATUS_WRONG_PASSWORD)
+            Text = IDS_BAD_PASSWORD;
+        else if (ntsStatus == STATUS_NO_SUCH_USER)
+            Text = IDS_BAD_USER_OR_PASSWORD;
+        else if (ntsStatus == STATUS_PASSWORD_RESTRICTION || ntsStatus == STATUS_PWD_TOO_SHORT ||
+                 ntsStatus == STATUS_PWD_TOO_RECENT || ntsStatus == STATUS_PWD_HISTORY_CONFLICT)
+            Text = IDS_PASSWORD_RESTRICTION;
+        else
+            Text = IDS_PASSWORD_CHANGE_FAILED;
+        Icon = CPSI_ERROR;
+    }
 
     ClearSecrets(This, !NT_SUCCESS(ntsStatus));
     if (!Text)
