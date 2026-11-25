@@ -182,8 +182,7 @@ TestAccessMaskEffect(VOID)
 
     if (!HaveTcb)
     {
-        skip("access-mask effect needs TCB (run as SYSTEM)
-");
+        skip("access-mask effect needs TCB (run as SYSTEM)\n");
         return;
     }
     for (m = 0; m < _countof(Masks); m++)
@@ -191,22 +190,19 @@ TestAccessMaskEffect(VOID)
         if (!NT_SUCCESS(CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, BnoPath, &Link)))
             return;
         Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkAccessMask, (PVOID)&Masks[m], sizeof(ACCESS_MASK));
-        trace("PROBE accessmask set 0x%08lx -> 0x%lx
-", Masks[m], Status);
+        trace("PROBE accessmask set 0x%08lx -> 0x%lx\n", Masks[m], Status);
         RtlInitUnicodeString(&LinkName, LastLink);
         InitializeObjectAttributes(&Oa, &LinkName, OBJ_CASE_INSENSITIVE, NULL, NULL);
         for (w = 0; w < _countof(Wants); w++)
         {
             Status = NtOpenDirectoryObject(&H, Wants[w], &Oa);
-            trace("PROBE mask 0x%08lx open target want 0x%08lx -> 0x%lx
-", Masks[m], Wants[w], Status);
+            trace("PROBE mask 0x%08lx open target want 0x%08lx -> 0x%lx\n", Masks[m], Wants[w], Status);
             if (NT_SUCCESS(Status))
                 NtClose(H);
         }
         Oa.Attributes |= OBJ_OPENLINK;
         Status = NtOpenSymbolicLinkObject(&H, SYMBOLIC_LINK_QUERY, &Oa);
-        trace("PROBE mask 0x%08lx reopen link itself -> 0x%lx
-", Masks[m], Status);
+        trace("PROBE mask 0x%08lx reopen link itself -> 0x%lx\n", Masks[m], Status);
         if (NT_SUCCESS(Status))
             NtClose(H);
         NtClose(Link);
@@ -223,14 +219,19 @@ TestOwnLinkNotGlobal(VOID)
     NTSTATUS Status;
 
     if (HaveTcb)
+    {
+        skip("own-link check needs a caller without TCB\n");
         return;
-    if (!NT_SUCCESS(CreateLink(GENERIC_ALL, L"\\BaseNamedObjects", &Link)))
+    }
+    Status = CreateLink(GENERIC_ALL, L"\\BaseNamedObjects", &Link);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("cannot create an own link: 0x%lx\n", Status);
         return;
+    }
     Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
-    trace("PROBE own GENERIC_ALL link global=1 (no tcb) -> 0x%lx
-", Status);
-    ok(!NT_SUCCESS(Status), "standard user globalised its own link
-");
+    trace("PROBE own GENERIC_ALL link global=1 (no tcb) -> 0x%lx\n", Status);
+    ok(!NT_SUCCESS(Status), "standard user globalised its own link\n");
     NtClose(Link);
 }
 
