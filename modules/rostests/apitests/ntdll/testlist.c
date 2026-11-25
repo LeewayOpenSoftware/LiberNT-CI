@@ -124,6 +124,7 @@ extern void func_NtReadFileAsync(void);
 extern void func_NtSaveKey(void);
 extern void func_NtSetDefaultLocale(void);
 extern void func_NtSetInformationFile(void);
+extern void func_NtSetInformationSymbolicLink(void);
 extern void func_NtSetInformationProcess(void);
 extern void func_NtSetInformationThread(void);
 extern void func_NtSetInformationToken(void);
@@ -362,6 +363,7 @@ const struct test winetest_testlist[] =
     { "NtSaveKey",                      func_NtSaveKey},
     { "NtSetDefaultLocale",             func_NtSetDefaultLocale },
     { "NtSetInformationFile",           func_NtSetInformationFile },
+    { "NtSetInformationSymbolicLink",   func_NtSetInformationSymbolicLink },
     { "NtSetInformationProcess",        func_NtSetInformationProcess },
     { "NtSetInformationThread",         func_NtSetInformationThread },
     { "NtSetInformationToken",          func_NtSetInformationToken },
