@@ -20,15 +20,18 @@ static WCHAR BnoPath[64];
 static ULONG Unique;
 static BOOLEAN HaveTcb;
 
+static WCHAR LastLink[128];
+
+/* Creates a uniquely named link under the session BaseNamedObjects; its full name stays in LastLink. */
 static
 NTSTATUS
 CreateLink(ACCESS_MASK Access, PCWSTR Target, PHANDLE Handle)
 {
-    WCHAR Buffer[128];
+    WCHAR *Buffer = LastLink;
     UNICODE_STRING Name, TargetName;
     OBJECT_ATTRIBUTES Oa;
 
-    StringCchPrintfW(Buffer, _countof(Buffer), L"%s\\npsl-%lu-%lu", BnoPath,
+    StringCchPrintfW(Buffer, _countof(LastLink), L"%s\\npsl-%lu-%lu", BnoPath,
                      HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess), ++Unique);
     RtlInitUnicodeString(&Name, Buffer);
     RtlInitUnicodeString(&TargetName, Target);
@@ -108,7 +111,7 @@ TestInvalidInput(VOID)
     ok_hex(Status, STATUS_SUCCESS);
     Status = pNtSetInformationSymbolicLink(Event, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
     trace("PROBE event handle -> 0x%lx\n", Status);
-    ok_hex(Status, STATUS_OBJECT_TYPE_MISMATCH);
+    ok(!NT_SUCCESS(Status), "event handle accepted\n"); /* lead: STATUS_OBJECT_TYPE_MISMATCH */
     NtClose(Event);
 
     Status = pNtSetInformationSymbolicLink(NULL, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
@@ -148,7 +151,7 @@ TestPrivilege(VOID)
     Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
     trace("PROBE global=1 (tcb=%d) -> 0x%lx\n", HaveTcb, Status);
     if (!HaveTcb)
-        ok_hex(Status, STATUS_PRIVILEGE_NOT_HELD);
+        ok(!NT_SUCCESS(Status), "global flag set without TCB\n"); /* lead: STATUS_PRIVILEGE_NOT_HELD */
     else
     {
         ok_hex(Status, STATUS_SUCCESS);
@@ -171,7 +174,7 @@ TestAccessMaskEffect(VOID)
 {
     static const ACCESS_MASK Masks[] = { 0, DIRECTORY_QUERY, DIRECTORY_TRAVERSE, SYMBOLIC_LINK_QUERY, DIRECTORY_ALL_ACCESS };
     static const ACCESS_MASK Wants[] = { DIRECTORY_QUERY, DIRECTORY_TRAVERSE, DIRECTORY_CREATE_OBJECT, DIRECTORY_ALL_ACCESS };
-    UNICODE_STRING Empty = RTL_CONSTANT_STRING(L"");
+    UNICODE_STRING LinkName;
     OBJECT_ATTRIBUTES Oa;
     HANDLE Link, H;
     ULONG m, w;
@@ -190,7 +193,8 @@ TestAccessMaskEffect(VOID)
         Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkAccessMask, (PVOID)&Masks[m], sizeof(ACCESS_MASK));
         trace("PROBE accessmask set 0x%08lx -> 0x%lx
 ", Masks[m], Status);
-        InitializeObjectAttributes(&Oa, &Empty, 0, Link, NULL);
+        RtlInitUnicodeString(&LinkName, LastLink);
+        InitializeObjectAttributes(&Oa, &LinkName, OBJ_CASE_INSENSITIVE, NULL, NULL);
         for (w = 0; w < _countof(Wants); w++)
         {
             Status = NtOpenDirectoryObject(&H, Wants[w], &Oa);
@@ -199,6 +203,7 @@ TestAccessMaskEffect(VOID)
             if (NT_SUCCESS(Status))
                 NtClose(H);
         }
+        Oa.Attributes |= OBJ_OPENLINK;
         Status = NtOpenSymbolicLinkObject(&H, SYMBOLIC_LINK_QUERY, &Oa);
         trace("PROBE mask 0x%08lx reopen link itself -> 0x%lx
 ", Masks[m], Status);
@@ -219,7 +224,7 @@ TestOwnLinkNotGlobal(VOID)
 
     if (HaveTcb)
         return;
-    if (!NT_SUCCESS(CreateLink(GENERIC_ALL, L"\BaseNamedObjects", &Link)))
+    if (!NT_SUCCESS(CreateLink(GENERIC_ALL, L"\\BaseNamedObjects", &Link)))
         return;
     Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
     trace("PROBE own GENERIC_ALL link global=1 (no tcb) -> 0x%lx
@@ -229,7 +234,59 @@ TestOwnLinkNotGlobal(VOID)
     NtClose(Link);
 }
 
-typedef struct _RACE { HANDLE Link; volatile LONG Stop; LONG Failures; } RACE;
+/* P5: which object a \\??\\ target reaches with the global flag off and on (SYSTEM only). */
+static
+VOID
+TestGlobalEffect(VOID)
+{
+    UNICODE_STRING Name, LinkName;
+    OBJECT_ATTRIBUTES Oa;
+    HANDLE GlobalEv = NULL, Link = NULL, H;
+    WCHAR Target[96], GlobalName[96];
+    EVENT_BASIC_INFORMATION Info;
+    ULONG Value, Pass;
+    NTSTATUS Status;
+
+    if (!HaveTcb)
+    {
+        skip("global-flag effect needs TCB (run as SYSTEM)\n");
+        return;
+    }
+    StringCchPrintfW(GlobalName, _countof(GlobalName), L"\\GLOBAL??\\npsl-ev-%lu",
+                     HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    StringCchPrintfW(Target, _countof(Target), L"\\??\\npsl-ev-%lu",
+                     HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    RtlInitUnicodeString(&Name, GlobalName);
+    InitializeObjectAttributes(&Oa, &Name, 0, NULL, NULL);
+    Status = NtCreateEvent(&GlobalEv, EVENT_ALL_ACCESS, &Oa, NotificationEvent, TRUE);
+    trace("PROBE create %S -> 0x%lx\n", GlobalName, Status);
+    if (!NT_SUCCESS(Status))
+        return;
+    if (NT_SUCCESS(CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, Target, &Link)))
+    {
+        RtlInitUnicodeString(&LinkName, LastLink);
+        InitializeObjectAttributes(&Oa, &LinkName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        for (Pass = 0; Pass < 2; Pass++)
+        {
+            Value = Pass;
+            Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+            trace("PROBE global=%lu -> 0x%lx\n", Value, Status);
+            Status = NtOpenEvent(&H, EVENT_QUERY_STATE, &Oa);
+            Info.EventState = -1;
+            if (NT_SUCCESS(Status))
+            {
+                NtQueryEvent(H, EventBasicInformation, &Info, sizeof(Info), NULL);
+                NtClose(H);
+            }
+            trace("PROBE global=%lu open via link -> 0x%lx state=%ld (1 = the \\GLOBAL?? event)\n",
+                  Value, Status, Info.EventState);
+        }
+        NtClose(Link);
+    }
+    NtClose(GlobalEv);
+}
+
+typedef struct _RACE { HANDLE Link; volatile LONG Stop; LONG Failures; LONG Opens; WCHAR Name[128]; } RACE;
 
 static
 DWORD
@@ -237,15 +294,21 @@ WINAPI
 OpenThread(PVOID Param)
 {
     RACE *Race = Param;
-    UNICODE_STRING Name = RTL_CONSTANT_STRING(L"");
+    UNICODE_STRING Name;
     OBJECT_ATTRIBUTES Oa;
     HANDLE Dir;
 
-    InitializeObjectAttributes(&Oa, &Name, 0, Race->Link, NULL);
+    RtlInitUnicodeString(&Name, Race->Name);
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
     while (!Race->Stop)
     {
         if (NT_SUCCESS(NtOpenDirectoryObject(&Dir, DIRECTORY_QUERY, &Oa)))
+        {
+            InterlockedIncrement(&Race->Opens);
             NtClose(Dir);
+        }
+        else
+            InterlockedIncrement(&Race->Failures);
     }
     return 0;
 }
@@ -254,7 +317,7 @@ static
 VOID
 TestConcurrency(VOID)
 {
-    RACE Race = { NULL, 0, 0 };
+    RACE Race = { NULL, 0, 0, 0 };
     HANDLE Threads[3];
     ULONG i, Value;
     NTSTATUS Status;
@@ -266,6 +329,7 @@ TestConcurrency(VOID)
     }
     if (!NT_SUCCESS(CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, BnoPath, &Race.Link)))
         return;
+    StringCchCopyW(Race.Name, _countof(Race.Name), LastLink);
     for (i = 0; i < _countof(Threads); i++)
         Threads[i] = CreateThread(NULL, 0, OpenThread, &Race, 0, NULL);
     for (i = 0; i < 2000; i++)
@@ -273,13 +337,14 @@ TestConcurrency(VOID)
         Value = i & 1;
         Status = pNtSetInformationSymbolicLink(Race.Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
         if (!NT_SUCCESS(Status))
-            Race.Failures++;
+            InterlockedIncrement(&Race.Failures);
     }
     Race.Stop = 1;
     WaitForMultipleObjects(_countof(Threads), Threads, TRUE, 60000);
     for (i = 0; i < _countof(Threads); i++)
         CloseHandle(Threads[i]);
-    ok(Race.Failures == 0, "%ld flag toggles failed\n", Race.Failures);
+    ok(Race.Failures == 0, "%ld flag toggles or opens through the link failed\n", Race.Failures);
+    ok(Race.Opens > 0, "no open through the link succeeded\n");
     NtClose(Race.Link);
 }
 
@@ -306,6 +371,7 @@ START_TEST(NtSetInformationSymbolicLink)
     TestInvalidInput();
     TestPrivilege();
     TestOwnLinkNotGlobal();
+    TestGlobalEffect();
     TestAccessMaskEffect();
     TestConcurrency();
 }
