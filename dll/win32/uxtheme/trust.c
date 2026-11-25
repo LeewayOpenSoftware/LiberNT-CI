@@ -1213,7 +1213,7 @@ TrustGuardEnter(LPCWSTR part, LPCWSTR name, UXT_GUARD *g, BOOL honourStale)
     StringCchPrintfW(g->value, ARRAY_SIZE(g->value), L"%08lX-%016I64X", GetCurrentProcessId(),
                      (ULONGLONG)self->CreateTime.QuadPart);
 
-    if (RegOpenKeyExW(g->root, g->subkey, 0, KEY_READ, &key) == ERROR_SUCCESS)
+    if (RegOpenKeyExW(g->root, g->subkey, 0, KEY_READ | (g->root == HKEY_LOCAL_MACHINE ? KEY_WOW64_64KEY : 0), &key) == ERROR_SUCCESS)
     {
         for (i = 0; hr == S_OK; i++)
         {
@@ -1255,7 +1255,7 @@ TrustGuardEnter(LPCWSTR part, LPCWSTR name, UXT_GUARD *g, BOOL honourStale)
     data.version = 1;
     data.reserved = 0;
     data.writtenAt = ((ULONGLONG)now.dwHighDateTime << 32) | now.dwLowDateTime;
-    if (RegCreateKeyExW(g->root, g->subkey, 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL) != ERROR_SUCCESS)
+    if (RegCreateKeyExW(g->root, g->subkey, 0, NULL, 0, KEY_SET_VALUE | (g->root == HKEY_LOCAL_MACHINE ? KEY_WOW64_64KEY : 0), NULL, &key, NULL) != ERROR_SUCCESS)
         return HRESULT_FROM_WIN32(ERROR_CANCELLED);         /* T-GUARD-4 */
     if (RegSetValueExW(key, g->value, 0, REG_BINARY, (const BYTE *)&data, sizeof(data)) != ERROR_SUCCESS)
     {
@@ -1274,7 +1274,7 @@ TrustGuardLeave(UXT_GUARD *g)
 
     if (!g->written)
         return;
-    if (RegOpenKeyExW(g->root, g->subkey, 0, KEY_SET_VALUE, &key) == ERROR_SUCCESS)
+    if (RegOpenKeyExW(g->root, g->subkey, 0, KEY_SET_VALUE | (g->root == HKEY_LOCAL_MACHINE ? KEY_WOW64_64KEY : 0), &key) == ERROR_SUCCESS)
     {
         RegDeleteValueW(key, g->value);
         RegCloseKey(key);
@@ -1287,7 +1287,10 @@ UXTHEME_TrustClearGuard(PTHEME_FILE tf)
 {
     if (!tf || !tf->szTrustGuard[0])
         return;
-    RegDeleteKeyW(tf->bTrustGuardMachine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER, tf->szTrustGuard);
+    if (tf->bTrustGuardMachine)
+        RegDeleteKeyExW(HKEY_LOCAL_MACHINE, tf->szTrustGuard, KEY_WOW64_64KEY, 0);
+    else
+        RegDeleteKeyW(HKEY_CURRENT_USER, tf->szTrustGuard);
 }
 
 static BOOL
