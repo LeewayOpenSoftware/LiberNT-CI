@@ -15,6 +15,7 @@
 
 #define TEST_USER L"LntMustChgTest"
 #define TEST_PASSWORD L"Lnt!MustChg#2026q"
+#define TEST_PASSWORD2 L"Lnt!MustChg#2026r"
 
 static
 PUSER_INFO_4
@@ -50,11 +51,11 @@ SetComment(PCWSTR Comment, DWORD PasswordExpired)
 
 static
 DWORD
-TryLogon(VOID)
+TryLogonWith(PCWSTR Password)
 {
     HANDLE Token;
 
-    if (LogonUserW(TEST_USER, L".", TEST_PASSWORD, LOGON32_LOGON_NETWORK,
+    if (LogonUserW(TEST_USER, L".", Password, LOGON32_LOGON_NETWORK,
                    LOGON32_PROVIDER_DEFAULT, &Token))
     {
         CloseHandle(Token);
@@ -62,6 +63,8 @@ TryLogon(VOID)
     }
     return GetLastError();
 }
+
+#define TryLogon() TryLogonWith(TEST_PASSWORD)
 
 static
 DWORD
@@ -185,6 +188,11 @@ START_TEST(NetUserMustChange)
     ok(Info->usri4_password_expired != 0, "net user /logonpasswordchg:yes did not set the state\n");
     NetApiBufferFree(Info);
     ok(TryLogon() == ERROR_PASSWORD_MUST_CHANGE, "Logon after net user /logonpasswordchg:yes did not report must-change\n");
+
+    /* net user <name> <password> sets the new password; must-change stays, as it is read back */
+    ok(RunNet(L"user " TEST_USER L" " TEST_PASSWORD2) == 0, "net user <name> <password> failed\n");
+    ok(TryLogonWith(TEST_PASSWORD2) == ERROR_PASSWORD_MUST_CHANGE, "The new password was not set\n");
+    ok(TryLogon() == ERROR_LOGON_FAILURE, "The old password still works\n");
 
     ok(RunNet(L"user " TEST_USER L" /logonpasswordchg:maybe") != 0, "net user accepted /logonpasswordchg:maybe\n");
 

@@ -1254,6 +1254,9 @@ cmdUser(
             result = 1;
             goto done;
         }
+
+        /* NetUserGetInfo never returns the password; set the one given */
+        pUserInfo->usri4_password = lpPassword;
     }
     else if (bAdd)
     {
