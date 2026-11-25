@@ -383,6 +383,8 @@ LrcShowPage(
     SetDlgItemTextW(Dialog, IDC_STATUS, L"");
     LrcClearSecrets(Dialog);
     LrcEnableInputs(Dialog, TRUE);
+    /* Keyboard-only recovery: the dialog is in front and the caret is in the first empty field. */
+    SetForegroundWindow(Dialog);
     SetFocus(GetDlgItem(Dialog, GetWindowTextLengthW(GetDlgItem(Dialog, IDC_USER)) ? (Change ? IDC_OLD : IDC_PASSWORD) : IDC_USER));
     LrcTrace("page", Change ? L"change" : (Scenario == LRC_CPUS_UNLOCK ? L"unlock" : L"logon"));
 }
@@ -482,8 +484,9 @@ LrcSubmit(
     }
 
     LrcEnableInputs(Dialog, FALSE);
-    /* The recovery role has no LSA handle: package 0 means winlogon's MSV1_0 (P4, server side). */
-    Error = WluiClientSubmitSerialization(&g_Connection, g_Scenario, &CLSID_PasswordProvider, 0, Blob, Size);
+    /* The recovery role has no LSA handle: the server picks MSV1_0 for it (P4, server side). */
+    Error = WluiClientSubmitSerialization(&g_Connection, g_Scenario, &CLSID_PasswordProvider,
+                                          WLUI_PACKAGE_SERVER_DEFAULT, Blob, Size);
     LrcTrace("submitted", Error == ERROR_SUCCESS ? L"ok" : L"refused");
     if (Error != ERROR_SUCCESS)
     {
@@ -753,6 +756,8 @@ wWinMain(
 
     /* The first frame is on screen before Ready, as the host does (6.3). */
     ShowWindow(Dialog, SW_SHOW);
+    SetForegroundWindow(Dialog);
+    SetFocus(GetDlgItem(Dialog, IDC_USER));
     UpdateWindow(Dialog);
     GdiFlush();
     Error = WluiClientReady(&g_Connection);

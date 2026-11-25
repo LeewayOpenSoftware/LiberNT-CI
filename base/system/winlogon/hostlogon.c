@@ -596,7 +596,7 @@ WlHlSubmitHandler(
     {
         /* P4: the recovery dialog has no LSA handle and only ever speaks for the password
          * provider; it sends package 0 and gets MSV1_0, nothing else is accepted from it. */
-        if (AuthenticationPackage != 0 || !IsEqualGUID(ProviderClsid, &WlHlPasswordProvider))
+        if (AuthenticationPackage != WLUI_PACKAGE_SERVER_DEFAULT || !IsEqualGUID(ProviderClsid, &WlHlPasswordProvider))
             return ERROR_ACCESS_DENIED;
         AuthenticationPackage = g_MsvPackage;
     }

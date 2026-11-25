@@ -241,6 +241,47 @@ LuhClearSecrets(void)
             SetWindowTextW(g_Ui.Page->Fields[i].Control, L"");
 }
 
+/* The legal notice msgina showed before the logon dialog: Policies\System first, then the
+ * Winlogon key; acknowledged before any credential page exists (winlogon sets the flag). */
+static void
+LuhLegalNotice(
+    _In_ HWND Window)
+{
+    static const PCWSTR Keys[2] = { L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                                    L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" };
+    static const PCWSTR TextNames[2] = { L"legalnoticetext", L"LegalNoticeText" };
+    static const PCWSTR CaptionNames[2] = { L"legalnoticecaption", L"LegalNoticeCaption" };
+    WCHAR Caption[256];
+    PWSTR Text = NULL;
+    DWORD Size = 0, i;
+
+    for (i = 0; i < 2 && Text == NULL; i++)
+    {
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, Keys[i], TextNames[i], RRF_RT_REG_SZ, NULL, NULL, &Size) != ERROR_SUCCESS ||
+            Size <= sizeof(WCHAR))
+            continue;
+        Text = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size + sizeof(WCHAR));
+        if (Text == NULL)
+            return;
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, Keys[i], TextNames[i], RRF_RT_REG_SZ, NULL, Text, &Size) != ERROR_SUCCESS ||
+            Text[0] == UNICODE_NULL)
+        {
+            HeapFree(GetProcessHeap(), 0, Text);
+            Text = NULL;
+            continue;
+        }
+        Size = sizeof(Caption);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, Keys[i], CaptionNames[i], RRF_RT_REG_SZ, NULL, Caption, &Size) != ERROR_SUCCESS)
+            Caption[0] = UNICODE_NULL;
+    }
+    if (Text == NULL)
+        return;
+    LuhTrace("legal-notice", NULL);
+    /* Modal on the UI thread: the heartbeat timer is still dispatched by the message box loop. */
+    MessageBoxW(Window, Text, Caption[0] ? Caption : L"Notice", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+    HeapFree(GetProcessHeap(), 0, Text);
+}
+
 static void
 LuhShowPolicyPage(
     _In_ HWND Window)
@@ -414,6 +455,8 @@ LuhHandleCommand(
             if (Command->Flags & WLUI_FLAG_FALLBACK)
                 g_Options.Fallback = TRUE;
             g_Options.NoPower = (Command->Flags & WLUI_FLAG_NO_POWER) != 0;
+            if ((Command->Flags & WLUI_FLAG_LEGAL_NOTICE) && !g_Ui.ProvidersStarted)
+                LuhLegalNotice(Window);
             StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"");
             g_Ui.Detail[0] = UNICODE_NULL;
             LuhSetSpinner(Window, TRUE);

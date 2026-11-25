@@ -39,6 +39,9 @@ const unsigned long WLUI_FLAG_NO_POWER      = 0x00000020;  /* ShutdownWithoutLog
 const unsigned long WLUI_MAX_TEXT = 256;
 const unsigned long WLUI_MAX_SERIALIZATION = 65536;
 
+/* SubmitSerialization from the recovery role: it has no LSA handle, so the server picks MSV1_0. */
+const unsigned long WLUI_PACKAGE_SERVER_DEFAULT = 0;
+
 typedef struct _WLUI_COMMAND
 {
     WLUI_COMMAND_TYPE Type;
