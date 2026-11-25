@@ -351,8 +351,7 @@ TestShadowLifetime(VOID)
     if (NT_SUCCESS(Status))
     {
         Status = OpenEventIn(Dir, L"lifetime-ev", &H);
-        trace("PROBE open via child after shadow handle closed -> 0x%lx
-", Status);
+        trace("PROBE open via child after shadow handle closed -> 0x%lx\n", Status);
         if (NT_SUCCESS(Status))
             NtClose(H);
         NtClose(Dir);
