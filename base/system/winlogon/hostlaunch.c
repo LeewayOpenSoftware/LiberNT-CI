@@ -81,7 +81,7 @@ WlHostRecLevelName(VOID)
 
 /* ---- event log ------------------------------------------------------------- */
 
-static VOID
+VOID
 WlHostLog(
     _In_ WORD Type,
     _In_ PCWSTR Text)
@@ -261,16 +261,67 @@ Fail:
     return NULL;
 }
 
+/* 8.10 c: a policy that demands a stronger credential than a password closes the
+ * password-only tiers (N2, N3): scforceoption, the PasswordProvider on the exclusion
+ * list, or ProhibitFallbacks (D-b). The N1 host applies the same policy by itself. */
+static BOOL
+WlHostPolicyDeniesWeakTier(VOID)
+{
+    static const WCHAR PasswordClsid[] = L"{60B78E88-EAD8-445C-9CFD-0B87F74EA6CD}";
+    DWORD Value = 0, Size = sizeof(Value), Type;
+    PWSTR List;
+    HKEY Key;
+    BOOL Denied = FALSE;
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                     L"scforceoption", RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS && Value != 0)
+        return TRUE;
+    Size = sizeof(Value);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Policies\\Microsoft\\Windows\\System",
+                     L"ProhibitFallbacks", RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS && Value != 0)
+        return TRUE;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Policies\\Microsoft\\Windows\\System", 0, KEY_QUERY_VALUE, &Key)
+        != ERROR_SUCCESS)
+        return FALSE;
+    Size = 0;
+    if (RegQueryValueExW(Key, L"ExcludedCredentialProviders", NULL, &Type, NULL, &Size) == ERROR_SUCCESS &&
+        (Type == REG_SZ || Type == REG_EXPAND_SZ) && Size != 0)
+    {
+        List = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size + sizeof(WCHAR));
+        if (List && RegQueryValueExW(Key, L"ExcludedCredentialProviders", NULL, &Type, (PBYTE)List, &Size) == ERROR_SUCCESS)
+        {
+            CharUpperW(List);
+            Denied = wcsstr(List, PasswordClsid) != NULL;
+        }
+        if (List)
+            HeapFree(GetProcessHeap(), 0, List);
+    }
+    RegCloseKey(Key);
+    return Denied;
+}
+
+static BOOL
+WlHostImagePresent(
+    _In_ PCWSTR Image)
+{
+    WCHAR Path[MAX_PATH];
+    return WlHostBuildPath(Image, Path) && GetFileAttributesW(Path) != INVALID_FILE_ATTRIBUTES;
+}
+
 /*
  * Walks the levels until a tier launches or the machine is terminal. On NULL
- * with *Terminal TRUE the caller shows the N4 state; nothing is left to launch.
+ * with *Terminal TRUE the caller shows the N4 state; nothing is left to launch,
+ * and *Reason says why (levels spent, both images missing, or policy).
  */
 PWLHOST_LAUNCH
 WlHostStart(
     _In_ DWORD Scenario,
-    _Out_ PBOOL Terminal)
+    _Out_ PBOOL Terminal,
+    _Out_ WLHOST_TERMINAL *Reason)
 {
     *Terminal = FALSE;
+    *Reason = WlHostTerminalNone;
 
     for (;;)
     {
@@ -281,8 +332,21 @@ WlHostStart(
 
         if (Action == WlRecActTerminal)
         {
-            WlHostLog(EVENTLOG_ERROR_TYPE, L"logon UI recovery reached the terminal state (N4)");
+            BOOL Missing = !WlHostImagePresent(WLHOST_LOGONUI_EXE) && !WlHostImagePresent(WLHOST_RECOVERY_EXE);
+            WlHostLog(EVENTLOG_ERROR_TYPE, Missing
+                      ? L"logon UI recovery reached the terminal state (N4): both logon UI images are missing"
+                      : L"logon UI recovery reached the terminal state (N4)");
             *Terminal = TRUE;
+            *Reason = Missing ? WlHostTerminalMissing : WlHostTerminalLevels;
+            return NULL;
+        }
+
+        if (Action != WlRecActLaunchHost && WlHostPolicyDeniesWeakTier())
+        {
+            /* The levels are left where they are: a later SAS may retry N1 as usual. */
+            WlHostLog(EVENTLOG_ERROR_TYPE, L"logon UI password tier refused by policy (scforceoption, exclusion or ProhibitFallbacks)");
+            *Terminal = TRUE;
+            *Reason = WlHostTerminalPolicy;
             return NULL;
         }
 

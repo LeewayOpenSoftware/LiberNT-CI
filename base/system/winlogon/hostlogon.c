@@ -31,6 +31,7 @@ typedef struct _WLHL_SUBMIT
     NTSTATUS Status;
     NTSTATUS SubStatus;
     BOOL MustChange;        /* the account may only continue through a password change */
+    UINT TextId;            /* a refusal worded by winlogon (safe mode), 0 = provider wording */
     HANDLE Token;
     LUID LogonId;
     WCHAR User[CREDSER_MAX_NAME_CHARS + 1];
@@ -56,6 +57,7 @@ static DWORD g_ChangeFor;               /* scenario a forced password change res
 static BOOL g_LsaBroken;                /* the last logged-out SAS could not reach the LSA */
 static HANDLE g_SwitchEvent;            /* ShellDesktopSwitchEvent of the logon in progress */
 static HANDLE g_ShellProcess;           /* first Userinit process of the logon in progress */
+static HWND g_TerminalDialog;           /* the N4 dialog, while it stands (SAS thread) */
 
 /* ---- LSA ---------------------------------------------------------------------- */
 
@@ -218,6 +220,47 @@ WlHlMustChange(
            SubStatus == STATUS_PASSWORD_MUST_CHANGE || SubStatus == STATUS_PASSWORD_EXPIRED;
 }
 
+/* msgina IsAdminToken: BUILTIN\Administrators among the token's groups. */
+static BOOL
+WlHlTokenIsAdmin(
+    _In_ HANDLE Token)
+{
+    SID_IDENTIFIER_AUTHORITY NtAuthority = { SECURITY_NT_AUTHORITY };
+    PSID Admins = NULL;
+    PTOKEN_GROUPS Groups;
+    DWORD Size = 0, i;
+    BOOL Found = FALSE;
+
+    if (!AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
+                                  0, 0, 0, 0, 0, 0, &Admins))
+        return FALSE;
+    GetTokenInformation(Token, TokenGroups, NULL, 0, &Size);
+    Groups = LocalAlloc(LMEM_FIXED, Size);
+    if (Groups && GetTokenInformation(Token, TokenGroups, Groups, Size, &Size))
+    {
+        for (i = 0; i < Groups->GroupCount && !Found; i++)
+            Found = EqualSid(Groups->Groups[i].Sid, Admins);
+    }
+    if (Groups)
+        LocalFree(Groups);
+    FreeSid(Admins);
+    return Found;
+}
+
+static DWORD WlHlPolicyDword(_In_ PCWSTR Name, _In_ DWORD Default);
+
+/* 8.10 d: in safe mode, SafeModeBlockNonAdmins keeps non-administrators out, as on Windows. */
+static BOOL
+WlHlSafeModeBlocksNonAdmins(VOID)
+{
+    DWORD Option = 0, Size = sizeof(Option);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\SafeBoot\\Option",
+                     L"OptionValue", RRF_RT_REG_DWORD, NULL, &Option, &Size) != ERROR_SUCCESS || Option == 0)
+        return FALSE;
+    return WlHlPolicyDword(L"SafeModeBlockNonAdmins", 0) != 0;
+}
+
 /* Interactive or unlock logon through MSV1_0, with the logon SID groups msgina built. */
 static NTSTATUS
 WlHlLsaLogon(
@@ -377,7 +420,8 @@ WlHlFinishLogon(
     _In_ NTSTATUS SubStatus,
     _In_opt_ HANDLE Token,
     _In_ const LUID *LogonId,
-    _In_ const CREDSER_LOGON *Logon)
+    _In_ const CREDSER_LOGON *Logon,
+    _In_ UINT TextId)
 {
     EnterCriticalSection(&g_SubmitLock);
     if (!g_Accepting)
@@ -393,6 +437,7 @@ WlHlFinishLogon(
     g_Submit.Status = Status;
     g_Submit.SubStatus = SubStatus;
     g_Submit.MustChange = WlHlMustChange(Status, SubStatus);
+    g_Submit.TextId = TextId;
     if (NT_SUCCESS(Status))
     {
         g_Submit.Token = Token;
@@ -451,13 +496,23 @@ WlHlHandleLogon(
     LUID LogonId;
     NTSTATUS Status, SubStatus = STATUS_SUCCESS;
 
+    UINT TextId = 0;
+
     if (!NT_SUCCESS(CredSerUnpackLogon(Copy, Size, &Logon)))
         return ERROR_INVALID_PARAMETER;
     Status = WlHlLsaLogon(&Logon, Unlock, &Token, &LogonId, &SubStatus);
+    if (!Unlock && NT_SUCCESS(Status) && WlHlSafeModeBlocksNonAdmins() && !WlHlTokenIsAdmin(Token))
+    {
+        ERR("WL: safe mode: non-administrator logon refused (SafeModeBlockNonAdmins)\n");
+        CloseHandle(Token);
+        Token = NULL;
+        Status = STATUS_ACCOUNT_RESTRICTION;
+        TextId = IDS_SAFEMODEADMINSONLY;
+    }
     if (Unlock)
         WlHlFinishUnlock(Status, SubStatus, Token);
     else
-        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon);
+        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, TextId);
     return ERROR_SUCCESS;
 }
 
@@ -493,7 +548,7 @@ WlHlHandleChange(
     if (Resume == WLHL_CPUS_UNLOCK)
         WlHlFinishUnlock(Status, SubStatus, Token);
     else
-        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon);
+        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, 0);
     return ERROR_SUCCESS;
 }
 
@@ -605,6 +660,23 @@ WlHlShutdownWithoutLogon(VOID)
     return WlHlPolicyDword(L"ShutdownWithoutLogon", 1) != 0;
 }
 
+/* A legal notice is configured (Policies\System legalnoticetext, or the Winlogon key). */
+static BOOL
+WlHlHasLegalNotice(VOID)
+{
+    WCHAR Text[4];
+    DWORD Size = sizeof(Text);
+    LONG Error;
+
+    Error = RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_POLICY_KEY, L"legalnoticetext", RRF_RT_REG_SZ, NULL, Text, &Size);
+    if (Error != ERROR_SUCCESS && Error != ERROR_MORE_DATA)
+    {
+        Size = sizeof(Text);
+        Error = RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"LegalNoticeText", RRF_RT_REG_SZ, NULL, Text, &Size);
+    }
+    return (Error == ERROR_SUCCESS || Error == ERROR_MORE_DATA) && Size > sizeof(WCHAR);
+}
+
 /* Flags for RequestCredentials that describe policy to the host; winlogon stays the gate. */
 static DWORD
 WlHlPolicyFlags(VOID)
@@ -614,6 +686,8 @@ WlHlPolicyFlags(VOID)
         Flags |= WLUI_FLAG_DISABLE_CAD;
     if (!WlHlShutdownWithoutLogon())
         Flags |= WLUI_FLAG_NO_POWER;
+    if (WlHlHasLegalNotice())
+        Flags |= WLUI_FLAG_LEGAL_NOTICE;
     return Flags;
 }
 
@@ -701,6 +775,81 @@ WlHlStopHost(VOID)
         WlHostStop(Old);
 }
 
+/* ---- N4: the terminal dialog winlogon draws itself (8.9 P3, 8.10 c, R1b) ---------------- */
+
+static INT_PTR CALLBACK
+WlHlTerminalProc(
+    _In_ HWND Dialog,
+    _In_ UINT Message,
+    _In_ WPARAM wParam,
+    _In_ LPARAM lParam)
+{
+    switch (Message)
+    {
+        case WM_INITDIALOG:
+        {
+            WCHAR Text[512];
+            UINT Id = (lParam == WlHostTerminalMissing) ? IDS_LOGONUI_TERMINAL_MISSING :
+                      (lParam == WlHostTerminalPolicy) ? IDS_LOGONUI_TERMINAL_POLICY : IDS_LOGONUI_TERMINAL_LEVELS;
+            LOGON_STATE State = g_Session ? g_Session->LogonState : STATE_LOGGED_OFF;
+            BOOL SignedOut = (State == STATE_LOGGED_OFF || State == STATE_LOGGED_OFF_SAS ||
+                              State == STATE_LOCKED || State == STATE_LOCKED_SAS);
+            BOOL Power = !SignedOut || WlHlShutdownWithoutLogon();     /* same gate as the host's flyout */
+
+            if (LoadStringW(hAppInstance, Id, Text, ARRAYSIZE(Text)) == 0)
+                Text[0] = UNICODE_NULL;
+            SetDlgItemTextW(Dialog, IDC_LUT_TEXT, Text);
+            EnableWindow(GetDlgItem(Dialog, IDC_LUT_RESTART), Power);
+            EnableWindow(GetDlgItem(Dialog, IDC_LUT_SHUTDOWN), Power);
+            return TRUE;
+        }
+        case WM_COMMAND:
+            if (LOWORD(wParam) == IDC_LUT_RESTART || LOWORD(wParam) == IDC_LUT_SHUTDOWN)
+            {
+                WlHlPostEvent(LOWORD(wParam) == IDC_LUT_RESTART ? WLHOST_EVENT_RESTART : WLHOST_EVENT_SHUTDOWN);
+                return TRUE;
+            }
+            if (LOWORD(wParam) == IDCANCEL)
+                return TRUE;            /* nothing dismisses it but a launch or a power action */
+            break;
+        case WM_CLOSE:
+            return TRUE;
+        case WM_DESTROY:
+            g_TerminalDialog = NULL;
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* Modeless on the SAS thread, so the thread keeps serving the SAS window (a user SAS may
+ * still retry N1, a remote shutdown still lands); closed by the next launch that succeeds. */
+static VOID
+WlHlShowTerminal(
+    _In_ WLHOST_TERMINAL Reason)
+{
+    if (g_TerminalDialog != NULL)
+        return;
+    g_TerminalDialog = CreateDialogParamW(hAppInstance, MAKEINTRESOURCEW(IDD_LOGONUITERMINAL), NULL,
+                                          WlHlTerminalProc, (LPARAM)Reason);
+    if (g_TerminalDialog == NULL)
+    {
+        ERR("WL: cannot create the terminal dialog (%lu)\n", GetLastError());
+        return;
+    }
+    ShowWindow(g_TerminalDialog, SW_SHOW);
+    SetForegroundWindow(g_TerminalDialog);
+    WlHostLog(EVENTLOG_ERROR_TYPE, Reason == WlHostTerminalPolicy ? L"logon UI terminal dialog shown (policy)" :
+              Reason == WlHostTerminalMissing ? L"logon UI terminal dialog shown (images missing)" :
+                                                L"logon UI terminal dialog shown (levels spent)");
+}
+
+static VOID
+WlHlCloseTerminal(VOID)
+{
+    if (g_TerminalDialog != NULL)
+        DestroyWindow(g_TerminalDialog);
+}
+
 /* Brings up a host for Scenario (0: status only). A live host is kept when it already shows
  * Scenario, or when it was status-only and the logon page is wanted (the host builds its
  * providers at the first RequestCredentials); any other change means a fresh host. */
@@ -711,6 +860,7 @@ WlHlEnsureHost(
     _In_ DWORD ReadyMs)
 {
     PWLHOST_LAUNCH Launch;
+    WLHOST_TERMINAL Reason = WlHostTerminalNone;
     BOOL Terminal = FALSE;
 
     EnterCriticalSection(&g_SubmitLock);
@@ -731,9 +881,14 @@ WlHlEnsureHost(
     }
     WlHlStopHost();
 
-    Launch = WlHostStart(Scenario ? Scenario : WLHL_CPUS_LOGON, &Terminal);
+    Launch = WlHostStart(Scenario ? Scenario : WLHL_CPUS_LOGON, &Terminal, &Reason);
     if (Launch == NULL)
-        return FALSE;                   /* N4: the terminal state is drawn by a later commit */
+    {
+        if (Terminal)
+            WlHlShowTerminal(Reason);
+        return FALSE;
+    }
+    WlHlCloseTerminal();
     EnterCriticalSection(&g_LaunchLock);
     g_Launch = Launch;
     g_HostScenario = Scenario;
@@ -790,10 +945,12 @@ WlHostDisplaySasNotice(
             WlHlPostResource(WluiCmdDisplayStatus, 0, IDS_PRESSCTRLALTDELETE);
         return;
     }
-    if (WlHostIsTerminal() || g_LsaBroken)
+    if (WlHostIsTerminal() || g_LsaBroken || g_TerminalDialog != NULL)
     {
-        /* N4 or no LSA: posting again would spin; a user SAS is the only way on (N4 dialog: commit 10). */
-        ERR("WL: logon UI cannot come up (%s); waiting for a user SAS\n", g_LsaBroken ? "no LSA" : "terminal state");
+        /* N4, policy or no LSA: posting again would spin; the terminal dialog stands and a user
+         * SAS is the only way on. */
+        ERR("WL: logon UI cannot come up (%s); waiting for a user SAS\n",
+            g_LsaBroken ? "no LSA" : g_TerminalDialog ? "terminal dialog" : "terminal state");
         return;
     }
     Session->HostAutoSas = TRUE;
@@ -875,9 +1032,14 @@ WlHostLoggedOutSas(
         if (!NT_SUCCESS(g_Submit.Status))
         {
             NTSTATUS Status = g_Submit.Status, SubStatus = g_Submit.SubStatus;
+            UINT TextId = g_Submit.TextId;
             LeaveCriticalSection(&g_SubmitLock);
-            /* The provider owns the wording of its result (STATUS_LOGON_FAILURE and friends). */
-            WlHlPost(WluiCmdReportResult, g_HostScenario, 0, Status, SubStatus, NULL, NULL);
+            /* The provider owns the wording of its result (STATUS_LOGON_FAILURE and friends),
+             * unless winlogon refused it for a reason of its own (safe mode). */
+            if (TextId)
+                WlHlPostResource(WluiCmdReportResult, 0, TextId);
+            else
+                WlHlPost(WluiCmdReportResult, g_HostScenario, 0, Status, SubStatus, NULL, NULL);
             continue;
         }
 

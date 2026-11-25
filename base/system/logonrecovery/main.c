@@ -317,6 +317,45 @@ LrcClearSecrets(
         SetDlgItemTextW(Dialog, Controls[i], L"");
 }
 
+/* 8.10 f: the legal notice applies in recovery too. Policies\System first, then the Winlogon key. */
+static VOID
+LrcLegalNotice(
+    _In_ HWND Dialog)
+{
+    static const PCWSTR Keys[2] = { L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                                    L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" };
+    static const PCWSTR TextNames[2] = { L"legalnoticetext", L"LegalNoticeText" };
+    static const PCWSTR CaptionNames[2] = { L"legalnoticecaption", L"LegalNoticeCaption" };
+    WCHAR Caption[256];
+    PWSTR Text = NULL;
+    DWORD Size = 0, i;
+
+    for (i = 0; i < 2 && Text == NULL; i++)
+    {
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, Keys[i], TextNames[i], RRF_RT_REG_SZ, NULL, NULL, &Size) != ERROR_SUCCESS ||
+            Size <= sizeof(WCHAR))
+            continue;
+        Text = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size + sizeof(WCHAR));
+        if (Text == NULL)
+            return;
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, Keys[i], TextNames[i], RRF_RT_REG_SZ, NULL, Text, &Size) != ERROR_SUCCESS ||
+            Text[0] == UNICODE_NULL)
+        {
+            HeapFree(GetProcessHeap(), 0, Text);
+            Text = NULL;
+            continue;
+        }
+        Size = sizeof(Caption);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, Keys[i], CaptionNames[i], RRF_RT_REG_SZ, NULL, Caption, &Size) != ERROR_SUCCESS)
+            Caption[0] = UNICODE_NULL;
+    }
+    if (Text == NULL)
+        return;
+    LrcTrace("legal-notice", NULL);
+    MessageBoxW(Dialog, Text, Caption[0] ? Caption : L"Notice", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+    HeapFree(GetProcessHeap(), 0, Text);
+}
+
 /* Lays the form out for the scenario: logon/unlock = user+password; change = user+old+new+confirm. */
 static VOID
 LrcShowPage(
@@ -529,6 +568,8 @@ LrcOnCommand(
     switch (Command->Type)
     {
         case WluiCmdRequestCredentials:
+            if (Command->Flags & WLUI_FLAG_LEGAL_NOTICE)
+                LrcLegalNotice(Dialog);     /* modal; the heartbeat timer still runs inside it */
             LrcShowPage(Dialog, Command->Scenario ? Command->Scenario : g_Options.Scenario, Command->Flags);
 #ifdef LOGONUI_TEST_HOOKS
             LrcAutoSubmit(Dialog);
