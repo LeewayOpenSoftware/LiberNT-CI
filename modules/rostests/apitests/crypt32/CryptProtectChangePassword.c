@@ -73,6 +73,19 @@ UnprotectCompare(_In_ HANDLE Token, _In_ DATA_BLOB *Blob)
     return Ok;
 }
 
+/* A local account's logon domain is the computer name; Win11's MSV1_0 change path
+ * refuses an empty domain (baseline win11-26100-DPAPI-CryptProtectChangePassword.log). */
+static PCWSTR
+LocalAccountDomain(void)
+{
+    static WCHAR Name[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD Count = ARRAYSIZE(Name);
+
+    if (Name[0] == UNICODE_NULL && !GetComputerNameW(Name, &Count))
+        Name[0] = UNICODE_NULL;
+    return Name;
+}
+
 /* Change the password through the MSV1_0 call package, as the user: a flat
  * MSV1_0_CHANGEPASSWORD_REQUEST in one buffer, over an untrusted handle. */
 static BOOL
@@ -148,6 +161,12 @@ ChangePasswordViaMsv1_0(_In_ PCWSTR Domain,
                                           &ResponseSize,
                                           &ProtocolStatus);
     Ok = Status == STATUS_SUCCESS && ProtocolStatus == STATUS_SUCCESS;
+    if (!Ok)
+    {
+        /* Say why: the next baseline must show which side refused and with what. */
+        trace("MsV1_0ChangePassword(%ls\\%ls): Status 0x%08lx, ProtocolStatus 0x%08lx\n",
+              Domain, Account, Status, Status == STATUS_SUCCESS ? ProtocolStatus : 0);
+    }
 
     HeapFree(GetProcessHeap(), 0, Request);
     if (Response != NULL)
@@ -283,7 +302,7 @@ START_TEST(CryptProtectChangePassword)
        GetLastError());
 
     /* Change the password through the package path (triggers the re-key). */
-    ok(ChangePasswordViaMsv1_0(L"", Account, Password1, Password2),
+    ok(ChangePasswordViaMsv1_0(LocalAccountDomain(), Account, Password1, Password2),
        "MsV1_0ChangePassword failed\n");
 
     /* C4: the SAME session must still open the old blob (Primary refreshed). */
@@ -319,7 +338,7 @@ done:
     {
         /* Leave a supplied account on its original password; the restore
          * doubles as a second re-key round (result ignored). */
-        ChangePasswordViaMsv1_0(L"", Account, Password2, Password1);
+        ChangePasswordViaMsv1_0(LocalAccountDomain(), Account, Password2, Password1);
     }
     if (Blob.pbData)
         LocalFree(Blob.pbData);
