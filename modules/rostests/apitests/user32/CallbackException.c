@@ -95,7 +95,7 @@ static int ChildPropagate(void)
 /* Child: no callback table while the kernel sends WM_NCCREATE (the shape of a process without user32) */
 static int ChildNullTable(void)
 {
-    PPEB Peb = NtCurrentPeb();
+    PPEB Peb = NtCurrentTeb()->ProcessEnvironmentBlock;
     PVOID Table;
     HWND hwnd;
 
