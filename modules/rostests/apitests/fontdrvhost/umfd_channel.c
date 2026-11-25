@@ -11,6 +11,7 @@
 #include <reactos/umfd.h>
 #include <reactos/umfdtest.h>
 #include <tlhelp32.h>
+#include <ntsecapi.h>
 
 INT WINAPI NtGdiExtEscape(HDC hdc, PWCHAR pDriver, INT nDriver, INT Escape,
                           INT InSize, LPSTR InData, INT OutSize, LPSTR OutData);
@@ -556,9 +557,22 @@ static BOOL can_run_launcher(void)
     return TRUE;
 }
 
+static ULONG logon_sessions(void)
+{
+    ULONG count = 0;
+    PLUID list = NULL;
+
+    if (LsaEnumerateLogonSessions(&count, &list) != STATUS_SUCCESS)
+        return 0;
+    LsaFreeReturnBuffer(list);
+    return count;
+}
+
 START_TEST(umfd_launcher)
 {
-    DWORD mode, pid, next, ms;
+    DWORD mode, pid, next, ms, restarts;
+    ULONG sessions;
+    HWINSTA winsta;
 
     if (!is_reactos())
     {
@@ -581,12 +595,22 @@ START_TEST(umfd_launcher)
     check_launcher_host(pid);
     ok(add_font(good_font, good_size, &ms) > 0, "a good font was refused by winlogon's host\n");
 
+    /* No ACE for the user or Administrators: nobody can move into the host's window station */
+    winsta = OpenWindowStationW(L"UmfdHost", FALSE, WINSTA_ENUMDESKTOPS);
+    ok(winsta == NULL && GetLastError() == ERROR_ACCESS_DENIED,
+       "OpenWindowStation(UmfdHost): %p, error %lu\n", winsta, GetLastError());
+    if (winsta)
+        CloseWindowStation(winsta);
+
+    sessions = logon_sessions();
+
     /* An abnormal end is relaunched after the first backoff step */
     ok(kill_host(pid), "could not end host %lu\n", pid);
     next = wait_launcher_host(pid, 5000);
     ok(next != 0, "the host was not relaunched within 5 s\n");
     if (!next)
         return;
+    restarts = 1;
     check_launcher_host(next);
     ok(add_font(good_font, good_size, &ms) > 0, "a good font was refused after the relaunch\n");
 
@@ -606,9 +630,30 @@ START_TEST(umfd_launcher)
         CloseHandle(host);
         pid = wait_launcher_host(next, 3000);
         ok(pid != 0, "the recycled host was not relaunched within 3 s\n");
+        if (!pid)
+            return;
+        next = pid;
+        restarts++;
         ok(add_font(good_font, good_size, &ms) > 0, "a good font was refused after the recycle\n");
     }
 #endif
+
+    /* Each launch is its own LocalService logon; it must end with its host, not pile up */
+    while (restarts < 3)
+    {
+        ok(kill_host(next), "could not end host %lu\n", next);
+        pid = wait_launcher_host(next, LAUNCHER_BACKOFF_MAX_MS + 5000);
+        ok(pid != 0, "the host was not relaunched after restart %lu\n", restarts);
+        if (!pid)
+            return;
+        next = pid;
+        restarts++;
+    }
+    Sleep(2000);
+    if (sessions == 0)
+        skip("LsaEnumerateLogonSessions failed\n");
+    else
+        ok(logon_sessions() <= sessions, "logon sessions grew from %lu over %lu host restarts\n", sessions, restarts);
 }
 
 /* The event-log entry the cap leaves; 0 if the log cannot be read */

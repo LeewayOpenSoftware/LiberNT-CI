@@ -13,8 +13,9 @@
 #include <reactos/umfd.h>
 
 #define UMFD_EXE             L"fontdrvhost.exe"
+/* Orosi interim placement; the Win11 virtual account (U2) decides where the host lives */
 #define UMFD_WINSTA          L"UmfdHost"
-#define UMFD_DESKTOP         L"UmfdHost\\Default"
+#define UMFD_DESKTOP         UMFD_WINSTA L"\\Default"
 #define UMFD_CAP_LAUNCHES    5
 #define UMFD_CAP_WINDOW_MS   (10 * 60 * 1000)
 #define UMFD_BACKOFF_MIN_MS  1000
@@ -39,7 +40,6 @@ typedef enum _UMFD_LAUNCH
     UmfdLaunchTaken     /* another TCB caller holds the channel */
 } UMFD_LAUNCH;
 
-static HANDLE g_Token;          /* restricted primary token, kept for relaunches */
 static HWINSTA g_Winsta;
 static HDESK g_Desktop;
 static HANDLE g_Supervisor;
@@ -90,8 +90,10 @@ WlUmfdReadMode(VOID)
     return Mode;
 }
 
+/* One LocalService logon per launch: the logon session ends with the host that holds its token */
 static BOOL
-WlUmfdMakeToken(VOID)
+WlUmfdMakeToken(
+    _Out_ PHANDLE Token)
 {
     static const PCWSTR Restrict[] = { L"S-1-1-0", L"S-1-5-12", L"S-1-5-32-545", L"S-1-5-11" };
     SID_AND_ATTRIBUTES Res[ARRAYSIZE(Restrict)];
@@ -101,6 +103,7 @@ WlUmfdMakeToken(VOID)
     DWORD i, Error = 0;
     BOOL Ok = FALSE;
 
+    *Token = NULL;
     ZeroMemory(Res, sizeof(Res));
     for (i = 0; i < ARRAYSIZE(Restrict); ++i)
     {
@@ -117,11 +120,11 @@ WlUmfdMakeToken(VOID)
         goto Out;
     }
     if (CreateRestrictedToken(Base, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL,
-                              ARRAYSIZE(Res), Res, &g_Token))
+                              ARRAYSIZE(Res), Res, Token))
     {
         Label.Label.Sid = Low;
         Label.Label.Attributes = SE_GROUP_INTEGRITY;
-        Ok = SetTokenInformation(g_Token, TokenIntegrityLevel, &Label, sizeof(Label) + GetLengthSid(Low));
+        Ok = SetTokenInformation(*Token, TokenIntegrityLevel, &Label, sizeof(Label) + GetLengthSid(Low));
     }
     if (!Ok)
         Error = GetLastError();
@@ -130,9 +133,9 @@ Out:
     if (!Ok)
     {
         WlUmfdLog(EVENTLOG_ERROR_TYPE, L"font driver host: no LocalService restricted token (%lu)", Error);
-        if (g_Token)
-            CloseHandle(g_Token);
-        g_Token = NULL;
+        if (*Token)
+            CloseHandle(*Token);
+        *Token = NULL;
     }
     if (Base)
         CloseHandle(Base);
@@ -182,7 +185,7 @@ WlUmfdLaunch(
 {
     SECURITY_ATTRIBUTES Sa = { sizeof(Sa), NULL, FALSE };
     WCHAR Path[MAX_PATH];
-    HANDLE Image = INVALID_HANDLE_VALUE;
+    HANDLE Image = INVALID_HANDLE_VALUE, Token = NULL;
     WLIMG_STATUS ImgStatus;
     STARTUPINFOW Si;
     PROCESS_INFORMATION Pi;
@@ -212,6 +215,8 @@ WlUmfdLaunch(
         CloseHandle(Image);
         return UmfdLaunchFailed;
     }
+    if (!WlUmfdMakeToken(&Token))
+        goto Out;
 
     ZeroMemory(&Si, sizeof(Si));
     Si.cb = sizeof(Si);
@@ -219,12 +224,14 @@ WlUmfdLaunch(
     ZeroMemory(&Pi, sizeof(Pi));
 
     /* Suspended: win32k must know the host before its first SERVE */
-    if (!CreateProcessAsUserW(g_Token, Path, NULL, &Sa, &Sa, FALSE, CREATE_SUSPENDED | DETACHED_PROCESS,
+    if (!CreateProcessAsUserW(Token, Path, NULL, &Sa, &Sa, FALSE, CREATE_SUSPENDED | DETACHED_PROCESS,
                               NULL, NULL, &Si, &Pi))
     {
         WlUmfdLog(EVENTLOG_ERROR_TYPE, L"font driver host launch failed: %s (%lu)", Path, GetLastError());
         goto Out;
     }
+    CloseHandle(Token);
+    Token = NULL;
 
     Reg.Magic = UMFD_MAGIC;
     Reg.Version = UMFD_VERSION;
@@ -250,6 +257,8 @@ WlUmfdLaunch(
     Result = UmfdLaunchOk;
 
 Out:
+    if (Token)
+        CloseHandle(Token);
     CloseHandle(Image);
     LocalFree(Sa.lpSecurityDescriptor);
     return Result;
@@ -358,13 +367,11 @@ WlUmfdRelease(VOID)
         CloseHandle(g_Cancel);
     if (g_FirstDone)
         CloseHandle(g_FirstDone);
-    if (g_Token)
-        CloseHandle(g_Token);
     if (g_Desktop)
         CloseDesktop(g_Desktop);
     if (g_Winsta)
         CloseWindowStation(g_Winsta);
-    g_Cancel = g_FirstDone = g_Token = NULL;
+    g_Cancel = g_FirstDone = NULL;
     g_Desktop = NULL;
     g_Winsta = NULL;
 }
@@ -388,7 +395,7 @@ WlUmfdStart(VOID)
     RtlAdjustPrivilege(SE_TCB_PRIVILEGE, TRUE, FALSE, &Old);
     RtlAdjustPrivilege(SE_ASSIGNPRIMARYTOKEN_PRIVILEGE, TRUE, FALSE, &Old);
 
-    if (!WlUmfdMakeToken() || !WlUmfdMakeDesktop())
+    if (!WlUmfdMakeDesktop())
         goto Fail;
 
     WlRecBudgetInit(&g_Budget, UMFD_CAP_LAUNCHES + 1, UMFD_CAP_WINDOW_MS);
