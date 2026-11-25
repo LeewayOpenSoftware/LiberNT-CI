@@ -406,7 +406,71 @@ GetAllowedShutdownOptions(
 
 #define DIM_SCREEN_ALPHA 150
 
-static const WCHAR DimScreenClassName[] = L"MsginaDimScreen";
+static const WCHAR DimScreenClassName[] = L"DimmedWindowClass";
+
+static HBITMAP
+CaptureDimmedScreen(
+    _In_ INT x,
+    _In_ INT y,
+    _In_ INT cx,
+    _In_ INT cy)
+{
+    HDC hScreenDC, hCaptureDC, hBlackDC;
+    HBITMAP hCaptureBmp, hBlackBmp, hOldCapture, hOldBlack;
+    BLENDFUNCTION Blend;
+    RECT rc;
+    BOOL bOk = FALSE;
+
+    hScreenDC = GetDC(NULL);
+    if (!hScreenDC)
+        return NULL;
+
+    hCaptureDC = CreateCompatibleDC(hScreenDC);
+    hBlackDC = CreateCompatibleDC(hScreenDC);
+    hCaptureBmp = CreateCompatibleBitmap(hScreenDC, cx, cy);
+    hBlackBmp = CreateCompatibleBitmap(hScreenDC, cx, cy);
+
+    if (hCaptureDC && hBlackDC && hCaptureBmp && hBlackBmp)
+    {
+        hOldCapture = SelectObject(hCaptureDC, hCaptureBmp);
+        hOldBlack = SelectObject(hBlackDC, hBlackBmp);
+
+        bOk = BitBlt(hCaptureDC, 0, 0, cx, cy, hScreenDC, x, y, SRCCOPY);
+        if (bOk)
+        {
+            SetRect(&rc, 0, 0, cx, cy);
+            FillRect(hBlackDC, &rc, GetStockObject(BLACK_BRUSH));
+
+            Blend.BlendOp = AC_SRC_OVER;
+            Blend.BlendFlags = 0;
+            Blend.SourceConstantAlpha = DIM_SCREEN_ALPHA;
+            Blend.AlphaFormat = 0;
+
+            bOk = GdiAlphaBlend(hCaptureDC, 0, 0, cx, cy,
+                                hBlackDC, 0, 0, cx, cy, Blend);
+        }
+
+        SelectObject(hCaptureDC, hOldCapture);
+        SelectObject(hBlackDC, hOldBlack);
+    }
+
+    if (hBlackBmp)
+        DeleteObject(hBlackBmp);
+    if (hBlackDC)
+        DeleteDC(hBlackDC);
+    if (hCaptureDC)
+        DeleteDC(hCaptureDC);
+    ReleaseDC(NULL, hScreenDC);
+
+    if (!bOk)
+    {
+        if (hCaptureBmp)
+            DeleteObject(hCaptureBmp);
+        return NULL;
+    }
+
+    return hCaptureBmp;
+}
 
 static LRESULT CALLBACK
 DimScreenWndProc(
@@ -415,16 +479,54 @@ DimScreenWndProc(
     _In_ WPARAM wParam,
     _In_ LPARAM lParam)
 {
-    if (uMsg == WM_PAINT)
+    switch (uMsg)
     {
-        PAINTSTRUCT ps;
-        HDC hDC = BeginPaint(hWnd, &ps);
-        RECT rc;
-        GetClientRect(hWnd, &rc);
-        FillRect(hDC, &rc, GetStockObject(BLACK_BRUSH));
-        EndPaint(hWnd, &ps);
-        return 0;
+        case WM_CREATE:
+        {
+            LPCREATESTRUCTW CreateStruct = (LPCREATESTRUCTW)lParam;
+            SetWindowLongPtrW(hWnd, GWLP_USERDATA, (LONG_PTR)CreateStruct->lpCreateParams);
+            return 0;
+        }
+        case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
+            HDC hDC = BeginPaint(hWnd, &ps);
+            HBITMAP hBmp = (HBITMAP)GetWindowLongPtrW(hWnd, GWLP_USERDATA);
+
+            if (hBmp)
+            {
+                HDC hMemDC = CreateCompatibleDC(hDC);
+                if (hMemDC)
+                {
+                    RECT rc;
+                    HBITMAP hOldBmp = SelectObject(hMemDC, hBmp);
+                    GetClientRect(hWnd, &rc);
+                    BitBlt(hDC, 0, 0, rc.right, rc.bottom, hMemDC, 0, 0, SRCCOPY);
+                    SelectObject(hMemDC, hOldBmp);
+                    DeleteDC(hMemDC);
+                }
+            }
+            else
+            {
+                RECT rc;
+                GetClientRect(hWnd, &rc);
+                FillRect(hDC, &rc, GetStockObject(BLACK_BRUSH));
+            }
+
+            EndPaint(hWnd, &ps);
+            return 0;
+        }
+        case WM_ERASEBKGND:
+            return TRUE;
+        case WM_DESTROY:
+        {
+            HBITMAP hBmp = (HBITMAP)GetWindowLongPtrW(hWnd, GWLP_USERDATA);
+            if (hBmp)
+                DeleteObject(hBmp);
+            return 0;
+        }
     }
+
     return DefWindowProcW(hWnd, uMsg, wParam, lParam);
 }
 
@@ -508,11 +610,12 @@ ShellDimScreen(
     _Out_ HWND *phWindow)
 {
     PDIM_FADE_HANDLER Handler;
+    HBITMAP hBmp;
     HWND hWnd;
     INT x, y, cx, cy;
 
     if (!ppUnknown || !phWindow)
-        return E_POINTER;
+        return E_INVALIDARG;
 
     *ppUnknown = NULL;
     *phWindow = NULL;
@@ -525,16 +628,20 @@ ShellDimScreen(
     cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 
-    hWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                           DimScreenClassName, NULL, WS_POPUP,
-                           x, y, cx, cy,
-                           NULL, NULL, hDllInstance, NULL);
-    if (!hWnd)
-        return HRESULT_FROM_WIN32(GetLastError());
+    hBmp = CaptureDimmedScreen(x, y, cx, cy);
 
-    /* Semi-transparent black overlay dims the desktop behind the dialog. */
-    SetLayeredWindowAttributes(hWnd, 0, DIM_SCREEN_ALPHA, LWA_ALPHA);
-    ShowWindow(hWnd, SW_SHOW);
+    hWnd = CreateWindowExW(WS_EX_TOPMOST,
+                           DimScreenClassName, NULL,
+                           WS_POPUP | WS_VISIBLE | WS_DISABLED | WS_CLIPSIBLINGS,
+                           x, y, cx, cy,
+                           NULL, NULL, hDllInstance, hBmp);
+    if (!hWnd)
+    {
+        if (hBmp)
+            DeleteObject(hBmp);
+        return HRESULT_FROM_WIN32(GetLastError());
+    }
+
     UpdateWindow(hWnd);
 
     Handler = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Handler));
