@@ -177,7 +177,7 @@ START_TEST(NetUserMustChange)
     ok(TryLogon() == ERROR_SUCCESS, "Logon after a password reset failed\n");
 
     /* net user /logonpasswordchg:yes */
-    ok(RunNet(TEST_USER L" /logonpasswordchg:yes") == 0, "net user /logonpasswordchg:yes failed\n");
+    ok(RunNet(L"user " TEST_USER L" /logonpasswordchg:yes") == 0, "net user /logonpasswordchg:yes failed\n");
     Info = GetInfo4();
     if (Info == NULL)
         goto cleanup;
@@ -185,7 +185,7 @@ START_TEST(NetUserMustChange)
     NetApiBufferFree(Info);
     ok(TryLogon() == ERROR_PASSWORD_MUST_CHANGE, "Logon after net user /logonpasswordchg:yes did not report must-change\n");
 
-    ok(RunNet(TEST_USER L" /logonpasswordchg:maybe") != 0, "net user accepted /logonpasswordchg:maybe\n");
+    ok(RunNet(L"user " TEST_USER L" /logonpasswordchg:maybe") != 0, "net user accepted /logonpasswordchg:maybe\n");
 
 cleanup:
     Status = NetUserDel(NULL, TEST_USER);
