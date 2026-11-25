@@ -558,6 +558,8 @@ jobs:
           find "$OUT/modules/rostests/apitests/credprov" -type f \( -name '*.exe' -o -name '*.dll' \) -exec cp -v {} apitests-out/amd64/ \;
           cp -v "$OUT/dll/win32/credprovs/credprovs_test.dll" apitests-out/amd64/
         fi
+        # Hooked helper hosts (add_rostests_file targets under base/) that apitests start from beside them.
+        find "$OUT/base" -type f -name '*_test.exe' -exec cp -v {} apitests-out/amd64/ \;
         ls -lR apitests-out | head -100
 
     - name: Upload the apitests binaries
