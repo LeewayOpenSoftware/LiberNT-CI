@@ -71,6 +71,7 @@ extern void func_x87Exception(void);
 extern void func_InstructionCacheMigration(void);
 #endif
 extern void func_NtCreateFile(void);
+extern void func_NtCreateDirectoryObjectEx(void);
 extern void func_NtCreateKey(void);
 extern void func_NtCreateKeyCached(void);
 extern void func_NtCreateProfile(void);
@@ -309,6 +310,7 @@ const struct test winetest_testlist[] =
     { "InstructionCacheMigration",      func_InstructionCacheMigration },
 #endif
     { "NtCreateFile",                   func_NtCreateFile },
+    { "NtCreateDirectoryObjectEx",      func_NtCreateDirectoryObjectEx },
     { "NtCreateKey",                    func_NtCreateKey },
     { "NtCreateKeyCached",              func_NtCreateKeyCached },
     { "NtCreateProfile",                func_NtCreateProfile },
