@@ -5,6 +5,7 @@ list(APPEND SOURCE
     NetLocalGroupAddMembers.c
     NetUserEnum.c
     NetUserGetLocalGroups.c
+    NetUserModals.c
     testlist.c)
 
 add_executable(netapi32_apitest ${SOURCE})
