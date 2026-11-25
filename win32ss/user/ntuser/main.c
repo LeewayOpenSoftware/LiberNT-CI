@@ -593,6 +593,32 @@ IntIsGuiImage(
     return bGui;
 }
 
+/* KiUserCallbackDispatcher calls through this table: no table means user32 is not loaded */
+static
+BOOL
+IntHasUserCallbackTable(
+    _In_ PEPROCESS Process)
+{
+    PPEB Peb = PsGetProcessPeb(Process);
+    BOOL bPresent = FALSE;
+
+    if (!Peb)
+        return FALSE;
+
+    _SEH2_TRY
+    {
+        ProbeForRead(&Peb->KernelCallbackTable, sizeof(PVOID), sizeof(PVOID));
+        bPresent = (Peb->KernelCallbackTable != NULL);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        bPresent = FALSE;
+    }
+    _SEH2_END;
+
+    return bPresent;
+}
+
 NTSTATUS NTAPI
 InitThreadCallback(PETHREAD Thread)
 {
@@ -851,8 +877,9 @@ InitThreadCallback(PETHREAD Thread)
         (VOID)UserCreateInputContext(0);
     }
 
-    /* Last things to do only if we are not a SYSTEM or CSRSS thread */
-    if (!(ptiCurrent->TIF_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD)))
+    /* Last things to do only if we are not a SYSTEM or CSRSS thread, and user32 is there to call */
+    if (!(ptiCurrent->TIF_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD)) &&
+        IntHasUserCallbackTable(Process))
     {
         /* Callback to User32 Client Thread Setup */
         TRACE_CH(UserThread, "Call co_IntClientThreadSetup...\n");
