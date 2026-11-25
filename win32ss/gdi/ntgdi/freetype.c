@@ -2416,6 +2416,13 @@ IntGdiLoadFontByIndexFromMemory(PGDI_LOAD_FONT pLoadFont, FT_Long FontIndex)
     PSHARED_FACE SharedFace;
     INT FaceCount = 0;
 
+    /* UMFD mode 1: the host parses the whole file first, before any lock is taken (U1) */
+    if (FontIndex == -1 &&
+        UmfdValidateFont(pLoadFont->Memory->Buffer, pLoadFont->Memory->BufferSize) == UmfdRejected)
+    {
+        return 0;
+    }
+
     IntLockFreeType();
 
     /* Load a face from memory */
