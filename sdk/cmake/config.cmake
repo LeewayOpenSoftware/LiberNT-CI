@@ -236,7 +236,7 @@ set(GENERATE_DEPENDENCY_GRAPH FALSE CACHE BOOL
 cmake_dependent_option(ENABLE_ROSTESTS "Whether to build the ReactOS test suite." OFF
                        "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
 
-option(UMFD_TEST_HOOKS "Build fontdrvhost with the UMFD channel fault hooks its tests drive (test images only)." OFF)
+option(UMFD_TEST_HOOKS "Build fontdrvhost with the UMFD channel fault hooks its tests drive (test images only)." ON)
 
 option(LIBERNT_ACCEPTANCE_HOOKS "Compile the acceptance-test provocation hooks into system setup (acceptance image builds only)." OFF)
 
