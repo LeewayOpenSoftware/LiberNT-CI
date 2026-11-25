@@ -960,9 +960,17 @@ WlHlEnsureHost(
     g_Launch = Launch;
     g_HostScenario = Scenario;
     LeaveCriticalSection(&g_LaunchLock);
+    LogonStage("host-launched");
 
-    if (!WlHostWaitReady(Launch, ReadyMs))
+    if (WlHostWaitReady(Launch, ReadyMs))
+    {
+        LogonStage("host-ready");
+    }
+    else
+    {
+        LogonStage("host-not-ready");
         WARN("WL: logon UI not ready after %lu ms, continuing anyway\n", ReadyMs);
+    }
     if (Scenario != 0)
         WlHlPost(WluiCmdRequestCredentials, Scenario, Flags, 0, 0, NULL, NULL);
     return TRUE;
@@ -984,14 +992,23 @@ WlHlSetAccepting(
     LeaveCriticalSection(&g_SubmitLock);
 }
 
+/* Called right after the selector is read, before any status message: the boot status page
+ * ("Orosi is starting up") goes through WlHostStatus and its locks long before the SAS window
+ * exists. Entering an uninitialised critical section there stalled winlogon (VM leg B.1.1). */
+VOID
+WlHostLogonInit(VOID)
+{
+    InitializeCriticalSection(&g_SubmitLock);
+    InitializeCriticalSection(&g_LaunchLock);
+    g_SubmitEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+}
+
+/* Called once the SAS window exists: events and handlers need it, the locks do not. */
 VOID
 WlHostAttach(
     _In_ PWLSESSION Session)
 {
     g_Session = Session;
-    InitializeCriticalSection(&g_SubmitLock);
-    InitializeCriticalSection(&g_LaunchLock);
-    g_SubmitEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
     WluiSetSubmitHandler(WlHlSubmitHandler);
     WluiSetActionHandler(WlHlActionHandler);
     WlHostSetEndedCallback(WlHlOnHostEnded);
