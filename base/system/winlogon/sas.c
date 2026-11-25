@@ -285,14 +285,18 @@ StartUserShell(
 
     ReadyEvent = CreateUserDesktopReadyEvent(Session);
     if (Session->UseLogonUI)
+    {
+        /* The switch waits for ShellDesktopSwitchEvent (§6.3.1); the ready event stays for compatibility. */
+        WlHostCreateDesktopSwitchEvent(Session);
         ret = WlHostActivateUserShell(Session, lpEnvironment);
+    }
     else
         ret = Session->Gina.Functions.WlxActivateUserShell(
                     Session->Gina.Context,
                     L"Default",
                     NULL, /* FIXME */
                     lpEnvironment);
-    if (ret && ReadyEvent)
+    if (ret && ReadyEvent && !Session->UseLogonUI)
         WaitForUserDesktopReady(ReadyEvent);
     if (ReadyEvent)
         CloseHandle(ReadyEvent);
@@ -1121,9 +1125,12 @@ cleanup:
     }
     else // if (ret)
     {
-        /* Host mode: the host fades first, so the switch lands on a painted desktop (§6.3). */
+        /* Host mode: wait for the painted desktop, then the host fades across the switch (§6.3.1). */
         if (Session->UseLogonUI)
+        {
+            WlHostWaitDesktopSwitch(Session);
             WlHostBeforeDesktopSwitch();
+        }
         SwitchDesktop(Session->ApplicationDesktop);
         RemoveStatusMessage(Session);
         if (Session->UseLogonUI)

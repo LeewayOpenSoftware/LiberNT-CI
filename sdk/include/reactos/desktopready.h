@@ -9,3 +9,8 @@
 
 #define REACTOS_USER_DESKTOP_READY_EVENT L"LiberNT_UserDesktopReady"
 #define REACTOS_USER_DESKTOP_READY_TIMEOUT_MS 30000
+
+/* Set by explorer once the desktop has painted and the taskbar is open; in host mode winlogon
+ * switches desktops on it, or after HKLM Winlogon\DelayedDesktopSwitchTimeout seconds. */
+#define LIBERNT_SHELL_DESKTOP_SWITCH_EVENT L"ShellDesktopSwitchEvent"
+#define LIBERNT_DESKTOP_SWITCH_TIMEOUT_DEFAULT_S 30

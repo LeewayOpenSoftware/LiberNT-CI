@@ -487,6 +487,14 @@ VOID
 WlHostThemeWait(VOID);
 
 VOID
+WlHostCreateDesktopSwitchEvent(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostWaitDesktopSwitch(
+    _In_ PWLSESSION Session);
+
+VOID
 WlHostBeforeDesktopSwitch(VOID);
 
 VOID

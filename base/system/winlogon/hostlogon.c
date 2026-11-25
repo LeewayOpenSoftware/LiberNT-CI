@@ -12,9 +12,11 @@
 #include <ntsecapi.h>
 #include <credser.h>
 #include <wlui_s.h>
+#include <reactos/desktopready.h>
 
 #define WLHL_READY_MS       2000
-#define WLHL_FADE_WAIT_MS   1500
+#define WLHL_HOST_EXIT_MS   3000    /* the host leaves on its own after its fade; then it is stopped */
+#define WLHL_SWITCH_CAP_S   600     /* upper bound for DelayedDesktopSwitchTimeout */
 #define WLHL_LOCK_READY_MS  2000    /* default for HKLM Winlogon\LockReadyTimeoutMs (P2) */
 #define WLHL_CPUS_LOGON             1   /* CPUS_LOGON */
 #define WLHL_CPUS_UNLOCK            2   /* CPUS_UNLOCK_WORKSTATION */
@@ -51,6 +53,8 @@ static BOOL g_Accepting;                /* the SAS thread is waiting for a logon
 static BOOL g_SubmitBusy;               /* a submit is between the gate and the slot */
 static DWORD g_ChangeFor;               /* scenario a forced password change resumes; 0 = no change page */
 static BOOL g_LsaBroken;                /* the last logged-out SAS could not reach the LSA */
+static HANDLE g_SwitchEvent;            /* ShellDesktopSwitchEvent of the logon in progress */
+static HANDLE g_ShellProcess;           /* first Userinit process of the logon in progress */
 
 /* ---- LSA ---------------------------------------------------------------------- */
 
@@ -952,19 +956,165 @@ WlHostThemeWait(VOID)
     FreeLibrary(Module);
 }
 
-/* The desktop is about to be switched: let the host fade, then give it a moment to leave. */
+/* ---- the desktop switch (PHASE3-PLAN §6.3.1, commit 8) ---------------------------------- */
+
+/* ShellDesktopSwitchEvent for this logon: SYSTEM owns it, the user may only signal it. */
+VOID
+WlHostCreateDesktopSwitchEvent(
+    _In_ PWLSESSION Session)
+{
+    SID_IDENTIFIER_AUTHORITY NtAuthority = { SECURITY_NT_AUTHORITY };
+    PSID SystemSid = NULL;
+    PTOKEN_USER User = NULL;
+    PACL Dacl = NULL;
+    SECURITY_DESCRIPTOR Sd;
+    SECURITY_ATTRIBUTES Sa;
+    DWORD Length = 0, AclSize;
+
+    if (g_SwitchEvent)
+    {
+        CloseHandle(g_SwitchEvent);
+        g_SwitchEvent = NULL;
+    }
+    if (Session->UserToken == NULL)
+        return;
+
+    GetTokenInformation(Session->UserToken, TokenUser, NULL, 0, &Length);
+    User = LocalAlloc(LMEM_FIXED, Length);
+    if (User == NULL || !GetTokenInformation(Session->UserToken, TokenUser, User, Length, &Length))
+        goto done;
+    if (!AllocateAndInitializeSid(&NtAuthority, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0, 0, 0, 0, 0, &SystemSid))
+        goto done;
+
+    AclSize = sizeof(ACL) + 2 * (sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD)) +
+              GetLengthSid(SystemSid) + GetLengthSid(User->User.Sid);
+    Dacl = LocalAlloc(LMEM_FIXED | LMEM_ZEROINIT, AclSize);
+    if (Dacl == NULL ||
+        !InitializeAcl(Dacl, AclSize, ACL_REVISION) ||
+        !AddAccessAllowedAce(Dacl, ACL_REVISION, EVENT_ALL_ACCESS, SystemSid) ||
+        !AddAccessAllowedAce(Dacl, ACL_REVISION, EVENT_MODIFY_STATE, User->User.Sid) ||
+        !InitializeSecurityDescriptor(&Sd, SECURITY_DESCRIPTOR_REVISION) ||
+        !SetSecurityDescriptorDacl(&Sd, TRUE, Dacl, FALSE))
+        goto done;
+
+    Sa.nLength = sizeof(Sa);
+    Sa.lpSecurityDescriptor = &Sd;
+    Sa.bInheritHandle = FALSE;
+    g_SwitchEvent = CreateEventW(&Sa, TRUE, FALSE, LIBERNT_SHELL_DESKTOP_SWITCH_EVENT);
+    if (g_SwitchEvent != NULL && GetLastError() == ERROR_ALREADY_EXISTS)
+    {
+        /* Not ours, so not trusted: the switch then relies on the timeout alone. */
+        ERR("WL: %ls already exists; ignoring it\n", LIBERNT_SHELL_DESKTOP_SWITCH_EVENT);
+        CloseHandle(g_SwitchEvent);
+        g_SwitchEvent = NULL;
+    }
+
+done:
+    if (g_SwitchEvent == NULL)
+        ERR("WL: no desktop switch event (error %lu); the switch will wait for the timeout\n", GetLastError());
+    if (Dacl) LocalFree(Dacl);
+    if (SystemSid) FreeSid(SystemSid);
+    if (User) LocalFree(User);
+}
+
+static DWORD
+WlHlDesktopSwitchTimeoutMs(VOID)
+{
+    DWORD Seconds = 0, Size = sizeof(Seconds);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"DelayedDesktopSwitchTimeout",
+                     RRF_RT_REG_DWORD, NULL, &Seconds, &Size) != ERROR_SUCCESS || Seconds > WLHL_SWITCH_CAP_S)
+        Seconds = LIBERNT_DESKTOP_SWITCH_TIMEOUT_DEFAULT_S;
+    return Seconds * 1000;
+}
+
+/* Waits for the first of: explorer's signal, a Userinit process that failed, the timeout.
+ * A Userinit that simply exited (it does, after starting the shell) keeps the wait going. */
+VOID
+WlHostWaitDesktopSwitch(
+    _In_ PWLSESSION Session)
+{
+    HANDLE Waits[2];
+    DWORD Count, Timeout = WlHlDesktopSwitchTimeoutMs();
+    ULONGLONG Start = GetTickCount64();
+    PCSTR Reason = "timeout";
+    BOOL TimedOut = TRUE;
+    MSG Msg;
+
+    UNREFERENCED_PARAMETER(Session);
+
+    for (;;)
+    {
+        ULONGLONG Elapsed = GetTickCount64() - Start;
+        DWORD Left = Elapsed < Timeout ? (DWORD)(Timeout - Elapsed) : 0, Result, ExitCode = 0;
+
+        Count = 0;
+        if (g_SwitchEvent) Waits[Count++] = g_SwitchEvent;
+        if (g_ShellProcess) Waits[Count++] = g_ShellProcess;
+        if (Count == 0 && Left == 0)
+            break;
+
+        /* Sent messages keep flowing to the SAS window while we wait (as WaitForUserDesktopReady did). */
+        PeekMessageW(&Msg, NULL, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+        Result = MsgWaitForMultipleObjects(Count, Waits, FALSE, Left, QS_SENDMESSAGE);
+        if (Result == WAIT_OBJECT_0 + Count)
+            continue;
+        if (Result == WAIT_TIMEOUT)
+            break;
+        if (Result == WAIT_FAILED)
+        {
+            Reason = "wait failed";
+            TimedOut = FALSE;
+            break;
+        }
+        if (Count > 0 && Waits[Result - WAIT_OBJECT_0] == g_SwitchEvent)
+        {
+            Reason = "shell signalled";
+            TimedOut = FALSE;
+            break;
+        }
+        /* Userinit ended: a failure switches now (nothing will ever signal); success keeps waiting. */
+        GetExitCodeProcess(g_ShellProcess, &ExitCode);
+        CloseHandle(g_ShellProcess);
+        g_ShellProcess = NULL;
+        if (ExitCode != 0)
+        {
+            Reason = "shell failed";
+            TimedOut = FALSE;
+            break;
+        }
+    }
+
+    if (TimedOut)
+        WARN("WL: desktop switch after %lu ms without the shell's signal\n", Timeout);
+    TRACE("WL: desktop switch: %s after %I64u ms\n", Reason, GetTickCount64() - Start);
+    if (g_ShellProcess)
+    {
+        CloseHandle(g_ShellProcess);
+        g_ShellProcess = NULL;
+    }
+    if (g_SwitchEvent)
+    {
+        CloseHandle(g_SwitchEvent);
+        g_SwitchEvent = NULL;
+    }
+}
+
+/* The desktop behind is painted: the host starts its fade and the switch follows at once. */
 VOID
 WlHostBeforeDesktopSwitch(VOID)
 {
     if (!WlHlHostLive())
         return;
     WlHlPost(WluiCmdReadyForDesktopSwitch, g_HostScenario, 0, 0, 0, NULL, NULL);
-    WaitForSingleObject(WlHostEndedEvent(g_Launch), WLHL_FADE_WAIT_MS);
 }
 
+/* The host leaves by itself once its fade is done (0b+: about 1.6 s after the crossing); it is
+ * only stopped if it overstays. */
 VOID
 WlHostAfterDesktopSwitch(VOID)
 {
+    if (WlHlHostLive())
+        WaitForSingleObject(WlHostEndedEvent(g_Launch), WLHL_HOST_EXIT_MS);
     WlHlStopHost();
 }
 
@@ -983,7 +1133,8 @@ WlHlRunAsUser(
     _In_ PWLSESSION Session,
     _In_ PCWSTR Desktop,
     _In_opt_ PVOID Environment,
-    _In_ PCWSTR Command)
+    _In_ PCWSTR Command,
+    _Out_opt_ PHANDLE Process)
 {
     WCHAR CommandLine[MAX_PATH * 2];
     WCHAR DesktopName[64];
@@ -1004,7 +1155,10 @@ WlHlRunAsUser(
         return FALSE;
     }
     CloseHandle(Pi.hThread);
-    CloseHandle(Pi.hProcess);
+    if (Process)
+        *Process = Pi.hProcess;
+    else
+        CloseHandle(Pi.hProcess);
     return TRUE;
 }
 
@@ -1015,7 +1169,7 @@ WlHostStartApplication(
     _In_opt_ PVOID Environment,
     _In_ PCWSTR Command)
 {
-    return WlHlRunAsUser(Session, Desktop, Environment, Command);
+    return WlHlRunAsUser(Session, Desktop, Environment, Command, NULL);
 }
 
 /* Userinit is a comma-separated command list (msgina WlxActivateUserShell). */
@@ -1052,7 +1206,8 @@ WlHostActivateUserShell(
         while (*Command == L' ') Command++;
         if (*Command == UNICODE_NULL)
             continue;
-        if (WlHlRunAsUser(Session, L"Default", Environment, Command))
+        /* The first command (Userinit) is watched by the desktop switch for an early failure. */
+        if (WlHlRunAsUser(Session, L"Default", Environment, Command, Any ? NULL : &g_ShellProcess))
             Any = TRUE;
     }
     return Any;
