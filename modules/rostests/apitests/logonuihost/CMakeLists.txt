@@ -11,7 +11,7 @@ list(APPEND SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/wlui_s.c)
 
 add_executable(logonuihost_apitest ${SOURCE})
-target_link_libraries(logonuihost_apitest wluiclient wluiauth wine)
+target_link_libraries(logonuihost_apitest wluiclient wluiauth uuid wine)
 set_module_type(logonuihost_apitest win32cui)
 add_importlibs(logonuihost_apitest rpcrt4 ole32 advapi32 user32 msvcrt kernel32 ntdll)
 add_dependencies(logonuihost_apitest logonuihost_test credprov_testmod)
