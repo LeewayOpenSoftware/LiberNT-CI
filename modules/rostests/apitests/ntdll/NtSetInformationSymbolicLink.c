@@ -267,9 +267,9 @@ TestGlobalEffect(VOID)
     {
         RtlInitUnicodeString(&LinkName, LastLink);
         InitializeObjectAttributes(&Oa, &LinkName, OBJ_CASE_INSENSITIVE, NULL, NULL);
-        for (Pass = 0; Pass < 2; Pass++)
+        for (Pass = 0; Pass < 3; Pass++) /* off, on, off again: is the flag sticky? */
         {
-            Value = Pass;
+            Value = Pass & 1;
             Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
             trace("PROBE global=%lu -> 0x%lx\n", Value, Status);
             Status = NtOpenEvent(&H, EVENT_QUERY_STATE, &Oa);
@@ -344,9 +344,9 @@ TestGlobalEffectPrivateMap(VOID)
     {
         RtlInitUnicodeString(&LinkName, LastLink);
         InitializeObjectAttributes(&Oa, &LinkName, OBJ_CASE_INSENSITIVE, NULL, NULL);
-        for (Pass = 0; Pass < 2; Pass++)
+        for (Pass = 0; Pass < 3; Pass++) /* off, on, off again: is the flag sticky? */
         {
-            Value = Pass;
+            Value = Pass & 1;
             Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
             trace("PROBE privmap global=%lu -> 0x%lx\n", Value, Status);
             Info.EventState = -1;
