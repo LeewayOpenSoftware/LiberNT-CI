@@ -276,6 +276,46 @@ TestConcurrency(VOID)
     NtClose(Race.Shadow);
 }
 
+/* D6: the child keeps its own shadow reference; the shadow's creator handle can go away. */
+static
+VOID
+TestShadowLifetime(VOID)
+{
+    HANDLE Shadow = NULL, Dir = NULL, Ev = NULL, H;
+    UNICODE_STRING Name;
+    OBJECT_ATTRIBUTES Oa;
+    WCHAR Buffer[128];
+    NTSTATUS Status;
+
+    /* Unnamed, so closing the last handle deletes it as far as names go. */
+    InitializeObjectAttributes(&Oa, NULL, 0, NULL, NULL);
+    Status = NtCreateDirectoryObject(&Shadow, DIRECTORY_ALL_ACCESS, &Oa);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+    RtlInitUnicodeString(&Name, L"lifetime-ev");
+    InitializeObjectAttributes(&Oa, &Name, 0, Shadow, NULL);
+    Status = NtCreateEvent(&Ev, EVENT_ALL_ACCESS, &Oa, NotificationEvent, FALSE);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    MakeName(Buffer, _countof(Buffer), L"lifetime");
+    RtlInitUnicodeString(&Name, Buffer);
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = pNtCreateDirectoryObjectEx(&Dir, DIRECTORY_ALL_ACCESS, &Oa, Shadow, 0);
+    ok_hex(Status, STATUS_SUCCESS);
+    NtClose(Shadow);
+    if (NT_SUCCESS(Status))
+    {
+        Status = OpenEventIn(Dir, L"lifetime-ev", &H);
+        trace("PROBE open via child after shadow handle closed -> 0x%lx
+", Status);
+        if (NT_SUCCESS(Status))
+            NtClose(H);
+        NtClose(Dir);
+    }
+    CloseIf(Ev);
+}
+
 START_TEST(NtCreateDirectoryObjectEx)
 {
     ULONG Session = NtCurrentPeb()->SessionId;
@@ -297,5 +337,6 @@ START_TEST(NtCreateDirectoryObjectEx)
     TestShadowHandleChecks();
     TestShadowLookup();
     TestCollision();
+    TestShadowLifetime();
     TestConcurrency();
 }
