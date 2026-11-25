@@ -24,10 +24,13 @@ static const char * const NetlogonExports[] =
     "DsDeregisterDnsHostRecordsW",
     "DsEnumerateDomainTrustsA",
     "DsEnumerateDomainTrustsW",
+    "DsGetDcCloseW",
     "DsGetDcNameA",
     "DsGetDcNameW",
     "DsGetDcNameWithAccountA",
     "DsGetDcNameWithAccountW",
+    "DsGetDcNextA",
+    "DsGetDcNextW",
     "DsGetDcOpenA",
     "DsGetDcOpenW",
     "DsGetDcSiteCoverageA",
@@ -47,7 +50,7 @@ static const char * const NetlogonExports[] =
 
 START_TEST(NetlogonForwarders)
 {
-    HMODULE Advapi32, Netapi32, Logoncli, Netutils;
+    HMODULE Netapi32, Logoncli, Netutils;
     PNetApiBufferAllocate NetapiAllocate, NetutilsAllocate;
     PNetApiBufferFree NetapiFree, NetutilsFree;
     PNetGetDCName LogoncliGetDCName, NetapiGetDCName;
@@ -56,9 +59,6 @@ START_TEST(NetlogonForwarders)
     NET_API_STATUS Status;
     FARPROC NetapiProc, LogoncliProc;
     ULONG i;
-
-    Advapi32 = LoadLibraryW(L"advapi32.dll");
-    ok(Advapi32 != NULL, "LoadLibraryW(advapi32) failed: %lu\n", GetLastError());
 
     Netapi32 = LoadLibraryW(L"netapi32.dll");
     ok(Netapi32 != NULL, "LoadLibraryW(netapi32) failed: %lu\n", GetLastError());
@@ -148,5 +148,4 @@ done:
     if (Netutils) FreeLibrary(Netutils);
     if (Logoncli) FreeLibrary(Logoncli);
     if (Netapi32) FreeLibrary(Netapi32);
-    if (Advapi32) FreeLibrary(Advapi32);
 }

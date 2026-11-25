@@ -10,6 +10,7 @@
 
 #include <windef.h>
 #include <winbase.h>
+#include <winsock2.h>
 #include <dsgetdc.h>
 
 #include <wine/debug.h>
@@ -38,4 +39,27 @@ DWORD WINAPI DsGetDcOpenW(LPCWSTR domain, ULONG flags, LPCWSTR site,
     *context = NULL;
 
     return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+DWORD WINAPI DsGetDcNextA(HANDLE context, PULONG address_count,
+    LPSOCKET_ADDRESS *addresses, LPSTR *dns_host_name)
+{
+    FIXME("(%p, %p, %p, %p)\n", context, address_count, addresses,
+        dns_host_name);
+
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+DWORD WINAPI DsGetDcNextW(HANDLE context, PULONG address_count,
+    LPSOCKET_ADDRESS *addresses, LPWSTR *dns_host_name)
+{
+    FIXME("(%p, %p, %p, %p)\n", context, address_count, addresses,
+        dns_host_name);
+
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+VOID WINAPI DsGetDcCloseW(HANDLE context)
+{
+    FIXME("(%p)\n", context);
 }

@@ -7,13 +7,13 @@
 @ stdcall DsDeregisterDnsHostRecordsW(wstr wstr ptr ptr wstr) logoncli.DsDeregisterDnsHostRecordsW
 8 stdcall DsEnumerateDomainTrustsA(str long ptr ptr) logoncli.DsEnumerateDomainTrustsA
 9 stdcall DsEnumerateDomainTrustsW(wstr long ptr ptr) logoncli.DsEnumerateDomainTrustsW
-@ stub DsGetDcCloseW
+@ stdcall DsGetDcCloseW(ptr) logoncli.DsGetDcCloseW
 @ stdcall DsGetDcNameA(str str ptr str long ptr) logoncli.DsGetDcNameA
 @ stdcall DsGetDcNameW(wstr wstr ptr wstr long ptr) logoncli.DsGetDcNameW
 @ stdcall DsGetDcNameWithAccountA(str str long str ptr str long ptr) logoncli.DsGetDcNameWithAccountA
 @ stdcall DsGetDcNameWithAccountW(wstr wstr long wstr ptr wstr long ptr) logoncli.DsGetDcNameWithAccountW
-@ stub DsGetDcNextA
-@ stub DsGetDcNextW
+@ stdcall DsGetDcNextA(ptr ptr ptr ptr) logoncli.DsGetDcNextA
+@ stdcall DsGetDcNextW(ptr ptr ptr ptr) logoncli.DsGetDcNextW
 @ stdcall DsGetDcOpenA(str long str ptr str long ptr) logoncli.DsGetDcOpenA
 @ stdcall DsGetDcOpenW(wstr long wstr ptr wstr long ptr) logoncli.DsGetDcOpenW
 @ stdcall DsGetDcSiteCoverageA(str ptr str) logoncli.DsGetDcSiteCoverageA
