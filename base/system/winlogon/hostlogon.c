@@ -1215,7 +1215,33 @@ WlHostLoggedOutSas(
         Session->MprNotifyInfo.pszOldPassword = NULL;
         Session->Profile = LocalAlloc(LMEM_FIXED | LMEM_ZEROINIT, sizeof(WLX_PROFILE_V2_0));
         if (Session->Profile)
+        {
+            WCHAR EnvName[MAX_COMPUTERNAME_LENGTH + 1];
+            PCWSTR EnvDomain = g_Submit.Domain;
+            SIZE_T EnvSize;
+            LPWSTR Env;
+
             Session->Profile->dwType = WLX_PROFILE_TYPE_V2_0;   /* local account: default paths */
+
+            /* The GINA profile carries LOGONSERVER (msgina); host mode sets it the same way. */
+            if (EnvDomain[0] == UNICODE_NULL)
+            {
+                DWORD EnvNameSize = ARRAYSIZE(EnvName);
+                if (GetComputerNameW(EnvName, &EnvNameSize))
+                    EnvDomain = EnvName;
+            }
+            if (EnvDomain[0] != UNICODE_NULL)
+            {
+                EnvSize = (wcslen(L"LOGONSERVER=\\\\") + wcslen(EnvDomain) + 2) * sizeof(WCHAR);
+                Env = LocalAlloc(LMEM_FIXED, EnvSize);
+                if (Env)
+                {
+                    StringCchPrintfW(Env, EnvSize / sizeof(WCHAR), L"LOGONSERVER=\\\\%s", EnvDomain);
+                    Env[EnvSize / sizeof(WCHAR) - 1] = UNICODE_NULL;
+                    Session->Profile->pszEnvironment = Env;
+                }
+            }
+        }
         SecureZeroMemory(g_Submit.Password, sizeof(g_Submit.Password));
         g_Submit.Token = NULL;
         g_ChangeFor = 0;
