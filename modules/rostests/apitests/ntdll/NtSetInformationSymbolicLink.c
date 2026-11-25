@@ -164,6 +164,71 @@ TestPrivilege(VOID)
     NtClose(Link);
 }
 
+/* S4: what SymbolicLinkAccessMask restricts is defined by this probe on Win11. */
+static
+VOID
+TestAccessMaskEffect(VOID)
+{
+    static const ACCESS_MASK Masks[] = { 0, DIRECTORY_QUERY, DIRECTORY_TRAVERSE, SYMBOLIC_LINK_QUERY, DIRECTORY_ALL_ACCESS };
+    static const ACCESS_MASK Wants[] = { DIRECTORY_QUERY, DIRECTORY_TRAVERSE, DIRECTORY_CREATE_OBJECT, DIRECTORY_ALL_ACCESS };
+    UNICODE_STRING Empty = RTL_CONSTANT_STRING(L"");
+    OBJECT_ATTRIBUTES Oa;
+    HANDLE Link, H;
+    ULONG m, w;
+    NTSTATUS Status;
+
+    if (!HaveTcb)
+    {
+        skip("access-mask effect needs TCB (run as SYSTEM)
+");
+        return;
+    }
+    for (m = 0; m < _countof(Masks); m++)
+    {
+        if (!NT_SUCCESS(CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, BnoPath, &Link)))
+            return;
+        Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkAccessMask, (PVOID)&Masks[m], sizeof(ACCESS_MASK));
+        trace("PROBE accessmask set 0x%08lx -> 0x%lx
+", Masks[m], Status);
+        InitializeObjectAttributes(&Oa, &Empty, 0, Link, NULL);
+        for (w = 0; w < _countof(Wants); w++)
+        {
+            Status = NtOpenDirectoryObject(&H, Wants[w], &Oa);
+            trace("PROBE mask 0x%08lx open target want 0x%08lx -> 0x%lx
+", Masks[m], Wants[w], Status);
+            if (NT_SUCCESS(Status))
+                NtClose(H);
+        }
+        Status = NtOpenSymbolicLinkObject(&H, SYMBOLIC_LINK_QUERY, &Oa);
+        trace("PROBE mask 0x%08lx reopen link itself -> 0x%lx
+", Masks[m], Status);
+        if (NT_SUCCESS(Status))
+            NtClose(H);
+        NtClose(Link);
+    }
+}
+
+/* S6: a standard user may not globalise even a link it created and fully owns. */
+static
+VOID
+TestOwnLinkNotGlobal(VOID)
+{
+    HANDLE Link;
+    ULONG Value = 1;
+    NTSTATUS Status;
+
+    if (HaveTcb)
+        return;
+    if (!NT_SUCCESS(CreateLink(GENERIC_ALL, L"\BaseNamedObjects", &Link)))
+        return;
+    Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+    trace("PROBE own GENERIC_ALL link global=1 (no tcb) -> 0x%lx
+", Status);
+    ok(!NT_SUCCESS(Status), "standard user globalised its own link
+");
+    NtClose(Link);
+}
+
 typedef struct _RACE { HANDLE Link; volatile LONG Stop; LONG Failures; } RACE;
 
 static
@@ -240,5 +305,7 @@ START_TEST(NtSetInformationSymbolicLink)
     TestAccessMaskMapping();
     TestInvalidInput();
     TestPrivilege();
+    TestOwnLinkNotGlobal();
+    TestAccessMaskEffect();
     TestConcurrency();
 }
