@@ -600,7 +600,21 @@ START_TEST(umfd_launcher)
     ok(winsta == NULL && GetLastError() == ERROR_ACCESS_DENIED,
        "OpenWindowStation(UmfdHost): %p, error %lu\n", winsta, GetLastError());
     if (winsta)
+    {
+        HWINSTA old = GetProcessWindowStation();
+        HDESK desk = NULL;
+
+        if (SetProcessWindowStation(winsta))
+        {
+            desk = OpenDesktopW(L"Default", 0, FALSE, DESKTOP_READOBJECTS);
+            ok(desk == NULL && GetLastError() == ERROR_ACCESS_DENIED,
+               "OpenDesktop(UmfdHost\\Default): %p, error %lu\n", desk, GetLastError());
+            SetProcessWindowStation(old);
+        }
+        if (desk)
+            CloseDesktop(desk);
         CloseWindowStation(winsta);
+    }
 
     sessions = logon_sessions();
 
@@ -622,7 +636,7 @@ START_TEST(umfd_launcher)
         ok(host != NULL, "OpenProcess(host %lu) failed: %lu\n", next, GetLastError());
         if (!host)
             return;
-        /* A recycle is a normal end: relaunched at once, and it clears the launch history */
+        /* A real recycle is inside its own budget: relaunched at once */
         for (i = 0; i < UMFD_HOST_MAX_FAULTS; ++i)
             add_command(UMFD_TEST_CRASH, 0, &ms);
         ok(WaitForSingleObject(host, 10000) == WAIT_OBJECT_0, "the host did not recycle\n");
@@ -656,8 +670,8 @@ START_TEST(umfd_launcher)
         ok(logon_sessions() <= sessions, "logon sessions grew from %lu over %lu host restarts\n", sessions, restarts);
 }
 
-/* The event-log entry the cap leaves; 0 if the log cannot be read */
-static int cap_logged(void)
+/* 1 if an event 4002 carries text, -1 if none does, 0 if the log cannot be read */
+static int launcher_logged(const WCHAR *text)
 {
     BYTE buf[0x10000];
     DWORD read, needed, off;
@@ -673,7 +687,7 @@ static int cap_logged(void)
         {
             EVENTLOGRECORD *rec = (EVENTLOGRECORD *)(buf + off);
             if ((rec->EventID & 0xFFFF) == 4002 && rec->NumStrings &&
-                wcsstr((WCHAR *)((BYTE *)rec + rec->StringOffset), L"not relaunched"))
+                wcsstr((WCHAR *)((BYTE *)rec + rec->StringOffset), text))
                 found = 1;
         }
     }
@@ -684,7 +698,7 @@ static int cap_logged(void)
 /* Destructive: leaves mode 1 refusing every added font until reboot, so the leg runs it last */
 START_TEST(umfd_launcher_cap)
 {
-    DWORD pid = 0, prev = 0, kills, ms;
+    DWORD pid = 0, prev = 0, ends, ms;
     int logged;
 
     if (!is_reactos() || umfd_mode() != 1 || !can_run_launcher())
@@ -692,7 +706,22 @@ START_TEST(umfd_launcher_cap)
         skip("needs Orosi in mode 1, elevated\n");
         return;
     }
-    for (kills = 0; kills <= 6; ++kills)
+#ifdef UMFD_TEST_HOOKS
+    /* R1: a host that fakes recycles uses up its 3 free ones, then each counts toward the cap */
+    for (ends = 0; ends <= 10; ++ends)
+    {
+        pid = wait_launcher_host(prev, LAUNCHER_BACKOFF_MAX_MS + 5000);
+        if (!pid)
+            break;
+        add_command(UMFD_TEST_RECYCLE, 0, &ms);
+        prev = pid;
+    }
+    ok(pid == 0, "the host was still relaunched after %lu fake recycles\n", ends);
+    ok(ends >= 1 && ends <= 8, "%lu fake recycles before the cap (3 free, then at most 5 launches)\n", ends);
+    logged = launcher_logged(L"recycle rate exceeded");
+    ok(logged != -1, "no event 4002 for the recycle rate\n");
+#else
+    for (ends = 0; ends <= 6; ++ends)
     {
         pid = wait_launcher_host(prev, LAUNCHER_BACKOFF_MAX_MS + 5000);
         if (!pid)
@@ -700,11 +729,12 @@ START_TEST(umfd_launcher_cap)
         ok(kill_host(pid), "could not end host %lu\n", pid);
         prev = pid;
     }
-    ok(pid == 0, "the host was still relaunched after %lu abnormal ends\n", kills);
-    ok(kills >= 1 && kills <= 5, "%lu abnormal ends before the cap (at most 5 launches in 10 minutes)\n", kills);
+    ok(pid == 0, "the host was still relaunched after %lu abnormal ends\n", ends);
+    ok(ends >= 1 && ends <= 5, "%lu abnormal ends before the cap (at most 5 launches in 10 minutes)\n", ends);
+#endif
     ok(add_font(good_font, good_size, &ms) == 0, "a font was accepted after the cap\n");
     ok(ms < 5000, "the refusal after the cap took %lu ms\n", ms);
-    logged = cap_logged();
+    logged = launcher_logged(L"not relaunched");
     if (logged == 0)
         skip("the Application event log cannot be read\n");
     else

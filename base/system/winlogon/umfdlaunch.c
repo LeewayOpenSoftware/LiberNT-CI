@@ -18,6 +18,7 @@
 #define UMFD_DESKTOP         UMFD_WINSTA L"\\Default"
 #define UMFD_CAP_LAUNCHES    5
 #define UMFD_CAP_WINDOW_MS   (10 * 60 * 1000)
+#define UMFD_RECYCLE_MAX     3      /* a real recycle takes 32 faulting files */
 #define UMFD_BACKOFF_MIN_MS  1000
 #define UMFD_BACKOFF_MAX_MS  30000
 #define UMFD_STOP_WAIT_MS    5000
@@ -45,7 +46,9 @@ static HDESK g_Desktop;
 static HANDLE g_Supervisor;
 static HANDLE g_Cancel;
 static HANDLE g_FirstDone;
-static WLREC_BUDGET g_Budget;   /* only the supervisor thread touches it */
+static WLREC_BUDGET g_Budget;           /* crash budget; only the supervisor thread touches either */
+static WLREC_BUDGET g_RecycleBudget;
+static BOOL g_StopDone;
 
 static VOID
 WlUmfdLog(
@@ -280,7 +283,7 @@ WlUmfdSupervisor(
     HANDLE Process, Waits[2];
     DWORD Backoff = 0, Pid, ExitCode, Which;
     ULONGLONG Started;
-    BOOL TakenLogged = FALSE;
+    BOOL TakenLogged = FALSE, Free = FALSE;
     UMFD_LAUNCH Launch;
 
     UNREFERENCED_PARAMETER(Parameter);
@@ -289,7 +292,8 @@ WlUmfdSupervisor(
     {
         if (WaitForSingleObject(g_Cancel, Backoff) == WAIT_OBJECT_0)
             break;
-        if (!WlRecBudgetAdmit(&g_Budget, GetTickCount64()))
+        /* A recycle inside its own budget relaunches without touching the crash budget */
+        if (!Free && !WlRecBudgetAdmit(&g_Budget, GetTickCount64()))
         {
             /* D1 cap: only crash loops get here; mode 1 now refuses fonts until reboot */
             WlUmfdLog(EVENTLOG_ERROR_TYPE,
@@ -298,6 +302,7 @@ WlUmfdSupervisor(
                       UMFD_CAP_LAUNCHES, UMFD_CAP_WINDOW_MS / 60000);
             break;
         }
+        Free = FALSE;
 
         Launch = WlUmfdLaunch(&Process, &Pid);
         SetEvent(g_FirstDone);
@@ -338,13 +343,14 @@ WlUmfdSupervisor(
         ExitCode = 0;
         GetExitCodeProcess(Process, &ExitCode);
         CloseHandle(Process);
-        if (ExitCode == UMFD_HOST_EXIT_RECYCLE)
+
+        /* The contained host picks its exit code: recycles get their own budget and never clear g_Budget */
+        if (ExitCode == UMFD_HOST_EXIT_RECYCLE && WlRecBudgetAdmit(&g_RecycleBudget, GetTickCount64()))
         {
-            /* D1: a recycle is a normal end and clears the launch history */
             WlUmfdLog(EVENTLOG_INFORMATION_TYPE, L"font driver host pid %lu recycled after %u faulted files",
                       Pid, UMFD_HOST_MAX_FAULTS);
-            WlRecBudgetReset(&g_Budget);
             Backoff = 0;
+            Free = TRUE;
             continue;
         }
 
@@ -352,8 +358,13 @@ WlUmfdSupervisor(
         if (GetTickCount64() - Started >= UMFD_BACKOFF_MAX_MS)
             Backoff = 0;
         Backoff = WlUmfdNextBackoff(Backoff);
-        WlUmfdLog(EVENTLOG_WARNING_TYPE, L"font driver host pid %lu ended abnormally (exit 0x%lx); relaunch in %lu ms",
-                  Pid, ExitCode, Backoff);
+        if (ExitCode == UMFD_HOST_EXIT_RECYCLE)
+            WlUmfdLog(EVENTLOG_WARNING_TYPE, L"font driver host pid %lu: recycle rate exceeded (%u in %u minutes); "
+                      L"counted as an abnormal end, relaunch in %lu ms",
+                      Pid, UMFD_RECYCLE_MAX, UMFD_CAP_WINDOW_MS / 60000, Backoff);
+        else
+            WlUmfdLog(EVENTLOG_WARNING_TYPE, L"font driver host pid %lu ended abnormally (exit 0x%lx); relaunch in %lu ms",
+                      Pid, ExitCode, Backoff);
     }
 
     SetEvent(g_FirstDone);
@@ -399,6 +410,7 @@ WlUmfdStart(VOID)
         goto Fail;
 
     WlRecBudgetInit(&g_Budget, UMFD_CAP_LAUNCHES + 1, UMFD_CAP_WINDOW_MS);
+    WlRecBudgetInit(&g_RecycleBudget, UMFD_RECYCLE_MAX + 1, UMFD_CAP_WINDOW_MS);
     g_Cancel = CreateEventW(NULL, TRUE, FALSE, NULL);
     g_FirstDone = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (g_Cancel == NULL || g_FirstDone == NULL)
@@ -408,7 +420,8 @@ WlUmfdStart(VOID)
         goto Fail;
 
     /* Serving before the logon UI if it can be, but winlogon never blocks on the host */
-    WaitForSingleObject(g_FirstDone, UMFD_FIRST_WAIT_MS);
+    if (WaitForSingleObject(g_FirstDone, UMFD_FIRST_WAIT_MS) != WAIT_OBJECT_0)
+        TRACE("WL: no first font driver host launch within %u ms; boot goes on\n", UMFD_FIRST_WAIT_MS);
     return;
 
 Fail:
@@ -419,8 +432,10 @@ Fail:
 VOID
 WlUmfdStop(VOID)
 {
-    if (g_Supervisor == NULL)
+    /* A supervisor left running by an earlier call is not waited for twice */
+    if (g_Supervisor == NULL || g_StopDone)
         return;
+    g_StopDone = TRUE;
 
     SetEvent(g_Cancel);
     if (WaitForSingleObject(g_Supervisor, UMFD_JOIN_MS) != WAIT_OBJECT_0)
