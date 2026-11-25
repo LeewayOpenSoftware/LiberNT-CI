@@ -296,6 +296,7 @@
 @ stdcall -version=0xA00+ NtConvertBetweenAuxiliaryCounterAndPerformanceCounter(long ptr ptr ptr)
 @ stdcall NtCreateDebugObject(ptr long ptr long)
 @ stdcall NtCreateDirectoryObject(long long long)
+@ stdcall NtCreateDirectoryObjectEx(ptr long ptr ptr long)
 @ stdcall -version=0x600+ NtCreateEnlistment(ptr long ptr ptr ptr long long ptr)
 @ stdcall NtCreateEvent(long long long long long)
 @ stdcall NtCreateEventPair(ptr long ptr)
@@ -1607,6 +1608,7 @@
 @ stdcall ZwContinue(ptr long)
 @ stdcall ZwCreateDebugObject(ptr long ptr long)
 @ stdcall ZwCreateDirectoryObject(long long long)
+@ stdcall ZwCreateDirectoryObjectEx(ptr long ptr ptr long)
 @ stdcall -version=0x600+ ZwCreateEnlistment(ptr long ptr ptr ptr long long ptr) NtCreateEnlistment
 @ stdcall ZwCreateEvent(long long long long long)
 @ stdcall ZwCreateEventPair(ptr long ptr)

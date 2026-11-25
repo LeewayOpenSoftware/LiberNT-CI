@@ -524,7 +524,8 @@ ObPostPhase0:
                                          &NameInfo->Name,
                                          OBJ_CASE_INSENSITIVE,
                                          FALSE,
-                                         &Context))
+                                         &Context,
+                                         NULL))
             {
                 /* Insert this object type */
                 ObpInsertEntryDirectory(ObpTypeDirectoryObject,

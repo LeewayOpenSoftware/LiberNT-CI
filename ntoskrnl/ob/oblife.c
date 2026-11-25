@@ -1359,7 +1359,8 @@ ObCreateObjectTypeEx(IN PUNICODE_STRING TypeName,
                                     TypeName,
                                     OBJ_CASE_INSENSITIVE,
                                     FALSE,
-                                    &Context))
+                                    &Context,
+                                    NULL))
         {
             /* We have already created it, so fail */
             ObpReleaseLookupContext(&Context);

@@ -334,7 +334,8 @@ ObpDeleteNameCheck(IN PVOID Object)
                                          &ObjectNameInfo->Name,
                                          0,
                                          FALSE,
-                                         &Context);
+                                         &Context,
+                                         NULL);
         if (Object)
         {
             /* Lock the object */
@@ -480,6 +481,7 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
     BOOLEAN Reparse = FALSE, SymLink = FALSE;
     POBJECT_DIRECTORY Directory = NULL, ParentDirectory = NULL, RootDirectory;
     POBJECT_DIRECTORY ReferencedDirectory = NULL, ReferencedParentDirectory = NULL;
+    POBJECT_DIRECTORY FoundDirectory = NULL;
     KIRQL CalloutIrql;
     OB_PARSE_METHOD ParseRoutine;
     POBJECT_TYPE ParseObjectType;
@@ -861,7 +863,28 @@ ParseFromRoot:
                                              &ComponentName,
                                              Attributes,
                                              InsertObject ? FALSE : TRUE,
-                                             LookupContext);
+                                             LookupContext,
+                                             &FoundDirectory);
+            if (FoundDirectory)
+            {
+                if (Object &&
+                    (AccessCheckMode != KernelMode) &&
+                    !(AccessState->Flags & TOKEN_HAS_TRAVERSE_PRIVILEGE) &&
+                    !ObpCheckTraverseAccess(FoundDirectory,
+                                            DIRECTORY_TRAVERSE,
+                                            AccessState,
+                                            FALSE,
+                                            AccessCheckMode,
+                                            &Status))
+                {
+                    ObpReleaseLookupContextObject(LookupContext);
+                    Object = NULL;
+                }
+
+                ObDereferenceObject(FoundDirectory);
+                FoundDirectory = NULL;
+                if (!Object) break;
+            }
             if (!Object)
             {
                 /* We didn't find it... do we still have a path? */
