@@ -15,6 +15,7 @@
 #define UMFD_TEST_STALL             2   /* sleep Param ms, read the whole view again, then reply */
 #define UMFD_TEST_FREEZE            3   /* sleep Param ms without replying, then exit */
 #define UMFD_TEST_EXIT              4   /* exit while the view is mapped and the request is open */
+#define UMFD_TEST_RECYCLE           5   /* exit with the recycle code at once, as a hostile host could */
 
 /* Host exit codes the tests check */
 #define UMFD_TEST_EXIT_VIEW_GONE    0x55460001  /* a stalled request's view was unmapped under the host */

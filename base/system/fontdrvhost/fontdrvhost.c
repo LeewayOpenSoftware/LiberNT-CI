@@ -166,6 +166,10 @@ TestHook(const BYTE *pView, ULONG64 cbView, ULONG *pNumFaces, LONG *pStatus)
         case UMFD_TEST_EXIT:
             ExitProcess(UMFD_TEST_EXIT_ON_REQUEST);
 
+        case UMFD_TEST_RECYCLE:
+            TerminateProcess(GetCurrentProcess(), UMFD_HOST_EXIT_RECYCLE);
+            break;
+
         default:
             *pStatus = STATUS_INVALID_PARAMETER;
             break;
@@ -234,7 +238,7 @@ HandleLoad(const UMFD_HEADER *Request, UMFD_LOAD_REPLY *Result)
     if (!Faulted)
         FT_Done_FreeType(Library);
     else if (++g_Faults >= UMFD_HOST_MAX_FAULTS)
-        ExitProcess(UMFD_HOST_EXIT_RECYCLE);    /* win32k refuses the open request, as it would this file */
+        TerminateProcess(GetCurrentProcess(), UMFD_HOST_EXIT_RECYCLE);  /* no teardown runs on the faulted heap */
     if (Status < 0)
         return Status;
 
