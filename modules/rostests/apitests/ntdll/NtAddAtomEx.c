@@ -7,8 +7,10 @@
 
 #include "precomp.h"
 
+#ifndef ATOM_FLAG_GLOBAL
 #define ATOM_FLAG_NONE   0x0
 #define ATOM_FLAG_GLOBAL 0x2
+#endif
 
 typedef NTSTATUS (NTAPI *PNT_ADD_ATOM_EX)(PCWSTR, ULONG, PRTL_ATOM, ULONG);
 
