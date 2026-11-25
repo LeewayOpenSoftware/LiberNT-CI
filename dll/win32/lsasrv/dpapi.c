@@ -2688,6 +2688,8 @@ DpapiProtectForUser(
     Status = STATUS_SUCCESS;
 
 done:
+    if (!NT_SUCCESS(Status))
+        ERR("user-scope protect failed: 0x%08lx\n", Status);
     RtlSecureZeroMemory(MasterKey, sizeof(MasterKey));
     RtlSecureZeroMemory(Derived, sizeof(Derived));
     if (Op.Sid != NULL)
@@ -2807,6 +2809,8 @@ DpapiUnprotectForUser(
     Status = STATUS_SUCCESS;
 
 done:
+    if (!NT_SUCCESS(Status))
+        ERR("user-scope unprotect failed: 0x%08lx\n", Status);
     RtlSecureZeroMemory(MasterKey, sizeof(MasterKey));
     RtlSecureZeroMemory(Derived, sizeof(Derived));
     if (Op.Sid != NULL)
