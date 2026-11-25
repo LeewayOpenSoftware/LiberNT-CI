@@ -153,7 +153,7 @@ static
 VOID
 TestShadowLookup(VOID)
 {
-    HANDLE Shadow = NULL, Dir = NULL, InShadow = NULL, Local = NULL, H;
+    HANDLE Shadow = NULL, Dir = NULL, InShadow = NULL, Opened = NULL, Local = NULL, Local2 = NULL, H = NULL;
     UNICODE_STRING Name;
     OBJECT_ATTRIBUTES Oa;
     NTSTATUS Status;
@@ -181,13 +181,21 @@ TestShadowLookup(VOID)
         Status = NtCreateEvent(&Local, EVENT_ALL_ACCESS, &Oa, NotificationEvent, FALSE);
         trace("PROBE create 'both' in child -> 0x%lx\n", Status);
 
-        Status = OpenEventIn(Dir, L"only-in-shadow", &InShadow);
+        Status = OpenEventIn(Dir, L"only-in-shadow", &Opened);
         trace("PROBE open shadow-only name via child -> 0x%lx\n", Status);
         ok_hex(Status, STATUS_SUCCESS);
-        CloseIf(InShadow);
+        CloseIf(Opened);
 
-        Status = OpenEventIn(Dir, L"missing-everywhere", &InShadow);
+        Status = OpenEventIn(Dir, L"missing-everywhere", &Opened);
         ok_hex(Status, STATUS_OBJECT_NAME_NOT_FOUND);
+        CloseIf(Opened);
+
+        /* P3: inserts do not fall through; Win11 decides local create vs collision. */
+        RtlInitUnicodeString(&Name, L"only-in-shadow");
+        InitializeObjectAttributes(&Oa, &Name, 0, Dir, NULL);
+        Status = NtCreateEvent(&Local2, EVENT_ALL_ACCESS, &Oa, NotificationEvent, FALSE);
+        trace("PROBE create shadow-only name in child -> 0x%lx\n", Status);
+        CloseIf(Local2);
 
         /* The shadow reference must not keep the child alive after close. */
         Status = NtQueryObject(Shadow, ObjectBasicInformation, &Info, sizeof(Info), NULL);
@@ -199,6 +207,7 @@ TestShadowLookup(VOID)
         trace("PROBE shadow handles=%lu pointers=%lu after child close\n", Info.HandleCount, Info.PointerCount);
     }
     CloseIf(H);
+    CloseIf(InShadow);
     NtClose(Shadow);
 }
 
@@ -276,6 +285,41 @@ TestConcurrency(VOID)
     NtClose(Race.Shadow);
 }
 
+/* P2: C -> A -> B, the name lives only in B. Win11 decides whether shadows chain. */
+static
+VOID
+TestShadowChain(VOID)
+{
+    HANDLE A = NULL, B = NULL, C = NULL, Ev = NULL, H = NULL;
+    UNICODE_STRING Name;
+    OBJECT_ATTRIBUTES Oa;
+    NTSTATUS Status;
+
+    if (!NT_SUCCESS(CreateDir(FALSE, L"chainB", 0, NULL, 0, &B)))
+        return;
+    RtlInitUnicodeString(&Name, L"only-in-b");
+    InitializeObjectAttributes(&Oa, &Name, 0, B, NULL);
+    Status = NtCreateEvent(&Ev, EVENT_ALL_ACCESS, &Oa, NotificationEvent, FALSE);
+    ok_hex(Status, STATUS_SUCCESS);
+    Status = CreateDir(TRUE, L"chainA", 0, B, 0, &A);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        Status = CreateDir(TRUE, L"chainC", 0, A, 0, &C);
+        trace("PROBE create C with shadow A (itself shadowed) -> 0x%lx\n", Status);
+        if (NT_SUCCESS(Status))
+        {
+            Status = OpenEventIn(C, L"only-in-b", &H);
+            trace("PROBE open B-only name via C->A->B -> 0x%lx\n", Status);
+            CloseIf(H);
+        }
+    }
+    CloseIf(C);
+    CloseIf(A);
+    CloseIf(Ev);
+    NtClose(B);
+}
+
 /* D6: the child keeps its own shadow reference; the shadow's creator handle can go away. */
 static
 VOID
@@ -337,6 +381,7 @@ START_TEST(NtCreateDirectoryObjectEx)
     TestShadowHandleChecks();
     TestShadowLookup();
     TestCollision();
+    TestShadowChain();
     TestShadowLifetime();
     TestConcurrency();
 }
