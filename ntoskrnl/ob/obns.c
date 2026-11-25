@@ -282,13 +282,16 @@ NtCreatePrivateNamespace(
                             ObjectAttributes,
                             PreviousMode,
                             NULL,
-                            sizeof(OBJECT_DIRECTORY),
+                            sizeof(OBP_OBJECT_DIRECTORY),
                             0,
                             0,
                             (PVOID*)&Directory);
     if (!NT_SUCCESS(Status)) goto Quit;
 
-    RtlZeroMemory(Directory, sizeof(OBJECT_DIRECTORY));
+    RtlZeroMemory(CONTAINING_RECORD(Directory,
+                                    OBP_OBJECT_DIRECTORY,
+                                    Directory),
+                  sizeof(OBP_OBJECT_DIRECTORY));
     ExInitializePushLock(&Directory->Lock);
     Directory->SessionId = -1;
     Namespace->Directory = Directory;

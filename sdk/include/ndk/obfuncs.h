@@ -247,6 +247,17 @@ NtCreateDirectoryObject(
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
+NtCreateDirectoryObjectEx(
+    _Out_ PHANDLE DirectoryHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_opt_ HANDLE ShadowDirectoryHandle,
+    _In_ ULONG Flags
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
 NtCreatePrivateNamespace(
     _Out_ PHANDLE NamespaceHandle,
     _In_ ACCESS_MASK DesiredAccess,
@@ -475,6 +486,17 @@ ZwCreateDirectoryObject(
     _Out_ PHANDLE DirectoryHandle,
     _In_ ACCESS_MASK DesiredAccess,
     _In_ POBJECT_ATTRIBUTES ObjectAttributes
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwCreateDirectoryObjectEx(
+    _Out_ PHANDLE DirectoryHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_opt_ HANDLE ShadowDirectoryHandle,
+    _In_ ULONG Flags
 );
 
 NTSYSAPI

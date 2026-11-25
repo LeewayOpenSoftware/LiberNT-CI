@@ -37,6 +37,7 @@ NtConnectPort 8
 NtContinue 2
 NtCreateDebugObject 4
 NtCreateDirectoryObject 3
+NtCreateDirectoryObjectEx 5
 NtCreateEvent 5
 NtCreateEventPair 3
 NtCreateFile 11

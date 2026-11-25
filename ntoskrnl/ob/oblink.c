@@ -171,7 +171,8 @@ ReparseTargetPath:
                                              &TargetPath,
                                              0,
                                              FALSE,
-                                             &LookupContext);
+                                             &LookupContext,
+                                             NULL);
 
             /* Locking was faked, undo it now */
             if (DirectoryObject == NameDirectory)
