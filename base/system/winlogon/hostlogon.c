@@ -1081,7 +1081,20 @@ WlHostLoggedOutSas(
 
         Waits[0] = g_SubmitEvent;
         Waits[1] = WlHostEndedEvent(g_Launch);
-        Which = WaitForMultipleObjects(2, Waits, FALSE, INFINITE);
+        /* Posted messages keep flowing to the SAS window: win32k posts the shutdown notification
+         * (WM_LOGONNOTIFY) there and a plain wait starved it (leg finding 2). A second SAS is
+         * ignored in STATE_LOGGED_OFF_SAS, so dispatching here cannot nest this loop. */
+        Which = MsgWaitForMultipleObjects(2, Waits, FALSE, INFINITE, QS_ALLINPUT);
+        if (Which == WAIT_OBJECT_0 + 2)
+        {
+            MSG Msg;
+            while (PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
+            {
+                TranslateMessage(&Msg);
+                DispatchMessageW(&Msg);
+            }
+            continue;
+        }
 
         if (Which == WAIT_OBJECT_0 + 1)
         {
