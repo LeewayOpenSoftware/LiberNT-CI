@@ -487,6 +487,7 @@ WlHlFinishUnlock(
     CloseHandle(Token);                 /* the session keeps its own token; this one only answered */
     if (Same)
     {
+        WlHostOnSas();                  /* the tier that unlocked starts fresh next time (leg finding 1) */
         WlHlPostEvent(WLHOST_EVENT_UNLOCK);
         return;
     }
@@ -1157,6 +1158,7 @@ WlHostLoggedOutSas(
         LeaveCriticalSection(&g_SubmitLock);
 
         WlHlPost(WluiCmdDisplayWelcome, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, Session->MprNotifyInfo.pszUserName, NULL);
+        WlHostOnSas();                  /* a completed logon resets the levels like a user SAS does */
         Result = WLX_SAS_ACTION_LOGON;
         break;
     }
