@@ -1,7 +1,8 @@
 /*
- * PROJECT:     LiberNT API tests
- * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PROJECT:     ReactOS API tests
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     The logon UI host runs as SYSTEM on the Winlogon desktop, out of a user's reach
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
 #include <apitest.h>
