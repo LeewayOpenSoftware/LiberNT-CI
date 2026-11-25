@@ -25,7 +25,10 @@ def now():
     return time.time() - T0
 
 class Timeline:
-    def __init__(self, path):
+    def __init__(self, path, append=False):
+        # T0 restarts with every run: two runs in one file would mix time bases.
+        if not append and os.path.exists(path) and os.path.getsize(path) > 0:
+            sys.exit("rec3: %s is not empty; use a fresh --out or --append" % path)
         self.f = open(path, "a", buffering=1, encoding="utf-8")
         self.lock = threading.Lock()
     def ev(self, kind, text):
@@ -94,6 +97,7 @@ class State:
     def __init__(self, tl):
         self.tl = tl
         self.spinner = False
+        self.spinner_since = 0.0        # when the current spinner window opened
         self.lock = threading.Lock()
     def on_serial(self, text):
         parts = text.split()
@@ -109,6 +113,8 @@ class State:
         with self.lock:
             if self.spinner != on:
                 self.spinner = on
+                if on:
+                    self.spinner_since = now()
                 self.tl.ev("SPINNER", "%s %s" % ("on" if on else "off", why))
 
 def parse_ppm(data):
@@ -172,10 +178,12 @@ def main():
     ap.add_argument("--spinner-frozen", type=float, default=2.0, help="same, while a spinner is expected")
     ap.add_argument("--block-delta", type=float, default=4.0, help="mean-luma move that counts as a changed block")
     ap.add_argument("--no-diff", action="store_true", help="classes only, no 8x8 diff (no numpy)")
+    ap.add_argument("--dump", default="/tmp/f.ppm", help="screendump path, as seen by QEMU and by this script")
+    ap.add_argument("--append", action="store_true", help="append to an existing timeline (time base restarts)")
     args = ap.parse_args()
 
     os.makedirs(args.out + "/frames", exist_ok=True)
-    tl = Timeline(args.out + "/timeline.tsv")
+    tl = Timeline(args.out + "/timeline.tsv", args.append)
     state = State(tl)
     Serial(args.serial, tl, state).start()
     while not os.path.exists(args.monitor):
@@ -193,7 +201,7 @@ def main():
     sleep_until = 0.0
     last_blocks = None; last_sig = None; last_cls = None; last_dim = None
     still_since = None; frozen_reported = False
-    dump = "/tmp/f.ppm"
+    dump = args.dump
 
     while not os.path.exists(args.out + "/stop"):
         t_frame = time.time()
@@ -261,13 +269,17 @@ def main():
         else:
             tl.ev("F", "%dx%d luma=%.2f nb=%.5f %s blocks=%d" % (w, h, mean, nb, cls, changed))
 
-        # frozen frames (6.4.5): no block moved for longer than the bound, tighter under a spinner
+        # frozen frames (6.4.5): the screen bound counts the whole still run; the spinner bound
+        # counts only the part of it that lies inside the spinner window (a page that was already
+        # still when the spinner started is not a hung spinner until 2 s of spinner have passed).
         if changed == 0:
             if still_since is None:
                 still_since = t
-            bound = args.spinner_frozen if state.spinner else args.frozen
-            if not frozen_reported and t - still_since > bound:
-                tl.ev("FROZEN", "start %.3f %s" % (still_since, "spinner" if state.spinner else "screen"))
+            screen_frozen = t - still_since > args.frozen
+            spinner_frozen = state.spinner and (t - max(still_since, state.spinner_since)) > args.spinner_frozen
+            if not frozen_reported and (screen_frozen or spinner_frozen):
+                tl.ev("FROZEN", "start %.3f %s" % (max(still_since, state.spinner_since) if spinner_frozen and not screen_frozen else still_since,
+                                                   "spinner" if spinner_frozen else "screen"))
                 frozen_reported = True
         else:
             if frozen_reported:

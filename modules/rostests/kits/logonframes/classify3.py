@@ -86,9 +86,13 @@ def fades(frames, t0, t1, minlen=3):
     return res
 
 def frozen_runs(frames, spinner_windows, t0, t1):
-    """Runs with blocks==0 longer than the bound; the bound is 2 s inside a spinner window."""
-    res = []; start = None
+    """Still runs (blocks==0). The screen bound (15 s) counts the whole run; the spinner bound
+    (2 s) counts the overlap of the run with each spinner window, wherever the run started.
+    Returns (start, end, spinner) or None when the window has no diff data at all."""
+    res = []; start = None; last = None
     seq = [f for f in frames if t0 <= f[0] <= t1 and f[6] >= 0]
+    if not seq:
+        return None
     for f in seq:
         if f[6] == 0:
             if start is None:
@@ -102,10 +106,14 @@ def frozen_runs(frames, spinner_windows, t0, t1):
         res.append((start, last))
     out = []
     for s, e in res:
-        spin = any(a <= s < b for a, b in spinner_windows)
-        bound = FROZEN_SPINNER_S if spin else FROZEN_SCREEN_S
-        if e - s > bound:
-            out.append((s, e, spin))
+        if e - s > FROZEN_SCREEN_S:
+            out.append((s, e, False))
+            continue
+        for a, b in spinner_windows:
+            os_, oe = max(s, a), min(e, b)
+            if oe - os_ > FROZEN_SPINNER_S:
+                out.append((os_, oe, True))
+                break
     return out
 
 def main():
@@ -188,9 +196,13 @@ def main():
             if budget and budget[1] is not None and (e - s) * 1000 > budget[1]:
                 flag = "  MISS: fade %.0f ms > %d ms" % ((e - s) * 1000, budget[1]); misses += 1
             print("  %8.2f-%8.2f FADE luma %.1f->%.1f %d frames %.2fs%s" % (s, e, l0, l1, n, e - s, flag))
-        for s, e, spin in frozen_runs(frames, spinner_windows, a, b):
-            print("  %8.2f-%8.2f FROZEN %.1fs %s  MISS" % (s, e, e - s, "(spinner hung)" if spin else "(screen)"))
-            misses += 1
+        frozen = frozen_runs(frames, spinner_windows, a, b)
+        if frozen is None:
+            print("  frozen: not measured (no block diff in this window)")
+        else:
+            for s, e, spin in frozen:
+                print("  %8.2f-%8.2f FROZEN %.1fs %s  MISS" % (s, e, e - s, "(spinner hung)" if spin else "(screen)"))
+                misses += 1
         res = sorted(set((f[1], f[2]) for f in frames if a <= f[0] < b))
         print("  resolutions:", res)
 

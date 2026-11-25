@@ -25,7 +25,18 @@ Phase 3 of the LogonUI work (PHASE3-PLAN commit 11; criterion INVESTIGACION 6.4 
 - Thumbnails (quarter size PPM) on every visible change under `frames/`.
 
 Without numpy the classes still work (every 23rd pixel, the 0b+ method) and the diff is off
-(`WARN` in the timeline). Install `python3-numpy` in the recorder container.
+(`WARN` in the timeline; the report then says `frozen: not measured`). Install `python3-numpy`
+in the recorder container.
+
+The screendump file (`--dump`, default `/tmp/f.ppm`) is written by QEMU and read by the
+recorder, so both must see the same path: run the recorder in the same container or host as
+QEMU, or point `--dump` at a shared directory. A run refuses a non-empty `timeline.tsv` (its
+time base restarts at zero); use a fresh `--out` per run, or `--append` knowingly.
+
+Frozen-frame rules as measured: the 15 s screen bound counts the whole still run; the 2 s
+spinner bound counts only the part of the still run that lies inside a spinner window, so a page
+that was already still when the spinner started becomes a hung spinner after 2 s of spinner, and
+a run that started before the spinner is still caught.
 
 ## Running
 
