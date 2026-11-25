@@ -118,6 +118,18 @@ return:
 PUBLIC _KiUserCallbackDispatcher@12
 _KiUserCallbackDispatcher@12:
 
+    /* Get the callback table */
+    mov eax, fs:[TEB_PEB]
+    mov eax, [eax+PEB_KERNEL_CALLBACK_TABLE]
+
+    /* No client callback table: Windows ends the process with this status */
+    test eax, eax
+    jnz table_present
+    push STATUS_FATAL_USER_CALLBACK_EXCEPTION
+    call _RtlRaiseStatus@4
+
+table_present:
+
     /* Setup SEH stack */
     mov ecx, fs:[TEB_EXCEPTION_LIST]
     mov edx, offset _KiUserCallbackExceptionHandler
