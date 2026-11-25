@@ -8,6 +8,7 @@ extern void func_ControlServiceEx(void);
 extern void func_CopySid(void);
 extern void func_RedistributableFileOwner(void);
 extern void func_CreateProcessWithLogon(void);
+extern void func_CreateProcessAsUserOwnerless(void);
 extern void func_CreateProcessWithToken(void);
 extern void func_CreateProcessWithTokenChild(void);
 extern void func_CreateService(void);
@@ -88,6 +89,7 @@ const struct test winetest_testlist[] =
     { "CopySid", func_CopySid },
     { "RedistributableFileOwner", func_RedistributableFileOwner },
     { "CreateProcessWithLogon", func_CreateProcessWithLogon },
+    { "CreateProcessAsUserOwnerless", func_CreateProcessAsUserOwnerless },
     { "CreateProcessWithToken", func_CreateProcessWithToken },
     { "CreateProcessWithTokenChild", func_CreateProcessWithTokenChild },
     { "CreateService", func_CreateService },

@@ -509,6 +509,69 @@ Quit:
 }
 
 
+/*
+ * A descriptor given by the caller may carry only some parts; the missing owner, group
+ * and DACL come from the new token's defaults (DefaultSd), as on Windows.
+ * Returns the descriptor to set: Security itself when it is complete, a new one
+ * otherwise (the caller frees it), or NULL on failure.
+ */
+static
+PSECURITY_DESCRIPTOR
+CompleteProcessSecurity(
+    _In_ PSECURITY_DESCRIPTOR Security,
+    _In_opt_ PSECURITY_DESCRIPTOR DefaultSd,
+    _Out_ PBOOL Allocated)
+{
+    SECURITY_DESCRIPTOR Absolute;
+    PSECURITY_DESCRIPTOR Relative;
+    PSID Owner, Group;
+    PACL Dacl;
+    BOOL Present, Defaulted, HaveOwner, HaveGroup, HaveDacl;
+    DWORD Size = 0;
+
+    *Allocated = FALSE;
+
+    if (!GetSecurityDescriptorOwner(Security, &Owner, &Defaulted))
+        return NULL;
+    HaveOwner = Owner != NULL;
+    if (!GetSecurityDescriptorGroup(Security, &Group, &Defaulted))
+        return NULL;
+    HaveGroup = Group != NULL;
+    if (!GetSecurityDescriptorDacl(Security, &Present, &Dacl, &Defaulted))
+        return NULL;
+    HaveDacl = Present;
+
+    if ((HaveOwner && HaveGroup && HaveDacl) || DefaultSd == NULL)
+        return Security;
+
+    if (!HaveOwner && !GetSecurityDescriptorOwner(DefaultSd, &Owner, &Defaulted))
+        return NULL;
+    if (!HaveGroup && !GetSecurityDescriptorGroup(DefaultSd, &Group, &Defaulted))
+        return NULL;
+    if (!HaveDacl && !GetSecurityDescriptorDacl(DefaultSd, &Present, &Dacl, &Defaulted))
+        return NULL;
+
+    if (!InitializeSecurityDescriptor(&Absolute, SECURITY_DESCRIPTOR_REVISION) ||
+        !SetSecurityDescriptorOwner(&Absolute, Owner, FALSE) ||
+        !SetSecurityDescriptorGroup(&Absolute, Group, FALSE) ||
+        !SetSecurityDescriptorDacl(&Absolute, Present, Dacl, FALSE))
+        return NULL;
+
+    if (MakeSelfRelativeSD(&Absolute, NULL, &Size) || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+        return NULL;
+    Relative = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, Size);
+    if (Relative == NULL)
+        return NULL;
+    if (!MakeSelfRelativeSD(&Absolute, Relative, &Size))
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Relative);
+        return NULL;
+    }
+
+    *Allocated = TRUE;
+    return Relative;
+}
+
 /**
  * @brief
  * Changes the object security information of a process
@@ -534,13 +597,17 @@ Quit:
  * @param[in] ThreadSecurity
  * A pointer to a security descriptor that is for the thread.
  *
+ * @param[in] DefaultSd
+ * The token's default descriptor; supplies the owner, group or DACL a given
+ * descriptor lacks.
+ *
  * @return
  * Return TRUE if new security information has been set, FALSE
  * otherwise.
  */
 static
 BOOL
-SetNewProcessObjectSecurity(
+SetNewProcessObjectSecurityWorker(
     _In_ HANDLE ObjectHandle,
     _In_opt_ HANDLE Token,
     _In_ PSECURITY_DESCRIPTOR Security)
@@ -593,22 +660,51 @@ SetNewProcessObjectSecurity(
 
 static
 BOOL
+SetNewProcessObjectSecurity(
+    _In_ HANDLE ObjectHandle,
+    _In_opt_ HANDLE Token,
+    _In_ PSECURITY_DESCRIPTOR Security,
+    _In_opt_ PSECURITY_DESCRIPTOR DefaultSd)
+{
+    PSECURITY_DESCRIPTOR Complete;
+    BOOL Allocated, Success;
+
+    Complete = CompleteProcessSecurity(Security, DefaultSd, &Allocated);
+    if (Complete == NULL)
+    {
+        SetLastError(ERROR_INVALID_SECURITY_DESCR);
+        return FALSE;
+    }
+
+    Success = SetNewProcessObjectSecurityWorker(ObjectHandle, Token, Complete);
+    if (Allocated)
+    {
+        DWORD Error = GetLastError();
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Complete);
+        SetLastError(Error);
+    }
+    return Success;
+}
+
+static
+BOOL
 InsertProcessSecurityCommon(
     _In_ HANDLE ProcessHandle,
     _In_ HANDLE ThreadHandle,
     _In_opt_ HANDLE Token,
     _In_ PSECURITY_DESCRIPTOR ProcessSecurity,
-    _In_ PSECURITY_DESCRIPTOR ThreadSecurity)
+    _In_ PSECURITY_DESCRIPTOR ThreadSecurity,
+    _In_opt_ PSECURITY_DESCRIPTOR DefaultSd)
 {
     /* Set new security data for the process */
-    if (!SetNewProcessObjectSecurity(ProcessHandle, Token, ProcessSecurity))
+    if (!SetNewProcessObjectSecurity(ProcessHandle, Token, ProcessSecurity, DefaultSd))
     {
         ERR("InsertProcessSecurityCommon(): Failed to set security for process (error %lu)\n", GetLastError());
         return FALSE;
     }
 
     /* Set new security data for the thread */
-    if (!SetNewProcessObjectSecurity(ThreadHandle, Token, ThreadSecurity))
+    if (!SetNewProcessObjectSecurity(ThreadHandle, Token, ThreadSecurity, DefaultSd))
     {
         ERR("InsertProcessSecurityCommon(): Failed to set security for thread (error %lu)\n", GetLastError());
         return FALSE;
@@ -1055,7 +1151,8 @@ CreateProcessAsUserCommon(
                                          lpProcessInformation->hThread,
                                          hTokenDup,
                                          ProcessSd,
-                                         ThreadSd))
+                                         ThreadSd,
+                                         DefaultSd))
         {
             ERR("Failed to set new security information for process and thread\n");
             Success = FALSE;

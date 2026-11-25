@@ -8,6 +8,7 @@ list(APPEND SOURCE
     ControlServiceEx.c
     CopySid.c
     RedistributableFileOwner.c
+    CreateProcessAsUserOwnerless.c
     CreateProcessWithLogon.c
     CreateProcessWithToken.c
     CreateProcessWithTokenChild.c
