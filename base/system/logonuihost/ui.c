@@ -41,6 +41,9 @@ typedef struct _LUH_UI
     BOOL Exiting;
     /* credential page */
     BOOL ProvidersStarted;
+    BOOL InLegalNotice;     /* the notice box is up; its modal loop dispatches our commands */
+    DWORD PendingScenario;  /* a RequestCredentials that arrived under the box */
+    DWORD PendingFlags;
     PLUH_PAGE Page;         /* owned by providers.c; valid until the next WM_LUH_PAGE */
     BOOL PageBusy;          /* a submission is with winlogon; controls disabled */
     HWND PolicyButtons[2];
@@ -451,12 +454,33 @@ LuhHandleCommand(
             break;
 
         case WluiCmdRequestCredentials:
+            if (g_Ui.InLegalNotice)
+            {
+                /* Re-entered from the notice box's loop: keep the request for after the box. */
+                g_Ui.PendingScenario = Command->Scenario;
+                g_Ui.PendingFlags = Command->Flags;
+                break;
+            }
             g_Options.Scenario = Command->Scenario ? Command->Scenario : g_Options.Scenario;
             if (Command->Flags & WLUI_FLAG_FALLBACK)
                 g_Options.Fallback = TRUE;
             g_Options.NoPower = (Command->Flags & WLUI_FLAG_NO_POWER) != 0;
             if ((Command->Flags & WLUI_FLAG_LEGAL_NOTICE) && !g_Ui.ProvidersStarted)
+            {
+                g_Ui.InLegalNotice = TRUE;
                 LuhLegalNotice(Window);
+                g_Ui.InLegalNotice = FALSE;
+                if (g_Ui.Exiting)
+                    break;              /* a Dismiss or the desktop switch arrived under the box */
+                if (g_Ui.PendingScenario)
+                {
+                    g_Options.Scenario = g_Ui.PendingScenario;
+                    if (g_Ui.PendingFlags & WLUI_FLAG_FALLBACK)
+                        g_Options.Fallback = TRUE;
+                    g_Options.NoPower = (g_Ui.PendingFlags & WLUI_FLAG_NO_POWER) != 0;
+                    g_Ui.PendingScenario = 0;
+                }
+            }
             StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"");
             g_Ui.Detail[0] = UNICODE_NULL;
             LuhSetSpinner(Window, TRUE);

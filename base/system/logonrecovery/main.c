@@ -25,6 +25,10 @@ static DWORD g_PendingLoss;
 static DWORD g_Scenario;            /* page in front: 0 = none yet */
 static BOOL g_Change;               /* the change-password form is shown */
 static BOOL g_Busy;                 /* a submission is with winlogon; inputs disabled */
+static BOOL g_Leaving;              /* LrcLeave ran: the dialog is gone or going */
+static BOOL g_InLegalNotice;        /* the notice box is up; its modal loop dispatches our commands */
+static DWORD g_PendingScenario;     /* a RequestCredentials that arrived under the box */
+static DWORD g_PendingFlags;
 static int g_ExitCode = LRC_EXIT_OK;
 
 /* ---- tracing ---------------------------------------------------------------------- */
@@ -554,6 +558,9 @@ LrcLeave(
     _In_ WLUI_EXIT_REASON Reason,
     _In_ int ExitCode)
 {
+    if (g_Leaving)
+        return;
+    g_Leaving = TRUE;
     g_ExitCode = ExitCode;
     KillTimer(Dialog, LRC_HEARTBEAT_TIMER);
     LrcClearSecrets(Dialog);
@@ -571,13 +578,36 @@ LrcOnCommand(
     switch (Command->Type)
     {
         case WluiCmdRequestCredentials:
-            if (Command->Flags & WLUI_FLAG_LEGAL_NOTICE)
+        {
+            DWORD Scenario = Command->Scenario, Flags = Command->Flags;
+
+            if (g_InLegalNotice)
+            {
+                /* Re-entered from the notice box's loop: keep the request for after the box. */
+                g_PendingScenario = Scenario;
+                g_PendingFlags = Flags;
+                break;
+            }
+            if (Flags & WLUI_FLAG_LEGAL_NOTICE)
+            {
+                g_InLegalNotice = TRUE;
                 LrcLegalNotice(Dialog);     /* modal; the heartbeat timer still runs inside it */
-            LrcShowPage(Dialog, Command->Scenario ? Command->Scenario : g_Options.Scenario, Command->Flags);
+                g_InLegalNotice = FALSE;
+                if (g_Leaving)
+                    break;                  /* a Dismiss or the desktop switch arrived under the box */
+                if (g_PendingScenario)
+                {
+                    Scenario = g_PendingScenario;
+                    Flags = g_PendingFlags;
+                    g_PendingScenario = 0;
+                }
+            }
+            LrcShowPage(Dialog, Scenario ? Scenario : g_Options.Scenario, Flags);
 #ifdef LOGONUI_TEST_HOOKS
             LrcAutoSubmit(Dialog);
 #endif
             break;
+        }
 
         case WluiCmdDisplayStatus:
             SetDlgItemTextW(Dialog, IDC_STATUS, Command->Text);

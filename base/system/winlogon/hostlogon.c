@@ -58,7 +58,10 @@ static DWORD g_ChangeFor;               /* scenario a forced password change res
 static BOOL g_LsaBroken;                /* the last logged-out SAS could not reach the LSA */
 static HANDLE g_SwitchEvent;            /* ShellDesktopSwitchEvent of the logon in progress */
 static HANDLE g_ShellProcess;           /* first Userinit process of the logon in progress */
-static HWND g_TerminalDialog;           /* the N4 dialog, while it stands (SAS thread) */
+static HWND g_TerminalDialog;           /* the N4 dialog, while it stands (owned by its own thread) */
+static HANDLE g_TerminalThread;         /* the thread that pumps that dialog */
+static HANDLE g_TerminalShown;          /* set once the thread has created the dialog, or failed */
+#define WM_LUT_CLOSE (WM_APP + 0x10)    /* the SAS thread asks the dialog thread to leave */
 
 /* ---- LSA ---------------------------------------------------------------------- */
 
@@ -813,42 +816,100 @@ WlHlTerminalProc(
             if (LOWORD(wParam) == IDCANCEL)
                 return TRUE;            /* nothing dismisses it but a launch or a power action */
             break;
+        case WM_LUT_CLOSE:
+            DestroyWindow(Dialog);
+            return TRUE;
         case WM_CLOSE:
             return TRUE;
         case WM_DESTROY:
             g_TerminalDialog = NULL;
+            PostQuitMessage(0);
             return TRUE;
     }
     return FALSE;
 }
 
-/* Modeless on the SAS thread, so the thread keeps serving the SAS window (a user SAS may
- * still retry N1, a remote shutdown still lands); closed by the next launch that succeeds. */
+/* The dialog lives on its own thread with its own loop: winlogon's main loop is filtered
+ * to the SAS window and has no IsDialogMessage, so a dialog on that thread would be dead. */
+static DWORD WINAPI
+WlHlTerminalThread(
+    _In_ LPVOID Parameter)
+{
+    WLHOST_TERMINAL Reason = (WLHOST_TERMINAL)(ULONG_PTR)Parameter;
+    HWND Dialog = NULL;
+    MSG Msg;
+
+    if (g_Session == NULL || !SetThreadDesktop(g_Session->WinlogonDesktop))
+        ERR("WL: terminal dialog thread cannot use the Winlogon desktop (%lu)\n", GetLastError());
+    else
+        Dialog = CreateDialogParamW(hAppInstance, MAKEINTRESOURCEW(IDD_LOGONUITERMINAL), NULL,
+                                    WlHlTerminalProc, (LPARAM)Reason);
+    g_TerminalDialog = Dialog;
+    SetEvent(g_TerminalShown);
+    if (Dialog == NULL)
+    {
+        ERR("WL: cannot create the terminal dialog (%lu)\n", GetLastError());
+        return 1;
+    }
+    ShowWindow(Dialog, SW_SHOW);
+    SetForegroundWindow(Dialog);
+    SetFocus(GetDlgItem(Dialog, IDC_LUT_RESTART));
+    while (GetMessageW(&Msg, NULL, 0, 0) > 0)
+    {
+        if (!IsDialogMessageW(Dialog, &Msg))
+        {
+            TranslateMessage(&Msg);
+            DispatchMessageW(&Msg);
+        }
+    }
+    return 0;
+}
+
+static BOOL
+WlHlTerminalUp(VOID)
+{
+    return g_TerminalThread != NULL && WaitForSingleObject(g_TerminalThread, 0) == WAIT_TIMEOUT &&
+           g_TerminalDialog != NULL;
+}
+
+/* Joins a dialog thread that is over (or asks a live one to leave first). */
+static VOID
+WlHlCloseTerminal(VOID)
+{
+    if (g_TerminalThread == NULL)
+        return;
+    if (g_TerminalDialog != NULL)
+        PostMessageW(g_TerminalDialog, WM_LUT_CLOSE, 0, 0);
+    if (WaitForSingleObject(g_TerminalThread, 5000) != WAIT_OBJECT_0)
+        ERR("WL: terminal dialog thread did not leave\n");
+    CloseHandle(g_TerminalThread);
+    g_TerminalThread = NULL;
+    g_TerminalDialog = NULL;
+}
+
+/* Shown by the SAS thread (not blocked by it); the next launch that succeeds closes it. */
 static VOID
 WlHlShowTerminal(
     _In_ WLHOST_TERMINAL Reason)
 {
-    if (g_TerminalDialog != NULL)
+    if (WlHlTerminalUp())
         return;
-    g_TerminalDialog = CreateDialogParamW(hAppInstance, MAKEINTRESOURCEW(IDD_LOGONUITERMINAL), NULL,
-                                          WlHlTerminalProc, (LPARAM)Reason);
-    if (g_TerminalDialog == NULL)
+    WlHlCloseTerminal();                /* a thread that already ended on its own */
+    if (g_TerminalShown == NULL)
+        g_TerminalShown = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (g_TerminalShown == NULL)
+        return;
+    ResetEvent(g_TerminalShown);
+    g_TerminalThread = CreateThread(NULL, 0, WlHlTerminalThread, (LPVOID)(ULONG_PTR)Reason, 0, NULL);
+    if (g_TerminalThread == NULL)
     {
-        ERR("WL: cannot create the terminal dialog (%lu)\n", GetLastError());
+        ERR("WL: cannot start the terminal dialog thread (%lu)\n", GetLastError());
         return;
     }
-    ShowWindow(g_TerminalDialog, SW_SHOW);
-    SetForegroundWindow(g_TerminalDialog);
+    WaitForSingleObject(g_TerminalShown, 5000);
     WlHostLog(EVENTLOG_ERROR_TYPE, Reason == WlHostTerminalPolicy ? L"logon UI terminal dialog shown (policy)" :
               Reason == WlHostTerminalMissing ? L"logon UI terminal dialog shown (images missing)" :
                                                 L"logon UI terminal dialog shown (levels spent)");
-}
-
-static VOID
-WlHlCloseTerminal(VOID)
-{
-    if (g_TerminalDialog != NULL)
-        DestroyWindow(g_TerminalDialog);
 }
 
 /* Brings up a host for Scenario (0: status only). A live host is kept when it already shows
@@ -946,12 +1007,12 @@ WlHostDisplaySasNotice(
             WlHlPostResource(WluiCmdDisplayStatus, 0, IDS_PRESSCTRLALTDELETE);
         return;
     }
-    if (WlHostIsTerminal() || g_LsaBroken || g_TerminalDialog != NULL)
+    if (WlHostIsTerminal() || g_LsaBroken || WlHlTerminalUp())
     {
         /* N4, policy or no LSA: posting again would spin; the terminal dialog stands and a user
          * SAS is the only way on. */
         ERR("WL: logon UI cannot come up (%s); waiting for a user SAS\n",
-            g_LsaBroken ? "no LSA" : g_TerminalDialog ? "terminal dialog" : "terminal state");
+            g_LsaBroken ? "no LSA" : WlHlTerminalUp() ? "terminal dialog" : "terminal state");
         return;
     }
     Session->HostAutoSas = TRUE;
