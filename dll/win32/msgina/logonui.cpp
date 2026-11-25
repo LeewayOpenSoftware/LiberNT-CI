@@ -1276,9 +1276,10 @@ public:
 
     void Fail(UINT Id, PCWSTR Argument, HWND Clear)
     {
-        SetMessage(Id, Argument);
+        /* Clearing the edit sends EN_CHANGE, which wipes Message: clear first, then set the text. */
         if (Clear)
             SetWindowTextW(Clear, L"");
+        SetMessage(Id, Argument);
         Start(Anim::Shake, 360);
         if (Clear)
             SetFocus(Clear);
