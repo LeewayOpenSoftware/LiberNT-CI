@@ -480,6 +480,7 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
     BOOLEAN Reparse = FALSE, SymLink = FALSE, GlobalReparse = FALSE;
     POBJECT_DIRECTORY Directory = NULL, ParentDirectory = NULL, RootDirectory;
     POBJECT_DIRECTORY ReferencedDirectory = NULL, ReferencedParentDirectory = NULL;
+    POBJECT_DIRECTORY DosDevicesDirectory;
     KIRQL CalloutIrql;
     OB_PARSE_METHOD ParseRoutine;
     POBJECT_TYPE ParseObjectType;
@@ -691,6 +692,7 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
         {
 ParseFromRoot:
             LocalName = *ObjectName;
+            DosDevicesDirectory = NULL;
 
             /* Deference the device map if we already have one */
             if (DeviceMap != NULL)
@@ -700,8 +702,7 @@ ParseFromRoot:
             }
 
             /* Check if this is a possible DOS name */
-            if (!GlobalReparse &&
-                !((ULONG_PTR)(ObjectName->Buffer) & 7))
+            if (!((ULONG_PTR)(ObjectName->Buffer) & 7))
             {
                 /*
                  * This could be one. Does it match the prefix?
@@ -716,16 +717,27 @@ ParseFromRoot:
                     (*(PULONGLONG)(ObjectName->Buffer) ==
                      ObpDosDevicesShortNamePrefix.Alignment.QuadPart))
                 {
-                    DeviceMap = ObpReferenceDeviceMap();
+                    if (GlobalReparse)
+                    {
+                        if (ObSystemDeviceMap)
+                            DosDevicesDirectory = ObSystemDeviceMap->DosDevicesDirectory;
+                    }
+                    else
+                    {
+                        DeviceMap = ObpReferenceDeviceMap();
+                        if (DeviceMap)
+                            DosDevicesDirectory = DeviceMap->DosDevicesDirectory;
+                    }
+
                     /* We have a local mapping, drop the ?? prefix */
-                    if (DeviceMap != NULL && DeviceMap->DosDevicesDirectory != NULL)
+                    if (DosDevicesDirectory)
                     {
                         LocalName.Length -= ObpDosDevicesShortName.Length;
                         LocalName.MaximumLength -= ObpDosDevicesShortName.Length;
                         LocalName.Buffer += (ObpDosDevicesShortName.Length / sizeof(WCHAR));
 
                         /* We'll browse that local directory */
-                        Directory = DeviceMap->DosDevicesDirectory;
+                        Directory = DosDevicesDirectory;
                     }
                 }
                 else if ((ObjectName->Length == ObpDosDevicesShortName.Length -
@@ -735,21 +747,31 @@ ParseFromRoot:
                          (*((PWCHAR)(ObjectName->Buffer) + 2) ==
                           (WCHAR)(ObpDosDevicesShortNameRoot.Alignment.HighPart)))
                 {
-                    DeviceMap = ObpReferenceDeviceMap();
+                    if (GlobalReparse)
+                    {
+                        if (ObSystemDeviceMap)
+                            DosDevicesDirectory = ObSystemDeviceMap->DosDevicesDirectory;
+                    }
+                    else
+                    {
+                        DeviceMap = ObpReferenceDeviceMap();
+                        if (DeviceMap)
+                            DosDevicesDirectory = DeviceMap->DosDevicesDirectory;
+                    }
 
                     /* Caller is looking for the directory itself */
-                    if (DeviceMap != NULL && DeviceMap->DosDevicesDirectory != NULL)
+                    if (DosDevicesDirectory)
                     {
-                        Status = ObReferenceObjectByPointer(DeviceMap->DosDevicesDirectory,
+                        Status = ObReferenceObjectByPointer(DosDevicesDirectory,
                                                             0,
                                                             ObjectType,
                                                             AccessMode);
                         if (NT_SUCCESS(Status))
                         {
-                            *FoundObject = DeviceMap->DosDevicesDirectory;
+                            *FoundObject = DosDevicesDirectory;
                         }
 
-                        ObfDereferenceDeviceMap(DeviceMap);
+                        if (DeviceMap) ObfDereferenceDeviceMap(DeviceMap);
                         return Status;
                     }
                 }
