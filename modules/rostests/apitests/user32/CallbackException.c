@@ -102,7 +102,6 @@ static int ChildNullTable(void)
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     if (!RegisterTestClass())
         return CHILD_BAD_ARGS;
-    g_HandleInside = TRUE;
     Table = Peb->KernelCallbackTable;
     Peb->KernelCallbackTable = NULL;
     hwnd = CreateTestWindow();
@@ -175,7 +174,8 @@ START_TEST(CallbackException)
        "exception unhandled inside a callback: child exit %#lx, expected STATUS_ACCESS_VIOLATION\n", ExitCode);
 
     /* 3. the kernel calls back into a process whose table is NULL: the dispatcher answers the kernel,
-       window creation fails, the process lives (Win11's own dispatcher is not known to check; traced) */
+       window creation fails, the process lives. Windows is not known to check the table; what it does
+       is read off the lab run of this test, so the assertion is ours only and the exit code is traced. */
     ExitCode = RunChild("nulltable");
     ok(ExitCode == CHILD_RETURNED || (!is_reactos() && ExitCode == (DWORD)STATUS_ACCESS_VIOLATION),
        "callback with a NULL KernelCallbackTable: child exit %#lx, expected %u\n", ExitCode, CHILD_RETURNED);
