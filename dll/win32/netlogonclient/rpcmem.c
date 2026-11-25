@@ -11,7 +11,7 @@
 
 void __RPC_FAR * __RPC_USER midl_user_allocate(SIZE_T len)
 {
-    return HeapAlloc(GetProcessHeap(), 0, len);
+    return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, len);
 }
 
 void __RPC_USER midl_user_free(void __RPC_FAR *ptr)
