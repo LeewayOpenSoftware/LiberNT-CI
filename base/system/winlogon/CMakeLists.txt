@@ -19,6 +19,7 @@ list(APPEND SOURCE
     security.c
     setup.c
     shutdown.c
+    umfdlaunch.c
     winlogon.c
     wlx.c
     winlogon.h

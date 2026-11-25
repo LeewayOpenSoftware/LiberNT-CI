@@ -1,7 +1,8 @@
 /*
  * PROJECT:     LiberNT API tests
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     UMFD channel failure tests against a registered fontdrvhost (UMFD_TEST_HOOKS images)
+ * PURPOSE:     UMFD channel failure tests against a registered fontdrvhost (UMFD_TEST_HOOKS images),
+ *              and winlogon's supervision of its host
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -9,6 +10,7 @@
 #include <windows.h>
 #include <reactos/umfd.h>
 #include <reactos/umfdtest.h>
+#include <tlhelp32.h>
 
 INT WINAPI NtGdiExtEscape(HDC hdc, PWCHAR pDriver, INT nDriver, INT Escape,
                           INT InSize, LPSTR InData, INT OutSize, LPSTR OutData);
@@ -428,4 +430,238 @@ START_TEST(umfd_recycle)
     ok(add_font(good_font, good_size, &ms) == 0, "a font was accepted with no host\n");
     CloseHandle(host);
     restore_host();
+}
+
+/* ---- winlogon's launcher (umfdlaunch.c); run these before the tests that register their own host ---- */
+
+#define LAUNCHER_BACKOFF_MAX_MS 30000
+
+static BOOL token_user_is(HANDLE token, WELL_KNOWN_SID_TYPE type)
+{
+    BYTE buf[256];
+    DWORD len;
+
+    return GetTokenInformation(token, TokenUser, buf, sizeof(buf), &len) &&
+           IsWellKnownSid(((TOKEN_USER *)buf)->User.Sid, type);
+}
+
+/* fontdrvhost.exe running as LocalService is winlogon's; a test's own host runs as SYSTEM */
+static DWORD find_host(DWORD not_pid, BOOL launcher_only)
+{
+    PROCESSENTRY32W pe = { sizeof(pe) };
+    HANDLE snap, process, token;
+    DWORD found = 0;
+    BOOL more, mine;
+
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return 0;
+    for (more = Process32FirstW(snap, &pe); more && !found; more = Process32NextW(snap, &pe))
+    {
+        if (lstrcmpiW(pe.szExeFile, L"fontdrvhost.exe") || pe.th32ProcessID == not_pid)
+            continue;
+        if (!launcher_only)
+        {
+            found = pe.th32ProcessID;
+            break;
+        }
+        process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+        if (!process)
+            continue;
+        mine = OpenProcessToken(process, TOKEN_QUERY, &token);
+        if (mine)
+        {
+            mine = token_user_is(token, WinLocalServiceSid);
+            CloseHandle(token);
+        }
+        CloseHandle(process);
+        if (mine)
+            found = pe.th32ProcessID;
+    }
+    CloseHandle(snap);
+    return found;
+}
+
+static DWORD wait_launcher_host(DWORD not_pid, DWORD timeout)
+{
+    DWORD start = GetTickCount(), pid;
+
+    while (!(pid = find_host(not_pid, TRUE)) && GetTickCount() - start < timeout)
+        Sleep(200);
+    return pid;
+}
+
+/* UMFD-LAUNCHER-DESIGN §6: LocalService, restricted to E+R+U+AU, Low, SeChangeNotify only, its own desktop */
+static void check_launcher_host(DWORD pid)
+{
+    BYTE buf[1024];
+    DWORD len;
+    HANDLE process, token = NULL;
+
+    process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    ok(process != NULL, "OpenProcess(host %lu) failed: %lu\n", pid, GetLastError());
+    if (!process)
+        return;
+    ok(OpenProcessToken(process, TOKEN_QUERY, &token), "OpenProcessToken failed: %lu\n", GetLastError());
+    CloseHandle(process);
+    if (!token)
+        return;
+
+    ok(token_user_is(token, WinLocalServiceSid), "the host does not run as LocalService\n");
+    ok(IsTokenRestricted(token), "the host token is not restricted\n");
+    if (GetTokenInformation(token, TokenRestrictedSids, buf, sizeof(buf), &len))
+        ok(((TOKEN_GROUPS *)buf)->GroupCount == 4, "%lu restricting SIDs\n", ((TOKEN_GROUPS *)buf)->GroupCount);
+    else
+        ok(0, "TokenRestrictedSids failed: %lu\n", GetLastError());
+    if (GetTokenInformation(token, TokenIntegrityLevel, buf, sizeof(buf), &len))
+    {
+        PSID label = ((TOKEN_MANDATORY_LABEL *)buf)->Label.Sid;
+        ok(*GetSidSubAuthority(label, *GetSidSubAuthorityCount(label) - 1) == SECURITY_MANDATORY_LOW_RID,
+           "the host is not at Low integrity\n");
+    }
+    else
+        ok(0, "TokenIntegrityLevel failed: %lu\n", GetLastError());
+    if (GetTokenInformation(token, TokenPrivileges, buf, sizeof(buf), &len))
+        ok(((TOKEN_PRIVILEGES *)buf)->PrivilegeCount <= 1, "the host holds %lu privileges\n",
+           ((TOKEN_PRIVILEGES *)buf)->PrivilegeCount);
+    else
+        ok(0, "TokenPrivileges failed: %lu\n", GetLastError());
+    CloseHandle(token);
+}
+
+static BOOL kill_host(DWORD pid)
+{
+    HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pid);
+    BOOL ret;
+
+    if (!process)
+        return FALSE;
+    ret = TerminateProcess(process, 0xDEAD) && WaitForSingleObject(process, 5000) == WAIT_OBJECT_0;
+    CloseHandle(process);
+    return ret;
+}
+
+static BOOL can_run_launcher(void)
+{
+    if (!enable_privilege(L"SeDebugPrivilege"))
+    {
+        skip("not elevated (no SeDebugPrivilege)\n");
+        return FALSE;
+    }
+    if (!load_good_font())
+    {
+        skip("no TrueType font found\n");
+        return FALSE;
+    }
+    return TRUE;
+}
+
+START_TEST(umfd_launcher)
+{
+    DWORD mode, pid, next, ms;
+
+    if (!is_reactos())
+    {
+        skip("the UMFD launcher is Orosi's own\n");
+        return;
+    }
+    mode = umfd_mode();
+    if (mode == 0)
+    {
+        ok(find_host(0, FALSE) == 0, "a font driver host runs in mode 0\n");
+        return;
+    }
+    if (mode != 1 || !can_run_launcher())
+        return;
+
+    pid = wait_launcher_host(0, 10000);
+    ok(pid != 0, "winlogon started no font driver host\n");
+    if (!pid)
+        return;
+    check_launcher_host(pid);
+    ok(add_font(good_font, good_size, &ms) > 0, "a good font was refused by winlogon's host\n");
+
+    /* An abnormal end is relaunched after the first backoff step */
+    ok(kill_host(pid), "could not end host %lu\n", pid);
+    next = wait_launcher_host(pid, 5000);
+    ok(next != 0, "the host was not relaunched within 5 s\n");
+    if (!next)
+        return;
+    check_launcher_host(next);
+    ok(add_font(good_font, good_size, &ms) > 0, "a good font was refused after the relaunch\n");
+
+#ifdef UMFD_TEST_HOOKS
+    {
+        HANDLE host = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, next);
+        DWORD i, code = 0;
+
+        ok(host != NULL, "OpenProcess(host %lu) failed: %lu\n", next, GetLastError());
+        if (!host)
+            return;
+        /* A recycle is a normal end: relaunched at once, and it clears the launch history */
+        for (i = 0; i < UMFD_HOST_MAX_FAULTS; ++i)
+            add_command(UMFD_TEST_CRASH, 0, &ms);
+        ok(WaitForSingleObject(host, 10000) == WAIT_OBJECT_0, "the host did not recycle\n");
+        ok(GetExitCodeProcess(host, &code) && code == UMFD_HOST_EXIT_RECYCLE, "host exit 0x%lx\n", code);
+        CloseHandle(host);
+        pid = wait_launcher_host(next, 3000);
+        ok(pid != 0, "the recycled host was not relaunched within 3 s\n");
+        ok(add_font(good_font, good_size, &ms) > 0, "a good font was refused after the recycle\n");
+    }
+#endif
+}
+
+/* The event-log entry the cap leaves; 0 if the log cannot be read */
+static int cap_logged(void)
+{
+    BYTE buf[0x10000];
+    DWORD read, needed, off;
+    HANDLE log = OpenEventLogW(NULL, L"Application");
+    int found = -1;
+
+    if (!log)
+        return 0;
+    while (found < 0 && ReadEventLogW(log, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_BACKWARDS_READ, 0,
+                                      buf, sizeof(buf), &read, &needed))
+    {
+        for (off = 0; off < read && found < 0; off += ((EVENTLOGRECORD *)(buf + off))->Length)
+        {
+            EVENTLOGRECORD *rec = (EVENTLOGRECORD *)(buf + off);
+            if ((rec->EventID & 0xFFFF) == 4002 && rec->NumStrings &&
+                wcsstr((WCHAR *)((BYTE *)rec + rec->StringOffset), L"not relaunched"))
+                found = 1;
+        }
+    }
+    CloseEventLog(log);
+    return found < 0 ? -1 : 1;
+}
+
+/* Destructive: leaves mode 1 refusing every added font until reboot, so the leg runs it last */
+START_TEST(umfd_launcher_cap)
+{
+    DWORD pid = 0, prev = 0, kills, ms;
+    int logged;
+
+    if (!is_reactos() || umfd_mode() != 1 || !can_run_launcher())
+    {
+        skip("needs Orosi in mode 1, elevated\n");
+        return;
+    }
+    for (kills = 0; kills <= 6; ++kills)
+    {
+        pid = wait_launcher_host(prev, LAUNCHER_BACKOFF_MAX_MS + 5000);
+        if (!pid)
+            break;
+        ok(kill_host(pid), "could not end host %lu\n", pid);
+        prev = pid;
+    }
+    ok(pid == 0, "the host was still relaunched after %lu abnormal ends\n", kills);
+    ok(kills >= 1 && kills <= 5, "%lu abnormal ends before the cap (at most 5 launches in 10 minutes)\n", kills);
+    ok(add_font(good_font, good_size, &ms) == 0, "a font was accepted after the cap\n");
+    ok(ms < 5000, "the refusal after the cap took %lu ms\n", ms);
+    logged = cap_logged();
+    if (logged == 0)
+        skip("the Application event log cannot be read\n");
+    else
+        ok(logged > 0, "no event 4002 for the cap\n");
 }

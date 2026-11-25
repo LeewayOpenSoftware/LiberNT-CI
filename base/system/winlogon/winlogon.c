@@ -583,6 +583,9 @@ WinMain(
     /* Wait for the LSA server */
     WaitForLsass();
 
+    /* The font driver host's LocalService token needs lsass */
+    WlUmfdStart();
+
     PublishThemeTrustFact();
 
     /* Init Notifications */

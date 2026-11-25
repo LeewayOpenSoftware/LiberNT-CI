@@ -450,6 +450,13 @@ VOID
 WlHostStop(
     _In_ PWLHOST_LAUNCH Launch);
 
+/* umfdlaunch.c */
+VOID
+WlUmfdStart(VOID);
+
+VOID
+WlUmfdStop(VOID);
+
 /* hostlogon.c */
 VOID
 WlHostAttach(

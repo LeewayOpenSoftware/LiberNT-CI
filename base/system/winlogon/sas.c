@@ -1648,6 +1648,7 @@ HandleShutdown(
     // SwitchDesktop(Session->WinlogonDesktop); // Re-enable if you notice the desktop may have switched to something else.
     DisplayStatusMessage(Session, Session->WinlogonDesktop, uMsgId);
 
+    WlUmfdStop();
     ShutdownSessionZero();
 
     /* Destroy SAS window */
