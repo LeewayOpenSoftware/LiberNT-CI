@@ -97,6 +97,11 @@ LuhDestroyPage(void)
                 DestroyWindow(g_Ui.Page->Fields[i].Control);
                 g_Ui.Page->Fields[i].Control = NULL;
             }
+            if (g_Ui.Page->Fields[i].LabelControl)
+            {
+                DestroyWindow(g_Ui.Page->Fields[i].LabelControl);
+                g_Ui.Page->Fields[i].LabelControl = NULL;
+            }
         }
         /* The page came from the provider thread; the UI owns it from WM_LUH_PAGE on. */
         SecureZeroMemory(g_Ui.Page, sizeof(*g_Ui.Page));
@@ -207,10 +212,10 @@ LuhCreatePage(
 
         if (LuhFieldHasLabelRow(Field))
         {
-            HWND Label = CreateWindowExW(0, L"STATIC", Field->Label, WS_CHILD | WS_VISIBLE | SS_LEFT, X, Y,
-                                         LUH_PAGE_WIDTH, LUH_ROW_HEIGHT, Window, NULL, NULL, NULL);
-            if (Label)
-                SendMessageW(Label, WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+            Field->LabelControl = CreateWindowExW(0, L"STATIC", Field->Label, WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                                  X, Y, LUH_PAGE_WIDTH, LUH_ROW_HEIGHT, Window, NULL, NULL, NULL);
+            if (Field->LabelControl)
+                SendMessageW(Field->LabelControl, WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
             Y += LUH_ROW_HEIGHT + LUH_ROW_GAP;
         }
         Field->Control = CreateWindowExW(0, Class, Text, Style, X, Y, LUH_PAGE_WIDTH, LUH_ROW_HEIGHT,
