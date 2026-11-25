@@ -96,17 +96,18 @@ WlHlConnectLsa(VOID)
     return TRUE;
 }
 
+static const GUID WlHlPasswordProvider =
+    { 0x60b78e88, 0xead8, 0x445c, { 0x9c, 0xfd, 0x0b, 0x87, 0xf7, 0x4e, 0xa6, 0xcd } };
+
 /* A provider CLSID is acceptable when it is registered for logon on this machine. */
 static BOOL
 WlHlProviderRegistered(
     _In_ const GUID *Clsid)
 {
-    static const GUID PasswordProvider =
-        { 0x60b78e88, 0xead8, 0x445c, { 0x9c, 0xfd, 0x0b, 0x87, 0xf7, 0x4e, 0xa6, 0xcd } };
     WCHAR Key[160], Text[40];
     HKEY hKey;
 
-    if (IsEqualGUID(Clsid, &PasswordProvider))
+    if (IsEqualGUID(Clsid, &WlHlPasswordProvider))
         return TRUE;
     if (StringFromGUID2(Clsid, Text, ARRAYSIZE(Text)) == 0)
         return FALSE;
@@ -531,12 +532,23 @@ WlHlSubmitHandler(
     DWORD Error, Resume;
 
     UNREFERENCED_PARAMETER(State);
-    UNREFERENCED_PARAMETER(Role);
 
     if (Scenario != WLHL_CPUS_LOGON && Scenario != WLHL_CPUS_UNLOCK && Scenario != WLHL_CPUS_CHANGE_PASSWORD)
         return ERROR_NOT_SUPPORTED;
-    if (!g_Connected || !CredSerIsKnownPackage(&g_Packages, AuthenticationPackage))
+    if (!g_Connected)
         return ERROR_INVALID_PARAMETER;
+    if (Role == WluiAuthRoleRecovery)
+    {
+        /* P4: the recovery dialog has no LSA handle and only ever speaks for the password
+         * provider; it sends package 0 and gets MSV1_0, nothing else is accepted from it. */
+        if (AuthenticationPackage != 0 || !IsEqualGUID(ProviderClsid, &WlHlPasswordProvider))
+            return ERROR_ACCESS_DENIED;
+        AuthenticationPackage = g_MsvPackage;
+    }
+    else if (!CredSerIsKnownPackage(&g_Packages, AuthenticationPackage))
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
     if (!WlHlProviderRegistered(ProviderClsid))
         return ERROR_ACCESS_DENIED;
     if (Serialization == NULL || cbSerialization == 0 || cbSerialization > CREDSER_MAX_BLOB_SIZE)
