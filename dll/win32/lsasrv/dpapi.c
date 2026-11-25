@@ -2787,7 +2787,7 @@ DpapiUnprotectForUser(
         Status = DpapiMac(Derived + DPAPI_AES_KEY_SIZE, Blob,
                           DPAPI_V2_HEADER_SIZE + CipherLength, Mac);
         if (NT_SUCCESS(Status) && !DpapiEqualMac(Mac, Blob + DPAPI_V2_HEADER_SIZE + CipherLength))
-            Status = STATUS_WRONG_PASSWORD;
+            Status = STATUS_UNSUCCESSFUL;
     }
     if (!NT_SUCCESS(Status))
         goto done;
