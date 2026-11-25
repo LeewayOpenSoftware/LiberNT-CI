@@ -448,12 +448,16 @@ WlHlFinishLogon(
     g_Submit.SubStatus = SubStatus;
     g_Submit.MustChange = WlHlMustChange(Status, SubStatus);
     g_Submit.TextId = TextId;
+    if (NT_SUCCESS(Status) || g_Submit.MustChange)
+    {
+        /* The change page gets the account name back; the password only follows a success. */
+        WlHlCopyString(&Logon->UserName, g_Submit.User, ARRAYSIZE(g_Submit.User));
+        WlHlCopyString(&Logon->LogonDomainName, g_Submit.Domain, ARRAYSIZE(g_Submit.Domain));
+    }
     if (NT_SUCCESS(Status))
     {
         g_Submit.Token = Token;
         g_Submit.LogonId = *LogonId;
-        WlHlCopyString(&Logon->UserName, g_Submit.User, ARRAYSIZE(g_Submit.User));
-        WlHlCopyString(&Logon->LogonDomainName, g_Submit.Domain, ARRAYSIZE(g_Submit.Domain));
         /* The network-provider notification (MPR) still wants the password; it is wiped after use. */
         WlHlCopyString(&Logon->Password, g_Submit.Password, ARRAYSIZE(g_Submit.Password));
     }
@@ -919,6 +923,35 @@ WlHlShowTerminal(
                                                 L"logon UI terminal dialog shown (levels spent)");
 }
 
+/* The change page names the account whose password expired: the typed logon, or the
+ * session's user when the change was forced at an unlock. */
+static VOID
+WlHlChangePrefill(
+    _Out_writes_(Chars) PWCHAR Prefill,
+    _In_ ULONG Chars)
+{
+    PCWSTR Domain = NULL, User = NULL;
+
+    EnterCriticalSection(&g_SubmitLock);
+    if (g_ChangeFor == WLHL_CPUS_LOGON)
+    {
+        Domain = g_Submit.Domain;
+        User = g_Submit.User;
+    }
+    else if (g_Session != NULL)
+    {
+        Domain = g_Session->MprNotifyInfo.pszDomain;
+        User = g_Session->MprNotifyInfo.pszUserName;
+    }
+    if (User == NULL || User[0] == UNICODE_NULL)
+        Prefill[0] = UNICODE_NULL;
+    else if (Domain != NULL && Domain[0] != UNICODE_NULL)
+        StringCchPrintfW(Prefill, Chars, L"%s\\%s", Domain, User);
+    else
+        StringCchCopyW(Prefill, Chars, User);
+    LeaveCriticalSection(&g_SubmitLock);
+}
+
 /* Brings up a host for Scenario (0: status only). A live host is kept when it already shows
  * Scenario, or when it was status-only and the logon page is wanted (the host builds its
  * providers at the first RequestCredentials); any other change means a fresh host. */
@@ -931,6 +964,7 @@ WlHlEnsureHost(
     PWLHOST_LAUNCH Launch;
     WLHOST_TERMINAL Reason = WlHostTerminalNone;
     BOOL Terminal = FALSE;
+    WCHAR Prefill[WLUI_MAX_TEXT];
 
     if (!g_HostLogonReady)
     {
@@ -943,6 +977,9 @@ WlHlEnsureHost(
     if (Scenario != WLHL_CPUS_CHANGE_PASSWORD)
         g_ChangeFor = 0;
     LeaveCriticalSection(&g_SubmitLock);
+    Prefill[0] = UNICODE_NULL;
+    if (Scenario == WLHL_CPUS_CHANGE_PASSWORD)
+        WlHlChangePrefill(Prefill, ARRAYSIZE(Prefill));
 
     if (WlHlHostLive())
     {
@@ -981,7 +1018,7 @@ WlHlEnsureHost(
         WARN("WL: logon UI not ready after %lu ms, continuing anyway\n", ReadyMs);
     }
     if (Scenario != 0)
-        WlHlPost(WluiCmdRequestCredentials, Scenario, Flags, 0, 0, NULL, NULL);
+        WlHlPost(WluiCmdRequestCredentials, Scenario, Flags, 0, 0, Prefill[0] ? Prefill : NULL, NULL);
     return TRUE;
 }
 

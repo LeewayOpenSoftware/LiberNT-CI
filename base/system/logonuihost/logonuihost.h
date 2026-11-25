@@ -32,6 +32,7 @@ typedef struct _LUH_OPTIONS
     DWORD Scenario;
     BOOL Fallback;
     BOOL NoPower;           /* WLUI_FLAG_NO_POWER from the last RequestCredentials */
+    WCHAR PrefillUser[256]; /* WLUI_COMMAND.User of the last RequestCredentials: a forced change's account */
     PCWSTR Endpoint;            /* test build only; NULL means the production endpoint */
     BYTE ServerSid[SECURITY_MAX_SID_SIZE];
     PCWSTR TraceFile;           /* test build only */

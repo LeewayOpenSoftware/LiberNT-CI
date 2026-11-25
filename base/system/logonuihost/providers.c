@@ -8,6 +8,8 @@
 
 #include "logonuihost.h"
 #include <credprovhost.h>
+#include <ntsecapi.h>
+#include <credser.h>
 
 
 #define LUH_MAX_FAULTS 16
@@ -349,6 +351,41 @@ ServeRequest(
     SecureZeroMemory(R->Text, sizeof(R->Text));
 }
 
+/* A forced change names its account: the providers get a logon serialization that carries
+ * only DOMAIN\user and no password, so the page comes up with the name filled in. */
+static VOID
+PrefillProviders(
+    _In_ PCPH_PROVIDER_SET Set,
+    _In_ PCWSTR Prefill)
+{
+    WCHAR Domain[ARRAYSIZE(g_Options.PrefillUser)];
+    BYTE Buffer[4096];
+    ULONG Size = sizeof(Buffer);
+    PCWSTR User = Prefill;
+    PCWSTR Slash = wcschr(Prefill, L'\\');
+    ULONG i;
+
+    Domain[0] = UNICODE_NULL;
+    if (Slash != NULL)
+    {
+        StringCchCopyNW(Domain, ARRAYSIZE(Domain), Prefill, Slash - Prefill);
+        User = Slash + 1;
+    }
+    if (User[0] != UNICODE_NULL &&
+        CredSerPackLogon(KerbInteractiveLogon, Domain[0] ? Domain : NULL, User, L"", NULL, Buffer, &Size) >= 0)
+    {
+        CREDENTIAL_PROVIDER_CREDENTIAL_SERIALIZATION Serialization;
+
+        ZeroMemory(&Serialization, sizeof(Serialization));
+        Serialization.clsidCredentialProvider = GUID_NULL;
+        Serialization.rgbSerialization = Buffer;
+        Serialization.cbSerialization = Size;
+        for (i = 0; i < Set->Count; i++)
+            ICredentialProvider_SetSerialization(Set->Providers[i].Provider, &Serialization);
+    }
+    SecureZeroMemory(Buffer, sizeof(Buffer));
+}
+
 static DWORD WINAPI
 ProviderThread(
     _In_ LPVOID Parameter)
@@ -383,6 +420,8 @@ ProviderThread(
                                         g_Options.Fallback ? CPH_FLAG_FALLBACK : 0, &T->Set);
     StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu", T->Set ? T->Set->Count : 0);
     LuhTrace("providers", Num);
+    if (SUCCEEDED(hr) && T->Set != NULL && g_Options.PrefillUser[0] != UNICODE_NULL)
+        PrefillProviders(T->Set, g_Options.PrefillUser);
 
     if (FAILED(hr) || T->Set == NULL || !SelectCredential(T, Events))
     {

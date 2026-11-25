@@ -508,6 +508,7 @@ LuhHandleCommand(
             break;
 
         case WluiCmdRequestCredentials:
+            StringCchCopyW(g_Options.PrefillUser, ARRAYSIZE(g_Options.PrefillUser), Command->User);
             if (g_Ui.InLegalNotice)
             {
                 /* Re-entered from the notice box's loop: keep the request for after the box. */
