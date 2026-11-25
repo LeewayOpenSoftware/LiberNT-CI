@@ -9,6 +9,7 @@
 #include <apitest.h>
 
 extern void func_DsRoleGetPrimaryDomainInformation(void);
+extern void func_NetlogonForwarders(void);
 extern void func_NetUserDelete(void);
 extern void func_NetLocalGroupAddMembers(void);
 extern void func_NetUserEnum(void);
@@ -17,6 +18,7 @@ extern void func_NetUserGetLocalGroups(void);
 const struct test winetest_testlist[] =
 {
     { "DsRoleGetPrimaryDomainInformation", func_DsRoleGetPrimaryDomainInformation },
+    { "NetlogonForwarders", func_NetlogonForwarders },
     { "NetUserDelete", func_NetUserDelete },
     { "NetLocalGroupAddMembers", func_NetLocalGroupAddMembers },
     { "NetUserEnum", func_NetUserEnum },
