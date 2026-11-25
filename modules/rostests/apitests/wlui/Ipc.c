@@ -15,7 +15,7 @@
  * them apart from the client stubs this binary links from wluiclient; same-named definitions
  * would shadow those and every "RPC" call would be a direct call (leg 2026-11-25). The server
  * header repeats the client types, so take the ifspec alone. */
-extern RPC_IF_HANDLE wlui_v1_0_s_ifspec;
+extern RPC_IF_HANDLE Testwlui_v1_0_s_ifspec;   /* widl prefixes the server ifspec too */
 
 /* ---- the test server: records what arrives ------------------------------- */
 
@@ -126,7 +126,7 @@ StartTestServer(
     if (Status != RPC_S_OK)
         return FALSE;
     /* Registered exactly as winlogon does: local only, and the callback keeps it on ncalrpc. */
-    Status = RpcServerRegisterIfEx(wlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
+    Status = RpcServerRegisterIfEx(Testwlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
                                    RPC_C_LISTEN_MAX_CALLS_DEFAULT, WluiServerIfCallback);
     ok(Status == RPC_S_OK, "RegisterIfEx %lu\n", Status);
     if (Status != RPC_S_OK)
@@ -140,7 +140,7 @@ static void
 StopTestServer(void)
 {
     RpcMgmtStopServerListening(NULL);
-    RpcServerUnregisterIf(wlui_v1_0_s_ifspec, NULL, TRUE);
+    RpcServerUnregisterIf(Testwlui_v1_0_s_ifspec, NULL, TRUE);
 }
 
 /* ---- tests ------------------------------------------------------------------ */
