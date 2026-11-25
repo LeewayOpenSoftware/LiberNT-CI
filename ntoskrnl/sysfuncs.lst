@@ -238,6 +238,7 @@ NtSetInformationJobObject 4
 NtSetInformationKey 4
 NtSetInformationObject 4
 NtSetInformationProcess 4
+NtSetInformationSymbolicLink 4
 NtSetInformationThread 4
 NtSetInformationToken 4
 NtSetIntervalProfile 2

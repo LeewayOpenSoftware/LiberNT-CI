@@ -477,7 +477,7 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
     PVOID Object;
     POBJECT_HEADER ObjectHeader;
     UNICODE_STRING ComponentName, RemainingName;
-    BOOLEAN Reparse = FALSE, SymLink = FALSE;
+    BOOLEAN Reparse = FALSE, SymLink = FALSE, GlobalReparse = FALSE;
     POBJECT_DIRECTORY Directory = NULL, ParentDirectory = NULL, RootDirectory;
     POBJECT_DIRECTORY ReferencedDirectory = NULL, ReferencedParentDirectory = NULL;
     KIRQL CalloutIrql;
@@ -569,6 +569,7 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
 
                 /* Check for success or failure, so not reparse */
                 if ((Status != STATUS_REPARSE) &&
+                    (Status != STATUS_REPARSE_GLOBAL) &&
                     (Status != STATUS_REPARSE_OBJECT))
                 {
                     /* Check for failure */
@@ -599,13 +600,15 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
                         Status = STATUS_OBJECT_NAME_NOT_FOUND;
                     return Status;
                 }
-                else if ((!ObjectName->Length) ||
+                else if ((Status == STATUS_REPARSE_GLOBAL) ||
+                         (!ObjectName->Length) ||
                          (!ObjectName->Buffer) ||
                          (ObjectName->Buffer[0] == OBJ_NAME_PATH_SEPARATOR))
                 {
                     /* Reparsed to the root directory, so start over */
                     ObDereferenceObject(RootDirectory);
                     RootDirectory = ObpRootDirectoryObject;
+                    GlobalReparse = (Status == STATUS_REPARSE_GLOBAL);
 
                     /* Don't use this anymore, since we're starting at root */
                     RootHandle = NULL;
@@ -697,7 +700,8 @@ ParseFromRoot:
             }
 
             /* Check if this is a possible DOS name */
-            if (!((ULONG_PTR)(ObjectName->Buffer) & 7))
+            if (!GlobalReparse &&
+                !((ULONG_PTR)(ObjectName->Buffer) & 7))
             {
                 /*
                  * This could be one. Does it match the prefix?
@@ -750,6 +754,8 @@ ParseFromRoot:
                     }
                 }
             }
+
+            GlobalReparse = FALSE;
         }
     }
 
@@ -1020,6 +1026,7 @@ ReparseObject:
 
                 /* Check if we have to reparse */
                 if ((Status == STATUS_REPARSE) ||
+                    (Status == STATUS_REPARSE_GLOBAL) ||
                     (Status == STATUS_REPARSE_OBJECT))
                 {
                     /* Reparse again */
@@ -1033,6 +1040,7 @@ ReparseObject:
 
                     /* Start over from root if we got sent back there */
                     if ((Status == STATUS_REPARSE_OBJECT) ||
+                        (Status == STATUS_REPARSE_GLOBAL) ||
                         (ObjectName->Buffer[0] == OBJ_NAME_PATH_SEPARATOR))
                     {
                         /* Check if we got a root directory */
@@ -1046,6 +1054,7 @@ ReparseObject:
                         /* Start at Root */
                         ParentDirectory = NULL;
                         RootDirectory = ObpRootDirectoryObject;
+                        GlobalReparse = (Status == STATUS_REPARSE_GLOBAL);
 
                         /* Check for reparse status */
                         if (Status == STATUS_REPARSE_OBJECT)

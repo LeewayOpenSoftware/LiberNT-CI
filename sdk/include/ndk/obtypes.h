@@ -27,6 +27,13 @@ Author:
 #include <extypes.h>
 #endif
 
+typedef enum _SYMBOLIC_LINK_INFO_CLASS
+{
+    SymbolicLinkGlobalInformation = 1,
+    SymbolicLinkAccessMask,
+    MaxSymbolicLinkInfoClass
+} SYMBOLIC_LINK_INFO_CLASS;
+
 #ifdef NTOS_MODE_USER
 //
 // Definitions for Object Creation
@@ -705,6 +712,7 @@ typedef struct _OBJECT_SYMBOLIC_LINK
     UNICODE_STRING LinkTargetRemaining;
     PVOID LinkTargetObject;
     ULONG DosDeviceDriveIndex;
+    volatile LONG Flags;
 } OBJECT_SYMBOLIC_LINK, *POBJECT_SYMBOLIC_LINK;
 
 //
