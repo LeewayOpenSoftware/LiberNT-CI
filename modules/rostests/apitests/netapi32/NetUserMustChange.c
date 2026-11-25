@@ -159,6 +159,7 @@ START_TEST(NetUserMustChange)
     if (Info == NULL)
         goto cleanup;
     ok(Info->usri4_password_expired != 0, "usri4_password_expired does not read back\n");
+    ok((Info->usri4_flags & UF_PASSWORD_EXPIRED) != 0, "UF_PASSWORD_EXPIRED missing, flags 0x%lx\n", Info->usri4_flags);
     NetApiBufferFree(Info);
     ok(TryLogon() == ERROR_PASSWORD_MUST_CHANGE, "Logon did not report must-change\n");
 
