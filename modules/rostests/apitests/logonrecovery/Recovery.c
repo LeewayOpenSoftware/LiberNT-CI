@@ -435,6 +435,7 @@ START_TEST(Recovery)
     ok(Code == 0, "run 3 exit %lu\n", Code);
 
     ok(g_WrongId == 0, "%ld calls carried a wrong launch id\n", g_WrongId);
+    ok(g_Action == 0, "a power action (%lu) was requested without a button press\n", g_Action);
 
     DeleteFileW(Trace);
     RpcMgmtStopServerListening(NULL);

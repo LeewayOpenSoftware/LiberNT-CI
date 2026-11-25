@@ -146,6 +146,7 @@ WlHlBuildLogonGroups(VOID)
     SID_IDENTIFIER_AUTHORITY LocalAuthority = { SECURITY_LOCAL_SID_AUTHORITY };
     PSID LogonSid = NULL, LocalSid = NULL;
     PTOKEN_GROUPS Groups = NULL;
+    PSID_AND_ATTRIBUTES Entry;
     LUID LogonLuid;
 
     AllocateLocallyUniqueId(&LogonLuid);
@@ -159,10 +160,11 @@ WlHlBuildLogonGroups(VOID)
         return NULL;
     }
     Groups->GroupCount = 2;
-    Groups->Groups[0].Sid = LogonSid;
-    Groups->Groups[0].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_LOGON_ID;
-    Groups->Groups[1].Sid = LocalSid;
-    Groups->Groups[1].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT;
+    Entry = Groups->Groups;             /* the block holds two entries; the type declares one */
+    Entry[0].Sid = LogonSid;
+    Entry[0].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_LOGON_ID;
+    Entry[1].Sid = LocalSid;
+    Entry[1].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT;
     return Groups;
 }
 
@@ -170,10 +172,13 @@ static VOID
 WlHlFreeLogonGroups(
     _In_opt_ PTOKEN_GROUPS Groups)
 {
+    PSID_AND_ATTRIBUTES Entry;
+
     if (Groups == NULL)
         return;
-    FreeSid(Groups->Groups[0].Sid);
-    FreeSid(Groups->Groups[1].Sid);
+    Entry = Groups->Groups;
+    FreeSid(Entry[0].Sid);
+    FreeSid(Entry[1].Sid);
     LocalFree(Groups);
 }
 

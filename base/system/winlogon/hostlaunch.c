@@ -69,16 +69,6 @@ WlHostRecEnd(
     return Name;
 }
 
-static PCWSTR
-WlHostRecLevelName(VOID)
-{
-    PCWSTR Name;
-    EnterCriticalSection(&g_RecoveryLock);
-    Name = WlRecLevelName(WlRecLevel(&g_Recovery));
-    LeaveCriticalSection(&g_RecoveryLock);
-    return Name;
-}
-
 /* ---- event log ------------------------------------------------------------- */
 
 VOID
