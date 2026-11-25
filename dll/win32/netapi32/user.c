@@ -1758,12 +1758,9 @@ SetUserInfo(SAM_HANDLE UserHandle,
                 UserAllInfo.WhichFields |= USER_ALL_HOMEDIRECTORYDRIVE;
             }
 
-            /* Zero leaves the password state alone; it cannot clear an expiry */
-            if (UserInfo3->usri3_password_expired != 0)
-            {
-                UserAllInfo.PasswordExpired = TRUE;
-                UserAllInfo.WhichFields |= USER_ALL_PASSWORDEXPIRED;
-            }
+            /* Sent as given, as Win11 does: zero clears an expiry, nonzero sets must-change */
+            UserAllInfo.PasswordExpired = (UserInfo3->usri3_password_expired != 0);
+            UserAllInfo.WhichFields |= USER_ALL_PASSWORDEXPIRED;
             break;
 
         case 4:
@@ -1898,12 +1895,9 @@ SetUserInfo(SAM_HANDLE UserHandle,
                 UserAllInfo.WhichFields |= USER_ALL_HOMEDIRECTORYDRIVE;
             }
 
-            /* Zero leaves the password state alone; it cannot clear an expiry */
-            if (UserInfo4->usri4_password_expired != 0)
-            {
-                UserAllInfo.PasswordExpired = TRUE;
-                UserAllInfo.WhichFields |= USER_ALL_PASSWORDEXPIRED;
-            }
+            /* Sent as given, as Win11 does: zero clears an expiry, nonzero sets must-change */
+            UserAllInfo.PasswordExpired = (UserInfo4->usri4_password_expired != 0);
+            UserAllInfo.WhichFields |= USER_ALL_PASSWORDEXPIRED;
             break;
 
 //        case 21:

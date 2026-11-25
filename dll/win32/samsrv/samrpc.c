@@ -8018,9 +8018,9 @@ SampSetUserAll(PSAM_DB_OBJECT UserObject,
             FixedData.PasswordLastSet.LowPart = 0;
             FixedData.PasswordLastSet.HighPart = 0;
         }
-        else
+        else if (SampGetUserAccountControl(UserObject, &FixedData) & USER_PASSWORD_EXPIRED)
         {
-            /* The password was last set right now */
+            /* Clearing an expiry restarts the age; a password that is not expired keeps its age */
             Status = NtQuerySystemTime(&FixedData.PasswordLastSet);
             if (!NT_SUCCESS(Status))
                 goto done;

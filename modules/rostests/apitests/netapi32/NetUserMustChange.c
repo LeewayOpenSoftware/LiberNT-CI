@@ -172,10 +172,15 @@ START_TEST(NetUserMustChange)
     ok(Status == NERR_Success, "NetUserSetInfo(comment) returned %lu\n", Status);
     ok(TryLogon() == ERROR_PASSWORD_MUST_CHANGE, "A comment change cleared must-change\n");
 
-    /* Zero cannot clear an expiry */
+    /* password_expired=0 clears must-change, as on Win11 26100 */
     Status = SetComment(L"zero", 0);
     ok(Status == NERR_Success, "NetUserSetInfo(password_expired=0) returned %lu\n", Status);
-    ok(TryLogon() == ERROR_PASSWORD_MUST_CHANGE, "password_expired=0 cleared must-change\n");
+    ok(TryLogon() == ERROR_SUCCESS, "password_expired=0 did not clear must-change\n");
+
+    /* Set it again for the reset below */
+    Status = SetComment(L"again", 1);
+    ok(Status == NERR_Success, "NetUserSetInfo(password_expired=1) returned %lu\n", Status);
+    ok(TryLogon() == ERROR_PASSWORD_MUST_CHANGE, "Logon did not report must-change again\n");
 
     /* A new password ends it */
     ResetPassword();
