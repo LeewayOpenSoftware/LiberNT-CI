@@ -840,6 +840,49 @@ DpapiReleaseSidLock(
     RtlLeaveCriticalSection(&DpapiSidLockListLock);
 }
 
+/* The profile directory of a SID from ProfileList. ProfileImagePath is REG_EXPAND_SZ
+ * ("%SystemDrive%\\Users\\name" on a stock install); it is read unexpanded, which every
+ * RegGetValueW does with RRF_NOEXPAND, and expanded here, so the Protect path never carries
+ * a literal "%SystemDrive%" (that made every user-scope protect fail with error 2). */
+static
+NTSTATUS
+DpapiReadProfileImagePath(
+    _In_ PCUNICODE_STRING SidUnicode,
+    _Out_writes_(PathChars) PWCHAR Path,
+    _In_ ULONG PathChars)
+{
+    WCHAR KeyPath[256];
+    WCHAR RawPath[MAX_PATH];
+    DWORD RawSize = sizeof(RawPath), Expanded;
+    LONG Length;
+    LSTATUS Result;
+    HKEY Key;
+
+    Length = _snwprintf(KeyPath, ARRAYSIZE(KeyPath),
+                        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\%wZ",
+                        SidUnicode);
+    if (Length < 0 || Length >= ARRAYSIZE(KeyPath))
+        return STATUS_NAME_TOO_LONG;
+
+    Result = RegOpenKeyExW(HKEY_LOCAL_MACHINE, KeyPath, 0, KEY_READ, &Key);
+    if (Result != ERROR_SUCCESS)
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+
+    Result = RegGetValueW(Key, NULL, L"ProfileImagePath",
+                          RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
+                          NULL, RawPath, &RawSize);
+    RegCloseKey(Key);
+    if (Result != ERROR_SUCCESS)
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+
+    Expanded = ExpandEnvironmentStringsW(RawPath, Path, PathChars);
+    if (Expanded == 0)
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+    if (Expanded > PathChars)
+        return STATUS_NAME_TOO_LONG;
+    return STATUS_SUCCESS;
+}
+
 static
 NTSTATUS
 DpapiGetUserProtectPath(
@@ -850,32 +893,17 @@ DpapiGetUserProtectPath(
 {
     WCHAR SidString[64];
     UNICODE_STRING SidUnicode;
-    WCHAR KeyPath[256];
     WCHAR ProfilePath[MAX_PATH];
-    DWORD ProfilePathSize = sizeof(ProfilePath);
     LONG Length;
-    LSTATUS Result;
-    HKEY Key;
+    NTSTATUS Status;
 
     RtlInitEmptyUnicodeString(&SidUnicode, SidString, sizeof(SidString));
     if (!NT_SUCCESS(RtlConvertSidToUnicodeString(&SidUnicode, Sid, FALSE)))
         return STATUS_UNSUCCESSFUL;
 
-    Length = _snwprintf(KeyPath, ARRAYSIZE(KeyPath),
-                        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\%wZ",
-                        &SidUnicode);
-    if (Length < 0 || Length >= ARRAYSIZE(KeyPath))
-        return STATUS_NAME_TOO_LONG;
-
-    Result = RegOpenKeyExW(HKEY_LOCAL_MACHINE, KeyPath, 0, KEY_READ, &Key);
-    if (Result != ERROR_SUCCESS)
-        return STATUS_OBJECT_NAME_NOT_FOUND;
-
-    Result = RegGetValueW(Key, NULL, L"ProfileImagePath", RRF_RT_REG_EXPAND_SZ,
-                          NULL, ProfilePath, &ProfilePathSize);
-    RegCloseKey(Key);
-    if (Result != ERROR_SUCCESS)
-        return STATUS_OBJECT_NAME_NOT_FOUND;
+    Status = DpapiReadProfileImagePath(&SidUnicode, ProfilePath, ARRAYSIZE(ProfilePath));
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     if (WithSidDir)
     {
@@ -1360,12 +1388,8 @@ DpapiOpenProtectTree(
 {
     WCHAR SidString[64];
     UNICODE_STRING SidUnicode;
-    WCHAR KeyPath[256];
     WCHAR ProfilePath[MAX_PATH];
-    DWORD ProfilePathSize = sizeof(ProfilePath);
     WCHAR NtPath[MAX_PATH + 8];
-    LSTATUS Result;
-    HKEY Key;
     NTSTATUS Status;
 
     Tree->RootHandle = NULL;
@@ -1376,18 +1400,9 @@ DpapiOpenProtectTree(
     if (!NT_SUCCESS(RtlConvertSidToUnicodeString(&SidUnicode, Sid, FALSE)))
         return STATUS_UNSUCCESSFUL;
 
-    _snwprintf(KeyPath, ARRAYSIZE(KeyPath),
-               L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\%wZ",
-               &SidUnicode);
-    Result = RegOpenKeyExW(HKEY_LOCAL_MACHINE, KeyPath, 0, KEY_READ, &Key);
-    if (Result != ERROR_SUCCESS)
-        return STATUS_OBJECT_NAME_NOT_FOUND;
-
-    Result = RegGetValueW(Key, NULL, L"ProfileImagePath", RRF_RT_REG_EXPAND_SZ,
-                          NULL, ProfilePath, &ProfilePathSize);
-    RegCloseKey(Key);
-    if (Result != ERROR_SUCCESS)
-        return STATUS_OBJECT_NAME_NOT_FOUND;
+    Status = DpapiReadProfileImagePath(&SidUnicode, ProfilePath, ARRAYSIZE(ProfilePath));
+    if (!NT_SUCCESS(Status))
+        return Status;
 
     _snwprintf(NtPath, ARRAYSIZE(NtPath), L"\\??\\%s", ProfilePath);
     Status = DpapiOpenNoReparse(NULL, NtPath, FILE_LIST_DIRECTORY,
