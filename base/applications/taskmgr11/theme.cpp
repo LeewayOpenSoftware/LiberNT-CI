@@ -127,8 +127,8 @@ void Theme_Apply(BOOL dark, int dpi)
     }
     else
     {
-        COLORREF base = g_t.materialOpacity >= 0 ? g_t.material :
-                        g_app.st.noBlur ? RGB(0x20, 0x20, 0x20) : RGB(0x00, 0x00, 0x00);
+        /* No composited material (no visual style in this process): opaque Win11 dark window colour, never black. */
+        COLORREF base = g_t.materialOpacity >= 0 ? g_t.material : RGB(0x20, 0x20, 0x20);
         COLORREF white = RGB(0xFF, 0xFF, 0xFF);
         COLORREF highlight = GetSysColor(COLOR_HIGHLIGHT);
 

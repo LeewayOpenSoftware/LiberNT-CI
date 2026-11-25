@@ -106,7 +106,7 @@ software on run149. Run150 tests the restored pair at 1920x1080. Detailed GPU pr
 formatting/output occurs after the device mutex is released. That September 8 ICD
 linked ARM64 DEBUG KMT/zlib libraries while Mesa used an optimized build.
 Run174 verified that earlier package: all ten direct-primary blur phases passed,
-Taskmgr11 normal/maximized/drag tests completed, and repeated synthetic drag
+Task Manager normal/maximized/drag tests completed, and repeated synthetic drag
 measured about 9.4–9.7FPS. GPU shadows and finished-blur reuse were retained.
 This does not establish 60FPS or fix ordinary GDI screen-shadow readback; see
 `RPI3_DWM_DRAG_LATENCY_REPORT_2026-09-08.md` for measurements and remaining
