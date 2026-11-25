@@ -19,6 +19,7 @@
 #define CHILD_RETURNED      1   /* CreateWindowEx returned, nothing caught */
 #define CHILD_CAUGHT        2   /* the __except around CreateWindowEx ran */
 #define CHILD_WINDOW_MADE   3   /* CreateWindowEx returned a window although the table was NULL */
+#define CHILD_FILTER_RAN    5   /* the process's unhandled exception filter was called */
 #define CHILD_BAD_ARGS      9
 
 static volatile int *g_Fault;   /* NULL, kept volatile so the store below stays a real store */
@@ -92,6 +93,27 @@ static int ChildPropagate(void)
     return ret;
 }
 
+/* Child: like propagate, with an unhandled exception filter that reports being called through the exit code */
+static LONG WINAPI MarkerFilter(PEXCEPTION_POINTERS Pointers)
+{
+    ExitProcess(CHILD_FILTER_RAN);
+}
+
+static int ChildFilter(void)
+{
+    HWND hwnd;
+
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    if (!RegisterTestClass())
+        return CHILD_BAD_ARGS;
+    g_HandleInside = FALSE;
+    SetUnhandledExceptionFilter(MarkerFilter);
+    hwnd = CreateTestWindow();
+    if (hwnd)
+        DestroyWindow(hwnd);
+    return CHILD_RETURNED;
+}
+
 /* Child: no callback table while the kernel sends WM_NCCREATE (the shape of a process without user32) */
 static int ChildNullTable(void)
 {
@@ -151,6 +173,8 @@ START_TEST(CallbackException)
         ExitProcess(ChildPropagate());
     if (Argc >= 3 && !strcmp(Argv[2], "nulltable"))
         ExitProcess(ChildNullTable());
+    if (Argc >= 3 && !strcmp(Argv[2], "filter"))
+        ExitProcess(ChildFilter());
 
     ok(RegisterTestClass(), "RegisterClass failed: %lu\n", GetLastError());
 
@@ -168,15 +192,18 @@ START_TEST(CallbackException)
 
     /* 2. not handled inside the callback: the frames below the callout frame are out of reach of the
        walk (the kernel cleared the nonvolatile registers for the callback), so the exception is
-       unhandled and the process ends with its code; the __except around CreateWindowEx never runs */
+       unhandled and the process ends with STATUS_FATAL_USER_CALLBACK_EXCEPTION, as on Win11; the
+       __except around CreateWindowEx never runs */
     ExitCode = RunChild("propagate");
-    ok(ExitCode == (DWORD)STATUS_ACCESS_VIOLATION,
-       "exception unhandled inside a callback: child exit %#lx, expected STATUS_ACCESS_VIOLATION\n", ExitCode);
+    ok(ExitCode == (DWORD)STATUS_FATAL_USER_CALLBACK_EXCEPTION,
+       "exception unhandled inside a callback: child exit %#lx, expected STATUS_FATAL_USER_CALLBACK_EXCEPTION\n", ExitCode);
+    /* 2b. whether the process's unhandled exception filter still runs on that path is read off the lab
+       run of this child (exit CHILD_FILTER_RAN if it does); nothing is asserted until it is captured */
+    ExitCode = RunChild("filter");
 
-    /* 3. the kernel calls back into a process whose table is NULL: the dispatcher answers the kernel,
-       window creation fails, the process lives. Windows is not known to check the table; what it does
-       is read off the lab run of this test, so the assertion is ours only and the exit code is traced. */
+    /* 3. the kernel calls back into a process whose table is NULL: on Win11 the process ends with
+       STATUS_FATAL_USER_CALLBACK_EXCEPTION, like any callback exception nothing handled */
     ExitCode = RunChild("nulltable");
-    ok(ExitCode == CHILD_RETURNED || (!is_reactos() && ExitCode == (DWORD)STATUS_ACCESS_VIOLATION),
-       "callback with a NULL KernelCallbackTable: child exit %#lx, expected %u\n", ExitCode, CHILD_RETURNED);
+    ok(ExitCode == (DWORD)STATUS_FATAL_USER_CALLBACK_EXCEPTION,
+       "callback with a NULL KernelCallbackTable: child exit %#lx, expected STATUS_FATAL_USER_CALLBACK_EXCEPTION\n", ExitCode);
 }
