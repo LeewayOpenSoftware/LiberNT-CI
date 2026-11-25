@@ -171,9 +171,11 @@ StatusRaise:
     jmp StatusRaise
 
 NoCallbackTable:
-    /* Answer the kernel instead of faulting on the missing table */
-    mov eax, STATUS_NOT_IMPLEMENTED
-    jmp CallbackReturn
+    /* No table to dispatch to: raise inside the callback frame, so the dispatcher's own handler ends the
+       process the way it ends any callback exception nothing handled (as on the Win11 lab VM) */
+    mov ecx, STATUS_NOT_IMPLEMENTED
+    call RtlRaiseStatus
+    jmp NoCallbackTable
 
 #ifdef _USE_ML
 KiUserCallbackDispatcher ENDP

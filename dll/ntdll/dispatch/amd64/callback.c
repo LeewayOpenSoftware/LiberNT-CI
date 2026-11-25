@@ -17,7 +17,8 @@ extern PRTLP_UNHANDLED_EXCEPTION_FILTER RtlpUnhandledExceptionFilter;
  * belong to the caller of the syscall that called back, and the kernel entered the callback with the
  * nonvolatile registers cleared, so no walk can continue past this frame. An exception that nothing
  * inside the callback handled is unhandled here: the process's top-level filter runs, as at the end
- * of a thread in RtlpUserThreadStart, and the process ends with the exception code. An unwind that
+ * of a thread in RtlpUserThreadStart, and the process ends with STATUS_FATAL_USER_CALLBACK_EXCEPTION,
+ * the exit code the Win11 lab VM shows for such a process. An unwind that
  * targets this frame ends the callback, with the exception code as its status; one that only passes
  * through is left to the walk below, which has no registers to go on and fails by itself.
  */
@@ -53,6 +54,6 @@ KiUserCallbackExceptionHandler(
            the kernel's exception port answers it as handled and the fault would repeat forever. */
         ZwRaiseException(ExceptionRecord, ContextRecord, FALSE);
     }
-    NtTerminateProcess(NtCurrentProcess(), ExceptionRecord->ExceptionCode);
+    NtTerminateProcess(NtCurrentProcess(), STATUS_FATAL_USER_CALLBACK_EXCEPTION);
     return ExceptionContinueSearch;
 }
