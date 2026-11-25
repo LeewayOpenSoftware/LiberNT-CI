@@ -7,5 +7,6 @@ list(APPEND SOURCE
 
 add_library(logoncli MODULE ${SOURCE})
 set_module_type(logoncli win32dll ENTRYPOINT DllMain 12)
-add_importlibs(logoncli netapi32 msvcrt kernel32 ntdll)
+target_link_libraries(logoncli wine ${PSEH_LIB} netlogonclient)
+add_importlibs(logoncli netutils rpcrt4 msvcrt kernel32 ntdll)
 add_cd_file(TARGET logoncli DESTINATION reactos/system32 FOR all)

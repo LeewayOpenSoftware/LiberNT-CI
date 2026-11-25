@@ -1,27 +1,29 @@
-# Net logon client forwarders to netapi32
+# Net logon client exports
 
-@ stdcall DsAddressToSiteNamesA(str long ptr str) netapi32.DsAddressToSiteNamesA
-@ stdcall DsAddressToSiteNamesExA(str long ptr str str) netapi32.DsAddressToSiteNamesExA
-@ stdcall DsAddressToSiteNamesExW(wstr long ptr wstr wstr) netapi32.DsAddressToSiteNamesExW
-@ stdcall DsAddressToSiteNamesW(wstr long ptr wstr) netapi32.DsAddressToSiteNamesW
-@ stdcall DsDeregisterDnsHostRecordsA(str str ptr ptr str) netapi32.DsDeregisterDnsHostRecordsA
-@ stdcall DsDeregisterDnsHostRecordsW(wstr wstr ptr ptr wstr) netapi32.DsDeregisterDnsHostRecordsW
-@ stdcall DsGetDcNameA(str str ptr str long ptr) netapi32.DsGetDcNameA
-@ stdcall DsGetDcNameW(wstr wstr ptr wstr long ptr) netapi32.DsGetDcNameW
-@ stdcall DsGetDcNameWithAccountA(str str long str ptr str long ptr) netapi32.DsGetDcNameWithAccountA
-@ stdcall DsGetDcNameWithAccountW(wstr wstr long wstr ptr wstr long ptr) netapi32.DsGetDcNameWithAccountW
-@ stdcall DsGetDcOpenA(str long str ptr str long ptr) netapi32.DsGetDcOpenA
-@ stdcall DsGetDcOpenW(wstr long wstr ptr wstr long ptr) netapi32.DsGetDcOpenW
-@ stdcall DsGetDcSiteCoverageA(str ptr str) netapi32.DsGetDcSiteCoverageA
-@ stdcall DsGetDcSiteCoverageW(wstr ptr wstr) netapi32.DsGetDcSiteCoverageW
-@ stdcall DsGetForestTrustInformationW(wstr wstr long ptr) netapi32.DsGetForestTrustInformationW
-@ stdcall DsGetSiteNameA(str ptr) netapi32.DsGetSiteNameA
-@ stdcall DsGetSiteNameW(wstr ptr) netapi32.DsGetSiteNameW
-@ stdcall DsMergeForestTrustInformationW(wstr ptr ptr ptr) netapi32.DsMergeForestTrustInformationW
-@ stdcall DsValidateSubnetNameA(str) netapi32.DsValidateSubnetNameA
-@ stdcall DsValidateSubnetNameW(wstr) netapi32.DsValidateSubnetNameW
-@ stdcall NetEnumerateTrustedDomains(wstr ptr) netapi32.NetEnumerateTrustedDomains
-@ stdcall NetGetAnyDCName(wstr wstr ptr) netapi32.NetGetAnyDCName
-@ stdcall NetGetDCName(wstr wstr ptr) netapi32.NetGetDCName
-@ stdcall NetLogonGetTimeServiceParentDomain(wstr ptr ptr) netapi32.NetLogonGetTimeServiceParentDomain
-@ stdcall NetLogonSetServiceBits(wstr long long) netapi32.NetLogonSetServiceBits
+@ stdcall DsAddressToSiteNamesA(str long ptr str)
+@ stdcall DsAddressToSiteNamesExA(str long ptr str str)
+@ stdcall DsAddressToSiteNamesExW(wstr long ptr wstr wstr)
+@ stdcall DsAddressToSiteNamesW(wstr long ptr wstr)
+@ stdcall DsDeregisterDnsHostRecordsA(str str ptr ptr str)
+@ stdcall DsDeregisterDnsHostRecordsW(wstr wstr ptr ptr wstr)
+@ stdcall DsEnumerateDomainTrustsA(str long ptr ptr)
+@ stdcall DsEnumerateDomainTrustsW(wstr long ptr ptr)
+@ stdcall DsGetDcNameA(str str ptr str long ptr)
+@ stdcall DsGetDcNameW(wstr wstr ptr wstr long ptr)
+@ stdcall DsGetDcNameWithAccountA(str str long str ptr str long ptr)
+@ stdcall DsGetDcNameWithAccountW(wstr wstr long wstr ptr wstr long ptr)
+@ stdcall DsGetDcOpenA(str long str ptr str long ptr)
+@ stdcall DsGetDcOpenW(wstr long wstr ptr wstr long ptr)
+@ stdcall DsGetDcSiteCoverageA(str ptr str)
+@ stdcall DsGetDcSiteCoverageW(wstr ptr wstr)
+@ stdcall DsGetForestTrustInformationW(wstr wstr long ptr)
+@ stdcall DsGetSiteNameA(str ptr)
+@ stdcall DsGetSiteNameW(wstr ptr)
+@ stdcall DsMergeForestTrustInformationW(wstr ptr ptr ptr)
+@ stdcall DsValidateSubnetNameA(str)
+@ stdcall DsValidateSubnetNameW(wstr)
+@ stdcall NetEnumerateTrustedDomains(wstr ptr)
+@ stdcall NetGetAnyDCName(wstr wstr ptr)
+@ stdcall NetGetDCName(wstr wstr ptr)
+@ stdcall NetLogonGetTimeServiceParentDomain(wstr ptr ptr)
+@ stdcall NetLogonSetServiceBits(wstr long long)
