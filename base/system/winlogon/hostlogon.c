@@ -1224,7 +1224,8 @@ WlHostLoggedOutSas(
             Session->Profile->dwType = WLX_PROFILE_TYPE_V2_0;   /* local account: default paths */
 
             /* The GINA profile carries LOGONSERVER (msgina); host mode sets it the same way. */
-            if (EnvDomain[0] == UNICODE_NULL)
+            if (EnvDomain[0] == UNICODE_NULL ||
+                (EnvDomain[0] == L'.' && EnvDomain[1] == UNICODE_NULL))
             {
                 DWORD EnvNameSize = ARRAYSIZE(EnvName);
                 if (GetComputerNameW(EnvName, &EnvNameSize))
