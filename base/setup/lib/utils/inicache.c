@@ -971,6 +971,7 @@ IniCacheSaveByHandle(
     ULONG Len;
     IO_STATUS_BLOCK IoStatusBlock;
     LARGE_INTEGER Offset;
+    FILE_END_OF_FILE_INFORMATION EndOfFile;
 
     /* Calculate required buffer size */
     BufferSize = 0;
@@ -1048,6 +1049,20 @@ IniCacheSaveByHandle(
     if (!NT_SUCCESS(Status))
     {
         DPRINT("NtWriteFile() failed (Status %lx)\n", Status);
+        RtlFreeHeap(ProcessHeap, 0, Buffer);
+        return Status;
+    }
+
+    /* The file may have been longer: cut it at the end of what was written */
+    EndOfFile.EndOfFile.QuadPart = BufferSize;
+    Status = NtSetInformationFile(FileHandle,
+                                  &IoStatusBlock,
+                                  &EndOfFile,
+                                  sizeof(EndOfFile),
+                                  FileEndOfFileInformation);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT("NtSetInformationFile(FileEndOfFileInformation) failed (Status %lx)\n", Status);
         RtlFreeHeap(ProcessHeap, 0, Buffer);
         return Status;
     }
