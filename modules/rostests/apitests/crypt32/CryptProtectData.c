@@ -236,7 +236,7 @@ TestScopeParity(void)
     }
 }
 
-/* Q8/D1/D3: new user blobs are LPD2 and concurrent first use creates exactly
+/* Q8/D1/D3: new user blobs are LDP2 and concurrent first use creates exactly
  * one master key. The lane-only negative tests (wrong password, cross-user
  * ACL, reparse refusal, LPD1 legacy vector, interrupted re-key) run from the
  * design note's test plan, D5. */
@@ -276,14 +276,14 @@ TestUserMasterKeyBinding(void)
         return;
     }
 
-    ok(Out.cbData >= 4 && memcmp(Out.pbData, "LPD2", 4) == 0,
-       "user blob is not an LPD2 blob\n");
-    ok(Out.cbData >= 24, "LPD2 blob too small for its key GUID\n");
+    ok(Out.cbData >= 4 && memcmp(Out.pbData, "LDP2", 4) == 0,
+       "user blob is not an LDP2 blob\n");
+    ok(Out.cbData >= 24, "LDP2 blob too small for its key GUID\n");
 
     ok(CryptUnprotectData(&Out, NULL, NULL, NULL, NULL, 0, &Back),
-       "LPD2 blob did not round-trip, error %lu\n", GetLastError());
+       "LDP2 blob did not round-trip, error %lu\n", GetLastError());
     ok(Back.cbData == sizeof(Secret) && memcmp(Back.pbData, Secret, sizeof(Secret)) == 0,
-       "LPD2 plaintext did not round-trip\n");
+       "LDP2 plaintext did not round-trip\n");
     LocalFree(Back.pbData);
     Back.pbData = NULL;
 

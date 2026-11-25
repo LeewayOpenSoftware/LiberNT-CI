@@ -11,7 +11,7 @@
 #include <bcrypt.h>
 
 #define DPAPI_BLOB_MAGIC            0x3150444C
-#define DPAPI_BLOB_MAGIC_V2         0x3250444C  /* 'LPD2': blob names its master key (Q8/D1) */
+#define DPAPI_BLOB_MAGIC_V2         0x3250444C  /* 'LDP2': blob names its master key (Q8/D1) */
 #define DPAPI_PBKDF2_ITERATIONS     8000
 #define DPAPI_SALT_SIZE             16
 #define DPAPI_IV_SIZE               16
@@ -2707,7 +2707,7 @@ done:
     return Status;
 }
 
-/* Q8 user-scope unprotect for LPD2 blobs: the blob's GUID names the master
+/* Q8 user-scope unprotect for LDP2 blobs: the blob's GUID names the master
  * key file; decryption falls back through credhist and lazily re-keys (D3). */
 static
 NTSTATUS
