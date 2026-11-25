@@ -467,7 +467,8 @@ WlHostStop(
 
 /* hostlogon.c */
 VOID
-WlHostLogonInit(VOID);
+WlHostLogonInit(
+    _In_ PWLSESSION Session);
 
 VOID
 WlHostAttach(

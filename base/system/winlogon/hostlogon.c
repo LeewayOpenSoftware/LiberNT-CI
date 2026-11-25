@@ -41,6 +41,7 @@ typedef struct _WLHL_SUBMIT
 } WLHL_SUBMIT;
 
 static PWLSESSION g_Session;
+static BOOL g_HostLogonReady;           /* WlHostLogonInit ran: locks and event exist */
 static HANDLE g_Lsa;
 static ULONG g_MsvPackage;
 static CREDSER_PACKAGES g_Packages;
@@ -930,6 +931,13 @@ WlHlEnsureHost(
     WLHOST_TERMINAL Reason = WlHostTerminalNone;
     BOOL Terminal = FALSE;
 
+    if (!g_HostLogonReady)
+    {
+        /* An ordering mistake must trace, not hang on a zeroed lock (VM leg B.1.1). */
+        ERR("WL: host requested before WlHostLogonInit (scenario %lu)\n", Scenario);
+        return FALSE;
+    }
+
     EnterCriticalSection(&g_SubmitLock);
     if (Scenario != WLHL_CPUS_CHANGE_PASSWORD)
         g_ChangeFor = 0;
@@ -996,11 +1004,14 @@ WlHlSetAccepting(
  * ("Orosi is starting up") goes through WlHostStatus and its locks long before the SAS window
  * exists. Entering an uninitialised critical section there stalled winlogon (VM leg B.1.1). */
 VOID
-WlHostLogonInit(VOID)
+WlHostLogonInit(
+    _In_ PWLSESSION Session)
 {
+    g_Session = Session;
     InitializeCriticalSection(&g_SubmitLock);
     InitializeCriticalSection(&g_LaunchLock);
     g_SubmitEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    g_HostLogonReady = TRUE;
 }
 
 /* Called once the SAS window exists: events and handlers need it, the locks do not. */
@@ -1008,7 +1019,8 @@ VOID
 WlHostAttach(
     _In_ PWLSESSION Session)
 {
-    g_Session = Session;
+    /* g_Session was set by WlHostLogonInit; only the handlers wait for the SAS window. */
+    UNREFERENCED_PARAMETER(Session);
     WluiSetSubmitHandler(WlHlSubmitHandler);
     WluiSetActionHandler(WlHlActionHandler);
     WlHostSetEndedCallback(WlHlOnHostEnded);

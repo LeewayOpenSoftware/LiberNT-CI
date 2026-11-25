@@ -553,7 +553,7 @@ WinMain(
     TRACE("WL: UseLogonUI selector = %d\n", WLSession->UseLogonUI);
     WlHostInit();
     if (WLSession->UseLogonUI)
-        WlHostLogonInit();      /* before the first status message, which starts a host */
+        WlHostLogonInit(WLSession);     /* before the first status message, which starts a host */
 
     /* Initialize the dialog tracking list */
     InitDialogListHead();
