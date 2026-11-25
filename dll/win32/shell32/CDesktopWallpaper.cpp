@@ -156,15 +156,11 @@ CreateActiveDesktop(IActiveDesktop **ppActiveDesktop)
 HRESULT WINAPI CDesktopWallpaper::SetWallpaper(LPCWSTR monitorID, LPCWSTR wallpaper)
 {
     WCHAR szDisabled[MAX_PATH];
-    HRESULT hr;
 
     TRACE("(%ls, %ls)\n", monitorID, wallpaper);
 
     if (!wallpaper)
         return E_POINTER;
-    hr = CheckMonitorId(monitorID);
-    if (FAILED(hr))
-        return hr;
     if (lstrlenW(wallpaper) >= MAX_PATH)
         return HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
 
@@ -183,6 +179,10 @@ HRESULT WINAPI CDesktopWallpaper::SetWallpaper(LPCWSTR monitorID, LPCWSTR wallpa
         if (dwAttributes & FILE_ATTRIBUTE_DIRECTORY)
             return E_INVALIDARG;
     }
+
+    /* Win11 checks the file first, then accepts an unknown monitor and changes nothing. */
+    if (FAILED(CheckMonitorId(monitorID)))
+        return S_OK;
 
     /* A disabled desktop stays blank; the new path waits for Enable(TRUE). */
     if (GetDisabledWallpaper(szDisabled, ARRAYSIZE(szDisabled)))
@@ -386,8 +386,9 @@ HRESULT WINAPI CDesktopWallpaper::GetSlideshowOptions(DESKTOP_SLIDESHOW_OPTIONS 
 
     if (!options || !slideshowTick)
         return E_POINTER;
+    /* Win11 reports its 30-minute default while no slideshow is configured. */
     *options = (DESKTOP_SLIDESHOW_OPTIONS)0;
-    *slideshowTick = 0;
+    *slideshowTick = 30 * 60 * 1000;
     return S_OK;
 }
 

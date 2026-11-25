@@ -152,6 +152,28 @@ TestMonitors(IDesktopWallpaper *pdw)
     ok(FAILED(hr), "GetMonitorRECT(unknown) returned 0x%lx\n", hr);
 }
 
+/* Win11 commits SetWallpaper to SPI, the registry and the monitor asynchronously (within 1 s). */
+static BOOL
+WaitForWallpaper(IDesktopWallpaper *pdw, LPCWSTR pszMonitor, LPCWSTR pszBitmap,
+                 LPWSTR pszSpi, LPWSTR pszReg, DWORD cch, LPWSTR *ppszMonitor)
+{
+    for (DWORD dwWaited = 0;; dwWaited += 50)
+    {
+        SystemParametersInfoW(SPI_GETDESKWALLPAPER, cch, pszSpi, 0);
+        ReadString(szDesktopKey, L"Wallpaper", pszReg, cch);
+        *ppszMonitor = NULL;
+        if (pszMonitor && FAILED(pdw->GetWallpaper(pszMonitor, ppszMonitor)))
+            *ppszMonitor = NULL;
+        if (!lstrcmpiW(pszSpi, pszBitmap) && !lstrcmpiW(pszReg, pszBitmap) &&
+            (!pszMonitor || (*ppszMonitor && !lstrcmpiW(*ppszMonitor, pszBitmap))))
+            return TRUE;
+        if (dwWaited >= 5000)
+            return FALSE;
+        CoTaskMemFree(*ppszMonitor);
+        Sleep(50);
+    }
+}
+
 static void
 ExpectState(IDesktopWallpaper *pdw, LPCWSTR pszBitmap, BOOL bEnabled, LPCSTR pszWhen)
 {
@@ -162,10 +184,11 @@ ExpectState(IDesktopWallpaper *pdw, LPCWSTR pszBitmap, BOOL bEnabled, LPCSTR psz
     hr = pdw->GetStatus(&State);
     ok_hr(hr, S_OK);
     ok(State == (bEnabled ? DSS_ENABLED : 0), "%s: state 0x%x\n", pszWhen, State);
-    /* The chosen wallpaper is reported whether or not the desktop shows it. */
     hr = pdw->GetWallpaper(NULL, &pszWallpaper);
     ok_hr(hr, S_OK);
-    ok(pszWallpaper && !lstrcmpiW(pszWallpaper, pszBitmap), "%s: GetWallpaper returned '%ls'\n", pszWhen, pszWallpaper);
+    /* While disabled, Win11 has answered both the chosen path and an empty string. */
+    ok(pszWallpaper && (!lstrcmpiW(pszWallpaper, pszBitmap) || (!bEnabled && !pszWallpaper[0])),
+       "%s: GetWallpaper returned '%ls'\n", pszWhen, pszWallpaper);
     CoTaskMemFree(pszWallpaper);
 }
 
@@ -242,31 +265,39 @@ TestWallpaper(IDesktopWallpaper *pdw, LPCWSTR pszBitmap)
     SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szSpi), szSpi, 0);
     ok(!lstrcmpiW(szSpi, szBefore), "Wallpaper changed to '%ls'\n", szSpi);
 
+    if (FAILED(pdw->GetMonitorDevicePathAt(0, &pszFirstMonitor)))
+        pszFirstMonitor = NULL;
+
     hr = pdw->SetWallpaper(NULL, pszBitmap);
     ok_hr(hr, S_OK);
-    SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szSpi), szSpi, 0);
-    ok(!lstrcmpiW(szSpi, pszBitmap), "SPI wallpaper is '%ls', expected '%ls'\n", szSpi, pszBitmap);
-    ReadString(szDesktopKey, L"Wallpaper", szReg, ARRAYSIZE(szReg));
-    ok(!lstrcmpiW(szReg, pszBitmap), "Registry wallpaper is '%ls', expected '%ls'\n", szReg, pszBitmap);
-
+    /* The interface itself reports the new path at once. */
     pszWallpaper = NULL;
     hr = pdw->GetWallpaper(NULL, &pszWallpaper);
     ok_hr(hr, S_OK);
     ok(pszWallpaper && !lstrcmpiW(pszWallpaper, pszBitmap), "GetWallpaper returned '%ls'\n", pszWallpaper);
     CoTaskMemFree(pszWallpaper);
 
-    if (SUCCEEDED(pdw->GetMonitorDevicePathAt(0, &pszFirstMonitor)))
-    {
-        pszWallpaper = NULL;
-        hr = pdw->GetWallpaper(pszFirstMonitor, &pszWallpaper);
-        ok_hr(hr, S_OK);
-        ok(pszWallpaper && !lstrcmpiW(pszWallpaper, pszBitmap), "GetWallpaper(monitor 0) returned '%ls'\n", pszWallpaper);
-        CoTaskMemFree(pszWallpaper);
-        CoTaskMemFree(pszFirstMonitor);
-    }
+    pszWallpaper = NULL;
+    ok(WaitForWallpaper(pdw, pszFirstMonitor, pszBitmap, szSpi, szReg, ARRAYSIZE(szSpi), &pszWallpaper),
+       "Wallpaper not committed: SPI '%ls', registry '%ls', monitor 0 '%ls', expected '%ls'\n",
+       szSpi, szReg, pszWallpaper, pszBitmap);
+    CoTaskMemFree(pszWallpaper);
 
+    /* Win11 checks the file before the monitor, then accepts an unknown monitor and changes nothing. */
+    hr = pdw->SetWallpaper(L"\\\\?\\NoSuchMonitor#0", L"C:\\DoesNotExist\\NoSuchWallpaper.bmp");
+    ok_hr(hr, HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND));
     hr = pdw->SetWallpaper(L"\\\\?\\NoSuchMonitor#0", pszBitmap);
-    ok(FAILED(hr), "SetWallpaper(unknown monitor) returned 0x%lx\n", hr);
+    ok_hr(hr, S_OK);
+    SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(szSpi), szSpi, 0);
+    ok(!lstrcmpiW(szSpi, pszBitmap), "SetWallpaper(unknown monitor) changed the wallpaper to '%ls'\n", szSpi);
+
+    /* Win11 briefly answers S_FALSE for every monitor after that call; start the disable test settled. */
+    hr = pdw->SetWallpaper(NULL, pszBitmap);
+    ok_hr(hr, S_OK);
+    pszWallpaper = NULL;
+    WaitForWallpaper(pdw, pszFirstMonitor, pszBitmap, szSpi, szReg, ARRAYSIZE(szSpi), &pszWallpaper);
+    CoTaskMemFree(pszWallpaper);
+    CoTaskMemFree(pszFirstMonitor);
 
     TestDisable(pdw, pszBitmap);
 }
@@ -349,7 +380,7 @@ TestSlideshow(IDesktopWallpaper *pdw)
         pItems->Release();
     hr = pdw->GetSlideshowOptions(&Options, &uTick);
     ok_hr(hr, S_OK);
-    ok(Options == 0 && uTick == 0, "GetSlideshowOptions returned 0x%x, %u\n", Options, uTick);
+    ok(Options == 0 && uTick == 1800000, "GetSlideshowOptions returned 0x%x, %u\n", Options, uTick);
     hr = pdw->AdvanceSlideshow(NULL, DSD_FORWARD);
     ok_hr(hr, E_UNEXPECTED);
 }
