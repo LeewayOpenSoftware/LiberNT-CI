@@ -41,6 +41,9 @@ typedef struct _LUH_UI
     BOOL Exiting;
     /* credential page */
     BOOL ProvidersStarted;
+    BOOL InLegalNotice;     /* the notice box is up; its modal loop dispatches our commands */
+    DWORD PendingScenario;  /* a RequestCredentials that arrived under the box */
+    DWORD PendingFlags;
     PLUH_PAGE Page;         /* owned by providers.c; valid until the next WM_LUH_PAGE */
     BOOL PageBusy;          /* a submission is with winlogon; controls disabled */
     HWND PolicyButtons[2];
@@ -94,6 +97,11 @@ LuhDestroyPage(void)
                 DestroyWindow(g_Ui.Page->Fields[i].Control);
                 g_Ui.Page->Fields[i].Control = NULL;
             }
+            if (g_Ui.Page->Fields[i].LabelControl)
+            {
+                DestroyWindow(g_Ui.Page->Fields[i].LabelControl);
+                g_Ui.Page->Fields[i].LabelControl = NULL;
+            }
         }
         /* The page came from the provider thread; the UI owns it from WM_LUH_PAGE on. */
         SecureZeroMemory(g_Ui.Page, sizeof(*g_Ui.Page));
@@ -131,6 +139,14 @@ LuhFieldVisible(
     return Field->State == CPFS_DISPLAY_IN_SELECTED_TILE || Field->State == CPFS_DISPLAY_IN_BOTH;
 }
 
+/* An edit field shows its label in a row of its own; the field itself starts with its value. */
+static BOOL
+LuhFieldHasLabelRow(
+    _In_ const LUH_FIELD *Field)
+{
+    return (Field->Type == CPFT_EDIT_TEXT || Field->Type == CPFT_PASSWORD_TEXT) && Field->Label[0] != UNICODE_NULL;
+}
+
 /* Lays the visible fields out as a column of standard controls in the middle of the screen. */
 static void
 LuhCreatePage(
@@ -149,7 +165,7 @@ LuhCreatePage(
 
     for (i = 0; i < Page->Count; i++)
         if (LuhFieldVisible(&Page->Fields[i]) && Page->Fields[i].Type != CPFT_TILE_IMAGE)
-            Rows++;
+            Rows += LuhFieldHasLabelRow(&Page->Fields[i]) ? 2 : 1;
 
     X = (Client.right - LUH_PAGE_WIDTH) / 2;
     Y = Client.bottom / 2 - (Rows * (LUH_ROW_HEIGHT + LUH_ROW_GAP)) / 2;
@@ -174,6 +190,7 @@ LuhCreatePage(
             case CPFT_EDIT_TEXT:
                 Class = L"EDIT";
                 Style |= WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL;
+                Text = Field->Value;    /* the label is its own row: as text it would be typed into */
                 break;
             case CPFT_PASSWORD_TEXT:
                 Class = L"EDIT";
@@ -193,6 +210,14 @@ LuhCreatePage(
                 continue;   /* tile images and combo boxes are Phase 4 */
         }
 
+        if (LuhFieldHasLabelRow(Field))
+        {
+            Field->LabelControl = CreateWindowExW(0, L"STATIC", Field->Label, WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                                  X, Y, LUH_PAGE_WIDTH, LUH_ROW_HEIGHT, Window, NULL, NULL, NULL);
+            if (Field->LabelControl)
+                SendMessageW(Field->LabelControl, WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+            Y += LUH_ROW_HEIGHT + LUH_ROW_GAP;
+        }
         Field->Control = CreateWindowExW(0, Class, Text, Style, X, Y, LUH_PAGE_WIDTH, LUH_ROW_HEIGHT,
                                          Window, (HMENU)(UINT_PTR)(LUH_ID_FIELD_BASE + i), NULL, NULL);
         if (Field->Control)
@@ -239,6 +264,75 @@ LuhClearSecrets(void)
     for (i = 0; i < g_Ui.Page->Count; i++)
         if (g_Ui.Page->Fields[i].Type == CPFT_PASSWORD_TEXT && g_Ui.Page->Fields[i].Control)
             SetWindowTextW(g_Ui.Page->Fields[i].Control, L"");
+}
+
+/* After a refused submit the keyboard goes to the first empty editable field (the cleared
+ * password, usually), or to the first editable one; a page with no focus leaves the user typing
+ * into nothing (leg finding 3b). */
+static void
+LuhFocusForRetry(void)
+{
+    HWND First = NULL;
+    DWORD i;
+    if (g_Ui.Page == NULL)
+        return;
+    for (i = 0; i < g_Ui.Page->Count; i++)
+    {
+        PLUH_FIELD Field = &g_Ui.Page->Fields[i];
+        if (Field->Control == NULL || Field->Interactive == CPFIS_DISABLED ||
+            (Field->Type != CPFT_EDIT_TEXT && Field->Type != CPFT_PASSWORD_TEXT))
+            continue;
+        if (First == NULL)
+            First = Field->Control;
+        if (GetWindowTextLengthW(Field->Control) == 0)
+        {
+            SetFocus(Field->Control);
+            return;
+        }
+    }
+    if (First)
+        SetFocus(First);
+}
+
+/* The legal notice msgina showed before the logon dialog: Policies\System first, then the
+ * Winlogon key; acknowledged before any credential page exists (winlogon sets the flag). */
+static void
+LuhLegalNotice(
+    _In_ HWND Window)
+{
+    static const PCWSTR Keys[2] = { L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                                    L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" };
+    static const PCWSTR TextNames[2] = { L"legalnoticetext", L"LegalNoticeText" };
+    static const PCWSTR CaptionNames[2] = { L"legalnoticecaption", L"LegalNoticeCaption" };
+    WCHAR Caption[256];
+    PWSTR Text = NULL;
+    DWORD Size = 0, i;
+
+    for (i = 0; i < 2 && Text == NULL; i++)
+    {
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, Keys[i], TextNames[i], RRF_RT_REG_SZ, NULL, NULL, &Size) != ERROR_SUCCESS ||
+            Size <= sizeof(WCHAR))
+            continue;
+        Text = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size + sizeof(WCHAR));
+        if (Text == NULL)
+            return;
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, Keys[i], TextNames[i], RRF_RT_REG_SZ, NULL, Text, &Size) != ERROR_SUCCESS ||
+            Text[0] == UNICODE_NULL)
+        {
+            HeapFree(GetProcessHeap(), 0, Text);
+            Text = NULL;
+            continue;
+        }
+        Size = sizeof(Caption);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, Keys[i], CaptionNames[i], RRF_RT_REG_SZ, NULL, Caption, &Size) != ERROR_SUCCESS)
+            Caption[0] = UNICODE_NULL;
+    }
+    if (Text == NULL)
+        return;
+    LuhTrace("legal-notice", NULL);
+    /* Modal on the UI thread: the heartbeat timer is still dispatched by the message box loop. */
+    MessageBoxW(Window, Text, Caption[0] ? Caption : L"Notice", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+    HeapFree(GetProcessHeap(), 0, Text);
 }
 
 static void
@@ -405,15 +499,39 @@ LuhHandleCommand(
             LuhSetSpinner(Window, FALSE);
             LuhClearSecrets();
             LuhEnablePage(TRUE);
+            LuhFocusForRetry();
             LuhTrace("result", g_Ui.Detail);
             InvalidateRect(Window, NULL, TRUE);
             break;
 
         case WluiCmdRequestCredentials:
+            if (g_Ui.InLegalNotice)
+            {
+                /* Re-entered from the notice box's loop: keep the request for after the box. */
+                g_Ui.PendingScenario = Command->Scenario;
+                g_Ui.PendingFlags = Command->Flags;
+                break;
+            }
             g_Options.Scenario = Command->Scenario ? Command->Scenario : g_Options.Scenario;
             if (Command->Flags & WLUI_FLAG_FALLBACK)
                 g_Options.Fallback = TRUE;
             g_Options.NoPower = (Command->Flags & WLUI_FLAG_NO_POWER) != 0;
+            if ((Command->Flags & WLUI_FLAG_LEGAL_NOTICE) && !g_Ui.ProvidersStarted)
+            {
+                g_Ui.InLegalNotice = TRUE;
+                LuhLegalNotice(Window);
+                g_Ui.InLegalNotice = FALSE;
+                if (g_Ui.Exiting)
+                    break;              /* a Dismiss or the desktop switch arrived under the box */
+                if (g_Ui.PendingScenario)
+                {
+                    g_Options.Scenario = g_Ui.PendingScenario;
+                    if (g_Ui.PendingFlags & WLUI_FLAG_FALLBACK)
+                        g_Options.Fallback = TRUE;
+                    g_Options.NoPower = (g_Ui.PendingFlags & WLUI_FLAG_NO_POWER) != 0;
+                    g_Ui.PendingScenario = 0;
+                }
+            }
             StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"");
             g_Ui.Detail[0] = UNICODE_NULL;
             LuhSetSpinner(Window, TRUE);

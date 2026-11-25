@@ -334,7 +334,7 @@ Test_PeRules(void)
     SetRestrictedSecurity(Path);
 
     /* R4d: clean DACL but a non-admin owner -> rejected (owner holds WRITE_DAC). */
-    if (EnablePrivilege(SE_RESTORE_NAME))
+    if (EnablePrivilege(L"SeRestorePrivilege"))
     {
         PSID Users = NULL;
         ConvertStringSidToSidW(L"S-1-5-32-545", &Users);

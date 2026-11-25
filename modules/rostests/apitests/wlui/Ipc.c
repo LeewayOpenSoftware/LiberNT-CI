@@ -11,8 +11,11 @@
 #include <wluiclient.h>
 #include <wluiauth.h>
 
-/* The server stubs (wlui_s.c) call these; their header repeats the client types, so take the ifspec alone. */
-extern RPC_IF_HANDLE wlui_v1_0_s_ifspec;
+/* The server stubs (wlui_s.c, generated with --prefix-server=Test) call these. The prefix keeps
+ * them apart from the client stubs this binary links from wluiclient; same-named definitions
+ * would shadow those and every "RPC" call would be a direct call (leg 2026-11-25). The server
+ * header repeats the client types, so take the ifspec alone. */
+extern RPC_IF_HANDLE Testwlui_v1_0_s_ifspec;   /* widl prefixes the server ifspec too */
 
 /* ---- the test server: records what arrives ------------------------------- */
 
@@ -22,17 +25,17 @@ static DWORD g_LastScenario, g_LastCb, g_LastAction, g_LastFaultReason, g_LastEx
 static GUID g_LastClsid;
 static BYTE g_LastBytes[32];
 
-DWORD __stdcall WluiReady(handle_t h, GUID LaunchId)
+DWORD __stdcall TestWluiReady(handle_t h, GUID LaunchId)
 {
     InterlockedIncrement(&g_Calls); g_LastLaunchId = LaunchId; return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiHeartbeat(handle_t h, GUID LaunchId)
+DWORD __stdcall TestWluiHeartbeat(handle_t h, GUID LaunchId)
 {
     InterlockedIncrement(&g_Calls); g_LastLaunchId = LaunchId; return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiWaitForCommand(handle_t h, GUID LaunchId, WLUI_COMMAND *Command)
+DWORD __stdcall TestWluiWaitForCommand(handle_t h, GUID LaunchId, WLUI_COMMAND *Command)
 {
     InterlockedIncrement(&g_Calls);
     g_LastLaunchId = LaunchId;
@@ -44,7 +47,7 @@ DWORD __stdcall WluiWaitForCommand(handle_t h, GUID LaunchId, WLUI_COMMAND *Comm
     return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiSubmitSerialization(handle_t h, GUID LaunchId, DWORD Scenario, GUID ProviderClsid,
+DWORD __stdcall TestWluiSubmitSerialization(handle_t h, GUID LaunchId, DWORD Scenario, GUID ProviderClsid,
                                         DWORD AuthenticationPackage, DWORD cbSerialization,
                                         const byte *Serialization)
 {
@@ -57,18 +60,18 @@ DWORD __stdcall WluiSubmitSerialization(handle_t h, GUID LaunchId, DWORD Scenari
     return AuthenticationPackage == 0 ? ERROR_INVALID_PARAMETER : ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiRequestAction(handle_t h, GUID LaunchId, WLUI_ACTION Action)
+DWORD __stdcall TestWluiRequestAction(handle_t h, GUID LaunchId, WLUI_ACTION Action)
 {
     InterlockedIncrement(&g_Calls); g_LastLaunchId = LaunchId; g_LastAction = Action; return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiReportProviderFault(handle_t h, GUID LaunchId, GUID ProviderClsid, DWORD Reason)
+DWORD __stdcall TestWluiReportProviderFault(handle_t h, GUID LaunchId, GUID ProviderClsid, DWORD Reason)
 {
     InterlockedIncrement(&g_Calls); g_LastLaunchId = LaunchId; g_LastClsid = ProviderClsid;
     g_LastFaultReason = Reason; return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiExiting(handle_t h, GUID LaunchId, WLUI_EXIT_REASON Reason)
+DWORD __stdcall TestWluiExiting(handle_t h, GUID LaunchId, WLUI_EXIT_REASON Reason)
 {
     InterlockedIncrement(&g_Calls); g_LastLaunchId = LaunchId; g_LastExitReason = Reason; return ERROR_SUCCESS;
 }
@@ -123,7 +126,7 @@ StartTestServer(
     if (Status != RPC_S_OK)
         return FALSE;
     /* Registered exactly as winlogon does: local only, and the callback keeps it on ncalrpc. */
-    Status = RpcServerRegisterIfEx(wlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
+    Status = RpcServerRegisterIfEx(Testwlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
                                    RPC_C_LISTEN_MAX_CALLS_DEFAULT, WluiServerIfCallback);
     ok(Status == RPC_S_OK, "RegisterIfEx %lu\n", Status);
     if (Status != RPC_S_OK)
@@ -137,7 +140,7 @@ static void
 StopTestServer(void)
 {
     RpcMgmtStopServerListening(NULL);
-    RpcServerUnregisterIf(wlui_v1_0_s_ifspec, NULL, TRUE);
+    RpcServerUnregisterIf(Testwlui_v1_0_s_ifspec, NULL, TRUE);
 }
 
 /* ---- tests ------------------------------------------------------------------ */
@@ -152,8 +155,11 @@ Test_NoServer(void)
 
     ok(WluiGetLocalSystemSid(System), "system sid\n");
     ok(WluiConnect(L"wlui-apitest-nobody-here", System, &Id, &C) == RPC_S_OK, "bind without a server\n");
+    g_Calls = 0;
     Error = WluiClientHeartbeat(&C);
     ok(Error == RPC_S_SERVER_UNAVAILABLE, "no server: %lu\n", Error);
+    /* An in-process shortcut to the test's own routines cannot pass this one. */
+    ok(g_Calls == 0, "no server, yet the test server took %ld call(s)\n", g_Calls);
     WluiDisconnect(&C);
     ok(C.Binding == NULL, "binding not cleared\n");
 
@@ -262,7 +268,9 @@ Test_ServerCheckAndWire(void)
     ok(g_LastFaultReason == 3, "fault reason %lu\n", g_LastFaultReason);
     ok(WluiClientExiting(&C, WluiExitDismissed) == ERROR_SUCCESS, "Exiting\n");
     ok(g_LastExitReason == WluiExitDismissed, "exit reason %lu\n", g_LastExitReason);
-    ok(g_Calls == 8, "calls %ld\n", g_Calls);
+    /* Ready, Heartbeat, WaitForCommand, three submits that pass the client checks
+     * (the package-0 one is refused by the server, after it counted), action, fault, exiting. */
+    ok(g_Calls == 9, "calls %ld\n", g_Calls);
 
     WluiDisconnect(&C);
     StopTestServer();

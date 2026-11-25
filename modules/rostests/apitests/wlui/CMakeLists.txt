@@ -3,7 +3,9 @@ include_directories(
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl
     ${CMAKE_CURRENT_BINARY_DIR})
 
-add_rpc_files(server ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/wlui.idl)
+# The test is the server and links the real client: its manager routines carry a prefix so the
+# generated client stubs stay in the link instead of being shadowed by same-named definitions.
+add_rpc_file(server ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/wlui.idl PREFIX_SERVER Test)
 
 list(APPEND SOURCE
     Ipc.c

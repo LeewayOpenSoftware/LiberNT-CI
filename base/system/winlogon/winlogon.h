@@ -404,6 +404,20 @@ WluiSetActionHandler(
 typedef struct _WLHOST_LAUNCH *PWLHOST_LAUNCH;
 typedef VOID (*WLHOST_ENDED_CALLBACK)(_In_ PWLHOST_LAUNCH Launch);
 
+/* Why nothing can be launched (the N4 dialog says it). */
+typedef enum _WLHOST_TERMINAL
+{
+    WlHostTerminalNone = 0,
+    WlHostTerminalLevels,       /* every tier failed or the launch cap was hit */
+    WlHostTerminalMissing,      /* neither logonuihost.exe nor logonrecovery.exe is there (R1b) */
+    WlHostTerminalPolicy        /* 8.10 c: policy forbids the password-only tiers */
+} WLHOST_TERMINAL;
+
+VOID
+WlHostLog(
+    _In_ WORD Type,
+    _In_ PCWSTR Text);
+
 VOID
 WlHostInit(VOID);
 
@@ -420,7 +434,8 @@ WlHostIsTerminal(VOID);
 PWLHOST_LAUNCH
 WlHostStart(
     _In_ DWORD Scenario,
-    _Out_ PBOOL Terminal);
+    _Out_ PBOOL Terminal,
+    _Out_ WLHOST_TERMINAL *Reason);
 
 BOOL
 WlHostWaitReady(
@@ -458,6 +473,10 @@ VOID
 WlUmfdStop(VOID);
 
 /* hostlogon.c */
+VOID
+WlHostLogonInit(
+    _In_ PWLSESSION Session);
+
 VOID
 WlHostAttach(
     _In_ PWLSESSION Session);
@@ -498,6 +517,9 @@ VOID
 WlHostThemeWait(VOID);
 
 VOID
+WlHostThemeWatch(VOID);
+
+VOID
 WlHostCreateDesktopSwitchEvent(
     _In_ PWLSESSION Session);
 
@@ -526,6 +548,27 @@ BOOL
 WlHostActivateUserShell(
     _In_ PWLSESSION Session,
     _In_opt_ PVOID Environment);
+
+/* reminder.c */
+typedef struct _WLR_REMINDER
+{
+    HANDLE Process;             /* held so the PID cannot be reused under us */
+    DWORD Pid;
+} WLR_REMINDER, *PWLR_REMINDER;
+
+BOOL
+WlrShowShutdownReminder(
+    _Out_ PWLR_REMINDER Reminder,
+    _In_opt_ PCWSTR Message,
+    _In_ ULONG TimeoutSeconds,
+    _In_ BOOL Reboot);
+
+VOID
+WlrDismissShutdownReminder(
+    _Inout_ PWLR_REMINDER Reminder);
+
+VOID
+WlrShowAbortNotice(VOID);
 
 /* rpcserver.c */
 BOOL

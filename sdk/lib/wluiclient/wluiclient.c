@@ -21,13 +21,26 @@ void __RPC_USER MIDL_user_free(void __RPC_FAR * ptr)
     HeapFree(GetProcessHeap(), 0, ptr);
 }
 
+/* S-1-5-18 laid out by hand: the recovery component links no advapi32. */
 BOOL
 NTAPI
 WluiGetLocalSystemSid(
     _Out_writes_bytes_(SECURITY_MAX_SID_SIZE) PSID Sid)
 {
-    DWORD Size = SECURITY_MAX_SID_SIZE;
-    return CreateWellKnownSid(WinLocalSystemSid, NULL, Sid, &Size);
+    static const SID LocalSystem = { SID_REVISION, 1, { SECURITY_NT_AUTHORITY }, { SECURITY_LOCAL_SYSTEM_RID } };
+
+    ZeroMemory(Sid, SECURITY_MAX_SID_SIZE);
+    CopyMemory(Sid, &LocalSystem, sizeof(LocalSystem));
+    return TRUE;
+}
+
+/* Structural check only (revision and sub-authority count), without advapi32. */
+static BOOL
+WluiSidLooksValid(
+    _In_opt_ PSID Sid)
+{
+    const SID *S = Sid;
+    return S != NULL && S->Revision == SID_REVISION && S->SubAuthorityCount <= SID_MAX_SUB_AUTHORITIES;
 }
 
 RPC_STATUS
@@ -44,8 +57,13 @@ WluiConnect(
 
     ZeroMemory(Connection, sizeof(*Connection));
 
-    if (ExpectedServerSid == NULL || !IsValidSid(ExpectedServerSid) || LaunchId == NULL)
+    if (!WluiSidLooksValid(ExpectedServerSid) || LaunchId == NULL)
         return RPC_S_INVALID_ARG;
+
+    /* A data reference pins the generated client stubs into every link: a binary that defines
+     * the WluiXxx server routines itself then fails to link instead of calling them in-process. */
+    if (wlui_v1_0_c_ifspec == NULL)
+        return RPC_S_UNKNOWN_IF;
 
     Status = RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncalrpc", NULL,
                                       (RPC_WSTR)(Endpoint ? Endpoint : WLUI_DEFAULT_ENDPOINT),

@@ -552,6 +552,8 @@ WinMain(
     WLSession->UseLogonUI = ReadUseLogonUISelector();
     TRACE("WL: UseLogonUI selector = %d\n", WLSession->UseLogonUI);
     WlHostInit();
+    if (WLSession->UseLogonUI)
+        WlHostLogonInit(WLSession);     /* before the first status message, which starts a host */
 
     /* Initialize the dialog tracking list */
     InitDialogListHead();
@@ -595,6 +597,7 @@ WinMain(
     if (WLSession->UseLogonUI)
     {
         LogonStage("host-mode");
+        WlHostThemeWatch();     /* msgina's WlxInitialize did this; winlogon hosts the theme hooks */
     }
     else if (!GinaInit(WLSession))
     {

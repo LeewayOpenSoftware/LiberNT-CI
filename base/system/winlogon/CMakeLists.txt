@@ -11,6 +11,7 @@ list(APPEND SOURCE
     environment.c
     hostlaunch.c
     hostlogon.c
+    reminder.c
     notify.c
     rpclogonui.c
     rpcserver.c

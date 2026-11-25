@@ -504,8 +504,8 @@ Options_GetFieldOptions(ICredentialProviderCredentialWithFieldOptions *iface, DW
 {
     if (!options)
         return E_POINTER;
-    if (!PasswordProvider_IsKnownFieldId(fieldID))
-        return E_INVALIDARG;
+    /* Win11's PasswordProvider answers any ID here: CPCFO_NONE unless it is a secret field
+     * (26100 baseline, Abi.c:135); only the per-field getters and setters reject unknown IDs. */
     *options = IsSecretField(fieldID) ? CPCFO_ENABLE_PASSWORD_REVEAL : CPCFO_NONE;
     return S_OK;
 }

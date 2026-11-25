@@ -10,6 +10,7 @@
 
 #include <rpc.h>
 #include <ntsecapi.h>
+#include <ndk/setypes.h>
 #include <credser.h>
 #include <wlui_s.h>
 #include <reactos/desktopready.h>
@@ -31,6 +32,7 @@ typedef struct _WLHL_SUBMIT
     NTSTATUS Status;
     NTSTATUS SubStatus;
     BOOL MustChange;        /* the account may only continue through a password change */
+    UINT TextId;            /* a refusal worded by winlogon (safe mode), 0 = provider wording */
     HANDLE Token;
     LUID LogonId;
     WCHAR User[CREDSER_MAX_NAME_CHARS + 1];
@@ -39,6 +41,7 @@ typedef struct _WLHL_SUBMIT
 } WLHL_SUBMIT;
 
 static PWLSESSION g_Session;
+static BOOL g_HostLogonReady;           /* WlHostLogonInit ran: locks and event exist */
 static HANDLE g_Lsa;
 static ULONG g_MsvPackage;
 static CREDSER_PACKAGES g_Packages;
@@ -56,6 +59,10 @@ static DWORD g_ChangeFor;               /* scenario a forced password change res
 static BOOL g_LsaBroken;                /* the last logged-out SAS could not reach the LSA */
 static HANDLE g_SwitchEvent;            /* ShellDesktopSwitchEvent of the logon in progress */
 static HANDLE g_ShellProcess;           /* first Userinit process of the logon in progress */
+static HWND g_TerminalDialog;           /* the N4 dialog, while it stands (owned by its own thread) */
+static HANDLE g_TerminalThread;         /* the thread that pumps that dialog */
+static HANDLE g_TerminalShown;          /* set once the thread has created the dialog, or failed */
+#define WM_LUT_CLOSE (WM_APP + 0x10)    /* the SAS thread asks the dialog thread to leave */
 
 /* ---- LSA ---------------------------------------------------------------------- */
 
@@ -96,17 +103,18 @@ WlHlConnectLsa(VOID)
     return TRUE;
 }
 
+static const GUID WlHlPasswordProvider =
+    { 0x60b78e88, 0xead8, 0x445c, { 0x9c, 0xfd, 0x0b, 0x87, 0xf7, 0x4e, 0xa6, 0xcd } };
+
 /* A provider CLSID is acceptable when it is registered for logon on this machine. */
 static BOOL
 WlHlProviderRegistered(
     _In_ const GUID *Clsid)
 {
-    static const GUID PasswordProvider =
-        { 0x60b78e88, 0xead8, 0x445c, { 0x9c, 0xfd, 0x0b, 0x87, 0xf7, 0x4e, 0xa6, 0xcd } };
     WCHAR Key[160], Text[40];
     HKEY hKey;
 
-    if (IsEqualGUID(Clsid, &PasswordProvider))
+    if (IsEqualGUID(Clsid, &WlHlPasswordProvider))
         return TRUE;
     if (StringFromGUID2(Clsid, Text, ARRAYSIZE(Text)) == 0)
         return FALSE;
@@ -139,6 +147,7 @@ WlHlBuildLogonGroups(VOID)
     SID_IDENTIFIER_AUTHORITY LocalAuthority = { SECURITY_LOCAL_SID_AUTHORITY };
     PSID LogonSid = NULL, LocalSid = NULL;
     PTOKEN_GROUPS Groups = NULL;
+    PSID_AND_ATTRIBUTES Entry;
     LUID LogonLuid;
 
     AllocateLocallyUniqueId(&LogonLuid);
@@ -152,10 +161,11 @@ WlHlBuildLogonGroups(VOID)
         return NULL;
     }
     Groups->GroupCount = 2;
-    Groups->Groups[0].Sid = LogonSid;
-    Groups->Groups[0].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_LOGON_ID;
-    Groups->Groups[1].Sid = LocalSid;
-    Groups->Groups[1].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT;
+    Entry = Groups->Groups;             /* the block holds two entries; the type declares one */
+    Entry[0].Sid = LogonSid;
+    Entry[0].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_LOGON_ID;
+    Entry[1].Sid = LocalSid;
+    Entry[1].Attributes = SE_GROUP_MANDATORY | SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT;
     return Groups;
 }
 
@@ -163,10 +173,13 @@ static VOID
 WlHlFreeLogonGroups(
     _In_opt_ PTOKEN_GROUPS Groups)
 {
+    PSID_AND_ATTRIBUTES Entry;
+
     if (Groups == NULL)
         return;
-    FreeSid(Groups->Groups[0].Sid);
-    FreeSid(Groups->Groups[1].Sid);
+    Entry = Groups->Groups;
+    FreeSid(Entry[0].Sid);
+    FreeSid(Entry[1].Sid);
     LocalFree(Groups);
 }
 
@@ -215,6 +228,47 @@ WlHlMustChange(
 {
     return Status == STATUS_PASSWORD_MUST_CHANGE || Status == STATUS_PASSWORD_EXPIRED ||
            SubStatus == STATUS_PASSWORD_MUST_CHANGE || SubStatus == STATUS_PASSWORD_EXPIRED;
+}
+
+/* msgina IsAdminToken: BUILTIN\Administrators among the token's groups. */
+static BOOL
+WlHlTokenIsAdmin(
+    _In_ HANDLE Token)
+{
+    SID_IDENTIFIER_AUTHORITY NtAuthority = { SECURITY_NT_AUTHORITY };
+    PSID Admins = NULL;
+    PTOKEN_GROUPS Groups;
+    DWORD Size = 0, i;
+    BOOL Found = FALSE;
+
+    if (!AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
+                                  0, 0, 0, 0, 0, 0, &Admins))
+        return FALSE;
+    GetTokenInformation(Token, TokenGroups, NULL, 0, &Size);
+    Groups = LocalAlloc(LMEM_FIXED, Size);
+    if (Groups && GetTokenInformation(Token, TokenGroups, Groups, Size, &Size))
+    {
+        for (i = 0; i < Groups->GroupCount && !Found; i++)
+            Found = EqualSid(Groups->Groups[i].Sid, Admins);
+    }
+    if (Groups)
+        LocalFree(Groups);
+    FreeSid(Admins);
+    return Found;
+}
+
+static DWORD WlHlPolicyDword(_In_ PCWSTR Name, _In_ DWORD Default);
+
+/* 8.10 d: in safe mode, SafeModeBlockNonAdmins keeps non-administrators out, as on Windows. */
+static BOOL
+WlHlSafeModeBlocksNonAdmins(VOID)
+{
+    DWORD Option = 0, Size = sizeof(Option);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\SafeBoot\\Option",
+                     L"OptionValue", RRF_RT_REG_DWORD, NULL, &Option, &Size) != ERROR_SUCCESS || Option == 0)
+        return FALSE;
+    return WlHlPolicyDword(L"SafeModeBlockNonAdmins", 0) != 0;
 }
 
 /* Interactive or unlock logon through MSV1_0, with the logon SID groups msgina built. */
@@ -376,7 +430,8 @@ WlHlFinishLogon(
     _In_ NTSTATUS SubStatus,
     _In_opt_ HANDLE Token,
     _In_ const LUID *LogonId,
-    _In_ const CREDSER_LOGON *Logon)
+    _In_ const CREDSER_LOGON *Logon,
+    _In_ UINT TextId)
 {
     EnterCriticalSection(&g_SubmitLock);
     if (!g_Accepting)
@@ -392,6 +447,7 @@ WlHlFinishLogon(
     g_Submit.Status = Status;
     g_Submit.SubStatus = SubStatus;
     g_Submit.MustChange = WlHlMustChange(Status, SubStatus);
+    g_Submit.TextId = TextId;
     if (NT_SUCCESS(Status))
     {
         g_Submit.Token = Token;
@@ -431,6 +487,7 @@ WlHlFinishUnlock(
     CloseHandle(Token);                 /* the session keeps its own token; this one only answered */
     if (Same)
     {
+        WlHostOnSas();                  /* the tier that unlocked starts fresh next time (leg finding 1) */
         WlHlPostEvent(WLHOST_EVENT_UNLOCK);
         return;
     }
@@ -450,13 +507,23 @@ WlHlHandleLogon(
     LUID LogonId;
     NTSTATUS Status, SubStatus = STATUS_SUCCESS;
 
+    UINT TextId = 0;
+
     if (!NT_SUCCESS(CredSerUnpackLogon(Copy, Size, &Logon)))
         return ERROR_INVALID_PARAMETER;
     Status = WlHlLsaLogon(&Logon, Unlock, &Token, &LogonId, &SubStatus);
+    if (!Unlock && NT_SUCCESS(Status) && WlHlSafeModeBlocksNonAdmins() && !WlHlTokenIsAdmin(Token))
+    {
+        ERR("WL: safe mode: non-administrator logon refused (SafeModeBlockNonAdmins)\n");
+        CloseHandle(Token);
+        Token = NULL;
+        Status = STATUS_ACCOUNT_RESTRICTION;
+        TextId = IDS_SAFEMODEADMINSONLY;
+    }
     if (Unlock)
         WlHlFinishUnlock(Status, SubStatus, Token);
     else
-        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon);
+        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, TextId);
     return ERROR_SUCCESS;
 }
 
@@ -492,7 +559,7 @@ WlHlHandleChange(
     if (Resume == WLHL_CPUS_UNLOCK)
         WlHlFinishUnlock(Status, SubStatus, Token);
     else
-        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon);
+        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, 0);
     return ERROR_SUCCESS;
 }
 
@@ -531,12 +598,23 @@ WlHlSubmitHandler(
     DWORD Error, Resume;
 
     UNREFERENCED_PARAMETER(State);
-    UNREFERENCED_PARAMETER(Role);
 
     if (Scenario != WLHL_CPUS_LOGON && Scenario != WLHL_CPUS_UNLOCK && Scenario != WLHL_CPUS_CHANGE_PASSWORD)
         return ERROR_NOT_SUPPORTED;
-    if (!g_Connected || !CredSerIsKnownPackage(&g_Packages, AuthenticationPackage))
+    if (!g_Connected)
         return ERROR_INVALID_PARAMETER;
+    if (Role == WluiAuthRoleRecovery)
+    {
+        /* P4: the recovery dialog has no LSA handle and only ever speaks for the password
+         * provider; it sends package 0 and gets MSV1_0, nothing else is accepted from it. */
+        if (AuthenticationPackage != WLUI_PACKAGE_SERVER_DEFAULT || !IsEqualGUID(ProviderClsid, &WlHlPasswordProvider))
+            return ERROR_ACCESS_DENIED;
+        AuthenticationPackage = g_MsvPackage;
+    }
+    else if (!CredSerIsKnownPackage(&g_Packages, AuthenticationPackage))
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
     if (!WlHlProviderRegistered(ProviderClsid))
         return ERROR_ACCESS_DENIED;
     if (Serialization == NULL || cbSerialization == 0 || cbSerialization > CREDSER_MAX_BLOB_SIZE)
@@ -593,6 +671,23 @@ WlHlShutdownWithoutLogon(VOID)
     return WlHlPolicyDword(L"ShutdownWithoutLogon", 1) != 0;
 }
 
+/* A legal notice is configured (Policies\System legalnoticetext, or the Winlogon key). */
+static BOOL
+WlHlHasLegalNotice(VOID)
+{
+    WCHAR Text[4];
+    DWORD Size = sizeof(Text);
+    LONG Error;
+
+    Error = RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_POLICY_KEY, L"legalnoticetext", RRF_RT_REG_SZ, NULL, Text, &Size);
+    if (Error != ERROR_SUCCESS && Error != ERROR_MORE_DATA)
+    {
+        Size = sizeof(Text);
+        Error = RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"LegalNoticeText", RRF_RT_REG_SZ, NULL, Text, &Size);
+    }
+    return (Error == ERROR_SUCCESS || Error == ERROR_MORE_DATA) && Size > sizeof(WCHAR);
+}
+
 /* Flags for RequestCredentials that describe policy to the host; winlogon stays the gate. */
 static DWORD
 WlHlPolicyFlags(VOID)
@@ -602,6 +697,8 @@ WlHlPolicyFlags(VOID)
         Flags |= WLUI_FLAG_DISABLE_CAD;
     if (!WlHlShutdownWithoutLogon())
         Flags |= WLUI_FLAG_NO_POWER;
+    if (WlHlHasLegalNotice())
+        Flags |= WLUI_FLAG_LEGAL_NOTICE;
     return Flags;
 }
 
@@ -689,6 +786,139 @@ WlHlStopHost(VOID)
         WlHostStop(Old);
 }
 
+/* ---- N4: the terminal dialog winlogon draws itself (8.9 P3, 8.10 c, R1b) ---------------- */
+
+static INT_PTR CALLBACK
+WlHlTerminalProc(
+    _In_ HWND Dialog,
+    _In_ UINT Message,
+    _In_ WPARAM wParam,
+    _In_ LPARAM lParam)
+{
+    switch (Message)
+    {
+        case WM_INITDIALOG:
+        {
+            WCHAR Text[512];
+            UINT Id = (lParam == WlHostTerminalMissing) ? IDS_LOGONUI_TERMINAL_MISSING :
+                      (lParam == WlHostTerminalPolicy) ? IDS_LOGONUI_TERMINAL_POLICY : IDS_LOGONUI_TERMINAL_LEVELS;
+            LOGON_STATE State = g_Session ? g_Session->LogonState : STATE_LOGGED_OFF;
+            BOOL SignedOut = (State == STATE_LOGGED_OFF || State == STATE_LOGGED_OFF_SAS ||
+                              State == STATE_LOCKED || State == STATE_LOCKED_SAS);
+            BOOL Power = !SignedOut || WlHlShutdownWithoutLogon();     /* same gate as the host's flyout */
+
+            if (LoadStringW(hAppInstance, Id, Text, ARRAYSIZE(Text)) == 0)
+                Text[0] = UNICODE_NULL;
+            SetDlgItemTextW(Dialog, IDC_LUT_TEXT, Text);
+            EnableWindow(GetDlgItem(Dialog, IDC_LUT_RESTART), Power);
+            EnableWindow(GetDlgItem(Dialog, IDC_LUT_SHUTDOWN), Power);
+            return TRUE;
+        }
+        case WM_COMMAND:
+            if (LOWORD(wParam) == IDC_LUT_RESTART || LOWORD(wParam) == IDC_LUT_SHUTDOWN)
+            {
+                WlHlPostEvent(LOWORD(wParam) == IDC_LUT_RESTART ? WLHOST_EVENT_RESTART : WLHOST_EVENT_SHUTDOWN);
+                return TRUE;
+            }
+            if (LOWORD(wParam) == IDCANCEL)
+                return TRUE;            /* nothing dismisses it but a launch or a power action */
+            break;
+        case WM_LUT_CLOSE:
+            DestroyWindow(Dialog);
+            return TRUE;
+        case WM_CLOSE:
+            return TRUE;
+        case WM_DESTROY:
+            g_TerminalDialog = NULL;
+            PostQuitMessage(0);
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* The dialog lives on its own thread with its own loop: winlogon's main loop is filtered
+ * to the SAS window and has no IsDialogMessage, so a dialog on that thread would be dead. */
+static DWORD WINAPI
+WlHlTerminalThread(
+    _In_ LPVOID Parameter)
+{
+    WLHOST_TERMINAL Reason = (WLHOST_TERMINAL)(ULONG_PTR)Parameter;
+    HWND Dialog = NULL;
+    MSG Msg;
+
+    if (g_Session == NULL || !SetThreadDesktop(g_Session->WinlogonDesktop))
+        ERR("WL: terminal dialog thread cannot use the Winlogon desktop (%lu)\n", GetLastError());
+    else
+        Dialog = CreateDialogParamW(hAppInstance, MAKEINTRESOURCEW(IDD_LOGONUITERMINAL), NULL,
+                                    WlHlTerminalProc, (LPARAM)Reason);
+    g_TerminalDialog = Dialog;
+    SetEvent(g_TerminalShown);
+    if (Dialog == NULL)
+    {
+        ERR("WL: cannot create the terminal dialog (%lu)\n", GetLastError());
+        return 1;
+    }
+    ShowWindow(Dialog, SW_SHOW);
+    SetForegroundWindow(Dialog);
+    SetFocus(GetDlgItem(Dialog, IDC_LUT_RESTART));
+    while (GetMessageW(&Msg, NULL, 0, 0) > 0)
+    {
+        if (!IsDialogMessageW(Dialog, &Msg))
+        {
+            TranslateMessage(&Msg);
+            DispatchMessageW(&Msg);
+        }
+    }
+    return 0;
+}
+
+static BOOL
+WlHlTerminalUp(VOID)
+{
+    return g_TerminalThread != NULL && WaitForSingleObject(g_TerminalThread, 0) == WAIT_TIMEOUT &&
+           g_TerminalDialog != NULL;
+}
+
+/* Joins a dialog thread that is over (or asks a live one to leave first). */
+static VOID
+WlHlCloseTerminal(VOID)
+{
+    if (g_TerminalThread == NULL)
+        return;
+    if (g_TerminalDialog != NULL)
+        PostMessageW(g_TerminalDialog, WM_LUT_CLOSE, 0, 0);
+    if (WaitForSingleObject(g_TerminalThread, 5000) != WAIT_OBJECT_0)
+        ERR("WL: terminal dialog thread did not leave\n");
+    CloseHandle(g_TerminalThread);
+    g_TerminalThread = NULL;
+    g_TerminalDialog = NULL;
+}
+
+/* Shown by the SAS thread (not blocked by it); the next launch that succeeds closes it. */
+static VOID
+WlHlShowTerminal(
+    _In_ WLHOST_TERMINAL Reason)
+{
+    if (WlHlTerminalUp())
+        return;
+    WlHlCloseTerminal();                /* a thread that already ended on its own */
+    if (g_TerminalShown == NULL)
+        g_TerminalShown = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (g_TerminalShown == NULL)
+        return;
+    ResetEvent(g_TerminalShown);
+    g_TerminalThread = CreateThread(NULL, 0, WlHlTerminalThread, (LPVOID)(ULONG_PTR)Reason, 0, NULL);
+    if (g_TerminalThread == NULL)
+    {
+        ERR("WL: cannot start the terminal dialog thread (%lu)\n", GetLastError());
+        return;
+    }
+    WaitForSingleObject(g_TerminalShown, 5000);
+    WlHostLog(EVENTLOG_ERROR_TYPE, Reason == WlHostTerminalPolicy ? L"logon UI terminal dialog shown (policy)" :
+              Reason == WlHostTerminalMissing ? L"logon UI terminal dialog shown (images missing)" :
+                                                L"logon UI terminal dialog shown (levels spent)");
+}
+
 /* Brings up a host for Scenario (0: status only). A live host is kept when it already shows
  * Scenario, or when it was status-only and the logon page is wanted (the host builds its
  * providers at the first RequestCredentials); any other change means a fresh host. */
@@ -699,7 +929,15 @@ WlHlEnsureHost(
     _In_ DWORD ReadyMs)
 {
     PWLHOST_LAUNCH Launch;
+    WLHOST_TERMINAL Reason = WlHostTerminalNone;
     BOOL Terminal = FALSE;
+
+    if (!g_HostLogonReady)
+    {
+        /* An ordering mistake must trace, not hang on a zeroed lock (VM leg B.1.1). */
+        ERR("WL: host requested before WlHostLogonInit (scenario %lu)\n", Scenario);
+        return FALSE;
+    }
 
     EnterCriticalSection(&g_SubmitLock);
     if (Scenario != WLHL_CPUS_CHANGE_PASSWORD)
@@ -719,16 +957,29 @@ WlHlEnsureHost(
     }
     WlHlStopHost();
 
-    Launch = WlHostStart(Scenario ? Scenario : WLHL_CPUS_LOGON, &Terminal);
+    Launch = WlHostStart(Scenario ? Scenario : WLHL_CPUS_LOGON, &Terminal, &Reason);
     if (Launch == NULL)
-        return FALSE;                   /* N4: the terminal state is drawn by a later commit */
+    {
+        if (Terminal)
+            WlHlShowTerminal(Reason);
+        return FALSE;
+    }
+    WlHlCloseTerminal();
     EnterCriticalSection(&g_LaunchLock);
     g_Launch = Launch;
     g_HostScenario = Scenario;
     LeaveCriticalSection(&g_LaunchLock);
+    LogonStage("host-launched");
 
-    if (!WlHostWaitReady(Launch, ReadyMs))
+    if (WlHostWaitReady(Launch, ReadyMs))
+    {
+        LogonStage("host-ready");
+    }
+    else
+    {
+        LogonStage("host-not-ready");
         WARN("WL: logon UI not ready after %lu ms, continuing anyway\n", ReadyMs);
+    }
     if (Scenario != 0)
         WlHlPost(WluiCmdRequestCredentials, Scenario, Flags, 0, 0, NULL, NULL);
     return TRUE;
@@ -750,14 +1001,27 @@ WlHlSetAccepting(
     LeaveCriticalSection(&g_SubmitLock);
 }
 
+/* Called right after the selector is read, before any status message: the boot status page
+ * ("Orosi is starting up") goes through WlHostStatus and its locks long before the SAS window
+ * exists. Entering an uninitialised critical section there stalled winlogon (VM leg B.1.1). */
 VOID
-WlHostAttach(
+WlHostLogonInit(
     _In_ PWLSESSION Session)
 {
     g_Session = Session;
     InitializeCriticalSection(&g_SubmitLock);
     InitializeCriticalSection(&g_LaunchLock);
     g_SubmitEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    g_HostLogonReady = TRUE;
+}
+
+/* Called once the SAS window exists: events and handlers need it, the locks do not. */
+VOID
+WlHostAttach(
+    _In_ PWLSESSION Session)
+{
+    /* g_Session was set by WlHostLogonInit; only the handlers wait for the SAS window. */
+    UNREFERENCED_PARAMETER(Session);
     WluiSetSubmitHandler(WlHlSubmitHandler);
     WluiSetActionHandler(WlHlActionHandler);
     WlHostSetEndedCallback(WlHlOnHostEnded);
@@ -778,10 +1042,12 @@ WlHostDisplaySasNotice(
             WlHlPostResource(WluiCmdDisplayStatus, 0, IDS_PRESSCTRLALTDELETE);
         return;
     }
-    if (WlHostIsTerminal() || g_LsaBroken)
+    if (WlHostIsTerminal() || g_LsaBroken || WlHlTerminalUp())
     {
-        /* N4 or no LSA: posting again would spin; a user SAS is the only way on (N4 dialog: commit 10). */
-        ERR("WL: logon UI cannot come up (%s); waiting for a user SAS\n", g_LsaBroken ? "no LSA" : "terminal state");
+        /* N4, policy or no LSA: posting again would spin; the terminal dialog stands and a user
+         * SAS is the only way on. */
+        ERR("WL: logon UI cannot come up (%s); waiting for a user SAS\n",
+            g_LsaBroken ? "no LSA" : WlHlTerminalUp() ? "terminal dialog" : "terminal state");
         return;
     }
     Session->HostAutoSas = TRUE;
@@ -815,7 +1081,34 @@ WlHostLoggedOutSas(
 
         Waits[0] = g_SubmitEvent;
         Waits[1] = WlHostEndedEvent(g_Launch);
-        Which = WaitForMultipleObjects(2, Waits, FALSE, INFINITE);
+        /* Posted messages keep flowing to the SAS window: win32k posts the shutdown notification
+         * (WM_LOGONNOTIFY) there and a plain wait starved it (leg finding 2). A second SAS is
+         * ignored in STATE_LOGGED_OFF_SAS, but a logoff, shutdown or lock notification runs its
+         * whole action nested in here; the state check after the loop is the guard. */
+        Which = MsgWaitForMultipleObjects(2, Waits, FALSE, INFINITE, QS_ALLINPUT);
+        if (Which == WAIT_OBJECT_0 + 2)
+        {
+            MSG Msg;
+            BOOL Quit = FALSE;
+            while (!Quit && PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
+            {
+                if (Msg.message == WM_QUIT)
+                {
+                    PostQuitMessage((int)Msg.wParam);   /* belongs to winlogon's main loop */
+                    Quit = TRUE;
+                    break;
+                }
+                TranslateMessage(&Msg);
+                DispatchMessageW(&Msg);
+            }
+            if (Quit || Session->LogonState != STATE_LOGGED_OFF_SAS || g_Launch == NULL)
+            {
+                /* The nested action ended the SAS, or the host is gone: this wait is over. */
+                WlHlSetAccepting(FALSE);
+                return WLX_SAS_ACTION_NONE;
+            }
+            continue;
+        }
 
         if (Which == WAIT_OBJECT_0 + 1)
         {
@@ -863,9 +1156,14 @@ WlHostLoggedOutSas(
         if (!NT_SUCCESS(g_Submit.Status))
         {
             NTSTATUS Status = g_Submit.Status, SubStatus = g_Submit.SubStatus;
+            UINT TextId = g_Submit.TextId;
             LeaveCriticalSection(&g_SubmitLock);
-            /* The provider owns the wording of its result (STATUS_LOGON_FAILURE and friends). */
-            WlHlPost(WluiCmdReportResult, g_HostScenario, 0, Status, SubStatus, NULL, NULL);
+            /* The provider owns the wording of its result (STATUS_LOGON_FAILURE and friends),
+             * unless winlogon refused it for a reason of its own (safe mode). */
+            if (TextId)
+                WlHlPostResource(WluiCmdReportResult, 0, TextId);
+            else
+                WlHlPost(WluiCmdReportResult, g_HostScenario, 0, Status, SubStatus, NULL, NULL);
             continue;
         }
 
@@ -887,6 +1185,7 @@ WlHostLoggedOutSas(
         LeaveCriticalSection(&g_SubmitLock);
 
         WlHlPost(WluiCmdDisplayWelcome, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, Session->MprNotifyInfo.pszUserName, NULL);
+        WlHostOnSas();                  /* a completed logon resets the levels like a user SAS does */
         Result = WLX_SAS_ACTION_LOGON;
         break;
     }
@@ -1016,6 +1315,28 @@ WlHostThemeWait(VOID)
     FreeLibrary(Module);
 }
 
+/* msgina's InitThemeSupport also called shsvcs ordinal 1 (ThemeWatchForStart): when the Themes
+ * service signals its start event, that process installs the session's theme hooks and stays
+ * their server (win32k drops them when its last GUI thread exits). Without it no process ever
+ * installed them in host mode and every window was classic (VM leg finding 4). The module stays
+ * loaded: it owns the registered wait and its callback. */
+VOID
+WlHostThemeWatch(VOID)
+{
+    typedef BOOL (WINAPI *THEMEWATCH)(VOID);
+    HMODULE Module = LoadLibraryW(L"shsvcs.dll");
+    THEMEWATCH Watch;
+
+    if (Module == NULL)
+    {
+        ERR("WL: shsvcs.dll not loaded (error %lu); the session gets no theme hooks\n", GetLastError());
+        return;
+    }
+    Watch = (THEMEWATCH)GetProcAddress(Module, (LPCSTR)1);
+    if (Watch == NULL || !Watch())
+        ERR("WL: ThemeWatchForStart unavailable or failed; the session gets no theme hooks\n");
+}
+
 /* ---- the desktop switch (PHASE3-PLAN §6.3.1, commit 8) ---------------------------------- */
 
 /* ShellDesktopSwitchEvent for this logon: SYSTEM owns it, the user may only signal it. */
@@ -1107,7 +1428,7 @@ WlHostWaitDesktopSwitch(
     HANDLE Waits[2];
     DWORD Count, Timeout = WlHlDesktopSwitchTimeoutMs();
     ULONGLONG Start = GetTickCount64();
-    PCSTR Reason = "timeout";
+    PCSTR Reason = "desktop-switch-timeout";
     BOOL TimedOut = TRUE;
     MSG Msg;
 
@@ -1133,13 +1454,13 @@ WlHostWaitDesktopSwitch(
             break;
         if (Result == WAIT_FAILED)
         {
-            Reason = "wait failed";
+            Reason = "desktop-switch-wait-failed";
             TimedOut = FALSE;
             break;
         }
         if (Count > 0 && Waits[Result - WAIT_OBJECT_0] == g_SwitchEvent)
         {
-            Reason = "shell signalled";
+            Reason = "desktop-switch-signalled";
             TimedOut = FALSE;
             break;
         }
@@ -1149,7 +1470,7 @@ WlHostWaitDesktopSwitch(
         g_ShellProcess = NULL;
         if (ExitCode != 0)
         {
-            Reason = "shell failed";
+            Reason = "desktop-switch-shell-failed";
             TimedOut = FALSE;
             break;
         }
@@ -1157,7 +1478,8 @@ WlHostWaitDesktopSwitch(
 
     if (TimedOut)
         WARN("WL: desktop switch after %lu ms without the shell's signal\n", Timeout);
-    TRACE("WL: desktop switch: %s after %I64u ms\n", Reason, GetTickCount64() - Start);
+    TRACE("WL: %s after %I64u ms\n", Reason, GetTickCount64() - Start);
+    LogonStage(Reason);                 /* the leg reads the switch from COM1 (checklist B.3) */
     WlHlCloseSwitchHandles();
 }
 
