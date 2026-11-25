@@ -1330,6 +1330,24 @@ cmdUser(
         {
             pUserInfo->usri4_home_dir = &argv[j][9];
         }
+        else if (_wcsnicmp(argv[j], L"/logonpasswordchg:", 18) == 0)
+        {
+            p = &argv[j][18];
+            if (_wcsicmp(p, L"yes") == 0)
+            {
+                pUserInfo->usri4_password_expired = TRUE;
+            }
+            else if (_wcsicmp(p, L"no") == 0)
+            {
+                pUserInfo->usri4_password_expired = FALSE;
+            }
+            else
+            {
+                PrintMessageStringV(3952, L"/LOGONPASSWORDCHG");
+                result = 1;
+                goto done;
+            }
+        }
         else if (_wcsnicmp(argv[j], L"/passwordchg:", 13) == 0)
         {
             p = &argv[i][13];
