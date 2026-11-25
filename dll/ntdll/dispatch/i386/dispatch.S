@@ -125,8 +125,10 @@ _KiUserCallbackDispatcher@12:
     /* No client callback table: Windows ends the process with this status */
     test eax, eax
     jnz table_present
+RaiseFatal:
     push STATUS_FATAL_USER_CALLBACK_EXCEPTION
     call _RtlRaiseStatus@4
+    jmp RaiseFatal
 
 table_present:
 
