@@ -53,7 +53,6 @@ WluiConnect(
 {
     RPC_WSTR StringBinding = NULL;
     RPC_SECURITY_QOS_V3_W Qos;
-    RPC_IF_ID IfId;
     RPC_STATUS Status;
 
     ZeroMemory(Connection, sizeof(*Connection));
@@ -61,9 +60,9 @@ WluiConnect(
     if (!WluiSidLooksValid(ExpectedServerSid) || LaunchId == NULL)
         return RPC_S_INVALID_ARG;
 
-    /* Pins the generated client stubs into every link: a binary that defines the WluiXxx
-     * server routines itself then fails to link instead of calling them in-process. */
-    if (RpcIfInqId(wlui_v1_0_c_ifspec, &IfId) != RPC_S_OK)
+    /* A data reference pins the generated client stubs into every link: a binary that defines
+     * the WluiXxx server routines itself then fails to link instead of calling them in-process. */
+    if (wlui_v1_0_c_ifspec == NULL)
         return RPC_S_UNKNOWN_IF;
 
     Status = RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncalrpc", NULL,
