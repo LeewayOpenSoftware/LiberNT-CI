@@ -584,6 +584,7 @@
 @ stdcall NtSetInformationObject(ptr long ptr long)
 @ stdcall NtSetInformationProcess(ptr long ptr long)
 @ stdcall -version=0x600+ NtSetInformationResourceManager(ptr long ptr long)
+@ stdcall NtSetInformationSymbolicLink(ptr long ptr long)
 @ stdcall NtSetInformationThread(ptr long ptr long)
 @ stdcall NtSetInformationVirtualMemory(ptr long ptr ptr ptr long)
 @ stdcall NtSetInformationToken(ptr long ptr long)
@@ -1890,6 +1891,7 @@
 @ stdcall ZwSetInformationObject(long long ptr long)
 @ stdcall ZwSetInformationProcess(long long long long)
 @ stdcall -version=0x600+ ZwSetInformationResourceManager(ptr long ptr long) NtSetInformationResourceManager
+@ stdcall ZwSetInformationSymbolicLink(ptr long ptr long)
 @ stdcall ZwSetInformationThread(long long ptr long)
 @ stdcall ZwSetInformationToken(long long ptr long)
 @ stdcall -version=0x600+ ZwSetInformationTransaction(ptr long ptr long) NtSetInformationTransaction

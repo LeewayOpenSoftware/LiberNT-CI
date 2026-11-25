@@ -292,6 +292,16 @@ NtCreateSymbolicLinkObject(
     _In_ PUNICODE_STRING Name
 );
 
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
+NtSetInformationSymbolicLink(
+    _In_ HANDLE LinkHandle,
+    _In_ SYMBOLIC_LINK_INFO_CLASS SymbolicLinkInformationClass,
+    _In_reads_bytes_(SymbolicLinkInformationLength) PVOID SymbolicLinkInformation,
+    _In_ ULONG SymbolicLinkInformationLength
+);
+
 __kernel_entry
 NTSYSCALLAPI
 NTSTATUS
@@ -507,6 +517,16 @@ ZwCreateSymbolicLinkObject(
     _In_ ACCESS_MASK DesiredAccess,
     _In_ POBJECT_ATTRIBUTES ObjectAttributes,
     _In_ PUNICODE_STRING Name
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwSetInformationSymbolicLink(
+    _In_ HANDLE LinkHandle,
+    _In_ SYMBOLIC_LINK_INFO_CLASS SymbolicLinkInformationClass,
+    _In_reads_bytes_(SymbolicLinkInformationLength) PVOID SymbolicLinkInformation,
+    _In_ ULONG SymbolicLinkInformationLength
 );
 
 NTSYSAPI

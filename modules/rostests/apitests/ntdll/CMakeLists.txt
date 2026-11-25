@@ -144,6 +144,7 @@ list(APPEND SOURCE
     NtSaveKey.c
     NtSetDefaultLocale.c
     NtSetInformationFile.c
+    NtSetInformationSymbolicLink.c
     NtSetInformationProcess.c
     NtSetInformationThread.c
     NtSetInformationToken.c

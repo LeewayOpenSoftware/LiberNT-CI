@@ -478,10 +478,11 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
     PVOID Object;
     POBJECT_HEADER ObjectHeader;
     UNICODE_STRING ComponentName, RemainingName;
-    BOOLEAN Reparse = FALSE, SymLink = FALSE;
+    BOOLEAN Reparse = FALSE, SymLink = FALSE, GlobalReparse = FALSE;
     POBJECT_DIRECTORY Directory = NULL, ParentDirectory = NULL, RootDirectory;
     POBJECT_DIRECTORY ReferencedDirectory = NULL, ReferencedParentDirectory = NULL;
     POBJECT_DIRECTORY FoundDirectory = NULL;
+    POBJECT_DIRECTORY DosDevicesDirectory;
     KIRQL CalloutIrql;
     OB_PARSE_METHOD ParseRoutine;
     POBJECT_TYPE ParseObjectType;
@@ -571,6 +572,7 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
 
                 /* Check for success or failure, so not reparse */
                 if ((Status != STATUS_REPARSE) &&
+                    (Status != STATUS_REPARSE_GLOBAL) &&
                     (Status != STATUS_REPARSE_OBJECT))
                 {
                     /* Check for failure */
@@ -601,13 +603,15 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
                         Status = STATUS_OBJECT_NAME_NOT_FOUND;
                     return Status;
                 }
-                else if ((!ObjectName->Length) ||
+                else if ((Status == STATUS_REPARSE_GLOBAL) ||
+                         (!ObjectName->Length) ||
                          (!ObjectName->Buffer) ||
                          (ObjectName->Buffer[0] == OBJ_NAME_PATH_SEPARATOR))
                 {
                     /* Reparsed to the root directory, so start over */
                     ObDereferenceObject(RootDirectory);
                     RootDirectory = ObpRootDirectoryObject;
+                    GlobalReparse = (Status == STATUS_REPARSE_GLOBAL);
 
                     /* Don't use this anymore, since we're starting at root */
                     RootHandle = NULL;
@@ -690,6 +694,7 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
         {
 ParseFromRoot:
             LocalName = *ObjectName;
+            DosDevicesDirectory = NULL;
 
             /* Deference the device map if we already have one */
             if (DeviceMap != NULL)
@@ -714,16 +719,27 @@ ParseFromRoot:
                     (*(PULONGLONG)(ObjectName->Buffer) ==
                      ObpDosDevicesShortNamePrefix.Alignment.QuadPart))
                 {
-                    DeviceMap = ObpReferenceDeviceMap();
+                    if (GlobalReparse)
+                    {
+                        if (ObSystemDeviceMap)
+                            DosDevicesDirectory = ObSystemDeviceMap->DosDevicesDirectory;
+                    }
+                    else
+                    {
+                        DeviceMap = ObpReferenceDeviceMap();
+                        if (DeviceMap)
+                            DosDevicesDirectory = DeviceMap->DosDevicesDirectory;
+                    }
+
                     /* We have a local mapping, drop the ?? prefix */
-                    if (DeviceMap != NULL && DeviceMap->DosDevicesDirectory != NULL)
+                    if (DosDevicesDirectory)
                     {
                         LocalName.Length -= ObpDosDevicesShortName.Length;
                         LocalName.MaximumLength -= ObpDosDevicesShortName.Length;
                         LocalName.Buffer += (ObpDosDevicesShortName.Length / sizeof(WCHAR));
 
                         /* We'll browse that local directory */
-                        Directory = DeviceMap->DosDevicesDirectory;
+                        Directory = DosDevicesDirectory;
                     }
                 }
                 else if ((ObjectName->Length == ObpDosDevicesShortName.Length -
@@ -733,25 +749,37 @@ ParseFromRoot:
                          (*((PWCHAR)(ObjectName->Buffer) + 2) ==
                           (WCHAR)(ObpDosDevicesShortNameRoot.Alignment.HighPart)))
                 {
-                    DeviceMap = ObpReferenceDeviceMap();
+                    if (GlobalReparse)
+                    {
+                        if (ObSystemDeviceMap)
+                            DosDevicesDirectory = ObSystemDeviceMap->DosDevicesDirectory;
+                    }
+                    else
+                    {
+                        DeviceMap = ObpReferenceDeviceMap();
+                        if (DeviceMap)
+                            DosDevicesDirectory = DeviceMap->DosDevicesDirectory;
+                    }
 
                     /* Caller is looking for the directory itself */
-                    if (DeviceMap != NULL && DeviceMap->DosDevicesDirectory != NULL)
+                    if (DosDevicesDirectory)
                     {
-                        Status = ObReferenceObjectByPointer(DeviceMap->DosDevicesDirectory,
+                        Status = ObReferenceObjectByPointer(DosDevicesDirectory,
                                                             0,
                                                             ObjectType,
                                                             AccessMode);
                         if (NT_SUCCESS(Status))
                         {
-                            *FoundObject = DeviceMap->DosDevicesDirectory;
+                            *FoundObject = DosDevicesDirectory;
                         }
 
-                        ObfDereferenceDeviceMap(DeviceMap);
+                        if (DeviceMap) ObfDereferenceDeviceMap(DeviceMap);
                         return Status;
                     }
                 }
             }
+
+            GlobalReparse = FALSE;
         }
     }
 
@@ -1043,6 +1071,7 @@ ReparseObject:
 
                 /* Check if we have to reparse */
                 if ((Status == STATUS_REPARSE) ||
+                    (Status == STATUS_REPARSE_GLOBAL) ||
                     (Status == STATUS_REPARSE_OBJECT))
                 {
                     /* Reparse again */
@@ -1056,6 +1085,7 @@ ReparseObject:
 
                     /* Start over from root if we got sent back there */
                     if ((Status == STATUS_REPARSE_OBJECT) ||
+                        (Status == STATUS_REPARSE_GLOBAL) ||
                         (ObjectName->Buffer[0] == OBJ_NAME_PATH_SEPARATOR))
                     {
                         /* Check if we got a root directory */
@@ -1069,6 +1099,7 @@ ReparseObject:
                         /* Start at Root */
                         ParentDirectory = NULL;
                         RootDirectory = ObpRootDirectoryObject;
+                        GlobalReparse = (Status == STATUS_REPARSE_GLOBAL);
 
                         /* Check for reparse status */
                         if (Status == STATUS_REPARSE_OBJECT)

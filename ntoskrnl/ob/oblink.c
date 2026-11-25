@@ -436,7 +436,10 @@ ObpParseSymbolicLink(IN PVOID ParsedObject,
     PWSTR NewTargetPath;
     SIZE_T LengthUsed, MaximumLength, TempLength;
     NTSTATUS Status;
+    LONG LinkFlags;
     PAGED_CODE();
+
+    LinkFlags = InterlockedCompareExchange(&SymlinkObject->Flags, 0, 0);
 
     /* Assume failure */
     *NextObject = NULL;
@@ -635,7 +638,8 @@ ObpParseSymbolicLink(IN PVOID ParsedObject,
     FullPath->Buffer = NewTargetPath;
 
     /* Tell the parse routine to start reparsing */
-    return STATUS_REPARSE;
+    return (LinkFlags & OBP_SYMBOLIC_LINK_LOOKUP) ?
+           STATUS_REPARSE_GLOBAL : STATUS_REPARSE;
 }
 
 NTSTATUS
@@ -790,6 +794,7 @@ NtCreateSymbolicLinkObject(OUT PHANDLE LinkHandle,
         /* Initialize the remaining name, dos drive index and target object */
         SymbolicLink->LinkTargetObject = NULL;
         SymbolicLink->DosDeviceDriveIndex = 0;
+        SymbolicLink->Flags = 0;
         RtlInitUnicodeString(&SymbolicLink->LinkTargetRemaining, NULL);
 
         /* Insert it into the object tree */
@@ -889,6 +894,78 @@ NtOpenSymbolicLinkObject(OUT PHANDLE LinkHandle,
 
     /* Return status to caller */
     return Status;
+}
+
+NTSTATUS
+NTAPI
+NtSetInformationSymbolicLink(
+    _In_ HANDLE LinkHandle,
+    _In_ SYMBOLIC_LINK_INFO_CLASS SymbolicLinkInformationClass,
+    _In_reads_bytes_(SymbolicLinkInformationLength) PVOID SymbolicLinkInformation,
+    _In_ ULONG SymbolicLinkInformationLength)
+{
+    POBJECT_SYMBOLIC_LINK SymbolicLink;
+    KPROCESSOR_MODE PreviousMode;
+    NTSTATUS Status;
+    ULONG Value;
+
+    PAGED_CODE();
+
+    if (SymbolicLinkInformationClass != SymbolicLinkGlobalInformation)
+        return STATUS_INVALID_INFO_CLASS;
+
+    PreviousMode = ExGetPreviousMode();
+    Status = ObReferenceObjectByHandle(LinkHandle,
+                                       SYMBOLIC_LINK_SET,
+                                       ObpSymbolicLinkObjectType,
+                                       PreviousMode,
+                                       (PVOID*)&SymbolicLink,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (SymbolicLinkInformationLength != sizeof(Value))
+    {
+        ObDereferenceObject(SymbolicLink);
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForRead(SymbolicLinkInformation, sizeof(Value), sizeof(Value));
+            Value = *(PULONG)SymbolicLinkInformation;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+        {
+            ObDereferenceObject(SymbolicLink);
+            return Status;
+        }
+    }
+    else
+    {
+        Value = *(PULONG)SymbolicLinkInformation;
+    }
+
+    if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
+    {
+        ObDereferenceObject(SymbolicLink);
+        return STATUS_PRIVILEGE_NOT_HELD;
+    }
+
+    InterlockedOr(&SymbolicLink->Flags, OBP_SYMBOLIC_LINK_GLOBAL);
+    if (Value)
+        InterlockedOr(&SymbolicLink->Flags, OBP_SYMBOLIC_LINK_LOOKUP);
+
+    ObDereferenceObject(SymbolicLink);
+    return STATUS_SUCCESS;
 }
 
 /*++
