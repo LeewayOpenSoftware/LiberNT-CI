@@ -262,7 +262,9 @@ Test_ServerCheckAndWire(void)
     ok(g_LastFaultReason == 3, "fault reason %lu\n", g_LastFaultReason);
     ok(WluiClientExiting(&C, WluiExitDismissed) == ERROR_SUCCESS, "Exiting\n");
     ok(g_LastExitReason == WluiExitDismissed, "exit reason %lu\n", g_LastExitReason);
-    ok(g_Calls == 8, "calls %ld\n", g_Calls);
+    /* Ready, Heartbeat, WaitForCommand, three submits that pass the client checks
+     * (the package-0 one is refused by the server, after it counted), action, fault, exiting. */
+    ok(g_Calls == 9, "calls %ld\n", g_Calls);
 
     WluiDisconnect(&C);
     StopTestServer();
