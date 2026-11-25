@@ -840,10 +840,8 @@ DpapiReleaseSidLock(
     RtlLeaveCriticalSection(&DpapiSidLockListLock);
 }
 
-/* The profile directory of a SID from ProfileList. ProfileImagePath is REG_EXPAND_SZ
- * ("%SystemDrive%\\Users\\name" on a stock install); it is read unexpanded, which every
- * RegGetValueW does with RRF_NOEXPAND, and expanded here, so the Protect path never carries
- * a literal "%SystemDrive%" (that made every user-scope protect fail with error 2). */
+/* The profile directory of a SID from ProfileList, read as SYSTEM (never under the caller's
+ * token) and expanded: ProfileImagePath is REG_EXPAND_SZ ("%SystemDrive%\\Users\\name"). */
 static
 NTSTATUS
 DpapiReadProfileImagePath(
@@ -866,18 +864,27 @@ DpapiReadProfileImagePath(
 
     Result = RegOpenKeyExW(HKEY_LOCAL_MACHINE, KeyPath, 0, KEY_READ, &Key);
     if (Result != ERROR_SUCCESS)
+    {
+        ERR("ProfileList key %s: error %lu\n", debugstr_w(KeyPath), Result);
         return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
 
     Result = RegGetValueW(Key, NULL, L"ProfileImagePath",
                           RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
                           NULL, RawPath, &RawSize);
     RegCloseKey(Key);
     if (Result != ERROR_SUCCESS)
+    {
+        ERR("ProfileImagePath under %s: error %lu\n", debugstr_w(KeyPath), Result);
         return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
 
     Expanded = ExpandEnvironmentStringsW(RawPath, Path, PathChars);
     if (Expanded == 0)
+    {
+        ERR("expanding %s: error %lu\n", debugstr_w(RawPath), GetLastError());
         return STATUS_OBJECT_NAME_NOT_FOUND;
+    }
     if (Expanded > PathChars)
         return STATUS_NAME_TOO_LONG;
     return STATUS_SUCCESS;
@@ -2601,18 +2608,21 @@ DpapiProtectForUser(
         WCHAR Dir[MAX_PATH * 2];
         WCHAR ProtectRoot[MAX_PATH * 2];
 
-        /* Dir creation and key loading run under the caller's token (D2). */
+        /* The paths come from ProfileList as SYSTEM; dir creation and key
+         * loading then run under the caller's token (D2). */
+        Status = DpapiGetUserProtectDir(Op.Sid, Dir, sizeof(Dir));
+        if (NT_SUCCESS(Status))
+            Status = DpapiGetUserProtectRoot(Op.Sid, ProtectRoot, sizeof(ProtectRoot));
+        if (!NT_SUCCESS(Status))
+            goto done;
+
         if (RpcImpersonateClient(NULL) != RPC_S_OK)
         {
             Status = STATUS_CANNOT_IMPERSONATE;
             goto done;
         }
 
-        Status = DpapiGetUserProtectDir(Op.Sid, Dir, sizeof(Dir));
-        if (NT_SUCCESS(Status))
-            Status = DpapiGetUserProtectRoot(Op.Sid, ProtectRoot, sizeof(ProtectRoot));
-        if (NT_SUCCESS(Status))
-            Status = DpapiAcquireSidLock(Op.Sid);
+        Status = DpapiAcquireSidLock(Op.Sid);
         if (NT_SUCCESS(Status))
         {
             Status = DpapiGetOrCreateMasterKey(Dir, ProtectRoot, Op.Sid, &Prekey,
@@ -2731,6 +2741,13 @@ DpapiUnprotectForUser(
 
     {
         WCHAR Dir[MAX_PATH * 2];
+        WCHAR ProtectRoot[MAX_PATH * 2];
+
+        Status = DpapiGetUserProtectDir(Op.Sid, Dir, sizeof(Dir));
+        if (NT_SUCCESS(Status))
+            Status = DpapiGetUserProtectRoot(Op.Sid, ProtectRoot, sizeof(ProtectRoot));
+        if (!NT_SUCCESS(Status))
+            goto done;
 
         if (RpcImpersonateClient(NULL) != RPC_S_OK)
         {
@@ -2738,13 +2755,7 @@ DpapiUnprotectForUser(
             goto done;
         }
 
-        WCHAR ProtectRoot[MAX_PATH * 2];
-
-        Status = DpapiGetUserProtectDir(Op.Sid, Dir, sizeof(Dir));
-        if (NT_SUCCESS(Status))
-            Status = DpapiGetUserProtectRoot(Op.Sid, ProtectRoot, sizeof(ProtectRoot));
-        if (NT_SUCCESS(Status))
-            Status = DpapiAcquireSidLock(Op.Sid);
+        Status = DpapiAcquireSidLock(Op.Sid);
         if (NT_SUCCESS(Status))
         {
             Status = DpapiOpenMasterKey(Dir, ProtectRoot, Op.Sid, &Prekey, &KeyGuid,
