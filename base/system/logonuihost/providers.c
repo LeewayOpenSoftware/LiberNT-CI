@@ -397,7 +397,9 @@ ProviderThread(
         return 0;
     }
 
-    /* The page is handed to the UI thread, which frees it when it tears the page down. */
+    /* The page is handed to the UI thread, which frees it when it tears the page down.
+     * A thread the UI already gave up on drops its late page right here, traced the
+     * same way as a drop in the UI's WM_LUH_PAGE handler. */
     {
         PLUH_PAGE Page = T->Abandoned ? NULL : HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Page));
         if (Page != NULL)
@@ -408,11 +410,17 @@ ProviderThread(
             {
                 SecureZeroMemory(Page, sizeof(*Page));
                 HeapFree(GetProcessHeap(), 0, Page);
+                if (T->Abandoned)
+                    LuhTrace("page-dropped", NULL);
             }
         }
         else if (!T->Abandoned)
         {
             PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_FAILED, (LPARAM)T);
+        }
+        else
+        {
+            LuhTrace("page-dropped", NULL);
         }
     }
 
