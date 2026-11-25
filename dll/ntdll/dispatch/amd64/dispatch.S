@@ -16,6 +16,7 @@ EXTERN NtContinue:PROC
 EXTERN LdrpInit:PROC
 EXTERN ZwCallbackReturn:PROC
 EXTERN RtlRaiseStatus:PROC
+EXTERN KiUserCallbackExceptionHandler:PROC
 
 .data
 
@@ -116,7 +117,12 @@ PUBLIC KiRaiseUserExceptionDispatcher
 .ENDP
 
 PUBLIC KiUserCallbackDispatcher
+#ifdef _USE_ML
+KiUserCallbackDispatcher PROC FRAME:KiUserCallbackExceptionHandler
+#else
 .PROC KiUserCallbackDispatcher
+.seh_handler KiUserCallbackExceptionHandler, @except, @unwind
+#endif
 
     /* The stack is set up with a UCALLOUT_FRAME */
     /* The frame ends with a MACHINE_FRAME. */
@@ -169,7 +175,15 @@ NoCallbackTable:
     mov eax, STATUS_NOT_IMPLEMENTED
     jmp CallbackReturn
 
+#ifdef _USE_ML
+KiUserCallbackDispatcher ENDP
+#else
+/* Emit handler data after the prolog directives so unwind codes are retained. */
+.seh_handlerdata
+.long 0
+.text
 .ENDP
+#endif
 
 /*
     BOOLEAN
