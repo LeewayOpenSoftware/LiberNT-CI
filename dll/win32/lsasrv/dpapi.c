@@ -2411,6 +2411,7 @@ done:
  * goes through the verified handle tree (C1): no path strings after the
  * profile root, no junction can redirect a create or rename. */
 NTSTATUS
+NTAPI
 LsapDpapiOnPasswordChange(
     _In_ PUNICODE_STRING DomainName,
     _In_ PUNICODE_STRING AccountName,

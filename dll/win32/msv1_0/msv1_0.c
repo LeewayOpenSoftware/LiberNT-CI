@@ -13,6 +13,7 @@
 /* Q8: msv1_0 delay-imports lsasrv; lsasrv extends the user's DPAPI credhist
  * and re-encrypts the master keys after a successful password change. */
 NTSTATUS
+NTAPI
 LsapDpapiOnPasswordChange(
     _In_ PUNICODE_STRING DomainName,
     _In_ PUNICODE_STRING AccountName,

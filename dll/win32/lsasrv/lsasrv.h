@@ -502,6 +502,7 @@ LsapGetDpapiPrekey(
  * SHA-1 digests of the old and new passwords (never cleartext). Re-encrypts the
  * user's DPAPI master keys and extends the credhist chain. */
 NTSTATUS
+NTAPI
 LsapDpapiOnPasswordChange(
     _In_ PUNICODE_STRING DomainName,
     _In_ PUNICODE_STRING AccountName,
