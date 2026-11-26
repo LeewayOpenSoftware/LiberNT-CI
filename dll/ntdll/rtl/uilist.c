@@ -18,6 +18,12 @@
 
 /*
  * @unimplemented
+ *
+ * Legacy-only export: Windows 11 no longer exports it, so there is no modern
+ * reference to verify a conversion against, and no in-tree caller uses it.
+ * It stays exported so old binaries still load, but reports the missing
+ * functionality instead of a fake success. The output is still set to an
+ * empty string for callers that read it regardless of the status.
  */
 NTSTATUS
 NTAPI
@@ -26,15 +32,11 @@ RtlConvertUiListToApiList(
     OUT PUNICODE_STRING ApiList,
     IN BOOLEAN SpaceAsSeparator)
 {
-    DPRINT1("RtlConvertUiListToApiList(%wZ, 0x%p, %s) called\n",
-            UiList, &ApiList, SpaceAsSeparator ? "true" : "false");
-    UNIMPLEMENTED;
-    /*
-     * Experiments show that returning a success code but setting the
-     * ApiList length to zero is better than returning a failure code.
-     */
+    UNREFERENCED_PARAMETER(UiList);
+    UNREFERENCED_PARAMETER(SpaceAsSeparator);
+
     RtlInitEmptyUnicodeString(ApiList, NULL, 0);
-    return STATUS_SUCCESS;
+    return STATUS_NOT_IMPLEMENTED;
 }
 
 /* EOF */

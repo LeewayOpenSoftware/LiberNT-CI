@@ -164,6 +164,7 @@ list(APPEND SOURCE
     RtlConditionVariable.c
     RtlCopyMappedMemory.c
     RtlConvertLCIDToString.c
+    RtlConvertUiListToApiList.c
     RtlCreateAndSetSD.c
     RtlMultiAppendUnicodeStringBuffer.c
     RtlSetEnvironmentStrings.c
