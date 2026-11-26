@@ -1202,7 +1202,8 @@ IopInitializeDriverModuleImpl(
         }
     }
 
-    // TODO: for legacy drivers, unload the driver if it didn't create any DO
+    /* A legacy driver that created no device object stays loaded until
+     * NtUnloadDriver, as on Windows. */
 
     ExFreePoolWithTag(RegistryPath, TAG_IO);
     RtlFreeUnicodeString(&DriverName);
