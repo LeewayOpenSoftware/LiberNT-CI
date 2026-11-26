@@ -62,6 +62,7 @@ extern void func_NtContinue(void);
 #endif
 #ifdef _M_AMD64
 extern void func_NullGsSelector(void);
+extern void func_RtlInitializeContext(void);
 extern void func_RtlRestoreContextConsolidate(void);
 extern void func_RtlVirtualUnwindFragment(void);
 extern void func_RtlVirtualUnwindTailJump(void);
@@ -310,6 +311,7 @@ const struct test winetest_testlist[] =
 #endif
 #ifdef _M_AMD64
     { "NullGsSelector",                 func_NullGsSelector },
+    { "RtlInitializeContext",           func_RtlInitializeContext },
     { "RtlRestoreContextConsolidate",   func_RtlRestoreContextConsolidate },
     { "RtlVirtualUnwindFragment",       func_RtlVirtualUnwindFragment },
     { "RtlVirtualUnwindTailJump",       func_RtlVirtualUnwindTailJump },
