@@ -890,7 +890,9 @@ NSP_NbnsQueryThread(LPVOID Parameter)
     {
         SOCKADDR_IN Local = {AF_INET};
 
-        Mutex = CreateMutexW(NULL, FALSE, L"Global\\LiberNTNetbiosNameService");
+        /* Session-local: a standard user may not create Global objects. Without
+         * the lock a second lookup binds an ephemeral port, which still works. */
+        Mutex = CreateMutexW(NULL, FALSE, L"Local\\LiberNTNetbiosNameService");
         if (Mutex)
             WaitForSingleObject(Mutex, NSP_NBNS_TRIES * NSP_NBNS_TIMEOUT * 4);
         Local.sin_port = htons(NSP_NBNS_PORT);
