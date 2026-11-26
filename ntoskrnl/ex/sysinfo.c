@@ -58,7 +58,8 @@ ExpIsRestrictedCaller(VOID)
     SeCaptureSubjectContext(&SubjectContext);
     SeLockSubjectContext(&SubjectContext);
     Token = SeQuerySubjectContextToken(&SubjectContext);
-    Restricted = SepGetTokenIntegrityRid(Token) < SECURITY_MANDATORY_MEDIUM_RID ||
+    Restricted = (SubjectContext.ClientToken && SubjectContext.ImpersonationLevel < SecurityImpersonation) ||
+                 SepGetTokenIntegrityRid(Token) < SECURITY_MANDATORY_MEDIUM_RID ||
                  (((PTOKEN)Token)->TokenFlags & TOKEN_LOWBOX) != 0;
     SeUnlockSubjectContext(&SubjectContext);
     SeReleaseSubjectContext(&SubjectContext);
