@@ -144,6 +144,39 @@ NpQueryClientProcess(IN PDEVICE_OBJECT DeviceObject,
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+NpQueryClientProcessV2(IN PDEVICE_OBJECT DeviceObject,
+                       IN PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    PFILE_PIPE_CLIENT_PROCESS_BUFFER_V2 QueryBuffer;
+    PNP_CCB Ccb;
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    if (IoStack->Parameters.FileSystemControl.OutputBufferLength != sizeof(FILE_PIPE_CLIENT_PROCESS_BUFFER_V2))
+        return STATUS_INVALID_PARAMETER;
+
+    if (NpDecodeFileObject(IoStack->FileObject, NULL, &Ccb, NULL) != NPFS_NTC_CCB)
+        return STATUS_PIPE_DISCONNECTED;
+
+    QueryBuffer = Irp->AssociatedIrp.SystemBuffer;
+    RtlZeroMemory(QueryBuffer, sizeof(*QueryBuffer));
+
+    ExAcquireResourceSharedLite(&Ccb->NonPagedCcb->Lock, TRUE);
+    if (Ccb->ClientSession)
+        QueryBuffer->ClientProcess = ((PNP_CLIENT_PROCESS)Ccb->ClientSession)->Process;
+    else
+        QueryBuffer->ClientProcess = (PVOID)(ULONG_PTR)Ccb->ClientProcessId;
+    ExReleaseResourceLite(&Ccb->NonPagedCcb->Lock);
+
+    Irp->IoStatus.Information = sizeof(*QueryBuffer);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 NpSetClientProcess(IN PDEVICE_OBJECT DeviceObject,
@@ -873,6 +906,11 @@ NpCommonFileSystemControl(IN PDEVICE_OBJECT DeviceObject,
 
             NpAcquireSharedVcb();
             Status = NpQueryClientProcess(DeviceObject, Irp);
+            break;
+
+        case FSCTL_PIPE_QUERY_CLIENT_PROCESS_V2:
+            NpAcquireSharedVcb();
+            Status = NpQueryClientProcessV2(DeviceObject, Irp);
             break;
 
         case FSCTL_PIPE_ASSIGN_EVENT:
