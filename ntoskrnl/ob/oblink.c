@@ -925,11 +925,10 @@ NtSetInformationSymbolicLink(
 
     PAGED_CODE();
 
-    if ((SymbolicLinkInformationClass != SymbolicLinkGlobalInformation) &&
-        (SymbolicLinkInformationClass != SymbolicLinkAccessMask))
-        return STATUS_INVALID_INFO_CLASS;
-
-    /* The handle (type, then SET access) is checked before the length, as on Win11 */
+    /*
+     * Win11 order (reruns 2 and 3): the handle (type, then SET access) first, then the
+     * class, then the length, then the privilege and the buffer probe.
+     */
     PreviousMode = ExGetPreviousMode();
     Status = ObReferenceObjectByHandle(LinkHandle,
                                        SYMBOLIC_LINK_SET,
@@ -939,6 +938,13 @@ NtSetInformationSymbolicLink(
                                        NULL);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    if ((SymbolicLinkInformationClass != SymbolicLinkGlobalInformation) &&
+        (SymbolicLinkInformationClass != SymbolicLinkAccessMask))
+    {
+        ObDereferenceObject(SymbolicLink);
+        return STATUS_INVALID_INFO_CLASS;
+    }
 
     if (SymbolicLinkInformationLength != sizeof(Value))
     {

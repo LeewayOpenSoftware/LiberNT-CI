@@ -137,9 +137,10 @@ TestInvalidInput(VOID)
     Status = pNtSetInformationSymbolicLink(Event, TEST_SymbolicLinkGlobalInformation, &Value, 1);
     trace("PROBE event handle, length 1 -> 0x%lx\n", Status);
     ok_hex(Status, STATUS_OBJECT_TYPE_MISMATCH);
-    /* Not yet probed on Win11: does the class win over the handle type? */
+    /* The handle type also wins over the class (rerun 3) */
     Status = pNtSetInformationSymbolicLink(Event, 0, &Value, sizeof(Value));
-    trace("PROBE event handle, class 0 -> 0x%lx (unpinned)\n", Status);
+    trace("PROBE event handle, class 0 -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_OBJECT_TYPE_MISMATCH);
     NtClose(Event);
 
     Status = pNtSetInformationSymbolicLink(NULL, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
@@ -155,11 +156,16 @@ TestInvalidInput(VOID)
         trace("PROBE class %lu QUERY-only handle -> 0x%lx\n", Class, Status);
         ok_hex(Status, STATUS_ACCESS_DENIED);
     }
-    /* Not yet probed on Win11: is the SET access checked before the length and the buffer? */
+    /* The SET access is checked before the length and the buffer (rerun 3) */
     Status = pNtSetInformationSymbolicLink(QueryOnly, TEST_SymbolicLinkGlobalInformation, &Value, 1);
-    trace("PROBE QUERY-only handle, length 1 -> 0x%lx (unpinned)\n", Status);
+    trace("PROBE QUERY-only handle, length 1 -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_ACCESS_DENIED);
     Status = pNtSetInformationSymbolicLink(QueryOnly, TEST_SymbolicLinkGlobalInformation, NULL, sizeof(Value));
-    trace("PROBE QUERY-only handle, NULL buffer -> 0x%lx (unpinned)\n", Status);
+    trace("PROBE QUERY-only handle, NULL buffer -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_ACCESS_DENIED);
+    /* Not yet probed on Win11: does the SET access also win over the class? */
+    Status = pNtSetInformationSymbolicLink(QueryOnly, 0, &Value, sizeof(Value));
+    trace("PROBE QUERY-only handle, class 0 -> 0x%lx (unpinned)\n", Status);
     NtClose(QueryOnly);
     NtClose(Link);
 }
@@ -286,7 +292,8 @@ TestAccessMaskEffect(VOID)
             NtClose(H);
         Oa.Attributes |= OBJ_OPENLINK;
         Status = NtOpenSymbolicLinkObject(&H, SYMBOLIC_LINK_QUERY, &Oa);
-        trace("PROBE mask 0x%08lx reopen link itself with OBJ_OPENLINK -> 0x%lx (unpinned)\n", Masks[m], Status);
+        trace("PROBE mask 0x%08lx reopen link itself with OBJ_OPENLINK -> 0x%lx\n", Masks[m], Status);
+        ok_hex(Status, STATUS_INVALID_PARAMETER);
         if (NT_SUCCESS(Status))
             NtClose(H);
         NtClose(Link);
