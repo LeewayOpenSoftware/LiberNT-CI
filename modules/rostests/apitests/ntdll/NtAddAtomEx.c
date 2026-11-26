@@ -604,9 +604,9 @@ START_TEST(NtAddAtomEx)
     if (NT_SUCCESS(PreStatus))
         NtDeleteAtom(PreAtom);
 
-    if (!LoadLibraryW(L"user32.dll"))
-        trace("user32.dll load failed: %lu (station-bound rows may differ)\n",
-              GetLastError());
+    ok(LoadLibraryW(L"user32.dll") != NULL,
+       "LoadLibraryW(user32.dll) failed: %lu (station-bound rows will differ)\n",
+       GetLastError());
 
     TestInvalidParameters(AddAtomEx);
     TestCombinedValidationOrder(AddAtomEx);
