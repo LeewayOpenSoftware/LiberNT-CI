@@ -573,6 +573,9 @@ TestExhaustion(
 START_TEST(NtAddAtomEx)
 {
     PNT_ADD_ATOM_EX AddAtomEx;
+    WCHAR PreName[64];
+    RTL_ATOM PreAtom = 0;
+    NTSTATUS PreStatus;
 
     AddAtomEx = (PNT_ADD_ATOM_EX)GetProcAddress(GetModuleHandleW(L"ntdll.dll"),
                                                 "NtAddAtomEx");
@@ -581,6 +584,29 @@ START_TEST(NtAddAtomEx)
         skip("NtAddAtomEx unavailable\n");
         return;
     }
+
+    /* Win11 ties the atom table to the window station: a process that has not
+       loaded user32 is denied every valid add with 0xC0000022 (Pam mvzy's
+       win11 baseline), while an invalid flag is still rejected first with
+       0xC000000D. Orosi has no such callout and falls back to the kernel atom
+       table (ntoskrnl/ex/atom.c). Record the pre-user32 status for the Win11
+       diff (traced, never asserted -- it is exactly the platform split under
+       study), then load user32 so the valid/order/lifetime/exhaustion rows
+       below run with a window station attached on either platform. */
+    MakeName(PreName, ARRAYSIZE(PreName), L"preuser32");
+    PreStatus = AddAtomEx(PreName,
+                          (ULONG)(wcslen(PreName) * sizeof(WCHAR)),
+                          &PreAtom,
+                          ATOM_FLAG_NONE);
+    trace("pre-user32 add -> %#lx, atom %#x "
+          "(Win11 expects 0xC0000022; Orosi falls back to the kernel table)\n",
+          PreStatus, PreAtom);
+    if (NT_SUCCESS(PreStatus))
+        NtDeleteAtom(PreAtom);
+
+    if (!LoadLibraryW(L"user32.dll"))
+        trace("user32.dll load failed: %lu (station-bound rows may differ)\n",
+              GetLastError());
 
     TestInvalidParameters(AddAtomEx);
     TestCombinedValidationOrder(AddAtomEx);
