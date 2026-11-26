@@ -138,6 +138,10 @@ WlUmfdMakeToken(
             Tp.Privileges[0].Luid = ChangeNotify;
             Tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
             AdjustTokenPrivileges(*Token, FALSE, &Tp, 0, NULL, NULL);
+            Error = GetLastError();
+            if (Error != ERROR_SUCCESS)
+                WlUmfdLog(EVENTLOG_WARNING_TYPE,
+                          L"font driver host token: SeChangeNotify could not be enabled (%lu)", Error);
         }
 
         /* LogonUser tokens are in session 0; win32k accepts only a host in winlogon's own session */
