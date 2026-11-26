@@ -222,7 +222,7 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     /* TokenBnoIsolation */
     IQS_SAME(TOKEN_BNO_ISOLATION_INFORMATION, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenChildProcessFlags */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_NONE,
     /* TokenIsLessPrivilegedAppContainer */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY),
     /* TokenIsSandboxed */
@@ -1622,7 +1622,6 @@ NtQueryInformationToken(
             case TokenAppContainerNumber:
             case TokenIsRestricted:
             case TokenPrivateNameSpace:
-            case TokenChildProcessFlags:
             case TokenIsLessPrivilegedAppContainer:
             case TokenIsSandboxed:
             {
@@ -1632,7 +1631,7 @@ NtQueryInformationToken(
                 RequiredLength = sizeof(ULONG);
                 if (TokenInformationClass == TokenIsLessPrivilegedAppContainer && !Token->LowBoxInfo)
                 {
-                    Status = STATUS_INVALID_PARAMETER;
+                    Status = STATUS_INVALID_INFO_CLASS;
                     break;
                 }
 
