@@ -1481,6 +1481,29 @@ LsapIntegrityLabelsDisabled(VOID)
 
 
 static
+BOOLEAN
+LsapIsHighIntegrityPrivilege(
+    _In_ PLUID Luid)
+{
+    if (Luid->HighPart != 0)
+        return FALSE;
+
+    switch (Luid->LowPart)
+    {
+        case SE_TAKE_OWNERSHIP_PRIVILEGE:
+        case SE_LOAD_DRIVER_PRIVILEGE:
+        case SE_BACKUP_PRIVILEGE:
+        case SE_RESTORE_PRIVILEGE:
+        case SE_DEBUG_PRIVILEGE:
+        case SE_IMPERSONATE_PRIVILEGE:
+        case SE_DELEGATE_SESSION_USER_IMPERSONATE_PRIVILEGE:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+static
 ULONG
 LsapGetIntegrityRid(
     IN PLSA_TOKEN_INFORMATION_V1 TokenInfo1)
@@ -1512,6 +1535,15 @@ LsapGetIntegrityRid(
             {
                 return SECURITY_MANDATORY_HIGH_RID;
             }
+        }
+    }
+
+    if (TokenInfo1->Privileges != NULL)
+    {
+        for (i = 0; i < TokenInfo1->Privileges->PrivilegeCount; i++)
+        {
+            if (LsapIsHighIntegrityPrivilege(&TokenInfo1->Privileges->Privileges[i].Luid))
+                return SECURITY_MANDATORY_HIGH_RID;
         }
     }
 
@@ -2209,14 +2241,6 @@ LsapLogonUser(PLSA_API_MSG RequestMsg,
         goto done;
     }
 
-    Status = LsapAddIntegrityGroup(TokenInformation,
-                                   TokenInformationType);
-    if (!NT_SUCCESS(Status))
-    {
-        ERR("LsapAddIntegrityGroup() failed (Status 0x%08lx)\n", Status);
-        goto done;
-    }
-
     Status = LsapSetTokenOwner(TokenInformation,
                                TokenInformationType);
     if (!NT_SUCCESS(Status))
@@ -2238,6 +2262,14 @@ LsapLogonUser(PLSA_API_MSG RequestMsg,
     if (!NT_SUCCESS(Status))
     {
         ERR("LsapSetPrivileges() failed (Status 0x%08lx)\n", Status);
+        goto done;
+    }
+
+    Status = LsapAddIntegrityGroup(TokenInformation,
+                                   TokenInformationType);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("LsapAddIntegrityGroup() failed (Status 0x%08lx)\n", Status);
         goto done;
     }
 
