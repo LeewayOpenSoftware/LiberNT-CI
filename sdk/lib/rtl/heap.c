@@ -2593,11 +2593,16 @@ RtlpHeapInvalidBlock(PHEAP Heap, PVOID Ptr)
     /*
      * Win11 terminates a 64-bit process with STATUS_HEAP_CORRUPTION on a
      * caller-pointer error (a double free or a free of an invalid pointer) by
-     * default, whatever the image subsystem version. A 32-bit process keeps the
-     * opt-in rule, and kernel mode never terminates from here.
+     * default, whatever the image subsystem version; a 32-bit process keeps the
+     * opt-in rule. Kernel mode never calls ZwTerminateProcess on itself, so a
+     * kernel heap that enabled termination fails fast instead.
      */
-    if (RtlpHeapTerminateOnCorruption ||
-        (RtlpGetMode() == UserMode && sizeof(PVOID) == 8))
+    if (RtlpGetMode() != UserMode)
+    {
+        if (RtlpHeapTerminateOnCorruption)
+            RtlpHeapCorruption(Heap, Ptr);
+    }
+    else if (RtlpHeapTerminateOnCorruption || sizeof(PVOID) == 8)
     {
         RtlpHeapTerminate(Heap, Ptr);
     }
