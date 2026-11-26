@@ -81,6 +81,10 @@ static void TestOddShapes(HANDLE Key)
         ok(Entries[0].DataLength == sizeof(DwordData) && Entries[1].DataLength == sizeof(DwordData), "duplicate entries differ\n");
         ok(Entries[2].DataLength == 0, "zero-length value reported %lu bytes\n", Entries[2].DataLength);
         ok(Entries[3].DataLength == 4, "REG_SZ without terminator reported %lu bytes\n", Entries[3].DataLength);
+        /* Win11 layout: 0, 4, 8, 8 (a zero-length item shares the next offset); total 12 */
+        ok(Entries[0].DataOffset == 0 && Entries[1].DataOffset == 4 && Entries[2].DataOffset == 8 && Entries[3].DataOffset == 8,
+           "offsets %lu %lu %lu %lu\n", Entries[0].DataOffset, Entries[1].DataOffset, Entries[2].DataOffset, Entries[3].DataOffset);
+        ok(Length == 12 && Required == 12, "length %lu required %lu\n", Length, Required);
     }
     NtDeleteValueKey(Key, &NameZero);
     NtDeleteValueKey(Key, &NameNoTerm);
@@ -89,7 +93,9 @@ static void TestOddShapes(HANDLE Key)
 /* L2-M2: many entries sharing one name; the kernel must bound what it captures */
 static void TestManyEntries(HANDLE Key)
 {
-    static const ULONG Counts[] = { 0x10000, 0x100000 };
+    /* Win11 26100: 0x10000 entries -> STATUS_BUFFER_OVERFLOW (required 262144), 0x100000 -> STATUS_INSUFFICIENT_RESOURCES;
+       the counts between them locate the bound */
+    static const ULONG Counts[] = { 0x10000, 0x20000, 0x40000, 0x80000, 0x100000 };
     PKEY_VALUE_ENTRY Entries;
     UCHAR Buffer[64];
     ULONG Length, Required, i, c;
@@ -111,6 +117,11 @@ static void TestManyEntries(HANDLE Key)
         trace("PROBE %lu entries sharing one name, 64-byte buffer -> 0x%lx, length %lu, required %lu\n",
               Counts[c], Status, Length, Required);
         ok(Status != STATUS_SUCCESS, "%lu entries fit into 64 bytes\n", Counts[c]);
+        if (Counts[c] == 0x10000)
+            ok(Status == STATUS_BUFFER_OVERFLOW && Length == sizeof(Buffer) && Required == 0x10000 * sizeof(DwordData),
+               "0x10000 entries: 0x%lx, length %lu, required %lu\n", Status, Length, Required);
+        if (Counts[c] == 0x100000)
+            ok(Status == STATUS_INSUFFICIENT_RESOURCES && Required == 0, "0x100000 entries: 0x%lx, required %lu\n", Status, Required);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Entries);
     }
 }
@@ -144,17 +155,22 @@ static void TestThreeValues(HANDLE Key)
     PUCHAR Buffer;
     NTSTATUS Status;
 
-    /* Size query with no room at all */
+    /* Size query with no room at all. Win11 26100: STATUS_BUFFER_OVERFLOW, *Length untouched, the needed
+       size in RequiredBufferLength (ULONG-aligned items: 4 + 7->8 + 12 = 24), entries cleared */
     ResetEntries(Entries, 3);
     Length = 0;
     Required = 0xEEEEEEEE;
     Status = NtQueryMultipleValueKey(Key, Entries, 3, NULL, &Length, &Required);
     TraceEntries("three values, length 0", Entries, 3, Status, Length, Required);
-    ok(!NT_SUCCESS(Status), "a zero-length buffer was accepted\n"); /* lead: STATUS_BUFFER_OVERFLOW */
-    ok(Length >= sizeof(DwordData) + sizeof(OddData) + sizeof(StringData) && Length < 0x1000,
-       "needed length %lu\n", Length);
-    if (Length == 0 || Length >= 0x1000)
+    ok_hex(Status, STATUS_BUFFER_OVERFLOW);
+    ok(Length == 0, "length changed to %lu on overflow\n", Length);
+    ok(Required == 24, "required %lu, expected 24\n", Required);
+    for (i = 0; i < 3; i++)
+        ok(Entries[i].Type == 0 && Entries[i].DataLength == 0 && Entries[i].DataOffset == 0,
+           "entry %lu not cleared on overflow: %lu/%lu/%lu\n", i, Entries[i].Type, Entries[i].DataLength, Entries[i].DataOffset);
+    if (Required == 0 || Required >= 0x1000)
         return;
+    Length = Required;
 
     /* Exact buffer */
     Buffer = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, Length);
@@ -167,9 +183,12 @@ static void TestThreeValues(HANDLE Key)
     ok_hex(Status, STATUS_SUCCESS);
     if (NT_SUCCESS(Status))
     {
+        ok(Length == 24 && Required == 24, "length %lu required %lu after success\n", Length, Required);
         ok(Entries[0].Type == REG_DWORD && Entries[0].DataLength == sizeof(DwordData), "Dw: type %lu length %lu\n", Entries[0].Type, Entries[0].DataLength);
         ok(Entries[1].Type == REG_BINARY && Entries[1].DataLength == sizeof(OddData), "Odd: type %lu length %lu\n", Entries[1].Type, Entries[1].DataLength);
         ok(Entries[2].Type == REG_SZ && Entries[2].DataLength == sizeof(StringData), "Str: type %lu length %lu\n", Entries[2].Type, Entries[2].DataLength);
+        ok(Entries[0].DataOffset == 0 && Entries[1].DataOffset == 4 && Entries[2].DataOffset == 12,
+           "offsets %lu %lu %lu, expected 0 4 12\n", Entries[0].DataOffset, Entries[1].DataOffset, Entries[2].DataOffset);
         for (i = 0; i < 3; i++)
             ok(Entries[i].DataOffset + Entries[i].DataLength <= Length, "entry %lu runs past the buffer\n", i);
         ok(memcmp(Buffer + Entries[0].DataOffset, &DwordData, sizeof(DwordData)) == 0, "Dw data differs\n");
@@ -183,12 +202,14 @@ static void TestThreeValues(HANDLE Key)
     Required = 0xEEEEEEEE;
     Status = NtQueryMultipleValueKey(Key, Entries, 3, Buffer, &Length, &Required);
     TraceEntries("three values, one byte short", Entries, 3, Status, Length, Required);
-    ok(!NT_SUCCESS(Status), "a short buffer was accepted\n");
+    ok_hex(Status, STATUS_BUFFER_OVERFLOW);
+    ok(Length == 23 && Required == 24, "short: length %lu required %lu\n", Length, Required);
 
     /* Required length pointer omitted */
     Length = 0;
     Status = NtQueryMultipleValueKey(Key, Entries, 3, NULL, &Length, NULL);
     trace("PROBE three values, no required pointer -> 0x%lx, length %lu\n", Status, Length);
+    ok_hex(Status, STATUS_BUFFER_OVERFLOW);
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
 }
@@ -202,11 +223,11 @@ static void TestBigValue(HANDLE Key)
 
     Status = NtQueryMultipleValueKey(Key, Entries, 2, NULL, &Length, &Required);
     TraceEntries("big + bin, length 0", Entries, 2, Status, Length, Required);
-    if (Length < BIG_SIZE + sizeof(BinData) || Length > BIG_SIZE + 64)
-    {
-        ok(0, "needed length %lu for a %lu-byte value plus %lu bytes\n", Length, (ULONG)BIG_SIZE, (ULONG)sizeof(BinData));
+    ok_hex(Status, STATUS_BUFFER_OVERFLOW);
+    ok(Required == BIG_SIZE + sizeof(BinData), "required %lu, expected %lu\n", Required, (ULONG)(BIG_SIZE + sizeof(BinData)));
+    if (Required < BIG_SIZE + sizeof(BinData) || Required > BIG_SIZE + 64)
         return;
-    }
+    Length = Required;
     Buffer = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, Length);
     Expected = RtlAllocateHeap(RtlGetProcessHeap(), 0, BIG_SIZE);
     if (!Buffer || !Expected)
@@ -234,7 +255,7 @@ static void TestInvalid(HANDLE Key)
     UCHAR Raw[sizeof(KEY_VALUE_ENTRY) + 8];
     UCHAR Buffer[64];
     ULONG Length, Required;
-    HANDLE Event = NULL, Notify = NULL;
+    HANDLE Event = NULL, Notify = NULL, Root = NULL;
     UNICODE_STRING Name;
     OBJECT_ATTRIBUTES Oa;
     NTSTATUS Status;
@@ -243,38 +264,44 @@ static void TestInvalid(HANDLE Key)
     Length = sizeof(Buffer);
     Status = NtQueryMultipleValueKey(Key, Entries, 2, Buffer, &Length, &Required);
     TraceEntries("missing name", Entries, 2, Status, Length, Required);
-    ok(!NT_SUCCESS(Status), "a missing value name was accepted\n"); /* lead: STATUS_OBJECT_NAME_NOT_FOUND */
+    ok_hex(Status, STATUS_OBJECT_NAME_NOT_FOUND);
+    ok(Length == sizeof(Buffer) && Required == 0, "missing name: length %lu required %lu\n", Length, Required);
 
-    /* Counts */
+    /* Counts: an empty list succeeds and leaves the length alone (Win11); an overflowing one is a resource failure */
     Length = sizeof(Buffer);
+    Required = 0xEEEEEEEE;
     Status = NtQueryMultipleValueKey(Key, &One, 0, Buffer, &Length, &Required);
-    trace("PROBE count 0 -> 0x%lx, length %lu\n", Status, Length);
+    trace("PROBE count 0 -> 0x%lx, length %lu, required 0x%lx (unpinned)\n", Status, Length, Required);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok(Length == sizeof(Buffer), "count 0 changed the length to %lu\n", Length);
     Length = sizeof(Buffer);
     Status = NtQueryMultipleValueKey(Key, &One, 0x10000001, Buffer, &Length, &Required);
     trace("PROBE count 0x10000001 -> 0x%lx\n", Status);
-    ok(!NT_SUCCESS(Status), "an overflowing entry count was accepted\n");
+    ok_hex(Status, STATUS_INSUFFICIENT_RESOURCES);
 
     /* Pointers */
     Length = sizeof(Buffer);
     Status = NtQueryMultipleValueKey(Key, NULL, 1, Buffer, &Length, &Required);
     trace("PROBE NULL entries -> 0x%lx\n", Status);
-    ok(!NT_SUCCESS(Status), "NULL entries were accepted\n");
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
     Status = NtQueryMultipleValueKey(Key, &One, 1, Buffer, NULL, &Required);
     trace("PROBE NULL length pointer -> 0x%lx\n", Status);
-    ok(!NT_SUCCESS(Status), "a NULL length pointer was accepted\n");
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
     Length = sizeof(Buffer);
     Status = NtQueryMultipleValueKey(Key, &One, 1, NULL, &Length, &Required);
     trace("PROBE NULL buffer with length %lu -> 0x%lx\n", (ULONG)sizeof(Buffer), Status);
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
     One.ValueName = (PUNICODE_STRING)(ULONG_PTR)8;
     Length = sizeof(Buffer);
     Status = NtQueryMultipleValueKey(Key, &One, 1, Buffer, &Length, &Required);
     trace("PROBE bad name pointer -> 0x%lx\n", Status);
-    ok(!NT_SUCCESS(Status), "a bad name pointer was accepted\n");
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
     One.ValueName = &NameDw;
     memcpy(Raw + 1, &One, sizeof(One));
     Length = sizeof(Buffer);
     Status = NtQueryMultipleValueKey(Key, (PKEY_VALUE_ENTRY)(Raw + 1), 1, Buffer, &Length, &Required);
     trace("PROBE misaligned entries pointer -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_DATATYPE_MISALIGNMENT);
 
     /* Wrong object, missing access */
     Status = NtCreateEvent(&Event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
@@ -282,13 +309,21 @@ static void TestInvalid(HANDLE Key)
     Length = sizeof(Buffer);
     Status = NtQueryMultipleValueKey(Event, &One, 1, Buffer, &Length, &Required);
     trace("PROBE event handle -> 0x%lx\n", Status);
-    ok(!NT_SUCCESS(Status), "an event handle was accepted\n"); /* lead: STATUS_OBJECT_TYPE_MISMATCH */
+    ok_hex(Status, STATUS_OBJECT_TYPE_MISMATCH);
     NtClose(Event);
 
+    /* The HKCU key path is relative to the user's hive root */
+    if (UserHiveKey)
+    {
+        Status = RtlOpenCurrentUser(KEY_READ, &Root);
+        ok_hex(Status, STATUS_SUCCESS);
+    }
     RtlInitUnicodeString(&Name, KeyPath);
-    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, Root, NULL);
     Status = NtOpenKey(&Notify, KEY_NOTIFY, &Oa);
     ok_hex(Status, STATUS_SUCCESS);
+    if (Root)
+        NtClose(Root);
     if (NT_SUCCESS(Status))
     {
         Length = sizeof(Buffer);
@@ -306,10 +341,11 @@ static void TestWin32Wrapper(void)
     FN_RegQueryMultipleValuesW pRegQueryMultipleValuesW;
     HKEY Hkey;
     VALENTW Vals[3] = { { L"Dw" }, { L"Odd" }, { L"Str" } };
-    DWORD Total = 0;
+    DWORD Total;
     LONG Error;
     PWSTR Buffer;
 
+    trace("PROBE entering the Win32 wrapper test\n");
     pRegQueryMultipleValuesW = Advapi ? (FN_RegQueryMultipleValuesW)GetProcAddress(Advapi, "RegQueryMultipleValuesW") : NULL;
     if (!pRegQueryMultipleValuesW)
     {
@@ -323,11 +359,13 @@ static void TestWin32Wrapper(void)
         skip("RegOpenKeyExW failed: %ld\n", Error);
         return;
     }
-    Error = pRegQueryMultipleValuesW(Hkey, Vals, 3, NULL, &Total);
-    trace("PROBE RegQueryMultipleValuesW size query -> %ld, total %lu\n", Error, Total);
-    Buffer = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, Total ? Total : 1);
+    Buffer = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, 0x10000);
     if (Buffer)
     {
+        Total = 1;
+        Error = pRegQueryMultipleValuesW(Hkey, Vals, 3, Buffer, &Total);
+        trace("PROBE RegQueryMultipleValuesW with a 1-byte size -> %ld, total %lu\n", Error, Total);
+        Total = 0x10000;
         Error = pRegQueryMultipleValuesW(Hkey, Vals, 3, Buffer, &Total);
         trace("PROBE RegQueryMultipleValuesW -> %ld, total %lu; offsets %Iu %Iu %Iu, lengths %lu %lu %lu\n", Error, Total,
               (SIZE_T)(Vals[0].ve_valueptr - (DWORD_PTR)Buffer), (SIZE_T)(Vals[1].ve_valueptr - (DWORD_PTR)Buffer),
@@ -346,6 +384,7 @@ static void TestTwoMegabytes(HANDLE Key)
     PUCHAR Data;
     NTSTATUS Status;
 
+    trace("PROBE entering the two-megabyte test\n");
     Data = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, 1024 * 1024);
     if (!Data)
         return;

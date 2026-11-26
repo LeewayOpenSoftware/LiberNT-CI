@@ -1109,11 +1109,12 @@ CmSetKeyInformation(IN PCM_KEY_CONTROL_BLOCK Kcb,
     }
     else if (KeySetInformationClass == KeyControlFlagsInformation)
     {
-        Flags = ((PKEY_CONTROL_FLAGS_INFORMATION)KeySetInformation)->ControlFlags;
+        /* Win11 takes any value here; the node has four bits for it */
+        Flags = ((PKEY_CONTROL_FLAGS_INFORMATION)KeySetInformation)->ControlFlags & 0xF;
     }
     else if (KeySetInformationClass != KeyWriteTimeInformation)
     {
-        return STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_INFO_CLASS;
     }
     if (Flags & ~0xF)
         return STATUS_INVALID_PARAMETER;
@@ -1364,22 +1365,21 @@ DoAgain:
         }
         if (Result != SearchSuccess)
         {
-            /* One missing name fails the whole call */
+            /* One missing name fails the whole call; the caller sees cleared entries and no size */
             Status = STATUS_OBJECT_NAME_NOT_FOUND;
-            goto Quickie;
+            *RequiredBufferLength = 0;
+            goto ClearEntries;
         }
 
         /* Small values carry their length in the special-size form */
         CmpIsKeyValueSmall(&DataLength, ValueData->DataLength);
         if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
 
-        /* Each item starts at a naturally aligned offset in the caller's buffer */
-        Total = ALIGN_UP_BY(Total, sizeof(ULONGLONG));
+        /* Each item starts at a ULONG-aligned offset in the caller's buffer (Win11 layout) */
+        Total = ALIGN_UP_BY(Total, sizeof(ULONG));
         if (Total + DataLength > MAXULONG)
         {
-            Status = STATUS_BUFFER_OVERFLOW;
-            *BufferLength = MAXULONG;
-            *RequiredBufferLength = MAXULONG;
+            Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Quickie;
         }
         ValueEntries[i].Type = ValueData->Type;
@@ -1388,13 +1388,12 @@ DoAgain:
         Total += DataLength;
     }
 
-    /* Tell the caller what it needs; stop here if it has less */
+    /* Tell the caller what it needs; stop here if it has less (*BufferLength stays as given, Win11) */
     *RequiredBufferLength = (ULONG)Total;
     if (Total > *BufferLength)
     {
-        *BufferLength = (ULONG)Total;
         Status = STATUS_BUFFER_OVERFLOW;
-        goto Quickie;
+        goto ClearEntries;
     }
     *BufferLength = (ULONG)Total;
 
@@ -1455,6 +1454,16 @@ DoAgain:
         if (DataCellToRelease != HCELL_NIL) HvReleaseCell(Hive, DataCellToRelease);
         if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
         if (!NT_SUCCESS(Status)) goto Quickie;
+    }
+    goto Quickie;
+
+ClearEntries:
+    /* Nothing was delivered: the entries go back cleared, as Win11 returns them */
+    for (i = 0; i < EntryCount; i++)
+    {
+        ValueEntries[i].Type = 0;
+        ValueEntries[i].DataLength = 0;
+        ValueEntries[i].DataOffset = 0;
     }
 
 Quickie:

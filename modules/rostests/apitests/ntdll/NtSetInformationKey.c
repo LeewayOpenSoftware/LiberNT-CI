@@ -77,20 +77,28 @@ static void TestValidationOrder(HANDLE Key, HANDLE ReadOnly)
     NTSTATUS Status;
 
     NtCreateEvent(&Event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
+    /* Win11 26100: class, then length, then the buffer, then the handle (type and access) */
     Status = NtSetInformationKey(Key, 0xFF, Buffer, 3);
     trace("PROBE order: bad class + bad length -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_INVALID_INFO_CLASS);
     Status = NtSetInformationKey(Event, TEST_KeyWriteTimeInformation, Buffer, 3);
     trace("PROBE order: bad length + event handle -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
     Status = NtSetInformationKey(ReadOnly, TEST_KeyWriteTimeInformation, Buffer, 3);
     trace("PROBE order: KEY_READ handle + bad length -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
     Status = NtSetInformationKey(ReadOnly, TEST_KeyWriteTimeInformation, NULL, sizeof(LARGE_INTEGER));
     trace("PROBE order: KEY_READ handle + NULL buffer -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
     Status = NtSetInformationKey(Event, 0xFF, Buffer, sizeof(ULONG));
     trace("PROBE order: bad class + event handle -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_INVALID_INFO_CLASS);
     Status = NtSetInformationKey(Key, TEST_KeyWow64FlagsInformation, Buffer + 1, sizeof(ULONG));
     trace("PROBE order: valid class + misaligned buffer -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_SUCCESS);
     Status = NtSetInformationKey(NULL, 0xFF, Buffer, 3);
     trace("PROBE order: NULL handle + bad class + bad length -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_INVALID_INFO_CLASS);
     if (Event)
         NtClose(Event);
 }
@@ -109,7 +117,7 @@ static void TestInvalid(HANDLE Key, HANDLE ReadOnly)
     {
         Status = NtSetInformationKey(Key, TEST_KeyWriteTimeInformation, Buffer, TimeLengths[i]);
         trace("PROBE class 0 length %lu -> 0x%lx\n", TimeLengths[i], Status);
-        ok(!NT_SUCCESS(Status), "class 0 accepted length %lu\n", TimeLengths[i]); /* lead: STATUS_INFO_LENGTH_MISMATCH */
+        ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
     }
     for (Class = TEST_KeyWow64FlagsInformation; Class <= TEST_KeyControlFlagsInformation; Class++)
     {
@@ -117,58 +125,73 @@ static void TestInvalid(HANDLE Key, HANDLE ReadOnly)
         {
             Status = NtSetInformationKey(Key, Class, Buffer, FlagLengths[i]);
             trace("PROBE class %lu length %lu -> 0x%lx\n", Class, FlagLengths[i], Status);
-            ok(!NT_SUCCESS(Status), "class %lu accepted length %lu\n", Class, FlagLengths[i]);
+            ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
         }
     }
 
-    /* Classes this row does not implement: what Win11 says defines them */
+    /* Win11 26100 implements classes 3-5 (a 4-byte zero buffer is accepted) and refuses 6 and above
+       with STATUS_INVALID_INFO_CLASS. Orosi has no classes 3-5 yet: traced, not pinned (follow-up row) */
     for (i = 0; i < _countof(OtherClasses); i++)
     {
         Status = NtSetInformationKey(Key, OtherClasses[i], Buffer, sizeof(ULONG));
         trace("PROBE class %lu with 4 bytes -> 0x%lx\n", OtherClasses[i], Status);
+        if (OtherClasses[i] >= 6)
+            ok_hex(Status, STATUS_INVALID_INFO_CLASS);
     }
 
     /* Buffers */
     Status = NtSetInformationKey(Key, TEST_KeyWriteTimeInformation, NULL, sizeof(LARGE_INTEGER));
     trace("PROBE class 0 NULL buffer -> 0x%lx\n", Status);
-    ok(!NT_SUCCESS(Status), "class 0 accepted a NULL buffer\n");
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
+    /* Win11 has no alignment rule for the buffer: this writes a zero time */
     Status = NtSetInformationKey(Key, TEST_KeyWriteTimeInformation, Buffer + 1, sizeof(LARGE_INTEGER));
     trace("PROBE class 0 misaligned buffer -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_SUCCESS);
     Status = NtSetInformationKey(Key, TEST_KeyWow64FlagsInformation, (PVOID)(ULONG_PTR)1, sizeof(ULONG));
     trace("PROBE class 1 bad buffer -> 0x%lx\n", Status);
-    ok(!NT_SUCCESS(Status), "class 1 accepted a bad buffer\n");
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
 
     /* Wrong object type, bad handle */
     Status = NtCreateEvent(&Event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
     ok_hex(Status, STATUS_SUCCESS);
     Status = NtSetInformationKey(Event, TEST_KeyWriteTimeInformation, Buffer, sizeof(LARGE_INTEGER));
     trace("PROBE event handle -> 0x%lx\n", Status);
-    ok(!NT_SUCCESS(Status), "an event handle was accepted\n"); /* lead: STATUS_OBJECT_TYPE_MISMATCH */
+    ok_hex(Status, STATUS_OBJECT_TYPE_MISMATCH);
     NtClose(Event);
     Status = NtSetInformationKey(NULL, TEST_KeyWriteTimeInformation, Buffer, sizeof(LARGE_INTEGER));
     trace("PROBE NULL handle -> 0x%lx\n", Status);
-    ok(!NT_SUCCESS(Status), "a NULL handle was accepted\n");
+    ok_hex(Status, STATUS_INVALID_HANDLE);
 
     /* A read-only handle for each class */
     Status = NtSetInformationKey(ReadOnly, TEST_KeyWriteTimeInformation, Buffer, sizeof(LARGE_INTEGER));
     trace("PROBE class 0 KEY_READ handle -> 0x%lx\n", Status);
-    ok(!NT_SUCCESS(Status), "class 0 accepted a KEY_READ handle\n"); /* lead: STATUS_ACCESS_DENIED */
+    ok_hex(Status, STATUS_ACCESS_DENIED);
     for (Class = TEST_KeyWow64FlagsInformation; Class <= TEST_KeyControlFlagsInformation; Class++)
     {
         Status = NtSetInformationKey(ReadOnly, Class, Buffer, sizeof(ULONG));
         trace("PROBE class %lu KEY_READ handle -> 0x%lx\n", Class, Status);
-        ok(!NT_SUCCESS(Status), "class %lu accepted a KEY_READ handle\n", Class);
+        ok_hex(Status, STATUS_ACCESS_DENIED);
     }
 
-    /* Flag values beyond the four bits the key node stores */
+    /* Flag values beyond four bits: Win11 refuses them for the Wow64 flags and takes them for the control flags */
     for (Class = TEST_KeyWow64FlagsInformation; Class <= TEST_KeyControlFlagsInformation; Class++)
     {
-        ULONG Value = 0x10;
+        ULONG Value = 0x10, Flags[3];
         Status = NtSetInformationKey(Key, Class, &Value, sizeof(Value));
         trace("PROBE class %lu value 0x10 -> 0x%lx\n", Class, Status);
+        ok_hex(Status, Class == TEST_KeyWow64FlagsInformation ? STATUS_INVALID_PARAMETER : STATUS_SUCCESS);
+        if (Class == TEST_KeyControlFlagsInformation)
+            QueryFlags(Key, "after control flags 0x10", Flags);
         Value = 0xFFFFFFFF;
         Status = NtSetInformationKey(Key, Class, &Value, sizeof(Value));
         trace("PROBE class %lu value 0xFFFFFFFF -> 0x%lx\n", Class, Status);
+        ok_hex(Status, Class == TEST_KeyWow64FlagsInformation ? STATUS_INVALID_PARAMETER : STATUS_SUCCESS);
+        if (Class == TEST_KeyControlFlagsInformation)
+        {
+            QueryFlags(Key, "after control flags 0xFFFFFFFF", Flags);
+            Value = 0;
+            NtSetInformationKey(Key, Class, &Value, sizeof(Value));
+        }
     }
 }
 
@@ -232,7 +255,8 @@ static void TestFlags(HANDLE Key, BOOLEAN Volatile)
     /* The short-buffer answer of the query side */
     Status = NtQueryKey(Key, KeyFlagsInformation, Flags, 8, &i);
     trace("PROBE KeyFlagsInformation with 8 bytes -> 0x%lx, result length %lu\n", Status, i);
-    ok(!NT_SUCCESS(Status), "an 8-byte KeyFlagsInformation buffer was accepted\n"); /* lead: STATUS_BUFFER_TOO_SMALL */
+    ok_hex(Status, STATUS_BUFFER_TOO_SMALL);
+    ok(i == 3 * sizeof(ULONG), "KeyFlagsInformation result length %lu\n", i);
 }
 
 static void RunOnKey(HANDLE Key, BOOLEAN Volatile, const char *Kind)

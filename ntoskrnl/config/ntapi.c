@@ -1997,9 +1997,9 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
 
     DPRINT("NtQueryMultipleValueKey() KH 0x%p, N %lu\n", KeyHandle, NumberOfValues);
 
-    /* The list must hold at least one entry and fit in 32 bits */
-    if ((NumberOfValues == 0) || (NumberOfValues > MAXULONG / sizeof(KEY_VALUE_ENTRY)))
-        return STATUS_INVALID_PARAMETER;
+    /* Win11 answers a list that does not fit (32 bits, or more than 8 MB of entries) with a resource failure */
+    if (NumberOfValues > CMP_MAX_MULTIPLE_VALUE_ENTRIES)
+        return STATUS_INSUFFICIENT_RESOURCES;
     ListSize = NumberOfValues * sizeof(KEY_VALUE_ENTRY);
 
     /* Verify that the handle is valid and is a registry key */
@@ -2016,6 +2016,27 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
     {
         ObDereferenceObject(KeyObject);
         return STATUS_INVALID_HANDLE;
+    }
+
+    /* An empty list succeeds without touching the buffer or its length (Win11) */
+    if (NumberOfValues == 0)
+    {
+        if (ReturnLength)
+        {
+            _SEH2_TRY
+            {
+                if (PreviousMode != KernelMode)
+                    ProbeForWriteUlong(ReturnLength);
+                *ReturnLength = 0;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+        }
+        ObDereferenceObject(KeyObject);
+        return Status;
     }
 
     /* Kernel copies of the entries and of every name, charged to the caller: nothing is read from user mode twice */
@@ -2158,8 +2179,9 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
         Status = CmpPostCallbacks(&CallbackCall, Status);
     }
 
-    /* Write the results back once; the caller's name pointers stay untouched */
-    if (NT_SUCCESS(Status) || (Status == STATUS_BUFFER_OVERFLOW))
+    /* Write the results back once; the caller's name pointers stay untouched. Win11 leaves *Length
+       alone unless the call succeeded, and reports the needed size (or 0 after a miss) separately */
+    if (NT_SUCCESS(Status) || (Status == STATUS_BUFFER_OVERFLOW) || (Status == STATUS_OBJECT_NAME_NOT_FOUND))
     {
         _SEH2_TRY
         {
@@ -2169,7 +2191,8 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
                 ValueList[i].DataOffset = Entries[i].DataOffset;
                 ValueList[i].Type = Entries[i].Type;
             }
-            *Length = LengthCopy;
+            if (NT_SUCCESS(Status))
+                *Length = LengthCopy;
             if (ReturnLength)
                 *ReturnLength = Required;
         }
@@ -2615,10 +2638,32 @@ NtSetInformationKey(IN HANDLE KeyHandle,
             ExpectedLength = sizeof(KEY_CONTROL_FLAGS_INFORMATION);
             break;
         default:
-            return STATUS_INVALID_PARAMETER;
+            return STATUS_INVALID_INFO_CLASS;
     }
     if (KeyInformationLength != ExpectedLength)
         return STATUS_INFO_LENGTH_MISMATCH;
+
+    /* Capture the information once; Win11 reads it before it looks at the handle, with no alignment rule */
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForRead(KeyInformation, ExpectedLength, sizeof(UCHAR));
+            RtlCopyMemory(&Capture, KeyInformation, ExpectedLength);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    else
+    {
+        RtlCopyMemory(&Capture, KeyInformation, ExpectedLength);
+    }
 
     /* Verify that the handle is valid and is a registry key */
     Status = ObReferenceObjectByHandle(KeyHandle,
@@ -2634,32 +2679,6 @@ NtSetInformationKey(IN HANDLE KeyHandle,
     {
         ObDereferenceObject(KeyObject);
         return STATUS_INVALID_HANDLE;
-    }
-
-    /* Capture the information once */
-    if (PreviousMode != KernelMode)
-    {
-        _SEH2_TRY
-        {
-            ProbeForRead(KeyInformation, ExpectedLength, sizeof(ULONG));
-            RtlCopyMemory(&Capture, KeyInformation, ExpectedLength);
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Status = _SEH2_GetExceptionCode();
-        }
-        _SEH2_END;
-
-        if (!NT_SUCCESS(Status))
-        {
-            /* Dereference and return status */
-            ObDereferenceObject(KeyObject);
-            return Status;
-        }
-    }
-    else
-    {
-        RtlCopyMemory(&Capture, KeyInformation, ExpectedLength);
     }
 
     /* Don't touch read-only keys */
