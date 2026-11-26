@@ -144,7 +144,6 @@ GetEnvironmentVariableW(IN LPCWSTR lpName,
                         IN LPWSTR lpBuffer,
                         IN DWORD nSize)
 {
-    UNICODE_STRING VarName;
     NTSTATUS Status;
     SIZE_T ReturnLength;
 
@@ -153,16 +152,9 @@ GetEnvironmentVariableW(IN LPCWSTR lpName,
         nSize = 0;
     }
 
-    Status = RtlInitUnicodeStringEx(&VarName, lpName);
-    if (!NT_SUCCESS(Status))
-    {
-        BaseSetLastNTError(Status);
-        return 0;
-    }
-
     Status = RtlQueryEnvironmentVariable(NULL,
-                                         VarName.Buffer,
-                                         VarName.Length / sizeof(WCHAR),
+                                         (PWSTR)lpName,
+                                         lpName ? wcslen(lpName) : 0,
                                          lpBuffer,
                                          nSize,
                                          &ReturnLength);
@@ -231,27 +223,14 @@ DECLSPEC_HOTPATCH
 SetEnvironmentVariableW(IN LPCWSTR lpName,
                         IN LPCWSTR lpValue)
 {
-    UNICODE_STRING VarName, VarValue;
     NTSTATUS Status;
 
-    Status = RtlInitUnicodeStringEx(&VarName, lpName);
-    if (NT_SUCCESS(Status))
-    {
-        if (lpValue)
-        {
-            Status = RtlInitUnicodeStringEx(&VarValue, lpValue);
-            if (NT_SUCCESS(Status))
-            {
-                Status = RtlSetEnvironmentVariable(NULL, &VarName, &VarValue);
-            }
-        }
-        else
-        {
-            Status = RtlSetEnvironmentVariable(NULL, &VarName, NULL);
-        }
-
-        if (NT_SUCCESS(Status)) return TRUE;
-    }
+    Status = RtlSetEnvironmentVar(NULL,
+                                  lpName,
+                                  lpName ? wcslen(lpName) : 0,
+                                  lpValue,
+                                  lpValue ? wcslen(lpValue) : 0);
+    if (NT_SUCCESS(Status)) return TRUE;
 
     BaseSetLastNTError(Status);
     return FALSE;

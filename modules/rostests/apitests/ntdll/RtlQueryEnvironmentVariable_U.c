@@ -39,6 +39,13 @@ TestLongValue(ULONG Chars, NTSTATUS ExpectedTooSmall)
     ok(ValueString.Length == (Status == STATUS_NO_MEMORY ? 0x5555 : Chars * sizeof(WCHAR)),
        "%lu chars: Length %u\n", Chars, ValueString.Length);
 
+    Value[0] = Value[1] = 0x2323;
+    RtlInitEmptyUnicodeString(&ValueString, Value, sizeof(WCHAR));
+    Status = RtlQueryEnvironmentVariable_U(Environment, &NameString, &ValueString);
+    ok(Status == ExpectedTooSmall, "%lu chars, 1-char buffer: 0x%lx\n", Chars, Status);
+    ok(Value[0] == UNICODE_NULL, "%lu chars: Value[0] 0x%x\n", Chars, Value[0]);
+    ok(Value[1] == 0x2323, "%lu chars: Value[1] 0x%x\n", Chars, Value[1]);
+
     RtlInitEmptyUnicodeString(&ValueString, Value, MAXUSHORT - 1);
     ValueString.Length = 0x5555;
     Status = RtlQueryEnvironmentVariable_U(Environment, &NameString, &ValueString);

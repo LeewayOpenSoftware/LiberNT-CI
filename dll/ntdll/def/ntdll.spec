@@ -1282,7 +1282,7 @@
 @ stdcall RtlSetDaclSecurityDescriptor(ptr long ptr long)
 @ stdcall -stub -version=0x600+ RtlSetDynamicTimeZoneInformation(long)
 @ stdcall RtlSetEnvironmentStrings(wstr long)
-@ stdcall -stub -version=0x600+ RtlSetEnvironmentVar(ptr ptr long ptr long)
+@ stdcall -version=0x600+ RtlSetEnvironmentVar(ptr ptr ptr ptr ptr)
 @ stdcall RtlSetEnvironmentVariable(ptr ptr ptr)
 @ stdcall -version=0x600+ RtlSetExtendedFeaturesMask(ptr int64)
 @ stdcall RtlSetGroupSecurityDescriptor(ptr ptr long)

@@ -206,9 +206,71 @@ Cleanup:
     if (BufferW) HeapFree(GetProcessHeap(), 0, BufferW);
 }
 
+static PWSTR MakeString(WCHAR Fill, SIZE_T Length)
+{
+    PWSTR String;
+    SIZE_T Index;
+
+    String = HeapAlloc(GetProcessHeap(), 0, (Length + 1) * sizeof(WCHAR));
+    if (String)
+    {
+        for (Index = 0; Index < Length; Index++)
+            String[Index] = Fill;
+        String[Length] = UNICODE_NULL;
+    }
+    return String;
+}
+
+/* Rows measured on Windows 11 26100: SetEnvironmentVariableW has no UNICODE_STRING limit */
+static void Test_SetLongValues(void)
+{
+    PWSTR Long, Name32767, Name40000;
+
+    Long = MakeString(L'y', 70000);
+    Name32767 = MakeString(L'm', 32767);
+    Name40000 = MakeString(L'n', 40000);
+    if (!Long || !Name32767 || !Name40000)
+    {
+        skip("no memory\n");
+        goto Cleanup;
+    }
+
+    ok(SetEnvironmentVariableW(L"PRC", Long), "70000 chars: error %lu\n", GetLastError());
+    ok_eq_ulong(GetEnvironmentVariableW(L"PRC", NULL, 0), 70001);
+    Long[32767] = UNICODE_NULL;
+    ok(SetEnvironmentVariableW(L"PRC", Long), "32767 chars: error %lu\n", GetLastError());
+    ok_eq_ulong(GetEnvironmentVariableW(L"PRC", NULL, 0), 32768);
+    ok(SetEnvironmentVariableW(L"PRC", L""), "empty value: error %lu\n", GetLastError());
+    ok_eq_ulong(GetEnvironmentVariableW(L"PRC", NULL, 0), 1);
+    ok(SetEnvironmentVariableW(L"PRC", NULL), "delete: error %lu\n", GetLastError());
+    SetLastError(0xdeadbeef);
+    ok_eq_ulong(GetEnvironmentVariableW(L"PRC", NULL, 0), 0);
+    ok_eq_ulong(GetLastError(), ERROR_ENVVAR_NOT_FOUND);
+
+    ok(SetEnvironmentVariableW(Name32767, L"v"), "32767-char name: error %lu\n", GetLastError());
+    ok_eq_ulong(GetEnvironmentVariableW(Name32767, NULL, 0), 2);
+    ok(SetEnvironmentVariableW(Name40000, L"v"), "40000-char name: error %lu\n", GetLastError());
+    ok_eq_ulong(GetEnvironmentVariableW(Name40000, NULL, 0), 2);
+    SetEnvironmentVariableW(Name32767, NULL);
+    SetEnvironmentVariableW(Name40000, NULL);
+
+    SetLastError(0xdeadbeef);
+    ok(!SetEnvironmentVariableW(L"", L"v"), "empty name accepted\n");
+    ok_eq_ulong(GetLastError(), ERROR_INVALID_PARAMETER);
+    SetLastError(0xdeadbeef);
+    ok(!SetEnvironmentVariableW(L"A=B", L"v"), "name with '=' accepted\n");
+    ok_eq_ulong(GetLastError(), ERROR_INVALID_PARAMETER);
+
+Cleanup:
+    if (Long) HeapFree(GetProcessHeap(), 0, Long);
+    if (Name32767) HeapFree(GetProcessHeap(), 0, Name32767);
+    if (Name40000) HeapFree(GetProcessHeap(), 0, Name40000);
+}
+
 START_TEST(GetEnvironmentVariable)
 {
     Test_GetEnvironmentVariableA();
     Test_GetEnvironmentVariableW();
     Test_LongValues();
+    Test_SetLongValues();
 }

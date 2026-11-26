@@ -150,6 +150,7 @@ extern void func_RtlConvertUiListToApiList(void);
 extern void func_RtlCreateAndSetSD(void);
 extern void func_RtlMultiAppendUnicodeStringBuffer(void);
 extern void func_RtlSetEnvironmentStrings(void);
+extern void func_RtlSetEnvironmentVar(void);
 extern void func_RtlCreateServiceSid(void);
 extern void func_RtlCriticalSection(void);
 extern void func_RtlCurrentTransaction(void);
@@ -392,6 +393,7 @@ const struct test winetest_testlist[] =
     { "RtlCreateAndSetSD",              func_RtlCreateAndSetSD },
     { "RtlMultiAppendUnicodeStringBuffer", func_RtlMultiAppendUnicodeStringBuffer },
     { "RtlSetEnvironmentStrings",       func_RtlSetEnvironmentStrings },
+    { "RtlSetEnvironmentVar",           func_RtlSetEnvironmentVar },
     { "RtlCreateServiceSid",            func_RtlCreateServiceSid },
     { "RtlCriticalSection",             func_RtlCriticalSection },
     { "RtlCurrentTransaction",          func_RtlCurrentTransaction },
