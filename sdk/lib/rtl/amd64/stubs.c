@@ -13,20 +13,10 @@
 #include <debug.h>
 #include "amd64/ketypes.h"
 
-static
-VOID
-NTAPI
-RtlpUserThreadStartup(
-    _In_ PTHREAD_START_ROUTINE StartAddress,
-    _In_opt_ PVOID Parameter)
-{
-    RtlExitUserThread(StartAddress(Parameter));
-}
-
 /* PUBLIC FUNCTIONS **********************************************************/
 
 /*
- * @unimplemented
+ * @implemented
  */
 VOID
 NTAPI
@@ -35,56 +25,25 @@ RtlInitializeContext(
     _Out_ PCONTEXT ThreadContext,
     _In_opt_ PVOID ThreadStartParam,
     _In_ PTHREAD_START_ROUTINE ThreadStartAddress,
-    _In_ PINITIAL_TEB StackBase)
+    _In_ PINITIAL_TEB InitialStack)
 {
-    /* Initialize everything to 0 */
     RtlZeroMemory(ThreadContext, sizeof(*ThreadContext));
 
-    /* Initialize StartAddress and Stack */
+    /*
+     * Copy what the caller passed, as Windows does: the caller chooses the
+     * first instruction (usually RtlUserThreadStart) and the stack pointer.
+     * The selectors stay 0; the kernel loads the user ones and reserves the
+     * home area when it creates the thread.
+     */
     ThreadContext->Rip = (ULONG64)ThreadStartAddress;
-    ThreadContext->Rsp = ((ULONG64)StackBase - 2 * sizeof(PVOID)) & ~15ULL;
-
-    /* Enable Interrupts */
-    ThreadContext->EFlags = EFLAGS_INTERRUPT_MASK;
-
-    /* Set start parameter */
+    ThreadContext->Rsp = (ULONG64)InitialStack;
     ThreadContext->Rcx = (ULONG64)ThreadStartParam;
-
-    /* Set the Selectors */
-    if ((LONG64)ThreadStartAddress < 0)
-    {
-        /* Initialize kernel mode segments */
-        ThreadContext->SegCs = KGDT64_R0_CODE;
-        ThreadContext->SegDs = KGDT64_R3_DATA;
-        ThreadContext->SegEs = KGDT64_R3_DATA;
-        ThreadContext->SegFs = KGDT64_R3_CMTEB;
-        ThreadContext->SegGs = KGDT64_R3_DATA;
-        ThreadContext->SegSs = KGDT64_R0_DATA;
-    }
-    else
-    {
-        /* Initialize user mode segments */
-        ThreadContext->SegCs = KGDT64_R3_CODE |  RPL_MASK;
-        ThreadContext->SegDs = KGDT64_R3_DATA |  RPL_MASK;
-        ThreadContext->SegEs = KGDT64_R3_DATA |  RPL_MASK;
-        ThreadContext->SegFs = KGDT64_R3_CMTEB |  RPL_MASK;
-        ThreadContext->SegGs = KGDT64_R3_DATA |  RPL_MASK;
-        ThreadContext->SegSs = KGDT64_R3_DATA |  RPL_MASK;
-
-        ThreadContext->Rip = (ULONG64)RtlpUserThreadStartup;
-        ThreadContext->Rcx = (ULONG64)ThreadStartAddress;
-        ThreadContext->Rdx = (ULONG64)ThreadStartParam;
-    }
-
+    ThreadContext->EFlags = EFLAGS_INTERRUPT_MASK;
     ThreadContext->MxCsr = INITIAL_MXCSR;
 
-    /* Only the basic Context is initialized */
     ThreadContext->ContextFlags = CONTEXT_CONTROL |
                                   CONTEXT_INTEGER |
-                                  CONTEXT_SEGMENTS |
                                   CONTEXT_FLOATING_POINT;
-
-    return;
 }
 
 NTSTATUS
