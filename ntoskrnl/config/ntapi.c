@@ -2380,8 +2380,123 @@ NtSetInformationKey(IN HANDLE KeyHandle,
                     IN PVOID KeyInformation,
                     IN ULONG KeyInformationLength)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = STATUS_SUCCESS;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PCM_KEY_BODY KeyObject;
+    REG_SET_INFORMATION_KEY_INFORMATION SetInformationKeyInfo;
+    CMP_CALLBACK_CALL CallbackCall;
+    union
+    {
+        KEY_WRITE_TIME_INFORMATION WriteTime;
+        KEY_WOW64_FLAGS_INFORMATION Wow64Flags;
+        KEY_CONTROL_FLAGS_INFORMATION ControlFlags;
+    } Capture;
+    ULONG ExpectedLength;
+
+    PAGED_CODE();
+
+    DPRINT("NtSetInformationKey() KH 0x%p, KIC %d, Length %lu\n",
+           KeyHandle, KeyInformationClass, KeyInformationLength);
+
+    /* Reject classes we don't know about */
+    switch (KeyInformationClass)
+    {
+        case KeyWriteTimeInformation:
+            ExpectedLength = sizeof(KEY_WRITE_TIME_INFORMATION);
+            break;
+        case KeyWow64FlagsInformation:
+            ExpectedLength = sizeof(KEY_WOW64_FLAGS_INFORMATION);
+            break;
+        case KeyControlFlagsInformation:
+            ExpectedLength = sizeof(KEY_CONTROL_FLAGS_INFORMATION);
+            break;
+        default:
+            return STATUS_INVALID_PARAMETER;
+    }
+    if (KeyInformationLength != ExpectedLength)
+        return STATUS_INFO_LENGTH_MISMATCH;
+
+    /* Verify that the handle is valid and is a registry key */
+    Status = ObReferenceObjectByHandle(KeyHandle,
+                                       KEY_SET_VALUE,
+                                       CmpKeyObjectType,
+                                       PreviousMode,
+                                       (PVOID*)&KeyObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (KeyObject->KeyControlBlock->Flags & KEY_PREDEF_HANDLE)
+    {
+        ObDereferenceObject(KeyObject);
+        return STATUS_INVALID_HANDLE;
+    }
+
+    /* Capture the information once */
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForRead(KeyInformation, ExpectedLength, sizeof(ULONG));
+            RtlCopyMemory(&Capture, KeyInformation, ExpectedLength);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+        {
+            /* Dereference and return status */
+            ObDereferenceObject(KeyObject);
+            return Status;
+        }
+    }
+    else
+    {
+        RtlCopyMemory(&Capture, KeyInformation, ExpectedLength);
+    }
+
+    /* Don't touch read-only keys */
+    if (KeyObject->KeyControlBlock->ExtFlags & CM_KCB_READ_ONLY_KEY)
+    {
+        ObDereferenceObject(KeyObject);
+        return STATUS_ACCESS_DENIED;
+    }
+
+    /* Setup callback */
+    SetInformationKeyInfo.Object = (PVOID)KeyObject;
+    SetInformationKeyInfo.KeySetInformationClass = KeyInformationClass;
+    SetInformationKeyInfo.KeySetInformation = &Capture;
+    SetInformationKeyInfo.KeySetInformationLength = ExpectedLength;
+
+    /* Do the callback */
+    SetInformationKeyInfo.CallContext = NULL;
+    SetInformationKeyInfo.ObjectContext = NULL;
+    SetInformationKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreSetInformationKey,
+                        RegNtPostSetInformationKey,
+                        &SetInformationKeyInfo,
+                        &SetInformationKeyInfo.CallContext,
+                        &SetInformationKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
+    {
+        /* Call the internal API */
+        Status = CmSetKeyInformation(KeyObject->KeyControlBlock,
+                                     KeyInformationClass,
+                                     &Capture);
+
+        /* Do the post-callback */
+        Status = CmpPostCallbacks(&CallbackCall, Status);
+    }
+
+    /* Dereference and return status */
+    ObDereferenceObject(KeyObject);
+    return Status;
 }
 
 NTSTATUS

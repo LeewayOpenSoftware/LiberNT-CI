@@ -1752,6 +1752,14 @@ CmDeleteValueKey(
 
 NTSTATUS
 NTAPI
+CmSetKeyInformation(
+    IN PCM_KEY_CONTROL_BLOCK Kcb,
+    IN KEY_SET_INFORMATION_CLASS KeySetInformationClass,
+    IN PVOID KeySetInformation
+);
+
+NTSTATUS
+NTAPI
 CmQueryValueKey(
     IN PCM_KEY_CONTROL_BLOCK Kcb,
     IN UNICODE_STRING ValueName,

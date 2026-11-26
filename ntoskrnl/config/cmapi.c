@@ -1091,6 +1091,97 @@ Quickie:
 
 NTSTATUS
 NTAPI
+CmSetKeyInformation(IN PCM_KEY_CONTROL_BLOCK Kcb,
+                    IN KEY_SET_INFORMATION_CLASS KeySetInformationClass,
+                    IN PVOID KeySetInformation)
+{
+    PHHIVE Hive;
+    PCM_KEY_NODE Node = NULL;
+    HCELL_INDEX Cell;
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG Flags = 0, Filter;
+    PAGED_CODE();
+
+    /* The flag classes carry four bits in the key node */
+    if (KeySetInformationClass == KeyWow64FlagsInformation)
+    {
+        Flags = ((PKEY_WOW64_FLAGS_INFORMATION)KeySetInformation)->UserFlags;
+    }
+    else if (KeySetInformationClass == KeyControlFlagsInformation)
+    {
+        Flags = ((PKEY_CONTROL_FLAGS_INFORMATION)KeySetInformation)->ControlFlags;
+    }
+    else if (KeySetInformationClass != KeyWriteTimeInformation)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (Flags & ~0xF)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Acquire hive lock and lock the KCB exclusive: the node is written */
+    CmpLockRegistry();
+    CmpAcquireKcbLockExclusive(Kcb);
+
+    /* Don't touch deleted keys */
+    if (Kcb->Delete)
+    {
+        CmpReleaseKcbLock(Kcb);
+        CmpUnlockRegistry();
+        return STATUS_KEY_DELETED;
+    }
+
+    /* Get the hive and the key cell, and keep the flusher away while the cell is dirty */
+    Hive = Kcb->KeyHive;
+    Cell = Kcb->KeyCell;
+    CmpLockHiveFlusherShared((PCMHIVE)Hive);
+
+    Node = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
+    if (!Node)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Quickie;
+    }
+
+    /* Mark the cell dirty */
+    if (!HvMarkCellDirty(Hive, Cell, FALSE))
+    {
+        Status = STATUS_NO_LOG_SPACE;
+        goto Quickie;
+    }
+
+    if (KeySetInformationClass == KeyWriteTimeInformation)
+    {
+        /* The caller's time replaces the stamp, in the node and in the cached copy */
+        Node->LastWriteTime = ((PKEY_WRITE_TIME_INFORMATION)KeySetInformation)->LastWriteTime;
+        Kcb->KcbLastWriteTime = Node->LastWriteTime;
+        Filter = REG_NOTIFY_CHANGE_LAST_SET;
+    }
+    else if (KeySetInformationClass == KeyWow64FlagsInformation)
+    {
+        Node->UserFlags = Flags;
+        Kcb->KcbUserFlags = Flags;
+        Filter = REG_NOTIFY_CHANGE_ATTRIBUTES;
+    }
+    else
+    {
+        Node->VirtControlFlags = Flags;
+        Kcb->KcbVirtControlFlags = Flags;
+        Filter = REG_NOTIFY_CHANGE_ATTRIBUTES;
+    }
+
+    /* Notify registered callbacks */
+    CmpReportNotify(Kcb, Hive, Cell, Filter);
+
+Quickie:
+    if (Node) HvReleaseCell(Hive, Cell);
+    CmpUnlockHiveFlusher((PCMHIVE)Hive);
+    CmpReleaseKcbLock(Kcb);
+    CmpUnlockRegistry();
+    return Status;
+}
+
+NTSTATUS
+NTAPI
 CmQueryValueKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
                 IN UNICODE_STRING ValueName,
                 IN KEY_VALUE_INFORMATION_CLASS KeyValueInformationClass,
