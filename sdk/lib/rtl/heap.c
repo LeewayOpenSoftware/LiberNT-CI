@@ -21,6 +21,9 @@
 
 #include <rtl.h>
 #include <heap.h>
+#if defined(_MSC_VER) && !defined(__clang__) && (defined(_M_IX86) || defined(_M_AMD64))
+#include <immintrin.h>
+#endif
 
 #define NDEBUG
 #include <debug.h>
@@ -104,19 +107,115 @@ UCHAR FillPattern[HEAP_ENTRY_SIZE] =
 
 BOOLEAN RtlpHeapTerminateOnCorruption = FALSE;
 
-/*
- * The entry headers are already routed through the encode/decode accessors, but
- * the key is left zero and the checksum is not yet enforced: with EncodeFlagMask
- * clear, RtlpHeapEntryValid accepts every header and RtlpCheckHeapEntry never
- * fails fast, so the heap behaves exactly as before. The real key generator and
- * the enforcement flag are turned on in a following change.
- */
+static LONG RtlpHeapEncodingCounter;
+
+static
+BOOLEAN
+RtlpHeapHardwareRandom(PULONGLONG Value)
+{
+#if defined(_M_IX86) || defined(_M_AMD64)
+    ULONG Attempt;
+#if defined(_MSC_VER) && !defined(__clang__)
+    int Info[4];
+
+    __cpuid(Info, 1);
+    if (!(Info[2] & (1 << 30)))
+        return FALSE;
+
+    for (Attempt = 0; Attempt < 16; Attempt++)
+    {
+#ifdef _M_AMD64
+        unsigned __int64 Random;
+
+        if (_rdrand64_step(&Random))
+        {
+            *Value = Random;
+            return TRUE;
+        }
+#else
+        unsigned int Low, High;
+
+        if (_rdrand32_step(&Low) && _rdrand32_step(&High))
+        {
+            *Value = ((ULONGLONG)High << 32) | Low;
+            return TRUE;
+        }
+#endif
+    }
+#else
+    ULONG Eax, Ebx, Ecx, Edx;
+    UCHAR Ok;
+
+    __asm__ __volatile__("cpuid" : "=a"(Eax), "=b"(Ebx), "=c"(Ecx), "=d"(Edx) : "a"(1), "c"(0));
+    if (!(Ecx & (1UL << 30)))
+        return FALSE;
+
+    for (Attempt = 0; Attempt < 16; Attempt++)
+    {
+#ifdef _M_AMD64
+        ULONGLONG Random;
+
+        __asm__ __volatile__("rdrand %0; setc %1" : "=r"(Random), "=qm"(Ok));
+        if (Ok)
+        {
+            *Value = Random;
+            return TRUE;
+        }
+#else
+        ULONG Low, High;
+        UCHAR Ok2;
+
+        __asm__ __volatile__("rdrand %0; setc %1" : "=r"(Low), "=qm"(Ok));
+        __asm__ __volatile__("rdrand %0; setc %1" : "=r"(High), "=qm"(Ok2));
+        if (Ok && Ok2)
+        {
+            *Value = ((ULONGLONG)High << 32) | Low;
+            return TRUE;
+        }
+#endif
+    }
+#endif
+    return FALSE;
+#else
+    UNREFERENCED_PARAMETER(Value);
+    return FALSE;
+#endif
+}
+
+static
+ULONGLONG
+RtlpHeapMix64(ULONGLONG Value)
+{
+    Value += 0x9E3779B97F4A7C15ULL;
+    Value = (Value ^ (Value >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    Value = (Value ^ (Value >> 27)) * 0x94D049BB133111EBULL;
+    return Value ^ (Value >> 31);
+}
+
 VOID NTAPI
 RtlpHeapGenerateEncoding(PHEAP Heap)
 {
-    Heap->Encoding.AgregateCode = 0;
-    Heap->PointerKey = 0;
-    Heap->EncodeFlagMask = 0;
+    ULONG Cookie = 0;
+    LARGE_INTEGER Counter;
+    ULONGLONG Hardware = 0, Key, Nonce;
+
+    Counter.QuadPart = 0;
+    if (RtlpGetMode() == UserMode)
+        ZwQueryInformationProcess(NtCurrentProcess(), ProcessCookie, &Cookie, sizeof(Cookie), NULL);
+    ZwQueryPerformanceCounter(&Counter, NULL);
+    RtlpHeapHardwareRandom(&Hardware);
+
+    Nonce = (ULONGLONG)(ULONG)InterlockedIncrement(&RtlpHeapEncodingCounter) << 48;
+    Nonce ^= (ULONGLONG)(ULONG_PTR)Heap << 16;
+    Nonce ^= (ULONGLONG)(ULONG_PTR)&RtlpHeapEncodingCounter;
+    Key = RtlpHeapMix64(((ULONGLONG)Cookie << 32 | Cookie) ^ Hardware);
+    Key ^= RtlpHeapMix64((ULONGLONG)Counter.QuadPart ^ Nonce);
+    if (Key == 0)
+        Key = 0x9E3779B97F4A7C15ULL;
+
+    Heap->Encoding.AgregateCode = Key;
+    Heap->PointerKey = (ULONG_PTR)RtlpHeapMix64(Key);
+    Heap->EncodeFlagMask = HEAP_ENCODE_ENTRIES;
 }
 
 DECLSPEC_NORETURN
@@ -4729,6 +4828,13 @@ RtlSetHeapInformation(IN HANDLE HeapHandle OPTIONAL,
                       IN PVOID HeapInformation,
                       IN SIZE_T HeapInformationLength)
 {
+    if (HeapInformationClass == HeapEnableTerminationOnCorruption)
+    {
+        /* Process-wide and irrevocable: every heap of this process ends it on a bad block */
+        RtlpHeapTerminateOnCorruption = TRUE;
+        return STATUS_SUCCESS;
+    }
+
     /* Setting heap information is not really supported except for enabling LFH */
     if (HeapInformationClass == HeapCompatibilityInformation)
     {
