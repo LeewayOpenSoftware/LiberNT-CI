@@ -157,7 +157,7 @@ TestAttributeRules(PCSTR Kind, HANDLE Handle, ULONG GetCode, ULONG SetCode)
     ok(SetAttribute(Handle, SetCode, "A", Value, sizeof(Value)) == STATUS_SUCCESS, "%s: set A failed\n", Kind);
     memset(Buffer, 0xCC, sizeof(Buffer));
     ok(GetAttribute(Handle, GetCode, "A", Buffer, sizeof(Buffer), &Information) == STATUS_SUCCESS, "%s: get A\n", Kind);
-    ok(Information == sizeof(Value) && !memcmp(Buffer, Value, sizeof(Value)), "%s: A has %Iu bytes\n", Kind, Information);
+    ok(Information == sizeof(Value) && !memcmp(Buffer, Value, sizeof(Value)), "%s: A has %lu bytes\n", Kind, (ULONG)Information);
     ok(GetAttribute(Handle, GetCode, "a", Buffer, sizeof(Buffer), NULL) == STATUS_NOT_FOUND, "%s: lookup ignored case\n", Kind);
     ok(GetAttribute(Handle, GetCode, "A", Buffer, sizeof(Value), &Information) == STATUS_SUCCESS, "%s: exact output\n", Kind);
     memset(Buffer, 0xCC, sizeof(Buffer));
@@ -316,10 +316,65 @@ TestConnectionAttributes(VOID)
     CloseHandle(Server);
 }
 
+static
+VOID
+TestHandleAttributes(VOID)
+{
+    static const UCHAR Value[] = { 7, 8 };
+    HANDLE Server, Server2, Client, Duplicate, AttributesOnly;
+    UCHAR Buffer[16];
+    ULONG Pid, One = 1;
+    ULONG_PTR Information;
+
+    Server = CreateServer(PIPE_NAME L"_handle");
+    Server2 = CreateServer(PIPE_NAME L"_handle");
+    Client = OpenClient(PIPE_NAME L"_handle", GENERIC_READ | GENERIC_WRITE);
+    AttributesOnly = OpenClient(PIPE_NAME L"_handle", FILE_READ_ATTRIBUTES);
+    ok(Server != INVALID_HANDLE_VALUE && Server2 != INVALID_HANDLE_VALUE && Client != INVALID_HANDLE_VALUE &&
+       AttributesOnly != INVALID_HANDLE_VALUE, "pipe: %lu\n", GetLastError());
+    ok(DuplicateHandle(GetCurrentProcess(), Server, GetCurrentProcess(), &Duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS),
+       "DuplicateHandle failed\n");
+
+    TestAttributeRules("handle", Server, FSCTL_PIPE_GET_HANDLE_ATTRIBUTE, FSCTL_PIPE_SET_HANDLE_ATTRIBUTE);
+
+    ok_ntstatus(SetAttribute(Server, FSCTL_PIPE_SET_HANDLE_ATTRIBUTE, "V", Value, sizeof(Value)), STATUS_SUCCESS);
+    ok_ntstatus(GetAttribute(Duplicate, FSCTL_PIPE_GET_HANDLE_ATTRIBUTE, "V", Buffer, sizeof(Buffer), &Information),
+                STATUS_SUCCESS);
+    ok_eq_ulong((ULONG)Information, (ULONG)sizeof(Value));
+    ok_ntstatus(GetAttribute(Client, FSCTL_PIPE_GET_HANDLE_ATTRIBUTE, "V", Buffer, sizeof(Buffer), NULL), STATUS_NOT_FOUND);
+    ok_ntstatus(GetAttribute(Server2, FSCTL_PIPE_GET_HANDLE_ATTRIBUTE, "V", Buffer, sizeof(Buffer), NULL), STATUS_NOT_FOUND);
+
+    ok_ntstatus(SetAttribute(Client, FSCTL_PIPE_SET_HANDLE_ATTRIBUTE, "D", Value, 1), STATUS_SUCCESS);
+    ok_ntstatus(GetAttribute(Client, FSCTL_PIPE_GET_HANDLE_ATTRIBUTE, "D", Buffer, sizeof(Buffer), &Information),
+                STATUS_SUCCESS);
+    ok_eq_ulong((ULONG)Information, 1);
+    ok_ntstatus(GetAttribute(Server, FSCTL_PIPE_GET_HANDLE_ATTRIBUTE, "D", Buffer, sizeof(Buffer), NULL), STATUS_NOT_FOUND);
+
+    ok_ntstatus(SetAttribute(AttributesOnly, FSCTL_PIPE_SET_HANDLE_ATTRIBUTE, "H", Value, 1), STATUS_SUCCESS);
+    ok_ntstatus(GetAttribute(AttributesOnly, FSCTL_PIPE_GET_HANDLE_ATTRIBUTE, "H", Buffer, sizeof(Buffer), NULL),
+                STATUS_SUCCESS);
+
+    ok_ntstatus(SetAttribute(Server, FSCTL_PIPE_SET_HANDLE_ATTRIBUTE, "ClientProcessId", &One, sizeof(One)), STATUS_SUCCESS);
+    Pid = 0;
+    ok_ntstatus(GetAttribute(Server, FSCTL_PIPE_GET_HANDLE_ATTRIBUTE, "ClientProcessId", &Pid, sizeof(Pid), NULL),
+                STATUS_SUCCESS);
+    ok_eq_ulong(Pid, One);
+
+    CloseHandle(Client);
+    ok(DisconnectNamedPipe(Server), "DisconnectNamedPipe failed: %lu\n", GetLastError());
+    ok_ntstatus(GetAttribute(Server, FSCTL_PIPE_GET_HANDLE_ATTRIBUTE, "V", Buffer, sizeof(Buffer), NULL), STATUS_SUCCESS);
+
+    CloseHandle(AttributesOnly);
+    CloseHandle(Duplicate);
+    CloseHandle(Server2);
+    CloseHandle(Server);
+}
+
 START_TEST(NamedPipeFsctl)
 {
     TestAccessBits();
     TestQueryClientProcessV2();
     TestPipeAttributes();
     TestConnectionAttributes();
+    TestHandleAttributes();
 }

@@ -347,6 +347,46 @@ NpSetPipeAttribute(IN PDEVICE_OBJECT DeviceObject,
 
 static
 NTSTATUS
+NpGetHandleAttribute(IN PDEVICE_OBJECT DeviceObject,
+                     IN PIRP Irp)
+{
+    ULONG NamedPipeEnd, NameLength;
+    PNP_CCB Ccb;
+    PCSTR Name;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    Status = NpDecodeAttributeTarget(Irp, &Ccb, &NamedPipeEnd);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Status = NpParseAttributeName(Irp, &Name, &NameLength);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    return NpGetAttribute(&Ccb->HandleAttributes[NamedPipeEnd], Name, NameLength, Irp);
+}
+
+static
+NTSTATUS
+NpSetHandleAttribute(IN PDEVICE_OBJECT DeviceObject,
+                     IN PIRP Irp)
+{
+    ULONG NamedPipeEnd;
+    PNP_CCB Ccb;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    Status = NpDecodeAttributeTarget(Irp, &Ccb, &NamedPipeEnd);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    return NpSetAttribute(&Ccb->HandleAttributes[NamedPipeEnd], Irp);
+}
+
+static
+NTSTATUS
 NpGetConnectionAttribute(IN PDEVICE_OBJECT DeviceObject,
                          IN PIRP Irp)
 {
@@ -1059,6 +1099,16 @@ NpCommonFileSystemControl(IN PDEVICE_OBJECT DeviceObject,
         case FSCTL_PIPE_SET_CONNECTION_ATTRIBUTE:
             NpAcquireExclusiveVcb();
             Status = NpSetConnectionAttribute(DeviceObject, Irp);
+            break;
+
+        case FSCTL_PIPE_GET_HANDLE_ATTRIBUTE:
+            NpAcquireSharedVcb();
+            Status = NpGetHandleAttribute(DeviceObject, Irp);
+            break;
+
+        case FSCTL_PIPE_SET_HANDLE_ATTRIBUTE:
+            NpAcquireExclusiveVcb();
+            Status = NpSetHandleAttribute(DeviceObject, Irp);
             break;
 
         default:

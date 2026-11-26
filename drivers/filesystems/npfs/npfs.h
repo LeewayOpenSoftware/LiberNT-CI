@@ -286,6 +286,7 @@ typedef struct _NP_CCB
     PSECURITY_CLIENT_CONTEXT ClientContext;
     LIST_ENTRY IrpList;
     LIST_ENTRY ConnectionAttributes;
+    LIST_ENTRY HandleAttributes[2];
 } NP_CCB, *PNP_CCB;
 
 /* A Volume Control Block (VCB) */

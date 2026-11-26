@@ -172,6 +172,7 @@ NpSetDisconnectedPipeState(IN PNP_CCB Ccb,
             }
 
             NpFreeAttributes(&Ccb->ConnectionAttributes);
+            NpFreeAttributes(&Ccb->HandleAttributes[FILE_PIPE_CLIENT_END]);
 
             Status = STATUS_SUCCESS;
             break;
@@ -361,6 +362,8 @@ NpSetClosingPipeState(IN PNP_CCB Ccb,
                 NpSetFileObject(Ccb->FileObject[FILE_PIPE_CLIENT_END], NULL, NULL, FALSE);
                 Ccb->FileObject[FILE_PIPE_CLIENT_END] = NULL;
             }
+
+            NpFreeAttributes(&Ccb->HandleAttributes[NamedPipeEnd]);
 
             EventBuffer = NonPagedCcb->EventBuffer[NamedPipeEnd];
 

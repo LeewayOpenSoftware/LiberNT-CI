@@ -123,6 +123,8 @@ NpDeleteCcb(IN PNP_CCB Ccb,
         ExDeleteResourceLite(&Ccb->NonPagedCcb->Lock);
         NpUninitializeSecurity(Ccb);
         NpFreeAttributes(&Ccb->ConnectionAttributes);
+        NpFreeAttributes(&Ccb->HandleAttributes[FILE_PIPE_CLIENT_END]);
+        NpFreeAttributes(&Ccb->HandleAttributes[FILE_PIPE_SERVER_END]);
         if (Ccb->ClientSession)
         {
             ExFreePool(Ccb->ClientSession);
@@ -396,6 +398,8 @@ NpCreateCcb(IN PNP_FCB Fcb,
     Fcb->ServerOpenCount++;
     InitializeListHead(&Ccb->IrpList);
     InitializeListHead(&Ccb->ConnectionAttributes);
+    InitializeListHead(&Ccb->HandleAttributes[FILE_PIPE_CLIENT_END]);
+    InitializeListHead(&Ccb->HandleAttributes[FILE_PIPE_SERVER_END]);
     ExInitializeResourceLite(&Ccb->NonPagedCcb->Lock);
     *NewCcb = Ccb;
     return STATUS_SUCCESS;
