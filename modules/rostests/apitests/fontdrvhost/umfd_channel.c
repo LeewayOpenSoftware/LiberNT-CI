@@ -585,10 +585,16 @@ static void trace_launcher_events(void)
     }
     while (ReadEventLogW(log, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_FORWARDS_READ, 0, buf, sizeof(buf), &read, &needed))
     {
-        for (off = 0; off < read; off += ((EVENTLOGRECORD *)(buf + off))->Length)
+        for (off = 0; off + sizeof(EVENTLOGRECORD) <= read; off += ((EVENTLOGRECORD *)(buf + off))->Length)
         {
             EVENTLOGRECORD *rec = (EVENTLOGRECORD *)(buf + off);
-            if ((rec->EventID & 0xFFFF) == 4002 && rec->NumStrings)
+
+            /* A corrupt record must not loop forever or run past the buffer */
+            if (rec->Length < sizeof(EVENTLOGRECORD) || rec->Length > read - off)
+                break;
+            /* The source name follows the header: only the launcher's own 4002 events */
+            if ((rec->EventID & 0xFFFF) == 4002 && rec->NumStrings &&
+                !lstrcmpiW((WCHAR *)((BYTE *)rec + sizeof(EVENTLOGRECORD)), L"Winlogon"))
                 trace("4002 @%lu type %u: %ls\n", rec->TimeGenerated, rec->EventType,
                       (WCHAR *)((BYTE *)rec + rec->StringOffset));
         }
