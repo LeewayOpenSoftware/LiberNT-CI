@@ -267,6 +267,11 @@ TestAccessMaskEffect(VOID)
         trace("PROBE mask 0x%08lx reopen link itself -> 0x%lx (unpinned)\n", Masks[m], Status);
         if (NT_SUCCESS(Status))
             NtClose(H);
+        Oa.Attributes |= OBJ_OPENLINK;
+        Status = NtOpenSymbolicLinkObject(&H, SYMBOLIC_LINK_QUERY, &Oa);
+        trace("PROBE mask 0x%08lx reopen link itself with OBJ_OPENLINK -> 0x%lx (unpinned)\n", Masks[m], Status);
+        if (NT_SUCCESS(Status))
+            NtClose(H);
         NtClose(Link);
     }
 }
@@ -409,6 +414,102 @@ Cleanup:
     if (GlobalEv) NtClose(GlobalEv);
 }
 
+/*
+ * P5b session-local link: P5 keeps the link in BaseNamedObjects, where the flag showed no effect.
+ * Here the link itself lives in the process's own DosDevices directory (the private device map),
+ * which is where a local DosDevices link sits. The private directory holds an unsignalled event,
+ * \GLOBAL?? a signalled one of the same name, and the link targets \??\<event>. The probe opens
+ * \??\<link>: state 0 = the target resolved locally, 1 = it resolved in \GLOBAL??.
+ */
+static
+VOID
+TestGlobalEffectSessionLocal(VOID)
+{
+    UNICODE_STRING Name, TargetName;
+    OBJECT_ATTRIBUTES Oa;
+    HANDLE GlobalEv = NULL, PrivDir = NULL, PrivEv = NULL, GlobalDir = NULL, Link = NULL, H;
+    WCHAR EvLeaf[32], LinkLeaf[32], GlobalName[96], Target[96], LinkPath[96];
+    PROCESS_DEVICEMAP_INFORMATION Map;
+    EVENT_BASIC_INFORMATION Info;
+    ULONG Value, Pass;
+    NTSTATUS Status;
+
+    if (!HaveTcb)
+    {
+        skip("session-local link probe needs TCB (run as SYSTEM)\n");
+        return;
+    }
+    StringCchPrintfW(EvLeaf, _countof(EvLeaf), L"npsl-sl-ev-%lu", HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    StringCchPrintfW(LinkLeaf, _countof(LinkLeaf), L"npsl-sl-lnk-%lu", HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    StringCchPrintfW(GlobalName, _countof(GlobalName), L"\\GLOBAL??\\%s", EvLeaf);
+    StringCchPrintfW(Target, _countof(Target), L"\\??\\%s", EvLeaf);
+    StringCchPrintfW(LinkPath, _countof(LinkPath), L"\\??\\%s", LinkLeaf);
+
+    RtlInitUnicodeString(&Name, GlobalName);
+    InitializeObjectAttributes(&Oa, &Name, 0, NULL, NULL);
+    Status = NtCreateEvent(&GlobalEv, EVENT_ALL_ACCESS, &Oa, NotificationEvent, TRUE);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    RtlInitUnicodeString(&Name, L"\\GLOBAL??");
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = NtOpenDirectoryObject(&GlobalDir, DIRECTORY_TRAVERSE, &Oa);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    InitializeObjectAttributes(&Oa, NULL, 0, NULL, NULL);
+    Status = NtCreateDirectoryObject(&PrivDir, DIRECTORY_ALL_ACCESS, &Oa);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status) || !GlobalEv || !GlobalDir)
+        goto Cleanup;
+
+    RtlInitUnicodeString(&Name, EvLeaf);
+    InitializeObjectAttributes(&Oa, &Name, 0, PrivDir, NULL);
+    Status = NtCreateEvent(&PrivEv, EVENT_ALL_ACCESS, &Oa, NotificationEvent, FALSE);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    RtlInitUnicodeString(&Name, LinkLeaf);
+    RtlInitUnicodeString(&TargetName, Target);
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, PrivDir, NULL);
+    Status = NtCreateSymbolicLinkObject(&Link, SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, &Oa, &TargetName);
+    trace("PROBE create session-local link %S -> %S: 0x%lx\n", LinkLeaf, Target, Status);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Map.Set.DirectoryHandle = PrivDir;
+    Status = NtSetInformationProcess(NtCurrentProcess(), ProcessDeviceMap, &Map, sizeof(Map.Set));
+    trace("PROBE set private device map -> 0x%lx\n", Status);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    RtlInitUnicodeString(&Name, LinkPath);
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    for (Pass = 0; Pass < 3; Pass++) /* off, on, off again */
+    {
+        Value = Pass & 1;
+        Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+        trace("PROBE sesslocal global=%lu -> 0x%lx\n", Value, Status);
+        Info.EventState = -1;
+        Status = NtOpenEvent(&H, EVENT_QUERY_STATE, &Oa);
+        if (NT_SUCCESS(Status))
+        {
+            NtQueryEvent(H, EventBasicInformation, &Info, sizeof(Info), NULL);
+            NtClose(H);
+        }
+        trace("PROBE sesslocal global=%lu open %S -> 0x%lx state=%ld (0 = local, 1 = \\GLOBAL?" "?)\n",
+              Value, LinkPath, Status, Info.EventState);
+    }
+
+    Map.Set.DirectoryHandle = GlobalDir;
+    Status = NtSetInformationProcess(NtCurrentProcess(), ProcessDeviceMap, &Map, sizeof(Map.Set));
+    ok_hex(Status, STATUS_SUCCESS);
+
+Cleanup:
+    if (Link) NtClose(Link);
+    if (PrivEv) NtClose(PrivEv);
+    if (PrivDir) NtClose(PrivDir);
+    if (GlobalDir) NtClose(GlobalDir);
+    if (GlobalEv) NtClose(GlobalEv);
+}
+
 typedef struct _RACE { HANDLE Link; volatile LONG Stop; LONG Failures; LONG Opens; WCHAR Name[128]; } RACE;
 
 static
@@ -443,6 +544,7 @@ TestConcurrency(VOID)
     RACE Race = { NULL, 0, 0, 0 };
     HANDLE Threads[3];
     ULONG i, Value;
+    DWORD Start;
     NTSTATUS Status;
 
     if (!HaveTcb)
@@ -456,9 +558,11 @@ TestConcurrency(VOID)
     for (i = 0; i < _countof(Threads); i++)
         Threads[i] = CreateThread(NULL, 0, OpenWorkerThread, &Race, 0, NULL);
     /* Let the workers get going before the toggles start, so the opens really overlap them */
-    for (i = 0; i < 500 && Race.Opens == 0; i++)
+    for (i = 0; i < 500 && *(volatile LONG *)&Race.Opens == 0; i++)
         Sleep(10);
-    for (i = 0; i < 2000; i++)
+    /* Then keep toggling until the workers have opened through the link a few times (bounded at 10 s) */
+    Start = GetTickCount();
+    for (i = 0; i < 2000 || (*(volatile LONG *)&Race.Opens < 16 && GetTickCount() - Start < 10000); i++)
     {
         Value = i & 1;
         Status = pNtSetInformationSymbolicLink(Race.Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
@@ -470,6 +574,7 @@ TestConcurrency(VOID)
     for (i = 0; i < _countof(Threads); i++)
         CloseHandle(Threads[i]);
     ok(Race.Failures == 0, "%ld flag toggles or opens through the link failed\n", Race.Failures);
+    trace("PROBE race toggles=%lu opens=%ld\n", i, Race.Opens);
     ok(Race.Opens > 0, "no open through the link succeeded\n");
     NtClose(Race.Link);
 }
@@ -499,6 +604,7 @@ START_TEST(NtSetInformationSymbolicLink)
     TestOwnLinkNotGlobal();
     TestGlobalEffect();
     TestGlobalEffectPrivateMap();
+    TestGlobalEffectSessionLocal();
     TestAccessMaskEffect();
     TestConcurrency();
 }

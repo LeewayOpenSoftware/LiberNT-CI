@@ -11,14 +11,16 @@ typedef NTSTATUS (NTAPI *FN_NtCreateDirectoryObjectEx)(PHANDLE, ACCESS_MASK, POB
 static FN_NtCreateDirectoryObjectEx pNtCreateDirectoryObjectEx;
 
 static WCHAR BnoPath[64];
-static ULONG Unique;
+static LONG Unique;
 
+/* The race threads call this concurrently: the counter must be atomic or two creates share a name. */
 static
 VOID
 MakeName(PWSTR Buffer, SIZE_T Count, PCWSTR Tag)
 {
     StringCchPrintfW(Buffer, Count, L"%s\\npdx-%lu-%lu-%s", BnoPath,
-                     HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess), ++Unique, Tag);
+                     HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess),
+                     (ULONG)InterlockedIncrement(&Unique), Tag);
 }
 
 static
@@ -248,8 +250,10 @@ RaceThread(PVOID Param)
 
     for (i = 0; i < 200; i++)
     {
-        if (!NT_SUCCESS(CreateDir(TRUE, L"race", 0, Race->Shadow, 0, &Dir)))
+        NTSTATUS Status = CreateDir(TRUE, L"race", 0, Race->Shadow, 0, &Dir);
+        if (!NT_SUCCESS(Status))
         {
+            trace("race create %lu -> 0x%lx\n", i, Status);
             InterlockedIncrement(&Race->Failures);
             continue;
         }
