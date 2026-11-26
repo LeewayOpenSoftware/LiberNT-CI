@@ -363,10 +363,9 @@ TestFlagsAndLifetime(
         ok_ntstatus(Status, STATUS_SUCCESS);
         if (NT_SUCCESS(Status))
         {
-            trace("0-then-2 flags %#x usage %u name %.*S\n",
+            trace("0-then-2 flags %#x usage %u name %S\n",
                   Basic.Information.Flags,
                   Basic.Information.UsageCount,
-                  Basic.Information.NameLength / sizeof(WCHAR),
                   Basic.Information.Name);
             ok_hex(Basic.Information.Flags & ATOM_FLAG_GLOBAL, 0);
             ok_hex(Basic.Information.UsageCount, 2);
