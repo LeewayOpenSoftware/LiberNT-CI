@@ -136,8 +136,9 @@ test_RoundTrip(void)
             ok_long(Info.UIRestrictionsClass, 0);
     }
 
-    /* All of them at once. INJECTION (0x200) is excluded: Orosi rejects it
-       for lack of win32k enforcement, so the sum here is 0x1FF. */
+    /* All of them at once. INJECTION (0x200) stays excluded: it is not
+       portable across Win11 26100 servicing lines (see test_InvalidParameters)
+       and Orosi rejects it, so the sum here is 0x1FF. */
     SetLastError(0xDEADBEEF);
     Success = SetRestrictions(hJob, JOB_OBJECT_UILIMIT_ALL & ~JOB_OBJECT_UILIMIT_INJECTION);
     ok(Success != FALSE, "Setting all enforced restrictions failed with %lu\n", GetLastError());
@@ -169,6 +170,7 @@ test_InvalidParameters(void)
     HANDLE hJob;
     DWORD Returned;
     BOOL Success;
+    BOOL InjectionAccepted;
 
     hJob = CreateJobObjectW(NULL, NULL);
     ok(hJob != NULL, "CreateJobObject failed with %lu\n", GetLastError());
@@ -186,12 +188,45 @@ test_InvalidParameters(void)
     ok(Success == FALSE, "Setting one undefined bit succeeded\n");
     ok_err(ERROR_INVALID_PARAMETER);
 
-    /* INJECTION: Orosi rejects it (no win32k enforcement; god decision,
-       documented divergence); Win11 accepts it */
+    /* INJECTION (0x200), and ALL (0x3FF) with it: Win11 26100 is split by
+       servicing level. This host line (26100.9974) accepts and stores both —
+       valid mask 0x3FF, stored but unenforced; the lab VM line rejects both
+       with ERROR_INVALID_PARAMETER (valid mask 0x1FF, see
+       win11-uilimit-injection.md). Orosi deliberately rejects: it never
+       stores a protection it does not enforce. Probe the bit once and pin
+       whichever behaviour this OS shows. */
     SetLastError(0xDEADBEEF);
     Success = SetRestrictions(hJob, JOB_OBJECT_UILIMIT_INJECTION);
-    ok(is_reactos() ? !Success : Success,
-       "INJECTION set: success=%u (Orosi must reject, Win11 accepts)\n", Success);
+    InjectionAccepted = (Success != FALSE);
+    if (is_reactos())
+    {
+        ok(!InjectionAccepted, "INJECTION set: success=%u\n", Success);
+        ok_err(ERROR_INVALID_PARAMETER);
+    }
+    else if (!InjectionAccepted)
+    {
+        ok_err(ERROR_INVALID_PARAMETER);
+    }
+
+    SetLastError(0xDEADBEEF);
+    Success = SetRestrictions(hJob, JOB_OBJECT_UILIMIT_ALL);
+    if (is_reactos() || !InjectionAccepted)
+    {
+        ok(!Success, "ALL set: success=%u\n", Success);
+        ok_err(ERROR_INVALID_PARAMETER);
+    }
+    else
+    {
+        ok(Success != FALSE, "ALL set: success=%u\n", Success);
+    }
+
+    if (!is_reactos())
+    {
+        if (InjectionAccepted)
+            trace("INJECTION and ALL accepted on this Windows servicing line (mask 0x3FF)\n");
+        else
+            trace("INJECTION and ALL rejected on this Windows servicing line (mask 0x1FF)\n");
+    }
 
     memset(&Info, 0xAA, sizeof(Info));
     Success = QueryInformationJobObject(hJob,
@@ -200,8 +235,13 @@ test_InvalidParameters(void)
                                         sizeof(Info),
                                         NULL);
     ok(Success != FALSE, "QueryInformationJobObject failed with %lu\n", GetLastError());
-    ok_long(Info.UIRestrictionsClass,
-            is_reactos() ? 0 : JOB_OBJECT_UILIMIT_INJECTION);
+    if (Success != FALSE)
+    {
+        if (InjectionAccepted)
+            ok_long(Info.UIRestrictionsClass, JOB_OBJECT_UILIMIT_ALL);
+        else
+            ok_long(Info.UIRestrictionsClass, 0);
+    }
 
     /* The class is fixed length in both directions */
     Info.UIRestrictionsClass = JOB_OBJECT_UILIMIT_HANDLES;
