@@ -66,12 +66,32 @@ DeltaTimeToSeconds(LARGE_INTEGER DeltaTime)
     if (DeltaTime.QuadPart == 0)
         return 0;
 
+    /* SAM's "never"; negating it would overflow */
+    if (DeltaTime.QuadPart == MINLONGLONG)
+        return TIMEQ_FOREVER;
+
     Seconds.QuadPart = -DeltaTime.QuadPart / 10000000;
 
     if (Seconds.HighPart != 0)
         return TIMEQ_FOREVER;
 
     return Seconds.LowPart;
+}
+
+
+/* Inverse of DeltaTimeToSeconds; TIMEQ_FOREVER is the "never" delta that SAM uses */
+static
+LARGE_INTEGER
+SecondsToDeltaTime(ULONG Seconds)
+{
+    LARGE_INTEGER DeltaTime;
+
+    if (Seconds == TIMEQ_FOREVER)
+        DeltaTime.QuadPart = MINLONGLONG;
+    else
+        DeltaTime.QuadPart = -(LONGLONG)Seconds * 10000000;
+
+    return DeltaTime;
 }
 
 
@@ -161,6 +181,9 @@ GetAccountFlags(ULONG AccountControl,
     if (AccountControl & USER_DONT_EXPIRE_PASSWORD)
         Flags |= UF_DONT_EXPIRE_PASSWD;
 
+    if (AccountControl & USER_PASSWORD_EXPIRED)
+        Flags |= UF_PASSWORD_EXPIRED;
+
 /*
     if (AccountControl & USER_ENCRYPTED_TEXT_PASSWORD_ALLOWED)
         Flags |= UF_ENCRYPTED_TEXT_PASSWORD_ALLOWED;
@@ -180,8 +203,6 @@ GetAccountFlags(ULONG AccountControl,
     if (AccountControl & USER_DONT_REQUIRE_PREAUTH)
         Flags |= UF_DONT_REQUIRE_PREAUTH;
 
-    if (AccountControl & USER_PASSWORD_EXPIRED)
-        Flags |= UF_PASSWORD_EXPIRED;
 */
 
     /* Set account type flags */
@@ -1757,6 +1778,7 @@ SetUserInfo(SAM_HANDLE UserHandle,
                 UserAllInfo.WhichFields |= USER_ALL_HOMEDIRECTORYDRIVE;
             }
 
+            /* Sent as given, as Win11 does: zero clears an expiry, nonzero sets must-change */
             UserAllInfo.PasswordExpired = (UserInfo3->usri3_password_expired != 0);
             UserAllInfo.WhichFields |= USER_ALL_PASSWORDEXPIRED;
             break;
@@ -1893,6 +1915,7 @@ SetUserInfo(SAM_HANDLE UserHandle,
                 UserAllInfo.WhichFields |= USER_ALL_HOMEDIRECTORYDRIVE;
             }
 
+            /* Sent as given, as Win11 does: zero clears an expiry, nonzero sets must-change */
             UserAllInfo.PasswordExpired = (UserInfo4->usri4_password_expired != 0);
             UserAllInfo.WhichFields |= USER_ALL_PASSWORDEXPIRED;
             break;
@@ -4121,7 +4144,8 @@ NetUserModalsGet(LPCWSTR servername,
             umi0 = (PUSER_MODALS_INFO_0)*bufptr;
 
             umi0->usrmod0_min_passwd_len = PasswordInfo->MinPasswordLength;
-            umi0->usrmod0_max_passwd_age = (ULONG)(-PasswordInfo->MaxPasswordAge.QuadPart / 10000000);
+            umi0->usrmod0_max_passwd_age =
+                DeltaTimeToSeconds(PasswordInfo->MaxPasswordAge);
             umi0->usrmod0_min_passwd_age =
                 DeltaTimeToSeconds(PasswordInfo->MinPasswordAge);
             umi0->usrmod0_force_logoff =
@@ -4223,8 +4247,218 @@ NetUserModalsSet(IN LPCWSTR servername,
                  IN LPBYTE buf,
                  OUT LPDWORD parm_err)
 {
-    FIXME("(%s %d %p %p)\n", debugstr_w(servername), level, buf, parm_err);
-    return ERROR_ACCESS_DENIED;
+    UNICODE_STRING ServerName;
+    SAM_HANDLE ServerHandle = NULL;
+    SAM_HANDLE DomainHandle = NULL;
+    PSID DomainSid = NULL;
+    PDOMAIN_PASSWORD_INFORMATION PasswordInfo = NULL;
+    PDOMAIN_LOGOFF_INFORMATION LogoffInfo = NULL;
+    PDOMAIN_LOCKOUT_INFORMATION LockoutInfo = NULL;
+    BOOLEAN SetPassword = FALSE, SetLogoff = FALSE, SetLockout = FALSE;
+    ULONG DesiredAccess = 0;
+    NET_API_STATUS ApiStatus = NERR_Success;
+    NTSTATUS Status;
+
+    TRACE("(%s %d %p %p)\n", debugstr_w(servername), level, buf, parm_err);
+
+    if (parm_err != NULL)
+        *parm_err = PARM_ERROR_NONE;
+
+    if (buf == NULL)
+        return ERROR_INVALID_PARAMETER;
+
+    switch (level)
+    {
+        case 0:
+            SetPassword = SetLogoff = TRUE;
+            break;
+
+        case 3:
+            SetLockout = TRUE;
+            break;
+
+        case 1001:
+        case 1002:
+        case 1003:
+        case 1005:
+            SetPassword = TRUE;
+            break;
+
+        case 1004:
+            SetLogoff = TRUE;
+            break;
+
+        case 1:
+        case 2:
+        case 1006:
+        case 1007:
+            /* Role, primary and domain name cannot be set through this API on a local SAM */
+            return ERROR_NOT_SUPPORTED;
+
+        default:
+            return ERROR_INVALID_LEVEL;
+    }
+
+    if (SetPassword || SetLockout)
+        DesiredAccess |= DOMAIN_READ_PASSWORD_PARAMETERS | DOMAIN_WRITE_PASSWORD_PARAMS;
+    if (SetLogoff)
+        DesiredAccess |= DOMAIN_READ_OTHER_PARAMETERS | DOMAIN_WRITE_OTHER_PARAMETERS;
+
+    if (servername != NULL)
+        RtlInitUnicodeString(&ServerName, servername);
+
+    Status = SamConnect((servername != NULL) ? &ServerName : NULL,
+                        &ServerHandle,
+                        SAM_SERVER_CONNECT | SAM_SERVER_LOOKUP_DOMAIN,
+                        NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("SamConnect failed (Status %08lx)\n", Status);
+        ApiStatus = NetpNtStatusToApiStatus(Status);
+        goto done;
+    }
+
+    Status = GetAccountDomainSid((servername != NULL) ? &ServerName : NULL,
+                                 &DomainSid);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("GetAccountDomainSid failed (Status %08lx)\n", Status);
+        ApiStatus = NetpNtStatusToApiStatus(Status);
+        goto done;
+    }
+
+    Status = SamOpenDomain(ServerHandle,
+                           DesiredAccess,
+                           DomainSid,
+                           &DomainHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("SamOpenDomain failed (Status %08lx)\n", Status);
+        ApiStatus = NetpNtStatusToApiStatus(Status);
+        goto done;
+    }
+
+    /* Read-modify-write: the single-value levels keep the other fields */
+    if (SetPassword)
+    {
+        Status = SamQueryInformationDomain(DomainHandle,
+                                           DomainPasswordInformation,
+                                           (PVOID *)&PasswordInfo);
+        if (!NT_SUCCESS(Status))
+        {
+            ApiStatus = NetpNtStatusToApiStatus(Status);
+            goto done;
+        }
+    }
+
+    if (SetLogoff)
+    {
+        Status = SamQueryInformationDomain(DomainHandle,
+                                           DomainLogoffInformation,
+                                           (PVOID *)&LogoffInfo);
+        if (!NT_SUCCESS(Status))
+        {
+            ApiStatus = NetpNtStatusToApiStatus(Status);
+            goto done;
+        }
+    }
+
+    if (SetLockout)
+    {
+        Status = SamQueryInformationDomain(DomainHandle,
+                                           DomainLockoutInformation,
+                                           (PVOID *)&LockoutInfo);
+        if (!NT_SUCCESS(Status))
+        {
+            ApiStatus = NetpNtStatusToApiStatus(Status);
+            goto done;
+        }
+    }
+
+    switch (level)
+    {
+        case 0:
+            PasswordInfo->MinPasswordLength = (USHORT)((PUSER_MODALS_INFO_0)buf)->usrmod0_min_passwd_len;
+            PasswordInfo->MaxPasswordAge = SecondsToDeltaTime(((PUSER_MODALS_INFO_0)buf)->usrmod0_max_passwd_age);
+            PasswordInfo->MinPasswordAge = SecondsToDeltaTime(((PUSER_MODALS_INFO_0)buf)->usrmod0_min_passwd_age);
+            PasswordInfo->PasswordHistoryLength = (USHORT)((PUSER_MODALS_INFO_0)buf)->usrmod0_password_hist_len;
+            LogoffInfo->ForceLogoff = SecondsToDeltaTime(((PUSER_MODALS_INFO_0)buf)->usrmod0_force_logoff);
+            break;
+
+        case 3:
+            LockoutInfo->LockoutDuration = SecondsToDeltaTime(((PUSER_MODALS_INFO_3)buf)->usrmod3_lockout_duration);
+            LockoutInfo->LockoutObservationWindow = SecondsToDeltaTime(((PUSER_MODALS_INFO_3)buf)->usrmod3_lockout_observation_window);
+            LockoutInfo->LockoutThreshold = (USHORT)((PUSER_MODALS_INFO_3)buf)->usrmod3_lockout_threshold;
+            break;
+
+        case 1001:
+            PasswordInfo->MinPasswordLength = (USHORT)((PUSER_MODALS_INFO_1001)buf)->usrmod1001_min_passwd_len;
+            break;
+
+        case 1002:
+            PasswordInfo->MaxPasswordAge = SecondsToDeltaTime(((PUSER_MODALS_INFO_1002)buf)->usrmod1002_max_passwd_age);
+            break;
+
+        case 1003:
+            PasswordInfo->MinPasswordAge = SecondsToDeltaTime(((PUSER_MODALS_INFO_1003)buf)->usrmod1003_min_passwd_age);
+            break;
+
+        case 1004:
+            LogoffInfo->ForceLogoff = SecondsToDeltaTime(((PUSER_MODALS_INFO_1004)buf)->usrmod1004_force_logoff);
+            break;
+
+        case 1005:
+            PasswordInfo->PasswordHistoryLength = (USHORT)((PUSER_MODALS_INFO_1005)buf)->usrmod1005_password_hist_len;
+            break;
+    }
+
+    if (SetPassword)
+    {
+        Status = SamSetInformationDomain(DomainHandle, DomainPasswordInformation, PasswordInfo);
+        if (!NT_SUCCESS(Status))
+        {
+            ApiStatus = NetpNtStatusToApiStatus(Status);
+            goto done;
+        }
+    }
+
+    if (SetLogoff)
+    {
+        Status = SamSetInformationDomain(DomainHandle, DomainLogoffInformation, LogoffInfo);
+        if (!NT_SUCCESS(Status))
+        {
+            ApiStatus = NetpNtStatusToApiStatus(Status);
+            goto done;
+        }
+    }
+
+    if (SetLockout)
+    {
+        Status = SamSetInformationDomain(DomainHandle, DomainLockoutInformation, LockoutInfo);
+        if (!NT_SUCCESS(Status))
+            ApiStatus = NetpNtStatusToApiStatus(Status);
+    }
+
+done:
+    if (LockoutInfo != NULL)
+        SamFreeMemory(LockoutInfo);
+
+    if (LogoffInfo != NULL)
+        SamFreeMemory(LogoffInfo);
+
+    if (PasswordInfo != NULL)
+        SamFreeMemory(PasswordInfo);
+
+    if (DomainSid != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, DomainSid);
+
+    if (DomainHandle != NULL)
+        SamCloseHandle(DomainHandle);
+
+    if (ServerHandle != NULL)
+        SamCloseHandle(ServerHandle);
+
+    return ApiStatus;
 }
 
 

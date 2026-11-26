@@ -150,7 +150,7 @@ Credential_GetFieldState(ICredentialProviderCredential2 *iface, DWORD dwFieldID,
 
     if (!pcpfs || !pcpfis)
         return E_POINTER;
-    if (dwFieldID >= PWFIELD_COUNT)
+    if (!PasswordProvider_IsKnownFieldId(dwFieldID))
         return E_INVALIDARG;
 
     *pcpfis = CPFIS_NONE;
@@ -191,7 +191,7 @@ Credential_GetStringValue(ICredentialProviderCredential2 *iface, DWORD dwFieldID
     if (!ppsz)
         return E_POINTER;
     *ppsz = NULL;
-    if (dwFieldID >= PWFIELD_COUNT || dwFieldID == PWFIELD_SUBMIT)
+    if (!PasswordProvider_IsKnownFieldId(dwFieldID) || dwFieldID == PWFIELD_SUBMIT)
         return E_INVALIDARG;
     return PasswordProvider_DupString(This->Text[dwFieldID], ppsz);
 }
@@ -248,6 +248,8 @@ Credential_SetStringValue(ICredentialProviderCredential2 *iface, DWORD dwFieldID
     SIZE_T Chars;
 
     if (!psz)
+        return E_INVALIDARG;
+    if (!PasswordProvider_IsKnownFieldId(dwFieldID))
         return E_INVALIDARG;
     if (dwFieldID != PWFIELD_USER_NAME && !IsSecretField(dwFieldID))
         return E_INVALIDARG;
@@ -424,6 +426,20 @@ Credential_ReportResult(ICredentialProviderCredential2 *iface, NTSTATUS ntsStatu
         Text = IDS_PASSWORD_CHANGED;
         Icon = CPSI_SUCCESS;
     }
+    else if (This->Scenario == CPUS_CHANGE_PASSWORD)
+    {
+        /* SAM's verdict on a change: the old password, the new one against policy, or anything else. */
+        if (ntsStatus == STATUS_WRONG_PASSWORD)
+            Text = IDS_BAD_PASSWORD;
+        else if (ntsStatus == STATUS_NO_SUCH_USER)
+            Text = IDS_BAD_USER_OR_PASSWORD;
+        else if (ntsStatus == STATUS_PASSWORD_RESTRICTION || ntsStatus == STATUS_PWD_TOO_SHORT ||
+                 ntsStatus == STATUS_PWD_TOO_RECENT || ntsStatus == STATUS_PWD_HISTORY_CONFLICT)
+            Text = IDS_PASSWORD_RESTRICTION;
+        else
+            Text = IDS_PASSWORD_CHANGE_FAILED;
+        Icon = CPSI_ERROR;
+    }
 
     ClearSecrets(This, !NT_SUCCESS(ntsStatus));
     if (!Text)
@@ -502,6 +518,8 @@ Options_GetFieldOptions(ICredentialProviderCredentialWithFieldOptions *iface, DW
 {
     if (!options)
         return E_POINTER;
+    /* Win11's PasswordProvider answers any ID here: CPCFO_NONE unless it is a secret field
+     * (26100 baseline, Abi.c:135); only the per-field getters and setters reject unknown IDs. */
     *options = IsSecretField(fieldID) ? CPCFO_ENABLE_PASSWORD_REVEAL : CPCFO_NONE;
     return S_OK;
 }

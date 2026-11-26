@@ -10,6 +10,7 @@ extern void func_CertUpdateStore(void);
 extern void func_ChainNotBefore(void);
 extern void func_ChainRevocation(void);
 extern void func_Countersign(void);
+extern void func_CryptProtectChangePassword(void);
 extern void func_CryptProtectData(void);
 extern void func_CryptProtectMemory(void);
 extern void func_FindOIDInfo(void);
@@ -27,6 +28,7 @@ const struct test winetest_testlist[] =
     { "ChainNotBefore", func_ChainNotBefore },
     { "ChainRevocation", func_ChainRevocation },
     { "Countersign", func_Countersign },
+    { "CryptProtectChangePassword", func_CryptProtectChangePassword },
     { "CryptProtectData", func_CryptProtectData },
     { "CryptProtectMemory", func_CryptProtectMemory },
     { "FindOIDInfo", func_FindOIDInfo },

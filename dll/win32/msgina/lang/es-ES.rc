@@ -58,7 +58,7 @@ BEGIN
     IDS_LOGONUI_CONFIRM_PASSWORD "Confirm password"
     IDS_LOGONUI_MISMATCH "The passwords don't match."
     IDS_LOGONUI_CHANGE_FAILED "The password couldn't be changed. Check the old password and try again."
-    IDS_LOGONUI_PASSWORD_RULES "The new password doesn't meet the password requirements."
+    IDS_LOGONUI_PASSWORD_RULES "No se puede actualizar la contraseña. El valor proporcionado para la nueva contraseña no cumple los requisitos de longitud, complejidad o historial del dominio."
     IDS_LOGONUI_OK "OK"
     IDS_LOGONUI_CHANGED "Your password has been changed."
     IDS_LOGONUI_EMERGENCY_TITLE "Emergency restart"

@@ -2,6 +2,16 @@
 
 LANGUAGE LANG_INDONESIAN, SUBLANG_DEFAULT
 
+IDD_LOGONUITERMINAL DIALOGEX 0, 0, 260, 96
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION
+CAPTION "Sign-in is not available"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "", IDC_LUT_TEXT, 12, 10, 236, 50
+    PUSHBUTTON "&Restart", IDC_LUT_RESTART, 128, 72, 58, 14
+    PUSHBUTTON "Shut &down", IDC_LUT_SHUTDOWN, 190, 72, 58, 14
+END
+
 IDD_SHUTDOWNCOMPUTER DIALOGEX 45, 22, 164, 52
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
 CAPTION "Menonaktifkan Komputer"
@@ -55,6 +65,15 @@ BEGIN
     IDS_LOGGINGOFF "Logging off"
     IDS_TIMEOUTSHORTFORMAT "%02d:%02d:%02d"
     IDS_TIMEOUTLONGFORMAT "%d hari"
+    IDS_PRESSCTRLALTDELETE "Press Ctrl+Alt+Delete to sign in"
+    IDS_UNLOCKONLYSESSIONUSER "This computer is locked. Only the signed-in user can unlock it."
+    IDS_LOGONUI_TERMINAL_LEVELS "The sign-in user interface failed repeatedly and cannot be started again. Restart the computer; if this keeps happening, contact your administrator."
+    IDS_LOGONUI_TERMINAL_MISSING "The sign-in components are missing from this installation. Repair the installation offline, then restart the computer."
+    IDS_LOGONUI_TERMINAL_POLICY "Sign-in is not available on this computer. Policy requires a credential that the sign-in user interface cannot offer right now. Contact your administrator."
+    IDS_SAFEMODEADMINSONLY "Only administrators can sign in while the computer is in safe mode."
+    IDS_REMINDER_TITLE "You're about to be signed out"
+    IDS_REMINDER_SHUTDOWN "Orosi will shut down in %s."
+    IDS_REMINDER_RESTART "Orosi will restart in %s."
 END
 
 STRINGTABLE
