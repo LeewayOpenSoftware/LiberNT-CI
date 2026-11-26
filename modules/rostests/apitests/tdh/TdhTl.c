@@ -95,6 +95,19 @@ BuildValidBlob(OUT PUCHAR Blob)
     BuilderByte(&B, 6);
     BuilderName(&B, "G2");
     BuilderByte(&B, 10);
+    /* nested struct: Outer { Inner { Ix INT16, Iy UINT32 }, Tail UINT8 } */
+    BuilderName(&B, "Outer");
+    BuilderByte(&B, 24 | 128);
+    BuilderByte(&B, 2);
+    BuilderName(&B, "Inner");
+    BuilderByte(&B, 24 | 128);
+    BuilderByte(&B, 2);
+    BuilderName(&B, "Ix");
+    BuilderByte(&B, 5);
+    BuilderName(&B, "Iy");
+    BuilderByte(&B, 8);
+    BuilderName(&B, "Tail");
+    BuilderByte(&B, 4);
     BuilderFinish(&B);
 
     memcpy(Blob, B.Bytes, B.Length);
@@ -160,8 +173,8 @@ TestValidEvent(VOID)
     ok(Info->EventDescriptor.Id == 42, "Id %u\n", Info->EventDescriptor.Id);
     ok(Info->EventDescriptor.Level == 5 && Info->EventDescriptor.Opcode == 2,
        "Level %u Opcode %u\n", Info->EventDescriptor.Level, Info->EventDescriptor.Opcode);
-    ok(Info->PropertyCount == 4, "PropertyCount %lu\n", Info->PropertyCount);
-    ok(Info->TopLevelPropertyCount == 3, "TopLevel %lu\n", Info->TopLevelPropertyCount);
+    ok(Info->PropertyCount == 10, "PropertyCount %lu\n", Info->PropertyCount);
+    ok(Info->TopLevelPropertyCount == 4, "TopLevel %lu\n", Info->TopLevelPropertyCount);
     ok(Info->ProviderNameOffset == 0, "ProviderNameOffset %lu without traits\n",
        Info->ProviderNameOffset);
     ok(Info->TaskNameOffset != 0, "TaskNameOffset 0\n");
@@ -187,6 +200,30 @@ TestValidEvent(VOID)
     ok(!wcscmp((PWSTR)((PUCHAR)Info + G1->NameOffset), L"G1"), "member 0 name\n");
     ok(G1->nonStructType.InType == TDH_INTYPE_UINT16, "G1 InType %u\n",
        G1->nonStructType.InType);
+
+    /* nested structs flatten with each struct's direct members contiguous:
+       Outer, Inner, Tail, Ix, Iy with Outer { Inner, Tail } and Inner { Ix, Iy } */
+    {
+        PEVENT_PROPERTY_INFO Outer = &Info->EventPropertyInfoArray[5];
+        PEVENT_PROPERTY_INFO Inner = &Info->EventPropertyInfoArray[6];
+        PEVENT_PROPERTY_INFO Tail = &Info->EventPropertyInfoArray[7];
+        PEVENT_PROPERTY_INFO Ix = &Info->EventPropertyInfoArray[8];
+
+        ok(!wcscmp((PWSTR)((PUCHAR)Info + Outer->NameOffset), L"Outer"), "Outer name\n");
+        ok(Outer->structType.StructStartIndex == 6 && Outer->structType.NumOfStructMembers == 2,
+           "Outer start %u members %u\n", Outer->structType.StructStartIndex,
+           Outer->structType.NumOfStructMembers);
+        ok(!wcscmp((PWSTR)((PUCHAR)Info + Inner->NameOffset), L"Inner"), "Inner name\n");
+        ok(Inner->structType.StructStartIndex == 8 && Inner->structType.NumOfStructMembers == 2,
+           "Inner start %u members %u\n", Inner->structType.StructStartIndex,
+           Inner->structType.NumOfStructMembers);
+        ok(!wcscmp((PWSTR)((PUCHAR)Info + Tail->NameOffset), L"Tail"), "Tail name\n");
+        ok(Tail->nonStructType.InType == TDH_INTYPE_UINT8, "Tail InType %u\n",
+           Tail->nonStructType.InType);
+        ok(!wcscmp((PWSTR)((PUCHAR)Info + Ix->NameOffset), L"Ix"), "Ix name\n");
+        ok(Ix->nonStructType.InType == TDH_INTYPE_INT16, "Ix InType %u\n",
+           Ix->nonStructType.InType);
+    }
 }
 
 static VOID

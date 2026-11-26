@@ -120,6 +120,7 @@ typedef struct _TLG_FIELD
     USHORT OutType;
     BOOLEAN IsStruct;
     USHORT StructMembers;
+    USHORT StructStart;
     USHORT ValueCount;
     BOOLEAN HasValueCount;
     USHORT TypeInfoSize;
@@ -186,33 +187,110 @@ typedef struct _TLG_DECODE
     TLG_FIELD Fields[TLG_MAX_FIELDS];
     ULONG Count;
     ULONG TopLevelCount;
-    ULONG DepthLimit;
 } TLG_DECODE, *PTLG_DECODE;
+
+/* The stream nests struct members depth-first, but TRACE_EVENT_INFO requires
+   each struct's direct members to be contiguous. The parse builds a small
+   tree, then a breadth-first flatten lays members out contiguously. */
+typedef struct _TLG_NODE
+{
+    TLG_FIELD Field;
+    USHORT Parent;      /* pool index, 0xFFFF for a root */
+    USHORT FirstChild;  /* pool index + 1, 0 for none */
+    USHORT NextSibling; /* pool index + 1, 0 for none */
+} TLG_NODE;
+
+static TLG_NODE TlgPool[TLG_MAX_FIELDS];
+static USHORT TlgPoolCount;
 
 static
 BOOLEAN
-TlgParseOneField(IN OUT TLG_READER *Reader, IN ULONG Depth, IN OUT PTLG_DECODE Decode)
+TlgBuildNode(IN OUT TLG_READER *Reader, IN ULONG Depth, IN USHORT Parent, OUT PUSHORT NodeIndex)
 {
     TLG_FIELD Field;
-    USHORT Members, i;
+    USHORT MyIndex, ChildIndex, LastChild, i;
 
     if (!TlgParseFieldHeader(Reader, &Field))
         return FALSE;
-    if (Decode->Count >= TLG_MAX_FIELDS)
+    if (TlgPoolCount >= TLG_MAX_FIELDS)
         return FALSE;
-    if (Depth == 0)
-        Decode->TopLevelCount++;
-    Decode->Fields[Decode->Count++] = Field;
+
+    MyIndex = TlgPoolCount++;
+    TlgPool[MyIndex].Field = Field;
+    TlgPool[MyIndex].Parent = Parent;
+    TlgPool[MyIndex].FirstChild = 0;
+    TlgPool[MyIndex].NextSibling = 0;
 
     if (Field.IsStruct)
     {
-        Members = Field.OutType; /* the N logical members follow inline */
         if (Depth + 1 >= TLG_MAX_DEPTH)
             return FALSE;
-        for (i = 0; i < Members; i++)
+        LastChild = 0xFFFF;
+        for (i = 0; i < Field.OutType; i++)
         {
-            if (!TlgParseOneField(Reader, Depth + 1, Decode))
+            if (!TlgBuildNode(Reader, Depth + 1, MyIndex, &ChildIndex))
                 return FALSE;
+            if (LastChild == 0xFFFF)
+                TlgPool[MyIndex].FirstChild = (USHORT)(ChildIndex + 1);
+            else
+                TlgPool[LastChild].NextSibling = (USHORT)(ChildIndex + 1);
+            LastChild = ChildIndex;
+        }
+    }
+
+    *NodeIndex = MyIndex;
+    return TRUE;
+}
+
+static
+BOOLEAN
+TlgParseEventFields(IN OUT TLG_READER *Reader, IN OUT PTLG_DECODE Decode)
+{
+    USHORT Queue[TLG_MAX_FIELDS];
+    USHORT NodeToField[TLG_MAX_FIELDS];
+    ULONG Head = 0, Tail = 0;
+
+    TlgPoolCount = 0;
+    RtlZeroMemory(Decode, sizeof(*Decode));
+
+    /* roots: the top-level field list runs to the end of the item */
+    while (Reader->Ptr < Reader->End)
+    {
+        USHORT Root;
+
+        if (Tail >= TLG_MAX_FIELDS)
+            return FALSE;
+        if (!TlgBuildNode(Reader, 0, 0xFFFF, &Root))
+            return FALSE;
+        Queue[Tail++] = Root;
+        Decode->TopLevelCount++;
+    }
+
+    while (Head < Tail)
+    {
+        USHORT Node = Queue[Head++];
+        USHORT Child;
+        USHORT FieldIndex;
+
+        if (Decode->Count >= TLG_MAX_FIELDS)
+            return FALSE;
+        FieldIndex = (USHORT)Decode->Count++;
+        Decode->Fields[FieldIndex] = TlgPool[Node].Field;
+        Decode->Fields[FieldIndex].StructStart = 0;
+        NodeToField[Node] = FieldIndex;
+
+        /* the first appended child marks its parent's member run */
+        if (TlgPool[Node].Parent != 0xFFFF &&
+            Decode->Fields[NodeToField[TlgPool[Node].Parent]].StructStart == 0)
+        {
+            Decode->Fields[NodeToField[TlgPool[Node].Parent]].StructStart = FieldIndex;
+        }
+
+        for (Child = TlgPool[Node].FirstChild; Child; Child = TlgPool[Child - 1].NextSibling)
+        {
+            if (Tail >= TLG_MAX_FIELDS)
+                return FALSE;
+            Queue[Tail++] = (USHORT)(Child - 1);
         }
     }
     return TRUE;
@@ -328,12 +406,8 @@ TdhGetEventInformation(
     if (!TlgReadString(&Reader, &EventName, &EventNameLength))
         return ERROR_INVALID_DATA;
 
-    RtlZeroMemory(&Decode, sizeof(Decode));
-    while (Reader.Ptr < Reader.End)
-    {
-        if (!TlgParseOneField(&Reader, 0, &Decode))
-            return ERROR_INVALID_DATA;
-    }
+    if (!TlgParseEventFields(&Reader, &Decode))
+        return ERROR_INVALID_DATA;
 
     if (TlgFindExtendedItem(Event, EVENT_HEADER_EXT_TYPE_PROV_TRAITS, &Traits, &TraitsSize))
     {
@@ -407,8 +481,8 @@ TdhGetEventInformation(
         if (Decode.Fields[i].IsStruct)
         {
             Property->Flags |= PropertyStruct;
-            Property->structType.StructStartIndex = (USHORT)(i + 1);
-            Property->structType.NumOfStructMembers = Decode.Fields[i].OutType;
+            Property->structType.StructStartIndex = Decode.Fields[i].StructStart;
+            Property->structType.NumOfStructMembers = Decode.Fields[i].StructMembers;
         }
         if (Decode.Fields[i].HasValueCount)
             Property->count = Decode.Fields[i].ValueCount;
