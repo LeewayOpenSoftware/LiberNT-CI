@@ -100,31 +100,53 @@ static VOID
 TestInvalidParameters(
     _In_ PNT_ADD_ATOM_EX AddAtomEx)
 {
-    static const ULONG InvalidFlags[] =
+    static const ULONG BadFlagCombos[] =
     {
-        0x00000001,
-        0x00000004,
-        0x00000008,
-        0x00010000,
+        0xFFFFFFFF,
         0x80000000,
-        0xFFFFFFFF
+        0x00010002,                 /* GLOBAL set plus an undefined bit */
+        ATOM_FLAG_GLOBAL | 0x00000001
     };
     WCHAR Name[64];
     WCHAR LongName[257];
     RTL_ATOM Atom;
     NTSTATUS Status;
     ULONG Index;
+    ULONG Flag;
 
     MakeName(Name, ARRAYSIZE(Name), L"invalid");
-    for (Index = 0; Index < ARRAYSIZE(InvalidFlags); Index++)
+
+    /* Sweep every single flag bit across the 32-bit space. Only
+       ATOM_FLAG_GLOBAL (bit 1) is defined, so every other bit must be
+       rejected with STATUS_INVALID_PARAMETER before any name work (Win11
+       baseline: an unknown flag -> 0xC000000D first). A bit that Win11 turns
+       out to accept would surface here as a failed assertion. */
+    for (Index = 0; Index < 32; Index++)
+    {
+        Flag = 1UL << Index;
+        if (Flag == ATOM_FLAG_GLOBAL) continue;
+        Atom = 0xABCD;
+        Status = AddAtomEx(Name,
+                           (ULONG)(wcslen(Name) * sizeof(WCHAR)),
+                           &Atom,
+                           Flag);
+        ok(Status == STATUS_INVALID_PARAMETER,
+           "flag bit %#lx: expected STATUS_INVALID_PARAMETER, got %#lx\n",
+           Flag, Status);
+        ok_hex(Atom, 0xABCD);
+        if (NT_SUCCESS(Status)) NtDeleteAtom(Atom);
+    }
+
+    /* Multi-bit combinations, including GLOBAL together with an undefined bit. */
+    for (Index = 0; Index < ARRAYSIZE(BadFlagCombos); Index++)
     {
         Atom = 0xABCD;
         Status = AddAtomEx(Name,
                            (ULONG)(wcslen(Name) * sizeof(WCHAR)),
                            &Atom,
-                           InvalidFlags[Index]);
-        trace("flag %#lx -> %#lx, atom %#x\n",
-              InvalidFlags[Index], Status, Atom);
+                           BadFlagCombos[Index]);
+        trace("flag combo %#lx -> %#lx, atom %#x\n",
+              BadFlagCombos[Index], Status, Atom);
         ok_ntstatus(Status, STATUS_INVALID_PARAMETER);
         ok_hex(Atom, 0xABCD);
         if (NT_SUCCESS(Status)) NtDeleteAtom(Atom);
@@ -238,9 +260,12 @@ TestExtendedValidation(
     ATOM_BASIC_BUFFER Basic;
     WCHAR LongName[257];
     WCHAR Name[64];
+    WCHAR EmbeddedNul[8];
     RTL_ATOM Atom;
     NTSTATUS Status;
     ULONG Index;
+    static const ULONG OverLengths[] =
+        { 0x00010002, 0x000101FE, 0xFFFFFFFE, 0xFFFFFFFF };
 
     for (Index = 0; Index < ARRAYSIZE(LongName) - 1; Index++)
         LongName[Index] = L'A';
@@ -317,7 +342,65 @@ TestExtendedValidation(
     trace("#+1 -> %#lx, atom %#x (Win11 pending)\n", Status, Atom);
     if (NT_SUCCESS(Status) && Atom >= 0xC000) NtDeleteAtom(Atom);
 
-    /* Pointer-form integer atoms are only reachable from kernel mode. */
+    /* T2: lengths above RTL_MAXIMUM_ATOM_LENGTH*sizeof(WCHAR) (0x1FE). The
+       length gate rejects them before the name is touched, so no fault leaks
+       out even for the wrap-prone 0xFFFFFFFE/0xFFFFFFFF -- platform independent. */
+    for (Index = 0; Index < ARRAYSIZE(OverLengths); Index++)
+    {
+        Atom = 0xABCD;
+        Status = AddAtomEx(LongName, OverLengths[Index], &Atom, ATOM_FLAG_NONE);
+        trace("length %#lx -> %#lx, atom %#x\n",
+              OverLengths[Index], Status, Atom);
+        ok_ntstatus(Status, STATUS_INVALID_PARAMETER);
+        ok_hex(Atom, 0xABCD);
+        if (NT_SUCCESS(Status)) NtDeleteAtom(Atom);
+    }
+
+    /* T2: odd (non-WCHAR-aligned) input address -> the alignment probe rejects it. */
+    Atom = 0xABCD;
+    Status = AddAtomEx((PCWSTR)(ULONG_PTR)0x20001,
+                       sizeof(WCHAR),
+                       &Atom,
+                       ATOM_FLAG_NONE);
+    trace("odd address 0x20001 -> %#lx, atom %#x\n", Status, Atom);
+    ok_ntstatus(Status, STATUS_DATATYPE_MISALIGNMENT);
+    ok_hex(Atom, 0xABCD);
+
+    /* T2: embedded NUL. The capture copies the full declared length, so the
+       stored name spans the NUL; whether the table keeps or truncates it is a
+       Win11 question -- record, do not pin. */
+    EmbeddedNul[0] = L'A';
+    EmbeddedNul[1] = L'B';
+    EmbeddedNul[2] = UNICODE_NULL;
+    EmbeddedNul[3] = L'C';
+    EmbeddedNul[4] = L'D';
+    EmbeddedNul[5] = UNICODE_NULL;
+    Atom = 0;
+    Status = AddAtomEx(EmbeddedNul, 5 * sizeof(WCHAR), &Atom, ATOM_FLAG_NONE);
+    trace("embedded NUL -> %#lx, atom %#x (Win11 pending)\n", Status, Atom);
+    if (NT_SUCCESS(Status) && Atom >= 0xC000) NtDeleteAtom(Atom);
+
+    /* T3: #49151 = 0xBFFF, the top valid integer atom (one below the 0xC000
+       string-atom base whose neighbour #49152 fails above). */
+    Atom = 0;
+    Status = AddAtomEx(L"#49151", 7 * sizeof(WCHAR), &Atom, ATOM_FLAG_NONE);
+    trace("#49151 -> %#lx, atom %#x\n", Status, Atom);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    ok_hex(Atom, 0xBFFF);
+
+    /* T3: non-numeric tail and a bare '#' -- Win11-pending, record only. */
+    Atom = 0;
+    Status = AddAtomEx(L"#12a", 5 * sizeof(WCHAR), &Atom, ATOM_FLAG_NONE);
+    trace("#12a -> %#lx, atom %#x (Win11 pending)\n", Status, Atom);
+    if (NT_SUCCESS(Status) && Atom >= 0xC000) NtDeleteAtom(Atom);
+
+    Atom = 0;
+    Status = AddAtomEx(L"#", 2 * sizeof(WCHAR), &Atom, ATOM_FLAG_NONE);
+    trace("bare # -> %#lx, atom %#x (Win11 pending)\n", Status, Atom);
+    if (NT_SUCCESS(Status) && Atom >= 0xC000) NtDeleteAtom(Atom);
+
+    /* Pointer-form integer atoms (MAKEINTATOM(123) == this cast) are only
+       reachable from kernel mode; from user mode the value is left untouched. */
     Atom = 0xABCD;
     Status = AddAtomEx((PCWSTR)(ULONG_PTR)123, 0, &Atom, ATOM_FLAG_NONE);
     trace("pointer-form from user mode -> %#lx, atom %#x\n", Status, Atom);
