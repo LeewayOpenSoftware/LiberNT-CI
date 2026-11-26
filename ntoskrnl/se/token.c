@@ -1179,6 +1179,10 @@ SepOpenThreadToken(
     OBJECT_ATTRIBUTES ObjectAttributes;
     PTOKEN NewToken, PrimaryToken;
     SECURITY_DESCRIPTOR SecurityDescriptor;
+    SECURITY_SUBJECT_CONTEXT SubjectContext;
+    PPRIVILEGE_SET Privileges = NULL;
+    ACCESS_MASK GrantedAccess;
+    BOOLEAN Allowed;
     PACL Dacl;
 
     PAGED_CODE();
@@ -1304,11 +1308,38 @@ SepOpenThreadToken(
         return Status;
     }
 
+    SeCaptureSubjectContext(&SubjectContext);
+    /* An identification-level client cannot pass an access check; Windows 11 opens such a copy as the process */
+    if (SubjectContext.ClientToken && SubjectContext.ImpersonationLevel < SecurityImpersonation)
+    {
+        PsDereferenceImpersonationToken(SubjectContext.ClientToken);
+        SubjectContext.ClientToken = NULL;
+    }
+    Allowed = SeAccessCheck(&SecurityDescriptor,
+                            &SubjectContext,
+                            FALSE,
+                            DesiredAccess,
+                            0,
+                            &Privileges,
+                            &SepTokenMapping,
+                            PreviousMode,
+                            &GrantedAccess,
+                            &Status);
+    SeReleaseSubjectContext(&SubjectContext);
+    if (Privileges) SeFreePrivileges(Privileges);
+    if (!Allowed)
+    {
+        ExFreePoolWithTag(Dacl, TAG_ACL);
+        ObDereferenceObject(NewToken);
+        ObDereferenceObject(Thread2);
+        return Status;
+    }
+
     /* Insert that copied token into the handle now */
     ObReferenceObject(NewToken);
     Status = ObInsertObject(NewToken,
                             NULL,
-                            DesiredAccess,
+                            GrantedAccess,
                             0,
                             NULL,
                             &TokenHandle);
