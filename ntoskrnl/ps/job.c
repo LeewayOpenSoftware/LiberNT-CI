@@ -3086,9 +3086,9 @@ NtQueryInformationJobObject(
     }
     case JobObjectEndOfJobTimeInformation:
     {
-        ExAcquireResourceSharedLite(&Job->JobLock, TRUE);
+        ExEnterCriticalRegionAndAcquireResourceShared(&Job->JobLock);
         EndOfJobTime.EndOfJobTimeAction = Job->EndOfJobTimeAction;
-        ExReleaseResourceLite(&Job->JobLock);
+        ExReleaseResourceAndLeaveCriticalRegion(&Job->JobLock);
 
         JobInfoBuffer = &EndOfJobTime;
         Status = STATUS_SUCCESS;
