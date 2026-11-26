@@ -364,6 +364,7 @@ NTSTATUS
 EtwpCaptureEnableFilters(
     _In_reads_(DescCount) PEVENT_FILTER_DESCRIPTOR Descs,
     _In_ ULONG DescCount,
+    _In_ KPROCESSOR_MODE PreviousMode,
     _Out_ PETWP_ENABLE_FILTERS *Captured)
 {
     NTSTATUS Status = STATUS_SUCCESS;
@@ -398,6 +399,8 @@ EtwpCaptureEnableFilters(
         {
             _SEH2_TRY
             {
+                if (PreviousMode != KernelMode)
+                    ProbeForRead((PVOID)(ULONG_PTR)Descs[i].Ptr, Store->Descs[i].Size, 1);
                 RtlCopyMemory(Blobs + BlobBytes, (PVOID)(ULONG_PTR)Descs[i].Ptr, Store->Descs[i].Size);
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -499,7 +502,10 @@ EtwpEnableGuid(
             _SEH2_YIELD(return _SEH2_GetExceptionCode());
         }
         _SEH2_END;
-        Status = EtwpCaptureEnableFilters(DescArray, Params.EnableFilterDescCount, &Filters);
+        Status = EtwpCaptureEnableFilters(DescArray,
+                                          Params.EnableFilterDescCount,
+                                          PreviousMode,
+                                          &Filters);
         if (!NT_SUCCESS(Status))
             return Status;
     }
