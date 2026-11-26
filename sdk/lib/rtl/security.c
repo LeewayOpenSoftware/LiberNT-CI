@@ -1178,7 +1178,16 @@ Cleanup1:
 }
 
 /*
- * @unimplemented
+ * @implemented
+ *
+ * Builds an absolute security descriptor in one process-heap block:
+ * SECURITY_DESCRIPTOR | DACL | SACL. Allowed and denied ACEs go to the DACL,
+ * audit ACEs to the SACL, in input order. The owner and group are referenced,
+ * not copied. Behaviour measured on Windows 11 26100 (see the NP02 research
+ * note): ACE header flags are InheritFlags | AceFlags, each ACE takes
+ * sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid bytes, SIDs are not validated,
+ * a missing DACL class gives a NULL DACL, and an unknown ACE type or an ACL
+ * larger than MAXUSHORT gives STATUS_INVALID_PARAMETER.
  */
 NTSTATUS
 NTAPI
@@ -1188,8 +1197,105 @@ RtlCreateAndSetSD(IN PRTL_ACE_DATA AceData,
                   IN PSID GroupSid OPTIONAL,
                   OUT PSECURITY_DESCRIPTOR *NewDescriptor)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    SIZE_T DaclSize = 0, SaclSize = 0;
+    PSECURITY_DESCRIPTOR Sd;
+    PACL Dacl = NULL, Sacl = NULL, Acl;
+    PACCESS_ALLOWED_ACE Ace;
+    PUCHAR DaclNext = NULL, SaclNext = NULL, *Next;
+    ULONG Index, SidLength, AceSize;
+
+    /* Validate the ACE types and size both ACLs */
+    for (Index = 0; Index < AceCount; Index++)
+    {
+        SidLength = RtlLengthSid(*AceData[Index].Sid);
+        switch (AceData[Index].AceType)
+        {
+            case ACCESS_ALLOWED_ACE_TYPE:
+            case ACCESS_DENIED_ACE_TYPE:
+                DaclSize += sizeof(ACCESS_ALLOWED_ACE) + SidLength;
+                break;
+
+            case SYSTEM_AUDIT_ACE_TYPE:
+                SaclSize += sizeof(ACCESS_ALLOWED_ACE) + SidLength;
+                break;
+
+            default:
+                return STATUS_INVALID_PARAMETER;
+        }
+
+        if (DaclSize + sizeof(ACL) > MAXUSHORT ||
+            SaclSize + sizeof(ACL) > MAXUSHORT)
+        {
+            return STATUS_INVALID_PARAMETER;
+        }
+    }
+    if (DaclSize) DaclSize += sizeof(ACL);
+    if (SaclSize) SaclSize += sizeof(ACL);
+
+    Sd = RtlAllocateHeap(RtlGetProcessHeap(),
+                         HEAP_ZERO_MEMORY,
+                         sizeof(SECURITY_DESCRIPTOR) + DaclSize + SaclSize);
+    if (!Sd) return STATUS_NO_MEMORY;
+
+    RtlCreateSecurityDescriptor(Sd, SECURITY_DESCRIPTOR_REVISION);
+    if (DaclSize)
+    {
+        Dacl = (PACL)((PUCHAR)Sd + sizeof(SECURITY_DESCRIPTOR));
+        RtlCreateAcl(Dacl, (ULONG)DaclSize, ACL_REVISION);
+        DaclNext = (PUCHAR)(Dacl + 1);
+    }
+    if (SaclSize)
+    {
+        Sacl = (PACL)((PUCHAR)Sd + sizeof(SECURITY_DESCRIPTOR) + DaclSize);
+        RtlCreateAcl(Sacl, (ULONG)SaclSize, ACL_REVISION);
+        SaclNext = (PUCHAR)(Sacl + 1);
+    }
+
+    /*
+     * Write the ACEs in place. The caller's data is read again, so check each
+     * ACE against the room left in its ACL in case it changed meanwhile.
+     */
+    for (Index = 0; Index < AceCount; Index++)
+    {
+        if (AceData[Index].AceType == SYSTEM_AUDIT_ACE_TYPE)
+        {
+            Acl = Sacl;
+            Next = &SaclNext;
+        }
+        else
+        {
+            Acl = Dacl;
+            Next = &DaclNext;
+        }
+        SidLength = RtlLengthSid(*AceData[Index].Sid);
+        AceSize = sizeof(ACCESS_ALLOWED_ACE) + SidLength;
+        if (!Acl ||
+            (AceData[Index].AceType != SYSTEM_AUDIT_ACE_TYPE &&
+             AceData[Index].AceType != ACCESS_ALLOWED_ACE_TYPE &&
+             AceData[Index].AceType != ACCESS_DENIED_ACE_TYPE) ||
+            AceSize > (SIZE_T)((PUCHAR)Acl + Acl->AclSize - *Next))
+        {
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Sd);
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        Ace = (PACCESS_ALLOWED_ACE)*Next;
+        Ace->Header.AceType = AceData[Index].AceType;
+        Ace->Header.AceFlags = AceData[Index].InheritFlags | AceData[Index].AceFlags;
+        Ace->Header.AceSize = (USHORT)AceSize;
+        Ace->Mask = AceData[Index].Mask;
+        RtlCopyMemory(&Ace->SidStart, *AceData[Index].Sid, SidLength);
+        Acl->AceCount++;
+        *Next += AceSize;
+    }
+
+    RtlSetDaclSecurityDescriptor(Sd, TRUE, Dacl, FALSE);
+    if (Sacl) RtlSetSaclSecurityDescriptor(Sd, TRUE, Sacl, FALSE);
+    if (OwnerSid) RtlSetOwnerSecurityDescriptor(Sd, OwnerSid, FALSE);
+    if (GroupSid) RtlSetGroupSecurityDescriptor(Sd, GroupSid, FALSE);
+
+    *NewDescriptor = Sd;
+    return STATUS_SUCCESS;
 }
 
 /*
