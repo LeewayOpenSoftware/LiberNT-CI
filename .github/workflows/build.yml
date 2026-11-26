@@ -713,6 +713,8 @@ jobs:
     # the shape verifier, which also runs after every change here. Built
     # under ASan and UBSan with the library's asserts live.
     runs-on: ubuntu-24.04
+    # Minutes normally; a wedged runner must not hold it for hours
+    timeout-minutes: 45
     steps:
     - name: Source checkout
       uses: actions/checkout@v6
