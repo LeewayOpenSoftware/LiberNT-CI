@@ -1148,6 +1148,8 @@ SpiLoadWallpaperMode(VOID)
         return wmFit;
     if (!ulTile && ulStyle == 10)
         return wmFill;
+    if (!ulTile && ulStyle == 22)
+        return wmSpan;
     return wmCenter;
 }
 

@@ -46,7 +46,8 @@ typedef enum
     wmTile,
     wmStretch,
     wmFit,
-    wmFill
+    wmFill,
+    wmSpan
 } WALLPAPER_MODE;
 
 typedef struct _SPIVALUES

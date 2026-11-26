@@ -179,6 +179,7 @@ list(APPEND SOURCE
     user/ntuser/useratom.c
     user/ntuser/usrheap.c
     user/ntuser/vis.c
+    user/ntuser/wallpaperspan.c
     user/ntuser/windc.c
     user/ntuser/window.c
     user/ntuser/winpos.c

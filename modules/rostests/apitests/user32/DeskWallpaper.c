@@ -137,6 +137,56 @@ CheckWallpaper(
     printf("%S: transcoded size %lu, source size %lu\n", Path, FileSize, SourceSize);
 }
 
+static
+VOID
+CheckStyleRoundTrip(
+    _In_ PCWSTR Path)
+{
+    DWORD OriginalStyle = 0, OriginalTile = 0, Style = 0, Tile = 0, Size = 0;
+    BOOL HaveOriginalStyle, HaveOriginalTile;
+
+    Size = sizeof(OriginalStyle);
+    HaveOriginalStyle = RegGetValueW(HKEY_CURRENT_USER, DesktopKey, L"WallpaperStyle", RRF_RT_REG_DWORD, NULL, &OriginalStyle, &Size) == ERROR_SUCCESS;
+    Size = sizeof(OriginalTile);
+    HaveOriginalTile = RegGetValueW(HKEY_CURRENT_USER, DesktopKey, L"TileWallpaper", RRF_RT_REG_DWORD, NULL, &OriginalTile, &Size) == ERROR_SUCCESS;
+
+    Tile = 0;
+    Style = 22;
+    RegSetKeyValueW(HKEY_CURRENT_USER, DesktopKey, L"TileWallpaper", REG_DWORD, &Tile, sizeof(Tile));
+    RegSetKeyValueW(HKEY_CURRENT_USER, DesktopKey, L"WallpaperStyle", REG_DWORD, &Style, sizeof(Style));
+    SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, (PVOID)Path, SPIF_UPDATEINIFILE);
+    Size = sizeof(Tile);
+    Tile = 0xdeadbeef;
+    ok(RegGetValueW(HKEY_CURRENT_USER, DesktopKey, L"TileWallpaper", RRF_RT_REG_DWORD, NULL, &Tile, &Size) == ERROR_SUCCESS && Tile == 0,
+       "TileWallpaper lost after style-22 round trip: %lu\n", Tile);
+    Size = sizeof(Style);
+    Style = 0xdeadbeef;
+    ok(RegGetValueW(HKEY_CURRENT_USER, DesktopKey, L"WallpaperStyle", RRF_RT_REG_DWORD, NULL, &Style, &Size) == ERROR_SUCCESS && Style == 22,
+       "WallpaperStyle 22 lost after round trip: %lu\n", Style);
+
+    /* Tile=1 with style 22 also survives; per SpiLoadWallpaperMode the pair decodes to wmCenter. */
+    Tile = 1;
+    RegSetKeyValueW(HKEY_CURRENT_USER, DesktopKey, L"TileWallpaper", REG_DWORD, &Tile, sizeof(Tile));
+    SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, (PVOID)Path, SPIF_UPDATEINIFILE);
+    Size = sizeof(Tile);
+    Tile = 0xdeadbeef;
+    ok(RegGetValueW(HKEY_CURRENT_USER, DesktopKey, L"TileWallpaper", RRF_RT_REG_DWORD, NULL, &Tile, &Size) == ERROR_SUCCESS && Tile == 1,
+       "TileWallpaper=1 lost after round trip: %lu\n", Tile);
+    Size = sizeof(Style);
+    Style = 0xdeadbeef;
+    ok(RegGetValueW(HKEY_CURRENT_USER, DesktopKey, L"WallpaperStyle", RRF_RT_REG_DWORD, NULL, &Style, &Size) == ERROR_SUCCESS && Style == 22,
+       "WallpaperStyle lost with Tile=1: %lu\n", Style);
+
+    if (HaveOriginalTile)
+        RegSetKeyValueW(HKEY_CURRENT_USER, DesktopKey, L"TileWallpaper", REG_DWORD, &OriginalTile, sizeof(OriginalTile));
+    else
+        RegDeleteKeyValueW(HKEY_CURRENT_USER, DesktopKey, L"TileWallpaper");
+    if (HaveOriginalStyle)
+        RegSetKeyValueW(HKEY_CURRENT_USER, DesktopKey, L"WallpaperStyle", REG_DWORD, &OriginalStyle, sizeof(OriginalStyle));
+    else
+        RegDeleteKeyValueW(HKEY_CURRENT_USER, DesktopKey, L"WallpaperStyle");
+}
+
 START_TEST(DeskWallpaper)
 {
     WCHAR Original[MAX_PATH + 1], Temp[MAX_PATH], Png[MAX_PATH], Jpg[MAX_PATH], Bmp[MAX_PATH], Missing[MAX_PATH], Transcoded[MAX_PATH];
@@ -167,6 +217,7 @@ START_TEST(DeskWallpaper)
     CheckWallpaper(Jpg, Transcoded, 0x00FFD8FF, 0x00FFFFFF, __LINE__);
     CheckWallpaper(Bmp, Transcoded, 0x00FFD8FF, 0x00FFFFFF, __LINE__);
     CheckWallpaper(Missing, Transcoded, 0x00FFD8FF, 0x00FFFFFF, __LINE__);
+    CheckStyleRoundTrip(Bmp);
     CountAfter = QueryTranscodedCount();
     printf("TranscodedImageCount went from %lu to %lu\n", CountBefore, CountAfter);
 
