@@ -1989,7 +1989,9 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
     CMP_CALLBACK_CALL CallbackCall;
     PKEY_VALUE_ENTRY Entries = NULL;
     PUNICODE_STRING Names = NULL;
-    ULONG ListSize, Captured = 0, LengthCopy = 0, Required = 0, i;
+    PWCHAR NameChars = NULL, NextChar;
+    ULONGLONG NamesSize = 0;
+    ULONG ListSize, LengthCopy = 0, Required = 0, i;
 
     PAGED_CODE();
 
@@ -2016,9 +2018,10 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
         return STATUS_INVALID_HANDLE;
     }
 
-    /* Kernel copies of the entries and of every name: nothing is read from user mode twice */
-    Entries = ExAllocatePoolWithTag(PagedPool, ListSize, TAG_CM);
-    Names = ExAllocatePoolWithTag(PagedPool, NumberOfValues * sizeof(UNICODE_STRING), TAG_CM);
+    /* Kernel copies of the entries and of every name, charged to the caller: nothing is read from user mode twice */
+    Entries = ExAllocatePoolWithQuotaTag(PagedPool | POOL_QUOTA_FAIL_INSTEAD_OF_RAISE, ListSize, TAG_CM);
+    Names = ExAllocatePoolWithQuotaTag(PagedPool | POOL_QUOTA_FAIL_INSTEAD_OF_RAISE,
+                                       NumberOfValues * sizeof(UNICODE_STRING), TAG_CM);
     if (!Entries || !Names)
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -2037,6 +2040,20 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
             if (ReturnLength)
                 ProbeForWriteUlong(ReturnLength);
             ProbeForWrite(Buffer, LengthCopy, sizeof(ULONG));
+
+            /* Every name header is read once; a value name never exceeds the hive's 32767-byte limit */
+            for (i = 0; i < NumberOfValues; i++)
+            {
+                Names[i] = ProbeForReadUnicodeString(Entries[i].ValueName);
+                if ((Names[i].Length > 32767) || (Names[i].Length & (sizeof(WCHAR) - 1)))
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+                if (Names[i].Length)
+                    ProbeForRead(Names[i].Buffer, Names[i].Length, sizeof(WCHAR));
+                NamesSize += Names[i].Length;
+            }
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -2051,32 +2068,62 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
     {
         RtlCopyMemory(Entries, ValueList, ListSize);
         LengthCopy = *Length;
+        for (i = 0; i < NumberOfValues; i++)
+        {
+            Names[i] = *Entries[i].ValueName;
+            if ((Names[i].Length > 32767) || (Names[i].Length & (sizeof(WCHAR) - 1)))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Quit;
+            }
+            NamesSize += Names[i].Length;
+        }
     }
 
-    /* Capture each name once; the kernel entries then point at the copies */
-    for (i = 0; i < NumberOfValues; i++)
+    /* One quota-charged block holds every name's characters (at most 32 KB per entry) */
+    if (NamesSize)
     {
-        Status = ProbeAndCaptureUnicodeString(&Names[i], PreviousMode, Entries[i].ValueName);
-        if (!NT_SUCCESS(Status))
-            goto Quit;
-        Captured++;
-
-        /* Make sure the name is aligned properly */
-        if (Names[i].Length & (sizeof(WCHAR) - 1))
+        if (NamesSize > MAXULONG)
         {
-            Status = STATUS_INVALID_PARAMETER;
+            Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Quit;
         }
-
-        /* Ignore any null characters at the end */
-        while (Names[i].Length &&
-               !(Names[i].Buffer[Names[i].Length / sizeof(WCHAR) - 1]))
+        NameChars = ExAllocatePoolWithQuotaTag(PagedPool | POOL_QUOTA_FAIL_INSTEAD_OF_RAISE, (SIZE_T)NamesSize, TAG_CM);
+        if (!NameChars)
         {
-            Names[i].Length -= sizeof(WCHAR);
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quit;
         }
-        Entries[i].ValueName = &Names[i];
     }
+    NextChar = NameChars;
+    _SEH2_TRY
+    {
+        for (i = 0; i < NumberOfValues; i++)
+        {
+            if (Names[i].Length)
+                RtlCopyMemory(NextChar, Names[i].Buffer, Names[i].Length);
+            Names[i].Buffer = NextChar;
+            Names[i].MaximumLength = Names[i].Length;
+            NextChar += Names[i].Length / sizeof(WCHAR);
 
+            /* Ignore any null characters at the end */
+            while (Names[i].Length &&
+                   !(Names[i].Buffer[Names[i].Length / sizeof(WCHAR) - 1]))
+            {
+                Names[i].Length -= sizeof(WCHAR);
+            }
+            Entries[i].ValueName = &Names[i];
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        goto Quit;
+
+    /* Filter drivers see the kernel copy of the entries; Buffer and the length cells are the caller's addresses */
     /* Setup the callback */
     QueryMultipleValueKeyInfo.Object = (PVOID)KeyObject;
     QueryMultipleValueKeyInfo.ValueEntries = Entries;
@@ -2134,8 +2181,7 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
     }
 
 Quit:
-    for (i = 0; i < Captured; i++)
-        ReleaseCapturedUnicodeString(&Names[i], PreviousMode);
+    if (NameChars) ExFreePoolWithTag(NameChars, TAG_CM);
     if (Names) ExFreePoolWithTag(Names, TAG_CM);
     if (Entries) ExFreePoolWithTag(Entries, TAG_CM);
 

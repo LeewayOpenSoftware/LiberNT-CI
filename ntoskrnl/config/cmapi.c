@@ -1437,7 +1437,7 @@ DoAgain:
             goto Quickie;
         }
 
-        /* User data, protect against exceptions */
+        /* User data, protect against exceptions; written with the locks held, as CmQueryValueKey does */
         _SEH2_TRY
         {
             RtlCopyMemory((PUCHAR)ValueBuffer + ValueEntries[i].DataOffset,
