@@ -144,6 +144,39 @@ NpQueryClientProcess(IN PDEVICE_OBJECT DeviceObject,
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+NpQueryClientProcessV2(IN PDEVICE_OBJECT DeviceObject,
+                       IN PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    PFILE_PIPE_CLIENT_PROCESS_BUFFER_V2 QueryBuffer;
+    PNP_CCB Ccb;
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    if (IoStack->Parameters.FileSystemControl.OutputBufferLength != sizeof(FILE_PIPE_CLIENT_PROCESS_BUFFER_V2))
+        return STATUS_INVALID_PARAMETER;
+
+    if (NpDecodeFileObject(IoStack->FileObject, NULL, &Ccb, NULL) != NPFS_NTC_CCB)
+        return STATUS_PIPE_DISCONNECTED;
+
+    QueryBuffer = Irp->AssociatedIrp.SystemBuffer;
+    RtlZeroMemory(QueryBuffer, sizeof(*QueryBuffer));
+
+    ExAcquireResourceSharedLite(&Ccb->NonPagedCcb->Lock, TRUE);
+    if (Ccb->ClientSession)
+        QueryBuffer->ClientProcess = ((PNP_CLIENT_PROCESS)Ccb->ClientSession)->Process;
+    else
+        QueryBuffer->ClientProcess = (PVOID)(ULONG_PTR)Ccb->ClientProcessId;
+    ExReleaseResourceLite(&Ccb->NonPagedCcb->Lock);
+
+    Irp->IoStatus.Information = sizeof(*QueryBuffer);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 NpSetClientProcess(IN PDEVICE_OBJECT DeviceObject,
@@ -234,67 +267,194 @@ NpQueryEvent(IN PDEVICE_OBJECT DeviceObject,
 }
 
 static
-NTSTATUS
-NpGetConnectionAttribute(IN PDEVICE_OBJECT DeviceObject,
-                         IN PIRP Irp)
+BOOLEAN
+NpIsAttributeName(IN PCSTR Name,
+                  IN ULONG NameLength,
+                  IN PCSTR BuiltInName)
 {
-    static const struct
-    {
-        PCSTR Name;
-        BOOLEAN Client;
-        BOOLEAN Session;
-    } Attributes[] =
-    {
-        { "ClientProcessId", TRUE, FALSE },
-        { "ClientSessionId", TRUE, TRUE },
-        { "ServerProcessId", FALSE, FALSE },
-        { "ServerSessionId", FALSE, TRUE },
-    };
-    PIO_STACK_LOCATION IoStack;
+    return NameLength == strlen(BuiltInName) && RtlEqualMemory(Name, BuiltInName, NameLength);
+}
+
+static
+NTSTATUS
+NpDecodeAttributeTarget(IN PIRP Irp,
+                        OUT PNP_CCB *Ccb,
+                        OUT PULONG NamedPipeEnd)
+{
     NODE_TYPE_CODE NodeTypeCode;
-    ULONG NamedPipeEnd, NameLength, i;
+
+    NodeTypeCode = NpDecodeFileObject(IoGetCurrentIrpStackLocation(Irp)->FileObject, NULL, Ccb, NamedPipeEnd);
+    if (NodeTypeCode == 0) return STATUS_PIPE_DISCONNECTED;
+    if (NodeTypeCode != NPFS_NTC_CCB) return STATUS_INVALID_PARAMETER;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NpGetPipeAttribute(IN PDEVICE_OBJECT DeviceObject,
+                   IN PIRP Irp)
+{
+    ULONG NamedPipeEnd, NameLength;
     PNP_CCB Ccb;
     PCSTR Name;
+    NTSTATUS Status;
     PAGED_CODE();
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    IoStack = IoGetCurrentIrpStackLocation(Irp);
-    NodeTypeCode = NpDecodeFileObject(IoStack->FileObject, NULL, &Ccb, &NamedPipeEnd);
-    if (NodeTypeCode == 0) return STATUS_PIPE_DISCONNECTED;
-    if (NodeTypeCode != NPFS_NTC_CCB) return STATUS_INVALID_PARAMETER;
+    Status = NpDecodeAttributeTarget(Irp, &Ccb, &NamedPipeEnd);
+    if (!NT_SUCCESS(Status)) return Status;
 
-    Name = Irp->AssociatedIrp.SystemBuffer;
-    NameLength = IoStack->Parameters.FileSystemControl.InputBufferLength;
-    if (!Name || !NameLength || Name[NameLength - 1] != ANSI_NULL) return STATUS_INVALID_PARAMETER;
+    Status = NpParseAttributeName(Irp, &Name, &NameLength);
+    if (!NT_SUCCESS(Status)) return Status;
 
-    for (i = 0; i < RTL_NUMBER_OF(Attributes); i++)
+    if (NpIsAttributeName(Name, NameLength, "ServerProcessId"))
+        return NpGetBuiltInAttribute(Ccb->ServerProcessId, Irp);
+    if (NpIsAttributeName(Name, NameLength, "ServerSessionId"))
+        return NpGetBuiltInAttribute(Ccb->ServerSessionId, Irp);
+
+    return NpGetAttribute(&Ccb->Fcb->PipeAttributes, Name, NameLength, Irp);
+}
+
+static
+NTSTATUS
+NpSetPipeAttribute(IN PDEVICE_OBJECT DeviceObject,
+                   IN PIRP Irp)
+{
+    ULONG NamedPipeEnd, NameLength;
+    PNP_CCB Ccb;
+    PCSTR Name;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    Status = NpDecodeAttributeTarget(Irp, &Ccb, &NamedPipeEnd);
+    if (!NT_SUCCESS(Status)) return Status;
+    if (NamedPipeEnd != FILE_PIPE_SERVER_END) return STATUS_ACCESS_DENIED;
+
+    Status = NpParseAttributeName(Irp, &Name, &NameLength);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    if (NpIsAttributeName(Name, NameLength, "ServerProcessId") ||
+        NpIsAttributeName(Name, NameLength, "ServerSessionId"))
     {
-        if (strcmp(Name, Attributes[i].Name) == 0) break;
+        return STATUS_ACCESS_DENIED;
     }
-    if (i == RTL_NUMBER_OF(Attributes)) return STATUS_NOT_FOUND;
 
-    if (NamedPipeEnd == FILE_PIPE_CLIENT_END)
-    {
-        if (Ccb->NamedPipeState == FILE_PIPE_DISCONNECTED_STATE) return STATUS_PIPE_DISCONNECTED;
-    }
-    else if (Attributes[i].Client &&
-             (Ccb->NamedPipeState == FILE_PIPE_DISCONNECTED_STATE ||
-              Ccb->NamedPipeState == FILE_PIPE_LISTENING_STATE))
-    {
+    return NpSetAttribute(&Ccb->Fcb->PipeAttributes, Irp);
+}
+
+static
+NTSTATUS
+NpGetHandleAttribute(IN PDEVICE_OBJECT DeviceObject,
+                     IN PIRP Irp)
+{
+    ULONG NamedPipeEnd, NameLength;
+    PNP_CCB Ccb;
+    PCSTR Name;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    Status = NpDecodeAttributeTarget(Irp, &Ccb, &NamedPipeEnd);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Status = NpParseAttributeName(Irp, &Name, &NameLength);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    return NpGetAttribute(&Ccb->HandleAttributes[NamedPipeEnd], Name, NameLength, Irp);
+}
+
+static
+NTSTATUS
+NpSetHandleAttribute(IN PDEVICE_OBJECT DeviceObject,
+                     IN PIRP Irp)
+{
+    ULONG NamedPipeEnd;
+    PNP_CCB Ccb;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    Status = NpDecodeAttributeTarget(Irp, &Ccb, &NamedPipeEnd);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    return NpSetAttribute(&Ccb->HandleAttributes[NamedPipeEnd], Irp);
+}
+
+static
+NTSTATUS
+NpGetConnectionAttribute(IN PDEVICE_OBJECT DeviceObject,
+                         IN PIRP Irp)
+{
+    ULONG NamedPipeEnd, NameLength;
+    BOOLEAN Session;
+    PNP_CCB Ccb;
+    PCSTR Name;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    Status = NpDecodeAttributeTarget(Irp, &Ccb, &NamedPipeEnd);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    Status = NpParseAttributeName(Irp, &Name, &NameLength);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    if (NamedPipeEnd == FILE_PIPE_CLIENT_END && Ccb->NamedPipeState == FILE_PIPE_DISCONNECTED_STATE)
+        return STATUS_PIPE_DISCONNECTED;
+
+    /* TODO: ClientComputerName of a remote client set through FSCTL_PIPE_SET_CLIENT_PROCESS */
+    if (NpIsAttributeName(Name, NameLength, "ClientComputerName"))
         return STATUS_NOT_FOUND;
+
+    Session = NpIsAttributeName(Name, NameLength, "ClientSessionId");
+    if (Session || NpIsAttributeName(Name, NameLength, "ClientProcessId"))
+    {
+        if (NamedPipeEnd == FILE_PIPE_SERVER_END &&
+            (Ccb->NamedPipeState == FILE_PIPE_DISCONNECTED_STATE ||
+             Ccb->NamedPipeState == FILE_PIPE_LISTENING_STATE))
+        {
+            return STATUS_NOT_FOUND;
+        }
+        return NpGetBuiltInAttribute(Session ? Ccb->ClientSessionId : Ccb->ClientProcessId, Irp);
     }
 
-    if (IoStack->Parameters.FileSystemControl.OutputBufferLength < sizeof(ULONG))
-        return STATUS_BUFFER_TOO_SMALL;
+    return NpGetAttribute(&Ccb->ConnectionAttributes, Name, NameLength, Irp);
+}
 
-    if (Attributes[i].Client)
-        *(PULONG)Irp->AssociatedIrp.SystemBuffer = Attributes[i].Session ? Ccb->ClientSessionId : Ccb->ClientProcessId;
-    else
-        *(PULONG)Irp->AssociatedIrp.SystemBuffer = Attributes[i].Session ? Ccb->ServerSessionId : Ccb->ServerProcessId;
+static
+NTSTATUS
+NpSetConnectionAttribute(IN PDEVICE_OBJECT DeviceObject,
+                         IN PIRP Irp)
+{
+    ULONG NamedPipeEnd, NameLength;
+    PNP_CCB Ccb;
+    PCSTR Name;
+    NTSTATUS Status;
+    PAGED_CODE();
 
-    Irp->IoStatus.Information = sizeof(ULONG);
-    return STATUS_SUCCESS;
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    Status = NpDecodeAttributeTarget(Irp, &Ccb, &NamedPipeEnd);
+    if (!NT_SUCCESS(Status)) return Status;
+    if (NamedPipeEnd != FILE_PIPE_SERVER_END) return STATUS_ACCESS_DENIED;
+
+    Status = NpParseAttributeName(Irp, &Name, &NameLength);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    if (NpIsAttributeName(Name, NameLength, "ClientProcessId") ||
+        NpIsAttributeName(Name, NameLength, "ClientSessionId") ||
+        NpIsAttributeName(Name, NameLength, "ClientComputerName"))
+    {
+        return STATUS_ACCESS_DENIED;
+    }
+
+    return NpSetAttribute(&Ccb->ConnectionAttributes, Irp);
 }
 
 NTSTATUS
@@ -875,6 +1035,11 @@ NpCommonFileSystemControl(IN PDEVICE_OBJECT DeviceObject,
             Status = NpQueryClientProcess(DeviceObject, Irp);
             break;
 
+        case FSCTL_PIPE_QUERY_CLIENT_PROCESS_V2:
+            NpAcquireSharedVcb();
+            Status = NpQueryClientProcessV2(DeviceObject, Irp);
+            break;
+
         case FSCTL_PIPE_ASSIGN_EVENT:
 
             NpAcquireExclusiveVcb();
@@ -916,9 +1081,34 @@ NpCommonFileSystemControl(IN PDEVICE_OBJECT DeviceObject,
             Status = NpSetClientProcess(DeviceObject, Irp);
             break;
 
+        case FSCTL_PIPE_GET_PIPE_ATTRIBUTE:
+            NpAcquireSharedVcb();
+            Status = NpGetPipeAttribute(DeviceObject, Irp);
+            break;
+
+        case FSCTL_PIPE_SET_PIPE_ATTRIBUTE:
+            NpAcquireExclusiveVcb();
+            Status = NpSetPipeAttribute(DeviceObject, Irp);
+            break;
+
         case FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE:
             NpAcquireSharedVcb();
             Status = NpGetConnectionAttribute(DeviceObject, Irp);
+            break;
+
+        case FSCTL_PIPE_SET_CONNECTION_ATTRIBUTE:
+            NpAcquireExclusiveVcb();
+            Status = NpSetConnectionAttribute(DeviceObject, Irp);
+            break;
+
+        case FSCTL_PIPE_GET_HANDLE_ATTRIBUTE:
+            NpAcquireSharedVcb();
+            Status = NpGetHandleAttribute(DeviceObject, Irp);
+            break;
+
+        case FSCTL_PIPE_SET_HANDLE_ATTRIBUTE:
+            NpAcquireExclusiveVcb();
+            Status = NpSetHandleAttribute(DeviceObject, Irp);
             break;
 
         default:

@@ -197,7 +197,16 @@ typedef struct _NP_CB_HEADER
     ULONG CurrentInstances;
     ULONG ServerOpenCount;
     PSECURITY_DESCRIPTOR SecurityDescriptor;
+    LIST_ENTRY PipeAttributes;
 } NP_CB_HEADER, *PNP_CB_HEADER;
+
+typedef struct _NP_ATTRIBUTE
+{
+    LIST_ENTRY Links;
+    ULONG NameLength;
+    ULONG ValueLength;
+    CHAR Data[ANYSIZE_ARRAY];
+} NP_ATTRIBUTE, *PNP_ATTRIBUTE;
 
 /* The footer that both FCB and DCB share */
 typedef struct _NP_CB_FOOTER
@@ -276,6 +285,8 @@ typedef struct _NP_CCB
     NP_DATA_QUEUE DataQueue[2];
     PSECURITY_CLIENT_CONTEXT ClientContext;
     LIST_ENTRY IrpList;
+    LIST_ENTRY ConnectionAttributes;
+    LIST_ENTRY HandleAttributes[2];
 } NP_CCB, *PNP_CCB;
 
 /* A Volume Control Block (VCB) */
@@ -468,6 +479,33 @@ VOID
 NTAPI
 NpDeleteCcb(IN PNP_CCB Ccb,
             IN PLIST_ENTRY ListEntry);
+
+NTSTATUS
+NTAPI
+NpParseAttributeName(IN PIRP Irp,
+                     OUT PCSTR *Name,
+                     OUT PULONG NameLength);
+
+NTSTATUS
+NTAPI
+NpSetAttribute(IN PLIST_ENTRY List,
+               IN PIRP Irp);
+
+NTSTATUS
+NTAPI
+NpGetAttribute(IN PLIST_ENTRY List,
+               IN PCSTR Name,
+               IN ULONG NameLength,
+               IN PIRP Irp);
+
+NTSTATUS
+NTAPI
+NpGetBuiltInAttribute(IN ULONG Value,
+                      IN PIRP Irp);
+
+VOID
+NTAPI
+NpFreeAttributes(IN PLIST_ENTRY List);
 
 VOID
 NTAPI

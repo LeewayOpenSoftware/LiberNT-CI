@@ -1423,6 +1423,7 @@ TransactNamedPipe(IN HANDLE hNamedPipe,
 static
 BOOL
 NpGetPipeAttribute(IN HANDLE hNamedPipe,
+                   IN ULONG FsControlCode,
                    IN PCSTR AttributeName,
                    IN ULONG AttributeNameSize,
                    OUT PULONG AttributeValue)
@@ -1430,7 +1431,7 @@ NpGetPipeAttribute(IN HANDLE hNamedPipe,
     IO_STATUS_BLOCK Iosb;
     NTSTATUS Status;
 
-    Status = NtFsControlFile(hNamedPipe, NULL, NULL, NULL, &Iosb, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, (PVOID)AttributeName, AttributeNameSize, AttributeValue, AttributeValue ? sizeof(*AttributeValue) : 0);
+    Status = NtFsControlFile(hNamedPipe, NULL, NULL, NULL, &Iosb, FsControlCode, (PVOID)AttributeName, AttributeNameSize, AttributeValue, AttributeValue ? sizeof(*AttributeValue) : 0);
     if (Status == STATUS_PENDING)
     {
         Status = NtWaitForSingleObject(hNamedPipe, FALSE, NULL);
@@ -1451,7 +1452,7 @@ WINAPI
 GetNamedPipeServerProcessId(IN HANDLE hNamedPipe,
                             OUT PULONG ServerProcessId)
 {
-    return NpGetPipeAttribute(hNamedPipe, "ServerProcessId", sizeof("ServerProcessId"), ServerProcessId);
+    return NpGetPipeAttribute(hNamedPipe, FSCTL_PIPE_GET_PIPE_ATTRIBUTE, "ServerProcessId", sizeof("ServerProcessId"), ServerProcessId);
 }
 
 BOOL
@@ -1459,7 +1460,7 @@ WINAPI
 GetNamedPipeServerSessionId(IN HANDLE hNamedPipe,
                             OUT PULONG ServerSessionId)
 {
-    return NpGetPipeAttribute(hNamedPipe, "ServerSessionId", sizeof("ServerSessionId"), ServerSessionId);
+    return NpGetPipeAttribute(hNamedPipe, FSCTL_PIPE_GET_PIPE_ATTRIBUTE, "ServerSessionId", sizeof("ServerSessionId"), ServerSessionId);
 }
 
 BOOL
@@ -1467,7 +1468,7 @@ WINAPI
 GetNamedPipeClientSessionId(IN HANDLE hNamedPipe,
                             OUT PULONG ClientSessionId)
 {
-    return NpGetPipeAttribute(hNamedPipe, "ClientSessionId", sizeof("ClientSessionId"), ClientSessionId);
+    return NpGetPipeAttribute(hNamedPipe, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, "ClientSessionId", sizeof("ClientSessionId"), ClientSessionId);
 }
 
 BOOL
