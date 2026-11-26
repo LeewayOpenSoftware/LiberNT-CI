@@ -554,7 +554,8 @@ PoolVsFree(
         }
     }
 
-    POOL_ASSERT(Decoded.Units <= Subsegment->TotalUnits);
+    if (Decoded.Units > Subsegment->TotalUnits)
+        KeBugCheckEx(BAD_POOL_HEADER, 0x32, (ULONG_PTR)Chunk, Decoded.Units, Subsegment->TotalUnits);
     POOL_ASSERT(Decoded.Units != Subsegment->TotalUnits ||
                 (Chunk == PoolVsFirstChunk(Subsegment) && Decoded.PrevUnits == 0 && Decoded.Last));
     Vs->Frees++;

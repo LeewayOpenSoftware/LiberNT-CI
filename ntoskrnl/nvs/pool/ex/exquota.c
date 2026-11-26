@@ -29,11 +29,18 @@ ExpPoolQuotaProcess(
     _In_ ULONG_PTR Trailer)
 {
     ULONG_PTR Value = Trailer ^ ExpPoolQuotaCookie ^ (ULONG_PTR)Block;
+    PEPROCESS Process = (PEPROCESS)Value;
 
-    if (Value == 0 || (Value & (MEMORY_ALLOCATION_ALIGNMENT - 1)) != 0)
+    if (Value == 0 ||
+        (Value & (MEMORY_ALLOCATION_ALIGNMENT - 1)) != 0 ||
+        Value < (ULONG_PTR)MmSystemRangeStart ||
+        !MmIsAddressValid(Process) ||
+        (Process->Pcb.Header.Type & KOBJECT_TYPE_MASK) != ProcessObject)
+    {
         KeBugCheckEx(BAD_POOL_HEADER, 0x24, (ULONG_PTR)Block, Trailer, 0);
+    }
 
-    return (PEPROCESS)Value;
+    return Process;
 }
 
 PVOID
