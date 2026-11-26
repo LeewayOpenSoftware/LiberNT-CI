@@ -36,6 +36,18 @@ static VOID TestEnableTraceEx2(VOID)
     SetLastError(0xDEADBEEF);
     Rs = SecHost(0, &TestGuid, EVENT_CONTROL_CODE_ENABLE_PROVIDER, 0, 0, 0, 0, NULL);
     ok(Ra == Rs, "EnableTraceEx2 result adv=%lu sec=%lu\n", Ra, Rs);
+
+    /* a filter count with a NULL descriptor is rejected, not faulted on */
+    {
+        ENABLE_TRACE_PARAMETERS Params;
+
+        ZeroMemory(&Params, sizeof(Params));
+        Params.Version = ENABLE_TRACE_PARAMETERS_VERSION;
+        Params.EnableFilterDescCount = 1;
+        Params.EnableFilterDesc = NULL;
+        Ra = AdvApi(0, &TestGuid, EVENT_CONTROL_CODE_ENABLE_PROVIDER, 0, 0, 0, 0, &Params);
+        ok(Ra == ERROR_INVALID_PARAMETER, "NULL filter descriptor: %lu\n", Ra);
+    }
 }
 
 static VOID TestOpenTraceW(VOID)

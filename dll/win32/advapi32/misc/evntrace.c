@@ -707,6 +707,8 @@ EnableTraceEx2(IN TRACEHANDLE TraceHandle,
             DescCount = EnableParameters->EnableFilterDescCount;
             if (DescCount > MAX_EVENT_FILTERS_COUNT)
                 return ERROR_INVALID_PARAMETER;
+            if (DescCount && !EnableParameters->EnableFilterDesc)
+                return ERROR_INVALID_PARAMETER;
         }
 
         RtlZeroMemory(&Params, sizeof(Params));
