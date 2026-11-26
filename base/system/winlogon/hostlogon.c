@@ -38,6 +38,7 @@ typedef struct _WLHL_SUBMIT
     WCHAR User[CREDSER_MAX_NAME_CHARS + 1];
     WCHAR Domain[CREDSER_MAX_NAME_CHARS + 1];
     WCHAR Password[CREDSER_MAX_PASSWORD_CHARS + 1];
+    WCHAR LogonServer[CREDSER_MAX_NAME_CHARS + 3];   /* "\\<server>" for the session's LOGONSERVER */
 } WLHL_SUBMIT;
 
 static PWLSESSION g_Session;
@@ -278,7 +279,8 @@ WlHlLsaLogon(
     _In_ BOOL Unlock,
     _Out_ PHANDLE Token,
     _Out_ PLUID LogonId,
-    _Out_ PNTSTATUS SubStatus)
+    _Out_ PNTSTATUS SubStatus,
+    _Out_writes_opt_z_(CREDSER_MAX_NAME_CHARS + 3) PWSTR LogonServer)
 {
     PMSV1_0_INTERACTIVE_LOGON Msv = NULL;
     PTOKEN_GROUPS Groups;
@@ -291,6 +293,8 @@ WlHlLsaLogon(
 
     *Token = NULL;
     *SubStatus = STATUS_SUCCESS;
+    if (LogonServer != NULL)
+        LogonServer[0] = UNICODE_NULL;
     Status = CredSerBuildMsv1_0Logon(Logon, &Msv, &MsvSize);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -306,12 +310,66 @@ WlHlLsaLogon(
                                    &Profile, &ProfileSize, LogonId, Token, &Quotas, SubStatus)
                     : (NTSTATUS)STATUS_NO_MEMORY;
     WlHlFreeLogonGroups(Groups);
+    /* Keep the MSV1_0 profile's LogonServer before the buffer is freed; msgina lsa.c:235
+     * receives the same field. For a local account it is \\<COMPUTERNAME>; empty when the
+     * package named none, in which case WlHlBuildVolatileEnv falls back to the computer name. */
+    if (NT_SUCCESS(Status) && LogonServer != NULL && Profile != NULL &&
+        ProfileSize >= sizeof(MSV1_0_INTERACTIVE_PROFILE))
+    {
+        PMSV1_0_INTERACTIVE_PROFILE Ip = (PMSV1_0_INTERACTIVE_PROFILE)Profile;
+        if (Ip->LogonServer.Buffer != NULL && Ip->LogonServer.Length >= sizeof(WCHAR))
+        {
+            SIZE_T Chars = Ip->LogonServer.Length / sizeof(WCHAR);
+            if (Chars > CREDSER_MAX_NAME_CHARS + 2)
+                Chars = CREDSER_MAX_NAME_CHARS + 2;
+            CopyMemory(LogonServer, Ip->LogonServer.Buffer, Chars * sizeof(WCHAR));
+            LogonServer[Chars] = UNICODE_NULL;
+        }
+    }
     if (Profile)
         LsaFreeReturnBuffer(Profile);
     CredSerFree(Msv, MsvSize);
     if (NT_SUCCESS(Status) && !WlHlTokenHasLogonSid(*Token))
         ERR("WL: logon token carries no logon SID; AllowAccessOnSession will refuse it\n");
     return Status;
+}
+
+/* The pszEnvironment block winlogon hands BuildVolatileEnvironment, carrying LOGONSERVER the
+ * way msgina does (msgina.c:1105-1127). The host path otherwise leaves pszEnvironment NULL, so
+ * the session never got LOGONSERVER (B.4.1). LogonServer is the MSV1_0 profile value when the
+ * package set one; for a local account that is \\<COMPUTERNAME>, matched by the fallback. */
+static PWSTR
+WlHlBuildVolatileEnv(
+    _In_opt_ PCWSTR LogonServer)
+{
+    WCHAR Value[CREDSER_MAX_NAME_CHARS + 3];
+    WCHAR Line[CREDSER_MAX_NAME_CHARS + 16];
+    SIZE_T Len;
+    PWSTR Block;
+
+    if (LogonServer != NULL && LogonServer[0] != UNICODE_NULL)
+    {
+        StringCchCopyW(Value, ARRAYSIZE(Value), LogonServer);
+    }
+    else
+    {
+        DWORD Count = ARRAYSIZE(Value) - 2;
+        Value[0] = L'\\';
+        Value[1] = L'\\';
+        if (!GetComputerNameW(&Value[2], &Count))
+            return NULL;
+    }
+
+    if (FAILED(StringCchPrintfW(Line, ARRAYSIZE(Line), L"LOGONSERVER=%s", Value)))
+        return NULL;
+
+    /* A double-NUL-terminated block of one KEY=VALUE pair; +2 holds both NULs, which the
+     * zero-init supplies. LocalAlloc so winlogon's FreeWlxProfileInfo LocalFree matches. */
+    Len = wcslen(Line);
+    Block = LocalAlloc(LMEM_FIXED | LMEM_ZEROINIT, (Len + 2) * sizeof(WCHAR));
+    if (Block != NULL)
+        CopyMemory(Block, Line, Len * sizeof(WCHAR));
+    return Block;
 }
 
 /* msgina lsa.c MyChangePassword: the MSV1_0 change request, built from the captured copy. */
@@ -431,7 +489,8 @@ WlHlFinishLogon(
     _In_opt_ HANDLE Token,
     _In_ const LUID *LogonId,
     _In_ const CREDSER_LOGON *Logon,
-    _In_ UINT TextId)
+    _In_ UINT TextId,
+    _In_opt_ PCWSTR LogonServer)
 {
     EnterCriticalSection(&g_SubmitLock);
     if (!g_Accepting)
@@ -460,6 +519,9 @@ WlHlFinishLogon(
         g_Submit.LogonId = *LogonId;
         /* The network-provider notification (MPR) still wants the password; it is wiped after use. */
         WlHlCopyString(&Logon->Password, g_Submit.Password, ARRAYSIZE(g_Submit.Password));
+        /* LOGONSERVER for the session env; empty means the consumer uses \\<COMPUTERNAME>. */
+        if (LogonServer != NULL && LogonServer[0] != UNICODE_NULL)
+            StringCchCopyW(g_Submit.LogonServer, ARRAYSIZE(g_Submit.LogonServer), LogonServer);
     }
     LeaveCriticalSection(&g_SubmitLock);
     SetEvent(g_SubmitEvent);
@@ -512,10 +574,11 @@ WlHlHandleLogon(
     NTSTATUS Status, SubStatus = STATUS_SUCCESS;
 
     UINT TextId = 0;
+    WCHAR LogonServer[CREDSER_MAX_NAME_CHARS + 3];
 
     if (!NT_SUCCESS(CredSerUnpackLogon(Copy, Size, &Logon)))
         return ERROR_INVALID_PARAMETER;
-    Status = WlHlLsaLogon(&Logon, Unlock, &Token, &LogonId, &SubStatus);
+    Status = WlHlLsaLogon(&Logon, Unlock, &Token, &LogonId, &SubStatus, LogonServer);
     if (!Unlock && NT_SUCCESS(Status) && WlHlSafeModeBlocksNonAdmins() && !WlHlTokenIsAdmin(Token))
     {
         ERR("WL: safe mode: non-administrator logon refused (SafeModeBlockNonAdmins)\n");
@@ -527,7 +590,7 @@ WlHlHandleLogon(
     if (Unlock)
         WlHlFinishUnlock(Status, SubStatus, Token);
     else
-        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, TextId);
+        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, TextId, LogonServer);
     return ERROR_SUCCESS;
 }
 
@@ -544,6 +607,7 @@ WlHlHandleChange(
     HANDLE Token = NULL;
     LUID LogonId;
     NTSTATUS Status, SubStatus = STATUS_SUCCESS;
+    WCHAR LogonServer[CREDSER_MAX_NAME_CHARS + 3];
 
     if (!NT_SUCCESS(CredSerUnpackChangePassword(Copy, Size, &Change)))
         return ERROR_INVALID_PARAMETER;
@@ -559,11 +623,11 @@ WlHlHandleChange(
     Logon.LogonDomainName = Change.DomainName;
     Logon.UserName = Change.AccountName;
     Logon.Password = Change.NewPassword;
-    Status = WlHlLsaLogon(&Logon, Resume == WLHL_CPUS_UNLOCK, &Token, &LogonId, &SubStatus);
+    Status = WlHlLsaLogon(&Logon, Resume == WLHL_CPUS_UNLOCK, &Token, &LogonId, &SubStatus, LogonServer);
     if (Resume == WLHL_CPUS_UNLOCK)
         WlHlFinishUnlock(Status, SubStatus, Token);
     else
-        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, 0);
+        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, 0, LogonServer);
     return ERROR_SUCCESS;
 }
 
@@ -1215,7 +1279,13 @@ WlHostLoggedOutSas(
         Session->MprNotifyInfo.pszOldPassword = NULL;
         Session->Profile = LocalAlloc(LMEM_FIXED | LMEM_ZEROINIT, sizeof(WLX_PROFILE_V2_0));
         if (Session->Profile)
+        {
             Session->Profile->dwType = WLX_PROFILE_TYPE_V2_0;   /* local account: default paths */
+            /* Hand winlogon LOGONSERVER the way msgina does: BuildVolatileEnvironment turns
+             * pszEnvironment into the Volatile Environment key, so userenv gives the session
+             * LOGONSERVER=\\<COMPUTERNAME> for a local account (B.4.1). */
+            Session->Profile->pszEnvironment = WlHlBuildVolatileEnv(g_Submit.LogonServer);
+        }
         SecureZeroMemory(g_Submit.Password, sizeof(g_Submit.Password));
         g_Submit.Token = NULL;
         g_ChangeFor = 0;
