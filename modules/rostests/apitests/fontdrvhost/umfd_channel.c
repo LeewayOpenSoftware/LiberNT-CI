@@ -27,6 +27,7 @@ static DWORD good_size;
 
 static DWORD register_in_session(DWORD session, DWORD *pid);
 static int launcher_logged(const WCHAR *text);
+static DWORD launcher_count(const WCHAR *text, DWORD within_s);
 
 static void report_status(DWORD state, DWORD win32_error, DWORD specific)
 {
@@ -826,32 +827,68 @@ START_TEST(umfd_launcher)
         ok(logon_sessions() <= sessions, "logon sessions grew from %lu over %lu host restarts\n", sessions, restarts);
 }
 
-/* 1 if an event 4002 carries text, -1 if none does, 0 if the log cannot be read */
-static int launcher_logged(const WCHAR *text)
+/* Seconds since 1970 now and at this boot, as in EVENTLOGRECORD.TimeGenerated */
+static DWORD unix_now(void)
+{
+    return (DWORD)(now_filetime() / 10000000 - 11644473600ULL);
+}
+
+static DWORD boot_time(void)
+{
+    /* A second of slack: the tick count and the clock are read apart */
+    return unix_now() - (DWORD)(GetTickCount64() / 1000) - 1;
+}
+
+/*
+ * Winlogon's events 4002 of this boot that carry text and were logged in the last within_s seconds
+ * (0: the whole boot). The log keeps earlier boots, so older records never count. (DWORD)-1 if the
+ * log cannot be read.
+ */
+static DWORD launcher_count(const WCHAR *text, DWORD within_s)
 {
     BYTE buf[0x10000];
-    DWORD read, needed, off;
+    DWORD read, needed, off, count = 0, from = boot_time();
     HANDLE log = OpenEventLogW(NULL, L"Application");
-    int found = -1;
 
     if (!log)
-        return 0;
-    while (found < 0 && ReadEventLogW(log, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_BACKWARDS_READ, 0,
-                                      buf, sizeof(buf), &read, &needed))
+        return (DWORD)-1;
+    if (within_s && unix_now() - within_s > from)
+        from = unix_now() - within_s;
+    while (ReadEventLogW(log, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_FORWARDS_READ, 0, buf, sizeof(buf), &read, &needed))
     {
-        for (off = 0; off < read && found < 0; off += ((EVENTLOGRECORD *)(buf + off))->Length)
+        for (off = 0; off + sizeof(EVENTLOGRECORD) <= read; off += ((EVENTLOGRECORD *)(buf + off))->Length)
         {
             EVENTLOGRECORD *rec = (EVENTLOGRECORD *)(buf + off);
-            if ((rec->EventID & 0xFFFF) == 4002 && rec->NumStrings &&
+
+            if (rec->Length < sizeof(EVENTLOGRECORD) || rec->Length > read - off)
+                break;
+            if ((rec->EventID & 0xFFFF) == 4002 && rec->NumStrings && rec->TimeGenerated >= from &&
+                rec->StringOffset >= sizeof(EVENTLOGRECORD) && rec->StringOffset < rec->Length &&
+                !lstrcmpiW((WCHAR *)((BYTE *)rec + sizeof(EVENTLOGRECORD)), L"Winlogon") &&
                 wcsstr((WCHAR *)((BYTE *)rec + rec->StringOffset), text))
-                found = 1;
+            {
+                ++count;
+            }
         }
     }
     CloseEventLog(log);
-    return found < 0 ? -1 : 1;
+    return count;
 }
 
-/* Destructive: leaves mode 1 refusing every added font until reboot, so the leg runs it last */
+/* 1 if an event 4002 of this boot carries text, -1 if none does, 0 if the log cannot be read */
+static int launcher_logged(const WCHAR *text)
+{
+    DWORD count = launcher_count(text, 0);
+
+    if (count == (DWORD)-1)
+        return 0;
+    return count ? 1 : -1;
+}
+
+/*
+ * Destructive: leaves mode 1 refusing every added font until reboot, so it runs first in a boot of its
+ * own. Abnormal ends earlier in the boot (other tests' kills) spend the same 5-in-10-minutes budget.
+ */
 START_TEST(umfd_launcher_cap)
 {
     DWORD pid = 0, ends, ms;
@@ -861,6 +898,25 @@ START_TEST(umfd_launcher_cap)
     if (!is_reactos() || umfd_mode() != 1 || !can_run_launcher())
     {
         skip("needs Orosi in mode 1, elevated\n");
+        return;
+    }
+    /* The budget is not reset by design: a boot that already spent it cannot test the cap */
+    if (launcher_logged(L"not relaunched") > 0)
+    {
+        trace_launcher_events();
+        skip("the launcher already capped in this boot: run this test first, in a boot of its own\n");
+        return;
+    }
+    /* A recycle over its own rate is an abnormal end too */
+    ends = launcher_count(L"ended abnormally", 10 * 60);
+    pid = launcher_count(L"recycle rate exceeded", 10 * 60);
+    if (ends != (DWORD)-1 && pid != (DWORD)-1)
+        ends += pid;
+    pid = 0;
+    if (ends != (DWORD)-1 && ends > 0)
+    {
+        trace_launcher_events();
+        skip("%lu abnormal host ends in the last 10 minutes of this boot spend the cap budget: run this test first, in a boot of its own\n", ends);
         return;
     }
 #ifdef UMFD_TEST_HOOKS
