@@ -125,7 +125,7 @@ BuildInteractiveProfileBuffer(IN PLSA_CLIENT_REQUEST ClientRequest,
                    UserInfo->All.HomeDirectoryDrive.Length + sizeof(WCHAR) +
                    UserInfo->All.ScriptPath.Length + sizeof(WCHAR) +
                    UserInfo->All.ProfilePath.Length + sizeof(WCHAR) +
-                   ((ComputerNameLength + 3) * sizeof(WCHAR));
+                   ((ComputerNameLength + 1) * sizeof(WCHAR));
 
     LocalBuffer = DispatchTable.AllocateLsaHeap(BufferLength);
     if (LocalBuffer == NULL)
@@ -216,11 +216,12 @@ BuildInteractiveProfileBuffer(IN PLSA_CLIENT_REQUEST ClientRequest,
 
     Ptr = (LPWSTR)((ULONG_PTR)Ptr + LocalBuffer->HomeDirectoryDrive.MaximumLength);
 
-    LocalBuffer->LogonServer.Length = (ComputerNameLength + 2) * sizeof(WCHAR);
+    LocalBuffer->LogonServer.Length = ComputerNameLength * sizeof(WCHAR);
     LocalBuffer->LogonServer.MaximumLength = LocalBuffer->LogonServer.Length + sizeof(WCHAR);
     LocalBuffer->LogonServer.Buffer = (LPWSTR)((ULONG_PTR)ClientBaseAddress + (ULONG_PTR)Ptr - (ULONG_PTR)LocalBuffer);
-    wcscpy(Ptr, L"\\\\");
-    wcscat(Ptr, ComputerName);
+    /* Win11 stores the bare computer name here (no backslashes); the
+     * LOGONSERVER consumer adds the \\ UNC prefix. */
+    wcscpy(Ptr, ComputerName);
 
     LocalBuffer->UserFlags = 0;
 

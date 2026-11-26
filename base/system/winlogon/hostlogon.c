@@ -38,7 +38,7 @@ typedef struct _WLHL_SUBMIT
     WCHAR User[CREDSER_MAX_NAME_CHARS + 1];
     WCHAR Domain[CREDSER_MAX_NAME_CHARS + 1];
     WCHAR Password[CREDSER_MAX_PASSWORD_CHARS + 1];
-    WCHAR LogonServer[CREDSER_MAX_NAME_CHARS + 3];   /* "\\<server>" for the session's LOGONSERVER */
+    WCHAR LogonServer[CREDSER_MAX_NAME_CHARS + 3];   /* bare <server> from the profile; \\ prepended for LOGONSERVER */
 } WLHL_SUBMIT;
 
 static PWLSESSION g_Session;
@@ -311,8 +311,9 @@ WlHlLsaLogon(
                     : (NTSTATUS)STATUS_NO_MEMORY;
     WlHlFreeLogonGroups(Groups);
     /* Keep the MSV1_0 profile's LogonServer before the buffer is freed; msgina lsa.c:235
-     * receives the same field. For a local account it is \\<COMPUTERNAME>; empty when the
-     * package named none, in which case WlHlBuildVolatileEnv falls back to the computer name. */
+     * receives the same field. On Win11 it is the bare <COMPUTERNAME> (no backslashes);
+     * WlHlBuildVolatileEnv prepends the \\ prefix. Empty when the package named none, in
+     * which case WlHlBuildVolatileEnv falls back to the computer name. */
     if (NT_SUCCESS(Status) && LogonServer != NULL && Profile != NULL &&
         ProfileSize >= sizeof(MSV1_0_INTERACTIVE_PROFILE))
     {
@@ -337,7 +338,7 @@ WlHlLsaLogon(
 /* The pszEnvironment block winlogon hands BuildVolatileEnvironment, carrying LOGONSERVER the
  * way msgina does (msgina.c:1105-1127). The host path otherwise leaves pszEnvironment NULL, so
  * the session never got LOGONSERVER (B.4.1). LogonServer is the MSV1_0 profile value when the
- * package set one; for a local account that is \\<COMPUTERNAME>, matched by the fallback. */
+ * package set one (the bare computer name on Win11), to which this prepends the \\ UNC prefix; the fallback builds \\<COMPUTERNAME> directly when the package named none. */
 static PWSTR
 WlHlBuildVolatileEnv(
     _In_opt_ PCWSTR LogonServer)
@@ -349,7 +350,17 @@ WlHlBuildVolatileEnv(
 
     if (LogonServer != NULL && LogonServer[0] != UNICODE_NULL)
     {
-        StringCchCopyW(Value, ARRAYSIZE(Value), LogonServer);
+        /* Win11's MSV1_0 profile LogonServer is the bare computer name; LOGONSERVER
+         * takes the \\<server> UNC form, so prepend the backslash pair unless the
+         * package already supplied one (as msgina does, msgina.c:1127). */
+        if (LogonServer[0] == L'\\')
+        {
+            StringCchCopyW(Value, ARRAYSIZE(Value), LogonServer);
+        }
+        else if (FAILED(StringCchPrintfW(Value, ARRAYSIZE(Value), L"\\\\%s", LogonServer)))
+        {
+            return NULL;
+        }
     }
     else
     {
