@@ -55,7 +55,6 @@ extern POBJECT_TYPE NTSYSAPI IoDriverObjectType;
 #define SYMBOLIC_LINK_QUERY                     0x0001
 #define SYMBOLIC_LINK_SET                       0x0002
 #define SYMBOLIC_LINK_ALL_ACCESS                STANDARD_RIGHTS_REQUIRED | 0x0001
-#define SYMBOLIC_LINK_ALL_ACCESS_EX             STANDARD_RIGHTS_REQUIRED | 0xFFFF
 #endif
 
 #ifdef NTOS_MODE_USER
