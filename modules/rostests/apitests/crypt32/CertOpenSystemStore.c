@@ -338,6 +338,52 @@ Cleanup:
         CryptReleaseContext(prov, 0);
 }
 
+/*
+ * A CurrentUser system store includes the LocalMachine store of the same name
+ * as a read-only physical store. A standard user cannot open HKLM for writing,
+ * so this also checks that the machine store is not opened for writing.
+ */
+static
+void
+CheckLocalMachineInCurrentUser(
+    _In_ PCWSTR Name,
+    _In_ BOOL MustHaveCerts)
+{
+    HCERTSTORE machine, user;
+    PCCERT_CONTEXT cert = NULL, found;
+    DWORD count = 0, missing = 0;
+
+    machine = CertOpenStore(CERT_STORE_PROV_SYSTEM_W, 0, 0,
+                            CERT_SYSTEM_STORE_LOCAL_MACHINE |
+                            CERT_STORE_READONLY_FLAG |
+                            CERT_STORE_OPEN_EXISTING_FLAG, Name);
+    ok(machine != NULL, "LocalMachine %ls open failed: %lu\n", Name, GetLastError());
+    user = CertOpenSystemStoreW(0, Name);
+    ok(user != NULL, "CurrentUser %ls open failed: %lu\n", Name, GetLastError());
+    if (machine && user)
+    {
+        while ((cert = CertEnumCertificatesInStore(machine, cert)) != NULL)
+        {
+            count++;
+            found = CertFindCertificateInStore(user,
+                                               X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                                               0, CERT_FIND_EXISTING, cert, NULL);
+            if (found)
+                CertFreeCertificateContext(found);
+            else
+                missing++;
+        }
+        ok(missing == 0, "%lu of %lu LocalMachine %ls certificates missing from CurrentUser %ls\n",
+           missing, count, Name, Name);
+        if (MustHaveCerts)
+            ok(count > 0, "LocalMachine %ls store is empty\n", Name);
+    }
+    if (user)
+        CertCloseStore(user, 0);
+    if (machine)
+        CertCloseStore(machine, 0);
+}
+
 START_TEST(CertOpenSystemStore)
 {
     HCERTSTORE root, authRoot;
@@ -345,6 +391,8 @@ START_TEST(CertOpenSystemStore)
     DWORD authCount = 0, before, after;
 
     CheckStagedAuthRoot();
+    CheckLocalMachineInCurrentUser(L"AuthRoot", TRUE);
+    CheckLocalMachineInCurrentUser(L"Root", FALSE);
 
     authRoot = CertOpenSystemStoreW(0, L"AuthRoot");
     root = CertOpenSystemStoreW(0, L"Root");

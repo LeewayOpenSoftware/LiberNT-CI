@@ -637,20 +637,23 @@ static WINECRYPT_CERTSTORE *CRYPT_SysOpenStoreW(HCRYPTPROV hCryptProv,
              CERT_PHYSICAL_STORE_ADD_ENABLE_FLAG, 0);
             CertCloseStore(regStore, 0);
             /* CERT_SYSTEM_STORE_CURRENT_USER returns both the HKCU and HKLM
-             * stores.
+             * stores. The HKLM store is the read-only .LocalMachine physical
+             * store: users may only read it, and writes go to HKCU.
              */
-            if ((dwFlags & CERT_SYSTEM_STORE_LOCATION_MASK) ==
-             CERT_SYSTEM_STORE_CURRENT_USER)
+            if (location == CERT_SYSTEM_STORE_CURRENT_USER)
             {
-                dwFlags &= ~CERT_SYSTEM_STORE_CURRENT_USER;
-                dwFlags |= CERT_SYSTEM_STORE_LOCAL_MACHINE;
+                DWORD machineFlags = dwFlags;
+
+                machineFlags &= ~(CERT_SYSTEM_STORE_LOCATION_MASK |
+                                  CERT_STORE_CREATE_NEW_FLAG);
+                machineFlags |= CERT_SYSTEM_STORE_LOCAL_MACHINE |
+                                CERT_STORE_READONLY_FLAG |
+                                CERT_STORE_OPEN_EXISTING_FLAG;
                 regStore = CertOpenStore(CERT_STORE_PROV_SYSTEM_REGISTRY_W, 0,
-                 0, dwFlags, pvPara);
+                 0, machineFlags, pvPara);
                 if (regStore)
                 {
-                    CertAddStoreToCollection(store, regStore,
-                     dwFlags & CERT_STORE_READONLY_FLAG ? 0 :
-                     CERT_PHYSICAL_STORE_ADD_ENABLE_FLAG, 0);
+                    CertAddStoreToCollection(store, regStore, 0, 0);
                     CertCloseStore(regStore, 0);
                 }
             }
@@ -659,8 +662,7 @@ static WINECRYPT_CERTSTORE *CRYPT_SysOpenStoreW(HCRYPTPROV hCryptProv,
                 CryptReleaseContext(hCryptProv, 0);
             /* The Root logical store aggregates AuthRoot as a read-only
              * physical store, matching Windows Vista and later. It is opened
-             * with the caller's original location (dwFlags was switched to
-             * the machine store above for a CurrentUser open), and read-only,
+             * with the caller's location, and read-only,
              * because a delete through the collection reaches the child store
              * whatever its update flags.
              */
