@@ -960,6 +960,16 @@ RtlIsValidLocaleName(
                                                    Flags & RTL_LOCALE_ALLOW_NEUTRAL_NAMES));
 }
 
+/*
+ * @implemented
+ *
+ * Writes LcidValue in Base (0 means 10; 2, 8, 10 and 16 are accepted;
+ * upper-case hex digits), left-padded with zeros to Padding characters.
+ * Size is in WCHARs and counts the terminating NUL. Measured on Windows 11
+ * 26100: a Size of 512 or more, or digits that do not fit, give
+ * STATUS_BUFFER_OVERFLOW with the buffer untouched; padding that does not fit
+ * is truncated to Size - 1 characters and gives STATUS_UNSUCCESSFUL.
+ */
 NTSTATUS
 NTAPI
 RtlConvertLCIDToString(
@@ -969,6 +979,34 @@ RtlConvertLCIDToString(
     _Out_writes_(Size) PWSTR pResultBuf,
     _In_ ULONG Size)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    static const WCHAR DigitChars[] = L"0123456789ABCDEF";
+    WCHAR Digits[32];
+    ULONG Count = 0, Total, Index, Value = LcidValue;
+
+    if (Size >= 512)
+        return STATUS_BUFFER_OVERFLOW;
+    if (Base == 0)
+        Base = 10;
+    if (Base != 2 && Base != 8 && Base != 10 && Base != 16)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Digits, least significant first */
+    do
+    {
+        Digits[Count++] = DigitChars[Value % Base];
+        Value /= Base;
+    } while (Value);
+
+    if (Count >= Size)
+        return STATUS_BUFFER_OVERFLOW;
+
+    Total = (Padding > Count) ? Padding : Count;
+    for (Index = 0; Index < Total && Index < Size - 1; Index++)
+    {
+        pResultBuf[Index] = (Index < Total - Count) ? L'0'
+                                                    : Digits[Total - 1 - Index];
+    }
+    pResultBuf[Index] = UNICODE_NULL;
+
+    return (Total < Size) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 }

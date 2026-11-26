@@ -145,7 +145,10 @@ extern void func_RtlCaptureContext(void);
 extern void func_RtlComputePrivatizedDllName_U(void);
 extern void func_RtlConditionVariable(void);
 extern void func_RtlCopyMappedMemory(void);
+extern void func_RtlConvertLCIDToString(void);
 extern void func_RtlCreateAndSetSD(void);
+extern void func_RtlMultiAppendUnicodeStringBuffer(void);
+extern void func_RtlSetEnvironmentStrings(void);
 extern void func_RtlCreateServiceSid(void);
 extern void func_RtlCriticalSection(void);
 extern void func_RtlCurrentTransaction(void);
@@ -383,7 +386,10 @@ const struct test winetest_testlist[] =
     { "RtlComputePrivatizedDllName_U",  func_RtlComputePrivatizedDllName_U },
     { "RtlConditionVariable",           func_RtlConditionVariable },
     { "RtlCopyMappedMemory",            func_RtlCopyMappedMemory },
+    { "RtlConvertLCIDToString",         func_RtlConvertLCIDToString },
     { "RtlCreateAndSetSD",              func_RtlCreateAndSetSD },
+    { "RtlMultiAppendUnicodeStringBuffer", func_RtlMultiAppendUnicodeStringBuffer },
+    { "RtlSetEnvironmentStrings",       func_RtlSetEnvironmentStrings },
     { "RtlCreateServiceSid",            func_RtlCreateServiceSid },
     { "RtlCriticalSection",             func_RtlCriticalSection },
     { "RtlCurrentTransaction",          func_RtlCurrentTransaction },
