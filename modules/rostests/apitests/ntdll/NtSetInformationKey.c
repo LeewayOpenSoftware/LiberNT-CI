@@ -15,16 +15,33 @@
 
 static WCHAR KeyPath[128];
 
-static NTSTATUS CreateTestKey(ULONG Options, PHANDLE Key)
+/* HKLM\SOFTWARE needs an administrator; the user's own hive takes the same rows for a standard user */
+static NTSTATUS CreateTestKey(ULONG Options, BOOLEAN UserHive, PHANDLE Key)
 {
     UNICODE_STRING Name;
     OBJECT_ATTRIBUTES Oa;
+    HANDLE Root = NULL;
+    NTSTATUS Status;
 
-    StringCchPrintfW(KeyPath, _countof(KeyPath), L"\\Registry\\Machine\\SOFTWARE\\Leeway-np02-SetInformationKey-%lu-%lu",
-                     HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess), Options);
+    if (UserHive)
+    {
+        Status = RtlOpenCurrentUser(KEY_CREATE_SUB_KEY, &Root);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        StringCchPrintfW(KeyPath, _countof(KeyPath), L"Software\\Leeway-np02-SetInformationKey-%lu-%lu",
+                         HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess), Options);
+    }
+    else
+    {
+        StringCchPrintfW(KeyPath, _countof(KeyPath), L"\\Registry\\Machine\\SOFTWARE\\Leeway-np02-SetInformationKey-%lu-%lu",
+                         HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess), Options);
+    }
     RtlInitUnicodeString(&Name, KeyPath);
-    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    return NtCreateKey(Key, KEY_ALL_ACCESS, &Oa, 0, NULL, Options, NULL);
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, Root, NULL);
+    Status = NtCreateKey(Key, KEY_ALL_ACCESS, &Oa, 0, NULL, Options, NULL);
+    if (Root)
+        NtClose(Root);
+    return Status;
 }
 
 static LONGLONG QueryWriteTime(HANDLE Key, NTSTATUS *Status)
@@ -39,15 +56,43 @@ static LONGLONG QueryWriteTime(HANDLE Key, NTSTATUS *Status)
     return Basic.LastWriteTime.QuadPart;
 }
 
-/* NtQueryKey(KeyFlagsInformation): Win11 answers 12 bytes (Wow64Flags, KeyFlags, ControlFlags); Orosi refuses it */
-static void TraceFlags(HANDLE Key, const char *When)
+/* NtQueryKey(KeyFlagsInformation): 12 bytes (Wow64Flags, KeyFlags, ControlFlags); the read side of this test's writes */
+static void QueryFlags(HANDLE Key, const char *When, ULONG *Flags)
 {
-    ULONG Flags[3] = { 0xDEADBEEF, 0xDEADBEEF, 0xDEADBEEF }, Length = 0;
+    ULONG Length = 0;
     NTSTATUS Status;
 
-    Status = NtQueryKey(Key, KeyFlagsInformation, Flags, sizeof(Flags), &Length);
+    Flags[0] = Flags[1] = Flags[2] = 0xDEADBEEF;
+    Status = NtQueryKey(Key, KeyFlagsInformation, Flags, 3 * sizeof(ULONG), &Length);
     trace("PROBE %s: KeyFlagsInformation -> 0x%lx, length %lu, words 0x%lx 0x%lx 0x%lx\n",
           When, Status, Length, Flags[0], Flags[1], Flags[2]);
+    ok(NT_SUCCESS(Status) && Length == 3 * sizeof(ULONG), "%s: KeyFlagsInformation 0x%lx, length %lu\n", When, Status, Length);
+}
+
+/* L1-M3: combined faults, so the Win11 run pins which check comes first */
+static void TestValidationOrder(HANDLE Key, HANDLE ReadOnly)
+{
+    UCHAR Buffer[16] = { 0 };
+    HANDLE Event = NULL;
+    NTSTATUS Status;
+
+    NtCreateEvent(&Event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
+    Status = NtSetInformationKey(Key, 0xFF, Buffer, 3);
+    trace("PROBE order: bad class + bad length -> 0x%lx\n", Status);
+    Status = NtSetInformationKey(Event, TEST_KeyWriteTimeInformation, Buffer, 3);
+    trace("PROBE order: bad length + event handle -> 0x%lx\n", Status);
+    Status = NtSetInformationKey(ReadOnly, TEST_KeyWriteTimeInformation, Buffer, 3);
+    trace("PROBE order: KEY_READ handle + bad length -> 0x%lx\n", Status);
+    Status = NtSetInformationKey(ReadOnly, TEST_KeyWriteTimeInformation, NULL, sizeof(LARGE_INTEGER));
+    trace("PROBE order: KEY_READ handle + NULL buffer -> 0x%lx\n", Status);
+    Status = NtSetInformationKey(Event, 0xFF, Buffer, sizeof(ULONG));
+    trace("PROBE order: bad class + event handle -> 0x%lx\n", Status);
+    Status = NtSetInformationKey(Key, TEST_KeyWow64FlagsInformation, Buffer + 1, sizeof(ULONG));
+    trace("PROBE order: valid class + misaligned buffer -> 0x%lx\n", Status);
+    Status = NtSetInformationKey(NULL, 0xFF, Buffer, 3);
+    trace("PROBE order: NULL handle + bad class + bad length -> 0x%lx\n", Status);
+    if (Event)
+        NtClose(Event);
 }
 
 static void TestInvalid(HANDLE Key, HANDLE ReadOnly)
@@ -155,19 +200,20 @@ static void TestWriteTime(HANDLE Key, const char *Kind)
     NtDeleteValueKey(Key, &ValueName);
 }
 
-static void TestFlags(HANDLE Key)
+static void TestFlags(HANDLE Key, BOOLEAN Volatile)
 {
     static const ULONG ControlFlags[] = { 0x2, 0x4, 0x8, 0xE, 0 };
-    ULONG Value, i;
+    ULONG Value, i, Flags[3];
     NTSTATUS Status;
 
-    TraceFlags(Key, "before");
+    QueryFlags(Key, "before", Flags);
+    ok(Flags[1] == (Volatile ? 0x1 : 0), "KeyFlags 0x%lx on a %s key\n", Flags[1], Volatile ? "volatile" : "persistent"); /* lead: REG_FLAG_VOLATILE */
     for (Value = 0; Value <= 0xF; Value++)
     {
         Status = NtSetInformationKey(Key, TEST_KeyWow64FlagsInformation, &Value, sizeof(Value));
         ok(NT_SUCCESS(Status), "Wow64 flags 0x%lx refused: 0x%lx\n", Value, Status);
-        if (Value == 0xF || Value == 0x1)
-            TraceFlags(Key, "after Wow64 flags");
+        QueryFlags(Key, "after Wow64 flags", Flags);
+        ok(Flags[0] == Value, "Wow64Flags read back 0x%lx, set 0x%lx\n", Flags[0], Value);
     }
     Value = 0;
     Status = NtSetInformationKey(Key, TEST_KeyWow64FlagsInformation, &Value, sizeof(Value));
@@ -179,43 +225,80 @@ static void TestFlags(HANDLE Key)
         Status = NtSetInformationKey(Key, TEST_KeyControlFlagsInformation, &Value, sizeof(Value));
         trace("PROBE control flags 0x%lx -> 0x%lx\n", Value, Status);
         ok(NT_SUCCESS(Status), "control flags 0x%lx refused: 0x%lx\n", Value, Status);
-        TraceFlags(Key, "after control flags");
+        QueryFlags(Key, "after control flags", Flags);
+        ok(Flags[2] == Value, "ControlFlags read back 0x%lx, set 0x%lx\n", Flags[2], Value);
     }
+
+    /* The short-buffer answer of the query side */
+    Status = NtQueryKey(Key, KeyFlagsInformation, Flags, 8, &i);
+    trace("PROBE KeyFlagsInformation with 8 bytes -> 0x%lx, result length %lu\n", Status, i);
+    ok(!NT_SUCCESS(Status), "an 8-byte KeyFlagsInformation buffer was accepted\n"); /* lead: STATUS_BUFFER_TOO_SMALL */
+}
+
+static void RunOnKey(HANDLE Key, BOOLEAN Volatile, const char *Kind)
+{
+    HANDLE ReadOnly = NULL;
+    NTSTATUS Status;
+
+    Status = NtDuplicateObject(NtCurrentProcess(), Key, NtCurrentProcess(), &ReadOnly, KEY_READ, 0, 0);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!ReadOnly)
+        return;
+    trace("---- %s key ----\n", Kind);
+    TestInvalid(Key, ReadOnly);
+    TestValidationOrder(Key, ReadOnly);
+    TestWriteTime(Key, Kind);
+    TestFlags(Key, Volatile);
+    NtClose(ReadOnly);
 }
 
 START_TEST(NtSetInformationKey)
 {
-    HANDLE Key = NULL, ReadOnly = NULL, Persistent = NULL;
+    HANDLE Key = NULL;
     NTSTATUS Status;
+    BOOLEAN Any = FALSE;
 
-    Status = CreateTestKey(REG_OPTION_VOLATILE, &Key);
-    if (!NT_SUCCESS(Status))
-    {
-        skip("cannot create the volatile test key: 0x%lx (run elevated)\n", Status);
-        return;
-    }
-    Status = NtDuplicateObject(NtCurrentProcess(), Key, NtCurrentProcess(), &ReadOnly, KEY_READ, 0, 0);
-    ok_hex(Status, STATUS_SUCCESS);
-
-    TestInvalid(Key, ReadOnly);
-    TestWriteTime(Key, "volatile key");
-    TestFlags(Key);
-
-    /* The same on a key in the persistent SOFTWARE hive: the dirty-cell path */
-    Status = CreateTestKey(REG_OPTION_NON_VOLATILE, &Persistent);
+    /* The caller's own hive first: a standard user can run these rows */
+    Status = CreateTestKey(REG_OPTION_VOLATILE, TRUE, &Key);
     if (NT_SUCCESS(Status))
     {
-        TestWriteTime(Persistent, "persistent key");
-        NtDeleteKey(Persistent);
-        NtClose(Persistent);
+        RunOnKey(Key, TRUE, "HKCU volatile");
+        NtDeleteKey(Key);
+        NtClose(Key);
+        Any = TRUE;
     }
     else
     {
-        skip("cannot create a persistent test key: 0x%lx\n", Status);
+        trace("PROBE HKCU volatile key: 0x%lx\n", Status);
     }
 
-    if (ReadOnly)
-        NtClose(ReadOnly);
-    NtDeleteKey(Key);
-    NtClose(Key);
+    /* HKLM\SOFTWARE: volatile, then persistent for the dirty-cell path (administrator) */
+    Status = CreateTestKey(REG_OPTION_VOLATILE, FALSE, &Key);
+    if (NT_SUCCESS(Status))
+    {
+        RunOnKey(Key, TRUE, "HKLM volatile");
+        NtDeleteKey(Key);
+        NtClose(Key);
+        Any = TRUE;
+    }
+    else
+    {
+        trace("PROBE HKLM volatile key: 0x%lx\n", Status);
+    }
+    Status = CreateTestKey(REG_OPTION_NON_VOLATILE, FALSE, &Key);
+    if (NT_SUCCESS(Status))
+    {
+        trace("---- HKLM persistent key ----\n");
+        TestWriteTime(Key, "HKLM persistent");
+        TestFlags(Key, FALSE);
+        NtDeleteKey(Key);
+        NtClose(Key);
+        Any = TRUE;
+    }
+    else
+    {
+        trace("PROBE HKLM persistent key: 0x%lx\n", Status);
+    }
+    if (!Any)
+        skip("no test key could be created\n");
 }

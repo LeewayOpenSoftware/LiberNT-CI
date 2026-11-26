@@ -24,16 +24,95 @@ static UNICODE_STRING NameBin = RTL_CONSTANT_STRING(L"Bin");
 static UNICODE_STRING NameBig = RTL_CONSTANT_STRING(L"Big");
 static UNICODE_STRING NameNo  = RTL_CONSTANT_STRING(L"DoesNotExist");
 
-static NTSTATUS CreateTestKey(PHANDLE Key)
+static void TraceEntries(const char *When, const KEY_VALUE_ENTRY *Entries, ULONG Count, NTSTATUS Status, ULONG Length, ULONG Required);
+static void ResetEntries(KEY_VALUE_ENTRY *Entries, ULONG Count);
+
+static BOOLEAN UserHiveKey;
+
+/* HKLM\SOFTWARE needs an administrator; the caller's own hive serves the standard-user run */
+static NTSTATUS CreateTestKey(BOOLEAN UserHive, PHANDLE Key)
 {
     UNICODE_STRING Name;
     OBJECT_ATTRIBUTES Oa;
+    HANDLE Root = NULL;
+    NTSTATUS Status;
 
-    StringCchPrintfW(KeyPath, _countof(KeyPath), L"\\Registry\\Machine\\SOFTWARE\\Leeway-np02-QueryMultipleValueKey-%lu",
-                     HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    UserHiveKey = UserHive;
+    if (UserHive)
+    {
+        Status = RtlOpenCurrentUser(KEY_CREATE_SUB_KEY, &Root);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        StringCchPrintfW(KeyPath, _countof(KeyPath), L"Software\\Leeway-np02-QueryMultipleValueKey-%lu",
+                         HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    }
+    else
+    {
+        StringCchPrintfW(KeyPath, _countof(KeyPath), L"\\Registry\\Machine\\SOFTWARE\\Leeway-np02-QueryMultipleValueKey-%lu",
+                         HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    }
     RtlInitUnicodeString(&Name, KeyPath);
-    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    return NtCreateKey(Key, KEY_ALL_ACCESS, &Oa, 0, NULL, REG_OPTION_VOLATILE, NULL);
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, Root, NULL);
+    Status = NtCreateKey(Key, KEY_ALL_ACCESS, &Oa, 0, NULL, REG_OPTION_VOLATILE, NULL);
+    if (Root)
+        NtClose(Root);
+    return Status;
+}
+
+/* L2-S2: duplicate names, a zero-length value and a REG_SZ stored without its terminator */
+static void TestOddShapes(HANDLE Key)
+{
+    UNICODE_STRING NameZero = RTL_CONSTANT_STRING(L"Zero"), NameNoTerm = RTL_CONSTANT_STRING(L"NoTerm");
+    KEY_VALUE_ENTRY Entries[4] = { { &NameDw }, { &NameDw }, { &NameZero }, { &NameNoTerm } };
+    UCHAR Buffer[256];
+    ULONG Length = sizeof(Buffer), Required = 0;
+    NTSTATUS Status;
+
+    Status = NtSetValueKey(Key, &NameZero, 0, REG_BINARY, NULL, 0);
+    ok_hex(Status, STATUS_SUCCESS);
+    Status = NtSetValueKey(Key, &NameNoTerm, 0, REG_SZ, (PVOID)L"ab", 4);
+    ok_hex(Status, STATUS_SUCCESS);
+    ResetEntries(Entries, 4);
+    Status = NtQueryMultipleValueKey(Key, Entries, 4, Buffer, &Length, &Required);
+    TraceEntries("duplicate Dw, zero-length, REG_SZ without terminator", Entries, 4, Status, Length, Required);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        ok(Entries[0].DataLength == sizeof(DwordData) && Entries[1].DataLength == sizeof(DwordData), "duplicate entries differ\n");
+        ok(Entries[2].DataLength == 0, "zero-length value reported %lu bytes\n", Entries[2].DataLength);
+        ok(Entries[3].DataLength == 4, "REG_SZ without terminator reported %lu bytes\n", Entries[3].DataLength);
+    }
+    NtDeleteValueKey(Key, &NameZero);
+    NtDeleteValueKey(Key, &NameNoTerm);
+}
+
+/* L2-M2: many entries sharing one name; the kernel must bound what it captures */
+static void TestManyEntries(HANDLE Key)
+{
+    static const ULONG Counts[] = { 0x10000, 0x100000 };
+    PKEY_VALUE_ENTRY Entries;
+    UCHAR Buffer[64];
+    ULONG Length, Required, i, c;
+    NTSTATUS Status;
+
+    for (c = 0; c < _countof(Counts); c++)
+    {
+        Entries = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, Counts[c] * sizeof(KEY_VALUE_ENTRY));
+        if (!Entries)
+        {
+            skip("no memory for %lu entries\n", Counts[c]);
+            continue;
+        }
+        for (i = 0; i < Counts[c]; i++)
+            Entries[i].ValueName = &NameDw;
+        Length = sizeof(Buffer);
+        Required = 0;
+        Status = NtQueryMultipleValueKey(Key, Entries, Counts[c], Buffer, &Length, &Required);
+        trace("PROBE %lu entries sharing one name, 64-byte buffer -> 0x%lx, length %lu, required %lu\n",
+              Counts[c], Status, Length, Required);
+        ok(Status != STATUS_SUCCESS, "%lu entries fit into 64 bytes\n", Counts[c]);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Entries);
+    }
 }
 
 static void TraceEntries(const char *When, const KEY_VALUE_ENTRY *Entries, ULONG Count, NTSTATUS Status, ULONG Length, ULONG Required)
@@ -237,7 +316,8 @@ static void TestWin32Wrapper(void)
         skip("RegQueryMultipleValuesW is not available\n");
         return;
     }
-    Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, KeyPath + wcslen(L"\\Registry\\Machine\\"), 0, KEY_QUERY_VALUE, &Hkey);
+    Error = RegOpenKeyExW(UserHiveKey ? HKEY_CURRENT_USER : HKEY_LOCAL_MACHINE,
+                          UserHiveKey ? KeyPath : KeyPath + wcslen(L"\\Registry\\Machine\\"), 0, KEY_QUERY_VALUE, &Hkey);
     if (Error != ERROR_SUCCESS)
     {
         skip("RegOpenKeyExW failed: %ld\n", Error);
@@ -284,19 +364,13 @@ static void TestTwoMegabytes(HANDLE Key)
     NtDeleteValueKey(Key, &Name2);
 }
 
-START_TEST(NtQueryMultipleValueKey)
+static void RunOnKey(HANDLE Key, const char *Kind)
 {
-    HANDLE Key = NULL;
     PUCHAR Big;
     ULONG i;
     NTSTATUS Status;
 
-    Status = CreateTestKey(&Key);
-    if (!NT_SUCCESS(Status))
-    {
-        skip("cannot create the volatile test key: 0x%lx (run elevated)\n", Status);
-        return;
-    }
+    trace("---- %s key ----\n", Kind);
     Status = NtSetValueKey(Key, &NameDw, 0, REG_DWORD, (PVOID)&DwordData, sizeof(DwordData));
     ok_hex(Status, STATUS_SUCCESS);
     Status = NtSetValueKey(Key, &NameOdd, 0, REG_BINARY, (PVOID)OddData, sizeof(OddData));
@@ -317,10 +391,43 @@ START_TEST(NtQueryMultipleValueKey)
 
     TestThreeValues(Key);
     TestBigValue(Key);
+    TestOddShapes(Key);
     TestInvalid(Key);
+    TestManyEntries(Key);
     TestWin32Wrapper();
     TestTwoMegabytes(Key);
+}
 
-    NtDeleteKey(Key);
-    NtClose(Key);
+START_TEST(NtQueryMultipleValueKey)
+{
+    HANDLE Key = NULL;
+    NTSTATUS Status;
+    BOOLEAN Any = FALSE;
+
+    Status = CreateTestKey(TRUE, &Key);
+    if (NT_SUCCESS(Status))
+    {
+        RunOnKey(Key, "HKCU volatile");
+        NtDeleteKey(Key);
+        NtClose(Key);
+        Any = TRUE;
+    }
+    else
+    {
+        trace("PROBE HKCU volatile key: 0x%lx\n", Status);
+    }
+    Status = CreateTestKey(FALSE, &Key);
+    if (NT_SUCCESS(Status))
+    {
+        RunOnKey(Key, "HKLM volatile");
+        NtDeleteKey(Key);
+        NtClose(Key);
+        Any = TRUE;
+    }
+    else
+    {
+        trace("PROBE HKLM volatile key: 0x%lx\n", Status);
+    }
+    if (!Any)
+        skip("no test key could be created\n");
 }
