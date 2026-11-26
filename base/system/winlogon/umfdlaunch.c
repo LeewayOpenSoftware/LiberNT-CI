@@ -128,6 +128,18 @@ WlUmfdMakeToken(
     if (CreateRestrictedToken(Base, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL,
                               ARRAYSIZE(Res), Res, Token))
     {
+        TOKEN_PRIVILEGES Tp;
+        LUID ChangeNotify;
+
+        /* a held-off copy cannot traverse \Sessions to reach the CSR port and the host dies on it */
+        if (LookupPrivilegeValueW(NULL, L"SeChangeNotifyPrivilege", &ChangeNotify))
+        {
+            Tp.PrivilegeCount = 1;
+            Tp.Privileges[0].Luid = ChangeNotify;
+            Tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+            AdjustTokenPrivileges(*Token, FALSE, &Tp, 0, NULL, NULL);
+        }
+
         /* LogonUser tokens are in session 0; win32k accepts only a host in winlogon's own session */
         SessionId = NtCurrentPeb()->SessionId;
         Label.Label.Sid = Low;
