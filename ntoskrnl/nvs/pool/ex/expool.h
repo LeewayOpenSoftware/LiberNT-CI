@@ -26,6 +26,8 @@
 #define EX_POOL_BOOT_SLOTS          16
 #define EX_POOL_BLOCK_QUOTA         0x01
 #define EX_POOL_FLAG_SPECIAL_POOL   0x20
+#define EX_POOL_FLAG_CHECK_TAGS     0x40
+#define PROTECTED_POOL              0x80000000
 #define EX_POOL_GROW_MINIMUM        ((SIZE_T)16 << POOL_UNIT_SHIFT)
 
 typedef struct _EX_POOL_STATE
