@@ -49,7 +49,8 @@ RtlMultiAppendUnicodeStringBuffer(
     _In_reads_(NumberOfAddends) PCUNICODE_STRING Addends)
 {
     SIZE_T Total = StringBuffer->String.Length;
-    PUCHAR Target;
+    PUCHAR Target, Source, OldBase;
+    SIZE_T OldSize;
     NTSTATUS Status;
     ULONG Index;
 
@@ -62,6 +63,8 @@ RtlMultiAppendUnicodeStringBuffer(
     if (Total + sizeof(WCHAR) > MAXUSHORT)
         return STATUS_NAME_TOO_LONG;
 
+    OldBase = StringBuffer->ByteBuffer.Buffer;
+    OldSize = StringBuffer->ByteBuffer.Size;
     Status = RtlpEnsureBufferSize(0, &StringBuffer->ByteBuffer, Total + sizeof(WCHAR));
     if (!NT_SUCCESS(Status))
         return Status;
@@ -70,7 +73,16 @@ RtlMultiAppendUnicodeStringBuffer(
     Target = StringBuffer->ByteBuffer.Buffer + StringBuffer->String.Length;
     for (Index = 0; Index < NumberOfAddends; Index++)
     {
-        RtlMoveMemory(Target, Addends[Index].Buffer, Addends[Index].Length);
+        /* The old storage may be freed: read an aliasing addend from the copy */
+        Source = (PUCHAR)Addends[Index].Buffer;
+        if (StringBuffer->ByteBuffer.Buffer != OldBase &&
+            Source >= OldBase &&
+            Addends[Index].Length <= OldSize &&
+            Source - OldBase <= (SSIZE_T)(OldSize - Addends[Index].Length))
+        {
+            Source = StringBuffer->ByteBuffer.Buffer + (Source - OldBase);
+        }
+        RtlMoveMemory(Target, Source, Addends[Index].Length);
         Target += Addends[Index].Length;
     }
     *(PWCHAR)Target = UNICODE_NULL;

@@ -120,6 +120,34 @@ TestLimits(VOID)
     RtlFreeHeap(RtlGetProcessHeap(), 0, Long);
 }
 
+/* An addend that is the buffer's own text; Windows 11 reads freed memory when a heap buffer moves */
+static
+VOID
+TestSelfAppend(USHORT StaticBytes, PCWSTR First, ULONG Copies, PCWSTR Expected, BOOLEAN CheckText)
+{
+    RTL_UNICODE_STRING_BUFFER StringBuffer;
+    UNICODE_STRING Addends[2];
+    WCHAR Static[64];
+    NTSTATUS Status;
+    ULONG Index;
+
+    InitStringBuffer(&StringBuffer, Static, StaticBytes, L"");
+    RtlInitUnicodeString(&Addends[0], First);
+    Status = pRtlMultiAppendUnicodeStringBuffer(&StringBuffer, 1, Addends);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    for (Index = 0; Index < Copies; Index++)
+        Addends[Index] = StringBuffer.String;
+    Status = pRtlMultiAppendUnicodeStringBuffer(&StringBuffer, Copies, Addends);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    ok_int(StringBuffer.String.Length, (int)(wcslen(Expected) * sizeof(WCHAR)));
+    if (CheckText)
+        ok(NT_SUCCESS(Status) && !wcscmp(StringBuffer.String.Buffer, Expected),
+           "self-append '%ls' x%lu: '%.40ls'\n", First, Copies, StringBuffer.String.Buffer);
+    ok_size_t(StringBuffer.ByteBuffer.Size, StaticBytes >= (wcslen(Expected) + 1) * sizeof(WCHAR) ?
+                                            StaticBytes : (wcslen(Expected) + 1) * sizeof(WCHAR));
+    FreeStringBuffer(&StringBuffer);
+}
+
 START_TEST(RtlMultiAppendUnicodeStringBuffer)
 {
     static PCWSTR Three[] = { L"ab", L"cde", L"f" };
@@ -146,5 +174,9 @@ START_TEST(RtlMultiAppendUnicodeStringBuffer)
     /* Too small: grows to exactly Length + NUL and keeps the old text */
     Check("grow", 8, L"", 3, Grow, STATUS_SUCCESS, L"abcdefghijkl", 26, FALSE);
     Check("grow-keeps-initial", 8, L"iii", 1, Xyz, STATUS_SUCCESS, L"iiixyz", 14, FALSE);
+    TestSelfAppend(64, L"abc", 1, L"abcabc", TRUE);
+    TestSelfAppend(8, L"abc", 1, L"abcabc", TRUE);
+    TestSelfAppend(8, L"abcdef", 1, L"abcdefabcdef", FALSE);
+    TestSelfAppend(8, L"abcdef", 2, L"abcdefabcdefabcdef", FALSE);
     TestLimits();
 }

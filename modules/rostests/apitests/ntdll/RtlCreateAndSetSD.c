@@ -245,6 +245,7 @@ TestInvalid(VOID)
         Data[1] = MakeAce(BadTypes[Index], 0, 0, 1, &World);
         Status = pRtlCreateAndSetSD(Data, 2, LocalSystem, Users, &Sd);
         ok(Status == STATUS_INVALID_PARAMETER, "type 0x%x: status 0x%lx\n", BadTypes[Index], Status);
+        ok(Sd == NULL, "type 0x%x: output written on failure\n", BadTypes[Index]);
         if (NT_SUCCESS(Status))
             RtlFreeHeap(RtlGetProcessHeap(), 0, Sd);
     }
@@ -266,6 +267,17 @@ TestInvalid(VOID)
         if (NT_SUCCESS(Status))
             RtlFreeHeap(RtlGetProcessHeap(), 0, Sd);
     }
+
+    /* The output is left untouched on failure */
+    Sd = (PSECURITY_DESCRIPTOR)(ULONG_PTR)0x1234567;
+    Status = pRtlCreateAndSetSD(Many, 2341, LocalSystem, Users, &Sd);
+    ok_ntstatus(Status, STATUS_INVALID_PARAMETER);
+    ok(Sd == (PSECURITY_DESCRIPTOR)(ULONG_PTR)0x1234567, "output changed on failure: %p\n", Sd);
+    Data[1].AceType = 7;
+    Sd = (PSECURITY_DESCRIPTOR)(ULONG_PTR)0x1234567;
+    Status = pRtlCreateAndSetSD(Data, 2, LocalSystem, Users, &Sd);
+    ok_ntstatus(Status, STATUS_INVALID_PARAMETER);
+    ok(Sd == (PSECURITY_DESCRIPTOR)(ULONG_PTR)0x1234567, "output changed on failure: %p\n", Sd);
     RtlFreeHeap(RtlGetProcessHeap(), 0, Many);
 }
 
