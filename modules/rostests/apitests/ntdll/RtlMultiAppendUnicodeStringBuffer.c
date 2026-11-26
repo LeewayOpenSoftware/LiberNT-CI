@@ -58,8 +58,8 @@ Check(PCSTR Tag, USHORT StaticBytes, PCWSTR Initial, ULONG Count, PCWSTR *Parts,
        "%s: static buffer use %d\n", Tag, StringBuffer.ByteBuffer.Buffer == StringBuffer.ByteBuffer.StaticBuffer);
     ok(StringBuffer.ByteBuffer.StaticBuffer == (PUCHAR)Static, "%s: StaticBuffer changed\n", Tag);
     ok_size_t(StringBuffer.ByteBuffer.StaticSize, StaticBytes);
-    ok(StringBuffer.ByteBuffer.Size == ExpectedSize, "%s: Size %Iu, expected %Iu\n",
-       Tag, StringBuffer.ByteBuffer.Size, ExpectedSize);
+    ok(StringBuffer.ByteBuffer.Size == ExpectedSize, "%s: Size %lu, expected %lu\n",
+       Tag, (ULONG)StringBuffer.ByteBuffer.Size, (ULONG)ExpectedSize);
     if (NT_SUCCESS(Status))
     {
         ok_int(StringBuffer.String.Length, (int)(wcslen(Expected) * sizeof(WCHAR)));
