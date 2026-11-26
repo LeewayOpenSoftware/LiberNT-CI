@@ -929,9 +929,7 @@ NtSetInformationSymbolicLink(
         (SymbolicLinkInformationClass != SymbolicLinkAccessMask))
         return STATUS_INVALID_INFO_CLASS;
 
-    if (SymbolicLinkInformationLength != sizeof(Value))
-        return STATUS_INFO_LENGTH_MISMATCH;
-
+    /* The handle (type, then SET access) is checked before the length, as on Win11 */
     PreviousMode = ExGetPreviousMode();
     Status = ObReferenceObjectByHandle(LinkHandle,
                                        SYMBOLIC_LINK_SET,
@@ -941,6 +939,12 @@ NtSetInformationSymbolicLink(
                                        NULL);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    if (SymbolicLinkInformationLength != sizeof(Value))
+    {
+        ObDereferenceObject(SymbolicLink);
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
 
     if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
     {
