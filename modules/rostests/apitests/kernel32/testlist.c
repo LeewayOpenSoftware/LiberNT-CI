@@ -15,6 +15,7 @@ extern void func_TermsrvAppInstallMode(void);
 extern void func_ApiSetCoreSynch(void);
 extern void func_ApplicationRecovery(void);
 extern void func_ApplicationRestart(void);
+extern void func_LocalAtomExhaustion(void);
 extern void func_AuditAlarmApis(void);
 extern void func_BaseSetLastNTError(void);
 extern void func_BaseThreadInitThunk(void);
@@ -255,6 +256,7 @@ const struct test winetest_testlist[] =
     { "ApiSetCoreSynch",             func_ApiSetCoreSynch },
     { "ApplicationRecovery",         func_ApplicationRecovery },
     { "ApplicationRestart",          func_ApplicationRestart },
+    { "LocalAtomExhaustion",         func_LocalAtomExhaustion },
     { "AuditAlarmApis",              func_AuditAlarmApis },
     { "BaseSetLastNTError",          func_BaseSetLastNTError },
     { "BaseThreadInitThunk",         func_BaseThreadInitThunk },

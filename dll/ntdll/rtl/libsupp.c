@@ -490,7 +490,8 @@ RtlpUnlockAtomTable(PRTL_ATOM_TABLE AtomTable)
 BOOLEAN
 RtlpCreateAtomHandleTable(PRTL_ATOM_TABLE AtomTable)
 {
-   RtlInitializeHandleTable(0xCFFF,
+   /* A local string atom is 0xC000 + index, so 0x4000 entries is the whole range */
+   RtlInitializeHandleTable(0x4000,
                             sizeof(RTL_ATOM_HANDLE),
                             &AtomTable->RtlHandleTable);
 
@@ -561,8 +562,8 @@ RtlpCreateAtomHandle(PRTL_ATOM_TABLE AtomTable, PRTL_ATOM_TABLE_ENTRY Entry)
    {
       PRTL_ATOM_HANDLE AtomHandle = (PRTL_ATOM_HANDLE)RtlHandle;
 
-      /* FIXME - Handle Indexes >= 0xC000 ?! */
-      if (HandleIndex < 0xC000)
+      /* Indexes past 0x3FFF would wrap the 16-bit atom into the integer range */
+      if (HandleIndex < 0x4000)
       {
          Entry->HandleIndex = (USHORT)HandleIndex;
          Entry->Atom = 0xC000 + (USHORT)HandleIndex;
