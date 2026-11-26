@@ -28,6 +28,22 @@ FAST_MUTEX ExpEnvironmentLock;
 ERESOURCE ExpFirmwareTableResource;
 LIST_ENTRY ExpFirmwareTableProviderListHead;
 
+static
+BOOLEAN
+ExpCallerSeesKernelAddresses(VOID)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+
+    return PreviousMode == KernelMode || SeSinglePrivilegeCheck(SeDebugPrivilege, PreviousMode);
+}
+
+static
+PVOID
+ExpUserAddressOnly(IN PVOID Address)
+{
+    return (ULONG_PTR)Address <= (ULONG_PTR)MmHighestUserAddress ? Address : NULL;
+}
+
 FORCEINLINE
 NTSTATUS
 ExpConvertLdrModuleToRtlModule(IN ULONG ModuleCount,
@@ -1321,6 +1337,7 @@ ExpQuerySystemProcessInformation(
     BOOLEAN _SEH2_VOLATILE Locked = FALSE;
     UNICODE_STRING RecordName;
     ULONG RecordSize;
+    BOOLEAN ShowAddresses = ExpCallerSeesKernelAddresses();
 
     _SEH2_TRY
     {
@@ -1504,7 +1521,8 @@ ExpQuerySystemProcessInformation(
                     ThreadInfo->UserTime.QuadPart = UInt32x32To64(CurrentThread->Tcb.UserTime, KeMaximumIncrement);
                     ThreadInfo->CreateTime.QuadPart = CurrentThread->CreateTime.QuadPart;
                     ThreadInfo->WaitTime = CurrentThread->Tcb.WaitTime;
-                    ThreadInfo->StartAddress = (PVOID) CurrentThread->StartAddress;
+                    ThreadInfo->StartAddress = ShowAddresses ? (PVOID)CurrentThread->StartAddress :
+                                                               ExpUserAddressOnly((PVOID)CurrentThread->StartAddress);
                     ThreadInfo->ClientId = CurrentThread->Cid;
                     ThreadInfo->Priority = CurrentThread->Tcb.Priority;
                     ThreadInfo->BasePriority = CurrentThread->Tcb.BasePriority;
@@ -1514,10 +1532,12 @@ ExpQuerySystemProcessInformation(
                     if (Extended)
                     {
                         ThreadInfoEx = (PSYSTEM_EXTENDED_THREAD_INFORMATION)ThreadInfo;
-                        ThreadInfoEx->StackBase = CurrentThread->Tcb.StackBase;
-                        ThreadInfoEx->StackLimit = (PVOID)CurrentThread->Tcb.StackLimit;
+                        ThreadInfoEx->StackBase = ShowAddresses ? CurrentThread->Tcb.StackBase : NULL;
+                        ThreadInfoEx->StackLimit = ShowAddresses ? (PVOID)CurrentThread->Tcb.StackLimit : NULL;
                         ThreadInfoEx->Win32StartAddress = (CurrentThread->Win32StartAddress ?
                             CurrentThread->Win32StartAddress : (PVOID)CurrentThread->StartAddress);
+                        if (!ShowAddresses)
+                            ThreadInfoEx->Win32StartAddress = ExpUserAddressOnly(ThreadInfoEx->Win32StartAddress);
                         ThreadInfoEx->TebBase = CurrentThread->Tcb.Teb;
                     }
 
@@ -1736,7 +1756,7 @@ QSI_DEF(SystemModuleInformation)
 {
     NTSTATUS Status;
     PRTL_PROCESS_MODULES Modules = NULL;
-    ULONG Needed = 0, Capacity = 0, Tries;
+    ULONG Needed = 0, Capacity = 0, Tries, Index, Count;
 
     /*
      * The list is walked under the module list resource into a kernel buffer, and the result
@@ -1778,6 +1798,14 @@ QSI_DEF(SystemModuleInformation)
 
     *ReqSize = Needed;
     if (Size < Needed && NT_SUCCESS(Status)) Status = STATUS_INFO_LENGTH_MISMATCH;
+
+    if (Modules && Capacity >= FIELD_OFFSET(RTL_PROCESS_MODULES, Modules) && !ExpCallerSeesKernelAddresses())
+    {
+        Count = min(Modules->NumberOfModules,
+                    (Capacity - FIELD_OFFSET(RTL_PROCESS_MODULES, Modules)) / sizeof(RTL_PROCESS_MODULE_INFORMATION));
+        for (Index = 0; Index < Count; Index++)
+            Modules->Modules[Index].ImageBase = NULL;
+    }
 
     /* Copy out with no lock held; the dispatcher's handler turns a fault into a status */
     _SEH2_TRY
@@ -1829,6 +1857,7 @@ QSI_DEF(SystemNonPagedPoolInformation)
 QSI_DEF(SystemHandleInformation)
 {
     PSYSTEM_HANDLE_INFORMATION HandleInformation;
+    BOOLEAN ShowAddresses = ExpCallerSeesKernelAddresses();
     PLIST_ENTRY NextTableEntry;
     ULONG TableBucket;
     PHANDLE_TABLE HandleTable;
@@ -1919,7 +1948,7 @@ QSI_DEF(SystemHandleInformation)
                         HandleInformation->Handles[Index].HandleValue =
                             (ULONG_PTR)Handle.GenericHandleOverlay;
 
-                        HandleInformation->Handles[Index].Object = &ObjectHeader->Body;
+                        HandleInformation->Handles[Index].Object = ShowAddresses ? &ObjectHeader->Body : NULL;
 
                         HandleInformation->Handles[Index].GrantedAccess =
                             HandleTableEntry->GrantedAccess & ~ObpAccessProtectCloseBit;
@@ -3134,6 +3163,7 @@ QSI_DEF(SystemEmulationProcessorInformation)
 QSI_DEF(SystemExtendedHandleInformation)
 {
     PSYSTEM_HANDLE_INFORMATION_EX HandleInformation;
+    BOOLEAN ShowAddresses = ExpCallerSeesKernelAddresses();
     PLIST_ENTRY NextTableEntry;
     ULONG TableBucket;
     PHANDLE_TABLE HandleTable;
@@ -3224,7 +3254,7 @@ QSI_DEF(SystemExtendedHandleInformation)
                         HandleInformation->Handles[Index].HandleValue =
                             (USHORT)(ULONG_PTR) Handle.GenericHandleOverlay;
 
-                        HandleInformation->Handles[Index].Object = &ObjectHeader->Body;
+                        HandleInformation->Handles[Index].Object = ShowAddresses ? &ObjectHeader->Body : NULL;
 
                         HandleInformation->Handles[Index].GrantedAccess =
                             HandleTableEntry->GrantedAccess & ~ObpAccessProtectCloseBit;
