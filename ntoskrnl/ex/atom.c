@@ -67,10 +67,10 @@ ExpGetGlobalAtomTable(VOID)
 /* FUNCTIONS ****************************************************************/
 
 /*++
- * @name NtAddAtom
+ * @name ExpAddAtom
  * @implemented
  *
- * Function NtAddAtom creates new Atom in Global Atom Table. If Atom
+ * Creates a new atom in the selected atom table. If an atom
  * with the same name already exist, internal Atom counter is incremented.
  * See: http://undocumented.ntinternals.net/UserMode/Undocumented%20Functions/Atoms/NtAddAtom.html
  *
@@ -89,22 +89,24 @@ ExpGetGlobalAtomTable(VOID)
  * @remarks None
  *
  *--*/
-NTSTATUS
+static NTSTATUS
 NTAPI
-NtAddAtom(IN PWSTR AtomName,
-          IN ULONG AtomNameLength,
-          OUT PRTL_ATOM Atom)
+ExpAddAtom(IN PCWSTR AtomName,
+           IN ULONG AtomNameLength,
+           OUT PRTL_ATOM Atom,
+           IN ULONG Flags)
 {
-    PRTL_ATOM_TABLE AtomTable = ExpGetGlobalAtomTable();
-    NTSTATUS Status;
+    PRTL_ATOM_TABLE AtomTable;
+    NTSTATUS Status = STATUS_SUCCESS;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
-    LPWSTR CapturedName;
+    LPWSTR CapturedName = NULL;
     ULONG CapturedSize;
     RTL_ATOM SafeAtom;
     PAGED_CODE();
 
-    /* Check for the table */
-    if (AtomTable == NULL) return STATUS_ACCESS_DENIED;
+    if (Flags & ~ATOM_FLAG_GLOBAL) return STATUS_INVALID_PARAMETER;
+
+    if (AtomName == NULL) return STATUS_INVALID_PARAMETER;
 
     /* Check for valid name */
     if (AtomNameLength > (RTL_MAXIMUM_ATOM_LENGTH * sizeof(WCHAR)))
@@ -114,11 +116,15 @@ NtAddAtom(IN PWSTR AtomName,
         return STATUS_INVALID_PARAMETER;
     }
 
+    /* Check for the table */
+    AtomTable = ExpGetGlobalAtomTable();
+    if (AtomTable == NULL) return STATUS_ACCESS_DENIED;
+
     /* Check if we're called from user-mode or kernel-mode */
     if (PreviousMode == KernelMode)
     {
         /* Re-use the given name if kernel mode */
-        CapturedName = AtomName;
+        CapturedName = (PWSTR)AtomName;
     }
     else
     {
@@ -153,10 +159,11 @@ NtAddAtom(IN PWSTR AtomName,
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
-                /* Return the exception code */
-                _SEH2_YIELD(return _SEH2_GetExceptionCode());
+                Status = _SEH2_GetExceptionCode();
             }
             _SEH2_END;
+
+            if (!NT_SUCCESS(Status)) goto Cleanup;
         }
         else
         {
@@ -166,7 +173,10 @@ NtAddAtom(IN PWSTR AtomName,
     }
 
     /* Call the runtime function */
-    Status = RtlAddAtomToAtomTable(AtomTable, CapturedName, &SafeAtom);
+    Status = RtlAddAtomToAtomTableEx(AtomTable,
+                                     CapturedName,
+                                     &SafeAtom,
+                                     Flags);
     if (NT_SUCCESS(Status) && (Atom))
     {
         /* Success and caller wants the atom back.. .enter SEH */
@@ -183,12 +193,32 @@ NtAddAtom(IN PWSTR AtomName,
         _SEH2_END;
     }
 
+Cleanup:
     /* If we captured anything, free it */
     if ((CapturedName != NULL) && (CapturedName != AtomName))
         ExFreePoolWithTag(CapturedName, TAG_ATOM);
 
     /* Return to caller */
     return Status;
+}
+
+NTSTATUS
+NTAPI
+NtAddAtom(IN PWSTR AtomName,
+          IN ULONG AtomNameLength,
+          OUT PRTL_ATOM Atom)
+{
+    return ExpAddAtom(AtomName, AtomNameLength, Atom, ATOM_FLAG_NONE);
+}
+
+NTSTATUS
+NTAPI
+NtAddAtomEx(IN PCWSTR AtomName,
+            IN ULONG AtomNameLength,
+            OUT PRTL_ATOM Atom,
+            IN ULONG Flags)
+{
+    return ExpAddAtom(AtomName, AtomNameLength, Atom, Flags);
 }
 
 /*++
