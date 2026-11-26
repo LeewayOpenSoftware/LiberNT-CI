@@ -47,6 +47,7 @@ PVOID ObpGetObjectWaitObject(POBJECT_TYPE ObjectType, PVOID Object);
 
 #define OBP_SYMBOLIC_LINK_GLOBAL                        0x00000001L
 #define OBP_SYMBOLIC_LINK_LOOKUP                        0x00000002L
+#define OBP_SYMBOLIC_LINK_ACCESS_MASK                   0x00000004L
 
 typedef struct _OBP_EXTENDED_OBJECT_TYPE_INITIALIZER
 {

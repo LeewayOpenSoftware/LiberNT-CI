@@ -713,6 +713,7 @@ typedef struct _OBJECT_SYMBOLIC_LINK
     PVOID LinkTargetObject;
     ULONG DosDeviceDriveIndex;
     volatile LONG Flags;
+    ACCESS_MASK AccessMask;
 } OBJECT_SYMBOLIC_LINK, *POBJECT_SYMBOLIC_LINK;
 
 //

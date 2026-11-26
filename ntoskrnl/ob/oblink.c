@@ -474,6 +474,19 @@ ObpParseSymbolicLink(IN PVOID ParsedObject,
         return STATUS_OBJECT_TYPE_MISMATCH;
     }
 
+    /* A link with an access mask caps what a traversal may ask of its target */
+    if (LinkFlags & OBP_SYMBOLIC_LINK_ACCESS_MASK)
+    {
+        ACCESS_MASK LinkMask = *(volatile ACCESS_MASK *)&SymlinkObject->AccessMask;
+
+        if (!AccessState ||
+            ((AccessState->RemainingDesiredAccess |
+              AccessState->PreviouslyGrantedAccess) & ~LinkMask))
+        {
+            return STATUS_ACCESS_DENIED;
+        }
+    }
+
     /* Check if this symlink is bound to a specific object */
     if (SymlinkObject->LinkTargetObject)
     {
@@ -795,6 +808,7 @@ NtCreateSymbolicLinkObject(OUT PHANDLE LinkHandle,
         SymbolicLink->LinkTargetObject = NULL;
         SymbolicLink->DosDeviceDriveIndex = 0;
         SymbolicLink->Flags = 0;
+        SymbolicLink->AccessMask = 0;
         RtlInitUnicodeString(&SymbolicLink->LinkTargetRemaining, NULL);
 
         /* Insert it into the object tree */
@@ -911,7 +925,8 @@ NtSetInformationSymbolicLink(
 
     PAGED_CODE();
 
-    if (SymbolicLinkInformationClass != SymbolicLinkGlobalInformation)
+    if ((SymbolicLinkInformationClass != SymbolicLinkGlobalInformation) &&
+        (SymbolicLinkInformationClass != SymbolicLinkAccessMask))
         return STATUS_INVALID_INFO_CLASS;
 
     if (SymbolicLinkInformationLength != sizeof(Value))
@@ -957,9 +972,17 @@ NtSetInformationSymbolicLink(
         Value = *(PULONG)SymbolicLinkInformation;
     }
 
-    InterlockedOr(&SymbolicLink->Flags, OBP_SYMBOLIC_LINK_GLOBAL);
-    if (Value)
-        InterlockedOr(&SymbolicLink->Flags, OBP_SYMBOLIC_LINK_LOOKUP);
+    if (SymbolicLinkInformationClass == SymbolicLinkGlobalInformation)
+    {
+        InterlockedOr(&SymbolicLink->Flags, OBP_SYMBOLIC_LINK_GLOBAL);
+        if (Value)
+            InterlockedOr(&SymbolicLink->Flags, OBP_SYMBOLIC_LINK_LOOKUP);
+    }
+    else
+    {
+        InterlockedExchange((volatile LONG *)&SymbolicLink->AccessMask, (LONG)Value);
+        InterlockedOr(&SymbolicLink->Flags, OBP_SYMBOLIC_LINK_ACCESS_MASK);
+    }
 
     ObDereferenceObject(SymbolicLink);
     return STATUS_SUCCESS;
