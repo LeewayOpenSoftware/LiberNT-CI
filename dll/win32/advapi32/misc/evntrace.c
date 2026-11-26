@@ -652,6 +652,18 @@ CloseTrace(IN TRACEHANDLE TraceHandle)
 
 ULONG
 WINAPI
+TraceSetInformation(IN TRACEHANDLE TraceHandle,
+                    IN TRACE_INFO_CLASS TraceInformationClass,
+                    IN PVOID TraceInformation OPTIONAL,
+                    IN ULONG InformationLength)
+{
+    /* No TRACE_INFO_CLASS maps to a working NtTraceControl path yet; fail
+       honestly instead of succeeding silently. */
+    return ERROR_NOT_SUPPORTED;
+}
+
+ULONG
+WINAPI
 EnableTraceEx2(IN TRACEHANDLE TraceHandle,
                IN LPCGUID ProviderId,
                IN ULONG ControlCode,

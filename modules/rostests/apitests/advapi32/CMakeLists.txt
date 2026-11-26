@@ -58,6 +58,7 @@ list(APPEND SOURCE
     SaferLevels.c
     SaferRules.c
     SddlNullAcl.c
+    SechostTraceForward.c
     Elevation.c
     SeclogonCaller.c
     ServiceArgs.c
