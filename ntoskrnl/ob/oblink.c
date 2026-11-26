@@ -914,6 +914,9 @@ NtSetInformationSymbolicLink(
     if (SymbolicLinkInformationClass != SymbolicLinkGlobalInformation)
         return STATUS_INVALID_INFO_CLASS;
 
+    if (SymbolicLinkInformationLength != sizeof(Value))
+        return STATUS_INFO_LENGTH_MISMATCH;
+
     PreviousMode = ExGetPreviousMode();
     Status = ObReferenceObjectByHandle(LinkHandle,
                                        SYMBOLIC_LINK_SET,
@@ -924,10 +927,10 @@ NtSetInformationSymbolicLink(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    if (SymbolicLinkInformationLength != sizeof(Value))
+    if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
     {
         ObDereferenceObject(SymbolicLink);
-        return STATUS_INFO_LENGTH_MISMATCH;
+        return STATUS_PRIVILEGE_NOT_HELD;
     }
 
     if (PreviousMode != KernelMode)
@@ -935,7 +938,7 @@ NtSetInformationSymbolicLink(
         _SEH2_TRY
         {
             ProbeForRead(SymbolicLinkInformation, sizeof(Value), sizeof(Value));
-            Value = *(PULONG)SymbolicLinkInformation;
+            Value = *(volatile ULONG *)SymbolicLinkInformation;
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -952,12 +955,6 @@ NtSetInformationSymbolicLink(
     else
     {
         Value = *(PULONG)SymbolicLinkInformation;
-    }
-
-    if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
-    {
-        ObDereferenceObject(SymbolicLink);
-        return STATUS_PRIVILEGE_NOT_HELD;
     }
 
     InterlockedOr(&SymbolicLink->Flags, OBP_SYMBOLIC_LINK_GLOBAL);
