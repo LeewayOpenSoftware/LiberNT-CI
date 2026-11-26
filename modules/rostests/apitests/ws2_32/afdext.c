@@ -60,6 +60,7 @@ START_TEST(afdext)
     WSACMSGHDR *cmsg;
     char data[16], control[WSA_CMSG_SPACE(sizeof(struct in_pktinfo))];
     OVERLAPPED overlapped;
+    WSADATA wsaData;
     DWORD bytes, flags;
     LPFN_DISCONNECTEX pDisconnectEx = NULL;
     LPFN_WSASENDMSG pWSASendMsg = NULL;
@@ -72,10 +73,19 @@ START_TEST(afdext)
     BOOL bret;
     INT ret;
 
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+    {
+        skip("WSAStartup failed %u\n", WSAGetLastError());
+        return;
+    }
+
     /* --- Extension function pointer queries (T10) --- */
     listener = CreateTcpListener(&addr);
     if (listener == INVALID_SOCKET)
+    {
+        WSACleanup();
         return;
+    }
 
     ret = WSAIoctl(listener, SIO_GET_EXTENSION_FUNCTION_POINTER,
                    &disconnectExGuid, sizeof(disconnectExGuid),
@@ -167,6 +177,8 @@ START_TEST(afdext)
     {
         ok(overlapped.Internal == STATUS_PENDING,
            "expected STATUS_PENDING, got %08Ix\n", (SIZE_T)overlapped.Internal);
+        /* the disconnect still has to complete before the peer sees EOF */
+        bret = WSAGetOverlappedResult(connector, &overlapped, &bytes, TRUE, &flags);
     }
     else
     {
@@ -267,6 +279,8 @@ START_TEST(afdext)
     closesocket(accepted);
     closesocket(connector);
     closesocket(listener);
+
+    WSACleanup();
 
     /* keep the query referenced */
     (void)pTransmitFile;
