@@ -388,8 +388,10 @@ PoolLfhFree(
 
     Slot = Subsegment->Slot;
     POOL_LOCK_ACQUIRE(&Slot->Lock, &OldIrql);
-    POOL_ASSERT(Subsegment->Signature == POOL_LFH_SIGNATURE);
-    POOL_ASSERT(Subsegment->FreeCount <= Subsegment->BlockCount);
+    if (Subsegment->Signature != POOL_LFH_SIGNATURE)
+        KeBugCheckEx(BAD_POOL_HEADER, 0x36, (ULONG_PTR)Subsegment, (ULONG_PTR)Block, Subsegment->Signature);
+    if (Subsegment->FreeCount > Subsegment->BlockCount)
+        KeBugCheckEx(BAD_POOL_HEADER, 0x37, (ULONG_PTR)Subsegment, Subsegment->FreeCount, Subsegment->BlockCount);
     POOL_ASSERT((Subsegment->FreeCount == 0) == !!Subsegment->OnFullList);
     POOL_ASSERT(Slot->SubsegmentCount != 0);
 
