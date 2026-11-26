@@ -231,8 +231,8 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     IQS_SAME(ULONG, ULONG, ICIF_QUERY),
     /* TokenIsSandboxed */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY),
-    /* TokenOriginatingProcessTrustLevel */
-    IQS_NONE,
+    /* TokenIsAppSilo */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
 };
 
 /* PRIVATE FUNCTIONS **********************************************************/
@@ -1628,6 +1628,7 @@ NtQueryInformationToken(
             case TokenPrivateNameSpace:
             case TokenIsLessPrivilegedAppContainer:
             case TokenIsSandboxed:
+            case TokenIsAppSilo:
             {
                 ULONG Value;
 
@@ -1678,6 +1679,11 @@ NtQueryInformationToken(
                         break;
                     case TokenIsSandboxed:
                         Value = !!(Token->TokenFlags & TOKEN_SANDBOX_INERT);
+                        break;
+                    case TokenIsAppSilo:
+                        /* FIXME: app-silo membership is not tracked yet; Win11
+                         * returns 0 on a token that is not in a silo. */
+                        Value = 0;
                         break;
                     default:
                         Value = 0;
