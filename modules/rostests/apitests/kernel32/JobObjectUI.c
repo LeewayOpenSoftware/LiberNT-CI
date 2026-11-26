@@ -33,6 +33,7 @@ static const ULONG SingleRestrictions[] =
     JOB_OBJECT_UILIMIT_GLOBALATOMS,
     JOB_OBJECT_UILIMIT_DESKTOP,
     JOB_OBJECT_UILIMIT_EXITWINDOWS,
+    JOB_OBJECT_UILIMIT_IME,
 };
 
 static
@@ -135,10 +136,11 @@ test_RoundTrip(void)
             ok_long(Info.UIRestrictionsClass, 0);
     }
 
-    /* All of them at once */
+    /* All of them at once. INJECTION (0x200) is excluded: Orosi rejects it
+       for lack of win32k enforcement, so the sum here is 0x1FF. */
     SetLastError(0xDEADBEEF);
-    Success = SetRestrictions(hJob, JOB_OBJECT_UILIMIT_ALL);
-    ok(Success != FALSE, "Setting JOB_OBJECT_UILIMIT_ALL failed with %lu\n", GetLastError());
+    Success = SetRestrictions(hJob, JOB_OBJECT_UILIMIT_ALL & ~JOB_OBJECT_UILIMIT_INJECTION);
+    ok(Success != FALSE, "Setting all enforced restrictions failed with %lu\n", GetLastError());
 
     memset(&Info, 0xAA, sizeof(Info));
     Success = QueryInformationJobObject(hJob,
@@ -147,11 +149,11 @@ test_RoundTrip(void)
                                         sizeof(Info),
                                         NULL);
     ok(Success != FALSE, "QueryInformationJobObject failed with %lu\n", GetLastError());
-    ok_long(Info.UIRestrictionsClass, JOB_OBJECT_UILIMIT_ALL);
+    ok_long(Info.UIRestrictionsClass, JOB_OBJECT_UILIMIT_ALL & ~JOB_OBJECT_UILIMIT_INJECTION);
 
     /* Setting the same value twice is not an error */
     SetLastError(0xDEADBEEF);
-    Success = SetRestrictions(hJob, JOB_OBJECT_UILIMIT_ALL);
+    Success = SetRestrictions(hJob, JOB_OBJECT_UILIMIT_ALL & ~JOB_OBJECT_UILIMIT_INJECTION);
     ok(Success != FALSE, "Setting the same restrictions again failed with %lu\n",
        GetLastError());
 
@@ -180,8 +182,15 @@ test_InvalidParameters(void)
     ok_err(ERROR_INVALID_PARAMETER);
 
     SetLastError(0xDEADBEEF);
-    Success = SetRestrictions(hJob, JOB_OBJECT_UILIMIT_ALL | 0x100);
+    Success = SetRestrictions(hJob, JOB_OBJECT_UILIMIT_ALL | 0x400);
     ok(Success == FALSE, "Setting one undefined bit succeeded\n");
+    ok_err(ERROR_INVALID_PARAMETER);
+
+    /* INJECTION stays rejected here: win32k has no job UI-injection
+       enforcement, so accepting it would be a documented divergence */
+    SetLastError(0xDEADBEEF);
+    Success = SetRestrictions(hJob, JOB_OBJECT_UILIMIT_INJECTION);
+    ok(Success == FALSE, "Setting INJECTION succeeded without enforcement\n");
     ok_err(ERROR_INVALID_PARAMETER);
 
     memset(&Info, 0xAA, sizeof(Info));

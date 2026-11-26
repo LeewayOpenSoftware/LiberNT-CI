@@ -2407,8 +2407,12 @@ PspSetJobUIRestrictions(
     NTSTATUS Status = STATUS_SUCCESS;
     PEJOB ChainJob;
 
-    /* Reject restrictions we do not know about */
-    if (UIRestrictionsClass & ~JOB_OBJECT_UILIMIT_ALL)
+    /* The SDK defines IME (0x100) and INJECTION (0x200) on top of the classic
+       limits, with ALL at 0x3FF. IME is accepted. INJECTION is rejected on
+       purpose: win32k has no UI-injection enforcement for jobs, so storing it
+       would promise a protection that does not exist (documented divergence
+       from Win11, native-parity-02/job-query-classes). */
+    if (UIRestrictionsClass & ~(JOB_OBJECT_UILIMIT_ALL & ~JOB_OBJECT_UILIMIT_INJECTION))
     {
         return STATUS_INVALID_PARAMETER;
     }
