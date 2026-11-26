@@ -12,6 +12,9 @@
 #include <ndk/setypes.h>
 #include <wlimgcheck.h>
 #include <reactos/umfd.h>
+#ifdef UMFD_TEST_HOOKS
+#include <ndk/obfuncs.h>
+#endif
 
 #define UMFD_EXE             L"fontdrvhost.exe"
 /* Orosi interim placement; the Win11 virtual account (U2) decides where the host lives */
@@ -187,6 +190,62 @@ WlUmfdMakeDesktop(VOID)
     return g_Desktop != NULL;
 }
 
+#ifdef UMFD_TEST_HOOKS
+/*
+ * Test images only: the first hosts of a boot die in kernel32's CSR connect with 0xC0000022.
+ * Records what the host token holds at each launch (SeChangeNotify, group count) and whether it
+ * can traverse each directory on the way to its session's CSR port.
+ */
+static VOID
+WlUmfdProbeToken(
+    _In_ HANDLE Token)
+{
+    static const LUID ChangeNotify = { SE_CHANGE_NOTIFY_PRIVILEGE, 0 };
+    ULONG_PTR Buffer[512];      /* pointer-aligned for TOKEN_GROUPS */
+    PTOKEN_PRIVILEGES Privileges = (PTOKEN_PRIVILEGES)Buffer;
+    PTOKEN_GROUPS Groups = (PTOKEN_GROUPS)Buffer;
+    WCHAR Path[3][64];
+    NTSTATUS Status[3] = { STATUS_UNSUCCESSFUL, STATUS_UNSUCCESSFUL, STATUS_UNSUCCESSFUL };
+    ULONG Session = NtCurrentPeb()->SessionId, i, GroupCount = 0;
+    DWORD Size, Notify = 2;     /* 2: unknown */
+    OBJECT_ATTRIBUTES Oa;
+    UNICODE_STRING Name;
+    HANDLE Dir;
+
+    if (GetTokenInformation(Token, TokenPrivileges, Buffer, sizeof(Buffer), &Size))
+    {
+        Notify = 0;
+        for (i = 0; i < Privileges->PrivilegeCount; ++i)
+        {
+            if (RtlEqualLuid(&Privileges->Privileges[i].Luid, &ChangeNotify))
+                Notify = (Privileges->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED) ? 1 : 3;  /* 3: held, off */
+        }
+    }
+    if (GetTokenInformation(Token, TokenGroups, Buffer, sizeof(Buffer), &Size))
+        GroupCount = Groups->GroupCount;
+
+    StringCchCopyW(Path[0], ARRAYSIZE(Path[0]), L"\\Sessions");
+    StringCchPrintfW(Path[1], ARRAYSIZE(Path[1]), L"\\Sessions\\%lu", Session);
+    StringCchPrintfW(Path[2], ARRAYSIZE(Path[2]), L"\\Sessions\\%lu\\Windows", Session);
+    if (ImpersonateLoggedOnUser(Token))
+    {
+        for (i = 0; i < 3; ++i)
+        {
+            RtlInitUnicodeString(&Name, Path[i]);
+            InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+            Status[i] = NtOpenDirectoryObject(&Dir, DIRECTORY_TRAVERSE, &Oa);
+            if (NT_SUCCESS(Status[i]))
+                NtClose(Dir);
+        }
+        RevertToSelf();
+    }
+    WlUmfdLog(EVENTLOG_WARNING_TYPE,
+              L"font driver host token probe: SeChangeNotify %lu (1 on, 3 held off, 0 absent, 2 unknown), %lu groups; "
+              L"traverse %s 0x%lx, %s 0x%lx, %s 0x%lx",
+              Notify, GroupCount, Path[0], Status[0], Path[1], Status[1], Path[2], Status[2]);
+}
+#endif
+
 static UMFD_LAUNCH
 WlUmfdLaunch(
     _Out_ PHANDLE Process,
@@ -226,6 +285,9 @@ WlUmfdLaunch(
     }
     if (!WlUmfdMakeToken(&Token))
         goto Out;
+#ifdef UMFD_TEST_HOOKS
+    WlUmfdProbeToken(Token);
+#endif
 
     ZeroMemory(&Si, sizeof(Si));
     Si.cb = sizeof(Si);
