@@ -314,6 +314,10 @@ DECLSPEC_NORETURN
 VOID NTAPI
 RtlpHeapCorruption(PHEAP Heap, PVOID Address);
 
+DECLSPEC_NORETURN
+VOID NTAPI
+RtlpHeapTerminate(PHEAP Heap, PVOID Address);
+
 BOOLEAN NTAPI
 RtlpHeapInvalidBlock(PHEAP Heap, PVOID Ptr);
 

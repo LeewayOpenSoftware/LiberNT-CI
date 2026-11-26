@@ -226,6 +226,20 @@ RtlpHeapCorruption(PHEAP Heap, PVOID Address)
     RtlFailFast(FAST_FAIL_HEAP_METADATA_CORRUPTION);
 }
 
+/*
+ * Terminates the process with STATUS_HEAP_CORRUPTION, the status Win11 reports
+ * when a 64-bit process frees a block twice or frees an invalid pointer. The
+ * termination cannot be swallowed by a caller's exception handler.
+ */
+DECLSPEC_NORETURN
+VOID NTAPI
+RtlpHeapTerminate(PHEAP Heap, PVOID Address)
+{
+    DPRINT1("HEAP %p: corruption detected at %p, terminating the process\n", Heap, Address);
+    ZwTerminateProcess(ZwCurrentProcess(), STATUS_HEAP_CORRUPTION);
+    RtlFailFast(FAST_FAIL_HEAP_METADATA_CORRUPTION);
+}
+
 static
 BOOLEAN
 RtlpIsLastCommittedEntry(PHEAP Heap, PHEAP_ENTRY Entry)
@@ -2574,10 +2588,20 @@ RtlpReportInvalidFree(HANDLE HeapPtr, PVOID Ptr)
 BOOLEAN NTAPI
 RtlpHeapInvalidBlock(PHEAP Heap, PVOID Ptr)
 {
-    if (RtlpHeapTerminateOnCorruption)
-        RtlpHeapCorruption(Heap, Ptr);
-
     RtlpReportInvalidFree(Heap, Ptr);
+
+    /*
+     * Win11 terminates a 64-bit process with STATUS_HEAP_CORRUPTION on a
+     * caller-pointer error (a double free or a free of an invalid pointer) by
+     * default, whatever the image subsystem version. A 32-bit process keeps the
+     * opt-in rule, and kernel mode never terminates from here.
+     */
+    if (RtlpHeapTerminateOnCorruption ||
+        (RtlpGetMode() == UserMode && sizeof(PVOID) == 8))
+    {
+        RtlpHeapTerminate(Heap, Ptr);
+    }
+
     RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
     return FALSE;
 }
