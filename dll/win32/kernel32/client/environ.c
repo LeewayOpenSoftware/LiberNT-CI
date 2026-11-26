@@ -144,17 +144,14 @@ GetEnvironmentVariableW(IN LPCWSTR lpName,
                         IN LPWSTR lpBuffer,
                         IN DWORD nSize)
 {
-    UNICODE_STRING VarName, VarValue;
+    UNICODE_STRING VarName;
     NTSTATUS Status;
-    USHORT UniSize;
+    SIZE_T ReturnLength;
 
     if (lpBuffer == NULL)
     {
         nSize = 0;
     }
-
-    /* Set maximum size for unicode string (in chars, including UNICODE_NULL) */
-    UniSize = (USHORT)min(nSize, UNICODE_STRING_MAX_CHARS);
 
     Status = RtlInitUnicodeStringEx(&VarName, lpName);
     if (!NT_SUCCESS(Status))
@@ -163,23 +160,25 @@ GetEnvironmentVariableW(IN LPCWSTR lpName,
         return 0;
     }
 
-    RtlInitEmptyUnicodeString(&VarValue, lpBuffer, UniSize * sizeof(WCHAR));
-
-    Status = RtlQueryEnvironmentVariable_U(NULL, &VarName, &VarValue);
-    if (!NT_SUCCESS(Status))
+    Status = RtlQueryEnvironmentVariable(NULL,
+                                         VarName.Buffer,
+                                         VarName.Length / sizeof(WCHAR),
+                                         lpBuffer,
+                                         nSize,
+                                         &ReturnLength);
+    if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_TOO_SMALL)
     {
-        if (Status == STATUS_BUFFER_TOO_SMALL)
-        {
-            return (VarValue.Length / sizeof(WCHAR)) + sizeof(ANSI_NULL);
-        }
-        BaseSetLastNTError (Status);
+        BaseSetLastNTError(Status);
         return 0;
     }
 
-    if (lpBuffer)
-        lpBuffer[VarValue.Length / sizeof(WCHAR)] = UNICODE_NULL;
+    if (ReturnLength > MAXDWORD)
+    {
+        BaseSetLastNTError(STATUS_BUFFER_OVERFLOW);
+        return 0;
+    }
 
-    return (VarValue.Length / sizeof(WCHAR));
+    return (DWORD)ReturnLength;
 }
 
 /*
