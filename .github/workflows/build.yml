@@ -525,6 +525,15 @@ jobs:
           ninja -C "$OUT" credprovs_test
         fi
 
+    - name: Build the WoW64 i386 apitests
+      # The nested i386 tree is created on demand; the apitests artifact wants
+      # the WoW64 i386 test binaries beside the native amd64 ones.
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        OUT=${{steps.configure.outputs.outdir}}
+        ninja -C "$OUT" wow64_i386_configure
+        ninja -C "$OUT/_wow64_i386" -k0 modules/rostests/apitests/all
+
     - name: Collect the kmtests binaries
       # kmtest.exe + kmtest_drv.sys (and the standalone test drivers) for a lab
       # run against the LiberNT.img of the same commit; the images themselves
