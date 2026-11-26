@@ -43,6 +43,7 @@ extern void func_QueryServiceConfig2(void);
 extern void func_RegCreateKeyEx(void);
 extern void func_RegCreateKeyTransacted(void);
 extern void func_RegEnumKey(void);
+extern void func_RegQueryMultipleValues(void);
 extern void func_RegEnumValueW(void);
 extern void func_RegFlushKey(void);
 extern void func_RegCreateKeyLink(void);
@@ -123,6 +124,7 @@ const struct test winetest_testlist[] =
     { "RegCreateKeyEx", func_RegCreateKeyEx },
     { "RegCreateKeyTransacted", func_RegCreateKeyTransacted },
     { "RegEnumKey", func_RegEnumKey },
+    { "RegQueryMultipleValues", func_RegQueryMultipleValues },
     { "RegEnumValueW", func_RegEnumValueW },
     { "RegFlushKey", func_RegFlushKey },
     { "RegCreateKeyLink", func_RegCreateKeyLink },
