@@ -10,6 +10,32 @@
 
 #include "precomp.h"
 
+/* Q8: msv1_0 delay-imports lsasrv; lsasrv extends the user's DPAPI credhist
+ * and re-encrypts the master keys after a successful password change. */
+NTSTATUS
+LsapDpapiOnPasswordChange(
+    _In_ PUNICODE_STRING DomainName,
+    _In_ PUNICODE_STRING AccountName,
+    _In_reads_bytes_(20) const UCHAR *OldDigest,
+    _In_reads_bytes_(20) const UCHAR *NewDigest);
+
+static
+VOID
+MsvpNotifyDpapiPasswordChange(
+    _In_ PUNICODE_STRING DomainName,
+    _In_ PUNICODE_STRING AccountName,
+    _In_ PUNICODE_STRING OldPassword,
+    _In_ PUNICODE_STRING NewPassword,
+    _In_reads_bytes_(MSV1_0_OWF_PASSWORD_LENGTH) const UCHAR *NewNtOwf);
+
+static
+VOID
+MsvpRefreshCredentialsForAccount(
+    _In_ PUNICODE_STRING AccountName,
+    _In_ PUNICODE_STRING DomainName,
+    _In_reads_bytes_(MSV1_0_OWF_PASSWORD_LENGTH) const UCHAR *NtOwf,
+    _In_reads_bytes_(20) const UCHAR *DpapiDigest);
+
 WINE_DEFAULT_DEBUG_CHANNEL(msv1_0);
 
 typedef struct _LSA_TOKEN_INFORMATION_V1
@@ -99,7 +125,7 @@ BuildInteractiveProfileBuffer(IN PLSA_CLIENT_REQUEST ClientRequest,
                    UserInfo->All.HomeDirectoryDrive.Length + sizeof(WCHAR) +
                    UserInfo->All.ScriptPath.Length + sizeof(WCHAR) +
                    UserInfo->All.ProfilePath.Length + sizeof(WCHAR) +
-                   ((ComputerNameLength + 3) * sizeof(WCHAR));
+                   ((ComputerNameLength + 1) * sizeof(WCHAR));
 
     LocalBuffer = DispatchTable.AllocateLsaHeap(BufferLength);
     if (LocalBuffer == NULL)
@@ -190,11 +216,12 @@ BuildInteractiveProfileBuffer(IN PLSA_CLIENT_REQUEST ClientRequest,
 
     Ptr = (LPWSTR)((ULONG_PTR)Ptr + LocalBuffer->HomeDirectoryDrive.MaximumLength);
 
-    LocalBuffer->LogonServer.Length = (ComputerNameLength + 2) * sizeof(WCHAR);
+    LocalBuffer->LogonServer.Length = ComputerNameLength * sizeof(WCHAR);
     LocalBuffer->LogonServer.MaximumLength = LocalBuffer->LogonServer.Length + sizeof(WCHAR);
     LocalBuffer->LogonServer.Buffer = (LPWSTR)((ULONG_PTR)ClientBaseAddress + (ULONG_PTR)Ptr - (ULONG_PTR)LocalBuffer);
-    wcscpy(Ptr, L"\\");
-    wcscat(Ptr, ComputerName);
+    /* Win11 stores the bare computer name here (no backslashes); the
+     * LOGONSERVER consumer adds the \\ UNC prefix. */
+    wcscpy(Ptr, ComputerName);
 
     LocalBuffer->UserFlags = 0;
 
@@ -578,13 +605,6 @@ done:
 
 
 static
-VOID
-MsvpRefreshNtOwfCredential(
-    _In_ PUNICODE_STRING AccountName,
-    _In_ PUNICODE_STRING DomainName,
-    _In_reads_bytes_(MSV1_0_OWF_PASSWORD_LENGTH) const UCHAR *NtOwf);
-
-static
 NTSTATUS
 MsvpChangePasswordWorker(IN PLSA_CLIENT_REQUEST ClientRequest,
                    IN PVOID ProtocolSubmitBuffer,
@@ -732,9 +752,13 @@ MsvpChangePasswordWorker(IN PLSA_CLIENT_REQUEST ClientRequest,
     if (!NT_SUCCESS(Status))
         TRACE("SamrUnicodeChangePasswordUser2 failed (Status %08lx)\n", Status);
     else
-        MsvpRefreshNtOwfCredential(&RequestBuffer->AccountName,
-                                   &RequestBuffer->DomainName,
-                                   (const UCHAR *)&NewNtPassword);
+    {
+        MsvpNotifyDpapiPasswordChange(&RequestBuffer->DomainName,
+                                      &RequestBuffer->AccountName,
+                                      &RequestBuffer->OldPassword,
+                                      &RequestBuffer->NewPassword,
+                                      (const UCHAR *)&NewNtPassword);
+    }
 
 done:
     RtlSecureZeroMemory(&PasswordBuffer, sizeof(PasswordBuffer));
@@ -1324,16 +1348,66 @@ static ULONG MsvAuthenticationPackageId = 0;
  */
 #define MSV1_0_DPAPI_PRIMARY_KEY "Primary"
 
+/* SHA-1 of the UTF-16 password: the DPAPI pre-key digest (a blank password hashes zero bytes, as on Windows). */
+static
+BOOLEAN
+MsvpHashPasswordForDpapi(
+    _In_ PUNICODE_STRING Password,
+    _Out_writes_bytes_(20) UCHAR *Digest)
+{
+    HCRYPTPROV Provider = 0;
+    HCRYPTHASH Hash = 0;
+    DWORD DigestLength = 20;
+    BOOLEAN Ok;
+
+    Ok = CryptAcquireContextW(&Provider, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT) &&
+         CryptCreateHash(Provider, CALG_SHA1, 0, 0, &Hash) &&
+         CryptHashData(Hash,
+                       Password->Length ? (const BYTE *)Password->Buffer : (const BYTE *)L"",
+                       Password->Length, 0) &&
+         CryptGetHashParam(Hash, HP_HASHVAL, Digest, &DigestLength, 0) &&
+         DigestLength == 20;
+
+    if (Hash != 0)
+        CryptDestroyHash(Hash);
+    if (Provider != 0)
+        CryptReleaseContext(Provider, 0);
+    return Ok;
+}
+
+/* Q8/C4: the password changed, so lsasrv extends the credhist chain and
+ * re-encrypts the user's master keys, and every live session of the account
+ * gets the new credentials. Digests only, never the passwords. */
+static
+VOID
+MsvpNotifyDpapiPasswordChange(
+    _In_ PUNICODE_STRING DomainName,
+    _In_ PUNICODE_STRING AccountName,
+    _In_ PUNICODE_STRING OldPassword,
+    _In_ PUNICODE_STRING NewPassword,
+    _In_reads_bytes_(MSV1_0_OWF_PASSWORD_LENGTH) const UCHAR *NewNtOwf)
+{
+    UCHAR OldDigest[20];
+    UCHAR NewDigest[20];
+
+    if (MsvpHashPasswordForDpapi(OldPassword, OldDigest) &&
+        MsvpHashPasswordForDpapi(NewPassword, NewDigest))
+    {
+        MsvpRefreshCredentialsForAccount(AccountName, DomainName, NewNtOwf, NewDigest);
+        LsapDpapiOnPasswordChange(DomainName, AccountName, OldDigest, NewDigest);
+    }
+
+    RtlSecureZeroMemory(OldDigest, sizeof(OldDigest));
+    RtlSecureZeroMemory(NewDigest, sizeof(NewDigest));
+}
+
 static
 VOID
 MsvpStoreDpapiCredential(
     _In_ PLUID LogonId,
     _In_ PUNICODE_STRING Password)
 {
-    HCRYPTPROV Provider = 0;
-    HCRYPTHASH Hash = 0;
-    BYTE Digest[20];
-    DWORD DigestLength = sizeof(Digest);
+    UCHAR Digest[20];
     LSA_STRING KeyValue;
     LSA_STRING Credential;
     NTSTATUS Status;
@@ -1345,21 +1419,10 @@ MsvpStoreDpapiCredential(
         return;
     }
 
-    if (!CryptAcquireContextW(&Provider, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT))
-    {
-        TRACE("CryptAcquireContextW failed (Error %lu)\n", GetLastError());
-        return;
-    }
-
-    /* A blank password hashes zero bytes, as on Windows; the pointer only has to be non-NULL for CryptHashData. */
-    if (!CryptCreateHash(Provider, CALG_SHA1, 0, 0, &Hash) ||
-        !CryptHashData(Hash, Password->Length ? (const BYTE *)Password->Buffer : (const BYTE *)L"",
-                       Password->Length, 0) ||
-        !CryptGetHashParam(Hash, HP_HASHVAL, Digest, &DigestLength, 0) ||
-        DigestLength != sizeof(Digest))
+    if (!MsvpHashPasswordForDpapi(Password, Digest))
     {
         TRACE("SHA-1 of the logon password failed (Error %lu)\n", GetLastError());
-        goto done;
+        return;
     }
 
     RtlInitString(&KeyValue, MSV1_0_DPAPI_PRIMARY_KEY);
@@ -1374,11 +1437,6 @@ MsvpStoreDpapiCredential(
     if (!NT_SUCCESS(Status))
         TRACE("AddCredential failed (Status 0x%08lx)\n", Status);
 
-done:
-    if (Hash != 0)
-        CryptDestroyHash(Hash);
-    if (Provider != 0)
-        CryptReleaseContext(Provider, 0);
     RtlSecureZeroMemory(Digest, sizeof(Digest));
 }
 
@@ -1776,50 +1834,79 @@ done:
 /* After a password change by the session's own user, its stored OWF follows the new password */
 static
 VOID
-MsvpRefreshNtOwfCredential(
-    _In_ PUNICODE_STRING AccountName,
-    _In_ PUNICODE_STRING DomainName,
-    _In_reads_bytes_(MSV1_0_OWF_PASSWORD_LENGTH) const UCHAR *NtOwf)
+MsvpReplaceSessionCredential(
+    _In_ PLUID LogonId,
+    _In_ PCSTR KeyName,
+    _In_reads_bytes_(Length) const UCHAR *Data,
+    _In_ ULONG Length)
 {
-    SECPKG_CLIENT_INFO ClientInfo;
-    PLOGON_LIST_ENTRY LogonEntry;
-    LSA_STRING KeyValue, Credential = { 0, 0, NULL };
+    LSA_STRING KeyValue, Credential = {0, 0, NULL};
     ULONG QueryContext = 0, KeyLength;
-    BOOLEAN Refresh = FALSE;
 
-    if (LsaGetClientInfo == NULL || DispatchTable.AddCredential == NULL ||
-        !NT_SUCCESS(LsaGetClientInfo(&ClientInfo)) ||
-        ClientInfo.ImpersonationLevel < SecurityImpersonation)
-    {
-        return;
-    }
-
-    RtlAcquireResourceShared(&LogonListResource, TRUE);
-    LogonEntry = GetLogonByLogonId(&ClientInfo.LogonId);
-    if (LogonEntry != NULL &&
-        RtlEqualUnicodeString(&LogonEntry->UserName, AccountName, TRUE) &&
-        (DomainName->Length == 0 ||
-         RtlEqualUnicodeString(&LogonEntry->LogonDomainName, DomainName, TRUE) ||
-         RtlEqualUnicodeString(&LogonEntry->LogonServer, DomainName, TRUE)))
-    {
-        Refresh = TRUE;
-    }
-    RtlReleaseResource(&LogonListResource);
-
-    /* Only a session that already holds an OWF gets the new one */
-    RtlInitString(&KeyValue, MSV1_0_NTOWF_KEY);
-    if (!Refresh ||
-        !NT_SUCCESS(DispatchTable.GetCredentials(&ClientInfo.LogonId, MsvAuthenticationPackageId,
-                                                 &QueryContext, FALSE, &KeyValue, &KeyLength, &Credential)))
+    /* Only a session that already holds the credential gets the new one. */
+    RtlInitString(&KeyValue, KeyName);
+    if (!NT_SUCCESS(DispatchTable.GetCredentials(LogonId, MsvAuthenticationPackageId,
+                                                 &QueryContext, FALSE, &KeyValue,
+                                                 &KeyLength, &Credential)))
     {
         return;
     }
     RtlSecureZeroMemory(Credential.Buffer, Credential.MaximumLength);
     DispatchTable.FreeLsaHeap(Credential.Buffer);
 
-    Credential.Buffer = (PCHAR)NtOwf;
-    Credential.Length = Credential.MaximumLength = MSV1_0_OWF_PASSWORD_LENGTH;
-    DispatchTable.AddCredential(&ClientInfo.LogonId, MsvAuthenticationPackageId, &KeyValue, &Credential);
+    Credential.Buffer = (PCHAR)Data;
+    Credential.Length = Credential.MaximumLength = (USHORT)Length;
+    DispatchTable.AddCredential(LogonId, MsvAuthenticationPackageId, &KeyValue, &Credential);
+}
+
+/* C4: after a password change, every logon session of the account keeps
+ * working: refresh the cached NTOWF and the DPAPI pre-key ("Primary") in all
+ * of them, not just the caller's (the Ctrl+Alt+Del caller is winlogon, not
+ * the user). Matching is by account name, the key msv1_0's logon list keeps. */
+static
+VOID
+MsvpRefreshCredentialsForAccount(
+    _In_ PUNICODE_STRING AccountName,
+    _In_ PUNICODE_STRING DomainName,
+    _In_reads_bytes_(MSV1_0_OWF_PASSWORD_LENGTH) const UCHAR *NtOwf,
+    _In_reads_bytes_(20) const UCHAR *DpapiDigest)
+{
+    LUID Sessions[128];
+    ULONG SessionCount = 0, Index;
+    PLIST_ENTRY CurrentEntry;
+
+    if (DispatchTable.AddCredential == NULL || DispatchTable.GetCredentials == NULL)
+        return;
+
+    RtlAcquireResourceShared(&LogonListResource, TRUE);
+    CurrentEntry = LogonListHead.Flink;
+    while (CurrentEntry != &LogonListHead && SessionCount < ARRAYSIZE(Sessions))
+    {
+        PLOGON_LIST_ENTRY LogonEntry = CONTAINING_RECORD(CurrentEntry,
+                                                         LOGON_LIST_ENTRY,
+                                                         ListEntry);
+        if (RtlEqualUnicodeString(&LogonEntry->UserName, AccountName, TRUE) &&
+            (DomainName->Length == 0 ||
+             RtlEqualUnicodeString(&LogonEntry->LogonDomainName, DomainName, TRUE) ||
+             RtlEqualUnicodeString(&LogonEntry->LogonServer, DomainName, TRUE)))
+        {
+            Sessions[SessionCount] = LogonEntry->LogonId;
+            SessionCount++;
+        }
+        CurrentEntry = CurrentEntry->Flink;
+    }
+    RtlReleaseResource(&LogonListResource);
+    if (CurrentEntry != &LogonListHead)
+        TRACE("MsvpRefreshCredentialsForAccount: more than %u sessions, capping\n",
+              ARRAYSIZE(Sessions));
+
+    for (Index = 0; Index < SessionCount; Index++)
+    {
+        MsvpReplaceSessionCredential(&Sessions[Index], MSV1_0_NTOWF_KEY,
+                                     NtOwf, MSV1_0_OWF_PASSWORD_LENGTH);
+        MsvpReplaceSessionCredential(&Sessions[Index], MSV1_0_DPAPI_PRIMARY_KEY,
+                                     DpapiDigest, 20);
+    }
 }
 
 /*

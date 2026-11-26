@@ -41,6 +41,10 @@ StartRpcServer(VOID)
         return FALSE;
     }
 
+    /* The wlui endpoint exists before any process that is not SYSTEM can run. */
+    if (!WluiServerStart())
+        return FALSE;
+
     Status = RpcServerListen(1, 20, TRUE);
     if (Status != RPC_S_OK)
     {

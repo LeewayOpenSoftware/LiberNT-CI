@@ -556,11 +556,14 @@ jobs:
         if [ -d "$OUT/_wow64_i386/modules/rostests/tests" ]; then
           find "$OUT/_wow64_i386/modules/rostests/tests" -type f \( -name 'lowil.exe' -o -name 'elevadm.exe' \) -exec cp -v {} apitests-out/wow64/ \;
         fi
-        # credprov_apitest needs its harness, test modules and the hooked credprovs build beside it.
+        # credprov_apitest needs its harness, test modules and the hooked credprovs build beside it;
+        # credprov_absent.dll must stay missing for the Framework missing-dependency case.
         if [ -d "$OUT/modules/rostests/apitests/credprov" ]; then
-          find "$OUT/modules/rostests/apitests/credprov" -type f \( -name '*.exe' -o -name '*.dll' \) -exec cp -v {} apitests-out/amd64/ \;
+          find "$OUT/modules/rostests/apitests/credprov" -type f \( -name '*.exe' -o -name '*.dll' \) ! -name 'credprov_absent.dll' -exec cp -v {} apitests-out/amd64/ \;
           cp -v "$OUT/dll/win32/credprovs/credprovs_test.dll" apitests-out/amd64/
         fi
+        # Hooked helper hosts (add_rostests_file targets under base/) that apitests start from beside them.
+        [ -d "$OUT/base" ] && find "$OUT/base" -type f -name '*_test.exe' -exec cp -v {} apitests-out/amd64/ \;
         ls -lR apitests-out | head -100
 
     - name: Upload the apitests binaries
@@ -1269,10 +1272,11 @@ jobs:
         Get-ChildItem -Recurse "$out/modules/rostests/tests" -File |
             Where-Object { $_.Name -in 'lowil.exe', 'elevadm.exe' } |
             ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
-        # credprov_apitest needs its harness, test modules and the hooked credprovs build beside it.
+        # credprov_apitest needs its harness, test modules and the hooked credprovs build beside it;
+        # credprov_absent.dll must stay missing for the Framework missing-dependency case.
         if (Test-Path "$out/modules/rostests/apitests/credprov") {
             Get-ChildItem -Recurse "$out/modules/rostests/apitests/credprov" -File |
-                Where-Object { $_.Extension -in '.exe', '.dll' } |
+                Where-Object { $_.Extension -in '.exe', '.dll' -and $_.Name -ne 'credprov_absent.dll' } |
                 ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
             Copy-Item -Verbose -ErrorAction Stop "$out/dll/win32/credprovs/credprovs_test.dll" apitests-out/amd64/
         }
