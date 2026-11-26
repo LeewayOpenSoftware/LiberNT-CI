@@ -71,6 +71,7 @@ list(APPEND SOURCE wow64.c)
 if(ARCH STREQUAL "i386")
     list(APPEND ASM_SOURCE dispatch/i386/dispatch.S)
 elseif(ARCH STREQUAL "amd64")
+    list(APPEND SOURCE dispatch/amd64/callback.c)
     list(APPEND ASM_SOURCE
         dispatch/amd64/dispatch.S
         compat/amd64/msys2.S)
