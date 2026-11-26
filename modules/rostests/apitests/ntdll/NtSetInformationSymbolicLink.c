@@ -356,7 +356,7 @@ TestGlobalEffectPrivateMap(VOID)
                 NtQueryEvent(H, EventBasicInformation, &Info, sizeof(Info), NULL);
                 NtClose(H);
             }
-            trace("PROBE privmap global=%lu open via link -> 0x%lx state=%ld (0 = private, 1 = \\GLOBAL??)\n",
+            trace("PROBE privmap global=%lu open via link -> 0x%lx state=%ld (0 = private, 1 = \\GLOBAL?" "?)\n",
                   Value, Status, Info.EventState);
         }
         NtClose(Link);
@@ -378,7 +378,7 @@ typedef struct _RACE { HANDLE Link; volatile LONG Stop; LONG Failures; LONG Open
 static
 DWORD
 WINAPI
-OpenThread(PVOID Param)
+OpenWorkerThread(PVOID Param)
 {
     RACE *Race = Param;
     UNICODE_STRING Name;
@@ -418,7 +418,7 @@ TestConcurrency(VOID)
         return;
     StringCchCopyW(Race.Name, _countof(Race.Name), LastLink);
     for (i = 0; i < _countof(Threads); i++)
-        Threads[i] = CreateThread(NULL, 0, OpenThread, &Race, 0, NULL);
+        Threads[i] = CreateThread(NULL, 0, OpenWorkerThread, &Race, 0, NULL);
     for (i = 0; i < 2000; i++)
     {
         Value = i & 1;
