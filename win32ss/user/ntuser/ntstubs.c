@@ -1599,15 +1599,15 @@ IntWindowDpiChanged(_In_ PWND Window, _In_ UINT Dpi)
     ULONG Version = NTUSER_DPI_CONTEXT_GET_VERSION(Window->DpiContext);
 
     if (!OldDpi) OldDpi = 96;
-    Suggested.left = MulDiv(Suggested.left, Dpi, OldDpi);
-    Suggested.top = MulDiv(Suggested.top, Dpi, OldDpi);
-    Suggested.right = MulDiv(Suggested.right, Dpi, OldDpi);
-    Suggested.bottom = MulDiv(Suggested.bottom, Dpi, OldDpi);
+    Suggested.left = EngMulDiv(Suggested.left, Dpi, OldDpi);
+    Suggested.top = EngMulDiv(Suggested.top, Dpi, OldDpi);
+    Suggested.right = EngMulDiv(Suggested.right, Dpi, OldDpi);
+    Suggested.bottom = EngMulDiv(Suggested.bottom, Dpi, OldDpi);
 
     if (Version == 2)
     {
-        ScaledSize.cx = MulDiv(Window->rcWindow.right - Window->rcWindow.left, Dpi, OldDpi);
-        ScaledSize.cy = MulDiv(Window->rcWindow.bottom - Window->rcWindow.top, Dpi, OldDpi);
+        ScaledSize.cx = EngMulDiv(Window->rcWindow.right - Window->rcWindow.left, Dpi, OldDpi);
+        ScaledSize.cy = EngMulDiv(Window->rcWindow.bottom - Window->rcWindow.top, Dpi, OldDpi);
         if (co_IntSendMessage(UserHMGetHandle(Window), WM_GETDPISCALEDSIZE,
                               MAKELONG(Dpi, Dpi), (LPARAM)&ScaledSize))
         {
