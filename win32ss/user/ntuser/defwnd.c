@@ -731,18 +731,7 @@ IntDefWindowProc(
          /* FALSE requests the system's default linear scaling. */
          return FALSE;
 
-      case WM_DPICHANGED:
-         if (lParam)
-         {
-            /* lParam is a captured RECT for this message (see g_MsgMemory). */
-            PRECT Suggested = (PRECT)lParam;
-            co_WinPosSetWindowPos(Wnd, NULL,
-                                  Suggested->left, Suggested->top,
-                                  Suggested->right - Suggested->left,
-                                  Suggested->bottom - Suggested->top,
-                                  SWP_NOZORDER | SWP_NOACTIVATE);
-         }
-         return 0;
+      /* Win11 DefWindowProc does not apply the suggested rect; the app resizes itself. */
 
       case WM_DEVICECHANGE:
             return TRUE;

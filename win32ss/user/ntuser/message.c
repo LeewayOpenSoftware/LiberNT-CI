@@ -111,7 +111,7 @@ static const unsigned int message_pointer_flags[] =
     /* 0x2c0 - 0x2df */
     0,
     /* 0x2e0 - 0x2ff */
-    0,
+    SET(WM_DPICHANGED) | SET(WM_GETDPISCALEDSIZE),
     /* 0x300 - 0x31f */
     SET(WM_ASKCBFORMATNAME),
     /* 0x320 - 0x33f */

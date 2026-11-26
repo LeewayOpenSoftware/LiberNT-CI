@@ -11,7 +11,10 @@ typedef BOOL (WINAPI *PFORCEWINDOWTODPIFORTEST)(HWND, UINT);
 static UINT MessageLog[32];
 static UINT MessageCount;
 static HWND TrackedChild;
+static HWND TrackedParent;
 static UINT ChildDpiChangedCount;
+static RECT SuggestedRect;
+static BOOL SuggestedSeen;
 
 static LRESULT CALLBACK
 DpiWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
@@ -27,6 +30,11 @@ DpiWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
         if (MessageCount < ARRAYSIZE(MessageLog)) MessageLog[MessageCount++] = Msg;
     }
     if (hWnd == TrackedChild && Msg == WM_DPICHANGED) ChildDpiChangedCount++;
+    if (hWnd == TrackedParent && Msg == WM_DPICHANGED)
+    {
+        SuggestedRect = *(RECT*)lParam;
+        SuggestedSeen = TRUE;
+    }
 
     return DefWindowProcW(hWnd, Msg, wParam, lParam);
 }
@@ -89,6 +97,8 @@ TestNotificationOrder(PFORCEWINDOWTODPIFORTEST ForceWindowToDpiForTest,
     MessageCount = 0;
     ChildDpiChangedCount = 0;
     TrackedChild = Child;
+    TrackedParent = Parent;
+    SuggestedSeen = FALSE;
     GetWindowRect(Parent, &BeforeRect);
     GetWindowRect(Child, &ChildBefore);
     OldDpi = GetDpiForWindow(Parent);
@@ -103,9 +113,17 @@ TestNotificationOrder(PFORCEWINDOWTODPIFORTEST ForceWindowToDpiForTest,
            "PMv1 message order started with %#x, count %u\n",
            MessageCount ? MessageLog[0] : 0, MessageCount);
         GetWindowRect(Parent, &AfterRect);
-        ok(abs((AfterRect.right - AfterRect.left) - MulDiv(BeforeRect.right - BeforeRect.left, Dpi, OldDpi)) <= 1 &&
-           abs((AfterRect.bottom - AfterRect.top) - MulDiv(BeforeRect.bottom - BeforeRect.top, Dpi, OldDpi)) <= 1,
-           "PMv1 suggested rectangle was not linearly scaled (%ldx%ld -> %ldx%ld)\n",
+        ok(SuggestedSeen, "PMv1 window did not receive a suggested rect\n");
+        ok(abs((SuggestedRect.right - SuggestedRect.left) - MulDiv(BeforeRect.right - BeforeRect.left, Dpi, OldDpi)) <= 1 &&
+           abs((SuggestedRect.bottom - SuggestedRect.top) - MulDiv(BeforeRect.bottom - BeforeRect.top, Dpi, OldDpi)) <= 1,
+           "PMv1 suggested size was not linearly scaled (%ldx%ld -> %ldx%ld)\n",
+           BeforeRect.right - BeforeRect.left, BeforeRect.bottom - BeforeRect.top,
+           SuggestedRect.right - SuggestedRect.left, SuggestedRect.bottom - SuggestedRect.top);
+        ok(SuggestedRect.left == BeforeRect.left && SuggestedRect.top == BeforeRect.top,
+           "PMv1 suggested position moved from (%ld,%ld) to (%ld,%ld)\n",
+           BeforeRect.left, BeforeRect.top, SuggestedRect.left, SuggestedRect.top);
+        ok(EqualRect(&BeforeRect, &AfterRect),
+           "PMv1 window rect changed (%ldx%ld -> %ldx%ld)\n",
            BeforeRect.right - BeforeRect.left, BeforeRect.bottom - BeforeRect.top,
            AfterRect.right - AfterRect.left, AfterRect.bottom - AfterRect.top);
         GetWindowRect(Child, &ChildAfter);
@@ -130,6 +148,7 @@ cleanup:
     if (Child != NULL) DestroyWindow(Child);
     if (Parent != NULL) DestroyWindow(Parent);
     TrackedChild = NULL;
+    TrackedParent = NULL;
     SetThreadDpiAwarenessContext(PreviousContext);
 }
 

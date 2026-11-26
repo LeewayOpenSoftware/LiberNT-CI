@@ -1523,17 +1523,16 @@ NtUserEnableNonClientDpiScaling(_In_ HWND hWnd)
     {
         EngSetLastError(ERROR_INVALID_WINDOW_HANDLE);
     }
-    else if ((Window->style & WS_CHILD) ||
-             NTUSER_DPI_CONTEXT_GET_AWARENESS(Window->DpiContext) != DPI_AWARENESS_PER_MONITOR_AWARE ||
-             NTUSER_DPI_CONTEXT_GET_VERSION(Window->DpiContext) != 1)
-    {
-        EngSetLastError(ERROR_INVALID_PARAMETER);
-    }
-    else
+    else if (Window->head.pti == PsGetCurrentThreadWin32Thread() &&
+             !(Window->style & WS_CHILD) &&
+             !(Window->state2 & WNDS2_WMCREATEMSGPROCESSED) &&
+             NTUSER_DPI_CONTEXT_GET_AWARENESS(Window->DpiContext) == DPI_AWARENESS_PER_MONITOR_AWARE)
     {
         Window->NonClientDpiScaling = TRUE;
         Ret = TRUE;
     }
+    /* All remaining cases fail without setting a last error, as the
+       historical HWND_ROUTINE_ROS_ENABLENCDPISCALING path did. */
     UserLeave();
     return Ret;
 }
@@ -1593,21 +1592,23 @@ IntUpdateDpiChildren(_In_ PWND Parent, _In_ UINT Dpi)
 static BOOL
 IntWindowDpiChanged(_In_ PWND Window, _In_ UINT Dpi)
 {
-    RECT Suggested = Window->rcWindow;
+    RECT Suggested;
     SIZE ScaledSize;
     UINT OldDpi = IntGetWindowDpiValue(Window);
     ULONG Version = NTUSER_DPI_CONTEXT_GET_VERSION(Window->DpiContext);
 
     if (!OldDpi) OldDpi = 96;
-    Suggested.left = EngMulDiv(Suggested.left, Dpi, OldDpi);
-    Suggested.top = EngMulDiv(Suggested.top, Dpi, OldDpi);
-    Suggested.right = EngMulDiv(Suggested.right, Dpi, OldDpi);
-    Suggested.bottom = EngMulDiv(Suggested.bottom, Dpi, OldDpi);
+
+    /* Win11 keeps the position and scales only the size (GAP.md 2.4). */
+    ScaledSize.cx = EngMulDiv(Window->rcWindow.right - Window->rcWindow.left, Dpi, OldDpi);
+    ScaledSize.cy = EngMulDiv(Window->rcWindow.bottom - Window->rcWindow.top, Dpi, OldDpi);
+    Suggested.left = Window->rcWindow.left;
+    Suggested.top = Window->rcWindow.top;
+    Suggested.right = Suggested.left + ScaledSize.cx;
+    Suggested.bottom = Suggested.top + ScaledSize.cy;
 
     if (Version == 2)
     {
-        ScaledSize.cx = EngMulDiv(Window->rcWindow.right - Window->rcWindow.left, Dpi, OldDpi);
-        ScaledSize.cy = EngMulDiv(Window->rcWindow.bottom - Window->rcWindow.top, Dpi, OldDpi);
         if (co_IntSendMessage(UserHMGetHandle(Window), WM_GETDPISCALEDSIZE,
                               MAKELONG(Dpi, Dpi), (LPARAM)&ScaledSize))
         {
