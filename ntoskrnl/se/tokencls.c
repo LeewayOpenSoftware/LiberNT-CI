@@ -198,15 +198,17 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     /* TokenAppContainerNumber */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenUserClaimAttributes */
-    IQS_NONE,
+    IQS_SAME(CLAIM_SECURITY_ATTRIBUTES_INFORMATION, ULONG,
+             ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenDeviceClaimAttributes */
-    IQS_NONE,
+    IQS_SAME(CLAIM_SECURITY_ATTRIBUTES_INFORMATION, ULONG,
+             ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenRestrictedUserClaimAttributes */
     IQS_NONE,
     /* TokenRestrictedDeviceClaimAttributes */
     IQS_NONE,
     /* TokenDeviceGroups */
-    IQS_NONE,
+    IQS_SAME(TOKEN_GROUPS, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenRestrictedDeviceGroups */
     IQS_NONE,
     /* TokenSecurityAttributes */
@@ -215,11 +217,12 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     /* TokenIsRestricted */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenProcessTrustLevel */
-    IQS_NONE,
+    IQS_SAME(PVOID, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenPrivateNameSpace */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenSingletonAttributes */
-    IQS_NONE,
+    IQS_SAME(CLAIM_SECURITY_ATTRIBUTES_INFORMATION, ULONG,
+             ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenBnoIsolation */
     IQS_SAME(TOKEN_BNO_ISOLATION_INFORMATION, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenChildProcessFlags */
@@ -1800,6 +1803,59 @@ NtQueryInformationToken(
                          * audit policy here once the 30-byte per-category layout
                          * is defined. */
                         RtlZeroMemory(TokenInformation, RequiredLength);
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                break;
+            }
+
+            case TokenUserClaimAttributes:
+            case TokenDeviceClaimAttributes:
+            case TokenSingletonAttributes:
+            case TokenDeviceGroups:
+            case TokenProcessTrustLevel:
+            {
+                DPRINT("NtQueryInformationToken(%d)\n", TokenInformationClass);
+
+                /* FIXME: these are reported as an empty fixed-size structure
+                 * regardless of the token's real claim attributes, device groups
+                 * or trust level, which are not stored yet. Win11 returns an empty
+                 * result when none is present; sizes verified on 26100.9974 (Pam,
+                 * native-parity-03/win11-token-query-themes67.md). */
+                switch (TokenInformationClass)
+                {
+                    case TokenDeviceGroups:
+                        RequiredLength = sizeof(TOKEN_GROUPS);
+                        break;
+                    case TokenProcessTrustLevel:
+                        RequiredLength = sizeof(PVOID);
+                        break;
+                    default:
+                        RequiredLength = sizeof(CLAIM_SECURITY_ATTRIBUTES_INFORMATION);
+                        break;
+                }
+
+                _SEH2_TRY
+                {
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        RtlZeroMemory(TokenInformation, RequiredLength);
+                        if (TokenInformationClass != TokenDeviceGroups &&
+                            TokenInformationClass != TokenProcessTrustLevel)
+                        {
+                            ((PCLAIM_SECURITY_ATTRIBUTES_INFORMATION)TokenInformation)->Version =
+                                CLAIM_SECURITY_ATTRIBUTES_INFORMATION_VERSION_V1;
+                        }
                     }
                     else
                     {
