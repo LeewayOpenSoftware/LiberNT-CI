@@ -219,7 +219,7 @@ BuildInteractiveProfileBuffer(IN PLSA_CLIENT_REQUEST ClientRequest,
     LocalBuffer->LogonServer.Length = (ComputerNameLength + 2) * sizeof(WCHAR);
     LocalBuffer->LogonServer.MaximumLength = LocalBuffer->LogonServer.Length + sizeof(WCHAR);
     LocalBuffer->LogonServer.Buffer = (LPWSTR)((ULONG_PTR)ClientBaseAddress + (ULONG_PTR)Ptr - (ULONG_PTR)LocalBuffer);
-    wcscpy(Ptr, L"\\");
+    wcscpy(Ptr, L"\\\\");
     wcscat(Ptr, ComputerName);
 
     LocalBuffer->UserFlags = 0;
