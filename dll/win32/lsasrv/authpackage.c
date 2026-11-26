@@ -1771,7 +1771,11 @@ LsapSetPrivileges(
                                 0,
                                 &PolicyHandle);
         if (!NT_SUCCESS(Status))
+        {
+            /* UMFD boot probe (diagnostic, not for main) */
+            ERR("LSAPROBE: LsarOpenPolicy 0x%08lx\n", Status);
             return Status;
+        }
 
         for (i = 0; i <= TokenInfo1->Groups->GroupCount; i++)
         {
@@ -1782,10 +1786,17 @@ LsapSetPrivileges(
                                      ACCOUNT_VIEW,
                                      &AccountHandle);
             if (!NT_SUCCESS(Status))
+            {
+                /* UMFD boot probe (diagnostic, not for main): which SIDs are skipped, and why */
+                if (Status != STATUS_OBJECT_NAME_NOT_FOUND)
+                    ERR("LSAPROBE: LsarOpenAccount sid %lu/%lu 0x%08lx\n", i, TokenInfo1->Groups->GroupCount, Status);
                 continue;
+            }
 
             Status = LsarEnumeratePrivilegesAccount(AccountHandle,
                                                     &Privileges);
+            if (!NT_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_NOT_FOUND)
+                ERR("LSAPROBE: LsarEnumeratePrivilegesAccount sid %lu 0x%08lx\n", i, Status);
             if (NT_SUCCESS(Status))
             {
                 for (j = 0; j < Privileges->PrivilegeCount; j++)
@@ -1811,6 +1822,7 @@ LsapSetPrivileges(
         }
 
         LsarClose(&PolicyHandle);
+        ERR("LSAPROBE: token privileges %lu\n", TokenInfo1->Privileges ? TokenInfo1->Privileges->PrivilegeCount : 0);
 
         if (TokenInfo1->Privileges != NULL)
         {
