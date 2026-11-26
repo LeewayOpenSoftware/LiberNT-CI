@@ -88,6 +88,7 @@ list(APPEND SOURCE
     NtApphelpCacheControl.c
     NtCompareTokens.c
     NtCreateFile.c
+    NtCreateDirectoryObjectEx.c
     NtCreateKey.c
     NtCreateKeyCached.c
     NtCreateProfile.c
@@ -143,6 +144,7 @@ list(APPEND SOURCE
     NtSaveKey.c
     NtSetDefaultLocale.c
     NtSetInformationFile.c
+    NtSetInformationSymbolicLink.c
     NtSetInformationProcess.c
     NtSetInformationThread.c
     NtSetInformationToken.c

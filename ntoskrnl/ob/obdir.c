@@ -39,7 +39,15 @@ NTAPI
 ObpDeleteDirectoryObject(IN PVOID Object)
 {
     POBJECT_DIRECTORY Directory = Object;
+    POBP_OBJECT_DIRECTORY DirectoryBody;
     ULONG Index;
+
+    DirectoryBody = CONTAINING_RECORD(Directory,
+                                      OBP_OBJECT_DIRECTORY,
+                                      Directory);
+
+    if (DirectoryBody->ShadowDirectory)
+        ObDereferenceObject(DirectoryBody->ShadowDirectory);
 
     if (Directory->NamespaceEntry)
         ObpRemovePrivateNamespace(Directory);
@@ -181,9 +189,12 @@ ObpLookupEntryDirectory(IN POBJECT_DIRECTORY Directory,
                         IN PUNICODE_STRING Name,
                         IN ULONG Attributes,
                         IN BOOLEAN SearchShadow,
-                        IN POBP_LOOKUP_CONTEXT Context)
+                        IN POBP_LOOKUP_CONTEXT Context,
+                        OUT POBJECT_DIRECTORY *FoundDirectory OPTIONAL)
 {
     BOOLEAN CaseInsensitive = FALSE;
+    BOOLEAN ExplicitShadow = FALSE;
+    BOOLEAN SearchedShadow = FALSE;
     POBJECT_HEADER_NAME_INFO HeaderNameInfo;
     POBJECT_HEADER ObjectHeader;
     ULONG HashValue;
@@ -196,11 +207,11 @@ ObpLookupEntryDirectory(IN POBJECT_DIRECTORY Directory,
     PVOID FoundObject = NULL;
     PWSTR Buffer;
     POBJECT_DIRECTORY ShadowDirectory;
+    POBP_OBJECT_DIRECTORY DirectoryBody;
 
     PAGED_CODE();
 
-    /* Check if we should search the shadow directory */
-    if (ObpLUIDDeviceMapsEnabled == 0) SearchShadow = FALSE;
+    if (FoundDirectory) *FoundDirectory = NULL;
 
     /* Fail if we don't have a directory or name */
     if (!(Directory) || !(Name)) goto Quickie;
@@ -308,11 +319,22 @@ DoItAgain:
             ObpReleaseDirectoryLock(Directory, Context);
         }
 
-        /* Check if we should scan the shadow directory */
-        if ((SearchShadow) && (Directory->DeviceMap))
+        if (SearchShadow && !SearchedShadow)
         {
-            ShadowDirectory = ObpGetShadowDirectory(Directory);
-            /* A global DOS directory was found, loop it again */
+            SearchedShadow = TRUE;
+            DirectoryBody = CONTAINING_RECORD(Directory,
+                                              OBP_OBJECT_DIRECTORY,
+                                              Directory);
+            ShadowDirectory = DirectoryBody->ShadowDirectory;
+            if (ShadowDirectory)
+            {
+                ExplicitShadow = TRUE;
+            }
+            else if ((ObpLUIDDeviceMapsEnabled != 0) && Directory->DeviceMap)
+            {
+                ShadowDirectory = ObpGetShadowDirectory(Directory);
+            }
+
             if (ShadowDirectory != NULL)
             {
                 Directory = ShadowDirectory;
@@ -331,6 +353,12 @@ Quickie:
 
         /* Reference the object being looked up */
         ObReferenceObject(FoundObject);
+
+        if (ExplicitShadow && FoundDirectory)
+        {
+            ObReferenceObject(Directory);
+            *FoundDirectory = Directory;
+        }
 
         /* Check if the directory was locked */
         if (!Context->DirectoryLocked)
@@ -759,33 +787,17 @@ Quickie:
     return Status;
 }
 
-/*++
-* @name NtCreateDirectoryObject
-* @implemented NT4
-*
-*     The NtOpenDirectoryObject routine creates or opens a directory object.
-*
-* @param DirectoryHandle
-*        Variable which receives the directory handle.
-*
-* @param DesiredAccess
-*        Desired access to the directory.
-*
-* @param ObjectAttributes
-*        Structure describing the directory.
-*
-* @return STATUS_SUCCESS or appropriate error value.
-*
-* @remarks None.
-*
-*--*/
+static
 NTSTATUS
-NTAPI
-NtCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
-                        IN ACCESS_MASK DesiredAccess,
-                        IN POBJECT_ATTRIBUTES ObjectAttributes)
+ObpCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
+                         IN ACCESS_MASK DesiredAccess,
+                         IN POBJECT_ATTRIBUTES ObjectAttributes,
+                         IN HANDLE ShadowDirectoryHandle OPTIONAL,
+                         IN ULONG Flags)
 {
+    POBP_OBJECT_DIRECTORY DirectoryBody;
     POBJECT_DIRECTORY Directory;
+    POBJECT_DIRECTORY ShadowDirectory = NULL;
     HANDLE NewHandle = NULL;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
@@ -793,6 +805,8 @@ NtCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
     ULONG i;
 #endif
     PAGED_CODE();
+
+    if (Flags) return STATUS_INVALID_PARAMETER;
 
     /* Check if we need to do any probing */
     if (PreviousMode != KernelMode)
@@ -811,17 +825,34 @@ NtCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
         _SEH2_END;
     }
 
+    if (ShadowDirectoryHandle)
+    {
+        Status = ObReferenceObjectByHandle(ShadowDirectoryHandle,
+                                           DIRECTORY_TRAVERSE,
+                                           ObpDirectoryObjectType,
+                                           PreviousMode,
+                                           (PVOID*)&ShadowDirectory,
+                                           NULL);
+        if (!NT_SUCCESS(Status)) return Status;
+    }
+
     /* Create the object */
     Status = ObCreateObject(PreviousMode,
                             ObpDirectoryObjectType,
                             ObjectAttributes,
                             PreviousMode,
                             NULL,
-                            sizeof(OBJECT_DIRECTORY),
+                            sizeof(OBP_OBJECT_DIRECTORY),
                             0,
                             0,
-                            (PVOID*)&Directory);
-    if (!NT_SUCCESS(Status)) return Status;
+                            (PVOID*)&DirectoryBody);
+    if (!NT_SUCCESS(Status))
+    {
+        if (ShadowDirectory) ObDereferenceObject(ShadowDirectory);
+        return Status;
+    }
+
+    Directory = &DirectoryBody->Directory;
 
     /* Setup the object */
 #ifdef _M_ARM64
@@ -838,8 +869,9 @@ NtCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
     Directory->SymbolicLinkUsageCount = 0;
 #endif
 #else
-    RtlZeroMemory(Directory, sizeof(OBJECT_DIRECTORY));
+    RtlZeroMemory(DirectoryBody, sizeof(OBP_OBJECT_DIRECTORY));
 #endif
+    DirectoryBody->ShadowDirectory = ShadowDirectory;
     ExInitializePushLock(&Directory->Lock);
     Directory->SessionId = -1;
 
@@ -866,6 +898,34 @@ NtCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
 
     /* Return status to caller */
     return Status;
+}
+
+NTSTATUS
+NTAPI
+NtCreateDirectoryObject(OUT PHANDLE DirectoryHandle,
+                        IN ACCESS_MASK DesiredAccess,
+                        IN POBJECT_ATTRIBUTES ObjectAttributes)
+{
+    return ObpCreateDirectoryObject(DirectoryHandle,
+                                    DesiredAccess,
+                                    ObjectAttributes,
+                                    NULL,
+                                    0);
+}
+
+NTSTATUS
+NTAPI
+NtCreateDirectoryObjectEx(OUT PHANDLE DirectoryHandle,
+                          IN ACCESS_MASK DesiredAccess,
+                          IN POBJECT_ATTRIBUTES ObjectAttributes,
+                          IN HANDLE ShadowDirectoryHandle OPTIONAL,
+                          IN ULONG Flags)
+{
+    return ObpCreateDirectoryObject(DirectoryHandle,
+                                    DesiredAccess,
+                                    ObjectAttributes,
+                                    ShadowDirectoryHandle,
+                                    Flags);
 }
 
 /* EOF */

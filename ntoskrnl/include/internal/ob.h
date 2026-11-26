@@ -45,12 +45,22 @@ PVOID ObpGetObjectWaitObject(POBJECT_TYPE ObjectType, PVOID Object);
      GENERIC_EXECUTE |                                  \
      GENERIC_ALL)
 
+#define OBP_SYMBOLIC_LINK_GLOBAL                        0x00000001L
+#define OBP_SYMBOLIC_LINK_LOOKUP                        0x00000002L
+#define OBP_SYMBOLIC_LINK_ACCESS_MASK                   0x00000004L
+
 typedef struct _OBP_EXTENDED_OBJECT_TYPE_INITIALIZER
 {
     OBJECT_TYPE_INITIALIZER TypeInfo;
     ULONG SeMandatoryLabelMask;
     ULONG SeTrustConstraintMask;
 } OBP_EXTENDED_OBJECT_TYPE_INITIALIZER, *POBP_EXTENDED_OBJECT_TYPE_INITIALIZER;
+
+typedef struct _OBP_OBJECT_DIRECTORY
+{
+    OBJECT_DIRECTORY Directory;
+    POBJECT_DIRECTORY ShadowDirectory;
+} OBP_OBJECT_DIRECTORY, *POBP_OBJECT_DIRECTORY;
 
 //
 // Handle Bit Flags
@@ -226,7 +236,8 @@ ObpLookupEntryDirectory(
     IN PUNICODE_STRING Name,
     IN ULONG Attributes,
     IN BOOLEAN SearchShadow,
-    IN POBP_LOOKUP_CONTEXT Context
+    IN POBP_LOOKUP_CONTEXT Context,
+    OUT POBJECT_DIRECTORY *FoundDirectory OPTIONAL
 );
 
 VOID

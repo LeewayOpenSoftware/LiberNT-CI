@@ -296,6 +296,7 @@
 @ stdcall -version=0xA00+ NtConvertBetweenAuxiliaryCounterAndPerformanceCounter(long ptr ptr ptr)
 @ stdcall NtCreateDebugObject(ptr long ptr long)
 @ stdcall NtCreateDirectoryObject(long long long)
+@ stdcall NtCreateDirectoryObjectEx(ptr long ptr ptr long)
 @ stdcall -version=0x600+ NtCreateEnlistment(ptr long ptr ptr ptr long long ptr)
 @ stdcall NtCreateEvent(long long long long long)
 @ stdcall NtCreateEventPair(ptr long ptr)
@@ -583,6 +584,7 @@
 @ stdcall NtSetInformationObject(ptr long ptr long)
 @ stdcall NtSetInformationProcess(ptr long ptr long)
 @ stdcall -version=0x600+ NtSetInformationResourceManager(ptr long ptr long)
+@ stdcall NtSetInformationSymbolicLink(ptr long ptr long)
 @ stdcall NtSetInformationThread(ptr long ptr long)
 @ stdcall NtSetInformationVirtualMemory(ptr long ptr ptr ptr long)
 @ stdcall NtSetInformationToken(ptr long ptr long)
@@ -1607,6 +1609,7 @@
 @ stdcall ZwContinue(ptr long)
 @ stdcall ZwCreateDebugObject(ptr long ptr long)
 @ stdcall ZwCreateDirectoryObject(long long long)
+@ stdcall ZwCreateDirectoryObjectEx(ptr long ptr ptr long)
 @ stdcall -version=0x600+ ZwCreateEnlistment(ptr long ptr ptr ptr long long ptr) NtCreateEnlistment
 @ stdcall ZwCreateEvent(long long long long long)
 @ stdcall ZwCreateEventPair(ptr long ptr)
@@ -1888,6 +1891,7 @@
 @ stdcall ZwSetInformationObject(long long ptr long)
 @ stdcall ZwSetInformationProcess(long long long long)
 @ stdcall -version=0x600+ ZwSetInformationResourceManager(ptr long ptr long) NtSetInformationResourceManager
+@ stdcall ZwSetInformationSymbolicLink(ptr long ptr long)
 @ stdcall ZwSetInformationThread(long long ptr long)
 @ stdcall ZwSetInformationToken(long long ptr long)
 @ stdcall -version=0x600+ ZwSetInformationTransaction(ptr long ptr long) NtSetInformationTransaction

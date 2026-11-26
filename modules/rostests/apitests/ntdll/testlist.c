@@ -71,6 +71,7 @@ extern void func_x87Exception(void);
 extern void func_InstructionCacheMigration(void);
 #endif
 extern void func_NtCreateFile(void);
+extern void func_NtCreateDirectoryObjectEx(void);
 extern void func_NtCreateKey(void);
 extern void func_NtCreateKeyCached(void);
 extern void func_NtCreateProfile(void);
@@ -124,6 +125,7 @@ extern void func_NtReadFileAsync(void);
 extern void func_NtSaveKey(void);
 extern void func_NtSetDefaultLocale(void);
 extern void func_NtSetInformationFile(void);
+extern void func_NtSetInformationSymbolicLink(void);
 extern void func_NtSetInformationProcess(void);
 extern void func_NtSetInformationThread(void);
 extern void func_NtSetInformationToken(void);
@@ -309,6 +311,7 @@ const struct test winetest_testlist[] =
     { "InstructionCacheMigration",      func_InstructionCacheMigration },
 #endif
     { "NtCreateFile",                   func_NtCreateFile },
+    { "NtCreateDirectoryObjectEx",      func_NtCreateDirectoryObjectEx },
     { "NtCreateKey",                    func_NtCreateKey },
     { "NtCreateKeyCached",              func_NtCreateKeyCached },
     { "NtCreateProfile",                func_NtCreateProfile },
@@ -362,6 +365,7 @@ const struct test winetest_testlist[] =
     { "NtSaveKey",                      func_NtSaveKey},
     { "NtSetDefaultLocale",             func_NtSetDefaultLocale },
     { "NtSetInformationFile",           func_NtSetInformationFile },
+    { "NtSetInformationSymbolicLink",   func_NtSetInformationSymbolicLink },
     { "NtSetInformationProcess",        func_NtSetInformationProcess },
     { "NtSetInformationThread",         func_NtSetInformationThread },
     { "NtSetInformationToken",          func_NtSetInformationToken },
