@@ -242,6 +242,35 @@ TestOtherSessions(PUCHAR Buffer)
         RtlAdjustPrivilege(SE_TCB_PRIVILEGE, TRUE, FALSE, &Old);
 }
 
+/* S1: which bytes of the inner buffer the call writes (traced until Win11 answers) */
+static
+VOID
+TestSentinel(PUCHAR Buffer)
+{
+    NTSTATUS Status;
+    ULONG Ret, i, Touched;
+
+    RtlFillMemory(Buffer, 4096, 0xCC);
+    Ret = 0xDEADBEEF;
+    Status = QuerySession(0xFFFFFFFF, Buffer, 4096, &Ret);
+    for (i = 0, Touched = 0; i < 4096; i++)
+        if (Buffer[i] != 0xCC)
+            Touched++;
+    trace("PROBE S1 unknown session, 4096-byte 0xCC buffer -> 0x%lx ret=%lu, %lu bytes changed\n",
+          Status, Ret, Touched);
+
+    RtlFillMemory(Buffer, BIG_SIZE, 0xCC);
+    Ret = 0;
+    Status = QuerySession(OwnSession, Buffer, BIG_SIZE, &Ret);
+    if (NT_SUCCESS(Status) && Ret < BIG_SIZE - 4096)
+    {
+        for (i = Ret, Touched = 0; i < Ret + 4096; i++)
+            if (Buffer[i] != 0xCC)
+                Touched++;
+        trace("PROBE S1 own session: %lu bytes changed in the 4096 after ret=%lu\n", Touched, Ret);
+    }
+}
+
 START_TEST(SystemSessionProcessInformation)
 {
     PUCHAR Buffer;
@@ -261,5 +290,6 @@ START_TEST(SystemSessionProcessInformation)
     TestOuter(Buffer);
     TestInner(Buffer);
     TestOtherSessions(Buffer);
+    TestSentinel(Buffer);
     VirtualFree(Buffer, 0, MEM_RELEASE);
 }
