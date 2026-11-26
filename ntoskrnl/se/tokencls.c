@@ -2602,6 +2602,12 @@ NtSetInformationToken(
                 ULONG NewRid = 0, OldRid;
                 BOOLEAN HasTcbPrivilege;
 
+                if (TokenInformationLength < sizeof(TOKEN_MANDATORY_LABEL))
+                {
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
+                    break;
+                }
+
                 _SEH2_TRY
                 {
                     CapturedLabel = *(PTOKEN_MANDATORY_LABEL)TokenInformation;
