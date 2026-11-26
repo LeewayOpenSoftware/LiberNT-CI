@@ -15,6 +15,7 @@
 #define ATOM_CAPACITY   0x4000
 #define ATOM_TRY_LIMIT  0x5000
 #define CHILD_WAIT_MS   120000
+#define SUCCESS_LAST_ERROR 0xDEADBEEF
 
 static ULONG Failures;
 
@@ -29,7 +30,7 @@ AddUnique(
     WCHAR Name[40];
 
     StringCbPrintfW(Name, sizeof(Name), L"OROSI_LOCAL_ATOM_%08lx", Index);
-    SetLastError(0xDEADBEEF);
+    SetLastError(SUCCESS_LAST_ERROR);
     return AddAtomW(Name);
 }
 
@@ -84,30 +85,40 @@ RunChild(VOID)
              "AddAtomA past the limit: 0x%04x, error %lu\n", Atom, GetLastError());
 
     /* An existing name only takes a reference */
-    SetLastError(0xDEADBEEF);
+    SetLastError(SUCCESS_LAST_ERROR);
     Atom = AddAtomW(L"OROSI_LOCAL_ATOM_00000000");
-    child_ok(Atom == First && GetLastError() == 0,
-             "re-add of the first name: 0x%04x, error %lu (expected 0x%04x, 0)\n", Atom, GetLastError(), First);
+    child_ok(Atom == First && GetLastError() == SUCCESS_LAST_ERROR,
+             "re-add of the first name: 0x%04x, error %lu (expected 0x%04x, 0x%08lx)\n",
+             Atom, GetLastError(), First, (ULONG)SUCCESS_LAST_ERROR);
 
     /* Integer atoms use no slot */
     Atom = AddAtomW(L"#123");
     child_ok(Atom == 123, "integer atom returned %u\n", Atom);
 
     /* Lookups still work at exhaustion */
-    child_ok(FindAtomW(L"OROSI_LOCAL_ATOM_00000000") == First, "FindAtomW(first) failed\n");
+    SetLastError(SUCCESS_LAST_ERROR);
+    Atom = FindAtomW(L"OROSI_LOCAL_ATOM_00000000");
+    child_ok(Atom == First && GetLastError() == SUCCESS_LAST_ERROR,
+             "FindAtomW(first): 0x%04x, error %lu (expected 0x%04x, 0x%08lx)\n",
+             Atom, GetLastError(), First, (ULONG)SUCCESS_LAST_ERROR);
     StringCbPrintfW(Name, sizeof(Name), L"OROSI_LOCAL_ATOM_%08lx", (ULONG)(ATOM_CAPACITY / 2));
-    child_ok(FindAtomW(Name) == Middle, "FindAtomW(middle) failed\n");
+    SetLastError(SUCCESS_LAST_ERROR);
+    Atom = FindAtomW(Name);
+    child_ok(Atom == Middle && GetLastError() == SUCCESS_LAST_ERROR,
+             "FindAtomW(middle): 0x%04x, error %lu (expected 0x%04x, 0x%08lx)\n",
+             Atom, GetLastError(), Middle, (ULONG)SUCCESS_LAST_ERROR);
     Name[0] = 0;
     child_ok(GetAtomNameW(Last, Name, ARRAYSIZE(Name)) != 0, "GetAtomNameW(last) failed: %lu\n", GetLastError());
-    SetLastError(0xDEADBEEF);
+    SetLastError(SUCCESS_LAST_ERROR);
     child_ok(FindAtomW(L"OROSI_LOCAL_ATOM_NEVER") == 0 && GetLastError() == ERROR_FILE_NOT_FOUND,
              "FindAtomW(never added): error %lu\n", GetLastError());
 
     /* A freed value is handed out again at once */
     child_ok(DeleteAtom(Last) == 0, "DeleteAtom(0x%04x) failed\n", Last);
     Atom = AddUnique(ATOM_TRY_LIMIT + 2);
-    child_ok(Atom == Last && GetLastError() == 0,
-             "add after delete: 0x%04x, error %lu (expected 0x%04x, 0)\n", Atom, GetLastError(), Last);
+    child_ok(Atom == Last && GetLastError() == SUCCESS_LAST_ERROR,
+             "add after delete: 0x%04x, error %lu (expected 0x%04x, 0x%08lx)\n",
+             Atom, GetLastError(), Last, (ULONG)SUCCESS_LAST_ERROR);
     Atom = AddUnique(ATOM_TRY_LIMIT + 3);
     child_ok(Atom == 0 && GetLastError() == ERROR_NOT_ENOUGH_MEMORY,
              "add after reuse: 0x%04x, error %lu\n", Atom, GetLastError());
@@ -117,12 +128,18 @@ RunChild(VOID)
 
 START_TEST(LocalAtomExhaustion)
 {
-    CHAR Path[MAX_PATH], Arguments[MAX_PATH * 2];
+    CHAR Gate[2], Path[MAX_PATH], Arguments[MAX_PATH * 2];
     STARTUPINFOA StartupInfo = { sizeof(StartupInfo) };
     PROCESS_INFORMATION ProcessInfo;
     DWORD Wait, ExitCode = 0xFFFFFFFF;
     char **Argv;
     int Argc;
+
+    if (GetEnvironmentVariableA("NP02_ATOM_EXHAUSTION", Gate, sizeof(Gate)) != 1 || Gate[0] != '1')
+    {
+        skip("NP02_ATOM_EXHAUSTION=1 is required for the local atom exhaustion probe\n");
+        return;
+    }
 
     Argc = winetest_get_mainargs(&Argv);
     if (Argc >= 3 && !strcmp(Argv[2], "child"))
