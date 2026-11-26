@@ -1,6 +1,8 @@
 # Font provenance
 
-One row per shipped file in media/fonts. Files added by the font cards carry the same fields in their own READMEs: F1 (segmdl2.ttf rebuilt from Fluent UI System Icons, SegoeIcons.ttf), F2 (Noto Sans KR, TC, Thai, Devanagari and the Bold CJK files), F3 (Carlito, Caladea, Cascadia Mono), F10a (Twemoji Mozilla, Noto Emoji). The segmdl2.ttf of this base is the GPL-3 placeholder that F1 replaces. Licence texts are in doc/<Family>/.
+One row per shipped file in media/fonts. Licence texts and per-family details are in doc/<Family>/.
+The icon fonts (segmdl2.ttf, SegoeIcons.ttf) are built in-tree by media/fonts/iconfont/mkiconfont.py
+from Fluent UI System Icons; the F2, F3 and emoji files ship unmodified from their upstream releases.
 
 | File | Doc folder | Upstream | Version | Licence | SHA-256 |
 |---|---|---|---|---|---|
@@ -21,14 +23,14 @@ One row per shipped file in media/fonts. Files added by the font cards carry the
 | FreeSansBold.ttf | FreeFont | GNU FreeFont, FreeSans | FreeFont 20120503 | GNU GPL 3 or later with the FreeFont embedding exception | 982534a3731416a15e2756601721f26053f68bf4239011550f3dd23ce6308215 |
 | FreeSansBoldOblique.ttf | FreeFont | GNU FreeFont, FreeSans | FreeFont 20120503 | GNU GPL 3 or later with the FreeFont embedding exception | deb48d677df0b521793df8da28729316bfcc255309aeb6dacfbd38241ac9b7ba |
 | FreeSansOblique.ttf | FreeFont | GNU FreeFont, FreeSans | FreeFont 20120503 | GNU GPL 3 or later with the FreeFont embedding exception | 43ef481308dfb3aa1103a75699cb4976139b6339eda0901df69a25533f07cf6b |
-| FSEX301-L2.ttf | Fixedsys | Fixedsys Excelsior (Darien Valentine) | 3.01 and 3.01-L2 | Public domain, as stated by the author | 7ea4666ca477a44a958b6d30b8262de13d65f436da1ca15fdcd016383d507d08 |
-| FSEX301.ttf | Fixedsys | Fixedsys Excelsior (Darien Valentine) | 3.01 and 3.01-L2 | Public domain, as stated by the author | 6dccf21e9b3d0b653927affd89c9d10811f9e5725a33e8b5fe37b147ecd10691 |
+| FSEX301-L2.ttf | Fixedsys | Fixedsys Excelsior (Darien Valentine) | 3.01 and 3.01-L2 | Free (author FAQ); reported public domain, no licence text in the font | 7ea4666ca477a44a958b6d30b8262de13d65f436da1ca15fdcd016383d507d08 |
+| FSEX301.ttf | Fixedsys | Fixedsys Excelsior (Darien Valentine) | 3.01 and 3.01-L2 | Free (author FAQ); reported public domain, no licence text in the font | 6dccf21e9b3d0b653927affd89c9d10811f9e5725a33e8b5fe37b147ecd10691 |
 | georgia.ttf | Georgia | Gelasio (Sorkin Type Co) | 1.005 | SIL Open Font License 1.1, Reserved Font Name Gelasio | 1866a1b50eaa682381b2774055106efdcf166f7eb9609bc9ec30e422e3a1cdd8 |
 | georgiab.ttf | Georgia | Gelasio (Sorkin Type Co) | 1.005 | SIL Open Font License 1.1, Reserved Font Name Gelasio | 8522fae3a36fda050776994e948a7731836b23c162ce9a66c9dcc0b57e686fd5 |
 | georgiai.ttf | Georgia | Gelasio (Sorkin Type Co) | 1.005 | SIL Open Font License 1.1, Reserved Font Name Gelasio | 81e4ec1ec99eeaef65df7a390154047d35d014ba144d6ba9c1bb33617aac732a |
 | georgiaz.ttf | Georgia | Gelasio (Sorkin Type Co) | 1.005 | SIL Open Font License 1.1, Reserved Font Name Gelasio | dd70a4cc8ed5589f67a77c58aa80fdcf7ff3bbb1a9dd6b66b7f75c8a5a4638ac |
 | lucon.ttf | LucidaConsole | DejaVu Sans Mono | 2.37 | Bitstream Vera Fonts licence | 4b0f2e74055b214a8db781f04eb876f45336641ff1d320ee46b1d56f1ff48c0f |
-| Marlett.ttf | Marlett | ReactOS Marlett (Ged Murphy, Wierd_W; glyphs contributed by TransGaming Technologies) | 0.32 | Permissive notice embedded in the font | b955762302a8d51ac4a5640f30fa78bb1aabb93825e9ab3ca962d3b8eb277828 |
+| Marlett.ttf | Marlett | ReactOS Marlett (Ged Murphy, Wierd_W, Katayama Hirofumi MZ; glyphs contributed by TransGaming Technologies) | 0.32 | Permissive notice embedded in the font (ISC style) | b955762302a8d51ac4a5640f30fa78bb1aabb93825e9ab3ca962d3b8eb277828 |
 | micross.ttf | MicrosoftSansSerif | Noto Sans (Google), renamed | Noto Sans 2017-09-15 source build, renamed Microsoft Sans Serif | SIL Open Font License 1.1 | 02ea542303db6c645d6867198ae127e12611ac8e25c0e262c882831bcb0de92d |
 | NotoSansJP-Regular.otf | NotoSansJP | Noto Sans JP (Noto CJK) | 2.004, unmodified | SIL Open Font License 1.1 | dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073 |
 | NotoSansSC-Regular.otf | NotoSansSC | Noto Sans SC (Noto CJK) | 2.004, unmodified | SIL Open Font License 1.1 | faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9 |
@@ -73,5 +75,25 @@ One row per shipped file in media/fonts. Files added by the font cards carry the
 | wingding.ttf | Wingdings | Wine Wingdings (Dmitry Timoshkov) | 1.000 | GNU LGPL 2.1 or later | cf5784b53e365ecfad1661b8b23d133effa1d3b54fb7a51137c8a9548f0db08e |
 | TwemojiMozilla.ttf | TwemojiMozilla | Twemoji Mozilla (Mozilla, art by Twitter), COLR v0 | 0.7.0 | Apache 2.0 (code) + CC BY 4.0 (artwork) | 6d90152ee0d29e82fe2a87793af5aa4b7ad13e6538360889e141e81ed299ee8e |
 | NotoEmoji.ttf | NotoEmoji | Noto Emoji (Google), variable weight | 3.002 | SIL Open Font License 1.1 | de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551 |
-
-Not covered here: segmdl2.ttf.
+| segmdl2.ttf | SegoeMDL2Assets | Built in-tree from Fluent UI System Icons (Microsoft), commit 6c2c9075cf | 1.0 | MIT | 563ff91d4e812e40c34196f21dd2fe182340863b3ca61be0eb489d1d41c85b47 |
+| SegoeIcons.ttf | SegoeFluentIcons | Built in-tree from Fluent UI System Icons (Microsoft), commit 6c2c9075cf | 1.0 | MIT | c2d72d6ee6bd3212bfb620d8c41a32966609fe80bb3b4697570dd0adda3e66cf |
+| NotoSansJP-Bold.otf | NotoSansJP | Noto Sans JP (Noto CJK, Adobe) | 2.004, unmodified | SIL Open Font License 1.1 | 1b0edfb500b73a4fa8a4fcaae1bbbd403994e08e73e3e0da37e70d3853f42c5f |
+| NotoSansKR-Regular.otf | NotoSansKR | Noto Sans KR (Noto CJK, Adobe) | 2.004, unmodified | SIL Open Font License 1.1 | 69975a0ac8472717870aefeab0a4d52739308d90856b9955313b2ad5e0148d68 |
+| NotoSansKR-Bold.otf | NotoSansKR | Noto Sans KR (Noto CJK, Adobe) | 2.004, unmodified | SIL Open Font License 1.1 | 5a6ceb287ed2fc6cfc6213144ebea68cbd94b20fc9eb873d8486493bf02d9bda |
+| NotoSansSC-Bold.otf | NotoSansSC | Noto Sans SC (Noto CJK, Adobe) | 2.004, unmodified | SIL Open Font License 1.1 | c6cb5a93abaa9edc8ee7463b7ebb7f42d618d40e6ed2f7a5371c97b0b64767c0 |
+| NotoSansTC-Regular.otf | NotoSansTC | Noto Sans TC (Noto CJK, Adobe) | 2.004, unmodified | SIL Open Font License 1.1 | 5bab0cb3c1cf89dde07c4a95a4054b195afbcfe784d69d75c340780712237537 |
+| NotoSansTC-Bold.otf | NotoSansTC | Noto Sans TC (Noto CJK, Adobe) | 2.004, unmodified | SIL Open Font License 1.1 | 55420b259eb119bf5f2a0aadba10cf9d736c12d64ab93e78546d69ef5f43558b |
+| NotoSansThai-Regular.ttf | NotoSansThai | Noto Sans Thai (Google) | 2.000, unmodified | SIL Open Font License 1.1 | 404ddfb5ed0aaa6b6ec8a85700d682978992062d67da93903967b56cbd9a4acc |
+| NotoSansDevanagari-Regular.ttf | NotoSansDevanagari | Noto Sans Devanagari (Google, Monotype) | 2.002, unmodified | SIL Open Font License 1.1 | 385e78e6359a9d88a0f243d53b1209d7548361ba2194e2b9ec779bcaa7e8949d |
+| Carlito-Regular.ttf | Carlito | Carlito (tyPoland Lukasz Dziedzic) | 1.104, unmodified | SIL Open Font License 1.1, Reserved Font Name Carlito | f6418f708baede9789daef5d458c0f53d2a888af9820e8062934e504fedc6595 |
+| Carlito-Bold.ttf | Carlito | Carlito (tyPoland Lukasz Dziedzic) | 1.104, unmodified | SIL Open Font License 1.1, Reserved Font Name Carlito | bb5d20f79b82599ec72983597437373a80f2d2085fa91fc144fd74e876a594db |
+| Carlito-Italic.ttf | Carlito | Carlito (tyPoland Lukasz Dziedzic) | 1.104, unmodified | SIL Open Font License 1.1, Reserved Font Name Carlito | 0b019225e58d702bfedcbd35c21696769f8ee115cb6343f84c2f240312450d1c |
+| Carlito-BoldItalic.ttf | Carlito | Carlito (tyPoland Lukasz Dziedzic) | 1.104, unmodified | SIL Open Font License 1.1, Reserved Font Name Carlito | b32928186c119599e03ca6a1ffc680fdcb7fac95772f4b95d989cf6cd3861517 |
+| Caladea-Regular.ttf | Caladea | Caladea (Huerta Tipografica) | 1.002, unmodified | Apache License 2.0 | d2f6cad33f191e65b68bd74e6d4f7708080a41b32db635866109df3090265d91 |
+| Caladea-Bold.ttf | Caladea | Caladea (Huerta Tipografica) | 1.002, unmodified | Apache License 2.0 | 74eda4fc5ffba0d8dc4aa76d41499f5ab76168d9ed6141c6417064c6244db9b6 |
+| Caladea-Italic.ttf | Caladea | Caladea (Huerta Tipografica) | 1.002, unmodified | Apache License 2.0 | 9c968bf60ba1e851cdfea77c71e3540c57792f77482dd241acc29d1425569c4e |
+| Caladea-BoldItalic.ttf | Caladea | Caladea (Huerta Tipografica) | 1.002, unmodified | Apache License 2.0 | f47a35ad6cd0efa9914d93f9d03c93e30c55da43674bccfabac73b3c0d522c01 |
+| CascadiaMono-Regular.ttf | CascadiaMono | Cascadia Mono (Microsoft, Saja Typeworks) | 2407.24, unmodified | SIL Open Font License 1.1, Reserved Font Name Cascadia Code | 06520d032ec274fa5040b22c6f4a1d829081b24ba40b2da56dae89bf10c7b481 |
+| CascadiaMono-Bold.ttf | CascadiaMono | Cascadia Mono (Microsoft, Saja Typeworks) | 2407.24, unmodified | SIL Open Font License 1.1, Reserved Font Name Cascadia Code | b22cb603ed23cac36e8444846e1841caca21719a5e852780a8d37ae7a49b0a36 |
+| CascadiaMono-Italic.ttf | CascadiaMono | Cascadia Mono (Microsoft, Saja Typeworks) | 2407.24, unmodified | SIL Open Font License 1.1, Reserved Font Name Cascadia Code | 8d98a33e7617c14dd1d200b4900bc6c2d5d7165abb5c09e9d2fd51c38ce9c9ff |
+| CascadiaMono-BoldItalic.ttf | CascadiaMono | Cascadia Mono (Microsoft, Saja Typeworks) | 2407.24, unmodified | SIL Open Font License 1.1, Reserved Font Name Cascadia Code | ecaeab55e6334408f8ff1fde78a99ddaeb3bb7fad4fcd177df8475c88a7d240f |
