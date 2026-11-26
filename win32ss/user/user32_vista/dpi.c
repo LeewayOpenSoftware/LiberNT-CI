@@ -70,8 +70,6 @@ UINT WINAPI User32GetSystemDpi(VOID);
 DWORD_PTR APIENTRY
 NtUserCallHwnd(HWND hWnd, DWORD Routine);
 
-#define HWND_ROUTINE_ROS_ENABLENCDPISCALING 0x1010
-
 static volatile LONG DpiCacheContextSlot = TLS_OUT_OF_INDEXES;
 static volatile LONG DpiCacheGenerationSlot = TLS_OUT_OF_INDEXES;
 static volatile LONG DpiCacheGeneration = 1;
