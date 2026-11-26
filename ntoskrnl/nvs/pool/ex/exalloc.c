@@ -244,7 +244,16 @@ ExAllocatePool3(
     IN PCPOOL_EXTENDED_PARAMETER ExtendedParameters,
     IN ULONG ExtendedParametersCount)
 {
+    /* TODO: honour POOL_EXTENDED_PARAMETER types; until then fail closed rather
+       than silently ignore a secure-pool, node or priority request */
+    if (ExtendedParametersCount != 0)
+    {
+        if (Flags & POOL_FLAG_RAISE_ON_FAILURE)
+            ExRaiseStatus(STATUS_INVALID_PARAMETER);
+
+        return NULL;
+    }
+
     UNREFERENCED_PARAMETER(ExtendedParameters);
-    UNREFERENCED_PARAMETER(ExtendedParametersCount);
     return ExAllocatePool2(Flags, NumberOfBytes, Tag);
 }
