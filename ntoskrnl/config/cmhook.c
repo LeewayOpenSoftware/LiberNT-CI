@@ -381,7 +381,7 @@ CmpCleanupKeyBodyContexts(
                 Entry = CandidateEntry;
                 break;
             }
-            /* unregister has claimed this node; leave it on both lists */
+            /* unregister will claim this node; leave it on both lists */
         }
         ExReleasePushLockExclusive(&CmpCallbackContextLock);
         KeLeaveCriticalRegion();

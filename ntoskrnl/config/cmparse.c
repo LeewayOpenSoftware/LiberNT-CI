@@ -329,6 +329,8 @@ CmpDoCreateChild(IN PHHIVE Hive,
     KeyBody->KtmUow = NULL;
     KeyBody->ProcessID = PsGetCurrentProcessId();
     InitializeListHead(&KeyBody->ContextListHead);
+    KeyBody->CleanupsInFlight = 0;
+    KeyBody->CleanupWaiter = NULL;
 
     /* Check if we had a class */
     if (ParseContext->Class.Length > 0)
@@ -902,6 +904,8 @@ CmpDoOpen(IN PHHIVE Hive,
         KeyBody->Trans.TransPtr = NULL;
         KeyBody->KtmUow = NULL;
         InitializeListHead(&KeyBody->ContextListHead);
+        KeyBody->CleanupsInFlight = 0;
+        KeyBody->CleanupWaiter = NULL;
         KeyBody->ProcessID = PsGetCurrentProcessId();
         KeyBody->NotifyBlock = NULL;
 

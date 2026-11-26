@@ -1302,6 +1302,8 @@ CmpCreateRegistryRoot(VOID)
     RootKey->Trans.TransPtr = NULL;
     RootKey->KtmUow = NULL;
     InitializeListHead(&RootKey->ContextListHead);
+    RootKey->CleanupsInFlight = 0;
+    RootKey->CleanupWaiter = NULL;
     RootKey->NotifyBlock = NULL;
     RootKey->ProcessID = PsGetCurrentProcessId();
     RootKey->KcbLocked = FALSE;
@@ -1362,6 +1364,8 @@ CmpCreateRegistryRoot(VOID)
     RootObject->Trans.TransPtr = NULL;
     RootObject->KtmUow = NULL;
     InitializeListHead(&RootObject->ContextListHead);
+    RootObject->CleanupsInFlight = 0;
+    RootObject->CleanupWaiter = NULL;
     RootObject->NotifyBlock = NULL;
     RootObject->ProcessID = PsGetCurrentProcessId();
     RootObject->KcbLocked = FALSE;
