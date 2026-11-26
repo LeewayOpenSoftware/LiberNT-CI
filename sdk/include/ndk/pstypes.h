@@ -450,8 +450,8 @@ typedef struct _PS_CREATE_INFO
 //
 // What the end of a job's time does to the processes in it
 //
-#define JOB_OBJECT_TERMINATE_AT_END_OF_JOB      1
-#define JOB_OBJECT_POST_AT_END_OF_JOB           2
+#define JOB_OBJECT_TERMINATE_AT_END_OF_JOB      0
+#define JOB_OBJECT_POST_AT_END_OF_JOB           1
 
 //
 // Job UI Restriction Flags

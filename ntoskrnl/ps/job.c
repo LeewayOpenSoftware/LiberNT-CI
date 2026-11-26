@@ -3351,11 +3351,10 @@ NtSetInformationJobObject(
         }
         _SEH2_END;
 
-        /* Win11 (measured): only no-action (0) and TERMINATE (1) are accepted;
-           POST (2) is rejected with STATUS_INVALID_PARAMETER even with a
-           completion port associated */
+        /* Win11 (measured): the action accepts the SDK values 0 (TERMINATE)
+           and 1 (POST) and rejects anything above POST */
         ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
-        if (EndOfJobTime.EndOfJobTimeAction > JOB_OBJECT_TERMINATE_AT_END_OF_JOB)
+        if (EndOfJobTime.EndOfJobTimeAction > JOB_OBJECT_POST_AT_END_OF_JOB)
         {
             ExReleaseResourceLite(&Job->JobLock);
             Status = STATUS_INVALID_PARAMETER;
