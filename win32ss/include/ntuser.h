@@ -836,6 +836,8 @@ typedef struct _WND
 
     PVOID DialogPointer;
     ULONG DpiContext; /* Awareness context captured from the creating thread. */
+    UINT Dpi; /* Current per-window DPI; defaults to the system DPI. */
+    BOOLEAN NonClientDpiScaling;
     ULONG DpiHostingBehavior; /* DPI_HOSTING_BEHAVIOR of the creating thread. */
     ULONG DialogDpiChangeBehavior;
     ULONG DialogControlDpiChangeBehavior;
@@ -2868,6 +2870,18 @@ ULONG
 NTAPI
 NtUserGetWindowDpiAwarenessContext(_In_ HWND hWnd);
 
+UINT
+NTAPI
+NtUserGetDpiForWindow(_In_ HWND hWnd);
+
+BOOL
+NTAPI
+NtUserEnableNonClientDpiScaling(_In_ HWND hWnd);
+
+BOOL
+NTAPI
+NtUserForceWindowToDpiForTest(_In_ HWND hWnd, _In_ UINT Dpi);
+
 LONG
 NTAPI
 NtUserGetThreadDpiHostingBehavior(VOID);
@@ -3876,7 +3890,6 @@ NtUserYieldTask(VOID);
 #define HWNDPARAM_ROUTINE_ROS_SETDPICHANGEBEHAVIOR 0x100c
 #define HWNDPARAM_ROUTINE_ROS_GETDPICHANGEBEHAVIOR 0x100d
 #define TWOPARAM_ROUTINE_ROS_QUERYMENU 0x100e
-#define HWND_ROUTINE_ROS_ENABLENCDPISCALING 0x1010
 #define ROS_DPI_CHANGE_BEHAVIOR_DIALOG 0x80000000
 #define SPI_ROS_SETDESKWALLPAPERBITMAP 0x80000003
 

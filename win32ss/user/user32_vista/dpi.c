@@ -42,6 +42,12 @@ NtUserGetThreadDpiAwarenessContext(VOID);
 ULONG APIENTRY
 NtUserGetWindowDpiAwarenessContext(HWND hWnd);
 
+UINT APIENTRY
+NtUserGetDpiForWindow(HWND hWnd);
+
+BOOL APIENTRY
+NtUserEnableNonClientDpiScaling(HWND hWnd);
+
 ULONG APIENTRY
 NtUserSetProcessDpiAwarenessContext(ULONG DpiContext, ULONG Flags);
 
@@ -63,8 +69,6 @@ UINT WINAPI User32GetSystemDpi(VOID);
 
 DWORD_PTR APIENTRY
 NtUserCallHwnd(HWND hWnd, DWORD Routine);
-
-#define HWND_ROUTINE_ROS_ENABLENCDPISCALING 0x1010
 
 static volatile LONG DpiCacheContextSlot = TLS_OUT_OF_INDEXES;
 static volatile LONG DpiCacheGenerationSlot = TLS_OUT_OF_INDEXES;
@@ -495,18 +499,7 @@ WINAPI
 GetDpiForWindow(
     _In_ HWND hWnd)
 {
-    DPI_AWARENESS_CONTEXT Context = GetWindowDpiAwarenessContext(hWnd);
-
-    if (!Context)
-        return 0;
-
-    if (User32IsDpiVirtualizationActive() &&
-        GetAwarenessFromDpiAwarenessContext(Context) == DPI_AWARENESS_UNAWARE)
-    {
-        return USER_DEFAULT_SCREEN_DPI;
-    }
-
-    return GetRawSystemDpi();
+    return NtUserGetDpiForWindow(hWnd);
 }
 
 BOOL
@@ -1032,7 +1025,7 @@ WINAPI
 EnableNonClientDpiScaling(
     _In_ HWND hWnd)
 {
-    return (BOOL)NtUserCallHwnd(hWnd, HWND_ROUTINE_ROS_ENABLENCDPISCALING);
+    return NtUserEnableNonClientDpiScaling(hWnd);
 }
 
 BOOL

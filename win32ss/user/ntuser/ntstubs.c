@@ -1481,6 +1481,211 @@ NtUserGetWindowDpiAwarenessContext(_In_ HWND hWnd)
     return Context;
 }
 
+static UINT
+IntGetWindowDpiValue(_In_ PWND Window)
+{
+    UINT SystemDpi = (gpsi && gpsi->dmLogPixels) ? gpsi->dmLogPixels : 96;
+
+    if (NTUSER_DPI_CONTEXT_GET_AWARENESS(Window->DpiContext) == DPI_AWARENESS_UNAWARE)
+        return 96;
+    if (NTUSER_DPI_CONTEXT_GET_AWARENESS(Window->DpiContext) == DPI_AWARENESS_SYSTEM_AWARE)
+        return SystemDpi;
+    return Window->Dpi ? Window->Dpi : SystemDpi;
+}
+
+UINT
+APIENTRY
+NtUserGetDpiForWindow(_In_ HWND hWnd)
+{
+    PWND Window;
+    UINT Dpi = 0;
+
+    UserEnterShared();
+    Window = UserGetWindowObject(hWnd);
+    if (Window)
+        Dpi = IntGetWindowDpiValue(Window);
+    else
+        EngSetLastError(ERROR_INVALID_WINDOW_HANDLE);
+    UserLeave();
+    return Dpi;
+}
+
+BOOL
+APIENTRY
+NtUserEnableNonClientDpiScaling(_In_ HWND hWnd)
+{
+    PWND Window;
+    BOOL Ret = FALSE;
+
+    UserEnterExclusive();
+    Window = UserGetWindowObject(hWnd);
+    if (!Window)
+    {
+        EngSetLastError(ERROR_INVALID_WINDOW_HANDLE);
+    }
+    else if (Window->head.pti == PsGetCurrentThreadWin32Thread() &&
+             !(Window->style & WS_CHILD) &&
+             !(Window->state2 & WNDS2_WMCREATEMSGPROCESSED) &&
+             NTUSER_DPI_CONTEXT_GET_AWARENESS(Window->DpiContext) == DPI_AWARENESS_PER_MONITOR_AWARE)
+    {
+        Window->NonClientDpiScaling = TRUE;
+        Ret = TRUE;
+    }
+    /* All remaining cases fail without setting a last error, as the
+       historical HWND_ROUTINE_ROS_ENABLENCDPISCALING path did. */
+    UserLeave();
+    return Ret;
+}
+
+static VOID
+IntNotifyDpiChildren(_In_ PWND Parent, _In_ UINT Dpi, _In_ UINT Message)
+{
+    HWND *List;
+    UINT Index;
+
+    if (!Parent || !IntIsWindow(UserHMGetHandle(Parent))) return;
+    List = IntWinListChildren(Parent);
+    if (!List) return;
+    for (Index = 0; List[Index]; ++Index)
+    {
+        PWND Child = ValidateHwndNoErr(List[Index]);
+        USER_REFERENCE_ENTRY Ref;
+        HWND hChild;
+
+        if (!Child || Child->spwndParent != Parent) continue;
+        hChild = UserHMGetHandle(Child);
+        UserRefObjectCo(Child, &Ref);
+        if (NTUSER_DPI_CONTEXT_GET_VERSION(Child->DpiContext) == 2)
+            co_IntSendMessage(hChild, Message, MAKELONG(Dpi, Dpi), 0);
+        if (IntIsWindow(UserHMGetHandle(Parent)) && IntIsWindow(hChild))
+            IntNotifyDpiChildren(Child, Dpi, Message);
+        UserDerefObjectCo(Child);
+        if (!IntIsWindow(UserHMGetHandle(Parent))) break;
+    }
+    ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
+}
+
+static VOID
+IntUpdateDpiChildren(_In_ PWND Parent, _In_ UINT Dpi)
+{
+    HWND *List;
+    UINT Index;
+
+    if (!Parent || !IntIsWindow(UserHMGetHandle(Parent))) return;
+    List = IntWinListChildren(Parent);
+    if (!List) return;
+    for (Index = 0; List[Index]; ++Index)
+    {
+        PWND Child = ValidateHwndNoErr(List[Index]);
+        USER_REFERENCE_ENTRY Ref;
+
+        if (!Child || Child->spwndParent != Parent) continue;
+        UserRefObjectCo(Child, &Ref);
+        Child->Dpi = Dpi;
+        if (IntIsWindow(List[Index]))
+            IntUpdateDpiChildren(Child, Dpi);
+        UserDerefObjectCo(Child);
+    }
+    ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
+}
+
+static BOOL
+IntWindowDpiChanged(_In_ PWND Window, _In_ UINT Dpi)
+{
+    RECT Suggested;
+    SIZE ScaledSize;
+    UINT OldDpi = IntGetWindowDpiValue(Window);
+    ULONG Version = NTUSER_DPI_CONTEXT_GET_VERSION(Window->DpiContext);
+
+    if (!OldDpi) OldDpi = 96;
+
+    /* Win11 keeps the position and scales only the size (GAP.md 2.4). */
+    ScaledSize.cx = EngMulDiv(Window->rcWindow.right - Window->rcWindow.left, Dpi, OldDpi);
+    ScaledSize.cy = EngMulDiv(Window->rcWindow.bottom - Window->rcWindow.top, Dpi, OldDpi);
+    Suggested.left = Window->rcWindow.left;
+    Suggested.top = Window->rcWindow.top;
+    Suggested.right = Suggested.left + ScaledSize.cx;
+    Suggested.bottom = Suggested.top + ScaledSize.cy;
+
+    if (Version == 2)
+    {
+        if (co_IntSendMessage(UserHMGetHandle(Window), WM_GETDPISCALEDSIZE,
+                              MAKELONG(Dpi, Dpi), (LPARAM)&ScaledSize))
+        {
+            Suggested.right = Suggested.left + ScaledSize.cx;
+            Suggested.bottom = Suggested.top + ScaledSize.cy;
+        }
+        if (!IntIsWindow(UserHMGetHandle(Window))) return FALSE;
+        IntNotifyDpiChildren(Window, Dpi, WM_DPICHANGED_BEFOREPARENT);
+        if (!IntIsWindow(UserHMGetHandle(Window))) return FALSE;
+    }
+
+    Window->Dpi = Dpi;
+    co_IntSendMessage(UserHMGetHandle(Window), WM_DPICHANGED,
+                      MAKELONG(Dpi, Dpi), (LPARAM)&Suggested);
+    if (IntIsWindow(UserHMGetHandle(Window)))
+        IntUpdateDpiChildren(Window, Dpi);
+
+    if (Version == 2 && IntIsWindow(UserHMGetHandle(Window)))
+        IntNotifyDpiChildren(Window, Dpi, WM_DPICHANGED_AFTERPARENT);
+    return TRUE;
+}
+
+BOOL
+APIENTRY
+NtUserForceWindowToDpiForTest(_In_ HWND hWnd, _In_ UINT Dpi)
+{
+    PWND Window;
+    PPROCESSINFO CurrentProcess;
+    USER_REFERENCE_ENTRY WindowRef;
+    ULONG Awareness;
+    BOOL Ret = FALSE;
+
+    UserEnterExclusive();
+    Window = UserGetWindowObject(hWnd);
+    if (!Window)
+    {
+        EngSetLastError(ERROR_INVALID_WINDOW_HANDLE);
+        goto Cleanup;
+    }
+    if (Dpi < 96 || Dpi > 480)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Cleanup;
+    }
+    if (Window->style & WS_CHILD)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Cleanup;
+    }
+
+    CurrentProcess = PsGetCurrentProcessWin32Process();
+    if (CurrentProcess && Window->head.pti && Window->head.pti->ppi &&
+        IntGetProcessIntegrity(PsGetCurrentProcess()) <
+        IntGetProcessIntegrity(Window->head.pti->ppi->peProcess))
+    {
+        EngSetLastError(ERROR_ACCESS_DENIED);
+        goto Cleanup;
+    }
+
+    Awareness = NTUSER_DPI_CONTEXT_GET_AWARENESS(Window->DpiContext);
+    if (Awareness != DPI_AWARENESS_PER_MONITOR_AWARE ||
+        (NTUSER_DPI_CONTEXT_GET_VERSION(Window->DpiContext) != 1 &&
+         NTUSER_DPI_CONTEXT_GET_VERSION(Window->DpiContext) != 2))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        goto Cleanup;
+    }
+
+    UserRefObjectCo(Window, &WindowRef);
+    Ret = IntWindowDpiChanged(Window, Dpi);
+    UserDerefObjectCo(Window);
+
+Cleanup:
+    UserLeave();
+    return Ret;
+}
+
 ULONG
 APIENTRY
 NtUserSetProcessDpiAwarenessContext(

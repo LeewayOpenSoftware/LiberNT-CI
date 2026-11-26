@@ -111,7 +111,7 @@ static const unsigned int message_pointer_flags[] =
     /* 0x2c0 - 0x2df */
     0,
     /* 0x2e0 - 0x2ff */
-    0,
+    SET(WM_DPICHANGED) | SET(WM_GETDPISCALEDSIZE),
     /* 0x300 - 0x31f */
     SET(WM_ASKCBFORMATNAME),
     /* 0x320 - 0x33f */
@@ -155,6 +155,8 @@ static MSGMEMORY g_MsgMemory[] =
 {
     { WM_CREATE, MMS_SIZE_SPECIAL, MMS_FLAG_READWRITE },
     { WM_GETMINMAXINFO, sizeof(MINMAXINFO), MMS_FLAG_READWRITE },
+    { WM_DPICHANGED, sizeof(RECT), MMS_FLAG_READ },
+    { WM_GETDPISCALEDSIZE, sizeof(SIZE), MMS_FLAG_READWRITE },
     { WM_KLUDGEMINRECT, sizeof(RECT), MMS_FLAG_READWRITE },
     { WM_GETTEXT, MMS_SIZE_WPARAMWCHAR, MMS_FLAG_WRITE },
     { WM_NCCALCSIZE, MMS_SIZE_SPECIAL, MMS_FLAG_READWRITE },

@@ -727,6 +727,12 @@ IntDefWindowProc(
 
    switch (Msg)
    {
+      case WM_GETDPISCALEDSIZE:
+         /* FALSE requests the system's default linear scaling. */
+         return FALSE;
+
+      /* Win11 DefWindowProc does not apply the suggested rect; the app resizes itself. */
+
       case WM_DEVICECHANGE:
             return TRUE;
 

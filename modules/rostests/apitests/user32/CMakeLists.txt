@@ -34,6 +34,7 @@ list(APPEND SOURCE
     DisplayConfigTarget.c
     DM_REPOSITION.c
     Dpi.c
+    DpiForceWindow.c
     DpiHostingBehavior.c
     DpiAwareness.c
     DpiScaleRule.c
