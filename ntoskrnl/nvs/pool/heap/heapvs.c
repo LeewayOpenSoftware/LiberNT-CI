@@ -527,7 +527,8 @@ PoolVsFree(
     {
         Other = PoolVsAdvance(Chunk, Decoded.Units);
         PoolVsDecode(Heap, Other, &Neighbor);
-        POOL_ASSERT(Neighbor.Valid && Neighbor.PrevUnits == Decoded.Units);
+        if (!Neighbor.Valid || Neighbor.PrevUnits != Decoded.Units)
+            KeBugCheckEx(BAD_POOL_HEADER, 0x30, (ULONG_PTR)Other, (ULONG_PTR)Chunk, Decoded.Units);
 
         if (Neighbor.Free)
         {
@@ -541,7 +542,8 @@ PoolVsFree(
     {
         Other = PoolVsRetreat(Chunk, Decoded.PrevUnits);
         PoolVsDecode(Heap, Other, &Neighbor);
-        POOL_ASSERT(Neighbor.Valid && Neighbor.Units == Decoded.PrevUnits);
+        if (!Neighbor.Valid || Neighbor.Units != Decoded.PrevUnits)
+            KeBugCheckEx(BAD_POOL_HEADER, 0x31, (ULONG_PTR)Other, (ULONG_PTR)Chunk, Decoded.PrevUnits);
 
         if (Neighbor.Free)
         {

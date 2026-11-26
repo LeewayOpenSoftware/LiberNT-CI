@@ -16,6 +16,7 @@
 
 EX_POOL_STATE ExpPoolState;
 ULONG ExpPoolFlags;
+ULONG_PTR ExpPoolQuotaCookie;
 
 static POOL_TAG_TABLE ExpBootTagTable;
 
@@ -195,6 +196,7 @@ InitializePool(
 
         PoolTagTrackerInitialize(&ExpPoolState.Tracker);
         PoolTagTrackerAddTable(&ExpPoolState.Tracker, &ExpBootTagTable);
+        ExpPoolQuotaCookie = (ULONG_PTR)ExpPoolEncodeKey();
         POOL_LOCK_INIT(&ExpPoolState.GrowLock, FALSE);
         ExpPoolState.SharedLow = ((ULONG_PTR)Layout.NonPagedSharedBase + POOL_UNIT_MASK) & ~(ULONG_PTR)POOL_UNIT_MASK;
         ExpPoolState.SharedHigh = ((ULONG_PTR)Layout.NonPagedSharedBase + Layout.NonPagedSharedBytes) &

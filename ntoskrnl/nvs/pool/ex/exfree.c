@@ -54,7 +54,7 @@ ExFreePoolWithTag(
 
     if (Info.Flags & EX_POOL_BLOCK_QUOTA)
     {
-        PEPROCESS Process = (PEPROCESS)Info.Trailer;
+        PEPROCESS Process = ExpPoolQuotaProcess(P, Info.Trailer);
 
         POOL_ASSERT(Info.Size >= sizeof(PEPROCESS) && Process != NULL);
         if (Process != NULL)

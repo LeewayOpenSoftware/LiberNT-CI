@@ -23,6 +23,19 @@ ExpPoolQuotaSlot(
     return (PEPROCESS *)((ULONG_PTR)Block + BlockSize - sizeof(PEPROCESS));
 }
 
+PEPROCESS
+ExpPoolQuotaProcess(
+    _In_ PVOID Block,
+    _In_ ULONG_PTR Trailer)
+{
+    ULONG_PTR Value = Trailer ^ ExpPoolQuotaCookie ^ (ULONG_PTR)Block;
+
+    if (Value == 0 || (Value & (MEMORY_ALLOCATION_ALIGNMENT - 1)) != 0)
+        KeBugCheckEx(BAD_POOL_HEADER, 0x24, (ULONG_PTR)Block, Trailer, 0);
+
+    return (PEPROCESS)Value;
+}
+
 PVOID
 NTAPI
 ExAllocatePoolWithQuotaTag(
@@ -81,7 +94,8 @@ ExAllocatePoolWithQuotaTag(
     }
 
     ObReferenceObject(Process);
-    *ExpPoolQuotaSlot(Block, Info.Size) = Process;
+    *ExpPoolQuotaSlot(Block, Info.Size) =
+        (PEPROCESS)((ULONG_PTR)Process ^ ExpPoolQuotaCookie ^ (ULONG_PTR)Block);
     Updated = PoolHeapSetFlags(Heap, Block, Info.Flags | EX_POOL_BLOCK_QUOTA);
     POOL_ASSERT(Updated);
     UNREFERENCED_PARAMETER(Updated);
@@ -116,8 +130,8 @@ ExReturnPoolQuota(
         return;
 
     POOL_ASSERT(Info.Size >= sizeof(PEPROCESS));
-    Process = (PEPROCESS)Info.Trailer;
-    POOL_ASSERT(Process != NULL && Process == *ExpPoolQuotaSlot(P, Info.Size));
+    POOL_ASSERT(Info.Trailer == (ULONG_PTR)*ExpPoolQuotaSlot(P, Info.Size));
+    Process = ExpPoolQuotaProcess(P, Info.Trailer);
     *ExpPoolQuotaSlot(P, Info.Size) = NULL;
     Updated = PoolHeapSetFlags(Heap, P, Info.Flags & ~EX_POOL_BLOCK_QUOTA);
     POOL_ASSERT(Updated);
