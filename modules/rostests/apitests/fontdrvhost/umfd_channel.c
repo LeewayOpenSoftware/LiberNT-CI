@@ -25,6 +25,9 @@ static SERVICE_STATUS_HANDLE status_handle;
 static BYTE *good_font;
 static DWORD good_size;
 
+static DWORD register_in_session(DWORD session, DWORD *pid);
+static int launcher_logged(const WCHAR *text);
+
 static void report_status(DWORD state, DWORD win32_error, DWORD specific)
 {
     SERVICE_STATUS status = { 0 };
@@ -81,13 +84,15 @@ static DWORD register_new_host(DWORD *pid)
 
 static void WINAPI service_main(DWORD argc, LPWSTR *argv)
 {
-    DWORD pid = 0, error;
+    DWORD pid = 0, error, session = 0;
 
     status_handle = RegisterServiceCtrlHandlerExW(service_name, service_handler, NULL);
     if (!status_handle)
         return;
     report_status(SERVICE_RUNNING, NO_ERROR, 0);
-    error = register_new_host(&pid);
+    if (argc >= 2)
+        session = wcstoul(argv[1], NULL, 10);
+    error = register_in_session(session, &pid);
     /* The host's pid travels back as the service-specific exit code */
     report_status(SERVICE_STOPPED, error, error ? 0 : pid);
 }
@@ -108,14 +113,84 @@ static BOOL enable_privilege(const WCHAR *name)
     return ret;
 }
 
-/* Runs this binary as a LocalSystem service that registers a new host; returns the host */
-static HANDLE start_host(void)
+/*
+ * Services run in session 0 while the channel's host and this test live in the test's session, and
+ * win32k matches sessions on UNREGISTER and REGISTER. So the service starts a copy of this exe in
+ * that session, with its own SYSTEM token stamped with the session, and that copy does the work.
+ * The helper's exit code carries the host pid, or the Win32 error with the top bit set.
+ */
+static DWORD register_in_session(DWORD session, DWORD *pid)
 {
     WCHAR cmd[MAX_PATH + 64], exe[MAX_PATH];
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    HANDLE token = NULL, primary = NULL;
+    DWORD own = 0, code = 0, error;
+
+    enable_privilege(L"SeTcbPrivilege");
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &own) || own == session)
+        return register_new_host(pid);
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY, &token))
+        return GetLastError();
+    if (!DuplicateTokenEx(token, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &primary))
+    {
+        error = GetLastError();
+        CloseHandle(token);
+        return error;
+    }
+    CloseHandle(token);
+    if (!SetTokenInformation(primary, TokenSessionId, &session, sizeof(session)))
+    {
+        error = GetLastError();
+        CloseHandle(primary);
+        return error;
+    }
+    GetModuleFileNameW(NULL, exe, MAX_PATH);
+    wsprintfW(cmd, L"\"%s\" umfd_channel register", exe);
+    si.lpDesktop = L"WinSta0\\Default";
+    if (!CreateProcessAsUserW(primary, exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
+    {
+        error = GetLastError();
+        CloseHandle(primary);
+        return error;
+    }
+    CloseHandle(primary);
+    CloseHandle(pi.hThread);
+    if (WaitForSingleObject(pi.hProcess, 60000) == WAIT_OBJECT_0 && GetExitCodeProcess(pi.hProcess, &code))
+    {
+        if (code & 0x80000000)
+        {
+            error = code & 0x7FFFFFFF;
+        }
+        else
+        {
+            *pid = code;
+            error = 0;
+        }
+    }
+    else
+    {
+        TerminateProcess(pi.hProcess, ERROR_TIMEOUT);
+        error = ERROR_TIMEOUT;
+    }
+    CloseHandle(pi.hProcess);
+    return error;
+}
+
+/* Runs this binary as a LocalSystem service that registers a new host in this session; returns the host */
+static HANDLE start_host(void)
+{
+    WCHAR cmd[MAX_PATH + 64], exe[MAX_PATH], arg[16];
+    LPCWSTR args[1] = { arg };
     SERVICE_STATUS status = { 0 };
     SC_HANDLE scm, service;
     HANDLE host = NULL;
+    DWORD session = 0;
     int i;
+
+    ProcessIdToSessionId(GetCurrentProcessId(), &session);
+    wsprintfW(arg, L"%lu", session);
 
     scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
     if (!scm)
@@ -137,7 +212,7 @@ static HANDLE start_host(void)
         return NULL;
     }
 
-    if (StartServiceW(service, 0, NULL))
+    if (StartServiceW(service, 1, args))
     {
         for (i = 0; i < 300; ++i)
         {
@@ -323,6 +398,14 @@ START_TEST(umfd_channel)
         StartServiceCtrlDispatcherW(table);
         return;
     }
+    if (argc >= 3 && !strcmp(argv[2], "register"))
+    {
+        DWORD pid = 0, error;
+
+        enable_privilege(L"SeTcbPrivilege");
+        error = register_new_host(&pid);
+        ExitProcess(error ? (0x80000000 | error) : pid);
+    }
     if (!can_run())
         return;
     host = start_host();
@@ -446,11 +529,24 @@ static BOOL token_user_is(HANDLE token, WELL_KNOWN_SID_TYPE type)
            IsWellKnownSid(((TOKEN_USER *)buf)->User.Sid, type);
 }
 
-/* fontdrvhost.exe running as LocalService is winlogon's; a test's own host runs as SYSTEM */
-static DWORD find_host(DWORD not_pid, BOOL launcher_only)
+static ULONGLONG now_filetime(void)
+{
+    FILETIME ft;
+
+    GetSystemTimeAsFileTime(&ft);
+    return ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+}
+
+/*
+ * fontdrvhost.exe running as LocalService is winlogon's; a test's own host runs as SYSTEM.
+ * A host is "new" when it was created at or after 'since': a relaunched host can be given the
+ * dead one's pid again, so the pid cannot tell them apart.
+ */
+static DWORD find_host(ULONGLONG since, BOOL launcher_only)
 {
     PROCESSENTRY32W pe = { sizeof(pe) };
     HANDLE snap, process, token;
+    FILETIME created, exited, kernel, user;
     DWORD found = 0;
     BOOL more, mine;
 
@@ -459,9 +555,9 @@ static DWORD find_host(DWORD not_pid, BOOL launcher_only)
         return 0;
     for (more = Process32FirstW(snap, &pe); more && !found; more = Process32NextW(snap, &pe))
     {
-        if (lstrcmpiW(pe.szExeFile, L"fontdrvhost.exe") || pe.th32ProcessID == not_pid)
+        if (lstrcmpiW(pe.szExeFile, L"fontdrvhost.exe"))
             continue;
-        if (!launcher_only)
+        if (!launcher_only && since == 0)
         {
             found = pe.th32ProcessID;
             break;
@@ -469,11 +565,16 @@ static DWORD find_host(DWORD not_pid, BOOL launcher_only)
         process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
         if (!process)
             continue;
-        mine = OpenProcessToken(process, TOKEN_QUERY, &token);
-        if (mine)
+        mine = GetProcessTimes(process, &created, &exited, &kernel, &user) &&
+               (((ULONGLONG)created.dwHighDateTime << 32) | created.dwLowDateTime) >= since;
+        if (mine && launcher_only)
         {
-            mine = token_user_is(token, WinLocalServiceSid);
-            CloseHandle(token);
+            mine = OpenProcessToken(process, TOKEN_QUERY, &token);
+            if (mine)
+            {
+                mine = token_user_is(token, WinLocalServiceSid);
+                CloseHandle(token);
+            }
         }
         CloseHandle(process);
         if (mine)
@@ -483,11 +584,12 @@ static DWORD find_host(DWORD not_pid, BOOL launcher_only)
     return found;
 }
 
-static DWORD wait_launcher_host(DWORD not_pid, DWORD timeout)
+/* The launcher's host created at or after 'since' (0: any) */
+static DWORD wait_launcher_host(ULONGLONG since, DWORD timeout)
 {
     DWORD start = GetTickCount(), pid;
 
-    while (!(pid = find_host(not_pid, TRUE)) && GetTickCount() - start < timeout)
+    while (!(pid = find_host(since, TRUE)) && GetTickCount() - start < timeout)
         Sleep(200);
     return pid;
 }
@@ -571,6 +673,7 @@ static ULONG logon_sessions(void)
 START_TEST(umfd_launcher)
 {
     DWORD mode, pid, next, ms, restarts;
+    ULONGLONG since;
     ULONG sessions;
     HWINSTA winsta;
 
@@ -619,8 +722,9 @@ START_TEST(umfd_launcher)
     sessions = logon_sessions();
 
     /* An abnormal end is relaunched after the first backoff step */
+    since = now_filetime();
     ok(kill_host(pid), "could not end host %lu\n", pid);
-    next = wait_launcher_host(pid, 5000);
+    next = wait_launcher_host(since, 5000);
     ok(next != 0, "the host was not relaunched within 5 s\n");
     if (!next)
         return;
@@ -637,15 +741,22 @@ START_TEST(umfd_launcher)
         if (!host)
             return;
         /* A real recycle is inside its own budget: relaunched at once */
+        since = now_filetime();
         for (i = 0; i < UMFD_HOST_MAX_FAULTS; ++i)
             add_command(UMFD_TEST_CRASH, 0, &ms);
         ok(WaitForSingleObject(host, 10000) == WAIT_OBJECT_0, "the host did not recycle\n");
         ok(GetExitCodeProcess(host, &code) && code == UMFD_HOST_EXIT_RECYCLE, "host exit 0x%lx\n", code);
         CloseHandle(host);
-        pid = wait_launcher_host(next, 3000);
+        pid = wait_launcher_host(since, 3000);
         ok(pid != 0, "the recycled host was not relaunched within 3 s\n");
         if (!pid)
+        {
+            /* Which way the launcher went (1 logged, -1 not logged, 0 log unreadable) */
+            trace("events 4002: recycled %d, channel held %d, ended abnormally %d\n",
+                  launcher_logged(L"recycled after"), launcher_logged(L"channel is held"),
+                  launcher_logged(L"ended abnormally"));
             return;
+        }
         next = pid;
         restarts++;
         ok(add_font(good_font, good_size, &ms) > 0, "a good font was refused after the recycle\n");
@@ -655,8 +766,9 @@ START_TEST(umfd_launcher)
     /* Each launch is its own LocalService logon; it must end with its host, not pile up */
     while (restarts < 3)
     {
+        since = now_filetime();
         ok(kill_host(next), "could not end host %lu\n", next);
-        pid = wait_launcher_host(next, LAUNCHER_BACKOFF_MAX_MS + 5000);
+        pid = wait_launcher_host(since, LAUNCHER_BACKOFF_MAX_MS + 5000);
         ok(pid != 0, "the host was not relaunched after restart %lu\n", restarts);
         if (!pid)
             return;
@@ -698,7 +810,8 @@ static int launcher_logged(const WCHAR *text)
 /* Destructive: leaves mode 1 refusing every added font until reboot, so the leg runs it last */
 START_TEST(umfd_launcher_cap)
 {
-    DWORD pid = 0, prev = 0, ends, ms;
+    DWORD pid = 0, ends, ms;
+    ULONGLONG since = 0;
     int logged;
 
     if (!is_reactos() || umfd_mode() != 1 || !can_run_launcher())
@@ -710,11 +823,11 @@ START_TEST(umfd_launcher_cap)
     /* R1: a host that fakes recycles uses up its 3 free ones, then each counts toward the cap */
     for (ends = 0; ends <= 10; ++ends)
     {
-        pid = wait_launcher_host(prev, LAUNCHER_BACKOFF_MAX_MS + 5000);
+        pid = wait_launcher_host(since, LAUNCHER_BACKOFF_MAX_MS + 5000);
         if (!pid)
             break;
+        since = now_filetime();
         add_command(UMFD_TEST_RECYCLE, 0, &ms);
-        prev = pid;
     }
     ok(pid == 0, "the host was still relaunched after %lu fake recycles\n", ends);
     ok(ends >= 1 && ends <= 8, "%lu fake recycles before the cap (3 free, then at most 5 launches)\n", ends);
@@ -723,11 +836,11 @@ START_TEST(umfd_launcher_cap)
 #else
     for (ends = 0; ends <= 6; ++ends)
     {
-        pid = wait_launcher_host(prev, LAUNCHER_BACKOFF_MAX_MS + 5000);
+        pid = wait_launcher_host(since, LAUNCHER_BACKOFF_MAX_MS + 5000);
         if (!pid)
             break;
+        since = now_filetime();
         ok(kill_host(pid), "could not end host %lu\n", pid);
-        prev = pid;
     }
     ok(pid == 0, "the host was still relaunched after %lu abnormal ends\n", ends);
     ok(ends >= 1 && ends <= 5, "%lu abnormal ends before the cap (at most 5 launches in 10 minutes)\n", ends);
