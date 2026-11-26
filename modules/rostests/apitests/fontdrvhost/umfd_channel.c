@@ -189,7 +189,9 @@ static HANDLE start_host(void)
     DWORD session = 0;
     int i;
 
-    ProcessIdToSessionId(GetCurrentProcessId(), &session);
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &session))
+        trace("ProcessIdToSessionId failed: %lu; the helper hops to session 0\n", GetLastError());
+    trace("c3 helper: test session %lu\n", session);
     wsprintfW(arg, L"%lu", session);
 
     scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
@@ -542,9 +544,12 @@ static ULONGLONG now_filetime(void)
 
 /*
  * fontdrvhost.exe running as LocalService is winlogon's; a test's own host runs as SYSTEM.
- * A host is "new" when it was created at or after 'since': a relaunched host can be given the
- * dead one's pid again, so the pid cannot tell them apart.
+ * A host is "new" when it still runs and was created after 'since': a relaunched host can be
+ * given the dead one's pid again, so the pid cannot tell them apart, and a host that has exited
+ * stays in the snapshot until its last handle closes. found_created is the found host's creation time.
  */
+static ULONGLONG found_created;
+
 static DWORD find_host(ULONGLONG since, BOOL launcher_only)
 {
     PROCESSENTRY32W pe = { sizeof(pe) };
@@ -569,7 +574,8 @@ static DWORD find_host(ULONGLONG since, BOOL launcher_only)
         if (!process)
             continue;
         mine = GetProcessTimes(process, &created, &exited, &kernel, &user) &&
-               (((ULONGLONG)created.dwHighDateTime << 32) | created.dwLowDateTime) >= since;
+               !exited.dwHighDateTime && !exited.dwLowDateTime &&
+               (((ULONGLONG)created.dwHighDateTime << 32) | created.dwLowDateTime) > since;
         if (mine && launcher_only)
         {
             mine = OpenProcessToken(process, TOKEN_QUERY, &token);
@@ -581,13 +587,16 @@ static DWORD find_host(ULONGLONG since, BOOL launcher_only)
         }
         CloseHandle(process);
         if (mine)
+        {
             found = pe.th32ProcessID;
+            found_created = ((ULONGLONG)created.dwHighDateTime << 32) | created.dwLowDateTime;
+        }
     }
     CloseHandle(snap);
     return found;
 }
 
-/* The launcher's host created at or after 'since' (0: any) */
+/* The launcher's running host created after 'since' (0: any) */
 static DWORD wait_launcher_host(ULONGLONG since, DWORD timeout)
 {
     DWORD start = GetTickCount(), pid;
@@ -861,7 +870,7 @@ START_TEST(umfd_launcher_cap)
         pid = wait_launcher_host(since, LAUNCHER_BACKOFF_MAX_MS + 5000);
         if (!pid)
             break;
-        since = now_filetime();
+        since = found_created;
         add_command(UMFD_TEST_RECYCLE, 0, &ms);
     }
     ok(pid == 0, "the host was still relaunched after %lu fake recycles\n", ends);
@@ -874,7 +883,7 @@ START_TEST(umfd_launcher_cap)
         pid = wait_launcher_host(since, LAUNCHER_BACKOFF_MAX_MS + 5000);
         if (!pid)
             break;
-        since = now_filetime();
+        since = found_created;
         ok(kill_host(pid), "could not end host %lu\n", pid);
     }
     ok(pid == 0, "the host was still relaunched after %lu abnormal ends\n", ends);
