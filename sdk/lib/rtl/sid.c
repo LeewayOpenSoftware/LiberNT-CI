@@ -518,3 +518,107 @@ RtlIsParentOfChildAppContainer(
     }
     return TRUE;
 }
+
+static
+ULONG
+RtlpSidHashValue(
+    IN PSID Sid_)
+{
+    PISID Sid = (PISID)Sid_;
+    ULONG Hash;
+    ULONG i;
+    PAGED_CODE_RTL();
+
+    Hash = Sid->SubAuthorityCount;
+    for (i = 0; i < sizeof(Sid->IdentifierAuthority.Value); i++)
+        Hash = (Hash * 131) + Sid->IdentifierAuthority.Value[i];
+    for (i = 0; i < Sid->SubAuthorityCount; i++)
+        Hash = (Hash * 131) + Sid->SubAuthority[i];
+
+    return Hash & (SID_HASH_SIZE - 1);
+}
+
+/*
+ * @implemented
+ *
+ * Each Hash[] slot holds a 1-based SidAttr index (0 = empty), so the table does
+ * not depend on the address SidAttr lives at. Slot layout is not byte-matched to
+ * Windows 11; see native-parity-03/token-accessinfo-22-design.md.
+ */
+NTSTATUS
+NTAPI
+RtlSidHashInitialize(
+    _In_reads_(SidCount) PSID_AND_ATTRIBUTES SidAttr,
+    _In_ ULONG SidCount,
+    _Out_ PSID_AND_ATTRIBUTES_HASH SidAttrHash)
+{
+    ULONG i, p, Bucket, Slot;
+    PAGED_CODE_RTL();
+
+    RtlZeroMemory(SidAttrHash, sizeof(*SidAttrHash));
+    SidAttrHash->SidCount = SidCount;
+    SidAttrHash->SidAttr = SidCount ? SidAttr : NULL;
+
+    /* More SIDs than slots cannot all be hashed; leave the table empty and let
+     * RtlSidHashLookup fall back to a linear scan over SidAttr. */
+    if (SidCount == 0 || SidCount > SID_HASH_SIZE)
+        return STATUS_SUCCESS;
+
+    for (i = 0; i < SidCount; i++)
+    {
+        Bucket = RtlpSidHashValue(SidAttr[i].Sid);
+        for (p = 0; p < SID_HASH_SIZE; p++)
+        {
+            Slot = (Bucket + p) & (SID_HASH_SIZE - 1);
+            if (SidAttrHash->Hash[Slot] == 0)
+            {
+                SidAttrHash->Hash[Slot] = i + 1;
+                break;
+            }
+        }
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+PSID_AND_ATTRIBUTES
+NTAPI
+RtlSidHashLookup(
+    _In_ PSID_AND_ATTRIBUTES_HASH SidAttrHash,
+    _In_ PSID Sid)
+{
+    ULONG i, p, Bucket, Slot;
+    SID_HASH_ENTRY Entry;
+    PAGED_CODE_RTL();
+
+    if (SidAttrHash == NULL || Sid == NULL || SidAttrHash->SidCount == 0)
+        return NULL;
+
+    /* An oversized table was not hashed at init (see RtlSidHashInitialize). */
+    if (SidAttrHash->SidCount > SID_HASH_SIZE)
+    {
+        for (i = 0; i < SidAttrHash->SidCount; i++)
+        {
+            if (RtlEqualSid(SidAttrHash->SidAttr[i].Sid, Sid))
+                return &SidAttrHash->SidAttr[i];
+        }
+        return NULL;
+    }
+
+    Bucket = RtlpSidHashValue(Sid);
+    for (p = 0; p < SID_HASH_SIZE; p++)
+    {
+        Slot = (Bucket + p) & (SID_HASH_SIZE - 1);
+        Entry = SidAttrHash->Hash[Slot];
+
+        if (Entry == 0)
+            return NULL;
+        if (RtlEqualSid(SidAttrHash->SidAttr[Entry - 1].Sid, Sid))
+            return &SidAttrHash->SidAttr[Entry - 1];
+    }
+
+    return NULL;
+}

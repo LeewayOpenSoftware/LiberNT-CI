@@ -176,7 +176,7 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     /* TokenHasRestrictions */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenAccessInformation */
-    IQS_NONE,
+    IQS_SAME(TOKEN_ACCESS_INFORMATION, PVOID, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenVirtualizationAllowed */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenVirtualizationEnabled */
@@ -773,6 +773,64 @@ SeQueryInformationToken(
  * STATUS_ACCESS_VIOLATION is returned if ReturnLength is NULL. A failure NTSTATUS
  * code is returned otherwise.
  */
+static ULONG
+SepAccessInfoSidHashLength(
+    _In_ ULONG Count,
+    _In_reads_opt_(Count) PSID_AND_ATTRIBUTES Sids)
+{
+    ULONG Length = sizeof(SID_AND_ATTRIBUTES_HASH) + Count * sizeof(SID_AND_ATTRIBUTES);
+    ULONG i;
+
+    for (i = 0; i < Count; i++)
+        Length += ALIGN_UP_BY(RtlLengthSid(Sids[i].Sid), sizeof(PVOID));
+
+    return ALIGN_UP_BY(Length, sizeof(PVOID));
+}
+
+static VOID
+SepAccessInfoBuildSidHash(
+    _In_ PUCHAR Scratch,
+    _In_ ULONG HashOffset,
+    _In_ ULONG_PTR UserBase,
+    _In_ ULONG Count,
+    _In_reads_opt_(Count) PSID_AND_ATTRIBUTES Sids)
+{
+    PSID_AND_ATTRIBUTES_HASH Hash = (PSID_AND_ATTRIBUTES_HASH)(Scratch + HashOffset);
+    ULONG ArrayOffset = HashOffset + sizeof(SID_AND_ATTRIBUTES_HASH);
+    PSID_AND_ATTRIBUTES Array = (PSID_AND_ATTRIBUTES)(Scratch + ArrayOffset);
+    ULONG SidOffset = ArrayOffset + Count * sizeof(SID_AND_ATTRIBUTES);
+    ULONG i;
+
+    if (Count == 0)
+    {
+        Hash->SidCount = 0;
+        Hash->SidAttr = NULL;
+        return;
+    }
+
+    for (i = 0; i < Count; i++)
+    {
+        ULONG SidLength = RtlLengthSid(Sids[i].Sid);
+        RtlCopySid(SidLength, Scratch + SidOffset, Sids[i].Sid);
+        Array[i].Sid = (PSID)(Scratch + SidOffset);
+        Array[i].Attributes = Sids[i].Attributes;
+        SidOffset += ALIGN_UP_BY(SidLength, sizeof(PVOID));
+    }
+
+    /* Hash over the kernel-resident SID copies, then relocate every pointer to
+     * the caller's buffer. Hash[] holds SidAttr indices, so it stays valid. */
+    RtlSidHashInitialize(Array, Count, Hash);
+
+    SidOffset = ArrayOffset + Count * sizeof(SID_AND_ATTRIBUTES);
+    for (i = 0; i < Count; i++)
+    {
+        ULONG SidLength = RtlLengthSid(Array[i].Sid);
+        Array[i].Sid = (PSID)(UserBase + SidOffset);
+        SidOffset += ALIGN_UP_BY(SidLength, sizeof(PVOID));
+    }
+    Hash->SidAttr = (PSID_AND_ATTRIBUTES)(UserBase + ArrayOffset);
+}
+
 _Must_inspect_result_
 __kernel_entry
 NTSTATUS
@@ -1875,6 +1933,106 @@ NtQueryInformationToken(
                     Status = _SEH2_GetExceptionCode();
                 }
                 _SEH2_END;
+                break;
+            }
+
+            case TokenAccessInformation:
+            {
+                PUCHAR Scratch;
+                PTOKEN_ACCESS_INFORMATION Info;
+                PTOKEN_PRIVILEGES Priv;
+                ULONG_PTR UserBase = (ULONG_PTR)TokenInformation;
+                ULONG HeaderLength, SidHashLength, RestrictedLength, PrivLength, CapLength;
+                ULONG Offset, p;
+
+                DPRINT("NtQueryInformationToken(TokenAccessInformation)\n");
+
+                HeaderLength = ALIGN_UP_BY(sizeof(TOKEN_ACCESS_INFORMATION), sizeof(PVOID));
+                SidHashLength = SepAccessInfoSidHashLength(Token->UserAndGroupCount,
+                                                           Token->UserAndGroups);
+                RestrictedLength = SepAccessInfoSidHashLength(Token->RestrictedSidCount,
+                                                             Token->RestrictedSids);
+                PrivLength = ALIGN_UP_BY(FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges) +
+                                         Token->PrivilegeCount * sizeof(LUID_AND_ATTRIBUTES),
+                                         sizeof(PVOID));
+                CapLength = ALIGN_UP_BY(sizeof(SID_AND_ATTRIBUTES_HASH), sizeof(PVOID));
+
+                RequiredLength = HeaderLength + SidHashLength + RestrictedLength +
+                                 PrivLength + CapLength;
+
+                if (TokenInformationLength < RequiredLength)
+                {
+                    _SEH2_TRY
+                    {
+                        *ReturnLength = RequiredLength;
+                    }
+                    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                    {
+                        Status = _SEH2_GetExceptionCode();
+                    }
+                    _SEH2_END;
+                    if (NT_SUCCESS(Status))
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    break;
+                }
+
+                Scratch = ExAllocatePoolWithTag(PagedPool, RequiredLength, TAG_SE);
+                if (Scratch == NULL)
+                {
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    break;
+                }
+                RtlZeroMemory(Scratch, RequiredLength);
+
+                Info = (PTOKEN_ACCESS_INFORMATION)Scratch;
+                Offset = HeaderLength;
+
+                /* Every embedded pointer is written as the caller's buffer address
+                 * (UserBase + offset) into the scratch, then copied out once; the
+                 * kernel never reads back the user buffer. */
+                Info->SidHash = (PSID_AND_ATTRIBUTES_HASH)(UserBase + Offset);
+                SepAccessInfoBuildSidHash(Scratch, Offset, UserBase,
+                                          Token->UserAndGroupCount, Token->UserAndGroups);
+                Offset += SidHashLength;
+
+                Info->RestrictedSidHash = (PSID_AND_ATTRIBUTES_HASH)(UserBase + Offset);
+                SepAccessInfoBuildSidHash(Scratch, Offset, UserBase,
+                                          Token->RestrictedSidCount, Token->RestrictedSids);
+                Offset += RestrictedLength;
+
+                Info->Privileges = (PTOKEN_PRIVILEGES)(UserBase + Offset);
+                Priv = (PTOKEN_PRIVILEGES)(Scratch + Offset);
+                Priv->PrivilegeCount = Token->PrivilegeCount;
+                for (p = 0; p < Token->PrivilegeCount; p++)
+                    Priv->Privileges[p] = Token->Privileges[p];
+                Offset += PrivLength;
+
+                /* Capabilities hash is present but empty on a non-AppContainer token. */
+                Info->CapabilitiesHash = (PSID_AND_ATTRIBUTES_HASH)(UserBase + Offset);
+                Offset += CapLength;
+
+                Info->AuthenticationId = Token->AuthenticationId;
+                Info->TokenType = Token->TokenType;
+                Info->ImpersonationLevel = Token->ImpersonationLevel;
+                Info->MandatoryPolicy.Policy = Token->MandatoryPolicy;
+                Info->Flags = Token->TokenFlags;
+                Info->AppContainerNumber =
+                    Token->LowBoxInfo ? ((PSEP_LOWBOX_INFO)Token->LowBoxInfo)->LowBoxNumber : 0;
+                /* FIXME: PackageSid, TrustLevelSid and SecurityAttributes stay NULL
+                 * until the token tracks an AppContainer/trust SID and claims. */
+
+                _SEH2_TRY
+                {
+                    RtlCopyMemory(TokenInformation, Scratch, RequiredLength);
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+
+                ExFreePoolWithTag(Scratch, TAG_SE);
                 break;
             }
 
