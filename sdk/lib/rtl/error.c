@@ -193,7 +193,7 @@ RtlMapSecurityErrorToNtStatus(IN ULONG SecurityError)
 {
     ULONG i;
 
-    /* TODO: every SEC_E_*/SEC_I_* entry below comes from the Win11 sweep
+    /* TODO: every SEC_E_* and SEC_I_* entry below comes from the Win11 sweep
        (native-parity-02/rtl-map-security-error-to-ntstatus); until the sweep
        lands, unlisted values report not-implemented instead of a guess. */
     for (i = 0; i < sizeof(SecurityErrorMap) / sizeof(SecurityErrorMap[0]); i++)

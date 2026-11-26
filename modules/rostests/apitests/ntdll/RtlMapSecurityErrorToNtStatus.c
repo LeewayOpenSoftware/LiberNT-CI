@@ -15,7 +15,7 @@ typedef struct _SEC_ERROR_MAP_ENTRY
     ULONG Value;
 } SEC_ERROR_MAP_ENTRY;
 
-/* Every SEC_E_*/SEC_I_* value defined in sdk/include/psdk/winerror.h at the
+/* Every SEC_E_* and SEC_I_* value defined in sdk/include/psdk/winerror.h at the
  * time of the sweep. The same exe runs on Windows 11 and on Orosi; the Win11
  * output IS the reference table (recorded in native-parity-02). */
 static const SEC_ERROR_MAP_ENTRY SecErrors[] =
