@@ -383,13 +383,21 @@ PoolLfhFree(
     KIRQL OldIrql;
     ULONG Bit;
 
+    if (Subsegment->Signature != POOL_LFH_SIGNATURE)
+        KeBugCheckEx(BAD_POOL_HEADER, 0x36, (ULONG_PTR)Subsegment, (ULONG_PTR)Block, Subsegment->Signature);
+
     if (!PoolLfhIndex(Subsegment, Block, &Bit))
         return FALSE;
 
     Slot = Subsegment->Slot;
+    if (Slot < &Heap->LfhSlot[0] ||
+        Slot >= &Heap->LfhSlot[Heap->SlotCount * POOL_LFH_CLASS_COUNT] ||
+        ((ULONG_PTR)Slot - (ULONG_PTR)Heap->LfhSlot) % sizeof(POOL_LFH_SLOT) != 0)
+        KeBugCheckEx(BAD_POOL_HEADER, 0x38, (ULONG_PTR)Subsegment, (ULONG_PTR)Slot, (ULONG_PTR)Heap->LfhSlot);
+
     POOL_LOCK_ACQUIRE(&Slot->Lock, &OldIrql);
-    POOL_ASSERT(Subsegment->Signature == POOL_LFH_SIGNATURE);
-    POOL_ASSERT(Subsegment->FreeCount <= Subsegment->BlockCount);
+    if (Subsegment->FreeCount > Subsegment->BlockCount)
+        KeBugCheckEx(BAD_POOL_HEADER, 0x37, (ULONG_PTR)Subsegment, Subsegment->FreeCount, Subsegment->BlockCount);
     POOL_ASSERT((Subsegment->FreeCount == 0) == !!Subsegment->OnFullList);
     POOL_ASSERT(Slot->SubsegmentCount != 0);
 

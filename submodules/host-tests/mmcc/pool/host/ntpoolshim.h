@@ -13,8 +13,45 @@
 
 typedef ULONG POOL_TYPE, EX_POOL_PRIORITY;
 typedef ULONG64 POOL_FLAGS;
-typedef const void *PCPOOL_EXTENDED_PARAMETER;
-typedef struct _EPROCESS { SIZE_T Quota[2]; LONG References; } EPROCESS, *PEPROCESS;
+typedef enum _POOL_EXTENDED_PARAMETER_TYPE
+{
+    PoolExtendedParameterInvalidType = 0,
+    PoolExtendedParameterPriority,
+    PoolExtendedParameterSecurePool,
+    PoolExtendedParameterNumaNode,
+    PoolExtendedParameterMax
+} POOL_EXTENDED_PARAMETER_TYPE;
+typedef struct _POOL_EXTENDED_PARAMETER
+{
+    struct
+    {
+        ULONG64 Type : 8;
+        ULONG64 Optional : 1;
+        ULONG64 Reserved : 64 - 9;
+    };
+    union
+    {
+        ULONG64 Reserved2;
+        PVOID Reserved3;
+        ULONG Priority;
+        ULONG PreferredNode;
+    };
+} POOL_EXTENDED_PARAMETER;
+typedef const POOL_EXTENDED_PARAMETER *PCPOOL_EXTENDED_PARAMETER;
+typedef struct _SHIM_DISPATCHER_HEADER { UCHAR Type; } SHIM_DISPATCHER_HEADER;
+typedef struct _SHIM_KPROCESS { SHIM_DISPATCHER_HEADER Header; } SHIM_KPROCESS;
+typedef struct _EPROCESS { SHIM_KPROCESS Pcb; SIZE_T Quota[2]; LONG References; } EPROCESS, *PEPROCESS, *PKPROCESS;
+typedef union _SHIM_LARGE_INTEGER { struct { ULONG LowPart; LONG HighPart; }; long long QuadPart; } LARGE_INTEGER, *PLARGE_INTEGER;
+#define KOBJECT_TYPE_MASK 0x7F
+#define ProcessObject 3
+#define BAD_POOL_HEADER 0x19
+#ifndef MEMORY_ALLOCATION_ALIGNMENT
+#define MEMORY_ALLOCATION_ALIGNMENT 16
+#endif
+extern PVOID MmSystemRangeStart;
+BOOLEAN MmIsAddressValid(PVOID Address);
+LARGE_INTEGER KeQueryPerformanceCounter(PLARGE_INTEGER Frequency);
+ULONG RtlRandomEx(PULONG Seed);
 
 #define IN
 #define OUT

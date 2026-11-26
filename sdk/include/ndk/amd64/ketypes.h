@@ -76,6 +76,7 @@ C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, LongPriorQosPeriod) == 0x1CE);
 #define KF_RDRAND               0x0000000100000000ULL // Win 10.0+
 #define KF_SMAP                 0x0000000200000000ULL // From ksamd64.inc
 #define KF_RDTSCP               0x0000000400000000ULL // Win 10.0+
+#define KF_RDSEED               0x0000000800000000ULL // Win 10.0+
 #define KF_HUGEPAGE             0x0000002000000000ULL // Win 10.0 1607+
 #define KF_XSAVES               0x0000004000000000ULL // From ksamd64.inc KF_XSAVES_BIT (0x26)
 #define KF_FPU_LEAKAGE          0x0000020000000000ULL // From ksamd64.inc KF_FPU_LEAKAGE_BIT (0x29)
