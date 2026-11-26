@@ -26,6 +26,10 @@
 #define EX_POOL_BOOT_SLOTS          16
 #define EX_POOL_BLOCK_QUOTA         0x01
 #define EX_POOL_FLAG_SPECIAL_POOL   0x20
+#define EX_POOL_FLAG_CHECK_TAGS     0x40
+#ifndef PROTECTED_POOL
+#define PROTECTED_POOL              0x80000000
+#endif
 #define EX_POOL_GROW_MINIMUM        ((SIZE_T)16 << POOL_UNIT_SHIFT)
 
 typedef struct _EX_POOL_STATE
@@ -44,6 +48,7 @@ typedef struct _EX_POOL_STATE
 
 extern EX_POOL_STATE ExpPoolState;
 extern ULONG ExpPoolFlags;
+extern ULONG_PTR ExpPoolQuotaCookie;
 
 FORCEINLINE
 ULONG
@@ -73,4 +78,5 @@ ExpPoolTypeFromHeap(_In_ ULONG HeapIndex)
 PVOID ExpPoolAllocate(_In_ ULONG HeapIndex, _In_ SIZE_T NumberOfBytes, _In_ ULONG Tag, _In_ ULONG HeapFlags);
 BOOLEAN ExpPoolGrow(_In_ ULONG HeapIndex, _In_ SIZE_T NumberOfBytes, _In_ LONG Generation);
 PPOOL_HEAP ExpPoolHeapFromAddress(_In_ PVOID Block, _Out_ PULONG HeapIndex);
+PEPROCESS ExpPoolQuotaProcess(_In_ PVOID Block, _In_ ULONG_PTR Trailer);
 VOID MiDumpPoolConsumers(_In_ BOOLEAN CalledFromDbg, _In_ ULONG Tag, _In_ ULONG Mask, _In_ ULONG Flags);

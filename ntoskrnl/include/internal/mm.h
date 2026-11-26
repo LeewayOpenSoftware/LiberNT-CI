@@ -990,6 +990,12 @@ NTAPI
 MmQuerySpecialPoolBlockSize(
     IN PVOID P);
 
+BOOLEAN
+NTAPI
+MmQuerySpecialPoolTag(
+    IN PVOID P,
+    OUT PULONG Tag);
+
 VOID
 NTAPI
 MiCheckSpecialPoolFault(

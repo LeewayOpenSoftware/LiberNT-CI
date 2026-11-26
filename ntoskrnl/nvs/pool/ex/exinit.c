@@ -16,18 +16,43 @@
 
 EX_POOL_STATE ExpPoolState;
 ULONG ExpPoolFlags;
+ULONG_PTR ExpPoolQuotaCookie;
 
 static POOL_TAG_TABLE ExpBootTagTable;
+
+static ULONG64 ExpPoolSeedState = 0x9E3779B97F4A7C15ULL;
+
+static
+ULONG64
+ExpPoolMix64(
+    _In_ ULONG64 Value)
+{
+    Value ^= Value >> 30;
+    Value *= 0xBF58476D1CE4E5B9ULL;
+    Value ^= Value >> 27;
+    Value *= 0x94D049BB133111EBULL;
+    Value ^= Value >> 31;
+    return Value;
+}
 
 static
 ULONG64
 ExpPoolEncodeKey(VOID)
 {
-    ULONG64 Key = 0x9E3779B97F4A7C15ULL;
+    ULONG64 Key;
+    ULONG Seed;
 
-    Key ^= (ULONG64)KeQueryInterruptTime();
-    Key ^= (ULONG64)(ULONG_PTR)&Key << 17;
-    Key ^= (ULONG64)(ULONG_PTR)&ExpPoolState >> 3;
+    ExpPoolSeedState += 0x9E3779B97F4A7C15ULL;
+    Key = ExpPoolMix64(ExpPoolSeedState ^
+                       (ULONG64)KeQueryInterruptTime() ^
+                       (ULONG64)KeQueryPerformanceCounter(NULL).QuadPart ^
+                       ((ULONG64)(ULONG_PTR)&Key << 17) ^
+                       ((ULONG64)(ULONG_PTR)&ExpPoolState >> 3));
+    Seed = (ULONG)(Key ^ (Key >> 32));
+    Key ^= ((ULONG64)RtlRandomEx(&Seed) << 32) ^ (ULONG64)RtlRandomEx(&Seed);
+    Key = ExpPoolMix64(Key);
+    if (Key == 0)
+        Key = 0x9E3779B97F4A7C15ULL;
     return Key;
 }
 
@@ -195,6 +220,7 @@ InitializePool(
 
         PoolTagTrackerInitialize(&ExpPoolState.Tracker);
         PoolTagTrackerAddTable(&ExpPoolState.Tracker, &ExpBootTagTable);
+        ExpPoolQuotaCookie = (ULONG_PTR)ExpPoolEncodeKey();
         POOL_LOCK_INIT(&ExpPoolState.GrowLock, FALSE);
         ExpPoolState.SharedLow = ((ULONG_PTR)Layout.NonPagedSharedBase + POOL_UNIT_MASK) & ~(ULONG_PTR)POOL_UNIT_MASK;
         ExpPoolState.SharedHigh = ((ULONG_PTR)Layout.NonPagedSharedBase + Layout.NonPagedSharedBytes) &

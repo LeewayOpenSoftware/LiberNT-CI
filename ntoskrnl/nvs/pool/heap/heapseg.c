@@ -523,9 +523,12 @@ PoolSegFreePages(
     KIRQL OldIrql;
     ULONG i;
 
-    POOL_ASSERT(Segment->Signature == POOL_SEGMENT_SIGNATURE);
-    POOL_ASSERT(Segment->Range[First].First == First);
-    POOL_ASSERT(Segment->Range[First].Pages != 0);
+    if (Segment->Signature != POOL_SEGMENT_SIGNATURE)
+        KeBugCheckEx(BAD_POOL_HEADER, 0x33, (ULONG_PTR)Segment, (ULONG_PTR)Base, Segment->Signature);
+    if (Segment->Range[First].First != First)
+        KeBugCheckEx(BAD_POOL_HEADER, 0x34, (ULONG_PTR)Segment, First, Segment->Range[First].First);
+    if (Segment->Range[First].Pages == 0)
+        KeBugCheckEx(BAD_POOL_HEADER, 0x35, (ULONG_PTR)Segment, First, (ULONG_PTR)Base);
 
     Shard = &Heap->Shard[Segment->Shard];
     PageCount = Segment->Range[First].Pages;
