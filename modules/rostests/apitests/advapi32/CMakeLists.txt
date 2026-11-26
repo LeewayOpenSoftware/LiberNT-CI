@@ -42,7 +42,6 @@ list(APPEND SOURCE
     RegCreateKeyEx.c
     RegCreateKeyTransacted.c
     RegEnumKey.c
-    RegQueryMultipleValues.c
     RegEnumValueW.c
     RegFlushKey.c
     RegCreateKeyLink.c
@@ -52,6 +51,7 @@ list(APPEND SOURCE
     RegOpenKeyExW.c
     RegOpenKeyTransacted.c
     RegQueryInfoKey.c
+    RegQueryMultipleValues.c
     RegQueryValueExW.c
     RtlEncryptMemory.c
     SaferIdentifyLevel.c
