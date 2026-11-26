@@ -52,7 +52,7 @@ CheckSocketStillConnected(SOCKET s)
     ok(send(s, &buf, 1, 0) == 1, "send after failed DisconnectEx %d\n", WSAGetLastError());
 }
 
-void func_afdext(void)
+START_TEST(afdext)
 {
     struct sockaddr_in addr;
     WSABUF buffer;
