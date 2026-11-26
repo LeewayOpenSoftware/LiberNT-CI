@@ -2253,6 +2253,7 @@ IntPaintDesktopContent(HDC hDC)
                 gspv.WallpaperMode == wmFill ||
                 gspv.WallpaperMode == wmSpan)
             {
+                /* TODO(D1): Span destination must be VirtualBounds minus the primary origin, clipped per monitor. */
                 x = 0;
                 y = 0;
             }
@@ -2351,7 +2352,10 @@ IntPaintDesktopContent(HDC hDC)
                 else if (gspv.WallpaperMode == wmFill ||
                     gspv.WallpaperMode == wmSpan)
                 {
-                    if (Rect.right && Rect.bottom)
+                    /* A failed Span layout paints nothing instead of a zero-extent blit. */
+                    if (Rect.right && Rect.bottom &&
+                        (gspv.WallpaperMode != wmSpan ||
+                         (wallpaperWidth != 0 && wallpaperHeight != 0)))
                     {
                         IntDrawScaledWallpaper(hDC,
                                                hWallpaperDC,
