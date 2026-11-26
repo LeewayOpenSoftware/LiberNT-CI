@@ -244,16 +244,27 @@ ExAllocatePool3(
     IN PCPOOL_EXTENDED_PARAMETER ExtendedParameters,
     IN ULONG ExtendedParametersCount)
 {
-    /* TODO: honour POOL_EXTENDED_PARAMETER types; until then fail closed rather
-       than silently ignore a secure-pool, node or priority request */
-    if (ExtendedParametersCount != 0)
-    {
-        if (Flags & POOL_FLAG_RAISE_ON_FAILURE)
-            ExRaiseStatus(STATUS_INVALID_PARAMETER);
+    ULONG Index;
 
-        return NULL;
+    for (Index = 0; Index < ExtendedParametersCount; Index++)
+    {
+        POOL_EXTENDED_PARAMETER_TYPE Type;
+
+        if (ExtendedParameters == NULL || ExtendedParameters[Index].Reserved != 0)
+            goto InvalidParameter;
+
+        /* TODO: honour priority and preferred node; accepted as hints for now.
+           Secure pool, unknown and out-of-range types fail closed. */
+        Type = (POOL_EXTENDED_PARAMETER_TYPE)ExtendedParameters[Index].Type;
+        if (Type != PoolExtendedParameterPriority && Type != PoolExtendedParameterNumaNode)
+            goto InvalidParameter;
     }
 
-    UNREFERENCED_PARAMETER(ExtendedParameters);
     return ExAllocatePool2(Flags, NumberOfBytes, Tag);
+
+InvalidParameter:
+    if (Flags & POOL_FLAG_RAISE_ON_FAILURE)
+        ExRaiseStatus(STATUS_INVALID_PARAMETER);
+
+    return NULL;
 }
