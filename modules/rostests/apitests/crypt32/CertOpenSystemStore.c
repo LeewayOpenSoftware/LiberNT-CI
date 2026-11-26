@@ -436,7 +436,10 @@ CheckCurrentUserWritesStayInHkcu(void)
        "CurrentUser Root add failed: %lu\n", GetLastError());
     if (added)
     {
-        found = FindInStore(userReg, cert);
+        CertCloseStore(userReg, 0);
+        userReg = CertOpenStore(CERT_STORE_PROV_SYSTEM_REGISTRY_W, 0, 0,
+                                CERT_SYSTEM_STORE_CURRENT_USER | CERT_STORE_READONLY_FLAG, L"Root");
+        found = userReg ? FindInStore(userReg, cert) : NULL;
         ok(found != NULL, "CurrentUser Root add is not in the HKCU store\n");
         if (found)
             CertFreeCertificateContext(found);
@@ -487,7 +490,11 @@ CheckCurrentUserWritesStayInHkcu(void)
     }
     if (found)
     {
-        before = CountStoreCerts(machine);
+        CertCloseStore(machine, 0);
+        machine = CertOpenStore(CERT_STORE_PROV_SYSTEM_REGISTRY_W, 0, 0,
+                                CERT_SYSTEM_STORE_LOCAL_MACHINE | CERT_STORE_READONLY_FLAG |
+                                CERT_STORE_OPEN_EXISTING_FLAG, L"Root");
+        before = machine ? CountStoreCerts(machine) : 0;
         SetLastError(0xdeadbeef);
         deleted = CertDeleteCertificateFromStore(found);
         ok(!deleted, "deleting a LocalMachine cert through CurrentUser Root succeeded\n");
