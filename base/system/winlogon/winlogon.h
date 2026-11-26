@@ -65,6 +65,13 @@ WINE_DEFAULT_DEBUG_CHANNEL(winlogon);
 #include "resource.h"
 
 #define WL_WM_SETUP_DONE (WM_USER + 0x0100)
+/* Posted to the SAS window by hostlogon.c from RPC and supervisor threads (wParam = WLHOST_EVENT_*). */
+#define WL_WM_HOST_EVENT (WM_USER + 0x0101)
+#define WLHOST_EVENT_ENDED          1   /* the live host left; relaunch per state */
+#define WLHOST_EVENT_UNLOCK         2   /* a verified unlock for the session user */
+#define WLHOST_EVENT_SHUTDOWN       3   /* power flyout while locked or logged off outside a SAS */
+#define WLHOST_EVENT_RESTART        4
+#define WLHOST_EVENT_MUST_CHANGE    5   /* the unlock credentials must change their password first */
 
 typedef BOOL (WINAPI * PFWLXNEGOTIATE)  (DWORD, DWORD *);
 typedef BOOL (WINAPI * PFWLXINITIALIZE) (LPWSTR, HANDLE, PVOID, PVOID, PVOID *);
@@ -259,6 +266,10 @@ typedef struct _WLSESSION
     DWORD Options;
     WLX_MPR_NOTIFY_INFO MprNotifyInfo;
     PWLX_PROFILE_V2_0 Profile;
+
+    /* Experimental LogonUI-mode selector (Winlogon\UseLogonUI), read once at start */
+    BOOL UseLogonUI;
+    BOOL HostAutoSas;           /* the pending SAS came from hostlogon.c, not from the user */
 } WLSESSION, *PWLSESSION;
 
 typedef enum _NOTIFICATION_TYPE
@@ -327,6 +338,230 @@ VOID
 CallNotificationDlls(
     PWLSESSION pSession,
     NOTIFICATION_TYPE Type);
+
+/* rpclogonui.c */
+#include <wluiauth.h>
+struct _WLUI_COMMAND;
+
+typedef DWORD (*WLUI_SUBMIT_HANDLER)(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ WLUI_AUTH_ROLE Role,
+    _In_ DWORD Scenario,
+    _In_ const GUID *ProviderClsid,
+    _In_ DWORD AuthenticationPackage,
+    _In_reads_bytes_(cbSerialization) const BYTE *Serialization,
+    _In_ DWORD cbSerialization);
+
+typedef DWORD (*WLUI_ACTION_HANDLER)(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ WLUI_AUTH_ROLE Role,
+    _In_ DWORD Action);
+
+BOOL
+WluiServerStart(VOID);
+
+PWLUI_LAUNCH_STATE
+WluiLaunchRegister(
+    _In_ DWORD Pid,
+    _In_ PSID Sid,
+    _In_ WLUI_AUTH_ROLE Role,
+    _In_opt_ const GUID *RequestedId,
+    _Out_ GUID *LaunchId);
+
+VOID
+WluiLaunchUnregister(
+    _In_ PWLUI_LAUNCH_STATE State);
+
+BOOL
+WluiLaunchPostCommand(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ const struct _WLUI_COMMAND *Command);
+
+BOOL
+WluiLaunchWaitReady(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ DWORD TimeoutMs);
+
+ULONGLONG
+WluiLaunchLastHeartbeat(
+    _In_ PWLUI_LAUNCH_STATE State);
+
+BOOL
+WluiLaunchExited(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _Out_opt_ DWORD *Reason);
+
+VOID
+WluiSetSubmitHandler(
+    _In_opt_ WLUI_SUBMIT_HANDLER Handler);
+
+VOID
+WluiSetActionHandler(
+    _In_opt_ WLUI_ACTION_HANDLER Handler);
+
+/* hostlaunch.c */
+#include <wlrecovery.h>
+typedef struct _WLHOST_LAUNCH *PWLHOST_LAUNCH;
+typedef VOID (*WLHOST_ENDED_CALLBACK)(_In_ PWLHOST_LAUNCH Launch);
+
+/* Why nothing can be launched (the N4 dialog says it). */
+typedef enum _WLHOST_TERMINAL
+{
+    WlHostTerminalNone = 0,
+    WlHostTerminalLevels,       /* every tier failed or the launch cap was hit */
+    WlHostTerminalMissing,      /* neither logonuihost.exe nor logonrecovery.exe is there (R1b) */
+    WlHostTerminalPolicy        /* 8.10 c: policy forbids the password-only tiers */
+} WLHOST_TERMINAL;
+
+VOID
+WlHostLog(
+    _In_ WORD Type,
+    _In_ PCWSTR Text);
+
+VOID
+WlHostInit(VOID);
+
+VOID
+WlHostSetEndedCallback(
+    _In_opt_ WLHOST_ENDED_CALLBACK Callback);
+
+VOID
+WlHostOnSas(VOID);
+
+BOOL
+WlHostIsTerminal(VOID);
+
+PWLHOST_LAUNCH
+WlHostStart(
+    _In_ DWORD Scenario,
+    _Out_ PBOOL Terminal,
+    _Out_ WLHOST_TERMINAL *Reason);
+
+BOOL
+WlHostWaitReady(
+    _In_ PWLHOST_LAUNCH Launch,
+    _In_ DWORD TimeoutMs);
+
+BOOL
+WlHostPost(
+    _In_ PWLHOST_LAUNCH Launch,
+    _In_ const struct _WLUI_COMMAND *Command);
+
+HANDLE
+WlHostEndedEvent(
+    _In_ PWLHOST_LAUNCH Launch);
+
+BOOL
+WlHostHasEnded(
+    _In_ PWLHOST_LAUNCH Launch,
+    _Out_opt_ WLREC_END *End,
+    _Out_opt_ PDWORD ExitCode);
+
+PWLUI_LAUNCH_STATE
+WlHostState(
+    _In_ PWLHOST_LAUNCH Launch);
+
+VOID
+WlHostStop(
+    _In_ PWLHOST_LAUNCH Launch);
+
+/* hostlogon.c */
+VOID
+WlHostLogonInit(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostAttach(
+    _In_ PWLSESSION Session);
+
+DWORD
+WlHostLoggedOutSas(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostLock(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostMustChange(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostLogoffAborted(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostRelaunch(
+    _In_ PWLSESSION Session);
+
+BOOL
+WlHostScreenSaverSecure(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostDisplaySasNotice(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostStatus(
+    _In_ PCWSTR Text);
+
+VOID
+WlHostThemeWait(VOID);
+
+VOID
+WlHostThemeWatch(VOID);
+
+VOID
+WlHostCreateDesktopSwitchEvent(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostWaitDesktopSwitch(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostBeforeDesktopSwitch(VOID);
+
+VOID
+WlHostAfterDesktopSwitch(VOID);
+
+VOID
+WlHostLogonFailed(
+    _In_ NTSTATUS Status);
+
+BOOL
+WlHostStartApplication(
+    _In_ PWLSESSION Session,
+    _In_ PCWSTR Desktop,
+    _In_opt_ PVOID Environment,
+    _In_ PCWSTR Command);
+
+BOOL
+WlHostActivateUserShell(
+    _In_ PWLSESSION Session,
+    _In_opt_ PVOID Environment);
+
+/* reminder.c */
+typedef struct _WLR_REMINDER
+{
+    HANDLE Process;             /* held so the PID cannot be reused under us */
+    DWORD Pid;
+} WLR_REMINDER, *PWLR_REMINDER;
+
+BOOL
+WlrShowShutdownReminder(
+    _Out_ PWLR_REMINDER Reminder,
+    _In_opt_ PCWSTR Message,
+    _In_ ULONG TimeoutSeconds,
+    _In_ BOOL Reboot);
+
+VOID
+WlrDismissShutdownReminder(
+    _Inout_ PWLR_REMINDER Reminder);
+
+VOID
+WlrShowAbortNotice(VOID);
 
 /* rpcserver.c */
 BOOL

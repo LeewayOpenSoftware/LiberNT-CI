@@ -21,6 +21,7 @@
 #include "precomp.h"
 #include <browseui_undoc.h>
 #include "traymanager.h"
+#include <reactos/desktopready.h>
 
 HINSTANCE hExplorerInstance;
 HANDLE hProcessHeap;
@@ -91,6 +92,26 @@ SetShellReadyEvent(IN LPCWSTR lpEventName)
     }
 
     return FALSE;
+}
+
+/* Forces the first paint of the desktop and of the taskbar, so winlogon's desktop switch lands on
+ * content rather than on windows that exist but have not painted yet (PHASE3-PLAN §6.3.1).
+ * UpdateWindow sends WM_PAINT synchronously, also to the desktop thread. */
+static VOID
+PaintBeforeDesktopSwitch(IN ITrayWindow *Tray)
+{
+    HWND hDesktop = GetShellWindow();
+    if (hDesktop == NULL)
+        hDesktop = FindWindowW(L"Progman", NULL);
+    if (hDesktop != NULL)
+        UpdateWindow(hDesktop);
+    if (Tray != NULL)
+    {
+        HWND hTray = Tray->GetHWND();
+        if (hTray != NULL)
+            UpdateWindow(hTray);
+    }
+    GdiFlush();
 }
 
 static VOID
@@ -317,6 +338,15 @@ StartWithDesktop(IN HINSTANCE hInstance)
     /* WinXP: Notify msgina to hide the welcome screen */
     if (!SetShellReadyEvent(L"msgina: ShellReadyEvent"))
         SetShellReadyEvent(L"Global\\msgina: ShellReadyEvent");
+#endif
+
+    TrayMgr.Open();
+
+#if !WIN7_DEBUG_MODE
+    /* Winlogon switches to this desktop on the signal, once it has painted and the taskbar is
+     * open; the startup items run behind the switch, not in front of a blank screen (§6.3.1). */
+    PaintBeforeDesktopSwitch(Tray);
+    SetShellReadyEvent(LIBERNT_SHELL_DESKTOP_SWITCH_EVENT);
 
     if (DoStartStartupItems(Tray))
     {
@@ -326,7 +356,6 @@ StartWithDesktop(IN HINSTANCE hInstance)
     ReleaseStartupMutex(); // For ProcessRunOnceItems
 #endif
 
-    TrayMgr.Open();
     TrayMgr.TrayMessageLoop();
 #if !WIN7_DEBUG_MODE
     HideMinimizedWindows(FALSE);

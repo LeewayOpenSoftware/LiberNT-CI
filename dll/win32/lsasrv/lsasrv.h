@@ -498,6 +498,16 @@ LsapGetDpapiPrekey(
     _In_ PLUID LogonId,
     _Out_ PLSA_STRING Prekey);
 
+/* Q8: called by msv1_0 after a successful interactive password change, with the
+ * SHA-1 digests of the old and new passwords (never cleartext). Re-encrypts the
+ * user's DPAPI master keys and extends the credhist chain. */
+NTSTATUS
+LsapDpapiOnPasswordChange(
+    _In_ PUNICODE_STRING DomainName,
+    _In_ PUNICODE_STRING AccountName,
+    _In_reads_bytes_(20) const UCHAR *OldDigest,
+    _In_reads_bytes_(20) const UCHAR *NewDigest);
+
 NTSTATUS
 NTAPI
 LsapDeleteCredential(

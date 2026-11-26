@@ -27,4 +27,6 @@ BEGIN
     IDS_PASSWORD_EXPIRED        "Your password has expired and must be changed."
     IDS_PASSWORD_MISMATCH       "The passwords you entered did not match."
     IDS_PASSWORD_CHANGED        "Your password has been changed."
+    IDS_PASSWORD_RESTRICTION    "The new password does not meet the length, complexity, or history requirements. Try another."
+    IDS_PASSWORD_CHANGE_FAILED  "The password could not be changed. Try again."
 END

@@ -16,6 +16,7 @@
 #include <credprovhost.h>
 #include <wine/debug.h>
 #include <wchar.h>
+#include <strsafe.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(credprovhost);
 
@@ -241,16 +242,56 @@ ApplyFilters(_Inout_ PCPH_PROVIDER_SET Set, _Inout_ CPH_CANDIDATES *Candidates,
     }
 }
 
+/* The fallback tier must survive a damaged class registration: load the system
+ * PasswordProvider by absolute path and ask its class factory directly (Q5). */
+static HRESULT
+CreatePasswordProviderDirect(_Outptr_ ICredentialProvider **Provider)
+{
+    typedef HRESULT (WINAPI *GETCLASSOBJECT)(REFCLSID, REFIID, void **);
+    static HMODULE Module;      /* kept loaded for the life of the process */
+    WCHAR Path[MAX_PATH];
+    UINT Length;
+    GETCLASSOBJECT GetClassObject;
+    IClassFactory *Factory = NULL;
+    HRESULT hr;
+
+    *Provider = NULL;
+    Length = GetSystemDirectoryW(Path, ARRAYSIZE(Path));
+    if (Length == 0 || Length >= ARRAYSIZE(Path) ||
+        FAILED(StringCchCatW(Path, ARRAYSIZE(Path), L"\\credprovs.dll")))
+        return HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW);
+
+    if (Module == NULL)
+        Module = LoadLibraryExW(Path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (Module == NULL)
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    GetClassObject = (GETCLASSOBJECT)GetProcAddress(Module, "DllGetClassObject");
+    if (GetClassObject == NULL)
+        return HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+
+    hr = GetClassObject(&CLSID_PasswordCredentialProvider, &IID_IClassFactory, (void **)&Factory);
+    if (FAILED(hr))
+        return hr;
+    hr = IClassFactory_CreateInstance(Factory, NULL, &IID_ICredentialProvider, (void **)Provider);
+    IClassFactory_Release(Factory);
+    return hr;
+}
+
 static VOID
 Instantiate(_Inout_ PCPH_PROVIDER_SET Set, _In_ REFCLSID Clsid,
-            _In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenario, _In_ DWORD ScenarioFlags)
+            _In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenario, _In_ DWORD ScenarioFlags,
+            _In_ BOOL Direct)
 {
     ICredentialProvider *Provider;
     HRESULT hr;
 
     if (Set->Count >= CPH_MAX_PROVIDERS)
         return;
-    hr = CoCreateInstance(Clsid, NULL, CLSCTX_INPROC_SERVER, &IID_ICredentialProvider, (void **)&Provider);
+    if (Direct)
+        hr = CreatePasswordProviderDirect(&Provider);
+    else
+        hr = CoCreateInstance(Clsid, NULL, CLSCTX_INPROC_SERVER, &IID_ICredentialProvider, (void **)&Provider);
     if (FAILED(hr))
     {
         AddSkipped(Set, Clsid, CPH_SKIP_LOAD_FAILED, hr);
@@ -298,7 +339,7 @@ CredProvHostEnumerateProviders(
         if (Set->PolicyDeniesPassword)
             AddSkipped(Set, &CLSID_PasswordCredentialProvider, CPH_SKIP_EXCLUDED, S_OK);
         else
-            Instantiate(Set, &CLSID_PasswordCredentialProvider, Scenario, ScenarioFlags);
+            Instantiate(Set, &CLSID_PasswordCredentialProvider, Scenario, ScenarioFlags, TRUE);
         *Result = Set;
         return S_OK;
     }
@@ -314,7 +355,7 @@ CredProvHostEnumerateProviders(
             AddSkipped(Set, &Candidates.Clsid[i], CPH_SKIP_EXCLUDED, S_OK);
             continue;
         }
-        Instantiate(Set, &Candidates.Clsid[i], Scenario, ScenarioFlags);
+        Instantiate(Set, &Candidates.Clsid[i], Scenario, ScenarioFlags, FALSE);
     }
     *Result = Set;
     return S_OK;

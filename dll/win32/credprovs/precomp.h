@@ -26,15 +26,16 @@
 
 #include "resource.h"
 
+/* Field IDs follow the Win11 password provider FieldTable (sparse). */
 enum
 {
-    PWFIELD_FRIENDLY_NAME,
-    PWFIELD_USER_NAME,
-    PWFIELD_PASSWORD,
-    PWFIELD_NEW_PASSWORD,
-    PWFIELD_CONFIRM_PASSWORD,
-    PWFIELD_SUBMIT,
-    PWFIELD_PROVIDER_LABEL,
+    PWFIELD_FRIENDLY_NAME = 0,
+    PWFIELD_USER_NAME = 1,
+    PWFIELD_PASSWORD = 2,
+    PWFIELD_NEW_PASSWORD = 3,
+    PWFIELD_CONFIRM_PASSWORD = 4,
+    PWFIELD_SUBMIT = 12,
+    PWFIELD_PROVIDER_LABEL = 15,
     PWFIELD_COUNT
 };
 
@@ -56,6 +57,8 @@ typedef struct _PWCREDENTIAL
 
 extern HINSTANCE CredProvsInstance;
 extern LONG CredProvsObjects;
+
+BOOL PasswordProvider_IsKnownFieldId(_In_ DWORD Id);
 
 HRESULT PasswordProvider_Create(_In_ REFIID riid, _Outptr_ void **ppv);
 HRESULT PasswordCredential_Create(_In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenario,

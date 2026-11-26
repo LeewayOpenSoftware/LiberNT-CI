@@ -100,6 +100,7 @@
 @ stub LsapDsInitializeDsStateInfo
 @ stub LsapDsInitializePromoteInterface
 @ stdcall LsapInitLsa()
+@ stdcall LsapDpapiOnPasswordChange(ptr ptr ptr ptr)
 @ stdcall LsarAddPrivilegesToAccount(ptr ptr)
 @ stdcall LsarClose(ptr)
 @ stdcall LsarCreateAccount(ptr ptr long ptr)

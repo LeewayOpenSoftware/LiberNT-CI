@@ -312,7 +312,7 @@ TestTiles(void)
     CREDENTIAL_PROVIDER_CREDENTIAL_FIELD_OPTIONS FieldOptions;
     CREDENTIAL_PROVIDER_FIELD_STATE State;
     CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE Interactive;
-    DWORD UserField = ~0u, PasswordField = ~0u, SubmitField = ~0u, Adjacent = ~0u;
+    DWORD UserField = ~0u, PasswordField = ~0u, SubmitField = ~0u, LabelField = ~0u, Adjacent = ~0u;
     LPWSTR Sid;
     BOOL WithUsers;
 
@@ -330,6 +330,22 @@ TestTiles(void)
         ok(FindField(Provider, CPFT_EDIT_TEXT, &CPFG_LOGON_USERNAME, &UserField), "no user name field\n");
         ok(FindField(Provider, CPFT_PASSWORD_TEXT, &CPFG_LOGON_PASSWORD, &PasswordField), "no password field\n");
         ok(FindField(Provider, CPFT_SUBMIT_BUTTON, NULL, &SubmitField), "no submit button\n");
+        ok_long(UserField, 1);
+        ok_long(PasswordField, 2);
+        ok_long(SubmitField, 12);
+        ok(FindField(Provider, CPFT_SMALL_TEXT, &CPFG_CREDENTIAL_PROVIDER_LABEL, &LabelField), "no provider label\n");
+        ok_long(LabelField, 15);
+
+        /* F1: the FieldTable gaps (5-11, 13, 14) are not fields. */
+        ok_hr(ICredentialProviderCredential_GetFieldState(Credential, 5, &State, &Interactive), E_INVALIDARG);
+        ok_hr(ICredentialProviderCredential_GetFieldState(Credential, 13, &State, &Interactive), E_INVALIDARG);
+        {
+            LPWSTR GapString = NULL;
+            ok_hr(ICredentialProviderCredential_GetStringValue(Credential, 5, &GapString), E_INVALIDARG);
+            ok(GapString == NULL, "gap ID 5 returned a string\n");
+            ok_hr(ICredentialProviderCredential_GetStringValue(Credential, 13, &GapString), E_INVALIDARG);
+            ok(GapString == NULL, "gap ID 13 returned a string\n");
+        }
 
         ok_hr(ICredentialProviderCredential_GetSubmitButtonValue(Credential, SubmitField, &Adjacent), S_OK);
         ok_long(Adjacent, PasswordField);
