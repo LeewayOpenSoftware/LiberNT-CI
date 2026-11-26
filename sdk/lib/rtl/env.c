@@ -326,39 +326,59 @@ RtlSetCurrentEnvironment(
 }
 
 
-/*
- * @implemented
- */
+static
+LONG
+RtlpCompareEnvironmentName(
+    _In_reads_(Length1) PCWSTR Name1,
+    _In_ SIZE_T Length1,
+    _In_reads_(Length2) PCWSTR Name2,
+    _In_ SIZE_T Length2)
+{
+    SIZE_T Index;
+    LONG Result;
+
+    for (Index = 0; Index < min(Length1, Length2); Index++)
+    {
+        Result = (LONG)RtlUpcaseUnicodeChar(Name1[Index]) - (LONG)RtlUpcaseUnicodeChar(Name2[Index]);
+        if (Result)
+            return Result;
+    }
+    return (Length1 < Length2) ? -1 : (Length1 > Length2);
+}
+
 NTSTATUS
 NTAPI
-RtlSetEnvironmentVariable(
-    _In_z_ PWSTR *Environment,
-    _In_ PUNICODE_STRING Name,
-    _In_ PUNICODE_STRING Value)
+RtlSetEnvironmentVar(
+    _Inout_opt_ PWSTR *Environment,
+    _In_reads_(NameLength) PCWSTR Name,
+    _In_ SIZE_T NameLength,
+    _In_reads_opt_(ValueLength) PCWSTR Value,
+    _In_ SIZE_T ValueLength)
 {
-    UNICODE_STRING var;
-    size_t hole_len, new_len, env_len = 0;
-    WCHAR *new_env = 0, *env_end = 0, *wcs, *env, *val = 0, *tail = 0, *hole = 0;
+    size_t hole_len, new_len, env_len = 0, var_len;
+    WCHAR *new_env = 0, *env_end = 0, *wcs, *env, *val = 0, *tail = 0, *hole = 0, *var;
+    PCWSTR name_wcs;
     PWSTR head = NULL;
     SIZE_T new_size;
     LONG f = 1;
     NTSTATUS Status = STATUS_SUCCESS;
 
-    DPRINT("RtlSetEnvironmentVariable(Environment %p Name %wZ Value %wZ)\n",
-           Environment, Name, Value);
+    DPRINT("RtlSetEnvironmentVar(Environment %p Name %.*S Value %p)\n",
+           Environment, (int)NameLength, Name, Value);
 
     /* Variable name must not be empty */
-    if (Name->Length < sizeof(WCHAR))
+    if (NameLength == 0)
         return STATUS_INVALID_PARAMETER;
 
      /* Variable names can't contain a '=' except as a first character. */
-    for (wcs = Name->Buffer + 1;
-         wcs < Name->Buffer + (Name->Length / sizeof(WCHAR));
-         wcs++)
+    for (name_wcs = Name + 1; name_wcs < Name + NameLength; name_wcs++)
     {
-        if (*wcs == L'=')
+        if (*name_wcs == L'=')
             return STATUS_INVALID_PARAMETER;
     }
+
+    if (Value && ValueLength > (MAXSIZE_T / sizeof(WCHAR)) - NameLength - 2)
+        return STATUS_NO_MEMORY;
 
     if (Environment)
     {
@@ -385,28 +405,27 @@ RtlSetEnvironmentVariable(
         /* find where to insert */
         while (*wcs)
         {
-            var.Buffer = wcs++;
+            var = wcs++;
             wcs = wcschr(wcs, L'=');
             if (wcs == NULL)
             {
-                wcs = var.Buffer + wcslen(var.Buffer);
+                wcs = var + wcslen(var);
             }
             if (*wcs)
             {
-                var.Length = (USHORT)(wcs - var.Buffer) * sizeof(WCHAR);
-                var.MaximumLength = var.Length;
+                var_len = wcs - var;
                 val = ++wcs;
                 wcs += wcslen(wcs);
-                f = RtlCompareUnicodeString(&var, Name, TRUE);
+                f = RtlpCompareEnvironmentName(var, var_len, Name, NameLength);
                 if (f >= 0)
                 {
                     if (f) /* Insert before found */
                     {
-                        hole = tail = var.Buffer;
+                        hole = tail = var;
                     }
                     else /* Exact match */
                     {
-                        head = var.Buffer;
+                        head = var;
                         tail = ++wcs;
                         hole = val;
                     }
@@ -419,14 +438,14 @@ RtlSetEnvironmentVariable(
     }
 
 found:
-    if (Value != NULL && Value->Buffer != NULL)
+    if (Value != NULL)
     {
         hole_len = tail - hole;
         /* calculate new environment size */
-        new_size = Value->Length + sizeof(WCHAR);
+        new_size = (ValueLength + 1) * sizeof(WCHAR);
         /* adding new variable */
         if (f)
-            new_size += Name->Length + sizeof(WCHAR);
+            new_size += (NameLength + 1) * sizeof(WCHAR);
         new_len = new_size / sizeof(WCHAR);
         if (hole_len < new_len)
         {
@@ -487,17 +506,17 @@ found:
         {
            /* copy variable name and '=' character */
             memmove(hole,
-                    Name->Buffer,
-                    Name->Length);
-            hole += Name->Length / sizeof(WCHAR);
+                    Name,
+                    NameLength * sizeof(WCHAR));
+            hole += NameLength;
             *hole++ = L'=';
         }
 
         /* copy value */
         memmove(hole,
-                Value->Buffer,
-                Value->Length);
-        hole += Value->Length / sizeof(WCHAR);
+                Value,
+                ValueLength * sizeof(WCHAR));
+        hole += ValueLength;
         *hole = 0;
     }
     else
@@ -519,6 +538,23 @@ found:
     }
 
     return(Status);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+RtlSetEnvironmentVariable(
+    _In_z_ PWSTR *Environment,
+    _In_ PUNICODE_STRING Name,
+    _In_ PUNICODE_STRING Value)
+{
+    return RtlSetEnvironmentVar(Environment,
+                                Name->Buffer,
+                                Name->Length / sizeof(WCHAR),
+                                (Value && Value->Buffer) ? Value->Buffer : NULL,
+                                Value ? Value->Length / sizeof(WCHAR) : 0);
 }
 
 
@@ -641,7 +677,7 @@ RtlQueryEnvironmentVariable_U(
 
     if (ReturnLength > UNICODE_STRING_MAX_CHARS)
     {
-        return STATUS_UNSUCCESSFUL;
+        return STATUS_NO_MEMORY;
     }
 
     /* Correct for extra length returned by RtlQueryEnvironmentVariable */

@@ -3610,6 +3610,17 @@ RtlSetCurrentDirectory_U(
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlSetEnvironmentVar(
+    _Inout_opt_ PWSTR *Environment,
+    _In_reads_(NameLength) PCWSTR Name,
+    _In_ SIZE_T NameLength,
+    _In_reads_opt_(ValueLength) PCWSTR Value,
+    _In_ SIZE_T ValueLength
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlSetEnvironmentVariable(
     _In_z_ PWSTR *Environment,
     _In_ PUNICODE_STRING Name,

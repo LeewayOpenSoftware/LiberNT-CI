@@ -171,6 +171,7 @@ list(APPEND SOURCE
     RtlCreateAndSetSD.c
     RtlMultiAppendUnicodeStringBuffer.c
     RtlSetEnvironmentStrings.c
+    RtlSetEnvironmentVar.c
     RtlCreateServiceSid.c
     RtlCriticalSection.c
     RtlCurrentTransaction.c
