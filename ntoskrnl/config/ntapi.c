@@ -1982,8 +1982,166 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
                         IN OUT PULONG Length,
                         OUT PULONG ReturnLength)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = STATUS_SUCCESS;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PCM_KEY_BODY KeyObject;
+    REG_QUERY_MULTIPLE_VALUE_KEY_INFORMATION QueryMultipleValueKeyInfo;
+    CMP_CALLBACK_CALL CallbackCall;
+    PKEY_VALUE_ENTRY Entries = NULL;
+    PUNICODE_STRING Names = NULL;
+    ULONG ListSize, Captured = 0, LengthCopy = 0, Required = 0, i;
+
+    PAGED_CODE();
+
+    DPRINT("NtQueryMultipleValueKey() KH 0x%p, N %lu\n", KeyHandle, NumberOfValues);
+
+    /* The list must hold at least one entry and fit in 32 bits */
+    if ((NumberOfValues == 0) || (NumberOfValues > MAXULONG / sizeof(KEY_VALUE_ENTRY)))
+        return STATUS_INVALID_PARAMETER;
+    ListSize = NumberOfValues * sizeof(KEY_VALUE_ENTRY);
+
+    /* Verify that the handle is valid and is a registry key */
+    Status = ObReferenceObjectByHandle(KeyHandle,
+                                       KEY_QUERY_VALUE,
+                                       CmpKeyObjectType,
+                                       PreviousMode,
+                                       (PVOID*)&KeyObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (KeyObject->KeyControlBlock->Flags & KEY_PREDEF_HANDLE)
+    {
+        ObDereferenceObject(KeyObject);
+        return STATUS_INVALID_HANDLE;
+    }
+
+    /* Kernel copies of the entries and of every name: nothing is read from user mode twice */
+    Entries = ExAllocatePoolWithTag(PagedPool, ListSize, TAG_CM);
+    Names = ExAllocatePoolWithTag(PagedPool, NumberOfValues * sizeof(UNICODE_STRING), TAG_CM);
+    if (!Entries || !Names)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Quit;
+    }
+    RtlZeroMemory(Names, NumberOfValues * sizeof(UNICODE_STRING));
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWrite(ValueList, ListSize, TYPE_ALIGNMENT(KEY_VALUE_ENTRY));
+            RtlCopyMemory(Entries, ValueList, ListSize);
+            ProbeForWriteUlong(Length);
+            LengthCopy = *Length;
+            if (ReturnLength)
+                ProbeForWriteUlong(ReturnLength);
+            ProbeForWrite(Buffer, LengthCopy, sizeof(ULONG));
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+            goto Quit;
+    }
+    else
+    {
+        RtlCopyMemory(Entries, ValueList, ListSize);
+        LengthCopy = *Length;
+    }
+
+    /* Capture each name once; the kernel entries then point at the copies */
+    for (i = 0; i < NumberOfValues; i++)
+    {
+        Status = ProbeAndCaptureUnicodeString(&Names[i], PreviousMode, Entries[i].ValueName);
+        if (!NT_SUCCESS(Status))
+            goto Quit;
+        Captured++;
+
+        /* Make sure the name is aligned properly */
+        if (Names[i].Length & (sizeof(WCHAR) - 1))
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Quit;
+        }
+
+        /* Ignore any null characters at the end */
+        while (Names[i].Length &&
+               !(Names[i].Buffer[Names[i].Length / sizeof(WCHAR) - 1]))
+        {
+            Names[i].Length -= sizeof(WCHAR);
+        }
+        Entries[i].ValueName = &Names[i];
+    }
+
+    /* Setup the callback */
+    QueryMultipleValueKeyInfo.Object = (PVOID)KeyObject;
+    QueryMultipleValueKeyInfo.ValueEntries = Entries;
+    QueryMultipleValueKeyInfo.EntryCount = NumberOfValues;
+    QueryMultipleValueKeyInfo.ValueBuffer = Buffer;
+    QueryMultipleValueKeyInfo.BufferLength = &LengthCopy;
+    QueryMultipleValueKeyInfo.RequiredBufferLength = &Required;
+
+    /* Do the callback */
+    QueryMultipleValueKeyInfo.CallContext = NULL;
+    QueryMultipleValueKeyInfo.ObjectContext = NULL;
+    QueryMultipleValueKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreQueryMultipleValueKey,
+                        RegNtPostQueryMultipleValueKey,
+                        &QueryMultipleValueKeyInfo,
+                        &QueryMultipleValueKeyInfo.CallContext,
+                        &QueryMultipleValueKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
+    {
+        /* Call the internal API */
+        Status = CmQueryMultipleValueKey(KeyObject->KeyControlBlock,
+                                         Entries,
+                                         NumberOfValues,
+                                         Buffer,
+                                         &LengthCopy,
+                                         &Required);
+
+        /* Do the post callback */
+        Status = CmpPostCallbacks(&CallbackCall, Status);
+    }
+
+    /* Write the results back once; the caller's name pointers stay untouched */
+    if (NT_SUCCESS(Status) || (Status == STATUS_BUFFER_OVERFLOW))
+    {
+        _SEH2_TRY
+        {
+            for (i = 0; i < NumberOfValues; i++)
+            {
+                ValueList[i].DataLength = Entries[i].DataLength;
+                ValueList[i].DataOffset = Entries[i].DataOffset;
+                ValueList[i].Type = Entries[i].Type;
+            }
+            *Length = LengthCopy;
+            if (ReturnLength)
+                *ReturnLength = Required;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+
+Quit:
+    for (i = 0; i < Captured; i++)
+        ReleaseCapturedUnicodeString(&Names[i], PreviousMode);
+    if (Names) ExFreePoolWithTag(Names, TAG_CM);
+    if (Entries) ExFreePoolWithTag(Entries, TAG_CM);
+
+    /* Dereference and return status */
+    ObDereferenceObject(KeyObject);
+    return Status;
 }
 
 NTSTATUS

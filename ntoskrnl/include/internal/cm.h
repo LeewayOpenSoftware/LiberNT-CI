@@ -787,6 +787,18 @@ CmpQueryKeyValueData(
 
 VALUE_SEARCH_RETURN_TYPE
 NTAPI
+CmpGetValueDataFromCache(
+    IN PCM_KEY_CONTROL_BLOCK Kcb,
+    IN PCM_CACHED_VALUE *CachedValue,
+    IN PCELL_DATA ValueKey,
+    IN BOOLEAN ValueIsCached,
+    OUT PVOID *DataPointer,
+    OUT PBOOLEAN Allocated,
+    OUT PHCELL_INDEX CellToRelease
+);
+
+VALUE_SEARCH_RETURN_TYPE
+NTAPI
 CmpGetValueListFromCache(
     IN PCM_KEY_CONTROL_BLOCK Kcb,
     OUT PCELL_DATA *CellData,
@@ -1756,6 +1768,17 @@ CmSetKeyInformation(
     IN PCM_KEY_CONTROL_BLOCK Kcb,
     IN KEY_SET_INFORMATION_CLASS KeySetInformationClass,
     IN PVOID KeySetInformation
+);
+
+NTSTATUS
+NTAPI
+CmQueryMultipleValueKey(
+    IN PCM_KEY_CONTROL_BLOCK Kcb,
+    IN OUT PKEY_VALUE_ENTRY ValueEntries,
+    IN ULONG EntryCount,
+    OUT PVOID ValueBuffer,
+    IN OUT PULONG BufferLength,
+    OUT PULONG RequiredBufferLength
 );
 
 NTSTATUS

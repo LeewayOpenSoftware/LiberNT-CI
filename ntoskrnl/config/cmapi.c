@@ -1299,6 +1299,173 @@ DoAgain:
 
 NTSTATUS
 NTAPI
+CmQueryMultipleValueKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
+                        IN OUT PKEY_VALUE_ENTRY ValueEntries,
+                        IN ULONG EntryCount,
+                        OUT PVOID ValueBuffer,
+                        IN OUT PULONG BufferLength,
+                        OUT PULONG RequiredBufferLength)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    PHHIVE Hive;
+    PCM_KEY_VALUE ValueData;
+    PCM_CACHED_VALUE *CachedValue;
+    HCELL_INDEX CellToRelease, DataCellToRelease;
+    VALUE_SEARCH_RETURN_TYPE Result;
+    ULONGLONG Total;
+    ULONG i, Index, DataLength;
+    PVOID Data;
+    BOOLEAN ValueCached, DataAllocated;
+    PAGED_CODE();
+
+    /* Acquire hive lock */
+    CmpLockRegistry();
+
+    /* Lock the KCB shared: every value is read under the same lock */
+    CmpAcquireKcbLockShared(Kcb);
+
+    /* Don't touch deleted keys */
+DoAgain:
+    if (Kcb->Delete)
+    {
+        /* Undo everything */
+        CmpReleaseKcbLock(Kcb);
+        CmpUnlockRegistry();
+        return STATUS_KEY_DELETED;
+    }
+
+    /* We don't deal with this yet */
+    if (Kcb->ExtFlags & CM_KCB_SYM_LINK_FOUND)
+    {
+        /* Shouldn't happen */
+        ASSERT(FALSE);
+    }
+
+    /* Get the hive */
+    Hive = Kcb->KeyHive;
+
+    /* First pass: every value must exist; collect type, length and offset */
+    Total = 0;
+    for (i = 0; i < EntryCount; i++)
+    {
+        Result = CmpFindValueByNameFromCache(Kcb,
+                                             ValueEntries[i].ValueName,
+                                             &CachedValue,
+                                             &Index,
+                                             &ValueData,
+                                             &ValueCached,
+                                             &CellToRelease);
+        if (Result == SearchNeedExclusiveLock)
+        {
+            /* Try with exclusive KCB lock */
+            ASSERT(CellToRelease == HCELL_NIL);
+            CmpConvertKcbSharedToExclusive(Kcb);
+            goto DoAgain;
+        }
+        if (Result != SearchSuccess)
+        {
+            /* One missing name fails the whole call */
+            Status = STATUS_OBJECT_NAME_NOT_FOUND;
+            goto Quickie;
+        }
+
+        /* Small values carry their length in the special-size form */
+        CmpIsKeyValueSmall(&DataLength, ValueData->DataLength);
+        if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
+
+        /* Each item starts at a naturally aligned offset in the caller's buffer */
+        Total = ALIGN_UP_BY(Total, sizeof(ULONGLONG));
+        if (Total + DataLength > MAXULONG)
+        {
+            Status = STATUS_BUFFER_OVERFLOW;
+            *BufferLength = MAXULONG;
+            *RequiredBufferLength = MAXULONG;
+            goto Quickie;
+        }
+        ValueEntries[i].Type = ValueData->Type;
+        ValueEntries[i].DataLength = DataLength;
+        ValueEntries[i].DataOffset = (ULONG)Total;
+        Total += DataLength;
+    }
+
+    /* Tell the caller what it needs; stop here if it has less */
+    *RequiredBufferLength = (ULONG)Total;
+    if (Total > *BufferLength)
+    {
+        *BufferLength = (ULONG)Total;
+        Status = STATUS_BUFFER_OVERFLOW;
+        goto Quickie;
+    }
+    *BufferLength = (ULONG)Total;
+
+    /* Second pass: copy the data; the lock is still held, so the set is consistent */
+    for (i = 0; i < EntryCount; i++)
+    {
+        Result = CmpFindValueByNameFromCache(Kcb,
+                                             ValueEntries[i].ValueName,
+                                             &CachedValue,
+                                             &Index,
+                                             &ValueData,
+                                             &ValueCached,
+                                             &CellToRelease);
+        if (Result == SearchNeedExclusiveLock)
+        {
+            ASSERT(CellToRelease == HCELL_NIL);
+            CmpConvertKcbSharedToExclusive(Kcb);
+            goto DoAgain;
+        }
+        if (Result != SearchSuccess)
+        {
+            Status = STATUS_OBJECT_NAME_NOT_FOUND;
+            goto Quickie;
+        }
+
+        /* Get the data pointer (small, normal or big-data storage) */
+        Result = CmpGetValueDataFromCache(Kcb,
+                                          CachedValue,
+                                          (PCELL_DATA)ValueData,
+                                          ValueCached,
+                                          &Data,
+                                          &DataAllocated,
+                                          &DataCellToRelease);
+        if (Result != SearchSuccess)
+        {
+            ASSERT(Data == NULL);
+            ASSERT(DataAllocated == FALSE);
+            if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quickie;
+        }
+
+        /* User data, protect against exceptions */
+        _SEH2_TRY
+        {
+            RtlCopyMemory((PUCHAR)ValueBuffer + ValueEntries[i].DataOffset,
+                          Data,
+                          ValueEntries[i].DataLength);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        /* Release what the lookup gave us */
+        if (DataAllocated) CmpFree(Data, 0);
+        if (DataCellToRelease != HCELL_NIL) HvReleaseCell(Hive, DataCellToRelease);
+        if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
+        if (!NT_SUCCESS(Status)) goto Quickie;
+    }
+
+Quickie:
+    /* Release locks */
+    CmpReleaseKcbLock(Kcb);
+    CmpUnlockRegistry();
+    return Status;
+}
+
+NTSTATUS
+NTAPI
 CmEnumerateValueKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
                     IN ULONG Index,
                     IN KEY_VALUE_INFORMATION_CLASS KeyValueInformationClass,
