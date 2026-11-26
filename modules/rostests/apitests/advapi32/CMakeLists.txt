@@ -42,6 +42,7 @@ list(APPEND SOURCE
     RegCreateKeyEx.c
     RegCreateKeyTransacted.c
     RegEnumKey.c
+    RegQueryMultipleValues.c
     RegEnumValueW.c
     RegFlushKey.c
     RegCreateKeyLink.c
