@@ -641,7 +641,7 @@ RtlQueryEnvironmentVariable_U(
 
     if (ReturnLength > UNICODE_STRING_MAX_CHARS)
     {
-        return STATUS_UNSUCCESSFUL;
+        return STATUS_NO_MEMORY;
     }
 
     /* Correct for extra length returned by RtlQueryEnvironmentVariable */

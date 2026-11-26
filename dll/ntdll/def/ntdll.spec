@@ -1203,7 +1203,7 @@
 @ stdcall RtlQueryDepthSList(ptr)
 @ stdcall -version=0x600+ RtlQueryDynamicTimeZoneInformation(ptr)
 @ stdcall -stub -version=0x600+ RtlQueryElevationFlags(ptr)
-@ stdcall -version=0x600+ RtlQueryEnvironmentVariable(ptr ptr long ptr long ptr)
+@ stdcall -version=0x600+ RtlQueryEnvironmentVariable(ptr ptr ptr ptr ptr ptr)
 @ stdcall RtlQueryEnvironmentVariable_U(ptr ptr ptr)
 @ stdcall RtlQueryHeapInformation(long long ptr long ptr)
 @ stdcall RtlQueryInformationAcl(ptr ptr long long)

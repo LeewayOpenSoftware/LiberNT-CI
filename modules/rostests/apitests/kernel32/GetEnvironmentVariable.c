@@ -3,6 +3,7 @@
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
  * PURPOSE:     Tests for GetEnvironmentVariable(A/W)
  * COPYRIGHT:   Copyright 2026 Timo Kreuzer <timo.kreuzer@reactos.org>
+ *              Copyright 2026 Leeway Open Software
  */
 
 #include "precomp.h"
@@ -118,8 +119,96 @@ static void Test_GetEnvironmentVariableW(void)
     ok((Length == ActualLength + 1) || broken(/* Windows 2003 */ Length == 0), "Length == %lu, ActualLength == %lu\n", Length, ActualLength);
 }
 
+typedef NTSTATUS (NTAPI *FN_RtlSetEnvironmentStrings)(PCWCHAR, SIZE_T);
+
+static BOOLEAN SetLongVariable(FN_RtlSetEnvironmentStrings pRtlSetEnvironmentStrings, PWSTR Block, ULONG Chars)
+{
+    ULONG Index;
+
+    Block[0] = L'L';
+    Block[1] = L'=';
+    for (Index = 0; Index < Chars; Index++)
+        Block[2 + Index] = L'y';
+    Block[2 + Chars] = Block[3 + Chars] = UNICODE_NULL;
+    return NT_SUCCESS(pRtlSetEnvironmentStrings(Block, (Chars + 4) * sizeof(WCHAR)));
+}
+
+/* Rows measured on Windows 11 26100: the A variant stops at UNICODE_STRING_MAX_CHARS, the W variant does not */
+static void Test_LongValues(void)
+{
+    FN_RtlSetEnvironmentStrings pRtlSetEnvironmentStrings;
+    PWSTR Saved = NULL, Current, Block, BufferW;
+    PCHAR BufferA;
+    SIZE_T SavedSize, Index;
+
+    pRtlSetEnvironmentStrings = (FN_RtlSetEnvironmentStrings)GetProcAddress(GetModuleHandleW(L"ntdll.dll"),
+                                                                            "RtlSetEnvironmentStrings");
+    if (!pRtlSetEnvironmentStrings)
+    {
+        skip("RtlSetEnvironmentStrings is not exported\n");
+        return;
+    }
+
+    Current = GetEnvironmentStringsW();
+    for (Index = 0; Current[Index] || Current[Index + 1]; Index++);
+    SavedSize = (Index + 2) * sizeof(WCHAR);
+    Saved = HeapAlloc(GetProcessHeap(), 0, SavedSize);
+    Block = HeapAlloc(GetProcessHeap(), 0, 40004 * sizeof(WCHAR));
+    BufferA = HeapAlloc(GetProcessHeap(), 0, 40008);
+    BufferW = HeapAlloc(GetProcessHeap(), 0, 40008 * sizeof(WCHAR));
+    if (!Saved || !Block || !BufferA || !BufferW)
+    {
+        skip("no memory\n");
+        FreeEnvironmentStringsW(Current);
+        goto Cleanup;
+    }
+    RtlCopyMemory(Saved, Current, SavedSize);
+    FreeEnvironmentStringsW(Current);
+
+    ok(SetLongVariable(pRtlSetEnvironmentStrings, Block, 32766), "set 32766 failed\n");
+    ok_eq_ulong(GetEnvironmentVariableA("L", NULL, 0), 32767);
+    memset(BufferA, 0xAB, 40008);
+    ok_eq_ulong(GetEnvironmentVariableA("L", BufferA, 32766), 32767);
+    ok_eq_char(BufferA[0], '\xAB');
+    ok_eq_ulong(GetEnvironmentVariableA("L", BufferA, 32767), 32766);
+    ok_eq_char(BufferA[32765], 'y');
+    ok_eq_char(BufferA[32766], '\0');
+    ok_eq_ulong(GetEnvironmentVariableW(L"L", NULL, 0), 32767);
+    ok_eq_ulong(GetEnvironmentVariableW(L"L", BufferW, 32767), 32766);
+
+    ok(SetLongVariable(pRtlSetEnvironmentStrings, Block, 32767), "set 32767 failed\n");
+    SetLastError(0xdeadbeef);
+    ok_eq_ulong(GetEnvironmentVariableA("L", NULL, 0), 0);
+    ok_eq_ulong(GetLastError(), ERROR_NOT_ENOUGH_MEMORY);
+    memset(BufferA, 0xAB, 40008);
+    SetLastError(0xdeadbeef);
+    ok_eq_ulong(GetEnvironmentVariableA("L", BufferA, 32768), 0);
+    ok_eq_ulong(GetLastError(), ERROR_NOT_ENOUGH_MEMORY);
+    ok_eq_char(BufferA[0], '\xAB');
+    ok_eq_ulong(GetEnvironmentVariableW(L"L", NULL, 0), 32768);
+    ok_eq_ulong(GetEnvironmentVariableW(L"L", BufferW, 32768), 32767);
+
+    ok(SetLongVariable(pRtlSetEnvironmentStrings, Block, 40000), "set 40000 failed\n");
+    SetLastError(0xdeadbeef);
+    ok_eq_ulong(GetEnvironmentVariableA("L", BufferA, 40001), 0);
+    ok_eq_ulong(GetLastError(), ERROR_NOT_ENOUGH_MEMORY);
+    ok_eq_ulong(GetEnvironmentVariableW(L"L", NULL, 0), 40001);
+    ok_eq_ulong(GetEnvironmentVariableW(L"L", BufferW, 40001), 40000);
+    ok_eq_wchar(BufferW[39999], L'y');
+    ok_eq_wchar(BufferW[40000], UNICODE_NULL);
+
+    pRtlSetEnvironmentStrings(Saved, SavedSize);
+
+Cleanup:
+    if (Saved) HeapFree(GetProcessHeap(), 0, Saved);
+    if (Block) HeapFree(GetProcessHeap(), 0, Block);
+    if (BufferA) HeapFree(GetProcessHeap(), 0, BufferA);
+    if (BufferW) HeapFree(GetProcessHeap(), 0, BufferW);
+}
+
 START_TEST(GetEnvironmentVariable)
 {
     Test_GetEnvironmentVariableA();
     Test_GetEnvironmentVariableW();
+    Test_LongValues();
 }
