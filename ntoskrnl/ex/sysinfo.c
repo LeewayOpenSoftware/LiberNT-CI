@@ -44,6 +44,46 @@ ExpUserAddressOnly(IN PVOID Address)
     return (ULONG_PTR)Address <= (ULONG_PTR)MmHighestUserAddress ? Address : NULL;
 }
 
+static
+BOOLEAN
+ExpIsRestrictedCaller(VOID)
+{
+    SECURITY_SUBJECT_CONTEXT SubjectContext;
+    PACCESS_TOKEN Token;
+    BOOLEAN Restricted;
+
+    if (ExGetPreviousMode() == KernelMode)
+        return FALSE;
+
+    SeCaptureSubjectContext(&SubjectContext);
+    SeLockSubjectContext(&SubjectContext);
+    Token = SeQuerySubjectContextToken(&SubjectContext);
+    Restricted = SepGetTokenIntegrityRid(Token) < SECURITY_MANDATORY_MEDIUM_RID ||
+                 (((PTOKEN)Token)->TokenFlags & TOKEN_LOWBOX) != 0;
+    SeUnlockSubjectContext(&SubjectContext);
+    SeReleaseSubjectContext(&SubjectContext);
+    return Restricted;
+}
+
+static
+BOOLEAN
+ExpIsRestrictedClass(IN SYSTEM_INFORMATION_CLASS SystemInformationClass)
+{
+    switch (SystemInformationClass)
+    {
+        case SystemModuleInformation:
+        case SystemLocksInformation:
+        case SystemHandleInformation:
+        case SystemObjectInformation:
+        case SystemExtendedHandleInformation:
+        case SystemBigPoolInformation:
+        case SystemModuleInformationEx:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
 FORCEINLINE
 NTSTATUS
 ExpConvertLdrModuleToRtlModule(IN ULONG ModuleCount,
@@ -4262,7 +4302,11 @@ NtQuerySystemInformation(
         SystemInformationClass = (SYSTEM_INFORMATION_CLASS)((ULONG_PTR)SystemInformationClass &
             KiSpeculationIndexMask(SystemInformationClass, MAX_SYSTEM_INFO_CLASS));
 
-        if (SystemInformationClass == SystemProcessIdInformation)
+        if (ExpIsRestrictedClass(SystemInformationClass) && ExpIsRestrictedCaller())
+        {
+            Status = STATUS_ACCESS_DENIED;
+        }
+        else if (SystemInformationClass == SystemProcessIdInformation)
         {
             Status = ExpQueryProcessIdInformation(SystemInformation,
                                                   SystemInformationLength,
