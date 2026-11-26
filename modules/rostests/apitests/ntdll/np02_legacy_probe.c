@@ -10,9 +10,8 @@
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
-#include <apitest.h>
-#include <ndk/exfuncs.h>
-#include <ndk/rtlfuncs.h>
+#include "precomp.h"
+#include <winreg.h>
 #include <pseh/pseh2.h>
 
 /* Classes are given as numbers on purpose: this is a probe of what the system
