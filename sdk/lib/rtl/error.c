@@ -171,14 +171,37 @@ RtlSetLastWin32ErrorAndNtStatusFromNtStatus(IN NTSTATUS Status)
     NtCurrentTeb()->LastErrorValue = RtlNtStatusToDosError(Status);
 }
 
+typedef struct _SECURITY_ERROR_MAP
+{
+    ULONG SecError;
+    NTSTATUS NtStatus;
+} SECURITY_ERROR_MAP;
+
+/* Observed on Windows 11 by the native-parity-02 sweep; extended only from
+ * sweep output, never from copied tables. */
+static const SECURITY_ERROR_MAP SecurityErrorMap[] =
+{
+    { 0 /* SEC_E_OK */, STATUS_SUCCESS },
+};
+
 /*
-* @unimplemented
+* @implemented
 */
 NTSTATUS
 NTAPI
 RtlMapSecurityErrorToNtStatus(IN ULONG SecurityError)
 {
-    UNIMPLEMENTED;
+    ULONG i;
+
+    /* TODO: every SEC_E_*/SEC_I_* entry below comes from the Win11 sweep
+       (native-parity-02/rtl-map-security-error-to-ntstatus); until the sweep
+       lands, unlisted values report not-implemented instead of a guess. */
+    for (i = 0; i < sizeof(SecurityErrorMap) / sizeof(SecurityErrorMap[0]); i++)
+    {
+        if (SecurityErrorMap[i].SecError == SecurityError)
+            return SecurityErrorMap[i].NtStatus;
+    }
+
     return STATUS_NOT_IMPLEMENTED;
 }
 

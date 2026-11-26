@@ -206,6 +206,7 @@ list(APPEND SOURCE
     RtlIsNameLegalDOS8Dot3.c
     RtlLocale.c
     RtlMemoryStream.c
+    RtlMapSecurityErrorToNtStatus.c
     PfxPrefixTable.c
     RtlAddressInSectionTable.c
     RtlCompareAltitudes.c
