@@ -289,6 +289,19 @@ typedef enum _PLUGPLAY_EVENT_CATEGORY
     MaxPlugEventCategory
 } PLUGPLAY_EVENT_CATEGORY;
 
+//
+// Key flags returned by NtQueryKey(KeyFlagsInformation) (names: System Informer phnt ntregapi.h)
+//
+#define REG_FLAG_VOLATILE                       0x0001
+#define REG_FLAG_LINK                           0x0002
+
+typedef struct _KEY_FLAGS_INFORMATION
+{
+    ULONG Wow64Flags;
+    ULONG KeyFlags;
+    ULONG ControlFlags;
+} KEY_FLAGS_INFORMATION, *PKEY_FLAGS_INFORMATION;
+
 #ifdef NTOS_MODE_USER
 
 //

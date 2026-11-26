@@ -131,6 +131,7 @@ list(APPEND SOURCE
     NtQueryInformationThread.c
     NtQueryInformationToken.c
     NtQueryKey.c
+    NtQueryMultipleValueKey.c
     NtQueryObject.c
     NtQueryObjectName.c
     NtQueryOpenSubKeys.c
@@ -145,6 +146,7 @@ list(APPEND SOURCE
     NtSaveKey.c
     NtSetDefaultLocale.c
     NtSetInformationFile.c
+    NtSetInformationKey.c
     NtSetInformationSymbolicLink.c
     NtSetInformationProcess.c
     NtSetInformationThread.c

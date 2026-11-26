@@ -111,6 +111,7 @@ extern void func_NtQueryInformationProcess(void);
 extern void func_NtQueryInformationThread(void);
 extern void func_NtQueryInformationToken(void);
 extern void func_NtQueryKey(void);
+extern void func_NtQueryMultipleValueKey(void);
 extern void func_NtQueryObject(void);
 extern void func_NtQueryObjectName(void);
 extern void func_NtQueryOpenSubKeys(void);
@@ -126,6 +127,7 @@ extern void func_NtReadFileAsync(void);
 extern void func_NtSaveKey(void);
 extern void func_NtSetDefaultLocale(void);
 extern void func_NtSetInformationFile(void);
+extern void func_NtSetInformationKey(void);
 extern void func_NtSetInformationSymbolicLink(void);
 extern void func_NtSetInformationProcess(void);
 extern void func_NtSetInformationThread(void);
@@ -359,6 +361,7 @@ const struct test winetest_testlist[] =
     { "NtQueryInformationThread",       func_NtQueryInformationThread },
     { "NtQueryInformationToken",        func_NtQueryInformationToken },
     { "NtQueryKey",                     func_NtQueryKey },
+    { "NtQueryMultipleValueKey",        func_NtQueryMultipleValueKey },
     { "NtQueryObject",                  func_NtQueryObject },
     { "NtQueryObjectName",              func_NtQueryObjectName },
     { "NtQueryOpenSubKeys",             func_NtQueryOpenSubKeys },
@@ -374,6 +377,7 @@ const struct test winetest_testlist[] =
     { "NtSaveKey",                      func_NtSaveKey},
     { "NtSetDefaultLocale",             func_NtSetDefaultLocale },
     { "NtSetInformationFile",           func_NtSetInformationFile },
+    { "NtSetInformationKey",            func_NtSetInformationKey },
     { "NtSetInformationSymbolicLink",   func_NtSetInformationSymbolicLink },
     { "NtSetInformationProcess",        func_NtSetInformationProcess },
     { "NtSetInformationThread",         func_NtSetInformationThread },

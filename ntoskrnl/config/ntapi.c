@@ -1982,8 +1982,235 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
                         IN OUT PULONG Length,
                         OUT PULONG ReturnLength)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = STATUS_SUCCESS;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PCM_KEY_BODY KeyObject;
+    REG_QUERY_MULTIPLE_VALUE_KEY_INFORMATION QueryMultipleValueKeyInfo;
+    CMP_CALLBACK_CALL CallbackCall;
+    PKEY_VALUE_ENTRY Entries = NULL;
+    PUNICODE_STRING Names = NULL;
+    PWCHAR NameChars = NULL, NextChar;
+    ULONGLONG NamesSize = 0;
+    ULONG ListSize, LengthCopy = 0, Required = 0, i;
+
+    PAGED_CODE();
+
+    DPRINT("NtQueryMultipleValueKey() KH 0x%p, N %lu\n", KeyHandle, NumberOfValues);
+
+    /* Win11 answers a list that does not fit (32 bits, or more than 8 MB of entries) with a resource failure */
+    if (NumberOfValues > CMP_MAX_MULTIPLE_VALUE_ENTRIES)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    ListSize = NumberOfValues * sizeof(KEY_VALUE_ENTRY);
+
+    /* Verify that the handle is valid and is a registry key */
+    Status = ObReferenceObjectByHandle(KeyHandle,
+                                       KEY_QUERY_VALUE,
+                                       CmpKeyObjectType,
+                                       PreviousMode,
+                                       (PVOID*)&KeyObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (KeyObject->KeyControlBlock->Flags & KEY_PREDEF_HANDLE)
+    {
+        ObDereferenceObject(KeyObject);
+        return STATUS_INVALID_HANDLE;
+    }
+
+    /* An empty list succeeds without touching the buffer or its length (Win11) */
+    if (NumberOfValues == 0)
+    {
+        if (ReturnLength)
+        {
+            _SEH2_TRY
+            {
+                if (PreviousMode != KernelMode)
+                    ProbeForWriteUlong(ReturnLength);
+                *ReturnLength = 0;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+        }
+        ObDereferenceObject(KeyObject);
+        return Status;
+    }
+
+    /* Kernel copies of the entries and of every name, charged to the caller: nothing is read from user mode twice */
+    Entries = ExAllocatePoolWithQuotaTag(PagedPool | POOL_QUOTA_FAIL_INSTEAD_OF_RAISE, ListSize, TAG_CM);
+    Names = ExAllocatePoolWithQuotaTag(PagedPool | POOL_QUOTA_FAIL_INSTEAD_OF_RAISE,
+                                       NumberOfValues * sizeof(UNICODE_STRING), TAG_CM);
+    if (!Entries || !Names)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Quit;
+    }
+    RtlZeroMemory(Names, NumberOfValues * sizeof(UNICODE_STRING));
+
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWrite(ValueList, ListSize, TYPE_ALIGNMENT(KEY_VALUE_ENTRY));
+            RtlCopyMemory(Entries, ValueList, ListSize);
+            ProbeForWriteUlong(Length);
+            LengthCopy = *Length;
+            if (ReturnLength)
+                ProbeForWriteUlong(ReturnLength);
+            ProbeForWrite(Buffer, LengthCopy, sizeof(ULONG));
+
+            /* Every name header is read once; a value name never exceeds the hive's 32767-byte limit */
+            for (i = 0; i < NumberOfValues; i++)
+            {
+                Names[i] = ProbeForReadUnicodeString(Entries[i].ValueName);
+                if ((Names[i].Length > 32767) || (Names[i].Length & (sizeof(WCHAR) - 1)))
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    break;
+                }
+                if (Names[i].Length)
+                    ProbeForRead(Names[i].Buffer, Names[i].Length, sizeof(WCHAR));
+                NamesSize += Names[i].Length;
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+            goto Quit;
+    }
+    else
+    {
+        RtlCopyMemory(Entries, ValueList, ListSize);
+        LengthCopy = *Length;
+        for (i = 0; i < NumberOfValues; i++)
+        {
+            Names[i] = *Entries[i].ValueName;
+            if ((Names[i].Length > 32767) || (Names[i].Length & (sizeof(WCHAR) - 1)))
+            {
+                Status = STATUS_INVALID_PARAMETER;
+                goto Quit;
+            }
+            NamesSize += Names[i].Length;
+        }
+    }
+
+    /* One quota-charged block holds every name's characters (at most 32 KB per entry) */
+    if (NamesSize)
+    {
+        if (NamesSize > MAXULONG)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quit;
+        }
+        NameChars = ExAllocatePoolWithQuotaTag(PagedPool | POOL_QUOTA_FAIL_INSTEAD_OF_RAISE, (SIZE_T)NamesSize, TAG_CM);
+        if (!NameChars)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quit;
+        }
+    }
+    NextChar = NameChars;
+    _SEH2_TRY
+    {
+        for (i = 0; i < NumberOfValues; i++)
+        {
+            if (Names[i].Length)
+                RtlCopyMemory(NextChar, Names[i].Buffer, Names[i].Length);
+            Names[i].Buffer = NextChar;
+            Names[i].MaximumLength = Names[i].Length;
+            NextChar += Names[i].Length / sizeof(WCHAR);
+
+            /* Ignore any null characters at the end */
+            while (Names[i].Length &&
+                   !(Names[i].Buffer[Names[i].Length / sizeof(WCHAR) - 1]))
+            {
+                Names[i].Length -= sizeof(WCHAR);
+            }
+            Entries[i].ValueName = &Names[i];
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        goto Quit;
+
+    /* Filter drivers see the kernel copy of the entries; Buffer and the length cells are the caller's addresses */
+    /* Setup the callback */
+    QueryMultipleValueKeyInfo.Object = (PVOID)KeyObject;
+    QueryMultipleValueKeyInfo.ValueEntries = Entries;
+    QueryMultipleValueKeyInfo.EntryCount = NumberOfValues;
+    QueryMultipleValueKeyInfo.ValueBuffer = Buffer;
+    QueryMultipleValueKeyInfo.BufferLength = &LengthCopy;
+    QueryMultipleValueKeyInfo.RequiredBufferLength = &Required;
+
+    /* Do the callback */
+    QueryMultipleValueKeyInfo.CallContext = NULL;
+    QueryMultipleValueKeyInfo.ObjectContext = NULL;
+    QueryMultipleValueKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreQueryMultipleValueKey,
+                        RegNtPostQueryMultipleValueKey,
+                        &QueryMultipleValueKeyInfo,
+                        &QueryMultipleValueKeyInfo.CallContext,
+                        &QueryMultipleValueKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
+    {
+        /* Call the internal API */
+        Status = CmQueryMultipleValueKey(KeyObject->KeyControlBlock,
+                                         Entries,
+                                         NumberOfValues,
+                                         Buffer,
+                                         &LengthCopy,
+                                         &Required);
+
+        /* Do the post callback */
+        Status = CmpPostCallbacks(&CallbackCall, Status);
+    }
+
+    /* Write the results back once; the caller's name pointers stay untouched. *Length carries the
+       delivered bytes on success and on overflow (Win11); a miss leaves it alone and reports 0 as needed */
+    if (NT_SUCCESS(Status) || (Status == STATUS_BUFFER_OVERFLOW) || (Status == STATUS_OBJECT_NAME_NOT_FOUND))
+    {
+        _SEH2_TRY
+        {
+            for (i = 0; i < NumberOfValues; i++)
+            {
+                ValueList[i].DataLength = Entries[i].DataLength;
+                ValueList[i].DataOffset = Entries[i].DataOffset;
+                ValueList[i].Type = Entries[i].Type;
+            }
+            if (Status != STATUS_OBJECT_NAME_NOT_FOUND)
+                *Length = LengthCopy;
+            if (ReturnLength)
+                *ReturnLength = Required;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+    }
+
+Quit:
+    if (NameChars) ExFreePoolWithTag(NameChars, TAG_CM);
+    if (Names) ExFreePoolWithTag(Names, TAG_CM);
+    if (Entries) ExFreePoolWithTag(Entries, TAG_CM);
+
+    /* Dereference and return status */
+    ObDereferenceObject(KeyObject);
+    return Status;
 }
 
 NTSTATUS
@@ -2380,8 +2607,119 @@ NtSetInformationKey(IN HANDLE KeyHandle,
                     IN PVOID KeyInformation,
                     IN ULONG KeyInformationLength)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status = STATUS_SUCCESS;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PCM_KEY_BODY KeyObject;
+    REG_SET_INFORMATION_KEY_INFORMATION SetInformationKeyInfo;
+    CMP_CALLBACK_CALL CallbackCall;
+    union
+    {
+        KEY_WRITE_TIME_INFORMATION WriteTime;
+        KEY_WOW64_FLAGS_INFORMATION Wow64Flags;
+        KEY_CONTROL_FLAGS_INFORMATION ControlFlags;
+    } Capture;
+    ULONG ExpectedLength;
+
+    PAGED_CODE();
+
+    DPRINT("NtSetInformationKey() KH 0x%p, KIC %d, Length %lu\n",
+           KeyHandle, KeyInformationClass, KeyInformationLength);
+
+    /* Reject classes we don't know about */
+    switch (KeyInformationClass)
+    {
+        case KeyWriteTimeInformation:
+            ExpectedLength = sizeof(KEY_WRITE_TIME_INFORMATION);
+            break;
+        case KeyWow64FlagsInformation:
+            ExpectedLength = sizeof(KEY_WOW64_FLAGS_INFORMATION);
+            break;
+        case KeyControlFlagsInformation:
+            ExpectedLength = sizeof(KEY_CONTROL_FLAGS_INFORMATION);
+            break;
+        default:
+            return STATUS_INVALID_INFO_CLASS;
+    }
+    if (KeyInformationLength != ExpectedLength)
+        return STATUS_INFO_LENGTH_MISMATCH;
+
+    /* Capture the information once; Win11 reads it before it looks at the handle, with no alignment rule */
+    if (PreviousMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForRead(KeyInformation, ExpectedLength, sizeof(UCHAR));
+            RtlCopyMemory(&Capture, KeyInformation, ExpectedLength);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    else
+    {
+        RtlCopyMemory(&Capture, KeyInformation, ExpectedLength);
+    }
+
+    /* Verify that the handle is valid and is a registry key */
+    Status = ObReferenceObjectByHandle(KeyHandle,
+                                       KEY_SET_VALUE,
+                                       CmpKeyObjectType,
+                                       PreviousMode,
+                                       (PVOID*)&KeyObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (KeyObject->KeyControlBlock->Flags & KEY_PREDEF_HANDLE)
+    {
+        ObDereferenceObject(KeyObject);
+        return STATUS_INVALID_HANDLE;
+    }
+
+    /* Don't touch read-only keys */
+    if (KeyObject->KeyControlBlock->ExtFlags & CM_KCB_READ_ONLY_KEY)
+    {
+        ObDereferenceObject(KeyObject);
+        return STATUS_ACCESS_DENIED;
+    }
+
+    /* Setup callback */
+    SetInformationKeyInfo.Object = (PVOID)KeyObject;
+    SetInformationKeyInfo.KeySetInformationClass = KeyInformationClass;
+    SetInformationKeyInfo.KeySetInformation = &Capture;
+    SetInformationKeyInfo.KeySetInformationLength = ExpectedLength;
+
+    /* Do the callback */
+    SetInformationKeyInfo.CallContext = NULL;
+    SetInformationKeyInfo.ObjectContext = NULL;
+    SetInformationKeyInfo.Reserved = NULL;
+    if (CmpPreCallbacks(&CallbackCall,
+                        RegNtPreSetInformationKey,
+                        RegNtPostSetInformationKey,
+                        &SetInformationKeyInfo,
+                        &SetInformationKeyInfo.CallContext,
+                        &SetInformationKeyInfo.ObjectContext,
+                        KeyObject,
+                        NULL,
+                        &Status))
+    {
+        /* Call the internal API */
+        Status = CmSetKeyInformation(KeyObject->KeyControlBlock,
+                                     KeyInformationClass,
+                                     &Capture);
+
+        /* Do the post-callback */
+        Status = CmpPostCallbacks(&CallbackCall, Status);
+    }
+
+    /* Dereference and return status */
+    ObDereferenceObject(KeyObject);
+    return Status;
 }
 
 NTSTATUS

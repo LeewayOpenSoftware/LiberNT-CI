@@ -1091,6 +1091,98 @@ Quickie:
 
 NTSTATUS
 NTAPI
+CmSetKeyInformation(IN PCM_KEY_CONTROL_BLOCK Kcb,
+                    IN KEY_SET_INFORMATION_CLASS KeySetInformationClass,
+                    IN PVOID KeySetInformation)
+{
+    PHHIVE Hive;
+    PCM_KEY_NODE Node = NULL;
+    HCELL_INDEX Cell;
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG Flags = 0, Filter;
+    PAGED_CODE();
+
+    /* The flag classes carry four bits in the key node */
+    if (KeySetInformationClass == KeyWow64FlagsInformation)
+    {
+        Flags = ((PKEY_WOW64_FLAGS_INFORMATION)KeySetInformation)->UserFlags;
+    }
+    else if (KeySetInformationClass == KeyControlFlagsInformation)
+    {
+        /* Win11 takes any value here; the node has four bits for it */
+        Flags = ((PKEY_CONTROL_FLAGS_INFORMATION)KeySetInformation)->ControlFlags & 0xF;
+    }
+    else if (KeySetInformationClass != KeyWriteTimeInformation)
+    {
+        return STATUS_INVALID_INFO_CLASS;
+    }
+    if (Flags & ~0xF)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Acquire hive lock and lock the KCB exclusive: the node is written */
+    CmpLockRegistry();
+    CmpAcquireKcbLockExclusive(Kcb);
+
+    /* Don't touch deleted keys */
+    if (Kcb->Delete)
+    {
+        CmpReleaseKcbLock(Kcb);
+        CmpUnlockRegistry();
+        return STATUS_KEY_DELETED;
+    }
+
+    /* Get the hive and the key cell, and keep the flusher away while the cell is dirty */
+    Hive = Kcb->KeyHive;
+    Cell = Kcb->KeyCell;
+    CmpLockHiveFlusherShared((PCMHIVE)Hive);
+
+    Node = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
+    if (!Node)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Quickie;
+    }
+
+    /* Mark the cell dirty */
+    if (!HvMarkCellDirty(Hive, Cell, FALSE))
+    {
+        Status = STATUS_NO_LOG_SPACE;
+        goto Quickie;
+    }
+
+    if (KeySetInformationClass == KeyWriteTimeInformation)
+    {
+        /* The caller's time replaces the stamp, in the node and in the cached copy */
+        Node->LastWriteTime = ((PKEY_WRITE_TIME_INFORMATION)KeySetInformation)->LastWriteTime;
+        Kcb->KcbLastWriteTime = Node->LastWriteTime;
+        Filter = REG_NOTIFY_CHANGE_LAST_SET;
+    }
+    else if (KeySetInformationClass == KeyWow64FlagsInformation)
+    {
+        Node->UserFlags = Flags;
+        Kcb->KcbUserFlags = Flags;
+        Filter = REG_NOTIFY_CHANGE_ATTRIBUTES;
+    }
+    else
+    {
+        Node->VirtControlFlags = Flags;
+        Kcb->KcbVirtControlFlags = Flags;
+        Filter = REG_NOTIFY_CHANGE_ATTRIBUTES;
+    }
+
+    /* Notify registered callbacks */
+    CmpReportNotify(Kcb, Hive, Cell, Filter);
+
+Quickie:
+    if (Node) HvReleaseCell(Hive, Cell);
+    CmpUnlockHiveFlusher((PCMHIVE)Hive);
+    CmpReleaseKcbLock(Kcb);
+    CmpUnlockRegistry();
+    return Status;
+}
+
+NTSTATUS
+NTAPI
 CmQueryValueKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
                 IN UNICODE_STRING ValueName,
                 IN KEY_VALUE_INFORMATION_CLASS KeyValueInformationClass,
@@ -1200,6 +1292,205 @@ DoAgain:
     /* If we have a cell to release, do so */
     if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
 
+    /* Release locks */
+    CmpReleaseKcbLock(Kcb);
+    CmpUnlockRegistry();
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+CmQueryMultipleValueKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
+                        IN OUT PKEY_VALUE_ENTRY ValueEntries,
+                        IN ULONG EntryCount,
+                        OUT PVOID ValueBuffer,
+                        IN OUT PULONG BufferLength,
+                        OUT PULONG RequiredBufferLength)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    PHHIVE Hive;
+    PCM_KEY_VALUE ValueData;
+    PCM_CACHED_VALUE *CachedValue;
+    HCELL_INDEX CellToRelease, DataCellToRelease;
+    VALUE_SEARCH_RETURN_TYPE Result;
+    ULONGLONG Total;
+    ULONG i, Index, DataLength, Available, Fit, Used;
+    PVOID Data;
+    BOOLEAN ValueCached, DataAllocated;
+    PAGED_CODE();
+
+    /* The caller's length is read once; a lock retry must compare against the same value */
+    Available = *BufferLength;
+
+    /* Acquire hive lock */
+    CmpLockRegistry();
+
+    /* Lock the KCB shared: every value is read under the same lock */
+    CmpAcquireKcbLockShared(Kcb);
+
+    /* Don't touch deleted keys */
+DoAgain:
+    if (Kcb->Delete)
+    {
+        /* Undo everything */
+        CmpReleaseKcbLock(Kcb);
+        CmpUnlockRegistry();
+        return STATUS_KEY_DELETED;
+    }
+
+    /* We don't deal with this yet */
+    if (Kcb->ExtFlags & CM_KCB_SYM_LINK_FOUND)
+    {
+        /* Shouldn't happen */
+        ASSERT(FALSE);
+    }
+
+    /* Get the hive */
+    Hive = Kcb->KeyHive;
+
+    /* First pass: every value must exist; collect type, length and offset, and count the leading items that fit */
+    Total = 0;
+    Fit = 0;
+    Used = 0;
+    Status = STATUS_SUCCESS;
+    for (i = 0; i < EntryCount; i++)
+    {
+        Result = CmpFindValueByNameFromCache(Kcb,
+                                             ValueEntries[i].ValueName,
+                                             &CachedValue,
+                                             &Index,
+                                             &ValueData,
+                                             &ValueCached,
+                                             &CellToRelease);
+        if (Result == SearchNeedExclusiveLock)
+        {
+            /* Try with exclusive KCB lock */
+            ASSERT(CellToRelease == HCELL_NIL);
+            CmpConvertKcbSharedToExclusive(Kcb);
+            goto DoAgain;
+        }
+        if (Result != SearchSuccess)
+        {
+            /* One missing name fails the whole call; the caller sees cleared entries and no size */
+            Status = STATUS_OBJECT_NAME_NOT_FOUND;
+            *RequiredBufferLength = 0;
+            goto ClearEntries;
+        }
+
+        /* Small values carry their length in the special-size form */
+        CmpIsKeyValueSmall(&DataLength, ValueData->DataLength);
+        if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
+
+        /* Each item starts at a ULONG-aligned offset in the caller's buffer (Win11 layout) */
+        Total = ALIGN_UP_BY(Total, sizeof(ULONG));
+        if (Total + DataLength > MAXULONG)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quickie;
+        }
+        ValueEntries[i].Type = ValueData->Type;
+        ValueEntries[i].DataLength = DataLength;
+        ValueEntries[i].DataOffset = (ULONG)Total;
+        Total += DataLength;
+        if ((Total <= Available) && (Fit == i))
+        {
+            Fit = i + 1;
+            Used = (ULONG)Total;
+        }
+    }
+
+    /* Tell the caller what it needs. Win11 delivers the leading items that fit, clears the rest and
+       reports the delivered bytes in *BufferLength together with STATUS_BUFFER_OVERFLOW */
+    *RequiredBufferLength = (ULONG)Total;
+    if (Total > Available)
+    {
+        Status = STATUS_BUFFER_OVERFLOW;
+        for (i = Fit; i < EntryCount; i++)
+        {
+            ValueEntries[i].Type = 0;
+            ValueEntries[i].DataLength = 0;
+            ValueEntries[i].DataOffset = 0;
+        }
+    }
+    else
+    {
+        Fit = EntryCount;
+        Used = (ULONG)Total;
+    }
+
+    /* Second pass: copy the data of the items that fit; the lock is still held, so the set is consistent */
+    for (i = 0; i < Fit; i++)
+    {
+        Result = CmpFindValueByNameFromCache(Kcb,
+                                             ValueEntries[i].ValueName,
+                                             &CachedValue,
+                                             &Index,
+                                             &ValueData,
+                                             &ValueCached,
+                                             &CellToRelease);
+        if (Result == SearchNeedExclusiveLock)
+        {
+            ASSERT(CellToRelease == HCELL_NIL);
+            CmpConvertKcbSharedToExclusive(Kcb);
+            goto DoAgain;
+        }
+        if (Result != SearchSuccess)
+        {
+            Status = STATUS_OBJECT_NAME_NOT_FOUND;
+            goto Quickie;
+        }
+
+        /* Get the data pointer (small, normal or big-data storage) */
+        Result = CmpGetValueDataFromCache(Kcb,
+                                          CachedValue,
+                                          (PCELL_DATA)ValueData,
+                                          ValueCached,
+                                          &Data,
+                                          &DataAllocated,
+                                          &DataCellToRelease);
+        if (Result != SearchSuccess)
+        {
+            ASSERT(Data == NULL);
+            ASSERT(DataAllocated == FALSE);
+            if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Quickie;
+        }
+
+        /* User data, protect against exceptions; written with the locks held, as CmQueryValueKey does */
+        _SEH2_TRY
+        {
+            RtlCopyMemory((PUCHAR)ValueBuffer + ValueEntries[i].DataOffset,
+                          Data,
+                          ValueEntries[i].DataLength);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        /* Release what the lookup gave us */
+        if (DataAllocated) CmpFree(Data, 0);
+        if (DataCellToRelease != HCELL_NIL) HvReleaseCell(Hive, DataCellToRelease);
+        if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
+        if (!NT_SUCCESS(Status)) goto Quickie;
+    }
+
+    /* The delivered bytes go out once: everything on success, the leading items on overflow */
+    *BufferLength = Used;
+    goto Quickie;
+
+ClearEntries:
+    /* Nothing was delivered: the entries go back cleared, as Win11 returns them */
+    for (i = 0; i < EntryCount; i++)
+    {
+        ValueEntries[i].Type = 0;
+        ValueEntries[i].DataLength = 0;
+        ValueEntries[i].DataOffset = 0;
+    }
+
+Quickie:
     /* Release locks */
     CmpReleaseKcbLock(Kcb);
     CmpUnlockRegistry();
@@ -1537,6 +1828,33 @@ CmpQueryFlagsInformation(
 
 static
 NTSTATUS
+CmpQueryKeyFlagsInformation(
+    _In_ PCM_KEY_CONTROL_BLOCK Kcb,
+    _Out_ PKEY_FLAGS_INFORMATION KeyFlagsInfo,
+    _In_ ULONG Length,
+    _In_ PULONG ResultLength)
+{
+    /* Validate the buffer size */
+    *ResultLength = sizeof(*KeyFlagsInfo);
+    if (Length < *ResultLength)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    /* The three groups of flags the key carries, from the KCB copies */
+    KeyFlagsInfo->Wow64Flags = Kcb->KcbUserFlags;
+    KeyFlagsInfo->KeyFlags = 0;
+    if (Kcb->Flags & KEY_IS_VOLATILE)
+        KeyFlagsInfo->KeyFlags |= REG_FLAG_VOLATILE;
+    if (Kcb->Flags & KEY_SYM_LINK)
+        KeyFlagsInfo->KeyFlags |= REG_FLAG_LINK;
+    KeyFlagsInfo->ControlFlags = Kcb->KcbVirtControlFlags;
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 CmpQueryNameInformation(
     _In_ PCM_KEY_CONTROL_BLOCK Kcb,
     _Out_opt_ PKEY_NAME_INFORMATION KeyNameInfo,
@@ -1664,8 +1982,11 @@ CmQueryKey(_In_ PCM_KEY_CONTROL_BLOCK Kcb,
                                                   Length,
                                                   ResultLength);
 #else
-                /* KEY_USER_FLAGS_INFORMATION removed at Vista+ */
-                Status = STATUS_INVALID_PARAMETER;
+                /* Vista+: KEY_FLAGS_INFORMATION (Wow64, key and control flags) */
+                Status = CmpQueryKeyFlagsInformation(Kcb,
+                                                     KeyInformation,
+                                                     Length,
+                                                     ResultLength);
 #endif
                 break;
             }

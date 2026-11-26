@@ -59,6 +59,12 @@
 #define CM_KCB_READ_ONLY_KEY                            0x80
 
 //
+// Most KEY_VALUE_ENTRY items one NtQueryMultipleValueKey call accepts, counted as entries
+// (Win11 26100 x64 takes 0x10000 entries and refuses 0x10001 with STATUS_INSUFFICIENT_RESOURCES)
+//
+#define CMP_MAX_MULTIPLE_VALUE_ENTRIES                  0x10000
+
+//
 // CM_KEY_BODY Types
 //
 #define CM_KEY_BODY_TYPE                                0x6B793032  // 'ky02'
@@ -783,6 +789,18 @@ CmpQueryKeyValueData(
     IN ULONG Length,
     OUT PULONG ResultLength,
     OUT PNTSTATUS Status
+);
+
+VALUE_SEARCH_RETURN_TYPE
+NTAPI
+CmpGetValueDataFromCache(
+    IN PCM_KEY_CONTROL_BLOCK Kcb,
+    IN PCM_CACHED_VALUE *CachedValue,
+    IN PCELL_DATA ValueKey,
+    IN BOOLEAN ValueIsCached,
+    OUT PVOID *DataPointer,
+    OUT PBOOLEAN Allocated,
+    OUT PHCELL_INDEX CellToRelease
 );
 
 VALUE_SEARCH_RETURN_TYPE
@@ -1748,6 +1766,25 @@ NTAPI
 CmDeleteValueKey(
     IN PCM_KEY_CONTROL_BLOCK Kcb,
     IN UNICODE_STRING ValueName
+);
+
+NTSTATUS
+NTAPI
+CmSetKeyInformation(
+    IN PCM_KEY_CONTROL_BLOCK Kcb,
+    IN KEY_SET_INFORMATION_CLASS KeySetInformationClass,
+    IN PVOID KeySetInformation
+);
+
+NTSTATUS
+NTAPI
+CmQueryMultipleValueKey(
+    IN PCM_KEY_CONTROL_BLOCK Kcb,
+    IN OUT PKEY_VALUE_ENTRY ValueEntries,
+    IN ULONG EntryCount,
+    OUT PVOID ValueBuffer,
+    IN OUT PULONG BufferLength,
+    OUT PULONG RequiredBufferLength
 );
 
 NTSTATUS
