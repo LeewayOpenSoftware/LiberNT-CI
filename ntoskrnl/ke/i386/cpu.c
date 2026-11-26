@@ -61,12 +61,12 @@ KiReadHardwareRandom64(VOID)
         for (i = 0; i < 64 && !GotLo; i++) GotLo = (BOOLEAN)_rdseed32_step(&Lo);
         for (i = 0; i < 64 && !GotHi; i++) GotHi = (BOOLEAN)_rdseed32_step(&Hi);
     }
-    if (!GotLo && (KeFeatureBits & KF_RDRAND))
+    if (KeFeatureBits & KF_RDRAND)
     {
         for (i = 0; i < 64 && !GotLo; i++) GotLo = (BOOLEAN)_rdrand32_step(&Lo);
         for (i = 0; i < 64 && !GotHi; i++) GotHi = (BOOLEAN)_rdrand32_step(&Hi);
     }
-    if (!GotLo)
+    if (!GotLo && !GotHi)
         return 0;
     return ((ULONG64)Hi << 32) | Lo;
 }
