@@ -1314,10 +1314,13 @@ CmQueryMultipleValueKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
     HCELL_INDEX CellToRelease, DataCellToRelease;
     VALUE_SEARCH_RETURN_TYPE Result;
     ULONGLONG Total;
-    ULONG i, Index, DataLength;
+    ULONG i, Index, DataLength, Available;
     PVOID Data;
     BOOLEAN ValueCached, DataAllocated;
     PAGED_CODE();
+
+    /* The caller's length is read once; a lock retry must compare against the same value */
+    Available = *BufferLength;
 
     /* Acquire hive lock */
     CmpLockRegistry();
@@ -1390,12 +1393,11 @@ DoAgain:
 
     /* Tell the caller what it needs; stop here if it has less (*BufferLength stays as given, Win11) */
     *RequiredBufferLength = (ULONG)Total;
-    if (Total > *BufferLength)
+    if (Total > Available)
     {
         Status = STATUS_BUFFER_OVERFLOW;
         goto ClearEntries;
     }
-    *BufferLength = (ULONG)Total;
 
     /* Second pass: copy the data; the lock is still held, so the set is consistent */
     for (i = 0; i < EntryCount; i++)
@@ -1455,6 +1457,9 @@ DoAgain:
         if (CellToRelease != HCELL_NIL) HvReleaseCell(Hive, CellToRelease);
         if (!NT_SUCCESS(Status)) goto Quickie;
     }
+
+    /* Everything was delivered: the used size goes out once */
+    *BufferLength = (ULONG)Total;
     goto Quickie;
 
 ClearEntries:
