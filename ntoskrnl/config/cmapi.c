@@ -1795,6 +1795,33 @@ CmpQueryFlagsInformation(
 
 static
 NTSTATUS
+CmpQueryKeyFlagsInformation(
+    _In_ PCM_KEY_CONTROL_BLOCK Kcb,
+    _Out_ PKEY_FLAGS_INFORMATION KeyFlagsInfo,
+    _In_ ULONG Length,
+    _In_ PULONG ResultLength)
+{
+    /* Validate the buffer size */
+    *ResultLength = sizeof(*KeyFlagsInfo);
+    if (Length < *ResultLength)
+    {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    /* The three groups of flags the key carries, from the KCB copies */
+    KeyFlagsInfo->Wow64Flags = Kcb->KcbUserFlags;
+    KeyFlagsInfo->KeyFlags = 0;
+    if (Kcb->Flags & KEY_IS_VOLATILE)
+        KeyFlagsInfo->KeyFlags |= REG_FLAG_VOLATILE;
+    if (Kcb->Flags & KEY_SYM_LINK)
+        KeyFlagsInfo->KeyFlags |= REG_FLAG_LINK;
+    KeyFlagsInfo->ControlFlags = Kcb->KcbVirtControlFlags;
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 CmpQueryNameInformation(
     _In_ PCM_KEY_CONTROL_BLOCK Kcb,
     _Out_opt_ PKEY_NAME_INFORMATION KeyNameInfo,
@@ -1922,8 +1949,11 @@ CmQueryKey(_In_ PCM_KEY_CONTROL_BLOCK Kcb,
                                                   Length,
                                                   ResultLength);
 #else
-                /* KEY_USER_FLAGS_INFORMATION removed at Vista+ */
-                Status = STATUS_INVALID_PARAMETER;
+                /* Vista+: KEY_FLAGS_INFORMATION (Wow64, key and control flags) */
+                Status = CmpQueryKeyFlagsInformation(Kcb,
+                                                     KeyInformation,
+                                                     Length,
+                                                     ResultLength);
 #endif
                 break;
             }
