@@ -729,8 +729,10 @@ RtlpLfhSize(PHEAP Heap, PVOID Ptr)
     if (Block)
     {
         RtlpDecodeHeapEntry(Heap, Entry, &Header);
-        if (Header.Flags & HEAP_ENTRY_BUSY)
+        if ((Header.Flags & HEAP_ENTRY_BUSY) && RtlpHeapEntryValid(Heap, &Header))
             Size = RtlpLfhUsableSize(Block) - Header.UnusedBytes;
+        else
+            RtlpHeapInvalidBlock(Heap, Ptr);
     }
 
     if (Size == (SIZE_T)-1)
