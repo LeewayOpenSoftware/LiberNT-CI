@@ -391,7 +391,8 @@ PoolLfhFree(
 
     Slot = Subsegment->Slot;
     if (Slot < &Heap->LfhSlot[0] ||
-        Slot >= &Heap->LfhSlot[Heap->SlotCount * POOL_LFH_CLASS_COUNT])
+        Slot >= &Heap->LfhSlot[Heap->SlotCount * POOL_LFH_CLASS_COUNT] ||
+        ((ULONG_PTR)Slot - (ULONG_PTR)Heap->LfhSlot) % sizeof(POOL_LFH_SLOT) != 0)
         KeBugCheckEx(BAD_POOL_HEADER, 0x38, (ULONG_PTR)Subsegment, (ULONG_PTR)Slot, (ULONG_PTR)Heap->LfhSlot);
 
     POOL_LOCK_ACQUIRE(&Slot->Lock, &OldIrql);
