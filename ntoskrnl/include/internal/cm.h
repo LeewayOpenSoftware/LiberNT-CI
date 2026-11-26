@@ -260,6 +260,10 @@ typedef struct _CM_KEY_BODY
     CM_TRANS_PTR Trans;
     GUID *KtmUow;
     LIST_ENTRY ContextListHead;
+
+    /* guarded by CmpCallbackContextLock; the delete path drains before freeing */
+    ULONG CleanupsInFlight;
+    PKEVENT CleanupWaiter;
 } CM_KEY_BODY, *PCM_KEY_BODY;
 
 C_ASSERT(FIELD_OFFSET(CM_KEY_BODY, AccessCheckedLayerHeight) == 0x4);

@@ -346,6 +346,9 @@ CmpCleanupKeyBodyContexts(
     PCM_CALLBACK_CONTEXT Node;
     PCM_CALLBACK_ENTRY Entry;
     PLIST_ENTRY Link;
+    KEVENT DrainEvent;
+
+    PAGED_CODE();
 
     for (;;)
     {
@@ -354,27 +357,31 @@ CmpCleanupKeyBodyContexts(
 
         KeEnterCriticalRegion();
         ExAcquirePushLockExclusive(&CmpCallbackContextLock);
-        if (!IsListEmpty(&KeyBody->ContextListHead))
+        for (Link = KeyBody->ContextListHead.Flink;
+             Link != &KeyBody->ContextListHead;
+             Link = Link->Flink)
         {
-            Link = RemoveHeadList(&KeyBody->ContextListHead);
-            Node = CONTAINING_RECORD(Link, CM_CALLBACK_CONTEXT, KeyBodyLink);
-            InitializeListHead(&Node->KeyBodyLink);
-            Entry = Node->Callback;
-            if (Entry != NULL)
+            PCM_CALLBACK_CONTEXT Candidate = CONTAINING_RECORD(Link, CM_CALLBACK_CONTEXT, KeyBodyLink);
+            PCM_CALLBACK_ENTRY CandidateEntry = Candidate->Callback;
+
+            if (CandidateEntry == NULL)
             {
-                if (ExAcquireRundownProtection(&Entry->RundownRef))
-                {
-                    RemoveEntryList(&Node->CallbackLink);
-                }
-                else
-                {
-                    Node = NULL;
-                    Entry = NULL;
-                    ExReleasePushLockExclusive(&CmpCallbackContextLock);
-                    KeLeaveCriticalRegion();
-                    continue;
-                }
+                RemoveEntryList(&Candidate->KeyBodyLink);
+                InitializeListHead(&Candidate->KeyBodyLink);
+                Node = Candidate;
+                break;
             }
+
+            if (ExAcquireRundownProtection(&CandidateEntry->RundownRef))
+            {
+                RemoveEntryList(&Candidate->KeyBodyLink);
+                InitializeListHead(&Candidate->KeyBodyLink);
+                RemoveEntryList(&Candidate->CallbackLink);
+                Node = Candidate;
+                Entry = CandidateEntry;
+                break;
+            }
+            /* unregister has claimed this node; leave it on both lists */
         }
         ExReleasePushLockExclusive(&CmpCallbackContextLock);
         KeLeaveCriticalRegion();
@@ -399,6 +406,25 @@ CmpCleanupKeyBodyContexts(
         }
         ExFreePoolWithTag(Node, TAG_CM_CALLBACK);
     }
+
+    KeInitializeEvent(&DrainEvent, NotificationEvent, FALSE);
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&CmpCallbackContextLock);
+    while (!IsListEmpty(&KeyBody->ContextListHead) || KeyBody->CleanupsInFlight != 0)
+    {
+        KeClearEvent(&DrainEvent);
+        KeyBody->CleanupWaiter = &DrainEvent;
+        ExReleasePushLockExclusive(&CmpCallbackContextLock);
+        KeLeaveCriticalRegion();
+
+        KeWaitForSingleObject(&DrainEvent, Executive, KernelMode, FALSE, NULL);
+
+        KeEnterCriticalRegion();
+        ExAcquirePushLockExclusive(&CmpCallbackContextLock);
+    }
+    KeyBody->CleanupWaiter = NULL;
+    ExReleasePushLockExclusive(&CmpCallbackContextLock);
+    KeLeaveCriticalRegion();
 }
 
 static
@@ -514,6 +540,7 @@ CmUnRegisterCallback(
     REG_CALLBACK_CONTEXT_CLEANUP_INFORMATION Information;
     PCM_CALLBACK_CONTEXT Node;
     PCM_CALLBACK_ENTRY Entry;
+    PCM_KEY_BODY KeyBody;
     PLIST_ENTRY Link;
     PAGED_CODE();
 
@@ -543,6 +570,8 @@ CmUnRegisterCallback(
             Link = RemoveHeadList(&Entry->ContextList);
             Node = CONTAINING_RECORD(Link, CM_CALLBACK_CONTEXT, CallbackLink);
             RemoveEntryList(&Node->KeyBodyLink);
+            InitializeListHead(&Node->KeyBodyLink);
+            ((PCM_KEY_BODY)Node->KeyBody)->CleanupsInFlight++;
         }
         ExReleasePushLockExclusive(&CmpCallbackContextLock);
         KeLeaveCriticalRegion();
@@ -556,6 +585,18 @@ CmUnRegisterCallback(
         Information.ObjectContext = Node->Context;
         Information.Reserved = NULL;
         CmpInvokeCallback(Entry, RegNtCallbackObjectContextCleanup, &Information);
+
+        KeEnterCriticalRegion();
+        ExAcquirePushLockExclusive(&CmpCallbackContextLock);
+        KeyBody = (PCM_KEY_BODY)Node->KeyBody;
+        KeyBody->CleanupsInFlight--;
+        if (KeyBody->CleanupsInFlight == 0 && KeyBody->CleanupWaiter != NULL)
+        {
+            KeSetEvent(KeyBody->CleanupWaiter, 0, FALSE);
+        }
+        ExReleasePushLockExclusive(&CmpCallbackContextLock);
+        KeLeaveCriticalRegion();
+
         ExFreePoolWithTag(Node, TAG_CM_CALLBACK);
     }
 
