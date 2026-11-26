@@ -185,6 +185,7 @@ extern void func_RtlIsNameInExpression(void);
 extern void func_RtlIsNameLegalDOS8Dot3(void);
 extern void func_RtlLocale(void);
 extern void func_RtlMemoryStream(void);
+extern void func_RtlMapSecurityErrorToNtStatus(void);
 extern void func_PfxPrefixTable(void);
 extern void func_RtlAddressInSectionTable(void);
 extern void func_RtlCompareAltitudes(void);
@@ -427,6 +428,7 @@ const struct test winetest_testlist[] =
     { "RtlIsNameLegalDOS8Dot3",         func_RtlIsNameLegalDOS8Dot3 },
     { "RtlLocale",                      func_RtlLocale },
     { "RtlMemoryStream",                func_RtlMemoryStream },
+    { "RtlMapSecurityErrorToNtStatus",  func_RtlMapSecurityErrorToNtStatus },
     { "PfxPrefixTable", func_PfxPrefixTable },
     { "RtlAddressInSectionTable", func_RtlAddressInSectionTable },
     { "RtlCompareAltitudes", func_RtlCompareAltitudes },

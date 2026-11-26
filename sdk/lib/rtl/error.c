@@ -171,15 +171,80 @@ RtlSetLastWin32ErrorAndNtStatusFromNtStatus(IN NTSTATUS Status)
     NtCurrentTeb()->LastErrorValue = RtlNtStatusToDosError(Status);
 }
 
+typedef struct _SECURITY_ERROR_MAP
+{
+    ULONG SecError;
+    NTSTATUS NtStatus;
+} SECURITY_ERROR_MAP;
+
+/* Observed on Windows 11 by the native-parity-02 sweep; extended only from
+ * sweep output, never from copied tables. Values not listed here pass through
+ * unchanged: the sweep's remaining defined values and all ten edge probes
+ * (wildcards included) map to identity on Win11. */
+static const SECURITY_ERROR_MAP SecurityErrorMap[] =
+{
+    { 0x00000000 /* SEC_E_OK */, 0x00000000 },
+    { 0x80090300 /* SEC_E_INSUFFICIENT_MEMORY */, 0xc000009a },
+    { 0x80090301 /* SEC_E_INVALID_HANDLE */, 0xc0000008 },
+    { 0x80090302 /* SEC_E_UNSUPPORTED_FUNCTION */, 0xc00000bb },
+    { 0x80090303 /* SEC_E_TARGET_UNKNOWN */, 0xc00000be },
+    { 0x80090304 /* SEC_E_INTERNAL_ERROR */, 0xc00000e5 },
+    { 0x80090305 /* SEC_E_SECPKG_NOT_FOUND */, 0xc00000fe },
+    { 0x80090306 /* SEC_E_NOT_OWNER */, 0xc0000061 },
+    { 0x80090307 /* SEC_E_CANNOT_INSTALL */, 0xc00000fe },
+    { 0x80090308 /* SEC_E_INVALID_TOKEN */, 0xc000000d },
+    { 0x80090309 /* SEC_E_CANNOT_PACK */, 0xc000000d },
+    { 0x8009030a /* SEC_E_QOP_NOT_SUPPORTED */, 0xc00000bb },
+    { 0x8009030b /* SEC_E_NO_IMPERSONATION */, 0xc000010d },
+    { 0x8009030c /* SEC_E_LOGON_DENIED */, 0xc000006d },
+    { 0x8009030d /* SEC_E_UNKNOWN_CREDENTIALS */, 0xc000005f },
+    { 0x8009030e /* SEC_E_NO_CREDENTIALS */, 0xc000005f },
+    { 0x8009030f /* SEC_E_MESSAGE_ALTERED */, 0xc0000022 },
+    { 0x80090310 /* SEC_E_OUT_OF_SEQUENCE */, 0xc0000022 },
+    { 0x80090311 /* SEC_E_NO_AUTHENTICATING_AUTHORITY */, 0xc000005e },
+    { 0x00090312 /* SEC_I_CONTINUE_NEEDED */, 0x00090312 },
+    { 0x00090313 /* SEC_I_COMPLETE_NEEDED */, 0x00090313 },
+    { 0x00090314 /* SEC_I_COMPLETE_AND_CONTINUE */, 0x00090314 },
+    { 0x00090315 /* SEC_I_LOCAL_LOGON */, 0x00090315 },
+    { 0x00090316 /* SEC_I_GENERIC_EXTENSION_RECEIVED */, 0x00090316 },
+    { 0x80090316 /* SEC_E_BAD_PKGID */, 0xc00000fe },
+    { 0x00090317 /* SEC_I_CONTEXT_EXPIRED */, 0x00090317 },
+    { 0x80090317 /* SEC_E_CONTEXT_EXPIRED */, 0x80090317 },
+    { 0x80090318 /* SEC_E_INCOMPLETE_MESSAGE */, 0x80090318 },
+    { 0x00090320 /* SEC_I_INCOMPLETE_CREDENTIALS */, 0x00090320 },
+    { 0x80090320 /* SEC_E_INCOMPLETE_CREDENTIALS */, 0x80090320 },
+    { 0x00090321 /* SEC_I_RENEGOTIATE */, 0x00090321 },
+    { 0x80090321 /* SEC_E_BUFFER_TOO_SMALL */, 0x80090321 },
+    { 0x80090322 /* SEC_E_WRONG_PRINCIPAL */, 0x80090322 },
+    { 0x00090323 /* SEC_I_NO_LSA_CONTEXT */, 0x00090323 },
+    { 0x80090324 /* SEC_E_TIME_SKEW */, 0xc0000133 },
+    { 0x80090325 /* SEC_E_UNTRUSTED_ROOT */, 0x80090325 },
+    { 0x80090326 /* SEC_E_ILLEGAL_MESSAGE */, 0x80090326 },
+    { 0x80090327 /* SEC_E_CERT_UNKNOWN */, 0x80090327 },
+    { 0x80090328 /* SEC_E_CERT_EXPIRED */, 0x80090328 },
+    { 0x80090329 /* SEC_E_ENCRYPT_FAILURE */, 0x80090329 },
+    { 0x80090330 /* SEC_E_DECRYPT_FAILURE */, 0x80090330 },
+    { 0x80090331 /* SEC_E_ALGORITHM_MISMATCH */, 0xc00000bb },
+    { 0x8009035d /* SEC_E_INVALID_PARAMETER */, 0xc000000d },
+};
+
 /*
-* @unimplemented
+* @implemented
 */
 NTSTATUS
 NTAPI
 RtlMapSecurityErrorToNtStatus(IN ULONG SecurityError)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    ULONG i;
+
+    for (i = 0; i < sizeof(SecurityErrorMap) / sizeof(SecurityErrorMap[0]); i++)
+    {
+        if (SecurityErrorMap[i].SecError == SecurityError)
+            return SecurityErrorMap[i].NtStatus;
+    }
+
+    /* Win11 default for every unlisted code, wildcards included: identity */
+    return (NTSTATUS)SecurityError;
 }
 
 /*
