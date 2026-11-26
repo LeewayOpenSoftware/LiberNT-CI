@@ -5,17 +5,36 @@
  * COPYRIGHT:   Copyright 2026 LeewayOpenSoftware <281492504+LeewayOpenSoftware@users.noreply.github.com>
  */
 
+#include <limits.h>
 #include <windef.h>
 #include "wallpaperspan.h"
 
-static LONG
+static BOOL
+SpanLongFrom64(
+    _In_ LONGLONG Value,
+    _Out_ LONG *Result)
+{
+    if (Value < 0 || Value > LONG_MAX)
+        return FALSE;
+
+    *Result = (LONG)Value;
+    return TRUE;
+}
+
+static BOOL
 SpanMulDiv(
     _In_ LONG Number,
     _In_ LONG Numerator,
-    _In_ LONG Denominator)
+    _In_ LONG Denominator,
+    _Out_ LONG *Result)
 {
-    LONGLONG Product = (LONGLONG)Number * Numerator;
-    return (LONG)((Product + Denominator / 2) / Denominator);
+    LONGLONG Product;
+
+    if (Number < 0 || Numerator < 0 || Denominator <= 0)
+        return FALSE;
+
+    Product = (LONGLONG)Number * Numerator;
+    return SpanLongFrom64((Product + Denominator / 2) / Denominator, Result);
 }
 
 BOOL
@@ -25,37 +44,53 @@ WallpaperSpanLayout(
     _In_ const RECTL *VirtualBounds,
     _Out_ WALLPAPER_SPAN_LAYOUT *Layout)
 {
-    LONG CanvasCx, CanvasCy, ScaledCx, ScaledCy;
+    LONGLONG CanvasCx, CanvasCy;
+    LONG ScaledCx, ScaledCy;
+    RECTL Source;
 
     if (!VirtualBounds || !Layout)
         return FALSE;
 
-    CanvasCx = VirtualBounds->right - VirtualBounds->left;
-    CanvasCy = VirtualBounds->bottom - VirtualBounds->top;
-    if (ImageCx <= 0 || ImageCy <= 0 || CanvasCx <= 0 || CanvasCy <= 0)
+    CanvasCx = (LONGLONG)VirtualBounds->right - VirtualBounds->left;
+    CanvasCy = (LONGLONG)VirtualBounds->bottom - VirtualBounds->top;
+    if (ImageCx <= 0 || ImageCy <= 0 ||
+        CanvasCx <= 0 || CanvasCx > LONG_MAX ||
+        CanvasCy <= 0 || CanvasCy > LONG_MAX)
         return FALSE;
 
     /* The crop-to-fill computation of wmFill, against the virtual canvas. */
-    if ((LONGLONG)CanvasCx * ImageCy > (LONGLONG)CanvasCy * ImageCx)
+    if (CanvasCx * ImageCy > CanvasCy * ImageCx)
     {
-        Layout->ScaleNum = CanvasCx;
+        Layout->ScaleNum = (LONG)CanvasCx;
         Layout->ScaleDen = ImageCx;
     }
     else
     {
-        Layout->ScaleNum = CanvasCy;
+        Layout->ScaleNum = (LONG)CanvasCy;
         Layout->ScaleDen = ImageCy;
     }
 
-    ScaledCx = SpanMulDiv(ImageCx, Layout->ScaleNum, Layout->ScaleDen);
-    ScaledCy = SpanMulDiv(ImageCy, Layout->ScaleNum, Layout->ScaleDen);
-    if (ScaledCx <= 0 || ScaledCy <= 0)
+    if (!SpanMulDiv(ImageCx, Layout->ScaleNum, Layout->ScaleDen, &ScaledCx) ||
+        !SpanMulDiv(ImageCy, Layout->ScaleNum, Layout->ScaleDen, &ScaledCy) ||
+        ScaledCx <= 0 || ScaledCy <= 0)
         return FALSE;
 
-    Layout->Source.left = (LONG)(((LONGLONG)(ScaledCx - CanvasCx) * ImageCx) / (2 * ScaledCx));
-    Layout->Source.top = (LONG)(((LONGLONG)(ScaledCy - CanvasCy) * ImageCy) / (2 * ScaledCy));
-    Layout->Source.right = Layout->Source.left + (LONG)(((LONGLONG)CanvasCx * ImageCx) / ScaledCx);
-    Layout->Source.bottom = Layout->Source.top + (LONG)(((LONGLONG)CanvasCy * ImageCy) / ScaledCy);
+    if (!SpanLongFrom64(((LONGLONG)ScaledCx - CanvasCx) * ImageCx /
+                        (2 * (LONGLONG)ScaledCx), &Source.left) ||
+        !SpanLongFrom64(((LONGLONG)ScaledCy - CanvasCy) * ImageCy /
+                        (2 * (LONGLONG)ScaledCy), &Source.top))
+        return FALSE;
+
+    if (!SpanLongFrom64((LONGLONG)Source.left + CanvasCx * ImageCx / ScaledCx,
+                        &Source.right) ||
+        !SpanLongFrom64((LONGLONG)Source.top + CanvasCy * ImageCy / ScaledCy,
+                        &Source.bottom))
+        return FALSE;
+
+    if (Source.right > ImageCx || Source.bottom > ImageCy)
+        return FALSE;
+
+    Layout->Source = Source;
     return TRUE;
 }
 
@@ -69,15 +104,17 @@ WallpaperSpanSample(
     _Out_ RECTL *Dest,
     _Out_ RECTL *Source)
 {
-    LONG CanvasCx, CanvasCy, SourceCx, SourceCy;
+    LONGLONG CanvasCx, CanvasCy, SourceCx, SourceCy;
     RECTL Clip;
 
     if (!Layout || !VirtualBounds || !Monitor || !Dest || !Source)
         return FALSE;
 
-    CanvasCx = VirtualBounds->right - VirtualBounds->left;
-    CanvasCy = VirtualBounds->bottom - VirtualBounds->top;
-    if (ImageCx <= 0 || ImageCy <= 0 || CanvasCx <= 0 || CanvasCy <= 0)
+    CanvasCx = (LONGLONG)VirtualBounds->right - VirtualBounds->left;
+    CanvasCy = (LONGLONG)VirtualBounds->bottom - VirtualBounds->top;
+    if (ImageCx <= 0 || ImageCy <= 0 ||
+        CanvasCx <= 0 || CanvasCx > LONG_MAX ||
+        CanvasCy <= 0 || CanvasCy > LONG_MAX)
         return FALSE;
 
     Clip = *Monitor;
@@ -92,13 +129,26 @@ WallpaperSpanSample(
     if (Clip.left >= Clip.right || Clip.top >= Clip.bottom)
         return FALSE;
 
-    SourceCx = Layout->Source.right - Layout->Source.left;
-    SourceCy = Layout->Source.bottom - Layout->Source.top;
+    SourceCx = (LONGLONG)Layout->Source.right - Layout->Source.left;
+    SourceCy = (LONGLONG)Layout->Source.bottom - Layout->Source.top;
+    if (SourceCx < 0 || SourceCx > LONG_MAX ||
+        SourceCy < 0 || SourceCy > LONG_MAX)
+        return FALSE;
 
     *Dest = Clip;
-    Source->left = Layout->Source.left + (LONG)(((LONGLONG)(Clip.left - VirtualBounds->left) * SourceCx) / CanvasCx);
-    Source->right = Layout->Source.left + (LONG)(((LONGLONG)(Clip.right - VirtualBounds->left) * SourceCx) / CanvasCx);
-    Source->top = Layout->Source.top + (LONG)(((LONGLONG)(Clip.top - VirtualBounds->top) * SourceCy) / CanvasCy);
-    Source->bottom = Layout->Source.top + (LONG)(((LONGLONG)(Clip.bottom - VirtualBounds->top) * SourceCy) / CanvasCy);
+    if (!SpanLongFrom64((LONGLONG)Layout->Source.left +
+                        ((LONGLONG)Clip.left - VirtualBounds->left) * SourceCx / CanvasCx,
+                        &Source->left) ||
+        !SpanLongFrom64((LONGLONG)Layout->Source.left +
+                        ((LONGLONG)Clip.right - VirtualBounds->left) * SourceCx / CanvasCx,
+                        &Source->right) ||
+        !SpanLongFrom64((LONGLONG)Layout->Source.top +
+                        ((LONGLONG)Clip.top - VirtualBounds->top) * SourceCy / CanvasCy,
+                        &Source->top) ||
+        !SpanLongFrom64((LONGLONG)Layout->Source.top +
+                        ((LONGLONG)Clip.bottom - VirtualBounds->top) * SourceCy / CanvasCy,
+                        &Source->bottom))
+        return FALSE;
+
     return TRUE;
 }

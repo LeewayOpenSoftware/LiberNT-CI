@@ -187,6 +187,53 @@ static void Test_Guards(void)
            "crop escaped the image: (%ld,%ld)\n", Layout.Source.left, Layout.Source.right);
 }
 
+static void Test_OverflowGuards(void)
+{
+    WALLPAPER_SPAN_LAYOUT Layout;
+    RECTL WideCanvas = { 0, 0, 1000, 10000 };
+    RECTL ExactMax = { 0, 0, LONG_MAX, 1 };
+    RECTL HugeSignedX = { LONG_MIN, 0, LONG_MAX, 100 };
+    RECTL HugeSignedY = { 0, LONG_MIN, 100, LONG_MAX };
+    RECTL Monitor = { 0, 0, 1000, 10 };
+    RECTL Dest, Source;
+    BOOL Ret;
+
+    /* The exact scaled width is 4,295,000,000: unrepresentable, must fail. */
+    ok(!WallpaperSpanLayout(429500, 1, &WideCanvas, &Layout),
+       "overflowing scaled width accepted\n");
+
+    Ret = WallpaperSpanLayout(4294, 10, &WideCanvas, &Layout);
+    ok(Ret, "representable high-aspect layout failed\n");
+    if (Ret)
+        ok(Layout.Source.left >= 0 && Layout.Source.right > Layout.Source.left &&
+           Layout.Source.right <= 4294 && Layout.Source.bottom <= 10,
+           "crop escaped the image: (%ld,%ld)-(%ld,%ld)\n",
+           Layout.Source.left, Layout.Source.top,
+           Layout.Source.right, Layout.Source.bottom);
+
+    Ret = WallpaperSpanLayout(10, 10, &ExactMax, &Layout);
+    ok(Ret, "LONG_MAX canvas rejected\n");
+    if (Ret)
+        ok(Layout.Source.left == 0 && Layout.Source.right == 10,
+           "full-width crop expected, got (%ld,%ld)-(%ld,%ld)\n",
+           Layout.Source.left, Layout.Source.top,
+           Layout.Source.right, Layout.Source.bottom);
+
+    ok(!WallpaperSpanLayout(10, 10, &HugeSignedX, &Layout),
+       "canvas wider than LONG_MAX accepted\n");
+    ok(!WallpaperSpanLayout(10, 10, &HugeSignedY, &Layout),
+       "canvas taller than LONG_MAX accepted\n");
+
+    Layout.ScaleNum = 1;
+    Layout.ScaleDen = 1;
+    Layout.Source.left = LONG_MIN;
+    Layout.Source.top = 0;
+    Layout.Source.right = LONG_MAX;
+    Layout.Source.bottom = 10;
+    ok(!WallpaperSpanSample(&Layout, 10, 10, &WideCanvas, &Monitor, &Dest, &Source),
+       "overflowing source extent sampled\n");
+}
+
 START_TEST(SpanGeometry)
 {
     Test_OneMonitorEqualsFill();
@@ -195,4 +242,5 @@ START_TEST(SpanGeometry)
     Test_Stacked();
     Test_GapsAndClips();
     Test_Guards();
+    Test_OverflowGuards();
 }
