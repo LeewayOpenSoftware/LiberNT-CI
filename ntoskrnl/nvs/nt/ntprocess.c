@@ -274,7 +274,9 @@ MiSelectBottomUpBase(
     if (Floor == MI_NT_HIGH_ENTROPY_FLOOR)
         Process->MitigationFlagsValues.HighEntropyASLREnabled = 1;
 
-    Seed = KeQueryPerformanceCounter(NULL).LowPart ^ (ULONG)KeQueryInterruptTime() ^ (ULONG)(ULONG_PTR)Process;
+    extern ULONG64 KiBootEntropy;
+    Seed = KeQueryPerformanceCounter(NULL).LowPart ^ (ULONG)KeQueryInterruptTime() ^ (ULONG)(ULONG_PTR)Process ^
+           (ULONG)KiBootEntropy ^ (ULONG)(KiBootEntropy >> 32);
     Space->BottomUpVa = Floor + (RtlRandomEx(&Seed) % Slots) * MI_ALLOCATION_GRANULARITY;
 
     if (TopDownCeiling != 0)

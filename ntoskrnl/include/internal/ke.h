@@ -169,6 +169,8 @@ extern USHORT KeProcessorArchitecture;
 extern USHORT KeProcessorLevel;
 extern USHORT KeProcessorRevision;
 extern ULONG64 KeFeatureBits;
+extern ULONG64 KiBootEntropy;
+VOID KiInitializeBootEntropy(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock);
 extern KAFFINITY KeActiveProcessors;
 extern ULONG KeBugCheckActive;
 BOOLEAN KiClaimBugCheckEntry(PKPRCB Prcb);

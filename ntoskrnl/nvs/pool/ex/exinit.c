@@ -20,6 +20,8 @@ ULONG_PTR ExpPoolQuotaCookie;
 
 static POOL_TAG_TABLE ExpBootTagTable;
 
+extern ULONG64 KiBootEntropy;
+
 static ULONG64 ExpPoolSeedState = 0x9E3779B97F4A7C15ULL;
 
 static
@@ -50,6 +52,7 @@ ExpPoolEncodeKey(VOID)
                        ((ULONG64)(ULONG_PTR)&ExpPoolState >> 3));
     Seed = (ULONG)(Key ^ (Key >> 32));
     Key ^= ((ULONG64)RtlRandomEx(&Seed) << 32) ^ (ULONG64)RtlRandomEx(&Seed);
+    Key ^= KiBootEntropy;
     Key = ExpPoolMix64(Key);
     if (Key == 0)
         Key = 0x9E3779B97F4A7C15ULL;

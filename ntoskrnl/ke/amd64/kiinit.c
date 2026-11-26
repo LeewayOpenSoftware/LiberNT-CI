@@ -492,6 +492,9 @@ KiInitializeKernelMachineDependent(
     /* Print applied kernel features/policies and boot CPU features */
     KiReportCpuFeatures(Prcb);
 #endif
+
+    /* F1: seed the boot entropy (hardware RNG + loader seed) for pool keys and ASLR. */
+    KiInitializeBootEntropy(LoaderBlock);
 }
 
 static LDR_DATA_TABLE_ENTRY LdrCoreEntries[3];
