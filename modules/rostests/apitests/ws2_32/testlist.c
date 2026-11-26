@@ -8,6 +8,7 @@ extern void func_CloseCompletion(void);
 extern void func_MulticastInterface(void);
 extern void func_ReuseDelivery(void);
 extern void func_accept_backlog(void);
+extern void func_afdext(void);
 extern void func_addresslistsort(void);
 extern void func_afunix(void);
 extern void func_bind(void);
@@ -55,6 +56,7 @@ const struct test winetest_testlist[] =
     { "MulticastInterface", func_MulticastInterface },
     { "ReuseDelivery", func_ReuseDelivery },
     { "accept_backlog", func_accept_backlog },
+    { "afdext", func_afdext },
     { "addresslistsort", func_addresslistsort },
     { "afunix", func_afunix },
     { "bind", func_bind },
