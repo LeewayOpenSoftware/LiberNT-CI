@@ -87,6 +87,9 @@ WallpaperSpanLayout(
                         &Source.bottom))
         return FALSE;
 
+    if (Source.right <= Source.left || Source.bottom <= Source.top)
+        return FALSE;
+
     if (Source.right > ImageCx || Source.bottom > ImageCy)
         return FALSE;
 
@@ -127,6 +130,10 @@ WallpaperSpanSample(
     if (Clip.bottom > VirtualBounds->bottom)
         Clip.bottom = VirtualBounds->bottom;
     if (Clip.left >= Clip.right || Clip.top >= Clip.bottom)
+        return FALSE;
+
+    if (Layout->Source.left < 0 || Layout->Source.top < 0 ||
+        Layout->Source.right > ImageCx || Layout->Source.bottom > ImageCy)
         return FALSE;
 
     SourceCx = (LONGLONG)Layout->Source.right - Layout->Source.left;

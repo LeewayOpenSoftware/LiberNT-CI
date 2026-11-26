@@ -211,13 +211,13 @@ static void Test_OverflowGuards(void)
            Layout.Source.left, Layout.Source.top,
            Layout.Source.right, Layout.Source.bottom);
 
-    Ret = WallpaperSpanLayout(10, 10, &ExactMax, &Layout);
-    ok(Ret, "LONG_MAX canvas rejected\n");
-    if (Ret)
-        ok(Layout.Source.left == 0 && Layout.Source.right == 10,
-           "full-width crop expected, got (%ld,%ld)-(%ld,%ld)\n",
-           Layout.Source.left, Layout.Source.top,
-           Layout.Source.right, Layout.Source.bottom);
+    /* Dwight M1: the exact-scaled crop is degenerate here (top == bottom), so reject. */
+    ok(!WallpaperSpanLayout(10, 10, &ExactMax, &Layout),
+       "degenerate LONG_MAX canvas crop accepted\n");
+
+    /* Dwight M1: high-aspect 4294x1 scales to a zero-width crop, so reject. */
+    ok(!WallpaperSpanLayout(4294, 1, &WideCanvas, &Layout),
+       "zero-width high-aspect crop accepted\n");
 
     ok(!WallpaperSpanLayout(10, 10, &HugeSignedX, &Layout),
        "canvas wider than LONG_MAX accepted\n");
