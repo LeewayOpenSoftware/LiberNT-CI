@@ -8,6 +8,9 @@
 #include "precomp.h"
 #include <winreg.h>
 
+C_ASSERT(FIELD_OFFSET(VALENTW, ve_type) == 2 * sizeof(PVOID) + sizeof(DWORD_PTR));
+C_ASSERT(sizeof(VALENTW) == 4 * sizeof(PVOID));
+
 static WCHAR g_SubKeyW[64];
 static CHAR g_SubKeyA[64];
 
@@ -158,4 +161,5 @@ START_TEST(RegQueryMultipleValues)
     MakeKeyNames();
     TestQueryMultipleValuesW();
     TestQueryMultipleValuesA();
+    RegDeleteKeyW(HKEY_CURRENT_USER, L"Software\\LiberNT Tests");
 }
