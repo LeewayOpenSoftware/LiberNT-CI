@@ -172,6 +172,7 @@ list(APPEND SOURCE
     ProcessPoolQuota.c
     ProcessUserModeIopl.c
     ObjectQuotaLimit.c
+    np02_legacy_probe.c
     LinkReparseLimit.c
     RtlWnfAndSqm.c
     WinSqmSession.c

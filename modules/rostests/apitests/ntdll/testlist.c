@@ -235,6 +235,7 @@ extern void func_ProcessPoolQuota(void);
 extern void func_ProcessUserModeIopl(void);
 extern void func_LinkReparseLimit(void);
 extern void func_ObjectQuotaLimit(void);
+extern void func_np02_legacy_probe(void);
 extern void func_RtlWnfAndSqm(void);
 extern void func_WinSqmSession(void);
 extern void func_RtlCheckPortableOperatingSystem(void);
@@ -479,6 +480,7 @@ const struct test winetest_testlist[] =
     { "ProcessUserModeIopl",            func_ProcessUserModeIopl },
     { "LinkReparseLimit",               func_LinkReparseLimit },
     { "ObjectQuotaLimit",               func_ObjectQuotaLimit },
+    { "np02_legacy_probe",              func_np02_legacy_probe },
     { "RtlWnfAndSqm", func_RtlWnfAndSqm },
     { "WinSqmSession", func_WinSqmSession },
     { "RtlCheckPortableOperatingSystem", func_RtlCheckPortableOperatingSystem },
