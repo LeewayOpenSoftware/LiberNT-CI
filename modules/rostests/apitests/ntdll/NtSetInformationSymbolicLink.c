@@ -133,9 +133,13 @@ TestInvalidInput(VOID)
     Status = pNtSetInformationSymbolicLink(Event, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
     trace("PROBE event handle -> 0x%lx\n", Status);
     ok_hex(Status, STATUS_OBJECT_TYPE_MISMATCH);
-    /* A bad length is reported before the handle is looked at */
+    /* Win11 checks the handle's object type before the length (rerun 2) */
     Status = pNtSetInformationSymbolicLink(Event, TEST_SymbolicLinkGlobalInformation, &Value, 1);
-    ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+    trace("PROBE event handle, length 1 -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_OBJECT_TYPE_MISMATCH);
+    /* Not yet probed on Win11: does the class win over the handle type? */
+    Status = pNtSetInformationSymbolicLink(Event, 0, &Value, sizeof(Value));
+    trace("PROBE event handle, class 0 -> 0x%lx (unpinned)\n", Status);
     NtClose(Event);
 
     Status = pNtSetInformationSymbolicLink(NULL, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
@@ -151,6 +155,11 @@ TestInvalidInput(VOID)
         trace("PROBE class %lu QUERY-only handle -> 0x%lx\n", Class, Status);
         ok_hex(Status, STATUS_ACCESS_DENIED);
     }
+    /* Not yet probed on Win11: is the SET access checked before the length and the buffer? */
+    Status = pNtSetInformationSymbolicLink(QueryOnly, TEST_SymbolicLinkGlobalInformation, &Value, 1);
+    trace("PROBE QUERY-only handle, length 1 -> 0x%lx (unpinned)\n", Status);
+    Status = pNtSetInformationSymbolicLink(QueryOnly, TEST_SymbolicLinkGlobalInformation, NULL, sizeof(Value));
+    trace("PROBE QUERY-only handle, NULL buffer -> 0x%lx (unpinned)\n", Status);
     NtClose(QueryOnly);
     NtClose(Link);
 }
@@ -254,17 +263,25 @@ TestAccessMaskEffect(VOID)
             if (NT_SUCCESS(Status))
                 NtClose(H);
         }
-        /* Not yet probed on Win11: generic and MAXIMUM_ALLOWED requests through a capped link */
+        /*
+         * Win11 rerun 2: MAXIMUM_ALLOWED through a capped link is denied at every mask, and
+         * GENERIC_READ is granted only when the mask holds all of its mapped directory rights.
+         */
         for (w = 0; w < _countof(Unpinned); w++)
         {
             Status = NtOpenDirectoryObject(&H, Unpinned[w], &Oa);
-            trace("PROBE mask 0x%08lx open target want 0x%08lx -> 0x%lx (unpinned)\n", Masks[m], Unpinned[w], Status);
+            trace("PROBE mask 0x%08lx open target want 0x%08lx -> 0x%lx\n", Masks[m], Unpinned[w], Status);
+            if (Unpinned[w] == MAXIMUM_ALLOWED)
+                ok_hex(Status, STATUS_ACCESS_DENIED);
+            else
+                ok_hex(Status, (Masks[m] == DIRECTORY_ALL_ACCESS) ? STATUS_SUCCESS : STATUS_ACCESS_DENIED);
             if (NT_SUCCESS(Status))
                 NtClose(H);
         }
-        /* The link itself (no traversal). Win11 gave INVALID_PARAMETER to the old OBJ_OPENLINK form. */
+        /* The link itself, no traversal: the mask does not apply (Win11 rerun 2) */
         Status = NtOpenSymbolicLinkObject(&H, SYMBOLIC_LINK_QUERY, &Oa);
-        trace("PROBE mask 0x%08lx reopen link itself -> 0x%lx (unpinned)\n", Masks[m], Status);
+        trace("PROBE mask 0x%08lx reopen link itself -> 0x%lx\n", Masks[m], Status);
+        ok_hex(Status, STATUS_SUCCESS);
         if (NT_SUCCESS(Status))
             NtClose(H);
         Oa.Attributes |= OBJ_OPENLINK;
@@ -543,7 +560,7 @@ TestConcurrency(VOID)
 {
     RACE Race = { NULL, 0, 0, 0 };
     HANDLE Threads[3];
-    ULONG i, Value;
+    ULONG i, Value, Toggles;
     DWORD Start;
     NTSTATUS Status;
 
@@ -569,12 +586,14 @@ TestConcurrency(VOID)
         if (!NT_SUCCESS(Status))
             InterlockedIncrement(&Race.Failures);
     }
+    Toggles = i;
     Race.Stop = 1;
     WaitForMultipleObjects(_countof(Threads), Threads, TRUE, 60000);
     for (i = 0; i < _countof(Threads); i++)
         CloseHandle(Threads[i]);
     ok(Race.Failures == 0, "%ld flag toggles or opens through the link failed\n", Race.Failures);
-    trace("PROBE race toggles=%lu opens=%ld\n", i, Race.Opens);
+    trace("PROBE race toggles=%lu opens=%ld\n", Toggles, Race.Opens);
+    ok(Toggles >= 2000, "only %lu toggles\n", Toggles);
     ok(Race.Opens > 0, "no open through the link succeeded\n");
     NtClose(Race.Link);
 }
