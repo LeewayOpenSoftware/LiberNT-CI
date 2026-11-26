@@ -163,7 +163,8 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     /* TokenSandBoxInert */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenAuditPolicy */
-    IQS_SAME(TOKEN_AUDIT_POLICY_INFORMATION, ULONG, ICIF_SET | ICIF_SET_SIZE_VARIABLE),
+    IQS_SAME(TOKEN_AUDIT_POLICY_INFORMATION, ULONG,
+             ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET | ICIF_SET_SIZE_VARIABLE),
     /* TokenOrigin */
     IQS_SAME(TOKEN_ORIGIN, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET),
     /* TokenElevationType */
@@ -1769,6 +1770,47 @@ NtQueryInformationToken(
                 {
                     Status = _SEH2_GetExceptionCode();
                     ObCloseHandle(Handle, PreviousMode);
+                }
+                _SEH2_END;
+                break;
+            }
+
+            case TokenAuditPolicy:
+            {
+                DPRINT("NtQueryInformationToken(TokenAuditPolicy)\n");
+
+                /* Win11 gates the query on SeSecurityPrivilege being enabled and
+                 * returns a fixed 30-byte per-user audit policy structure (Pam
+                 * Win11 pin win11-token-probes.md); the privilege is checked
+                 * before the length. */
+                RequiredLength = 30;
+
+                if (!SeSinglePrivilegeCheck(SeSecurityPrivilege, PreviousMode))
+                {
+                    Status = STATUS_PRIVILEGE_NOT_HELD;
+                    break;
+                }
+
+                _SEH2_TRY
+                {
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        /* FIXME: no per-user audit policy source exists yet; Win11
+                         * returns zeros when none is configured. Map the token's
+                         * audit policy here once the 30-byte per-category layout
+                         * is defined. */
+                        RtlZeroMemory(TokenInformation, RequiredLength);
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
                 }
                 _SEH2_END;
                 break;
