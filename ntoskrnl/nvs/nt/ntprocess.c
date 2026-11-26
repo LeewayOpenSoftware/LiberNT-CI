@@ -275,8 +275,8 @@ MiSelectBottomUpBase(
         Process->MitigationFlagsValues.HighEntropyASLREnabled = 1;
 
     extern ULONG64 KiBootEntropy;
-    /* F1 SHOULD-1: domain-separate the ASLR entropy from the kernel-secret pool key,
-     * so an ASLR observation cannot narrow the pool key input. */
+    /* Derive the ASLR seed from KiBootEntropy through an independent mix, keeping
+     * the ASLR base and the pool key on separate values. */
     ULONG64 AslrEntropy = KiBootEntropy ^ 0x41534C52BAADF00DULL;
     AslrEntropy ^= AslrEntropy >> 30;
     AslrEntropy *= 0xBF58476D1CE4E5B9ULL;
