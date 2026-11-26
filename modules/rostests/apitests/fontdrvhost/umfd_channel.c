@@ -153,8 +153,11 @@ static HANDLE start_host(void)
         }
         else
         {
-            ok(0, "the service did not register a host: state %lu, error %lu\n",
-               status.dwCurrentState, status.dwWin32ExitCode);
+            if (status.dwWin32ExitCode == ERROR_ALREADY_REGISTERED)
+                ok(0, "the winlogon launcher holds the channel: boot with UmfdTestNoLauncher=1 for this test\n");
+            else
+                ok(0, "the service did not register a host: state %lu, error %lu\n",
+                   status.dwCurrentState, status.dwWin32ExitCode);
         }
     }
     else
@@ -568,6 +571,31 @@ static ULONG logon_sessions(void)
     return count;
 }
 
+/* Traces every launcher event 4002, oldest first, so a failed leg shows the supervisor's timeline */
+static void trace_launcher_events(void)
+{
+    BYTE buf[0x10000];
+    DWORD read, needed, off;
+    HANDLE log = OpenEventLogW(NULL, L"Application");
+
+    if (!log)
+    {
+        trace("the Application event log cannot be read: %lu\n", GetLastError());
+        return;
+    }
+    while (ReadEventLogW(log, EVENTLOG_SEQUENTIAL_READ | EVENTLOG_FORWARDS_READ, 0, buf, sizeof(buf), &read, &needed))
+    {
+        for (off = 0; off < read; off += ((EVENTLOGRECORD *)(buf + off))->Length)
+        {
+            EVENTLOGRECORD *rec = (EVENTLOGRECORD *)(buf + off);
+            if ((rec->EventID & 0xFFFF) == 4002 && rec->NumStrings)
+                trace("4002 @%lu type %u: %ls\n", rec->TimeGenerated, rec->EventType,
+                      (WCHAR *)((BYTE *)rec + rec->StringOffset));
+        }
+    }
+    CloseEventLog(log);
+}
+
 START_TEST(umfd_launcher)
 {
     DWORD mode, pid, next, ms, restarts;
@@ -645,7 +673,10 @@ START_TEST(umfd_launcher)
         pid = wait_launcher_host(next, 3000);
         ok(pid != 0, "the recycled host was not relaunched within 3 s\n");
         if (!pid)
+        {
+            trace_launcher_events();
             return;
+        }
         next = pid;
         restarts++;
         ok(add_font(good_font, good_size, &ms) > 0, "a good font was refused after the recycle\n");
@@ -739,4 +770,5 @@ START_TEST(umfd_launcher_cap)
         skip("the Application event log cannot be read\n");
     else
         ok(logged > 0, "no event 4002 for the cap\n");
+    trace_launcher_events();
 }

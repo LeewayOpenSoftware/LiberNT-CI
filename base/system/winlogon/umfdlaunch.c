@@ -66,7 +66,8 @@ WlUmfdLog(
     StringCchVPrintfW(Text, ARRAYSIZE(Text), Format, Args);
     va_end(Args);
 
-    if (Type == EVENTLOG_ERROR_TYPE)
+    /* Warnings too: a held channel or a backoff must show on the debug port */
+    if (Type != EVENTLOG_INFORMATION_TYPE)
         ERR("WL: %ls\n", Text);
     else
         TRACE("WL: %ls\n", Text);
@@ -401,6 +402,19 @@ WlUmfdStart(VOID)
 
     if (Mode == 0)
         return;
+#ifdef UMFD_TEST_HOOKS
+    {
+        DWORD Off = 0, Size = sizeof(Off);
+
+        /* Test images only: the channel tests register their own host, so a boot can leave the channel to them */
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Leeway\\Win32k", L"UmfdTestNoLauncher",
+                         RRF_RT_REG_DWORD, NULL, &Off, &Size) == ERROR_SUCCESS && Off != 0)
+        {
+            WlUmfdLog(EVENTLOG_WARNING_TYPE, L"font driver host: launcher off (test hook UmfdTestNoLauncher)");
+            return;
+        }
+    }
+#endif
     if (Mode != 1)
     {
         WlUmfdLog(EVENTLOG_WARNING_TYPE, L"font driver host: UmfdMode %lu is not available; none started", Mode);
