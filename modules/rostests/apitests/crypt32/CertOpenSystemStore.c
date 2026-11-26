@@ -101,6 +101,7 @@ CheckRootChainsAsTrusted(
 #define TEST_ROOT_NAME      L"CN=LiberNT AuthRoot Aggregation Test Root"
 #define TEST_UNTRUSTED_NAME L"CN=LiberNT AuthRoot Aggregation Untrusted Root"
 #define TEST_LEAF_NAME      L"CN=LiberNT AuthRoot Aggregation Test Leaf"
+#define TEST_WRITE_NAME     L"CN=LiberNT CurrentUser Root Write Test"
 
 #define FILETIME_DAY (24ULL * 60 * 60 * 10000000)
 
@@ -384,6 +385,147 @@ CheckLocalMachineInCurrentUser(
         CertCloseStore(machine, 0);
 }
 
+static
+PCCERT_CONTEXT
+FindInStore(
+    _In_ HCERTSTORE Store,
+    _In_ PCCERT_CONTEXT Cert)
+{
+    return CertFindCertificateInStore(Store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                                      0, CERT_FIND_EXISTING, Cert, NULL);
+}
+
+/*
+ * Writes through a CurrentUser store stay in HKCU, and the LocalMachine part
+ * is read-only: an add lands in HKCU only, and deleting a machine certificate
+ * through the CurrentUser store fails with ERROR_ACCESS_DENIED. When the
+ * caller may write HKLM, the machine certificate is one this test stages, so
+ * no real root is ever at risk.
+ */
+static
+void
+CheckCurrentUserWritesStayInHkcu(void)
+{
+    HCRYPTPROV prov = 0;
+    HCRYPTKEY key = 0;
+    HCERTSTORE user = NULL, userReg = NULL, machine = NULL, machineRw = NULL;
+    PCCERT_CONTEXT cert = NULL, added = NULL, staged = NULL, found;
+    DWORD before, after;
+    BOOL deleted;
+
+    if (!CryptAcquireContextW(&prov, NULL, MS_ENH_RSA_AES_PROV_W, PROV_RSA_AES,
+                              CRYPT_VERIFYCONTEXT) ||
+        !CryptGenKey(prov, AT_SIGNATURE, 2048 << 16, &key))
+    {
+        skip("no RSA provider for the write checks: %lu\n", GetLastError());
+        goto Cleanup;
+    }
+    cert = MakeCert(prov, TEST_WRITE_NAME, TEST_WRITE_NAME, 6, -1, 30, TRUE);
+    user = CertOpenSystemStoreW(0, L"Root");
+    userReg = CertOpenStore(CERT_STORE_PROV_SYSTEM_REGISTRY_W, 0, 0,
+                            CERT_SYSTEM_STORE_CURRENT_USER | CERT_STORE_READONLY_FLAG, L"Root");
+    machine = CertOpenStore(CERT_STORE_PROV_SYSTEM_REGISTRY_W, 0, 0,
+                            CERT_SYSTEM_STORE_LOCAL_MACHINE | CERT_STORE_READONLY_FLAG |
+                            CERT_STORE_OPEN_EXISTING_FLAG, L"Root");
+    ok(cert && user && userReg && machine, "write check setup failed: %lu\n", GetLastError());
+    if (!cert || !user || !userReg || !machine)
+        goto Cleanup;
+
+    /* An add through the CurrentUser Root store lands in HKCU only */
+    ok(CertAddCertificateContextToStore(user, cert, CERT_STORE_ADD_NEW, &added),
+       "CurrentUser Root add failed: %lu\n", GetLastError());
+    if (added)
+    {
+        found = FindInStore(userReg, cert);
+        ok(found != NULL, "CurrentUser Root add is not in the HKCU store\n");
+        if (found)
+            CertFreeCertificateContext(found);
+        found = FindInStore(machine, cert);
+        ok(found == NULL, "CurrentUser Root add reached the LocalMachine store\n");
+        if (found)
+            CertFreeCertificateContext(found);
+        ok(CertDeleteCertificateFromStore(added),
+           "removing the CurrentUser Root test cert failed: %lu\n", GetLastError());
+        added = NULL;
+    }
+
+    /* A machine certificate cannot be deleted through the CurrentUser store */
+    machineRw = CertOpenStore(CERT_STORE_PROV_SYSTEM_REGISTRY_W, 0, 0,
+                              CERT_SYSTEM_STORE_LOCAL_MACHINE |
+                              CERT_STORE_OPEN_EXISTING_FLAG, L"Root");
+    if (machineRw)
+    {
+        ok(CertAddCertificateContextToStore(machineRw, cert, CERT_STORE_ADD_NEW, &staged),
+           "staging the test cert in LocalMachine Root failed: %lu\n", GetLastError());
+        if (!staged)
+            goto Cleanup;
+        CertCloseStore(user, 0);
+        user = CertOpenSystemStoreW(0, L"Root");
+        found = user ? FindInStore(user, cert) : NULL;
+    }
+    else
+    {
+        /* Standard user: any machine certificate; HKLM denies the write anyway */
+        found = NULL;
+        while ((found = CertEnumCertificatesInStore(machine, found)) != NULL)
+        {
+            PCCERT_CONTEXT inUser = FindInStore(userReg, found);
+
+            if (!inUser)
+                break;
+            CertFreeCertificateContext(inUser);
+        }
+        if (found)
+        {
+            PCCERT_CONTEXT viaUser = FindInStore(user, found);
+
+            CertFreeCertificateContext(found);
+            found = viaUser;
+        }
+        else
+            skip("no LocalMachine-only Root certificate to try\n");
+    }
+    if (found)
+    {
+        before = CountStoreCerts(machine);
+        SetLastError(0xdeadbeef);
+        deleted = CertDeleteCertificateFromStore(found);
+        ok(!deleted, "deleting a LocalMachine cert through CurrentUser Root succeeded\n");
+        ok(deleted || GetLastError() == ERROR_ACCESS_DENIED,
+           "delete through CurrentUser Root: error %lu, expected ERROR_ACCESS_DENIED\n",
+           GetLastError());
+        CertCloseStore(machine, 0);
+        machine = CertOpenStore(CERT_STORE_PROV_SYSTEM_REGISTRY_W, 0, 0,
+                                CERT_SYSTEM_STORE_LOCAL_MACHINE | CERT_STORE_READONLY_FLAG |
+                                CERT_STORE_OPEN_EXISTING_FLAG, L"Root");
+        after = machine ? CountStoreCerts(machine) : 0;
+        ok(after == before, "LocalMachine Root count changed %lu -> %lu\n", before, after);
+    }
+    else if (machineRw)
+        ok(0, "the staged LocalMachine cert is not visible through CurrentUser Root\n");
+
+Cleanup:
+    if (staged)
+        ok(CertDeleteCertificateFromStore(staged),
+           "removing the staged LocalMachine cert failed: %lu\n", GetLastError());
+    if (added)
+        CertDeleteCertificateFromStore(added);
+    if (machineRw)
+        CertCloseStore(machineRw, 0);
+    if (machine)
+        CertCloseStore(machine, 0);
+    if (userReg)
+        CertCloseStore(userReg, 0);
+    if (user)
+        CertCloseStore(user, 0);
+    if (cert)
+        CertFreeCertificateContext(cert);
+    if (key)
+        CryptDestroyKey(key);
+    if (prov)
+        CryptReleaseContext(prov, 0);
+}
+
 START_TEST(CertOpenSystemStore)
 {
     HCERTSTORE root, authRoot;
@@ -393,6 +535,7 @@ START_TEST(CertOpenSystemStore)
     CheckStagedAuthRoot();
     CheckLocalMachineInCurrentUser(L"AuthRoot", TRUE);
     CheckLocalMachineInCurrentUser(L"Root", FALSE);
+    CheckCurrentUserWritesStayInHkcu();
 
     authRoot = CertOpenSystemStoreW(0, L"AuthRoot");
     root = CertOpenSystemStoreW(0, L"Root");
