@@ -3576,6 +3576,18 @@ RtlIsNameLegalDOS8Dot3(
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlQueryEnvironmentVariable(
+    _In_opt_ PVOID Environment,
+    _In_reads_(NameLength) PWSTR Name,
+    _In_ SIZE_T NameLength,
+    _Out_writes_(ValueLength) PWSTR Value,
+    _In_ SIZE_T ValueLength,
+    _Out_ PSIZE_T ReturnLength
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlQueryEnvironmentVariable_U(
     _In_opt_ PWSTR Environment,
     _In_ PCUNICODE_STRING Name,

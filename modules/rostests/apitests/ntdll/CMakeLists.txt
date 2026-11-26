@@ -166,6 +166,11 @@ list(APPEND SOURCE
     RtlComputePrivatizedDllName_U.c
     RtlConditionVariable.c
     RtlCopyMappedMemory.c
+    RtlConvertLCIDToString.c
+    RtlConvertUiListToApiList.c
+    RtlCreateAndSetSD.c
+    RtlMultiAppendUnicodeStringBuffer.c
+    RtlSetEnvironmentStrings.c
     RtlCreateServiceSid.c
     RtlCriticalSection.c
     RtlCurrentTransaction.c

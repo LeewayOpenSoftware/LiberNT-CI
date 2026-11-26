@@ -15,12 +15,59 @@
 
 /* FUNCTIONS *****************************************************************/
 
+/*
+ * @implemented
+ *
+ * Replaces the current environment block with a copy of NewEnvironment, as
+ * Windows 11 26100 does: the block is not validated, NewEnvironmentSize bytes
+ * are copied, EnvironmentSize becomes NewEnvironmentSize and EnvironmentVersion
+ * is incremented. A block that fits the current allocation is copied in
+ * place; otherwise a new block is allocated and the old one destroyed.
+ */
 NTSTATUS
 NTAPI
-RtlSetEnvironmentStrings(_In_ PWCHAR NewEnvironment, _In_ ULONG NewEnvironmentSize)
+RtlSetEnvironmentStrings(
+    _In_reads_bytes_(NewEnvironmentSize) PCWCHAR NewEnvironment,
+    _In_ SIZE_T NewEnvironmentSize)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PRTL_USER_PROCESS_PARAMETERS Params;
+    PWSTR Current, NewBlock = NULL;
+
+    RtlAcquirePebLock();
+    Params = NtCurrentPeb()->ProcessParameters;
+    Current = Params->Environment;
+
+    /* The PEB environment is a process-heap block, as RtlSetEnvironmentVariable assumes */
+    if (Current && NewEnvironmentSize <= RtlSizeHeap(RtlGetProcessHeap(), 0, Current))
+    {
+        RtlMoveMemory(Current, NewEnvironment, NewEnvironmentSize);
+    }
+    else
+    {
+        /* Two spare zero characters keep an unterminated block bounded */
+        if (NewEnvironmentSize > MAXULONG_PTR - 2 * sizeof(WCHAR))
+        {
+            RtlReleasePebLock();
+            return STATUS_NO_MEMORY;
+        }
+        NewBlock = RtlAllocateHeap(RtlGetProcessHeap(),
+                                   HEAP_ZERO_MEMORY,
+                                   NewEnvironmentSize + 2 * sizeof(WCHAR));
+        if (!NewBlock)
+        {
+            RtlReleasePebLock();
+            return STATUS_NO_MEMORY;
+        }
+        RtlCopyMemory(NewBlock, NewEnvironment, NewEnvironmentSize);
+        Params->Environment = NewBlock;
+    }
+    Params->EnvironmentSize = NewEnvironmentSize;
+    Params->EnvironmentVersion++;
+    RtlReleasePebLock();
+
+    if (NewBlock && Current)
+        RtlDestroyEnvironment(Current);
+    return STATUS_SUCCESS;
 }
 
 /*
