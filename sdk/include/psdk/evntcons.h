@@ -115,6 +115,157 @@ typedef const EVENT_RECORD *PCEVENT_RECORD;
 #define PROCESS_TRACE_MODE_RAW_TIMESTAMP            0x00001000
 #define PROCESS_TRACE_MODE_EVENT_RECORD             0x10000000
 
+/*
+ * TDH decoding types (Windows SDK 10.0.26100.0 tdh.h): the consumer-side
+ * descriptions TdhGetEventInformation fills in.
+ */
+typedef enum _DECODING_SOURCE
+{
+    DecodingSourceXMLFile,
+    DecodingSourceWbem,
+    DecodingSourceWPP,
+    DecodingSourceTlg,
+    DecodingSourceMax
+} DECODING_SOURCE;
+
+typedef enum _TDH_IN_TYPE
+{
+    TDH_INTYPE_NULL,
+    TDH_INTYPE_UNICODESTRING,
+    TDH_INTYPE_ANSISTRING,
+    TDH_INTYPE_INT8,
+    TDH_INTYPE_UINT8,
+    TDH_INTYPE_INT16,
+    TDH_INTYPE_UINT16,
+    TDH_INTYPE_INT32,
+    TDH_INTYPE_UINT32,
+    TDH_INTYPE_INT64,
+    TDH_INTYPE_UINT64,
+    TDH_INTYPE_FLOAT,
+    TDH_INTYPE_DOUBLE,
+    TDH_INTYPE_BOOLEAN,
+    TDH_INTYPE_BINARY,
+    TDH_INTYPE_GUID,
+    TDH_INTYPE_POINTER,
+    TDH_INTYPE_FILETIME,
+    TDH_INTYPE_SYSTEMTIME,
+    TDH_INTYPE_SID,
+    TDH_INTYPE_HEXINT32,
+    TDH_INTYPE_HEXINT64,
+    TDH_INTYPE_MANIFEST_COUNTEDSTRING,
+    TDH_INTYPE_MANIFEST_COUNTEDANSISTRING,
+    TDH_INTYPE_RESERVED24,
+    TDH_INTYPE_MANIFEST_COUNTEDBINARY
+} TDH_IN_TYPE;
+
+typedef enum _PROPERTY_FLAGS
+{
+    PropertyStruct = 0x1,
+    PropertyParamLength = 0x2,
+    PropertyParamCount = 0x4,
+    PropertyWBEMXmlFragment = 0x8,
+    PropertyParamFixedLength = 0x10,
+    PropertyParamFixedCount = 0x20,
+    PropertyHasTags = 0x40,
+    PropertyHasCustomSchema = 0x80
+} PROPERTY_FLAGS;
+
+typedef struct _EVENT_PROPERTY_INFO
+{
+    PROPERTY_FLAGS Flags;
+    ULONG NameOffset;
+    union
+    {
+        struct
+        {
+            USHORT InType;
+            USHORT OutType;
+            ULONG MapNameOffset;
+        } nonStructType;
+        struct
+        {
+            USHORT StructStartIndex;
+            USHORT NumOfStructMembers;
+            ULONG padding;
+        } structType;
+    } DUMMYUNIONNAME;
+    union
+    {
+        USHORT count;
+        USHORT countPropertyIndex;
+    } DUMMYUNIONNAME2;
+    union
+    {
+        USHORT length;
+        USHORT lengthPropertyIndex;
+    } DUMMYUNIONNAME3;
+    union
+    {
+        ULONG Reserved;
+        struct
+        {
+            ULONG Tags : 28;
+        };
+    } DUMMYUNIONNAME4;
+} EVENT_PROPERTY_INFO, *PEVENT_PROPERTY_INFO;
+
+typedef enum _TDH_CONTEXT_TYPE
+{
+    TDH_CONTEXT_WPP_TMFFILE,
+    TDH_CONTEXT_WPP_TMFSEARCHPATH,
+    TDH_CONTEXT_WPP_GMT,
+    TDH_CONTEXT_POINTERSIZE,
+    TDH_CONTEXT_PDB_PATH,
+    TDH_CONTEXT_MAXIMUM
+} TDH_CONTEXT_TYPE;
+
+typedef struct _TDH_CONTEXT
+{
+    ULONGLONG ParameterValue;
+    TDH_CONTEXT_TYPE ParameterType;
+    ULONG ParameterSize;
+} TDH_CONTEXT, *PTDH_CONTEXT;
+
+typedef struct _TRACE_EVENT_INFO
+{
+    GUID ProviderGuid;
+    GUID EventGuid;
+    EVENT_DESCRIPTOR EventDescriptor;
+    DECODING_SOURCE DecodingSource;
+    ULONG ProviderNameOffset;
+    ULONG LevelNameOffset;
+    ULONG ChannelNameOffset;
+    ULONG KeywordsNameOffset;
+    ULONG TaskNameOffset;
+    ULONG OpcodeNameOffset;
+    ULONG EventMessageOffset;
+    ULONG ProviderMessageOffset;
+    ULONG BinaryXMLOffset;
+    ULONG BinaryXMLSize;
+    union
+    {
+        ULONG EventNameOffset;
+        ULONG ActivityIDNameOffset;
+    } DUMMYUNIONNAME5;
+    union
+    {
+        ULONG EventAttributesOffset;
+        ULONG RelatedActivityIDNameOffset;
+    } DUMMYUNIONNAME6;
+    ULONG PropertyCount;
+    ULONG TopLevelPropertyCount;
+    union
+    {
+        ULONG Flags;
+        struct
+        {
+            ULONG Reserved : 4;
+            ULONG Tags : 28;
+        };
+    } DUMMYUNIONNAME7;
+    EVENT_PROPERTY_INFO EventPropertyInfoArray[ANYSIZE_ARRAY];
+} TRACE_EVENT_INFO, *PTRACE_EVENT_INFO;
+
 #ifdef __cplusplus
 }
 #endif
