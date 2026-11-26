@@ -15,6 +15,63 @@ typedef struct _SEC_ERROR_MAP_ENTRY
     ULONG Value;
 } SEC_ERROR_MAP_ENTRY;
 
+typedef struct _SEC_ERROR_PIN_ENTRY
+{
+    PCSTR Name;
+    ULONG Value;
+    NTSTATUS Expected;
+} SEC_ERROR_PIN_ENTRY;
+
+/* The 43 rows captured by the Win11 sweep before the harness silenced the
+ * identical trace format. Pinned here; everything else keeps tracing until
+ * the silencing-proof rerun extends this list. */
+static const SEC_ERROR_PIN_ENTRY SecErrorsPinned[] =
+{
+    { "SEC_E_OK", 0x00000000, 0x00000000 },
+    { "SEC_E_INSUFFICIENT_MEMORY", 0x80090300, 0xc000009a },
+    { "SEC_E_INVALID_HANDLE", 0x80090301, 0xc0000008 },
+    { "SEC_E_UNSUPPORTED_FUNCTION", 0x80090302, 0xc00000bb },
+    { "SEC_E_TARGET_UNKNOWN", 0x80090303, 0xc00000be },
+    { "SEC_E_INTERNAL_ERROR", 0x80090304, 0xc00000e5 },
+    { "SEC_E_SECPKG_NOT_FOUND", 0x80090305, 0xc00000fe },
+    { "SEC_E_NOT_OWNER", 0x80090306, 0xc0000061 },
+    { "SEC_E_CANNOT_INSTALL", 0x80090307, 0xc00000fe },
+    { "SEC_E_INVALID_TOKEN", 0x80090308, 0xc000000d },
+    { "SEC_E_CANNOT_PACK", 0x80090309, 0xc000000d },
+    { "SEC_E_QOP_NOT_SUPPORTED", 0x8009030A, 0xc00000bb },
+    { "SEC_E_NO_IMPERSONATION", 0x8009030B, 0xc000010d },
+    { "SEC_E_LOGON_DENIED", 0x8009030C, 0xc000006d },
+    { "SEC_E_UNKNOWN_CREDENTIALS", 0x8009030D, 0xc000005f },
+    { "SEC_E_NO_CREDENTIALS", 0x8009030E, 0xc000005f },
+    { "SEC_E_MESSAGE_ALTERED", 0x8009030F, 0xc0000022 },
+    { "SEC_E_OUT_OF_SEQUENCE", 0x80090310, 0xc0000022 },
+    { "SEC_E_NO_AUTHENTICATING_AUTHORITY", 0x80090311, 0xc000005e },
+    { "SEC_I_CONTINUE_NEEDED", 0x00090312, 0x00090312 },
+    { "SEC_I_COMPLETE_NEEDED", 0x00090313, 0x00090313 },
+    { "SEC_I_COMPLETE_AND_CONTINUE", 0x00090314, 0x00090314 },
+    { "SEC_I_LOCAL_LOGON", 0x00090315, 0x00090315 },
+    { "SEC_I_GENERIC_EXTENSION_RECEIVED", 0x00090316, 0x00090316 },
+    { "SEC_E_BAD_PKGID", 0x80090316, 0xc00000fe },
+    { "SEC_I_CONTEXT_EXPIRED", 0x00090317, 0x00090317 },
+    { "SEC_E_CONTEXT_EXPIRED", 0x80090317, 0x80090317 },
+    { "SEC_E_INCOMPLETE_MESSAGE", 0x80090318, 0x80090318 },
+    { "SEC_I_INCOMPLETE_CREDENTIALS", 0x00090320, 0x00090320 },
+    { "SEC_E_INCOMPLETE_CREDENTIALS", 0x80090320, 0x80090320 },
+    { "SEC_I_RENEGOTIATE", 0x00090321, 0x00090321 },
+    { "SEC_E_BUFFER_TOO_SMALL", 0x80090321, 0x80090321 },
+    { "SEC_E_WRONG_PRINCIPAL", 0x80090322, 0x80090322 },
+    { "SEC_I_NO_LSA_CONTEXT", 0x00090323, 0x00090323 },
+    { "SEC_E_TIME_SKEW", 0x80090324, 0xc0000133 },
+    { "SEC_E_UNTRUSTED_ROOT", 0x80090325, 0x80090325 },
+    { "SEC_E_ILLEGAL_MESSAGE", 0x80090326, 0x80090326 },
+    { "SEC_E_CERT_UNKNOWN", 0x80090327, 0x80090327 },
+    { "SEC_E_CERT_EXPIRED", 0x80090328, 0x80090328 },
+    { "SEC_E_ENCRYPT_FAILURE", 0x80090329, 0x80090329 },
+    { "SEC_E_DECRYPT_FAILURE", 0x80090330, 0x80090330 },
+    { "SEC_E_ALGORITHM_MISMATCH", 0x80090331, 0xc00000bb },
+    { "SEC_E_INVALID_PARAMETER", 0x8009035D, 0xc000000d },
+};
+
 /* Every SEC_E_* and SEC_I_* value defined in sdk/include/psdk/winerror.h at the
  * time of the sweep. The same exe runs on Windows 11 and on Orosi; the Win11
  * output IS the reference table (recorded in native-parity-02). */
@@ -138,7 +195,59 @@ static void RunSweep(PRTL_MAP_SECURITY_ERROR_TO_NTSTATUS Mapper, const SEC_ERROR
     for (i = 0; i < Count; i++)
     {
         Status = Mapper(Table[i].Value);
-        trace("SECMAP %s 0x%08lx -> 0x%08lx\n", Table[i].Name, Table[i].Value, Status);
+        /* printf, not trace: the test harness silences an identical trace
+           format after 42 occurrences, which truncated the first sweep */
+        printf("SECMAP %s 0x%08lx -> 0x%08lx\n", Table[i].Name, Table[i].Value, Status);
+    }
+}
+
+static void PinKnown(PRTL_MAP_SECURITY_ERROR_TO_NTSTATUS Mapper)
+{
+    ULONG i;
+    NTSTATUS Status;
+
+    for (i = 0; i < sizeof(SecErrorsPinned) / sizeof(SecErrorsPinned[0]); i++)
+    {
+        Status = Mapper(SecErrorsPinned[i].Value);
+        ok(Status == SecErrorsPinned[i].Expected,
+           "%s 0x%08lx mapped to 0x%08lx, expected 0x%08lx\n",
+           SecErrorsPinned[i].Name,
+           SecErrorsPinned[i].Value,
+           Status,
+           SecErrorsPinned[i].Expected);
+    }
+}
+
+static BOOL
+IsPinned(ULONG Value)
+{
+    ULONG i;
+
+    for (i = 0; i < sizeof(SecErrorsPinned) / sizeof(SecErrorsPinned[0]); i++)
+    {
+        if (SecErrorsPinned[i].Value == Value)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* Win11 maps every value the sweep did not capture as a distinct row to
+ * identity; assert that for the remaining defined values and the edges */
+static void PinIdentityDefault(PRTL_MAP_SECURITY_ERROR_TO_NTSTATUS Mapper,
+                               const SEC_ERROR_MAP_ENTRY *Table,
+                               ULONG Count)
+{
+    ULONG i;
+    NTSTATUS Status;
+
+    for (i = 0; i < Count; i++)
+    {
+        if (IsPinned(Table[i].Value))
+            continue;
+        Status = Mapper(Table[i].Value);
+        ok(Status == (NTSTATUS)Table[i].Value,
+           "%s 0x%08lx mapped to 0x%08lx, expected identity\n",
+           Table[i].Name, Table[i].Value, Status);
     }
 }
 
@@ -155,9 +264,12 @@ START_TEST(RtlMapSecurityErrorToNtStatus)
         return;
     }
 
-    /* Only the identity of the success value is fixed without a baseline. */
-    ok(Mapper(SecErrors[0].Value) == STATUS_SUCCESS,
-       "%s mapped to 0x%08lx\n", SecErrors[0].Name, Mapper(SecErrors[0].Value));
+    /* The pinned rows are the 43 mappings captured by the Win11
+       sweep; every remaining defined value and all edge probes map to identity
+       there, which the two passes below pin row by row. */
+    PinKnown(Mapper);
+    PinIdentityDefault(Mapper, SecErrors, sizeof(SecErrors) / sizeof(SecErrors[0]));
+    PinIdentityDefault(Mapper, SecErrorEdges, sizeof(SecErrorEdges) / sizeof(SecErrorEdges[0]));
 
     RunSweep(Mapper, SecErrors, sizeof(SecErrors) / sizeof(SecErrors[0]));
     RunSweep(Mapper, SecErrorEdges, sizeof(SecErrorEdges) / sizeof(SecErrorEdges[0]));
