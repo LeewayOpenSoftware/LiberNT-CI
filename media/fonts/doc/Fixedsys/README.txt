@@ -58,7 +58,8 @@ Fixedsys Excelsior (Darien Valentine) (ReactOS/LiberNT family name kept for comp
 
 Origin:  http://www.fixedsysexcelsior.com/
 Version: 3.01 and 3.01-L2
-Licence: Public domain, as stated by the author (README.txt) (see README.txt)
+Licence: Free of charge per the author's FAQ (quoted above); reported as released into the public
+         domain (Wikipedia, quoted above). The fonts carry no licence text in their name tables.
 
 Files and SHA-256:
   6dccf21e9b3d0b653927affd89c9d10811f9e5725a33e8b5fe37b147ecd10691  FSEX301.ttf
