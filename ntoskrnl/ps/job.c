@@ -2948,6 +2948,7 @@ NtQueryInformationJobObject(
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION ExtendedLimit;
     JOBOBJECT_BASIC_AND_IO_ACCOUNTING_INFORMATION BasicAndIo;
     JOBOBJECT_BASIC_UI_RESTRICTIONS UiRestrictions;
+    JOBOBJECT_END_OF_JOB_TIME_INFORMATION EndOfJobTime;
     ULONG RequiredLength, RequiredAlign, ReturnRequiredLength;
 
     PAGED_CODE();
@@ -3083,9 +3084,22 @@ NtQueryInformationJobObject(
         Status = STATUS_SUCCESS;
         break;
     }
-    case JobObjectSecurityLimitInformation:
     case JobObjectEndOfJobTimeInformation:
+    {
+        ExAcquireResourceSharedLite(&Job->JobLock, TRUE);
+        EndOfJobTime.EndOfJobTimeAction = Job->EndOfJobTimeAction;
+        ExReleaseResourceLite(&Job->JobLock);
+
+        JobInfoBuffer = &EndOfJobTime;
+        Status = STATUS_SUCCESS;
+        break;
+    }
     case JobObjectAssociateCompletionPortInformation:
+        /* Win11: the completion port class is set-only; the query is rejected */
+        DPRINT1("Class %d not queryable\n", JobInformationClass);
+        Status = STATUS_INVALID_INFO_CLASS;
+        break;
+    case JobObjectSecurityLimitInformation:
     case JobObjectJobSetInformation:
         DPRINT1("Class %d not implemented\n", JobInformationClass);
         Status = STATUS_NOT_IMPLEMENTED;
@@ -3322,10 +3336,40 @@ NtSetInformationJobObject(
         Status = PspSetJobUIRestrictions(Job, UiRestrictions.UIRestrictionsClass);
         break;
     }
+    case JobObjectEndOfJobTimeInformation:
+    {
+        JOBOBJECT_END_OF_JOB_TIME_INFORMATION EndOfJobTime = {0};
+
+        _SEH2_TRY
+        {
+            EndOfJobTime = *(PJOBOBJECT_END_OF_JOB_TIME_INFORMATION)JobInformation;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+            goto Exit;
+        }
+        _SEH2_END;
+
+        /* Win11 (measured): only no-action (0) and TERMINATE (1) are accepted;
+           POST (2) is rejected with STATUS_INVALID_PARAMETER even with a
+           completion port associated */
+        ExAcquireResourceExclusiveLite(&Job->JobLock, TRUE);
+        if (EndOfJobTime.EndOfJobTimeAction > JOB_OBJECT_TERMINATE_AT_END_OF_JOB)
+        {
+            ExReleaseResourceLite(&Job->JobLock);
+            Status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+        Job->EndOfJobTimeAction = EndOfJobTime.EndOfJobTimeAction;
+        ExReleaseResourceLite(&Job->JobLock);
+
+        Status = STATUS_SUCCESS;
+        break;
+    }
     case JobObjectBasicAccountingInformation:
     case JobObjectBasicAndIoAccountingInformation:
     case JobObjectBasicProcessIdList:
-    case JobObjectEndOfJobTimeInformation:
     case JobObjectJobSetInformation:
     case JobObjectSecurityLimitInformation:
         DPRINT1("Class %d not implemented\n", JobInformationClass);
