@@ -389,9 +389,9 @@ static void TestWin32Wrapper(void)
         trace("PROBE RegQueryMultipleValuesW with a 1-byte size -> %ld, total %lu\n", Error, Total);
         Total = 0x10000;
         Error = pRegQueryMultipleValuesW(Hkey, Vals, 3, Buffer, &Total);
-        trace("PROBE RegQueryMultipleValuesW -> %ld, total %lu; offsets %Iu %Iu %Iu, lengths %lu %lu %lu\n", Error, Total,
-              (SIZE_T)(Vals[0].ve_valueptr - (DWORD_PTR)Buffer), (SIZE_T)(Vals[1].ve_valueptr - (DWORD_PTR)Buffer),
-              (SIZE_T)(Vals[2].ve_valueptr - (DWORD_PTR)Buffer), Vals[0].ve_valuelen, Vals[1].ve_valuelen, Vals[2].ve_valuelen);
+        trace("PROBE RegQueryMultipleValuesW -> %ld, total %lu; offsets %lu %lu %lu, lengths %lu %lu %lu\n", Error, Total,
+              (ULONG)(Vals[0].ve_valueptr - (DWORD_PTR)Buffer), (ULONG)(Vals[1].ve_valueptr - (DWORD_PTR)Buffer),
+              (ULONG)(Vals[2].ve_valueptr - (DWORD_PTR)Buffer), Vals[0].ve_valuelen, Vals[1].ve_valuelen, Vals[2].ve_valuelen);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
     }
     RegCloseKey(Hkey);
