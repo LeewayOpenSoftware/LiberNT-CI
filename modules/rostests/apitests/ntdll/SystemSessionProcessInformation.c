@@ -64,12 +64,14 @@ TestOwnSession(PUCHAR Buffer)
 
     Status = QuerySession(OwnSession, Buffer, BIG_SIZE, &Ret);
     trace("PROBE P1 own session %lu -> 0x%lx ret=%lu\n", OwnSession, Status, Ret);
+    ok_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
     {
         skip("own-session query failed: 0x%lx\n", Status);
         return;
     }
-    Count = WalkChain(Buffer, BIG_SIZE, OwnSession, &Foreign, Pid, &Found);
+    /* Only the returned bytes hold records */
+    Count = WalkChain(Buffer, Ret, OwnSession, &Foreign, Pid, &Found);
     trace("PROBE P1 records=%lu foreign=%lu ownpid=%d\n", Count, Foreign, Found);
     ok(Foreign == 0, "%lu records are not in session %lu\n", Foreign, OwnSession);
     ok(Found, "own process not listed\n");
@@ -77,6 +79,7 @@ TestOwnSession(PUCHAR Buffer)
 
     Status = QuerySession(OwnSession, Buffer, BIG_SIZE, NULL);
     trace("PROBE P9 ReturnLength NULL -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_SUCCESS);
 
     Ret = 0;
     Status = NtQuerySystemInformation(SystemProcessInformation, Buffer, BIG_SIZE, &Ret);
@@ -118,6 +121,16 @@ TestOuter(PUCHAR Buffer)
         Ret = 0xDEADBEEF;
         Status = NtQuerySystemInformation(SystemSessionProcessInformation, Info, Lengths[i], &Ret);
         trace("PROBE P2 outer length %lu -> 0x%lx ret=%lu\n", Lengths[i], Status, Ret);
+        if (Lengths[i] < sizeof(SYSTEM_SESSION_PROCESS_INFORMATION))
+        {
+            /* Win11: the size the outer structure needs */
+            ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+            ok_eq_ulong(Ret, (ULONG)sizeof(SYSTEM_SESSION_PROCESS_INFORMATION));
+        }
+        else
+        {
+            ok_hex(Status, STATUS_SUCCESS);
+        }
     }
 
     Info = (PSYSTEM_SESSION_PROCESS_INFORMATION)((PUCHAR)Info + 1);
@@ -127,6 +140,8 @@ TestOuter(PUCHAR Buffer)
     Ret = 0xDEADBEEF;
     Status = NtQuerySystemInformation(SystemSessionProcessInformation, Info, sizeof(*Info), &Ret);
     trace("PROBE P3 outer misaligned +1 -> 0x%lx ret=%lu\n", Status, Ret);
+    ok_hex(Status, STATUS_DATATYPE_MISALIGNMENT);
+    ok_eq_ulong(Ret, 0xDEADBEEFUL);
 }
 
 /* P4 + P5 + P6 + P7: the inner buffer */
@@ -143,12 +158,17 @@ TestInner(PUCHAR Buffer)
     Ret = 0xDEADBEEF;
     Status = QuerySession(OwnSession, NULL, 0, &Ret);
     trace("PROBE P4 inner NULL/0 -> 0x%lx ret=%lu\n", Status, Ret);
+    /* Win11: a short inner buffer reports the size the list needs */
+    ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok(Ret > sizeof(SYSTEM_PROCESS_INFORMATION) && Ret != 0xDEADBEEF, "needed size %lu\n", Ret);
 
     for (i = 0; i < _countof(Sizes); i++)
     {
         Ret = 0xDEADBEEF;
         Status = QuerySession(OwnSession, Buffer, Sizes[i], &Ret);
         trace("PROBE P5 inner size %lu -> 0x%lx ret=%lu\n", Sizes[i], Status, Ret);
+        ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+        ok(Ret > Sizes[i] && Ret != 0xDEADBEEF, "needed size %lu for %lu\n", Ret, Sizes[i]);
     }
 
     for (i = 0; i < _countof(Misalign); i++)
@@ -156,14 +176,28 @@ TestInner(PUCHAR Buffer)
         Ret = 0xDEADBEEF;
         Status = QuerySession(OwnSession, Buffer + Misalign[i], BIG_SIZE - 8, &Ret);
         trace("PROBE P6 inner misaligned +%lu -> 0x%lx ret=%lu\n", Misalign[i], Status, Ret);
+        /* Win11 probes the inner buffer at ULONG alignment */
+        if (Misalign[i] % sizeof(ULONG))
+        {
+            ok_hex(Status, STATUS_DATATYPE_MISALIGNMENT);
+            ok_eq_ulong(Ret, 0xDEADBEEFUL);
+        }
+        else
+        {
+            ok_hex(Status, STATUS_SUCCESS);
+        }
     }
 
     Ret = 0xDEADBEEF;
     Status = QuerySession(OwnSession, (PVOID)(ULONG_PTR)0x1000, BIG_SIZE, &Ret);
     trace("PROBE P7 inner 0x1000 -> 0x%lx ret=%lu\n", Status, Ret);
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
+    ok_eq_ulong(Ret, 0xDEADBEEFUL);
     Ret = 0xDEADBEEF;
     Status = QuerySession(OwnSession, Kernel, BIG_SIZE, &Ret);
     trace("PROBE P7 inner kernel %p -> 0x%lx ret=%lu\n", Kernel, Status, Ret);
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
+    ok_eq_ulong(Ret, 0xDEADBEEFUL);
 }
 
 /* P8: other session ids, with the caller's TCB state, then with TCB disabled */
@@ -193,11 +227,15 @@ TestOtherSessions(PUCHAR Buffer)
             Count = Foreign = 0;
             Found = FALSE;
             if (NT_SUCCESS(Status))
-                Count = WalkChain(Buffer, BIG_SIZE, Sessions[i], &Foreign, NULL, &Found);
+                Count = WalkChain(Buffer, Ret, Sessions[i], &Foreign, NULL, &Found);
             trace("PROBE P8 tcb=%s session %lu -> 0x%lx ret=%lu records=%lu foreign=%lu\n",
                   (HaveTcb && Pass == 0) ? "on" : "off", Sessions[i], Status, Ret, Count, Foreign);
+            /* Win11: no privilege rule for another session; an unknown one is an empty list */
+            ok_hex(Status, STATUS_SUCCESS);
             if (NT_SUCCESS(Status))
                 ok(Foreign == 0, "session %lu: %lu records from another session\n", Sessions[i], Foreign);
+            if (Sessions[i] == 0xFFFFFFFF)
+                ok_eq_ulong(Ret, 0UL);
         }
     }
     if (HaveTcb)
