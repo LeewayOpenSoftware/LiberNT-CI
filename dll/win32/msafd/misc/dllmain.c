@@ -3129,6 +3129,7 @@ WSPIoctl(IN  SOCKET Handle,
                 GUID DisconnectExGUID = WSAID_DISCONNECTEX;
                 GUID GetAcceptExSockaddrsGUID = WSAID_GETACCEPTEXSOCKADDRS;
                 GUID RecvMsgGUID = WSAID_WSARECVMSG;
+                GUID SendMsgGUID = WSAID_WSASENDMSG;
 
                 if (IsEqualGUID(&AcceptExGUID, lpvInBuffer))
                 {
@@ -3165,6 +3166,13 @@ WSPIoctl(IN  SOCKET Handle,
                     Errno = NO_ERROR;
                     Ret = NO_ERROR;
                 }
+                else if (IsEqualGUID(&SendMsgGUID, lpvInBuffer))
+                {
+                    *((PVOID *)lpvOutBuffer) = WSPWSASendMsg;
+                    cbRet = sizeof(PVOID);
+                    Errno = NO_ERROR;
+                    Ret = NO_ERROR;
+                }
                 else
                 {
                     ERR("Querying unknown extension function: %x\n", ((GUID*)lpvInBuffer)->Data1);
@@ -3184,17 +3192,14 @@ WSPIoctl(IN  SOCKET Handle,
                 break;
             }
 
-            Ret = WSPSendTo(Handle,
-                            SendMsg->lpMsg->lpBuffers,
-                            SendMsg->lpMsg->dwBufferCount,
-                            SendMsg->lpNumberOfBytesSent,
-                            SendMsg->dwFlags,
-                            SendMsg->lpMsg->name,
-                            SendMsg->lpMsg->namelen,
-                            SendMsg->lpOverlapped,
-                            SendMsg->lpCompletionRoutine,
-                            lpThreadId,
-                            &Errno);
+            Ret = WSPWSASendMsg(Handle,
+                                SendMsg->lpMsg,
+                                SendMsg->dwFlags,
+                                SendMsg->lpNumberOfBytesSent,
+                                SendMsg->lpOverlapped,
+                                SendMsg->lpCompletionRoutine);
+            if (Ret == SOCKET_ERROR)
+                Errno = WSAGetLastError();
             break;
         }
         case SIO_BASE_HANDLE:
