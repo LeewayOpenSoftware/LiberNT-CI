@@ -182,6 +182,56 @@ TestInvalidParameters(
 }
 
 static VOID
+TestCombinedValidationOrder(
+    _In_ PNT_ADD_ATOM_EX AddAtomEx)
+{
+    const ULONG InvalidFlag = 0x00000001;
+    WCHAR LongName[257];
+    WCHAR Name[64];
+    RTL_ATOM Atom;
+    NTSTATUS Status;
+    ULONG Index;
+
+    for (Index = 0; Index < ARRAYSIZE(LongName) - 1; Index++)
+        LongName[Index] = L'A';
+    LongName[ARRAYSIZE(LongName) - 1] = UNICODE_NULL;
+
+    /* Two faults at once: record which one wins, pin the precedence only after
+       the Win11 run. Every combination must still fail and create no atom. */
+    Atom = 0xABCD;
+    Status = AddAtomEx(NULL, 0, &Atom, InvalidFlag);
+    trace("invalid flag + NULL name -> %#lx, atom %#x (Win11 pending)\n",
+          Status, Atom);
+    ok(!NT_SUCCESS(Status),
+       "invalid flag + NULL name unexpectedly succeeded: %#lx\n", Status);
+    ok_hex(Atom, 0xABCD);
+    if (NT_SUCCESS(Status)) NtDeleteAtom(Atom);
+
+    Atom = 0xABCD;
+    Status = AddAtomEx(LongName, 512, &Atom, InvalidFlag);
+    trace("invalid flag + 512-byte name -> %#lx, atom %#x (Win11 pending)\n",
+          Status, Atom);
+    ok(!NT_SUCCESS(Status),
+       "invalid flag + 512-byte name unexpectedly succeeded: %#lx\n", Status);
+    ok_hex(Atom, 0xABCD);
+    if (NT_SUCCESS(Status)) NtDeleteAtom(Atom);
+
+    MakeName(Name, ARRAYSIZE(Name), L"orderbadout");
+    Status = AddAtomEx(Name,
+                       (ULONG)(wcslen(Name) * sizeof(WCHAR)),
+                       (PRTL_ATOM)(ULONG_PTR)0x10000,
+                       InvalidFlag);
+    trace("invalid flag + bad output -> %#lx (Win11 pending)\n", Status);
+    ok(!NT_SUCCESS(Status),
+       "invalid flag + bad output unexpectedly succeeded: %#lx\n", Status);
+    Status = NtFindAtom(Name,
+                        (ULONG)(wcslen(Name) * sizeof(WCHAR)),
+                        &Atom);
+    ok_ntstatus(Status, STATUS_OBJECT_NAME_NOT_FOUND);
+    if (NT_SUCCESS(Status)) NtDeleteAtom(Atom);
+}
+
+static VOID
 TestExtendedValidation(
     _In_ PNT_ADD_ATOM_EX AddAtomEx)
 {
@@ -534,6 +584,7 @@ START_TEST(NtAddAtomEx)
     }
 
     TestInvalidParameters(AddAtomEx);
+    TestCombinedValidationOrder(AddAtomEx);
     TestExtendedValidation(AddAtomEx);
     TestFlagsAndLifetime(AddAtomEx);
     TestConcurrency(AddAtomEx);
