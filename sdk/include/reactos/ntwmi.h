@@ -10,6 +10,7 @@
 #include <wmistr.h>
 #include <evntrace.h>
 #include <evntprov.h>
+#include <evntcons.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -78,9 +79,15 @@ typedef struct _ETW_ENABLE_PARAMETERS
     ULONG LoggerId;
     UCHAR ControlCode;          /* EVENT_CONTROL_CODE_* */
     UCHAR Level;
-    USHORT Reserved;
+    USHORT Version;             /* ENABLE_TRACE_PARAMETERS_VERSION or _VERSION_2 */
     ULONGLONG MatchAnyKeyword;
     ULONGLONG MatchAllKeyword;
+    ULONG EnableProperty;       /* EVENT_ENABLE_PROPERTY_* */
+    ULONG EnableFilterDescCount;
+    GUID SourceId;
+    /* followed in-band by EnableFilterDescCount EVENT_FILTER_DESCRIPTOR entries;
+     * each descriptor's Ptr still addresses the caller's filter data, which the
+     * kernel captures separately under SEH */
 } ETW_ENABLE_PARAMETERS, *PETW_ENABLE_PARAMETERS;
 
 /* EtwQueryEnableCode input; the output is one ULONG, non-zero when an event of this level

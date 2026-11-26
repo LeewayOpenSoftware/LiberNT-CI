@@ -29,10 +29,49 @@
 #include <debug.h>
 
 #define ETWP_PROV_TAG           'PwtE'
+#define ETWP_FILTERS_TAG        'tFtE'
 #define ETWP_MAX_SESSIONS       8       /* sessions one provider can be enabled for */
 #define ETWP_SLOTS_PER_BLOCK    256
 #define ETWP_MAX_BLOCKS         256
 #define ETWP_LEVEL_ALL          0xFF
+
+/* Win11 rejects filter types a session does not support; unknown types
+   are an error here as well */
+static
+BOOLEAN
+EtwpFilterTypeKnown(IN ULONG Type)
+{
+    switch (Type)
+    {
+    case EVENT_FILTER_TYPE_NONE:
+    case EVENT_FILTER_TYPE_SCHEMATIZED:
+    case EVENT_FILTER_TYPE_SYSTEM_FLAGS:
+    case EVENT_FILTER_TYPE_TRACEHANDLE:
+    case EVENT_FILTER_TYPE_PID:
+    case EVENT_FILTER_TYPE_EVENT_ID:
+    case EVENT_FILTER_TYPE_EVENT_NAME:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+/* EVENT_ENABLE_PROPERTY_SID/TS_ID/STACK_TRACE/PSM_KEY/IGNORE_KEYWORD_0 are
+   defined by the SDK, but none can be honoured yet; a set bit is refused
+   rather than silently accepted */
+#define ETWP_KNOWN_ENABLE_PROPERTIES (EVENT_ENABLE_PROPERTY_SID              | \r
+                                      EVENT_ENABLE_PROPERTY_TS_ID          | \r
+                                      EVENT_ENABLE_PROPERTY_STACK_TRACE  | \r
+                                      EVENT_ENABLE_PROPERTY_PSM_KEY      | \r
+                                      EVENT_ENABLE_PROPERTY_IGNORE_KEYWORD_0)
+
+typedef struct _ETWP_ENABLE_FILTERS
+{
+    LONG RefCount;
+    ULONG Count;
+    EVENT_FILTER_DESCRIPTOR Descs[ANYSIZE_ARRAY];
+    /* the captured filter data follows the descriptors in this allocation */
+} ETWP_ENABLE_FILTERS, *PETWP_ENABLE_FILTERS;
 
 typedef struct _ETWP_SESSION_ENABLE
 {
@@ -40,6 +79,7 @@ typedef struct _ETWP_SESSION_ENABLE
     UCHAR Level;
     ULONGLONG MatchAny;
     ULONGLONG MatchAll;
+    PETWP_ENABLE_FILTERS Filters;
 } ETWP_SESSION_ENABLE, *PETWP_SESSION_ENABLE;
 
 typedef struct _ETWP_PROVIDER
@@ -191,26 +231,32 @@ VOID
 EtwpRunCallbacks(
     _In_ PETWP_PROVIDER Provider,
     _In_opt_ PETWP_CALLBACK Callbacks,
-    _In_ ULONG Count)
+    _In_ ULONG Count,
+    _In_opt_ PETWP_ENABLE_FILTERS Filters,
+    _In_ LPCGUID SourceId)
 {
     ULONG i;
+    PEVENT_FILTER_DESCRIPTOR FilterData = Filters ? Filters->Descs : NULL;
 
     for (i = 0; i < Count; i++)
     {
         PETWP_KREGISTRATION Registration = Callbacks[i].Registration;
         UCHAR Level = Provider->Level == ETWP_LEVEL_ALL ? 0 : Provider->Level;
+        BOOLEAN Disabling = Callbacks[i].ControlCode == EVENT_CONTROL_CODE_DISABLE_PROVIDER;
 
-        Registration->EnableCallback(&EtwpNullGuid,
+        Registration->EnableCallback(SourceId,
                                      Callbacks[i].ControlCode,
-                                     Callbacks[i].ControlCode == EVENT_CONTROL_CODE_DISABLE_PROVIDER ? 0 : Level,
-                                     Callbacks[i].ControlCode == EVENT_CONTROL_CODE_DISABLE_PROVIDER ? 0 : Provider->MatchAny,
+                                     Disabling ? 0 : Level,
+                                     Disabling ? 0 : Provider->MatchAny,
                                      0,
-                                     NULL,
+                                     Disabling ? NULL : FilterData,
                                      Registration->CallbackContext);
         ExReleaseRundownProtection(&Registration->Rundown);
     }
     if (Callbacks)
         ExFreePoolWithTag(Callbacks, ETWP_PROV_TAG);
+    /* the callback run's borrow ends here; the session entry keeps its own */
+    EtwpReleaseEnableFilters(Filters);
 }
 
 static
@@ -292,6 +338,97 @@ EtwpDeliver(
     return Status;
 }
 
+static
+PETWP_ENABLE_FILTERS
+EtwpReferenceEnableFilters(IN PETWP_ENABLE_FILTERS Filters)
+{
+    if (Filters)
+        InterlockedIncrement(&Filters->RefCount);
+    return Filters;
+}
+
+static
+VOID
+EtwpReleaseEnableFilters(IN_opt_ PETWP_ENABLE_FILTERS Filters)
+{
+    if (Filters && InterlockedDecrement(&Filters->RefCount) == 0)
+        ExFreePoolWithTag(Filters, ETWP_FILTERS_TAG);
+}
+
+/* Validates the descriptors and copies them plus every filter blob into one
+   kernel-owned allocation: no controller pointers are kept, the descriptor
+   Ptr fields are rewritten to the captured data, and the exact sizes are
+   preserved. Fails without partial state on any invalid descriptor. */
+static
+NTSTATUS
+EtwpCaptureEnableFilters(
+    _In_reads_(DescCount) PEVENT_FILTER_DESCRIPTOR Descs,
+    _In_ ULONG DescCount,
+    _Out_ PETWP_ENABLE_FILTERS *Captured)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    PETWP_ENABLE_FILTERS Store;
+    PUCHAR Blobs;
+    SIZE_T Total, BlobBytes = 0;
+    ULONG i;
+
+    *Captured = NULL;
+    for (i = 0; i < DescCount; i++)
+    {
+        if (Descs[i].Size > MAX_EVENT_FILTER_DATA_SIZE || !EtwpFilterTypeKnown(Descs[i].Type) ||
+            (Descs[i].Size && !Descs[i].Ptr))
+            return STATUS_INVALID_PARAMETER;
+        BlobBytes += Descs[i].Size;
+    }
+
+    Total = FIELD_OFFSET(ETWP_ENABLE_FILTERS, Descs) +
+            (SIZE_T)DescCount * sizeof(EVENT_FILTER_DESCRIPTOR) + BlobBytes;
+    Store = ExAllocatePoolZero(PagedPool, Total, ETWP_FILTERS_TAG);
+    if (!Store)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Store->RefCount = 1;
+    Store->Count = DescCount;
+    RtlCopyMemory(Store->Descs, Descs, DescCount * sizeof(EVENT_FILTER_DESCRIPTOR));
+    Blobs = (PUCHAR)(Store->Descs + DescCount);
+    BlobBytes = 0;
+    for (i = 0; i < DescCount; i++)
+    {
+        if (Store->Descs[i].Size)
+        {
+            _SEH2_TRY
+            {
+                RtlCopyMemory(Blobs + BlobBytes, (PVOID)(ULONG_PTR)Descs[i].Ptr, Store->Descs[i].Size);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            if (!NT_SUCCESS(Status))
+            {
+                ExFreePoolWithTag(Store, ETWP_FILTERS_TAG);
+                return Status;
+            }
+        }
+        Store->Descs[i].Ptr = (ULONGLONG)(ULONG_PTR)(Blobs + BlobBytes);
+        BlobBytes += Store->Descs[i].Size;
+    }
+
+    *Captured = Store;
+    return STATUS_SUCCESS;
+}
+
+/* Compacts the session array away and drops the entry's filters reference;
+   the allocation survives a callback run that borrowed one */
+static
+VOID
+EtwpRemoveSessionEntryLocked(IN PETWP_PROVIDER Provider, IN ULONG Index)
+{
+    EtwpReleaseEnableFilters(Provider->Sessions[Index].Filters);
+    Provider->Sessions[Index] = Provider->Sessions[--Provider->SessionCount];
+}
+
 /* --------------------------------------------------------------------------
  * Enable control (NtTraceControl EtwEnableGuidCode)
  * -------------------------------------------------------------------------- */
@@ -303,14 +440,17 @@ EtwpEnableGuid(
     _In_ KPROCESSOR_MODE PreviousMode)
 {
     ETW_ENABLE_PARAMETERS Params;
-    PETWP_PROVIDER Provider;
+    EVENT_FILTER_DESCRIPTOR DescArray[MAX_EVENT_FILTERS_COUNT];
+    PETWP_ENABLE_FILTERS Filters = NULL;
+    PETWP_ENABLE_FILTERS RunFilters = NULL;
+    PETWP_PROVIDER Provider = NULL;
     PETWP_CALLBACK Callbacks = NULL;
-    ULONG Count = 0, i, CallbackCode = 0;
+    ULONG Count = 0, CallbackCode = 0, DescBytes = 0, i;
     NTSTATUS Status = STATUS_SUCCESS;
 
     PAGED_CODE();
 
-    if (!InBuffer || InBufferLen != sizeof(Params))
+    if (!InBuffer || InBufferLen < sizeof(Params))
         return STATUS_INVALID_PARAMETER;
     _SEH2_TRY
     {
@@ -324,8 +464,48 @@ EtwpEnableGuid(
     }
     _SEH2_END;
 
+    if (Params.Version != ENABLE_TRACE_PARAMETERS_VERSION &&
+        Params.Version != ENABLE_TRACE_PARAMETERS_VERSION_2)
+        return STATUS_INVALID_PARAMETER;
     if (Params.ControlCode > EVENT_CONTROL_CODE_CAPTURE_STATE)
         return STATUS_INVALID_PARAMETER;
+    if (Params.ControlCode != EVENT_CONTROL_CODE_DISABLE_PROVIDER)
+    {
+        if (Params.EnableProperty & ~ETWP_KNOWN_ENABLE_PROPERTIES)
+            return STATUS_INVALID_PARAMETER;
+        /* none of the known properties can be honoured yet (no capture
+           infrastructure for SID, TS_ID, stack walks, PSM key or keyword-0
+           semantics): refuse instead of silently accepting */
+        if (Params.EnableProperty & ETWP_KNOWN_ENABLE_PROPERTIES)
+            return STATUS_NOT_SUPPORTED;
+    }
+
+    if (Params.EnableFilterDescCount &&
+        Params.ControlCode != EVENT_CONTROL_CODE_DISABLE_PROVIDER)
+    {
+        if (Params.EnableFilterDescCount > MAX_EVENT_FILTERS_COUNT)
+            return STATUS_INVALID_PARAMETER;
+        DescBytes = Params.EnableFilterDescCount * sizeof(EVENT_FILTER_DESCRIPTOR);
+        if (InBufferLen - sizeof(Params) != DescBytes)
+            return STATUS_INVALID_PARAMETER;
+        _SEH2_TRY
+        {
+            if (PreviousMode != KernelMode)
+                ProbeForRead((PUCHAR)InBuffer + sizeof(Params), DescBytes, sizeof(ULONG));
+            RtlCopyMemory(DescArray, (PUCHAR)InBuffer + sizeof(Params), DescBytes);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+        Status = EtwpCaptureEnableFilters(DescArray, Params.EnableFilterDescCount, &Filters);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+    else if (InBufferLen != sizeof(Params))
+        return STATUS_INVALID_PARAMETER;
+
     if (Params.ControlCode != EVENT_CONTROL_CODE_DISABLE_PROVIDER && !EtwpLoggerExists(Params.LoggerId))
         return STATUS_WMI_INSTANCE_NOT_FOUND;
 
@@ -353,12 +533,17 @@ EtwpEnableGuid(
                 Status = STATUS_TOO_MANY_SESSIONS;
                 goto out;
             }
+            RtlZeroMemory(&Provider->Sessions[Provider->SessionCount],
+                          sizeof(ETWP_SESSION_ENABLE));
             Provider->SessionCount++;
         }
         Provider->Sessions[i].LoggerId = Params.LoggerId;
         Provider->Sessions[i].Level = Params.Level;
         Provider->Sessions[i].MatchAny = Params.MatchAnyKeyword;
         Provider->Sessions[i].MatchAll = Params.MatchAllKeyword;
+        EtwpReleaseEnableFilters(Provider->Sessions[i].Filters);
+        Provider->Sessions[i].Filters = Filters;   /* takes the captured reference */
+        Filters = NULL;
         /*
          * A stop that unlinked the session before this point sweeps the providers
          * only later or already did: test again while the entry is visible, so
@@ -367,17 +552,18 @@ EtwpEnableGuid(
          */
         if (!EtwpLoggerExists(Params.LoggerId))
         {
-            Provider->Sessions[i] = Provider->Sessions[--Provider->SessionCount];
+            EtwpRemoveSessionEntryLocked(Provider, i);
             Status = STATUS_WMI_INSTANCE_NOT_FOUND;
             goto out;
         }
         CallbackCode = EVENT_CONTROL_CODE_ENABLE_PROVIDER;
+        RunFilters = EtwpReferenceEnableFilters(Provider->Sessions[i].Filters);
         break;
 
     case EVENT_CONTROL_CODE_DISABLE_PROVIDER:
         if (i == Provider->SessionCount)
             goto out;   /* not enabled for that session: nothing to do */
-        Provider->Sessions[i] = Provider->Sessions[--Provider->SessionCount];
+        EtwpRemoveSessionEntryLocked(Provider, i);
         CallbackCode = Provider->SessionCount ? EVENT_CONTROL_CODE_ENABLE_PROVIDER
                                               : EVENT_CONTROL_CODE_DISABLE_PROVIDER;
         break;
@@ -389,6 +575,7 @@ EtwpEnableGuid(
             goto out;
         }
         CallbackCode = EVENT_CONTROL_CODE_CAPTURE_STATE;
+        RunFilters = EtwpReferenceEnableFilters(Provider->Sessions[i].Filters);
         break;
     }
 
@@ -400,7 +587,10 @@ out:
     KeLeaveCriticalRegion();
 
     if (NT_SUCCESS(Status) && Provider)
-        EtwpRunCallbacks(Provider, Callbacks, Count);
+        EtwpRunCallbacks(Provider, Callbacks, Count, RunFilters, &Params.SourceId);
+    else
+        EtwpReleaseEnableFilters(RunFilters);
+    EtwpReleaseEnableFilters(Filters);   /* non-NULL only when never attached */
     return Status;
 }
 
@@ -428,7 +618,7 @@ EtwpProvidersLoggerStopped(
             {
                 if (Candidate->Sessions[i].LoggerId == LoggerId)
                 {
-                    Candidate->Sessions[i] = Candidate->Sessions[--Candidate->SessionCount];
+                    EtwpRemoveSessionEntryLocked(Candidate, i);
                     EtwpRecomputeAggregate(Candidate);
                     Callbacks = EtwpCollectCallbacksLocked(Candidate,
                                                            Candidate->SessionCount ? EVENT_CONTROL_CODE_ENABLE_PROVIDER
@@ -444,7 +634,7 @@ EtwpProvidersLoggerStopped(
 
         if (!Provider)
             break;
-        EtwpRunCallbacks(Provider, Callbacks, Count);
+        EtwpRunCallbacks(Provider, Callbacks, Count, NULL, &EtwpNullGuid);
     }
 }
 
@@ -771,7 +961,7 @@ registered:
         ExReleasePushLockShared(&EtwpProviderLock);
         KeLeaveCriticalRegion();
         if (Count)
-            EtwpRunCallbacks(Provider, Callbacks, Count);
+            EtwpRunCallbacks(Provider, Callbacks, Count, NULL, &EtwpNullGuid);
     }
     return STATUS_SUCCESS;
 }
