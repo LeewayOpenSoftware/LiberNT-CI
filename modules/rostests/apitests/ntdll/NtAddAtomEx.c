@@ -182,6 +182,103 @@ TestInvalidParameters(
 }
 
 static VOID
+TestExtendedValidation(
+    _In_ PNT_ADD_ATOM_EX AddAtomEx)
+{
+    ATOM_BASIC_BUFFER Basic;
+    WCHAR LongName[257];
+    WCHAR Name[64];
+    RTL_ATOM Atom;
+    NTSTATUS Status;
+    ULONG Index;
+
+    for (Index = 0; Index < ARRAYSIZE(LongName) - 1; Index++)
+        LongName[Index] = L'A';
+    LongName[ARRAYSIZE(LongName) - 1] = UNICODE_NULL;
+
+    Atom = 0;
+    Status = AddAtomEx(LongName, 509, &Atom, ATOM_FLAG_NONE);
+    trace("509-byte name -> %#lx, atom %#x\n", Status, Atom);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        Status = QueryBasic(Atom, &Basic);
+        ok_ntstatus(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+            ok_hex(Basic.Information.NameLength, 508);
+        NtDeleteAtom(Atom);
+    }
+
+    Atom = 0xABCD;
+    Status = AddAtomEx(LongName, 511, &Atom, ATOM_FLAG_NONE);
+    trace("511-byte name -> %#lx, atom %#x\n", Status, Atom);
+    ok_ntstatus(Status, STATUS_INVALID_PARAMETER);
+    ok_hex(Atom, 0xABCD);
+
+    Atom = 0xABCD;
+    Status = AddAtomEx((PCWSTR)(ULONG_PTR)0x10001,
+                       sizeof(WCHAR),
+                       &Atom,
+                       ATOM_FLAG_NONE);
+    trace("misaligned input -> %#lx, atom %#x\n", Status, Atom);
+    ok_ntstatus(Status, STATUS_DATATYPE_MISALIGNMENT);
+    ok_hex(Atom, 0xABCD);
+
+    Atom = 0xABCD;
+    Status = AddAtomEx(L"#49152", 7 * sizeof(WCHAR), &Atom, ATOM_FLAG_NONE);
+    trace("#49152 -> %#lx, atom %#x\n", Status, Atom);
+    ok_ntstatus(Status, STATUS_INVALID_PARAMETER);
+    ok_hex(Atom, 0xABCD);
+
+    Atom = 0;
+    Status = AddAtomEx(L"#0007", 6 * sizeof(WCHAR), &Atom, ATOM_FLAG_NONE);
+    trace("#0007 -> %#lx, atom %#x\n", Status, Atom);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    ok_hex(Atom, 7);
+
+    Atom = 0;
+    Status = AddAtomEx(L"#123x", 6 * sizeof(WCHAR), &Atom, ATOM_FLAG_NONE);
+    trace("#123x -> %#lx, atom %#x\n", Status, Atom);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        ok(Atom >= 0xC000, "#123x must be a string atom, got %#x\n", Atom);
+        NtDeleteAtom(Atom);
+    }
+
+    /* Win11-pending rows: record, do not pin. */
+    Atom = 0;
+    Status = AddAtomEx(L"#0", 3 * sizeof(WCHAR), &Atom, ATOM_FLAG_NONE);
+    trace("#0 -> %#lx, atom %#x (Win11 pending)\n", Status, Atom);
+    if (NT_SUCCESS(Status) && Atom >= 0xC000) NtDeleteAtom(Atom);
+
+    Atom = 0;
+    Status = AddAtomEx(L"#65537", 7 * sizeof(WCHAR), &Atom, ATOM_FLAG_NONE);
+    trace("#65537 -> %#lx, atom %#x (Win11 pending)\n", Status, Atom);
+    if (NT_SUCCESS(Status) && Atom >= 0xC000) NtDeleteAtom(Atom);
+
+    Atom = 0;
+    Status = AddAtomEx(L"#-1", 4 * sizeof(WCHAR), &Atom, ATOM_FLAG_NONE);
+    trace("#-1 -> %#lx, atom %#x (Win11 pending)\n", Status, Atom);
+    if (NT_SUCCESS(Status) && Atom >= 0xC000) NtDeleteAtom(Atom);
+
+    Atom = 0;
+    Status = AddAtomEx(L"#+1", 4 * sizeof(WCHAR), &Atom, ATOM_FLAG_NONE);
+    trace("#+1 -> %#lx, atom %#x (Win11 pending)\n", Status, Atom);
+    if (NT_SUCCESS(Status) && Atom >= 0xC000) NtDeleteAtom(Atom);
+
+    /* Pointer-form integer atoms are only reachable from kernel mode. */
+    Atom = 0xABCD;
+    Status = AddAtomEx((PCWSTR)(ULONG_PTR)123, 0, &Atom, ATOM_FLAG_NONE);
+    trace("pointer-form from user mode -> %#lx, atom %#x\n", Status, Atom);
+    ok_hex(Atom, 0xABCD);
+
+    MakeName(Name, ARRAYSIZE(Name), L"cleanup");
+    Status = NtFindAtom(Name, (ULONG)(wcslen(Name) * sizeof(WCHAR)), &Atom);
+    ok_ntstatus(Status, STATUS_OBJECT_NAME_NOT_FOUND);
+}
+
+static VOID
 TestFlagsAndLifetime(
     _In_ PNT_ADD_ATOM_EX AddAtomEx)
 {
@@ -437,6 +534,7 @@ START_TEST(NtAddAtomEx)
     }
 
     TestInvalidParameters(AddAtomEx);
+    TestExtendedValidation(AddAtomEx);
     TestFlagsAndLifetime(AddAtomEx);
     TestConcurrency(AddAtomEx);
     TestExhaustion(AddAtomEx);
