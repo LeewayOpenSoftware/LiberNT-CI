@@ -753,6 +753,7 @@ RtlpLfhValidate(PHEAP Heap, PVOID Ptr)
     {
         RtlpDecodeHeapEntry(Heap, Entry, &Header);
         Valid = (Header.Flags & HEAP_ENTRY_BUSY) &&
+                RtlpHeapEntryValid(Heap, &Header) &&
                 Header.UnusedBytes <= RtlpLfhUsableSize(Block);
     }
     return Valid;
