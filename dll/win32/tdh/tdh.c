@@ -304,6 +304,8 @@ TlgParseEventFields(IN OUT TLG_READER *Reader, IN OUT PTLG_DECODE Decode)
             Queue[Tail++] = (USHORT)(Child - 1);
         }
     }
+
+    Decode->Pool = NULL; /* the stack storage dies with this frame */
     return TRUE;
 }
 
