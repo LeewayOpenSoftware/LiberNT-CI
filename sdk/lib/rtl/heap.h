@@ -64,6 +64,9 @@
 /* Segment flags */
 #define HEAP_USER_ALLOCATED    0x1
 
+/* HEAP.EncodeFlagMask: the entry headers of this heap are stored XOR HEAP.Encoding */
+#define HEAP_ENCODE_ENTRIES    0x00100000
+
 /* A handy inline to distinguis normal heap, special "debug heap" and special "page heap" */
 FORCEINLINE BOOLEAN
 RtlpHeapIsSpecial(ULONG Flags)
@@ -293,6 +296,219 @@ typedef struct _HEAP_SEGMENT
     HEAP_SEGMENT_MEMBERS;
 } HEAP_SEGMENT, *PHEAP_SEGMENT;
 
+/*
+ * Entry header protection. Every HEAP_ENTRY the heap owns (block headers, free
+ * entries, segment and heap entries, uncommitted-range guards, virtual block
+ * headers and LFH slot headers) keeps its 8-byte code word XOR HEAP.Encoding,
+ * and SmallTagIndex carries LOBYTE(Size) ^ HIBYTE(Size) ^ Flags. Readers decode
+ * into a local copy; writers go through the setters, which recompute the
+ * checksum. A header that fails the checksum at a metadata decision is a
+ * corruption and ends the process through RtlpHeapCorruption.
+ */
+extern BOOLEAN RtlpHeapTerminateOnCorruption;
+
+VOID NTAPI
+RtlpHeapGenerateEncoding(PHEAP Heap);
+
+DECLSPEC_NORETURN
+VOID NTAPI
+RtlpHeapCorruption(PHEAP Heap, PVOID Address);
+
+DECLSPEC_NORETURN
+VOID NTAPI
+RtlpHeapTerminate(PHEAP Heap, PVOID Address);
+
+BOOLEAN NTAPI
+RtlpHeapInvalidBlock(PHEAP Heap, PVOID Ptr);
+
+FORCEINLINE
+UCHAR
+RtlpHeapEntryChecksum(PHEAP_ENTRY Entry)
+{
+    return (UCHAR)(LOBYTE(Entry->Size) ^ HIBYTE(Entry->Size) ^ Entry->Flags);
+}
+
+FORCEINLINE
+ULONGLONG
+RtlpDecodeHeapEntryWord(PHEAP Heap, ULONGLONG Word)
+{
+    return Word ^ Heap->Encoding.AgregateCode;
+}
+
+FORCEINLINE
+VOID
+RtlpDecodeHeapEntry(PHEAP Heap, PVOID Entry, PHEAP_ENTRY Decoded)
+{
+    Decoded->AgregateCode = ((PHEAP_ENTRY)Entry)->AgregateCode ^ Heap->Encoding.AgregateCode;
+}
+
+FORCEINLINE
+VOID
+RtlpEncodeHeapEntry(PHEAP Heap, PVOID Entry, PHEAP_ENTRY Clear)
+{
+    Clear->SmallTagIndex = RtlpHeapEntryChecksum(Clear);
+    ((PHEAP_ENTRY)Entry)->AgregateCode = Clear->AgregateCode ^ Heap->Encoding.AgregateCode;
+}
+
+FORCEINLINE
+BOOLEAN
+RtlpHeapEncodingActive(PHEAP Heap)
+{
+    return (Heap->EncodeFlagMask & HEAP_ENCODE_ENTRIES) != 0;
+}
+
+/*
+ * A decoded header is accepted when the heap is not yet encoding (the accessor
+ * funnel is in place but the key is zero and the checksum is not enforced) or
+ * when its checksum matches. Enforcement therefore turns on with the key.
+ */
+FORCEINLINE
+BOOLEAN
+RtlpHeapEntryValid(PHEAP Heap, PHEAP_ENTRY Decoded)
+{
+    return !RtlpHeapEncodingActive(Heap) ||
+           Decoded->SmallTagIndex == RtlpHeapEntryChecksum(Decoded);
+}
+
+FORCEINLINE
+VOID
+RtlpCheckHeapEntry(PHEAP Heap, PVOID Entry, PHEAP_ENTRY Decoded)
+{
+    RtlpDecodeHeapEntry(Heap, Entry, Decoded);
+    if (!RtlpHeapEntryValid(Heap, Decoded))
+        RtlpHeapCorruption(Heap, Entry);
+}
+
+FORCEINLINE
+USHORT
+RtlpEntrySize(PHEAP Heap, PVOID Entry)
+{
+    HEAP_ENTRY Decoded;
+
+    RtlpDecodeHeapEntry(Heap, Entry, &Decoded);
+    return Decoded.Size;
+}
+
+FORCEINLINE
+UCHAR
+RtlpEntryFlags(PHEAP Heap, PVOID Entry)
+{
+    HEAP_ENTRY Decoded;
+
+    RtlpDecodeHeapEntry(Heap, Entry, &Decoded);
+    return Decoded.Flags;
+}
+
+FORCEINLINE
+USHORT
+RtlpEntryPreviousSize(PHEAP Heap, PVOID Entry)
+{
+    HEAP_ENTRY Decoded;
+
+    RtlpDecodeHeapEntry(Heap, Entry, &Decoded);
+    return Decoded.PreviousSize;
+}
+
+FORCEINLINE
+UCHAR
+RtlpEntrySegmentOffset(PHEAP Heap, PVOID Entry)
+{
+    HEAP_ENTRY Decoded;
+
+    RtlpDecodeHeapEntry(Heap, Entry, &Decoded);
+    return Decoded.SegmentOffset;
+}
+
+FORCEINLINE
+UCHAR
+RtlpEntryUnusedBytes(PHEAP Heap, PVOID Entry)
+{
+    HEAP_ENTRY Decoded;
+
+    RtlpDecodeHeapEntry(Heap, Entry, &Decoded);
+    return Decoded.UnusedBytes;
+}
+
+FORCEINLINE
+USHORT
+RtlpCheckedEntrySize(PHEAP Heap, PVOID Entry)
+{
+    HEAP_ENTRY Decoded;
+
+    RtlpCheckHeapEntry(Heap, Entry, &Decoded);
+    return Decoded.Size;
+}
+
+FORCEINLINE
+VOID
+RtlpEntryWrite(PHEAP Heap, PVOID Entry, USHORT Size, UCHAR Flags, USHORT PreviousSize, UCHAR SegmentOffset, UCHAR UnusedBytes)
+{
+    HEAP_ENTRY Clear;
+
+    Clear.AgregateCode = 0;
+    Clear.Size = Size;
+    Clear.Flags = Flags;
+    Clear.PreviousSize = PreviousSize;
+    Clear.SegmentOffset = SegmentOffset;
+    Clear.UnusedBytes = UnusedBytes;
+    RtlpEncodeHeapEntry(Heap, Entry, &Clear);
+}
+
+FORCEINLINE
+VOID
+RtlpEntrySetSize(PHEAP Heap, PVOID Entry, USHORT Size)
+{
+    HEAP_ENTRY Clear;
+
+    RtlpDecodeHeapEntry(Heap, Entry, &Clear);
+    Clear.Size = Size;
+    RtlpEncodeHeapEntry(Heap, Entry, &Clear);
+}
+
+FORCEINLINE
+VOID
+RtlpEntrySetFlags(PHEAP Heap, PVOID Entry, UCHAR Flags)
+{
+    HEAP_ENTRY Clear;
+
+    RtlpDecodeHeapEntry(Heap, Entry, &Clear);
+    Clear.Flags = Flags;
+    RtlpEncodeHeapEntry(Heap, Entry, &Clear);
+}
+
+FORCEINLINE
+VOID
+RtlpEntrySetPreviousSize(PHEAP Heap, PVOID Entry, USHORT PreviousSize)
+{
+    HEAP_ENTRY Clear;
+
+    RtlpDecodeHeapEntry(Heap, Entry, &Clear);
+    Clear.PreviousSize = PreviousSize;
+    RtlpEncodeHeapEntry(Heap, Entry, &Clear);
+}
+
+FORCEINLINE
+VOID
+RtlpEntrySetSegmentOffset(PHEAP Heap, PVOID Entry, UCHAR SegmentOffset)
+{
+    HEAP_ENTRY Clear;
+
+    RtlpDecodeHeapEntry(Heap, Entry, &Clear);
+    Clear.SegmentOffset = SegmentOffset;
+    RtlpEncodeHeapEntry(Heap, Entry, &Clear);
+}
+
+FORCEINLINE
+VOID
+RtlpEntrySetUnusedBytes(PHEAP Heap, PVOID Entry, UCHAR UnusedBytes)
+{
+    HEAP_ENTRY Clear;
+
+    RtlpDecodeHeapEntry(Heap, Entry, &Clear);
+    Clear.UnusedBytes = UnusedBytes;
+    RtlpEncodeHeapEntry(Heap, Entry, &Clear);
+}
+
 FORCEINLINE
 PHEAP_SEGMENT
 RtlpHeapSegmentFromAddress(PHEAP Heap, PVOID Address)
@@ -361,7 +577,7 @@ RtlpCoalesceFreeBlocks (PHEAP Heap,
                         BOOLEAN Remove);
 
 PHEAP_ENTRY_EXTRA NTAPI
-RtlpGetExtraStuffPointer(PHEAP_ENTRY HeapEntry);
+RtlpGetExtraStuffPointer(PHEAP Heap, PHEAP_ENTRY HeapEntry);
 
 BOOLEAN NTAPI
 RtlpValidateHeap(PHEAP Heap, BOOLEAN ForceValidation);
@@ -534,13 +750,13 @@ typedef struct _RTLP_LFH_SLOT
 } RTLP_LFH_SLOT, *PRTLP_LFH_SLOT;
 
 PHEAP
-RtlpLfhOwner(PVOID Ptr);
+RtlpLfhOwner(PHEAP Heap, PVOID Ptr);
 
 PHEAP
-RtlpLfhLookup(PVOID Ptr, PRTLP_LFH_SLOT Slot);
+RtlpLfhLookup(PHEAP Heap, PVOID Ptr, PRTLP_LFH_SLOT Slot);
 
 BOOLEAN
-RtlpLfhFree(PVOID Ptr, PRTLP_LFH_SLOT Slot);
+RtlpLfhFree(PHEAP Heap, PVOID Ptr, PRTLP_LFH_SLOT Slot);
 
 SIZE_T
 RtlpLfhSize(PHEAP Heap, PVOID Ptr);
