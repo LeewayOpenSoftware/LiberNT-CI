@@ -13,6 +13,7 @@
 #include <apitest.h>
 #include <ndk/exfuncs.h>
 #include <ndk/rtlfuncs.h>
+#include <pseh/pseh2.h>
 
 /* Classes are given as numbers on purpose: this is a probe of what the system
  * answers for them, whatever the local headers name them. */
@@ -84,6 +85,9 @@ static void ProbePairCall(const char *Name, HANDLE Pair, PFN_H Fn)
     {
         trace("PROBE %s -> BLOCKED (5 s)\n", Name);
         TerminateThread(Thread, 0);
+        /* TerminateThread is asynchronous: wait until the worker is really
+         * gone before Run goes out of scope. */
+        WaitForSingleObject(Thread, INFINITE);
     }
     else
     {
@@ -119,11 +123,23 @@ static void TestEventPairs(void)
         /* Also try the exact minimal access and a NULL attribute block, so the
          * status is not an artefact of the access mask. */
         Status = Create(&Pair, SYNCHRONIZE, NULL);
-        trace("PROBE NtCreateEventPair SYNCHRONIZE NULL oa -> 0x%lx\n", Status);
+        trace("PROBE NtCreateEventPair SYNCHRONIZE NULL oa -> 0x%lx handle=%p\n", Status, Pair);
     }
 
     /* named + open */
-    RtlInitUnicodeString(&Name, L"\\BaseNamedObjects\\np02-evpair");
+    /* The session's own BaseNamedObjects: the global one needs SeCreateGlobalPrivilege. */
+    {
+        static WCHAR NameBuf[96];
+        DWORD Own = 0;
+
+        ProcessIdToSessionId(GetCurrentProcessId(), &Own);
+        if (Own == 0)
+            wcscpy(NameBuf, L"\\BaseNamedObjects\\np02-evpair");
+        else
+            _snwprintf(NameBuf, _countof(NameBuf) - 1, L"\\Sessions\\%lu\\BaseNamedObjects\\np02-evpair", Own);
+        RtlInitUnicodeString(&Name, NameBuf);
+        trace("PROBE named pair path %ls\n", NameBuf);
+    }
     InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
     {
         HANDLE Named = NULL;
@@ -197,11 +213,8 @@ static void TestRetiredClasses(void)
 
 /* --------------------------------------------------------------- NT4 heap calls */
 
-static LONG HeapFilter(DWORD Code, DWORD *Out)
-{
-    *Out = Code;
-    return EXCEPTION_EXECUTE_HANDLER;
-}
+/* Run Call() under SEH; on an exception *Res gets the marker and *Exc the code. */
+#define PROBE_EXC_MARK 0xE000E000
 
 static void TestHeapCalls(void)
 {
@@ -212,7 +225,6 @@ static void TestHeapCalls(void)
     PVOID Heap = RtlCreateHeap(HEAP_GROWABLE, NULL, 0, 0, NULL, NULL);
     PVOID Block;
     ULONG UsageBuf[64];
-    DWORD Exc = 0;
 
     if (!Heap)
     {
@@ -223,35 +235,95 @@ static void TestHeapCalls(void)
 
     if (Usage)
     {
-        ULONG Ret = 0;
+        volatile ULONG Ret = 0;
+        volatile ULONG Exc = 0;
+
         RtlZeroMemory(UsageBuf, sizeof(UsageBuf));
         UsageBuf[0] = sizeof(UsageBuf); /* leading Bytes field, as the contract is described */
-        __try { Ret = Usage(Heap, 0, UsageBuf); }
-        __except (HeapFilter(GetExceptionCode(), &Exc)) { trace("PROBE RtlUsageHeap EXCEPTION 0x%lx\n", Exc); Ret = 0xE000E000; }
+        _SEH2_TRY
+        {
+            Ret = Usage(Heap, 0, UsageBuf);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Exc = _SEH2_GetExceptionCode();
+            Ret = PROBE_EXC_MARK;
+        }
+        _SEH2_END;
+        if (Ret == PROBE_EXC_MARK)
+            trace("PROBE RtlUsageHeap EXCEPTION 0x%lx\n", Exc);
         trace("PROBE RtlUsageHeap(private, 0, buf) -> 0x%lx first=0x%lx\n", Ret, UsageBuf[0]);
-        __try { Ret = Usage(Heap, 0, NULL); }
-        __except (HeapFilter(GetExceptionCode(), &Exc)) { trace("PROBE RtlUsageHeap NULL EXCEPTION 0x%lx\n", Exc); Ret = 0xE000E000; }
+
+        Exc = 0;
+        _SEH2_TRY
+        {
+            Ret = Usage(Heap, 0, NULL);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Exc = _SEH2_GetExceptionCode();
+            Ret = PROBE_EXC_MARK;
+        }
+        _SEH2_END;
+        if (Ret == PROBE_EXC_MARK)
+            trace("PROBE RtlUsageHeap NULL EXCEPTION 0x%lx\n", Exc);
         trace("PROBE RtlUsageHeap(private, 0, NULL) -> 0x%lx\n", Ret);
     }
     if (Extend)
     {
-        NTSTATUS Status;
-        __try { Status = Extend(Heap, 0, NULL, 0); }
-        __except (HeapFilter(GetExceptionCode(), &Exc)) { trace("PROBE RtlExtendHeap EXCEPTION 0x%lx\n", Exc); Status = 0xE000E000; }
+        volatile NTSTATUS Status = 0;
+        volatile ULONG Exc = 0;
+
+        _SEH2_TRY
+        {
+            Status = Extend(Heap, 0, NULL, 0);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Exc = _SEH2_GetExceptionCode();
+            Status = PROBE_EXC_MARK;
+        }
+        _SEH2_END;
+        if (Status == (NTSTATUS)PROBE_EXC_MARK)
+            trace("PROBE RtlExtendHeap EXCEPTION 0x%lx\n", Exc);
         trace("PROBE RtlExtendHeap(private, 0, NULL, 0) -> 0x%lx\n", Status);
     }
     if (Protect)
     {
-        BOOLEAN R1 = 0xEE, R2 = 0xEE;
-        __try { R1 = Protect(Heap, FALSE); R2 = Protect(Heap, TRUE); Protect(Heap, FALSE); }
-        __except (HeapFilter(GetExceptionCode(), &Exc)) { trace("PROBE RtlProtectHeap EXCEPTION 0x%lx\n", Exc); }
+        volatile BOOLEAN R1 = 0xEE, R2 = 0xEE;
+        volatile ULONG Exc = 0;
+
+        _SEH2_TRY
+        {
+            R1 = Protect(Heap, FALSE);
+            R2 = Protect(Heap, TRUE);
+            Protect(Heap, FALSE);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Exc = _SEH2_GetExceptionCode();
+            trace("PROBE RtlProtectHeap EXCEPTION 0x%lx\n", Exc);
+        }
+        _SEH2_END;
         trace("PROBE RtlProtectHeap(private, FALSE)=%u then TRUE=%u (restored FALSE)\n", R1, R2);
     }
     if (Zero)
     {
-        NTSTATUS Status;
-        __try { Status = Zero(Heap, 0); }
-        __except (HeapFilter(GetExceptionCode(), &Exc)) { trace("PROBE RtlZeroHeap EXCEPTION 0x%lx\n", Exc); Status = 0xE000E000; }
+        volatile NTSTATUS Status = 0;
+        volatile ULONG Exc = 0;
+
+        _SEH2_TRY
+        {
+            Status = Zero(Heap, 0);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Exc = _SEH2_GetExceptionCode();
+            Status = PROBE_EXC_MARK;
+        }
+        _SEH2_END;
+        if (Status == (NTSTATUS)PROBE_EXC_MARK)
+            trace("PROBE RtlZeroHeap EXCEPTION 0x%lx\n", Exc);
         trace("PROBE RtlZeroHeap(private, 0) -> 0x%lx\n", Status);
     }
     if (Block)
@@ -269,6 +341,7 @@ static void TestReflection(void)
     HKEY Key = NULL;
     LONG Err;
     BOOL Disabled;
+    BOOL InitialDisabled = 0;
 
     if (!Adv)
         Adv = LoadLibraryW(L"advapi32.dll");
@@ -289,6 +362,7 @@ static void TestReflection(void)
     SetLastError(0xBEEF);
     Err = Query(Key, &Disabled);
     trace("PROBE RegQueryReflectionKey(HKLM\\SOFTWARE) -> %ld disabled=%d lasterr=%lu\n", Err, Disabled, GetLastError());
+    InitialDisabled = (Err == ERROR_SUCCESS) ? Disabled : 0;
     Err = Disable(Key);
     trace("PROBE RegDisableReflectionKey(HKLM\\SOFTWARE) -> %ld\n", Err);
     Disabled = 0x55;
@@ -296,6 +370,11 @@ static void TestReflection(void)
     trace("PROBE RegQueryReflectionKey after disable -> %ld disabled=%d\n", Err, Disabled);
     Err = Enable(Key);
     trace("PROBE RegEnableReflectionKey(HKLM\\SOFTWARE) -> %ld\n", Err);
+    if (InitialDisabled)
+    {
+        Err = Disable(Key);
+        trace("PROBE restored the initial (disabled) state -> %ld\n", Err);
+    }
     Disabled = 0x55;
     Err = Query(Key, &Disabled);
     trace("PROBE RegQueryReflectionKey after enable -> %ld disabled=%d\n", Err, Disabled);
@@ -348,12 +427,36 @@ static void TestDosPathToSessionPath(void)
         LocalFree(OutA);
 
     OutW = (LPWSTR)(ULONG_PTR)0x1;
-    SetLastError(0xBEEF);
-    Ret = W(Own, NULL, &OutW);
-    trace("PROBE DosPathToSessionPathW(own, NULL path) -> %lu err=%lu\n", Ret, GetLastError());
-    SetLastError(0xBEEF);
-    Ret = W(Own, InW, NULL);
-    trace("PROBE DosPathToSessionPathW(own, path, NULL out) -> %lu err=%lu\n", Ret, GetLastError());
+    {
+        volatile DWORD Rv = 0, Err2 = 0, Exc = 0;
+
+        _SEH2_TRY
+        {
+            SetLastError(0xBEEF);
+            Rv = W(Own, NULL, &OutW);
+            Err2 = GetLastError();
+            trace("PROBE DosPathToSessionPathW(own, NULL path) -> %lu err=%lu\n", Rv, Err2);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Exc = _SEH2_GetExceptionCode();
+            trace("PROBE DosPathToSessionPathW(own, NULL path) EXCEPTION 0x%lx\n", Exc);
+        }
+        _SEH2_END;
+        _SEH2_TRY
+        {
+            SetLastError(0xBEEF);
+            Rv = W(Own, InW, NULL);
+            Err2 = GetLastError();
+            trace("PROBE DosPathToSessionPathW(own, path, NULL out) -> %lu err=%lu\n", Rv, Err2);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Exc = _SEH2_GetExceptionCode();
+            trace("PROBE DosPathToSessionPathW(own, path, NULL out) EXCEPTION 0x%lx\n", Exc);
+        }
+        _SEH2_END;
+    }
 }
 
 START_TEST(np02_legacy_probe)
