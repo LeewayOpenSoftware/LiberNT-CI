@@ -169,9 +169,9 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     /* TokenElevationType */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY),
     /* TokenLinkedToken */
-    IQS_SAME(TOKEN_LINKED_TOKEN, ULONG, ICIF_QUERY | ICIF_SET),
+    IQS_SAME(TOKEN_LINKED_TOKEN, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET),
     /* TokenElevation */
-    IQS_SAME(TOKEN_ELEVATION, ULONG, ICIF_QUERY),
+    IQS_SAME(TOKEN_ELEVATION, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenHasRestrictions */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY),
     /* TokenAccessInformation */
@@ -1682,7 +1682,14 @@ NtQueryInformationToken(
 
                 _SEH2_TRY
                 {
-                    if (TokenInformationLength >= RequiredLength)
+                    /* TokenElevation is fixed-size: a non-exact buffer yields
+                     * STATUS_INFO_LENGTH_MISMATCH with ReturnLength set, per Win11. */
+                    if (TokenInformationClass == TokenElevation &&
+                        TokenInformationLength != RequiredLength)
+                    {
+                        Status = STATUS_INFO_LENGTH_MISMATCH;
+                    }
+                    else if (TokenInformationLength >= RequiredLength)
                     {
                         *(PULONG)TokenInformation = Value;
                     }
@@ -1711,7 +1718,7 @@ NtQueryInformationToken(
                 DPRINT("NtQueryInformationToken(TokenLinkedToken)\n");
 
                 RequiredLength = sizeof(TOKEN_LINKED_TOKEN);
-                if (TokenInformationLength < RequiredLength)
+                if (TokenInformationLength != RequiredLength)
                 {
                     _SEH2_TRY
                     {
@@ -1721,7 +1728,7 @@ NtQueryInformationToken(
                     {
                     }
                     _SEH2_END;
-                    Status = STATUS_BUFFER_TOO_SMALL;
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
                     break;
                 }
 
