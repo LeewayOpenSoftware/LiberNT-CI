@@ -134,6 +134,7 @@ extern void func_NtSetValueKey(void);
 extern void func_NtSetVolumeInformationFile(void);
 extern void func_NtStartProfile(void);
 extern void func_NtSystemInformation(void);
+extern void func_SystemSessionProcessInformation(void);
 extern void func_NtTerminateThread(void);
 extern void func_NtUnloadDriver(void);
 extern void func_NtWnfState(void);
@@ -382,6 +383,7 @@ const struct test winetest_testlist[] =
     { "NtSetVolumeInformationFile",     func_NtSetVolumeInformationFile },
     { "NtStartProfile",                 func_NtStartProfile },
     { "NtSystemInformation",            func_NtSystemInformation },
+    { "SystemSessionProcessInformation", func_SystemSessionProcessInformation },
     { "NtTerminateThread",              func_NtTerminateThread },
     { "NtUnloadDriver",                 func_NtUnloadDriver },
     { "NtWnfState",                     func_NtWnfState },
