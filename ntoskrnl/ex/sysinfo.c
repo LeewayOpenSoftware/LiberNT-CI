@@ -1339,8 +1339,15 @@ ExpQuerySystemProcessInformation(
             Overflow = TRUE;
         }
 
-        /* Zero user's buffer */
-        if (!Overflow) RtlZeroMemory(Spi, Size);
+        /* Zero user's buffer. Class 53 writes only the empty-list terminator: Windows leaves
+           the bytes past the records as they were (the records themselves are copied whole) */
+        if (!Overflow)
+        {
+            if (FilterSession)
+                Spi->NextEntryOffset = 0;
+            else
+                RtlZeroMemory(Spi, Size);
+        }
 
         SystemProcess = PsIdleProcess;
         Process = SystemProcess;
