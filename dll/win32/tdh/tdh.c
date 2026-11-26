@@ -182,44 +182,51 @@ TlgParseFieldHeader(IN OUT TLG_READER *Reader, OUT PTLG_FIELD Field)
 }
 
 /* Result of one full metadata walk: the flattened field list. */
+typedef struct _TLG_NODE TLG_NODE;
 typedef struct _TLG_DECODE
 {
     TLG_FIELD Fields[TLG_MAX_FIELDS];
     ULONG Count;
     ULONG TopLevelCount;
+    TLG_NODE *Pool;      /* parse tree storage, owned per call */
+    USHORT PoolCount;
 } TLG_DECODE, *PTLG_DECODE;
 
 /* The stream nests struct members depth-first, but TRACE_EVENT_INFO requires
    each struct's direct members to be contiguous. The parse builds a small
    tree, then a breadth-first flatten lays members out contiguously. */
-typedef struct _TLG_NODE
+struct _TLG_NODE
 {
     TLG_FIELD Field;
     USHORT Parent;      /* pool index, 0xFFFF for a root */
     USHORT FirstChild;  /* pool index + 1, 0 for none */
     USHORT NextSibling; /* pool index + 1, 0 for none */
-} TLG_NODE;
-
-static TLG_NODE TlgPool[TLG_MAX_FIELDS];
-static USHORT TlgPoolCount;
+};
 
 static
 BOOLEAN
-TlgBuildNode(IN OUT TLG_READER *Reader, IN ULONG Depth, IN USHORT Parent, OUT PUSHORT NodeIndex)
+TlgBuildNode(IN OUT TLG_READER *Reader,
+             IN ULONG Depth,
+             IN USHORT Parent,
+             IN OUT PTLG_DECODE Decode,
+             OUT PUSHORT NodeIndex)
 {
     TLG_FIELD Field;
     USHORT MyIndex, ChildIndex, LastChild, i;
 
     if (!TlgParseFieldHeader(Reader, &Field))
         return FALSE;
-    if (TlgPoolCount >= TLG_MAX_FIELDS)
+    if (Decode->PoolCount >= TLG_MAX_FIELDS)
         return FALSE;
 
-    MyIndex = TlgPoolCount++;
-    TlgPool[MyIndex].Field = Field;
-    TlgPool[MyIndex].Parent = Parent;
-    TlgPool[MyIndex].FirstChild = 0;
-    TlgPool[MyIndex].NextSibling = 0;
+    if (Field.IsStruct)
+        Field.StructMembers = Field.OutType;
+
+    MyIndex = Decode->PoolCount++;
+    Decode->Pool[MyIndex].Field = Field;
+    Decode->Pool[MyIndex].Parent = Parent;
+    Decode->Pool[MyIndex].FirstChild = 0;
+    Decode->Pool[MyIndex].NextSibling = 0;
 
     if (Field.IsStruct)
     {
@@ -228,12 +235,12 @@ TlgBuildNode(IN OUT TLG_READER *Reader, IN ULONG Depth, IN USHORT Parent, OUT PU
         LastChild = 0xFFFF;
         for (i = 0; i < Field.OutType; i++)
         {
-            if (!TlgBuildNode(Reader, Depth + 1, MyIndex, &ChildIndex))
+            if (!TlgBuildNode(Reader, Depth + 1, MyIndex, Decode, &ChildIndex))
                 return FALSE;
             if (LastChild == 0xFFFF)
-                TlgPool[MyIndex].FirstChild = (USHORT)(ChildIndex + 1);
+                Decode->Pool[MyIndex].FirstChild = (USHORT)(ChildIndex + 1);
             else
-                TlgPool[LastChild].NextSibling = (USHORT)(ChildIndex + 1);
+                Decode->Pool[LastChild].NextSibling = (USHORT)(ChildIndex + 1);
             LastChild = ChildIndex;
         }
     }
@@ -246,12 +253,16 @@ static
 BOOLEAN
 TlgParseEventFields(IN OUT TLG_READER *Reader, IN OUT PTLG_DECODE Decode)
 {
+    TLG_NODE Pool[TLG_MAX_FIELDS];
     USHORT Queue[TLG_MAX_FIELDS];
     USHORT NodeToField[TLG_MAX_FIELDS];
     ULONG Head = 0, Tail = 0;
 
-    TlgPoolCount = 0;
+    /* the tree and the flatten state are per-call: consumers run this entry
+       point concurrently, so nothing may live in file-scope storage */
     RtlZeroMemory(Decode, sizeof(*Decode));
+    Decode->Pool = Pool;
+    Decode->PoolCount = 0;
 
     /* roots: the top-level field list runs to the end of the item */
     while (Reader->Ptr < Reader->End)
@@ -260,7 +271,7 @@ TlgParseEventFields(IN OUT TLG_READER *Reader, IN OUT PTLG_DECODE Decode)
 
         if (Tail >= TLG_MAX_FIELDS)
             return FALSE;
-        if (!TlgBuildNode(Reader, 0, 0xFFFF, &Root))
+        if (!TlgBuildNode(Reader, 0, 0xFFFF, Decode, &Root))
             return FALSE;
         Queue[Tail++] = Root;
         Decode->TopLevelCount++;
@@ -275,18 +286,18 @@ TlgParseEventFields(IN OUT TLG_READER *Reader, IN OUT PTLG_DECODE Decode)
         if (Decode->Count >= TLG_MAX_FIELDS)
             return FALSE;
         FieldIndex = (USHORT)Decode->Count++;
-        Decode->Fields[FieldIndex] = TlgPool[Node].Field;
+        Decode->Fields[FieldIndex] = Decode->Pool[Node].Field;
         Decode->Fields[FieldIndex].StructStart = 0;
         NodeToField[Node] = FieldIndex;
 
         /* the first appended child marks its parent's member run */
-        if (TlgPool[Node].Parent != 0xFFFF &&
-            Decode->Fields[NodeToField[TlgPool[Node].Parent]].StructStart == 0)
+        if (Decode->Pool[Node].Parent != 0xFFFF &&
+            Decode->Fields[NodeToField[Decode->Pool[Node].Parent]].StructStart == 0)
         {
-            Decode->Fields[NodeToField[TlgPool[Node].Parent]].StructStart = FieldIndex;
+            Decode->Fields[NodeToField[Decode->Pool[Node].Parent]].StructStart = FieldIndex;
         }
 
-        for (Child = TlgPool[Node].FirstChild; Child; Child = TlgPool[Child - 1].NextSibling)
+        for (Child = Decode->Pool[Node].FirstChild; Child; Child = Decode->Pool[Child - 1].NextSibling)
         {
             if (Tail >= TLG_MAX_FIELDS)
                 return FALSE;
