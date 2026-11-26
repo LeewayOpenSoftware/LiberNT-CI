@@ -2599,7 +2599,7 @@ NtSetInformationToken(
                 TOKEN_MANDATORY_LABEL CapturedLabel;
                 PSID_AND_ATTRIBUTES Integrity;
                 PSID NewSid = NULL, CapturedSid;
-                ULONG NewRid = 0, OldRid;
+                ULONG NewRid = 0, OldRid, Index;
                 BOOLEAN HasTcbPrivilege;
 
                 _SEH2_TRY
@@ -2670,6 +2670,18 @@ NtSetInformationToken(
                 }
 
                 RtlCopySid(RtlLengthSid(Integrity->Sid), Integrity->Sid, NewSid);
+                if (NewRid < OldRid)
+                {
+                    for (Index = 0; Index < Token->PrivilegeCount; Index++)
+                    {
+                        if ((Token->Privileges[Index].Attributes & SE_PRIVILEGE_ENABLED) &&
+                            !SepIsPrivilegeAllowedAtIntegrity(&Token->Privileges[Index].Luid, NewRid))
+                        {
+                            Token->Privileges[Index].Attributes &= ~SE_PRIVILEGE_ENABLED;
+                            SepUpdateSinglePrivilegeFlagToken(Token, Index);
+                        }
+                    }
+                }
                 ExAllocateLocallyUniqueId(&Token->ModifiedId);
                 SepReleaseTokenLock(Token);
                 SeSetObjectMandatoryLabel(Token,

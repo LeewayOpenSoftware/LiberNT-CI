@@ -64,6 +64,7 @@ SepAdjustPrivileges(
     _Out_ PBOOLEAN ChangesMade)
 {
     ULONG i, j, PrivilegeCount, ChangeCount, NewAttributes;
+    ULONG IntegrityRid = SepGetTokenIntegrityRid(Token);
 
     PAGED_CODE();
 
@@ -95,6 +96,15 @@ SepAdjustPrivileges(
                     NewAttributes = NewState[j].Attributes;
                     NewAttributes &= (SE_PRIVILEGE_ENABLED | SE_PRIVILEGE_REMOVED);
                     NewAttributes |= Token->Privileges[i].Attributes & ~SE_PRIVILEGE_ENABLED;
+
+                    /* Below Medium only the privileges Windows 11 allows there can be enabled; a refusal counts as not assigned */
+                    if ((NewAttributes & SE_PRIVILEGE_ENABLED) &&
+                        !(Token->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED) &&
+                        IntegrityRid < SECURITY_MANDATORY_MEDIUM_RID &&
+                        !SepIsPrivilegeAllowedAtIntegrity(&Token->Privileges[i].Luid, IntegrityRid))
+                    {
+                        j = NewStateCount;
+                    }
 
                     /* Stop looking */
                     break;

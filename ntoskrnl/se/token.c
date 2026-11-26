@@ -2860,6 +2860,31 @@ SepGetTokenIntegrityRid(
     return *RtlSubAuthoritySid(Token->UserAndGroups[Token->IntegrityLevelIndex].Sid, 0);
 }
 
+BOOLEAN
+NTAPI
+SepIsPrivilegeAllowedAtIntegrity(
+    _In_ PLUID Privilege,
+    _In_ ULONG IntegrityRid)
+{
+    if (IntegrityRid >= SECURITY_MANDATORY_HIGH_RID)
+        return TRUE;
+
+    if (IntegrityRid >= SECURITY_MANDATORY_MEDIUM_RID)
+    {
+        return !RtlEqualLuid(Privilege, &SeTakeOwnershipPrivilege) &&
+               !RtlEqualLuid(Privilege, &SeLoadDriverPrivilege) &&
+               !RtlEqualLuid(Privilege, &SeBackupPrivilege) &&
+               !RtlEqualLuid(Privilege, &SeRestorePrivilege) &&
+               !RtlEqualLuid(Privilege, &SeDebugPrivilege) &&
+               !RtlEqualLuid(Privilege, &SeImpersonatePrivilege) &&
+               !RtlEqualLuid(Privilege, &SeDelegateSessionUserImpersonatePrivilege);
+    }
+
+    return RtlEqualLuid(Privilege, &SeChangeNotifyPrivilege) ||
+           RtlEqualLuid(Privilege, &SeUndockPrivilege) ||
+           RtlEqualLuid(Privilege, &SeIncreaseWorkingSetPrivilege);
+}
+
 PSID
 NTAPI
 SepMandatorySidFromRid(
