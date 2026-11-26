@@ -1320,7 +1320,7 @@ TestSandboxedChild(VOID)
                                               JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
     Limits.BasicLimitInformation.ActiveProcessLimit = 1;
     CHECK(SetInformationJobObject(Job, JobObjectExtendedLimitInformation, &Limits, sizeof(Limits)));
-    Ui.UIRestrictionsClass = JOB_OBJECT_UILIMIT_ALL;
+    Ui.UIRestrictionsClass = JOB_OBJECT_UILIMIT_ALL & ~JOB_OBJECT_UILIMIT_INJECTION;
     CHECK(SetInformationJobObject(Job, JobObjectBasicUIRestrictions, &Ui, sizeof(Ui)));
 
     GetUserObjectSecurity(GetThreadDesktop(GetCurrentThreadId()), &DesktopInfo, NULL, 0, &Length);

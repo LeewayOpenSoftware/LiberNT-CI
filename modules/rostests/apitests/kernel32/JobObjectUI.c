@@ -186,12 +186,12 @@ test_InvalidParameters(void)
     ok(Success == FALSE, "Setting one undefined bit succeeded\n");
     ok_err(ERROR_INVALID_PARAMETER);
 
-    /* INJECTION stays rejected here: win32k has no job UI-injection
-       enforcement, so accepting it would be a documented divergence */
+    /* INJECTION: Orosi rejects it (no win32k enforcement; god decision,
+       documented divergence); Win11 accepts it */
     SetLastError(0xDEADBEEF);
     Success = SetRestrictions(hJob, JOB_OBJECT_UILIMIT_INJECTION);
-    ok(Success == FALSE, "Setting INJECTION succeeded without enforcement\n");
-    ok_err(ERROR_INVALID_PARAMETER);
+    ok(is_reactos() ? !Success : Success,
+       "INJECTION set: success=%u (Orosi must reject, Win11 accepts)\n", Success);
 
     memset(&Info, 0xAA, sizeof(Info));
     Success = QueryInformationJobObject(hJob,
@@ -200,7 +200,8 @@ test_InvalidParameters(void)
                                         sizeof(Info),
                                         NULL);
     ok(Success != FALSE, "QueryInformationJobObject failed with %lu\n", GetLastError());
-    ok_long(Info.UIRestrictionsClass, 0);
+    ok_long(Info.UIRestrictionsClass,
+            is_reactos() ? 0 : JOB_OBJECT_UILIMIT_INJECTION);
 
     /* The class is fixed length in both directions */
     Info.UIRestrictionsClass = JOB_OBJECT_UILIMIT_HANDLES;

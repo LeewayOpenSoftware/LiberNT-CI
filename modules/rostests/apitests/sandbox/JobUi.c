@@ -119,7 +119,7 @@ START_TEST(JobUi)
 
     Job = CreateJobObjectW(NULL, NULL);
     ok(Job != NULL, "CreateJobObject failed %lu\n", GetLastError());
-    Ui.UIRestrictionsClass = JOB_OBJECT_UILIMIT_ALL;
+    Ui.UIRestrictionsClass = JOB_OBJECT_UILIMIT_ALL & ~JOB_OBJECT_UILIMIT_INJECTION;
     ok(SetInformationJobObject(Job, JobObjectBasicUIRestrictions, &Ui, sizeof(Ui)), "UI restrictions failed %lu\n", GetLastError());
 
     ZeroMemory(&Class, sizeof(Class));

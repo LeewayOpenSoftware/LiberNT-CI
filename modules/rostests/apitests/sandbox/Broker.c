@@ -122,7 +122,7 @@ CreateSandboxJob(void)
     Limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
     Limits.BasicLimitInformation.ActiveProcessLimit = 1;
     ok(SetInformationJobObject(Job, JobObjectExtendedLimitInformation, &Limits, sizeof(Limits)), "job limits failed %lu\n", GetLastError());
-    Ui.UIRestrictionsClass = JOB_OBJECT_UILIMIT_ALL;
+    Ui.UIRestrictionsClass = JOB_OBJECT_UILIMIT_ALL & ~JOB_OBJECT_UILIMIT_INJECTION;
     ok(SetInformationJobObject(Job, JobObjectBasicUIRestrictions, &Ui, sizeof(Ui)), "job UI limits failed %lu\n", GetLastError());
     return Job;
 }
