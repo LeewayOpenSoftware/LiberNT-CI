@@ -241,6 +241,7 @@ list(APPEND SOURCE
     StackOverflow.c
     StackProbe.c
     SystemInfo.c
+    SystemSessionProcessInformation.c
     Timer.c
     UserHiveLinks.c
     precomp.h)
