@@ -119,6 +119,7 @@ list(APPEND SOURCE
     JapaneseCalendar.c
     JobObject.c
     JobObjectUI.c
+    JobQueryInfo.c
     KernelBaseRegistry.c
     KernelBaseUrl.c
     KnownDlls.c
