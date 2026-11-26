@@ -8,7 +8,19 @@
 #include "precomp.h"
 #include <winreg.h>
 
-typedef LONG (WINAPI *FN_RegQueryMultipleValuesW)(HKEY, PVALENTW, DWORD, LPWSTR, LPDWORD);
+/*
+ * The Windows SDK lays VALENTW out with a DWORD_PTR ve_valueptr (24 bytes on x64). Orosi's winreg.h
+ * still has a DWORD there (16 bytes), so this probe carries its own copy of the real layout.
+ */
+typedef struct _VALENT_W64
+{
+    LPWSTR ve_valuename;
+    DWORD ve_valuelen;
+    DWORD_PTR ve_valueptr;
+    DWORD ve_type;
+} VALENT_W64, *PVALENT_W64;
+
+typedef LONG (WINAPI *FN_RegQueryMultipleValuesW)(HKEY, PVALENT_W64, DWORD, LPWSTR, LPDWORD);
 
 static WCHAR KeyPath[128];
 static const ULONG DwordData = 0x11223344;
@@ -93,9 +105,9 @@ static void TestOddShapes(HANDLE Key)
 /* L2-M2: many entries sharing one name; the kernel must bound what it captures */
 static void TestManyEntries(HANDLE Key)
 {
-    /* Win11 26100: 0x10000 entries -> STATUS_BUFFER_OVERFLOW (required 262144), 0x100000 -> STATUS_INSUFFICIENT_RESOURCES;
-       the counts between them locate the bound */
-    static const ULONG Counts[] = { 0x10000, 0x20000, 0x40000, 0x80000, 0x100000 };
+    /* Win11 26100: 0x10000 entries -> STATUS_BUFFER_OVERFLOW (required 262144); 0x20000 and above ->
+       STATUS_INSUFFICIENT_RESOURCES. 0x10001 locates the edge (1 MB of entries, or 65536 of them) */
+    static const ULONG Counts[] = { 0x10000, 0x10001, 0x20000, 0x100000 };
     PKEY_VALUE_ENTRY Entries;
     UCHAR Buffer[64];
     ULONG Length, Required, i, c;
@@ -120,8 +132,8 @@ static void TestManyEntries(HANDLE Key)
         if (Counts[c] == 0x10000)
             ok(Status == STATUS_BUFFER_OVERFLOW && Length == sizeof(Buffer) && Required == 0x10000 * sizeof(DwordData),
                "0x10000 entries: 0x%lx, length %lu, required %lu\n", Status, Length, Required);
-        if (Counts[c] == 0x100000)
-            ok(Status == STATUS_INSUFFICIENT_RESOURCES && Required == 0, "0x100000 entries: 0x%lx, required %lu\n", Status, Required);
+        if (Counts[c] >= 0x20000)
+            ok(Status == STATUS_INSUFFICIENT_RESOURCES && Required == 0, "%lu entries: 0x%lx, required %lu\n", Counts[c], Status, Required);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Entries);
     }
 }
@@ -202,14 +214,24 @@ static void TestThreeValues(HANDLE Key)
     Required = 0xEEEEEEEE;
     Status = NtQueryMultipleValueKey(Key, Entries, 3, Buffer, &Length, &Required);
     TraceEntries("three values, one byte short", Entries, 3, Status, Length, Required);
+    /* Win11 26100: the items that fit are delivered (Dw, Odd = 12 bytes), the rest cleared */
     ok_hex(Status, STATUS_BUFFER_OVERFLOW);
-    ok(Length == 23 && Required == 24, "short: length %lu required %lu\n", Length, Required);
+    ok(Length == 12 && Required == 24, "short: length %lu required %lu\n", Length, Required);
+    ok(Entries[0].Type == REG_DWORD && Entries[0].DataLength == 4 && Entries[0].DataOffset == 0 &&
+       Entries[1].Type == REG_BINARY && Entries[1].DataLength == 7 && Entries[1].DataOffset == 4,
+       "short: delivered entries %lu/%lu/%lu and %lu/%lu/%lu\n", Entries[0].Type, Entries[0].DataLength, Entries[0].DataOffset,
+       Entries[1].Type, Entries[1].DataLength, Entries[1].DataOffset);
+    ok(Entries[2].Type == 0 && Entries[2].DataLength == 0 && Entries[2].DataOffset == 0,
+       "short: third entry not cleared: %lu/%lu/%lu\n", Entries[2].Type, Entries[2].DataLength, Entries[2].DataOffset);
+    ok(memcmp(Buffer, &DwordData, sizeof(DwordData)) == 0 && memcmp(Buffer + 4, OddData, sizeof(OddData)) == 0,
+       "short: the delivered data differs\n");
 
     /* Required length pointer omitted */
     Length = 0;
     Status = NtQueryMultipleValueKey(Key, Entries, 3, NULL, &Length, NULL);
     trace("PROBE three values, no required pointer -> 0x%lx, length %lu\n", Status, Length);
     ok_hex(Status, STATUS_BUFFER_OVERFLOW);
+    ok(Length == 0, "no required pointer: length %lu\n", Length);
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
 }
@@ -271,9 +293,9 @@ static void TestInvalid(HANDLE Key)
     Length = sizeof(Buffer);
     Required = 0xEEEEEEEE;
     Status = NtQueryMultipleValueKey(Key, &One, 0, Buffer, &Length, &Required);
-    trace("PROBE count 0 -> 0x%lx, length %lu, required 0x%lx (unpinned)\n", Status, Length, Required);
+    trace("PROBE count 0 -> 0x%lx, length %lu, required 0x%lx\n", Status, Length, Required);
     ok_hex(Status, STATUS_SUCCESS);
-    ok(Length == sizeof(Buffer), "count 0 changed the length to %lu\n", Length);
+    ok(Length == sizeof(Buffer) && Required == 0, "count 0: length %lu required 0x%lx\n", Length, Required);
     Length = sizeof(Buffer);
     Status = NtQueryMultipleValueKey(Key, &One, 0x10000001, Buffer, &Length, &Required);
     trace("PROBE count 0x10000001 -> 0x%lx\n", Status);
@@ -329,7 +351,7 @@ static void TestInvalid(HANDLE Key)
         Length = sizeof(Buffer);
         Status = NtQueryMultipleValueKey(Notify, &One, 1, Buffer, &Length, &Required);
         trace("PROBE KEY_NOTIFY-only handle -> 0x%lx\n", Status);
-        ok(!NT_SUCCESS(Status), "a handle without KEY_QUERY_VALUE was accepted\n"); /* lead: STATUS_ACCESS_DENIED */
+        ok_hex(Status, STATUS_ACCESS_DENIED);
         NtClose(Notify);
     }
 }
@@ -340,7 +362,7 @@ static void TestWin32Wrapper(void)
     HMODULE Advapi = LoadLibraryW(L"advapi32.dll");
     FN_RegQueryMultipleValuesW pRegQueryMultipleValuesW;
     HKEY Hkey;
-    VALENTW Vals[3] = { { L"Dw" }, { L"Odd" }, { L"Str" } };
+    VALENT_W64 Vals[3] = { { L"Dw" }, { L"Odd" }, { L"Str" } };
     DWORD Total;
     LONG Error;
     PWSTR Buffer;

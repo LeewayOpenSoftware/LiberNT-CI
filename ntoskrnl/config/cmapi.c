@@ -1314,7 +1314,7 @@ CmQueryMultipleValueKey(IN PCM_KEY_CONTROL_BLOCK Kcb,
     HCELL_INDEX CellToRelease, DataCellToRelease;
     VALUE_SEARCH_RETURN_TYPE Result;
     ULONGLONG Total;
-    ULONG i, Index, DataLength, Available;
+    ULONG i, Index, DataLength, Available, Fit, Used;
     PVOID Data;
     BOOLEAN ValueCached, DataAllocated;
     PAGED_CODE();
@@ -1348,8 +1348,11 @@ DoAgain:
     /* Get the hive */
     Hive = Kcb->KeyHive;
 
-    /* First pass: every value must exist; collect type, length and offset */
+    /* First pass: every value must exist; collect type, length and offset, and count the leading items that fit */
     Total = 0;
+    Fit = 0;
+    Used = 0;
+    Status = STATUS_SUCCESS;
     for (i = 0; i < EntryCount; i++)
     {
         Result = CmpFindValueByNameFromCache(Kcb,
@@ -1389,18 +1392,34 @@ DoAgain:
         ValueEntries[i].DataLength = DataLength;
         ValueEntries[i].DataOffset = (ULONG)Total;
         Total += DataLength;
+        if ((Total <= Available) && (Fit == i))
+        {
+            Fit = i + 1;
+            Used = (ULONG)Total;
+        }
     }
 
-    /* Tell the caller what it needs; stop here if it has less (*BufferLength stays as given, Win11) */
+    /* Tell the caller what it needs. Win11 delivers the leading items that fit, clears the rest and
+       reports the delivered bytes in *BufferLength together with STATUS_BUFFER_OVERFLOW */
     *RequiredBufferLength = (ULONG)Total;
     if (Total > Available)
     {
         Status = STATUS_BUFFER_OVERFLOW;
-        goto ClearEntries;
+        for (i = Fit; i < EntryCount; i++)
+        {
+            ValueEntries[i].Type = 0;
+            ValueEntries[i].DataLength = 0;
+            ValueEntries[i].DataOffset = 0;
+        }
+    }
+    else
+    {
+        Fit = EntryCount;
+        Used = (ULONG)Total;
     }
 
-    /* Second pass: copy the data; the lock is still held, so the set is consistent */
-    for (i = 0; i < EntryCount; i++)
+    /* Second pass: copy the data of the items that fit; the lock is still held, so the set is consistent */
+    for (i = 0; i < Fit; i++)
     {
         Result = CmpFindValueByNameFromCache(Kcb,
                                              ValueEntries[i].ValueName,
@@ -1458,8 +1477,8 @@ DoAgain:
         if (!NT_SUCCESS(Status)) goto Quickie;
     }
 
-    /* Everything was delivered: the used size goes out once */
-    *BufferLength = (ULONG)Total;
+    /* The delivered bytes go out once: everything on success, the leading items on overflow */
+    *BufferLength = Used;
     goto Quickie;
 
 ClearEntries:

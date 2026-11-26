@@ -59,10 +59,10 @@
 #define CM_KCB_READ_ONLY_KEY                            0x80
 
 //
-// Most KEY_VALUE_ENTRY items one NtQueryMultipleValueKey call accepts (8 MB of entries; Win11
-// refuses 0x100000 and takes 0x10000, the exact bound is still to be probed)
+// Most KEY_VALUE_ENTRY items one NtQueryMultipleValueKey call accepts: 1 MB of entries
+// (Win11 26100 takes 0x10000 entries and refuses 0x20000 with STATUS_INSUFFICIENT_RESOURCES)
 //
-#define CMP_MAX_MULTIPLE_VALUE_ENTRIES                  (0x800000 / sizeof(KEY_VALUE_ENTRY))
+#define CMP_MAX_MULTIPLE_VALUE_ENTRIES                  (0x100000 / sizeof(KEY_VALUE_ENTRY))
 
 //
 // CM_KEY_BODY Types

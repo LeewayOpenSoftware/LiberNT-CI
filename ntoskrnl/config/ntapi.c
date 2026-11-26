@@ -2179,8 +2179,8 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
         Status = CmpPostCallbacks(&CallbackCall, Status);
     }
 
-    /* Write the results back once; the caller's name pointers stay untouched. Win11 leaves *Length
-       alone unless the call succeeded, and reports the needed size (or 0 after a miss) separately */
+    /* Write the results back once; the caller's name pointers stay untouched. *Length carries the
+       delivered bytes on success and on overflow (Win11); a miss leaves it alone and reports 0 as needed */
     if (NT_SUCCESS(Status) || (Status == STATUS_BUFFER_OVERFLOW) || (Status == STATUS_OBJECT_NAME_NOT_FOUND))
     {
         _SEH2_TRY
@@ -2191,7 +2191,7 @@ NtQueryMultipleValueKey(IN HANDLE KeyHandle,
                 ValueList[i].DataOffset = Entries[i].DataOffset;
                 ValueList[i].Type = Entries[i].Type;
             }
-            if (NT_SUCCESS(Status))
+            if (Status != STATUS_OBJECT_NAME_NOT_FOUND)
                 *Length = LengthCopy;
             if (ReturnLength)
                 *ReturnLength = Required;
