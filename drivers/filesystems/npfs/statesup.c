@@ -171,6 +171,8 @@ NpSetDisconnectedPipeState(IN PNP_CCB Ccb,
                 Ccb->ClientSession = NULL;
             }
 
+            NpFreeAttributes(&Ccb->ConnectionAttributes);
+
             Status = STATUS_SUCCESS;
             break;
 

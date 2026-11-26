@@ -122,6 +122,7 @@ NpDeleteCcb(IN PNP_CCB Ccb,
         NpCheckForNotify(Ccb->Fcb->ParentDcb, FALSE, ListEntry);
         ExDeleteResourceLite(&Ccb->NonPagedCcb->Lock);
         NpUninitializeSecurity(Ccb);
+        NpFreeAttributes(&Ccb->ConnectionAttributes);
         if (Ccb->ClientSession)
         {
             ExFreePool(Ccb->ClientSession);
@@ -394,6 +395,7 @@ NpCreateCcb(IN PNP_FCB Fcb,
     Fcb->CurrentInstances++;
     Fcb->ServerOpenCount++;
     InitializeListHead(&Ccb->IrpList);
+    InitializeListHead(&Ccb->ConnectionAttributes);
     ExInitializeResourceLite(&Ccb->NonPagedCcb->Lock);
     *NewCcb = Ccb;
     return STATUS_SUCCESS;

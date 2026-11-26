@@ -255,9 +255,71 @@ TestPipeAttributes(VOID)
     CloseHandle(Server);
 }
 
+static
+VOID
+TestConnectionAttributes(VOID)
+{
+    static const UCHAR Value[] = { 7, 8 };
+    HANDLE Server, Server2, Client, Duplicate;
+    UCHAR Buffer[16];
+    ULONG Pid, One = 1;
+    ULONG_PTR Information;
+
+    Server = CreateServer(PIPE_NAME L"_conn");
+    Server2 = CreateServer(PIPE_NAME L"_conn");
+    Client = OpenClient(PIPE_NAME L"_conn", GENERIC_READ | GENERIC_WRITE);
+    ok(Server != INVALID_HANDLE_VALUE && Server2 != INVALID_HANDLE_VALUE && Client != INVALID_HANDLE_VALUE,
+       "pipe: %lu\n", GetLastError());
+    ok(DuplicateHandle(GetCurrentProcess(), Server, GetCurrentProcess(), &Duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS),
+       "DuplicateHandle failed\n");
+
+    TestAttributeRules("connection", Server, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, FSCTL_PIPE_SET_CONNECTION_ATTRIBUTE);
+
+    ok_ntstatus(SetAttribute(Server, FSCTL_PIPE_SET_CONNECTION_ATTRIBUTE, "V", Value, sizeof(Value)), STATUS_SUCCESS);
+    ok_ntstatus(GetAttribute(Client, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, "V", Buffer, sizeof(Buffer), &Information),
+                STATUS_SUCCESS);
+    ok_eq_ulong((ULONG)Information, (ULONG)sizeof(Value));
+    ok_ntstatus(GetAttribute(Duplicate, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, "V", Buffer, sizeof(Buffer), NULL), STATUS_SUCCESS);
+    ok_ntstatus(GetAttribute(Server2, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, "V", Buffer, sizeof(Buffer), NULL), STATUS_NOT_FOUND);
+    ok_ntstatus(SetAttribute(Client, FSCTL_PIPE_SET_CONNECTION_ATTRIBUTE, "W", Value, sizeof(Value)), STATUS_ACCESS_DENIED);
+
+    ok_ntstatus(SetAttribute(Server, FSCTL_PIPE_SET_CONNECTION_ATTRIBUTE, "ClientProcessId", &One, sizeof(One)),
+                STATUS_ACCESS_DENIED);
+    ok_ntstatus(SetAttribute(Server, FSCTL_PIPE_SET_CONNECTION_ATTRIBUTE, "ClientSessionId", &One, sizeof(One)),
+                STATUS_ACCESS_DENIED);
+    ok_ntstatus(SetAttribute(Server, FSCTL_PIPE_SET_CONNECTION_ATTRIBUTE, "ClientComputerName", &One, sizeof(One)),
+                STATUS_ACCESS_DENIED);
+    Pid = 0;
+    ok_ntstatus(GetAttribute(Server, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, "ClientProcessId", &Pid, sizeof(Pid), NULL),
+                STATUS_SUCCESS);
+    ok_eq_ulong(Pid, GetCurrentProcessId());
+    ok_ntstatus(GetAttribute(Server, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, "ClientComputerName", Buffer, sizeof(Buffer), NULL),
+                STATUS_NOT_FOUND);
+    ok_ntstatus(GetAttribute(Server, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, "ServerProcessId", &Pid, sizeof(Pid), NULL),
+                STATUS_NOT_FOUND);
+    ok_ntstatus(SetAttribute(Server, FSCTL_PIPE_SET_CONNECTION_ATTRIBUTE, "ServerProcessId", &One, sizeof(One)),
+                STATUS_SUCCESS);
+    Pid = 0;
+    ok_ntstatus(GetAttribute(Server, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, "ServerProcessId", &Pid, sizeof(Pid), NULL),
+                STATUS_SUCCESS);
+    ok_eq_ulong(Pid, One);
+    ok_ntstatus(GetAttribute(Server2, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, "ClientProcessId", &Pid, sizeof(Pid), NULL),
+                STATUS_NOT_FOUND);
+
+    CloseHandle(Client);
+    ok_ntstatus(GetAttribute(Server, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, "V", Buffer, sizeof(Buffer), NULL), STATUS_SUCCESS);
+    ok(DisconnectNamedPipe(Server), "DisconnectNamedPipe failed: %lu\n", GetLastError());
+    ok_ntstatus(GetAttribute(Server, FSCTL_PIPE_GET_CONNECTION_ATTRIBUTE, "V", Buffer, sizeof(Buffer), NULL), STATUS_NOT_FOUND);
+
+    CloseHandle(Duplicate);
+    CloseHandle(Server2);
+    CloseHandle(Server);
+}
+
 START_TEST(NamedPipeFsctl)
 {
     TestAccessBits();
     TestQueryClientProcessV2();
     TestPipeAttributes();
+    TestConnectionAttributes();
 }
