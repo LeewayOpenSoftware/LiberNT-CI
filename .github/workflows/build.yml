@@ -866,6 +866,16 @@ jobs:
       run: |
         ctest --test-dir build/mmcc-host --output-on-failure -j 4
 
+    - name: Configure, build and test the pool host tests
+      env:
+        ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+        UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        TSAN_OPTIONS: halt_on_error=1
+      run: |
+        cmake -S submodules/host-tests/mmcc/pool -B build/mmcc-pool -G Ninja -DCMAKE_BUILD_TYPE=Debug
+        cmake --build build/mmcc-pool
+        ctest --test-dir build/mmcc-pool --output-on-failure -j 4
+
   build-msvc:
     # MSVC + Rust is a required configuration (owner order 2026-11-14). The lrmrs leg is the primary one;
     # the conly leg (LRM-RS OFF, no Rust toolchain installed) only shows that the C-only build still works.
