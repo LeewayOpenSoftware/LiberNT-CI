@@ -9,6 +9,7 @@
 #include "winlogon.h"
 
 #include <mmsystem.h>  /* timeBeginPeriod */
+#include <dwmapi.h>    /* DwmIsCompositionEnabled */
 
 #define WL_COVER_CLASS      L"WinlogonTransitionCover"
 #define WL_COVER_FADE_MS    500
@@ -182,7 +183,17 @@ WlCoverPresent(
     return UpdateLayeredWindow(Window, NULL, &Origin, &Size, Memory, &Source, 0, &Blend, ULW_ALPHA);
 }
 
-/* The fade steps: the window keeps the frame it was given once, only the constant alpha changes. */
+/* With composition the window keeps the frame it was given once and a step changes only its constant alpha.
+ * Without it nothing redraws a layered window from a stored alpha, so a step has to blend the frame again. */
+static
+BOOL
+WlCoverComposited(VOID)
+{
+    BOOL Enabled = FALSE;
+
+    return SUCCEEDED(DwmIsCompositionEnabled(&Enabled)) && Enabled;
+}
+
 static
 BOOL
 WlCoverSetAlpha(
@@ -212,11 +223,14 @@ WlCoverAlpha(
 static
 VOID
 WlCoverFade(
-    _In_ HWND Window)
+    _In_ HWND Window,
+    _In_ PWL_COVER Cover,
+    _In_ HDC Memory)
 {
     ULONGLONG Start, Last, Next, Now, Before;
-    DWORD Frames = 0, Late = 0, Longest = 0, Present = 0, Interval, Took;
-    CHAR Line[112];
+    DWORD Frames = 0, Late = 0, Longest = 0, Present = 0, AlphaSteps = 0, Interval, Took;
+    BYTE Alpha;
+    CHAR Line[128];
 
     /* 1 ms timer resolution for the fade only: a 16 ms wait on the default ~15.6 ms tick lasts two ticks. */
     timeBeginPeriod(1);
@@ -235,9 +249,17 @@ WlCoverFade(
         }
         Last = Now;
 
-        /* The frame went once with the window; each step only changes its constant alpha. */
+        Alpha = WlCoverAlpha(Now - Start);
         Before = WlCoverNowMs();
-        WlCoverSetAlpha(Window, WlCoverAlpha(Now - Start));
+        if (WlCoverComposited())
+        {
+            WlCoverSetAlpha(Window, Alpha);
+            AlphaSteps++;
+        }
+        else
+        {
+            WlCoverPresent(Window, Cover, Memory, Alpha);
+        }
         Took = (DWORD)(WlCoverNowMs() - Before);
         if (Took > Present)
             Present = Took;
@@ -257,9 +279,9 @@ WlCoverFade(
     timeEndPeriod(1);
 
     /* The lab judges smoothness from this line: a late frame is an interval over twice the target;
-     * present-ms is the longest alpha update. */
-    StringCchPrintfA(Line, ARRAYSIZE(Line), "cover-fade frames=%lu longest-ms=%lu late=%lu target-ms=%u present-ms=%lu",
-                     Frames, Longest, Late, WL_COVER_FRAME_MS, Present);
+     * present-ms is the longest step; alpha-steps counts the composited ones (frame not resent). */
+    StringCchPrintfA(Line, ARRAYSIZE(Line), "cover-fade frames=%lu longest-ms=%lu late=%lu target-ms=%u present-ms=%lu alpha-steps=%lu",
+                     Frames, Longest, Late, WL_COVER_FRAME_MS, Present, AlphaSteps);
     LogonStage(Line);
 }
 
@@ -314,7 +336,7 @@ WlCoverThread(
     if (Cover->Ready)
     {
         WlCoverWait(Cover->Release, WL_COVER_HOLD_MS);
-        WlCoverFade(Window);
+        WlCoverFade(Window, Cover, Memory);
     }
 
     if (Window != NULL)
