@@ -291,8 +291,9 @@ AddUser(
 
 /*
  * Logon: the accounts the msgina page lists, every enabled normal local account (msgina
- * LoadUsers). Unlock: only the locked account Only names, as msgina lists only the session's
- * user; without a name, none at all, so nothing is enumerated on the lock screen.
+ * LoadUsers). Unlock: only the locked local account Only names (DOMAIN\user, the domain being
+ * this computer), as msgina lists only the session's user; without such a name, none at all,
+ * so nothing is enumerated on the lock screen.
  */
 HRESULT
 LuhUsersCreate(
@@ -313,8 +314,15 @@ LuhUsersCreate(
         return HRESULT_FROM_WIN32(GetLastError());
     if (Only != NULL && Only[0] != UNICODE_NULL)
     {
-        OnlyName = wcschr(Only, L'\\');
-        OnlyName = OnlyName ? OnlyName + 1 : Only;
+        PCWSTR Slash = wcschr(Only, L'\\');
+
+        /* DOMAIN\user: only a local account (domain = this computer) can match a local tile;
+         * a domain account of the same name must not, so it gets no tile here. */
+        if (Slash == NULL)
+            OnlyName = Only;
+        else if ((Slash - Only == 1 && Only[0] == L'.') ||      /* a lone dot is this computer too */
+                 ((SIZE_T)(Slash - Only) == wcslen(Computer) && _wcsnicmp(Only, Computer, Slash - Only) == 0))
+            OnlyName = Slash + 1;
     }
 
     Array = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Array));
