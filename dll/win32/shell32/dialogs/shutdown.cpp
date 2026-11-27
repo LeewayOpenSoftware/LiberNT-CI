@@ -20,8 +20,6 @@
 #include "shutdown.h"  /* WLX_SHUTDOWN_STATE_* */
 #include <powrprof.h>
 
-WINE_DEFAULT_DEBUG_CHANNEL(shell);
-
 EXTERN_C BOOL WINAPI SHTestTokenPrivilegeW(_In_opt_ HANDLE hToken, _In_ LPCWSTR lpName);
 
 static LONG
