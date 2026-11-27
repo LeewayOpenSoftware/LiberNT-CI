@@ -1,5 +1,10 @@
 #include "libm.h"
 
+#ifdef _MSC_VER
+#pragma warning(disable: 4164)
+#pragma function(copysign)
+#endif
+
 double __cdecl copysign(double x, double y) {
 	union {double f; uint64_t i;} ux={x}, uy={y};
 	ux.i &= -1ULL/2;

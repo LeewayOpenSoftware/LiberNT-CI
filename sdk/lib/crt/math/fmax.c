@@ -7,6 +7,12 @@
 
 #include <math.h>
 
+#ifdef _MSC_VER
+#pragma warning(disable: 4164)
+#pragma function(fmax)
+#pragma function(fmaxf)
+#endif
+
 double fmax(double x, double y)
 {
     if (isnan(x))
