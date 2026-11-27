@@ -758,10 +758,11 @@ static void test_GetCalendarInfo(void)
             if (ret || j == CAL_ITWODIGITYEARMAX)
 #ifdef __REACTOS__
                 ok( ret2 || broken(j == CAL_SRELATIVELONGDATE) /* Win7 */ || broken(j == CAL_SMONTHDAY || j == CAL_SABBREVERASTRING), /* Vista */
+                    "calendar %u %s value %02x failed\n", i, wine_dbgstr_w(name), j );
 #else
                 ok( ret2 || broken(j == CAL_SRELATIVELONGDATE),  /* win7 doesn't have this */
-#endif
                     "calendar %u %s value %02x failed\n", i, wine_dbgstr_w(name), j );
+#endif
             else
                 ok( !ret2, "calendar %u %s value %02x succeeded %s\n",
                     i, wine_dbgstr_w(name), j, wine_dbgstr_w(bufferW) );

@@ -9114,10 +9114,11 @@ static void test_GetSecurityInfo(void)
     }
 #ifdef __REACTOS__
     ok(admins_ace_id != -1,
+       "Builtin Admins ACE not found.\n");
 #else
     ok(admins_ace_id != -1 || broken(admins_ace_id == -1) /* xp */,
-#endif
        "Builtin Admins ACE not found.\n");
+#endif
     if (admins_ace_id != -1)
     {
         bret = GetAce(pDacl, admins_ace_id, (VOID **)&ace);

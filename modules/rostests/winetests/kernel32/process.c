@@ -4272,10 +4272,11 @@ static void test_process_info(HANDLE hproc)
                 todo_wine
 #ifdef __REACTOS__
                 ok(status == STATUS_ACCESS_DENIED || broken(status == STATUS_INVALID_PARAMETER) /* WS03 */,
+                    "for info %lu expected STATUS_ACCESS_DENIED, got %08lx (ret_len %lu)\n", i, status, ret_len);
 #else
                 ok(status == STATUS_ACCESS_DENIED,
-#endif
                     "for info %lu expected STATUS_ACCESS_DENIED, got %08lx (ret_len %lu)\n", i, status, ret_len);
+#endif
             break;
 
         default:
