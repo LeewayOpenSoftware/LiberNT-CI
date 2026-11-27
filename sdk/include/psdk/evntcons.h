@@ -97,7 +97,9 @@ struct _EVENT_RECORD {
   PVOID UserContext;
 };
 
+#if defined(_WMIKM_) || defined(_NTDDK_) || defined(_NTIFS_)
 typedef struct _EVENT_RECORD EVENT_RECORD, *PEVENT_RECORD;
+#endif
 typedef const EVENT_RECORD *PCEVENT_RECORD;
 #endif
 
