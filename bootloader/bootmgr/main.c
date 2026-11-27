@@ -442,7 +442,7 @@ BmBuildMenu(VOID)
         BmMenuName(BmEntries[i].Description, BmNames[i]);
         BmMenuNames[i] = BmNames[i];
         BmMenuIcons[i] = (!BmEntries[i].FirmwareDevice ||
-                          _wcsicmp(BmEntries[i].FirmwarePath, BM_LIBERNT_MANAGER) == 0) ? UiMenuIconLiberNT :
+                          _wcsicmp(BmEntries[i].FirmwarePath, BM_LIBERNT_MANAGER) == 0) ? UiMenuIconOrosi :
                          BmLogos[i].Pixels ? UiMenuIconImage : UiMenuIconDesktop;
         BmMenuImages[i] = BmLogos[i].Pixels ? &BmLogos[i] : NULL;
     }

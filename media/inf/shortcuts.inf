@@ -627,13 +627,13 @@ COMMUNICATIONS=Kommunikatsioon
 GAMES=Mängud
 
 README_TITLE=Loe mind
-README_DESC=Orosi'i Loe-mind fail
+README_DESC=Orosi Loe-mind fail
 
 CMD_TITLE=Käsurida
 CMD_DESC=Ava käsurida
 EXPLORER_TITLE=Orosi Explorer
 EXPLORER_DESC=Ava sirvija
-RAPPS_TITLE=Orosi'i Rakenduste Haldur
+RAPPS_TITLE=Orosi Rakenduste Haldur
 RAPPS_TITLE_SHORT=Rakenduste Haldur
 RAPPS_DESC=Laadi alla ja paigalda erinevaid rakendusi
 SERVMAN_TITLE=Service Manager
