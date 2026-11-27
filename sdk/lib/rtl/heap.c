@@ -1326,7 +1326,7 @@ RtlpCoalesceFreeBlocks (PHEAP Heap,
             /* Also update previous size if needed */
             if (!(Entry.Flags & HEAP_ENTRY_LAST_ENTRY))
             {
-                RtlpEntrySetPreviousSizeKeyed((PHEAP_ENTRY)FreeEntry + *FreeSize, (USHORT)(*FreeSize), Key);
+                RtlpEntrySetPreviousSizeKeyed(Heap, (PHEAP_ENTRY)FreeEntry + *FreeSize, (USHORT)(*FreeSize), Key);
             }
             else
             {
@@ -1369,7 +1369,7 @@ RtlpCoalesceFreeBlocks (PHEAP Heap,
             /* Also update previous size if needed */
             if (!(Entry.Flags & HEAP_ENTRY_LAST_ENTRY))
             {
-                RtlpEntrySetPreviousSizeKeyed((PHEAP_ENTRY)FreeEntry + *FreeSize, (USHORT)(*FreeSize), Key);
+                RtlpEntrySetPreviousSizeKeyed(Heap, (PHEAP_ENTRY)FreeEntry + *FreeSize, (USHORT)(*FreeSize), Key);
             }
             else
             {
