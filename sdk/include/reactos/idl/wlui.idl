@@ -162,4 +162,12 @@ interface wlui
         [in] handle_t hBinding,
         [in] GUID LaunchId,
         [in] WLUI_EXIT_REASON Reason);
+
+    /* Function 7: the screen for command Sequence is painted (the host's first WM_PAINT after it). */
+    DWORD
+    __stdcall
+    WluiCommandShown(
+        [in] handle_t hBinding,
+        [in] GUID LaunchId,
+        [in] DWORD Sequence);
 }

@@ -27,10 +27,23 @@ struct _WL_COVER
 
 typedef struct _WL_CAPTURE
 {
+    LONG Refs;              /* the caller and the capture thread; the last one frees it */
     HDESK Desktop;
     RECT Screen;
     HBITMAP Frame;
 } WL_CAPTURE;
+
+static
+VOID
+WlCaptureRelease(
+    _In_ WL_CAPTURE *Capture)
+{
+    if (InterlockedDecrement(&Capture->Refs) != 0)
+        return;
+    if (Capture->Frame)
+        DeleteObject(Capture->Frame);
+    HeapFree(GetProcessHeap(), 0, Capture);
+}
 
 static
 VOID
@@ -59,11 +72,17 @@ WlCaptureThread(
     int Height = Capture->Screen.bottom - Capture->Screen.top;
 
     if (!SetThreadDesktop(Capture->Desktop))
+    {
+        WlCaptureRelease(Capture);
         return 1;
+    }
 
     Screen = GetDC(NULL);
     if (Screen == NULL)
+    {
+        WlCaptureRelease(Capture);
         return 1;
+    }
     Memory = CreateCompatibleDC(Screen);
     if (Memory != NULL)
     {
@@ -86,6 +105,7 @@ WlCaptureThread(
         DeleteDC(Memory);
     }
     ReleaseDC(NULL, Screen);
+    WlCaptureRelease(Capture);
     return 0;
 }
 
@@ -148,6 +168,18 @@ WlCoverPresent(
     return UpdateLayeredWindow(Window, NULL, &Origin, &Size, Memory, &Source, 0, &Blend, ULW_ALPHA);
 }
 
+/* Milliseconds from the high-resolution counter (GetTickCount64 steps by about 15.6 ms). */
+static
+ULONGLONG
+WlCoverNowMs(VOID)
+{
+    LARGE_INTEGER Count, Frequency;
+
+    if (!QueryPerformanceFrequency(&Frequency) || Frequency.QuadPart == 0 || !QueryPerformanceCounter(&Count))
+        return GetTickCount64();
+    return (ULONGLONG)(Count.QuadPart / (Frequency.QuadPart / 1000 ? Frequency.QuadPart / 1000 : 1));
+}
+
 /* Time-based ease-out (cubic): the alpha follows the clock, not the number of frames drawn. */
 static
 BYTE
@@ -170,13 +202,13 @@ WlCoverFade(
     _In_ PWL_COVER Cover,
     _In_ HDC Memory)
 {
-    ULONGLONG Start = GetTickCount64(), Last = Start, Now;
+    ULONGLONG Start = WlCoverNowMs(), Last = Start, Now;
     DWORD Frames = 0, Late = 0, Longest = 0, Interval;
     CHAR Line[80];
 
     for (;;)
     {
-        Now = GetTickCount64();
+        Now = WlCoverNowMs();
         Interval = (DWORD)(Now - Last);
         if (Frames > 0)
         {
@@ -292,28 +324,47 @@ WlSwitchDesktopCovered(
     _In_ HDESK From,
     _In_ HDESK To)
 {
-    WL_CAPTURE Capture;
-    PWL_COVER Cover;
+    WL_CAPTURE *Capture;
+    PWL_COVER Cover = NULL;
     HANDLE Thread;
+    HBITMAP Frame = NULL;
+    RECT Screen;
 
-    ZeroMemory(&Capture, sizeof(Capture));
-    Capture.Desktop = From;
-    WlCoverScreenRect(&Capture.Screen);
-    Thread = CreateThread(NULL, 0, WlCaptureThread, &Capture, 0, NULL);
-    if (Thread != NULL)
+    WlCoverScreenRect(&Screen);
+    Capture = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Capture));
+    if (Capture != NULL)
     {
-        WaitForSingleObject(Thread, WL_COVER_SHOWN_MS);
-        CloseHandle(Thread);
+        Capture->Refs = 2;
+        Capture->Desktop = From;
+        Capture->Screen = Screen;
+        Thread = CreateThread(NULL, 0, WlCaptureThread, Capture, 0, NULL);
+        if (Thread == NULL)
+        {
+            Capture->Refs = 1;
+        }
+        else
+        {
+            /* A late thread keeps its own reference and frees the frame it may still make. */
+            if (WaitForSingleObject(Thread, WL_COVER_SHOWN_MS) == WAIT_OBJECT_0)
+            {
+                Frame = Capture->Frame;
+                Capture->Frame = NULL;
+            }
+            CloseHandle(Thread);
+        }
+        WlCaptureRelease(Capture);
     }
 
+    if (Frame == NULL)
+        goto Plain;
     Cover = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Cover));
-    if (Cover == NULL || Capture.Frame == NULL)
+    if (Cover == NULL)
         goto Plain;
 
     Cover->Desktop = To;
-    Cover->Frame = Capture.Frame;
-    Capture.Frame = NULL;
-    Cover->Screen = Capture.Screen;
+    Cover->Frame = Frame;
+    Frame = NULL;
+    Cover->Screen = Screen;
     Cover->Shown = CreateEventW(NULL, TRUE, FALSE, NULL);
     Cover->Release = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (Cover->Shown == NULL || Cover->Release == NULL)
@@ -333,14 +384,15 @@ WlSwitchDesktopCovered(
     return Cover;
 
 Plain:
-    if (Capture.Frame)
-        DeleteObject(Capture.Frame);
+    if (Frame)
+        DeleteObject(Frame);
     if (Cover)
     {
         if (Cover->Thread && WaitForSingleObject(Cover->Thread, 0) == WAIT_TIMEOUT)
         {
             /* Still alive: it owns the cover memory now and must not be freed under it. */
             SwitchDesktop(To);
+            LogonStage("desktop-switch-plain");
             return NULL;
         }
         WlCoverFree(Cover);

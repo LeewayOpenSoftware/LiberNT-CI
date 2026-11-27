@@ -372,10 +372,16 @@ VOID
 WluiLaunchUnregister(
     _In_ PWLUI_LAUNCH_STATE State);
 
-BOOL
+DWORD
 WluiLaunchPostCommand(
     _In_ PWLUI_LAUNCH_STATE State,
     _In_ const struct _WLUI_COMMAND *Command);
+
+BOOL
+WluiLaunchWaitShown(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ DWORD Sequence,
+    _In_ DWORD TimeoutMs);
 
 BOOL
 WluiLaunchWaitReady(
@@ -442,10 +448,16 @@ WlHostWaitReady(
     _In_ PWLHOST_LAUNCH Launch,
     _In_ DWORD TimeoutMs);
 
-BOOL
+DWORD
 WlHostPost(
     _In_ PWLHOST_LAUNCH Launch,
     _In_ const struct _WLUI_COMMAND *Command);
+
+BOOL
+WlHostWaitShown(
+    _In_ PWLHOST_LAUNCH Launch,
+    _In_ DWORD Sequence,
+    _In_ DWORD TimeoutMs);
 
 HANDLE
 WlHostEndedEvent(
@@ -533,6 +545,13 @@ WlCoverRelease(
 UINT
 WlHostStatusText(
     _In_ UINT ResourceId);
+
+VOID
+WlHostWaitStatusShown(VOID);
+
+VOID
+WlHostShowUnlockWelcome(
+    _In_ PWLSESSION Session);
 
 VOID
 WlHostThemeWait(VOID);

@@ -18,6 +18,7 @@
 #define WLHL_READY_MS       2000
 #define WLHL_HOST_EXIT_MS   3000    /* the host leaves on its own after its fade; then it is stopped */
 #define WLHL_SWITCH_CAP_S   600     /* upper bound for DelayedDesktopSwitchTimeout */
+#define WLHL_SHOWN_MS       1500    /* how long a switch waits for the host to paint its screen */
 #define WLHL_LOCK_READY_MS  2000    /* default for HKLM Winlogon\LockReadyTimeoutMs (P2) */
 #define WLHL_CPUS_LOGON             1   /* CPUS_LOGON */
 #define WLHL_CPUS_UNLOCK            2   /* CPUS_UNLOCK_WORKSTATION */
@@ -62,6 +63,7 @@ static BOOL g_SubmitBusy;               /* a submit is between the gate and the 
 static DWORD g_ChangeFor;               /* scenario a forced password change resumes; 0 = no change page */
 static BOOL g_LsaBroken;                /* the last logged-out SAS could not reach the LSA */
 static HANDLE g_SwitchEvent;            /* ShellDesktopSwitchEvent of the logon in progress */
+static DWORD g_StatusSequence;          /* the last status command; a switch waits for its paint */
 static HANDLE g_ShellProcess;           /* first Userinit process of the logon in progress */
 static HWND g_TerminalDialog;           /* the N4 dialog, while it stands (owned by its own thread) */
 static HANDLE g_TerminalThread;         /* the thread that pumps that dialog */
@@ -366,7 +368,7 @@ WlHlLsaChangePassword(
 
 /* ---- commands and events to the SAS thread --------------------------------------- */
 
-static VOID
+static DWORD
 WlHlPost(
     _In_ WLUI_COMMAND_TYPE Type,
     _In_ DWORD Scenario,
@@ -377,6 +379,7 @@ WlHlPost(
     _In_opt_ PCWSTR Text)
 {
     WLUI_COMMAND Command;
+    DWORD Sequence = 0;
 
     ZeroMemory(&Command, sizeof(Command));
     Command.Type = Type;
@@ -390,9 +393,24 @@ WlHlPost(
     /* RPC threads post results while the SAS thread may be swapping hosts. */
     EnterCriticalSection(&g_LaunchLock);
     if (g_Launch != NULL)
-        WlHostPost(g_Launch, &Command);
+        Sequence = WlHostPost(g_Launch, &Command);
     LeaveCriticalSection(&g_LaunchLock);
     SecureZeroMemory(&Command, sizeof(Command));
+    return Sequence;
+}
+
+/* Waits until the host has painted the screen of command Sequence; bounded, never a hang. */
+static
+BOOL
+WlHlWaitShown(
+    _In_ DWORD Sequence)
+{
+    BOOL Shown = FALSE;
+
+    if (Sequence != 0 && g_Launch != NULL)
+        Shown = WlHostWaitShown(g_Launch, Sequence, WLHL_SHOWN_MS);
+    LogonStage(Shown ? "host-shown" : "host-shown-timeout");
+    return Shown;
 }
 
 static VOID
@@ -1966,7 +1984,23 @@ WlHostStatus(
 {
     if (!WlHlHostLive() && !WlHlEnsureHost(0, 0, WlHlLockReadyMs()))
         return;
-    WlHlPost(WluiCmdDisplayStatus, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, NULL, Text);
+    g_StatusSequence = WlHlPost(WluiCmdDisplayStatus, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, NULL, Text);
+}
+
+/* Before the screen switches to the host, its status page must be on screen. */
+VOID
+WlHostWaitStatusShown(VOID)
+{
+    WlHlWaitShown(g_StatusSequence);
+}
+
+/* Unlock: the frame that crosses to the user's desktop shows Welcome, never the credential page. */
+VOID
+WlHostShowUnlockWelcome(
+    _In_ PWLSESSION Session)
+{
+    if (WlHlHostLive())
+        WlHlWaitShown(WlHlPost(WluiCmdDisplayWelcome, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, Session->UserName, NULL));
 }
 
 /* Theme service wait msgina did before starting the shell (shsvcs ordinal 2). */

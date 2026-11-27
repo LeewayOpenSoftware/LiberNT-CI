@@ -1449,6 +1449,7 @@ HandleLogoff(
         /* "Signing out" stands on the host before any user process is closed (plan, commit 7);
          * the desktop fades into it instead of cutting. */
         DisplayStatusMessage(Session, Session->WinlogonDesktop, IDS_LOGGINGOFF);
+        WlHostWaitStatusShown();
         WlCoverRelease(WlSwitchDesktopCovered(Session->ApplicationDesktop, Session->WinlogonDesktop));
     }
 
@@ -1838,7 +1839,10 @@ DoGenericAction(
                 CallNotificationDlls(Session, UnlockHandler);
                 if (Session->UseLogonUI)
                 {
-                    PWL_COVER Cover = WlSwitchDesktopCovered(Session->WinlogonDesktop, Session->ApplicationDesktop);
+                    PWL_COVER Cover;
+
+                    WlHostShowUnlockWelcome(Session);
+                    Cover = WlSwitchDesktopCovered(Session->WinlogonDesktop, Session->ApplicationDesktop);
 
                     WlHostBeforeDesktopSwitch();
                     WlCoverRelease(Cover);

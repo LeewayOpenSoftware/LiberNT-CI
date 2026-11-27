@@ -65,7 +65,8 @@ WluiLaunchUnregister(
     WluiStateRelease(State);
 }
 
-BOOL
+/* Returns the command's sequence number, 0 if it was dropped. */
+DWORD
 WluiLaunchPostCommand(
     _In_ PWLUI_LAUNCH_STATE State,
     _In_ const struct _WLUI_COMMAND *Command)
@@ -76,9 +77,18 @@ WluiLaunchPostCommand(
     if (!WluiStatePost(State, &Copy, sizeof(Copy)))
     {
         ERR("WL: wlui command %u dropped (queue full or launch dead)\n", Copy.Type);
-        return FALSE;
+        return 0;
     }
-    return TRUE;
+    return Copy.Sequence;
+}
+
+BOOL
+WluiLaunchWaitShown(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ DWORD Sequence,
+    _In_ DWORD TimeoutMs)
+{
+    return Sequence != 0 && WluiStateWaitShown(State, Sequence, TimeoutMs);
 }
 
 BOOL
@@ -384,6 +394,28 @@ WluiExiting(
     WluiStateSetExiting(State, (DWORD)Reason);
     TRACE("WL: wlui launch exiting (reason %u)\n", Reason);
 
+    WluiStateRelease(State);
+    return ERROR_SUCCESS;
+}
+
+/* Function 7 */
+DWORD
+__stdcall
+WluiCommandShown(
+    handle_t hBinding,
+    GUID LaunchId,
+    DWORD Sequence)
+{
+    PWLUI_LAUNCH_STATE State;
+    DWORD Error;
+
+    Error = WluiAuthorizeCall(hBinding, &LaunchId, WluiOpCommandShown, &State, NULL);
+    if (Error != ERROR_SUCCESS)
+        return Error;
+
+    /* Only a sequence that was actually handed out counts (the caller is untrusted input). */
+    if (Sequence != 0 && Sequence <= (DWORD)State->SequenceCounter)
+        WluiStateSetShown(State, Sequence);
     WluiStateRelease(State);
     return ERROR_SUCCESS;
 }
