@@ -75,10 +75,13 @@ WlDisplayLockedNotice(IN PWLSESSION Session)
         Session->Gina.Functions.WlxDisplayLockedNotice(Session->Gina.Context);
 }
 
+/* A secure screen saver locks whatever DisableLockWorkstation says, as on Windows. */
+static BOOL g_SecureSaverLock;
+
 static BOOL
 WlIsLockOk(IN PWLSESSION Session)
 {
-    return Session->UseLogonUI ? TRUE : Session->Gina.Functions.WlxIsLockOk(Session->Gina.Context);
+    return Session->UseLogonUI ? WlHostIsLockOk(Session) : Session->Gina.Functions.WlxIsLockOk(Session->Gina.Context);
 }
 
 static BOOL
@@ -1128,13 +1131,20 @@ cleanup:
         /* Host mode: wait for the painted desktop, then the host fades across the switch (§6.3.1). */
         if (Session->UseLogonUI)
         {
+            PWL_COVER Cover;
+
             WlHostWaitDesktopSwitch(Session);
+            /* The last host frame covers the painted desktop, then fades out over it. */
+            Cover = WlSwitchDesktopCovered(Session->WinlogonDesktop, Session->ApplicationDesktop);
             WlHostBeforeDesktopSwitch();
-        }
-        SwitchDesktop(Session->ApplicationDesktop);
-        RemoveStatusMessage(Session);
-        if (Session->UseLogonUI)
+            WlCoverRelease(Cover);
             WlHostAfterDesktopSwitch();
+        }
+        else
+        {
+            SwitchDesktop(Session->ApplicationDesktop);
+            RemoveStatusMessage(Session);
+        }
         Session->LogonState = STATE_LOGGED_ON;
         LogonStage("logged-on");
     }
@@ -1436,9 +1446,21 @@ HandleLogoff(
 
     if (Session->UseLogonUI)
     {
-        /* "Signing out" stands on the host before any user process is closed (plan, commit 7). */
+        /* "Signing out" stands on the host before any user process is closed (plan, commit 7).
+         * From the user's desktop that desktop fades into it; from the Ctrl+Alt+Del list or a
+         * locked station the screen already shows the Winlogon desktop, so it is a plain cut,
+         * as on Windows 11 (no cover of a desktop that is not on screen). */
         DisplayStatusMessage(Session, Session->WinlogonDesktop, IDS_LOGGINGOFF);
-        SwitchDesktop(Session->WinlogonDesktop);
+        WlHostWaitStatusShown();
+        if (Session->LogonState == STATE_LOGGED_ON)
+        {
+            WlCoverRelease(WlSwitchDesktopCovered(Session->ApplicationDesktop, Session->WinlogonDesktop));
+        }
+        else
+        {
+            SwitchDesktop(Session->WinlogonDesktop);
+            LogonStage("desktop-switch-plain-secure");
+        }
     }
 
     Status = CreateLogoffSecurityAttributes(&psa);
@@ -1744,7 +1766,7 @@ DoGenericAction(
             if ((Session->LogonState == STATE_LOGGED_ON) ||
                 (Session->LogonState == STATE_LOGGED_ON_SAS))
             {
-                if (WlIsLockOk(Session))
+                if (g_SecureSaverLock || WlIsLockOk(Session))
                 {
                     Session->LogonState = STATE_LOCKED;
                     SwitchDesktop(Session->WinlogonDesktop);
@@ -1817,6 +1839,16 @@ DoGenericAction(
         case WLX_SAS_ACTION_SHUTDOWN_SLEEP: /* 0x0c */
         case WLX_SAS_ACTION_SHUTDOWN_SLEEP2: /* 0x0d */
         case WLX_SAS_ACTION_SHUTDOWN_HIBERNATE: /* 0x0e */
+            /* Waking asks for the password, as on Windows: a signed-in session is locked before it sleeps. */
+            if ((Session->LogonState == STATE_LOGGED_ON) ||
+                (Session->LogonState == STATE_LOGGED_ON_SAS))
+            {
+                BOOL OldSecureSaverLock = g_SecureSaverLock;
+
+                g_SecureSaverLock = TRUE;   /* the wake password is not DisableLockWorkstation's to waive */
+                DoGenericAction(Session, WLX_SAS_ACTION_LOCK_WKSTA);
+                g_SecureSaverLock = OldSecureSaverLock;
+            }
             HandleSuspend(wlxAction);
             DoGenericAction(Session, WLX_SAS_ACTION_NONE);
             break;
@@ -1826,11 +1858,29 @@ DoGenericAction(
             {
                 CallNotificationDlls(Session, UnlockHandler);
                 if (Session->UseLogonUI)
+                {
+                    PWL_COVER Cover = NULL;
+
+                    if (WlHostShowUnlockWelcome(Session))
+                    {
+                        Cover = WlSwitchDesktopCovered(Session->WinlogonDesktop, Session->ApplicationDesktop);
+                    }
+                    else
+                    {
+                        /* A cut is acceptable; the credential page on the user's desktop is not. */
+                        SwitchDesktop(Session->ApplicationDesktop);
+                        LogonStage("desktop-switch-plain-unshown");
+                    }
+
                     WlHostBeforeDesktopSwitch();
-                SwitchDesktop(Session->ApplicationDesktop);
-                RemoveStatusMessage(Session);
-                if (Session->UseLogonUI)
+                    WlCoverRelease(Cover);
                     WlHostAfterDesktopSwitch();
+                }
+                else
+                {
+                    SwitchDesktop(Session->ApplicationDesktop);
+                    RemoveStatusMessage(Session);
+                }
                 Session->LogonState = STATE_LOGGED_ON;
             }
             break;
@@ -1891,8 +1941,8 @@ DispatchSAS(
                 case STATE_LOGGED_ON:
                     Session->LogonState = STATE_LOGGED_ON_SAS;
                     SwitchDesktop(Session->WinlogonDesktop);
-                    /* Host mode: the Ctrl+Alt+Del options page is Phase 4; the SAS is cancelled. */
-                    wlxAction = Session->UseLogonUI ? WLX_SAS_ACTION_NONE :
+                    /* Host mode: the host shows the Ctrl+Alt+Del options and is gone on return. */
+                    wlxAction = Session->UseLogonUI ? WlHostLoggedOnSas(Session) :
                         (DWORD)Session->Gina.Functions.WlxLoggedOnSAS(Session->Gina.Context, dwSasType, NULL);
                     if ((wlxAction == WLX_SAS_ACTION_NONE) ||
                         (wlxAction == WLX_SAS_ACTION_TASKLIST))
@@ -1923,8 +1973,15 @@ DispatchSAS(
 
                     CloseAllDialogWindows();
 
-                    wlxAction = Session->UseLogonUI ? WLX_SAS_ACTION_NONE :
-                        (DWORD)Session->Gina.Functions.WlxWkstaLockedSAS(Session->Gina.Context, dwSasType);
+                    if (Session->UseLogonUI)
+                    {
+                        /* Host mode: the SAS brings up the unlock page; the station stays locked
+                         * until the host's unlock comes back as WLHOST_EVENT_UNLOCK. */
+                        WlHostLockedSas(Session);
+                        wlxAction = WLX_SAS_ACTION_NONE;
+                        break;
+                    }
+                    wlxAction = (DWORD)Session->Gina.Functions.WlxWkstaLockedSAS(Session->Gina.Context, dwSasType);
                     break;
 
                 case STATE_LOCKED_SAS:
@@ -1953,6 +2010,7 @@ DispatchSAS(
             StartScreenSaver(Session);
             if (bSecure)
             {
+                g_SecureSaverLock = TRUE;
                 wlxAction = WLX_SAS_ACTION_LOCK_WKSTA;
 //                DoGenericAction(Session, WLX_SAS_ACTION_LOCK_WKSTA);
             }
@@ -1964,6 +2022,7 @@ DispatchSAS(
     }
 
     DoGenericAction(Session, wlxAction);
+    g_SecureSaverLock = FALSE;
 
     if (dwSasType != WLX_SAS_TYPE_CTRL_ALT_DEL)
         return;
@@ -2007,6 +2066,9 @@ HostEvent(
             break;
         case WLHOST_EVENT_RESTART:
             DoGenericAction(Session, WLX_SAS_ACTION_SHUTDOWN_REBOOT);
+            break;
+        case WLHOST_EVENT_SLEEP:
+            DoGenericAction(Session, WLX_SAS_ACTION_SHUTDOWN_SLEEP);
             break;
         default:
             WARN("Unknown host event %lu\n", Event);
@@ -2114,7 +2176,9 @@ SASWindowProc(
                 case IDHK_CTRL_ALT_DEL:
                 {
                     TRACE("SAS: CONTROL+ALT+DELETE\n");
-                    if (!Session->Gina.UseCtrlAltDelete)
+                    /* Without a GINA nobody calls WlxSetOption(WLX_OPTION_USE_CTRL_ALT_DEL); in host
+                     * mode Ctrl+Alt+Del is always a SAS, whether or not DisableCAD makes it optional. */
+                    if (!Session->UseLogonUI && !Session->Gina.UseCtrlAltDelete)
                         break;
                     PostMessageW(Session->SASWindow, WLX_WM_SAS, WLX_SAS_TYPE_CTRL_ALT_DEL, 0);
                     return TRUE;

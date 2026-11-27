@@ -1,0 +1,46 @@
+/*
+ * PROJECT:     LiberNT LogonUI host
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Spanish (Spain) resource file
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_SPANISH, SUBLANG_NEUTRAL
+
+STRINGTABLE
+BEGIN
+    IDS_LUH_POWER           "Energía"
+    IDS_LUH_RESTART         "Reiniciar"
+    IDS_LUH_SHUTDOWN        "Apagar"
+    IDS_LUH_HINT_SIGNIN     "Presione una tecla o haga clic para iniciar sesión"
+    IDS_LUH_HINT_UNLOCK     "Presione una tecla o haga clic para desbloquear"
+    IDS_LUH_NOTICE          "Aviso"
+    IDS_LUH_NO_SIGNIN       "El inicio de sesión no está disponible en este equipo."
+    IDS_LUH_CONTACT_ADMIN   "Póngase en contacto con el administrador."
+    IDS_LUH_SIGNIN_FAILED   "No se pudo completar el inicio de sesión. Inténtelo de nuevo."
+    IDS_LUH_PLEASE_WAIT     "Espere"
+    IDS_LUH_WELCOME         "Te damos la bienvenida"
+    IDS_LUH_LOCK            "Bloquear"
+    IDS_LUH_SIGN_OUT        "Cerrar sesión"
+    IDS_LUH_CHANGE_PASSWORD "Cambiar una contraseña"
+    IDS_LUH_TASK_MANAGER    "Administrador de tareas"
+    IDS_LUH_CANCEL          "Cancelar"
+    IDS_LUH_EMERGENCY_TITLE "Reinicio de emergencia"
+    IDS_LUH_EMERGENCY_TEXT  "Seleccione Aceptar para reiniciar de inmediato. Se perderá todo lo que no haya guardado. Use esto solo como último recurso."
+    IDS_LUH_ACCOUNT_DISABLED "Su cuenta se ha deshabilitado. Póngase en contacto con el administrador del sistema."
+    IDS_LUH_ACCOUNT_EXPIRED "La cuenta del usuario ha expirado."
+    IDS_LUH_LOGON_HOURS     "Su cuenta tiene restricciones de horario que le impiden iniciar sesión en este momento.\nInténtelo de nuevo más tarde."
+    IDS_LUH_WORKSTATION     "Su cuenta está configurada para impedir que use este equipo. Pruebe con otro equipo."
+    IDS_LUH_ACCOUNT_RESTRICTED "Las restricciones de la cuenta impiden que este usuario inicie sesión. Por ejemplo: no se permiten contraseñas en blanco, el horario de inicio de sesión está limitado o se aplica una restricción de directiva."
+    IDS_LUH_LOCKED_OUT      "La cuenta a la que se hace referencia está bloqueada y no se puede usar para iniciar sesión."
+    IDS_LUH_CAPS_LOCK       "Bloq Mayús está activado"
+    IDS_LUH_OK              "Aceptar"
+    IDS_LUH_TIP_SHUTDOWN    "Cierra todas las aplicaciones y apaga el equipo."
+    IDS_LUH_TIP_RESTART     "Cierra todas las aplicaciones, apaga el equipo y vuelve a encenderlo."
+    IDS_LUH_SLEEP           "Suspender"
+    IDS_LUH_TIP_SLEEP       "El equipo sigue encendido con poco consumo. Las aplicaciones siguen abiertas y, al reactivarlo, vuelves al instante a donde lo dejaste."
+    IDS_LUH_WARN_RESTART    "Si reinicia ahora, usted y cualquier otra persona que use este equipo podrían perder el trabajo no guardado."
+    IDS_LUH_WARN_SHUTDOWN   "Si apaga ahora, usted y cualquier otra persona que use este equipo podrían perder el trabajo no guardado."
+    IDS_LUH_RESTART_ANYWAY  "Reiniciar de todos modos"
+    IDS_LUH_SHUTDOWN_ANYWAY "Apagar de todos modos"
+END

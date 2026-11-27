@@ -57,11 +57,15 @@ LogonStage(
     OutputDebugStringA(Line);
 }
 
-/* Read once at start: the logon mode must never flip mid-session. */
+/*
+ * The logon UI is always the supervised LogonUI host: there is no GINA mode to fall back to.
+ * The old selector and a GinaDLL replacement are ignored, as on Vista and later; a trace says so.
+ */
 static
-BOOL
-ReadUseLogonUISelector(VOID)
+VOID
+NoteIgnoredLogonSettings(VOID)
 {
+    WCHAR Gina[MAX_PATH];
     DWORD Value = 0, Size = sizeof(Value);
 
     if (RegGetValueW(HKEY_LOCAL_MACHINE,
@@ -70,11 +74,21 @@ ReadUseLogonUISelector(VOID)
                      RRF_RT_REG_DWORD,
                      NULL,
                      &Value,
-                     &Size) != ERROR_SUCCESS)
+                     &Size) == ERROR_SUCCESS)
     {
-        Value = 0;
+        WARN("WL: Winlogon\\UseLogonUI=%lu is ignored; the LogonUI host is always used\n", Value);
     }
-    return (Value != 0);
+    Size = sizeof(Gina);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                     L"GinaDLL",
+                     RRF_RT_REG_SZ,
+                     NULL,
+                     Gina,
+                     &Size) == ERROR_SUCCESS)
+    {
+        WARN("WL: Winlogon\\GinaDLL=%ls is ignored; GINAs are not loaded\n", Gina);
+    }
 }
 
 /**
@@ -351,6 +365,9 @@ DisplayStatusMessage(
     if (Session->UseLogonUI)
     {
         /* The host shows status in place; it keeps the text until the next command. */
+        ResourceId = WlHostStatusText(ResourceId);
+        if (ResourceId == 0)
+            return TRUE;
         if (LoadStringW(hAppInstance, ResourceId, StatusMsg, MAX_PATH) != 0)
             WlHostStatus(StatusMsg);
         return TRUE;
@@ -549,8 +566,8 @@ WinMain(
 
     ZeroMemory(WLSession, sizeof(WLSESSION));
     WLSession->DialogTimeout = 120; /* 2 minutes */
-    WLSession->UseLogonUI = ReadUseLogonUISelector();
-    TRACE("WL: UseLogonUI selector = %d\n", WLSession->UseLogonUI);
+    WLSession->UseLogonUI = TRUE;
+    NoteIgnoredLogonSettings();
     WlHostInit();
     if (WLSession->UseLogonUI)
         WlHostLogonInit(WLSession);     /* before the first status message, which starts a host */
