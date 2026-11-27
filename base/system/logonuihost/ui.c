@@ -202,6 +202,7 @@ LuhDestroyPage(void)
     DWORD i;
 
     g_Ui.CapsControl = NULL;    /* its box goes away with the page */
+    g_Ui.CapsTop = 0;
     if (g_Ui.Page)
     {
         for (i = 0; i < g_Ui.Page->Count; i++)
