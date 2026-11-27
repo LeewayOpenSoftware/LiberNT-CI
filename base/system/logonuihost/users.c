@@ -355,6 +355,10 @@ LuhUsersCreate(
         return E_OUTOFMEMORY;
     Array->ICredentialProviderUserArray_iface.lpVtbl = &LuhUserArrayVtbl;
     Array->Ref = 1;
+    /* DontDisplayLockedUserId=3 hides the locked account's name: the unlock page names nobody
+     * (winlogon still lets only the session's user unlock). */
+    if (Unlock && ReadPolicyDword(L"DontDisplayLockedUserId", 1) == 3)
+        OnlyName = NULL;
     if (Unlock && OnlyName == NULL)
     {
         TRACE("unlock without an account name: no users\n");
