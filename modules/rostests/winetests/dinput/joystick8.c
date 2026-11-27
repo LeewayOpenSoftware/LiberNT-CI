@@ -6881,7 +6881,10 @@ START_TEST( joystick8 )
 
     argc = winetest_get_mainargs( &argv );
     if (argc >= 3 && !strcmp( argv[2], "test_rawinput_desktop" ))
-        return test_rawinput_desktop( argv[3], argc > 4 && !strcmp( argv[4], "input" ) );
+    {
+        test_rawinput_desktop( argv[3], argc > 4 && !strcmp( argv[4], "input" ) );
+        return;
+    }
 
     dinput_test_init();
     if (!bus_device_start()) goto done;
