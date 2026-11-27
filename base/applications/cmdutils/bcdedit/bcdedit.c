@@ -19,6 +19,7 @@
 #include <winbase.h>
 #include <winreg.h>
 #include <winuser.h>
+#include <rpc.h>
 #include <strsafe.h>
 
 #include <reactos/bcddef.h>
@@ -1442,6 +1443,345 @@ DisplayOrderCommand(
     return Ok ? 0 : 1;
 }
 
+/* The object Type for a /application class, and for a well-known alias the caller may name. */
+static const struct { PCWSTR Name; ULONG Type; } g_AppTypes[] =
+{
+    { L"bootmgr",    0x10100002 },
+    { L"fwbootmgr",  0x10100001 },
+    { L"osloader",   0x10200003 },
+    { L"resume",     0x10200004 },
+    { L"memdiag",    0x10200005 },
+    { L"startup",    0x10200006 },
+    { L"ntldr",      0x10300006 },
+    { L"bootsector", 0x10400008 },
+};
+
+static const struct { PCWSTR Alias; ULONG Type; } g_WellKnownTypes[] =
+{
+    { L"{bootmgr}",              0x10100002 },
+    { L"{fwbootmgr}",            0x10100001 },
+    { L"{memdiag}",              0x10200005 },
+    { L"{ntldr}",                0x10300006 },
+    { L"{ramdiskoptions}",       0x30000000 },
+    { L"{dbgsettings}",          0x20100001 },
+    { L"{emssettings}",          0x20100002 },
+    { L"{badmemory}",            0x20100003 },
+    { L"{globalsettings}",       0x20100000 },
+    { L"{bootloadersettings}",   0x20200003 },
+    { L"{hypervisorsettings}",   0x20200003 },
+    { L"{resumeloadersettings}", 0x20200004 },
+};
+
+/* A fresh object identifier, formatted like the ids bcdedit prints. */
+static
+BOOL
+GenerateGuid(
+    _Out_writes_z_(Cap) PWSTR Buffer,
+    _In_ SIZE_T Cap)
+{
+    UUID Uuid;
+
+    if (UuidCreate(&Uuid) != RPC_S_OK)
+        return FALSE;
+    return SUCCEEDED(StringCchPrintfW(Buffer, Cap,
+        L"{%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
+        Uuid.Data1, Uuid.Data2, Uuid.Data3,
+        Uuid.Data4[0], Uuid.Data4[1], Uuid.Data4[2], Uuid.Data4[3],
+        Uuid.Data4[4], Uuid.Data4[5], Uuid.Data4[6], Uuid.Data4[7]));
+}
+
+/* Create Objects\<Id>\Description\Type on an object that does not yet exist; FALSE if it does. */
+static
+BOOL
+NewObject(
+    _In_ HKEY Store,
+    _In_ PCWSTR Id,
+    _In_ ULONG Type)
+{
+    HKEY Objects, Object, Description;
+    DWORD Disposition = 0;
+    BOOL Ok = FALSE;
+
+    if (RegOpenKeyExW(Store, L"Objects", 0, KEY_READ | KEY_WRITE, &Objects) != ERROR_SUCCESS)
+        return FALSE;
+    if (RegCreateKeyExW(Objects, Id, 0, NULL, 0, KEY_READ | KEY_WRITE, NULL, &Object, &Disposition) == ERROR_SUCCESS)
+    {
+        if (Disposition != REG_OPENED_EXISTING_KEY &&
+            RegCreateKeyExW(Object, L"Description", 0, NULL, 0, KEY_WRITE, NULL, &Description, NULL) == ERROR_SUCCESS)
+        {
+            Ok = (RegSetValueExW(Description, L"Type", 0, REG_DWORD, (const BYTE *)&Type, sizeof(Type)) == ERROR_SUCCESS);
+            RegCloseKey(Description);
+        }
+        RegCloseKey(Object);
+    }
+    RegCloseKey(Objects);
+    return Ok;
+}
+
+/* Copy every element of one object to another, value and registry type unchanged. */
+static
+BOOL
+CopyElements(
+    _In_ HKEY Store,
+    _In_ PCWSTR SrcId,
+    _In_ PCWSTR DstId)
+{
+    HKEY Objects, SrcObject, SrcElements;
+    WCHAR Name[16];
+    DWORD Index;
+    BOOL Ok = TRUE;
+
+    if (RegOpenKeyExW(Store, L"Objects", 0, KEY_READ, &Objects) != ERROR_SUCCESS)
+        return FALSE;
+    if (RegOpenKeyExW(Objects, SrcId, 0, KEY_READ, &SrcObject) != ERROR_SUCCESS)
+    {
+        RegCloseKey(Objects);
+        return FALSE;
+    }
+    if (RegOpenKeyExW(SrcObject, L"Elements", 0, KEY_READ, &SrcElements) == ERROR_SUCCESS)
+    {
+        for (Index = 0; ; Index++)
+        {
+            HKEY One;
+            BYTE *Data;
+            DWORD Chars = ARRAYSIZE(Name), RegType = 0, Length = 0;
+
+            if (RegEnumKeyExW(SrcElements, Index, Name, &Chars, NULL, NULL, NULL, NULL) == ERROR_NO_MORE_ITEMS)
+                break;
+            if (!IsHexName8(Name, Chars))
+                continue;
+            if (RegOpenKeyExW(SrcElements, Name, 0, KEY_READ, &One) != ERROR_SUCCESS)
+                continue;
+            if (RegQueryValueExW(One, L"Element", NULL, &RegType, NULL, &Length) == ERROR_SUCCESS && Length > 0)
+            {
+                Data = HeapAlloc(GetProcessHeap(), 0, Length);
+                if (Data != NULL)
+                {
+                    if (RegQueryValueExW(One, L"Element", NULL, &RegType, Data, &Length) == ERROR_SUCCESS)
+                    {
+                        if (!WriteElement(Store, DstId, wcstoul(Name, NULL, 16), RegType, Data, Length))
+                            Ok = FALSE;
+                    }
+                    HeapFree(GetProcessHeap(), 0, Data);
+                }
+            }
+            RegCloseKey(One);
+        }
+        RegCloseKey(SrcElements);
+    }
+    RegCloseKey(SrcObject);
+    RegCloseKey(Objects);
+    return Ok;
+}
+
+/* /create [<id>] /d "name" [/application <type> | /inherit | /device]: add a new object. The id
+ * is generated when omitted; the class comes from the option or, for a well-known id, its alias. */
+static
+int
+CreateCommand(
+    _In_opt_ PCWSTR StoreFile,
+    _In_ int Argc,
+    _In_reads_(Argc) WCHAR **Argv,
+    _In_ int First)
+{
+    WCHAR Generated[48], AliasBuf[48];
+    PCWSTR IdArg = NULL, Description = NULL, AppType = NULL, Id;
+    BOOL Inherit = FALSE, Device = FALSE, HaveType = FALSE;
+    ULONG Type = 0;
+    HKEY Store;
+    SIZE_T i;
+    int a;
+
+    for (a = First; a < Argc; a++)
+    {
+        if (_wcsicmp(Argv[a], L"/d") == 0 && a + 1 < Argc)
+            Description = Argv[++a];
+        else if (_wcsicmp(Argv[a], L"/application") == 0 && a + 1 < Argc)
+            AppType = Argv[++a];
+        else if (_wcsicmp(Argv[a], L"/inherit") == 0)
+            Inherit = TRUE;
+        else if (_wcsicmp(Argv[a], L"/device") == 0)
+            Device = TRUE;
+        else if (Argv[a][0] != L'/' && IdArg == NULL)
+            IdArg = Argv[a];
+        else
+        {
+            PrintResource(IDS_ERR_BADPARAM);
+            return 1;
+        }
+    }
+
+    if (AppType != NULL)
+    {
+        for (i = 0; i < ARRAYSIZE(g_AppTypes); i++)
+        {
+            if (_wcsicmp(AppType, g_AppTypes[i].Name) == 0)
+            {
+                Type = g_AppTypes[i].Type;
+                HaveType = TRUE;
+                break;
+            }
+        }
+    }
+    else if (Inherit)
+    {
+        Type = 0x20100000;
+        HaveType = TRUE;
+    }
+    else if (Device)
+    {
+        Type = 0x30000000;
+        HaveType = TRUE;
+    }
+    else if (IdArg != NULL)
+    {
+        for (i = 0; i < ARRAYSIZE(g_WellKnownTypes); i++)
+        {
+            if (_wcsicmp(IdArg, g_WellKnownTypes[i].Alias) == 0)
+            {
+                Type = g_WellKnownTypes[i].Type;
+                HaveType = TRUE;
+                break;
+            }
+        }
+    }
+    if (!HaveType)
+    {
+        PrintResource(IDS_ERR_BADPARAM);
+        return 1;
+    }
+
+    if (IdArg != NULL)
+    {
+        Id = IdForAlias(IdArg, AliasBuf, ARRAYSIZE(AliasBuf));
+        if (!IsValidGuid(Id))
+        {
+            PrintResource(IDS_ERR_BADID);
+            return 1;
+        }
+    }
+    else
+    {
+        if (!GenerateGuid(Generated, ARRAYSIZE(Generated)))
+        {
+            PrintResource(IDS_ERR_SETFAIL);
+            return 1;
+        }
+        Id = Generated;
+    }
+
+    if (OpenStore(StoreFile, KEY_READ | KEY_WRITE, &Store) != ERROR_SUCCESS)
+    {
+        PrintResource(IDS_ERR_OPENSTORE);
+        return 1;
+    }
+    if (!NewObject(Store, Id, Type))
+    {
+        RegCloseKey(Store);
+        PrintResource(IDS_ERR_SETFAIL);
+        return 1;
+    }
+    if (Description != NULL)
+    {
+        WriteElement(Store, Id, 0x12000004, REG_SZ, Description,
+                     (DWORD)((wcslen(Description) + 1) * sizeof(WCHAR)));
+    }
+    RegCloseKey(Store);
+
+    wprintf(L"%s\n", Id);
+    PrintResource(IDS_OK);
+    return 0;
+}
+
+/* /copy <id> /d "name": duplicate an object under a new id, with a new description. */
+static
+int
+CopyCommand(
+    _In_opt_ PCWSTR StoreFile,
+    _In_ int Argc,
+    _In_reads_(Argc) WCHAR **Argv,
+    _In_ int First)
+{
+    WCHAR Generated[48], SrcBuf[48];
+    PCWSTR SrcArg = NULL, Description = NULL, Src;
+    HKEY Store, Objects, SrcObject, Description2;
+    DWORD Type = 0, Length = sizeof(Type), RegType = 0;
+    int a;
+
+    for (a = First; a < Argc; a++)
+    {
+        if (_wcsicmp(Argv[a], L"/d") == 0 && a + 1 < Argc)
+            Description = Argv[++a];
+        else if (Argv[a][0] != L'/' && SrcArg == NULL)
+            SrcArg = Argv[a];
+        else
+        {
+            PrintResource(IDS_ERR_BADPARAM);
+            return 1;
+        }
+    }
+    if (SrcArg == NULL)
+    {
+        PrintResource(IDS_ERR_BADPARAM);
+        return 1;
+    }
+
+    if (!GenerateGuid(Generated, ARRAYSIZE(Generated)))
+    {
+        PrintResource(IDS_ERR_SETFAIL);
+        return 1;
+    }
+    if (OpenStore(StoreFile, KEY_READ | KEY_WRITE, &Store) != ERROR_SUCCESS)
+    {
+        PrintResource(IDS_ERR_OPENSTORE);
+        return 1;
+    }
+    Src = IdForAlias(SrcArg, SrcBuf, ARRAYSIZE(SrcBuf));
+    if (!IsValidGuid(Src))
+    {
+        RegCloseKey(Store);
+        PrintResource(IDS_ERR_BADID);
+        return 1;
+    }
+
+    /* The source object's class becomes the copy's class. */
+    if (RegOpenKeyExW(Store, L"Objects", 0, KEY_READ, &Objects) == ERROR_SUCCESS)
+    {
+        if (RegOpenKeyExW(Objects, Src, 0, KEY_READ, &SrcObject) == ERROR_SUCCESS)
+        {
+            if (RegOpenKeyExW(SrcObject, L"Description", 0, KEY_READ, &Description2) == ERROR_SUCCESS)
+            {
+                RegQueryValueExW(Description2, L"Type", NULL, &RegType, (BYTE *)&Type, &Length);
+                RegCloseKey(Description2);
+            }
+            RegCloseKey(SrcObject);
+        }
+        RegCloseKey(Objects);
+    }
+    if (Type == 0 || !NewObject(Store, Generated, Type))
+    {
+        RegCloseKey(Store);
+        PrintResource(IDS_ERR_SETFAIL);
+        return 1;
+    }
+    if (!CopyElements(Store, Src, Generated))
+    {
+        RegCloseKey(Store);
+        PrintResource(IDS_ERR_SETFAIL);
+        return 1;
+    }
+    if (Description != NULL)
+    {
+        WriteElement(Store, Generated, 0x12000004, REG_SZ, Description,
+                     (DWORD)((wcslen(Description) + 1) * sizeof(WCHAR)));
+    }
+    RegCloseKey(Store);
+
+    wprintf(L"%s\n", Generated);
+    PrintResource(IDS_OK);
+    return 0;
+}
+
 int
 wmain(
     _In_ int argc,
@@ -1549,6 +1889,23 @@ wmain(
             return 1;
         }
         return DisplayOrderCommand(StoreFile, argc, argv, i + 1);
+    }
+
+    if (_wcsicmp(Command, L"/create") == 0)
+    {
+        /* /create [<id>] /d "name" [/application <type> | /inherit | /device] */
+        return CreateCommand(StoreFile, argc, argv, i + 1);
+    }
+
+    if (_wcsicmp(Command, L"/copy") == 0)
+    {
+        /* /copy <id> /d "name" */
+        if (i + 1 >= argc)
+        {
+            PrintResource(IDS_ERR_BADPARAM);
+            return 1;
+        }
+        return CopyCommand(StoreFile, argc, argv, i + 1);
     }
 
     PrintResource(IDS_ERR_BADPARAM);

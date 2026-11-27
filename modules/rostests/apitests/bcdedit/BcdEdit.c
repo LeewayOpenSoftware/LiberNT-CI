@@ -55,16 +55,17 @@ SeedStore(PCWSTR File)
     return TRUE;
 }
 
-/* Run "bcdedit <Args>" to completion with its output discarded, and return its exit code, or
- * (DWORD)-1 if it could not be started. */
+/* Run "bcdedit <Args>" to completion and return its exit code, or (DWORD)-1 if it could not be
+ * started. When Out is given, stdout is captured into it (NUL-terminated); bcdedit writes a guid
+ * as plain ASCII, so the id it prints for /create and /copy can be read back. */
 static DWORD
-RunBcd(PCWSTR Args)
+RunBcdCapture(PCWSTR Args, char *Out, DWORD OutSize)
 {
     WCHAR CmdLine[1024];
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     SECURITY_ATTRIBUTES sa;
-    HANDLE Null;
+    HANDLE Sink = INVALID_HANDLE_VALUE, ReadEnd = INVALID_HANDLE_VALUE;
     DWORD Code = (DWORD)-1;
 
     StringCchPrintfW(CmdLine, ARRAYSIZE(CmdLine), L"bcdedit %s", Args);
@@ -72,18 +73,40 @@ RunBcd(PCWSTR Args)
     sa.nLength = sizeof(sa);
     sa.lpSecurityDescriptor = NULL;
     sa.bInheritHandle = TRUE;
-    Null = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
-                       OPEN_EXISTING, 0, NULL);
+
+    if (Out != NULL)
+    {
+        if (OutSize > 0)
+            Out[0] = 0;
+        if (!CreatePipe(&ReadEnd, &Sink, &sa, 0))
+            return Code;
+        SetHandleInformation(ReadEnd, HANDLE_FLAG_INHERIT, 0);
+    }
+    else
+    {
+        Sink = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                           OPEN_EXISTING, 0, NULL);
+    }
 
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-    si.hStdOutput = Null;
-    si.hStdError = Null;
+    si.hStdOutput = Sink;
+    si.hStdError = Sink;
 
     if (CreateProcessW(NULL, CmdLine, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
     {
+        if (Out != NULL)
+        {
+            DWORD Total = 0, Got;
+            CloseHandle(Sink);          /* the child owns the only write end now */
+            Sink = INVALID_HANDLE_VALUE;
+            while (Total + 1 < OutSize &&
+                   ReadFile(ReadEnd, Out + Total, OutSize - 1 - Total, &Got, NULL) && Got > 0)
+                Total += Got;
+            Out[Total] = 0;
+        }
         /* Kill a hung child so it releases the fixture hive and the file can be deleted. */
         if (WaitForSingleObject(pi.hProcess, 20000) != WAIT_OBJECT_0)
             TerminateProcess(pi.hProcess, 1);
@@ -91,9 +114,17 @@ RunBcd(PCWSTR Args)
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
     }
-    if (Null != INVALID_HANDLE_VALUE)
-        CloseHandle(Null);
+    if (Sink != INVALID_HANDLE_VALUE)
+        CloseHandle(Sink);
+    if (ReadEnd != INVALID_HANDLE_VALUE)
+        CloseHandle(ReadEnd);
     return Code;
+}
+
+static DWORD
+RunBcd(PCWSTR Args)
+{
+    return RunBcdCapture(Args, NULL, 0);
 }
 
 /* Read Objects\<Id>\Elements\<Type>\Element from the hive file into Buffer; returns its registry
@@ -124,13 +155,36 @@ ReadElement(PCWSTR File, PCWSTR Id, ULONG Type, BYTE *Buffer, DWORD *Length)
     return RegType;
 }
 
+/* Objects\<Id>\Description\Type from the hive file, or 0 if the object or value is absent. */
+static DWORD
+ReadObjectType(PCWSTR File, PCWSTR Id)
+{
+    HKEY Root, Key;
+    WCHAR Path[160];
+    DWORD Type = 0, Size = sizeof(Type), RegType = 0;
+
+    if (RegLoadAppKeyW(File, &Root, KEY_READ, 0, 0) != ERROR_SUCCESS)
+        return 0;
+    StringCchPrintfW(Path, ARRAYSIZE(Path), L"Objects\\%s\\Description", Id);
+    if (RegOpenKeyExW(Root, Path, 0, KEY_READ, &Key) == ERROR_SUCCESS)
+    {
+        RegQueryValueExW(Key, L"Type", NULL, &RegType, (BYTE *)&Type, &Size);
+        RegCloseKey(Key);
+    }
+    RegCloseKey(Root);
+    return Type;
+}
+
 START_TEST(BcdEdit)
 {
     WCHAR File[MAX_PATH], Dir[MAX_PATH], Args[512];
-    WCHAR Buffer[128];
+    WCHAR Buffer[128], NewId[64];
     BYTE *B = (BYTE *)Buffer;
+    char Out[256];
     DWORD Length, RegType;
     DWORD Code;
+    static const WCHAR Fresh[] = L"{cccccccc-1111-2222-3333-444444444444}";
+    static const WCHAR Src[]   = L"{dddddddd-1111-2222-3333-444444444444}";
 
     GetTempPathW(ARRAYSIZE(Dir), Dir);
     StringCchPrintfW(File, ARRAYSIZE(File), L"%sbcdedit_fixture_%lu.hiv", Dir, GetCurrentProcessId());
@@ -266,6 +320,56 @@ START_TEST(BcdEdit)
     ok(RunBcd(Args) == 1, "non-guid list value should be rejected\n");
     StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /set {bbbbbbbb-cccc-dddd-eeee-ffffffffffff} description X", File);
     ok(RunBcd(Args) == 1, "/set on a missing object should be rejected\n");
+
+    /* /create makes a new OS loader object with the given description. */
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /create %s /d \"Fresh Entry\" /application osloader", File, Fresh);
+    Code = RunBcd(Args);
+    ok(Code == 0, "/create exit %lu\n", Code);
+    ok(ReadObjectType(File, Fresh) == 0x10200003, "/create type %08lx\n", ReadObjectType(File, Fresh));
+    Length = sizeof(Buffer);
+    RegType = ReadElement(File, Fresh, EL_DESCRIPTION, B, &Length);
+    ok(RegType == REG_SZ && wcscmp(Buffer, L"Fresh Entry") == 0, "/create description wrong\n");
+
+    /* Creating the same id again fails, since the object already exists. */
+    Code = RunBcd(Args);
+    ok(Code == 1, "/create of an existing id should exit 1, got %lu\n", Code);
+
+    /* A non-guid id, or a request with no class, is rejected. */
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /create notaguid /d X /application osloader", File);
+    ok(RunBcd(Args) == 1, "/create with a non-guid id should be rejected\n");
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /create %s /d X", File, Fresh);
+    ok(RunBcd(Args) == 1, "/create with no class should be rejected\n");
+
+    /* /copy duplicates an object's class and elements under a fresh id that it prints. */
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /create %s /d \"Copy Source\" /application osloader", File, Src);
+    ok(RunBcd(Args) == 0, "/copy source create failed\n");
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /set %s timeout 0x2a", File, Src);
+    ok(RunBcd(Args) == 0, "/copy source /set failed\n");
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /copy %s /d \"Copied\"", File, Src);
+    Out[0] = 0;
+    Code = RunBcdCapture(Args, Out, sizeof(Out));
+    ok(Code == 0, "/copy exit %lu\n", Code);
+    {
+        char *End = strchr(Out, '}');
+        int Len = End ? (int)(End - Out) + 1 : 0;
+        if (Len > 0 && Len < ARRAYSIZE(NewId))
+        {
+            MultiByteToWideChar(CP_ACP, 0, Out, Len, NewId, ARRAYSIZE(NewId));
+            NewId[Len] = 0;
+            ok(_wcsicmp(NewId, Src) != 0, "/copy must use a new id, not the source\n");
+            ok(ReadObjectType(File, NewId) == 0x10200003, "/copy did not carry the class\n");
+            Length = sizeof(Buffer);
+            RegType = ReadElement(File, NewId, EL_TIMEOUT, B, &Length);
+            ok(RegType == REG_BINARY && Length == 8 && B[0] == 0x2a, "/copy did not carry the timeout\n");
+            Length = sizeof(Buffer);
+            RegType = ReadElement(File, NewId, EL_DESCRIPTION, B, &Length);
+            ok(RegType == REG_SZ && wcscmp(Buffer, L"Copied") == 0, "/copy did not set the new description\n");
+        }
+        else
+        {
+            ok(0, "/copy did not print a new id: '%.40s'\n", Out);
+        }
+    }
 
     /* /enum over the /store file opens and lists it. */
     StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /enum", File);

@@ -7,5 +7,5 @@
 
 add_executable(bcdedit bcdedit.c bcdedit.rc)
 set_module_type(bcdedit win32cui UNICODE)
-add_importlibs(bcdedit advapi32 user32 msvcrt kernel32)
+add_importlibs(bcdedit advapi32 rpcrt4 user32 msvcrt kernel32)
 add_cd_file(TARGET bcdedit DESTINATION reactos/system32 FOR all)
