@@ -3876,10 +3876,11 @@ static void test_unicode_sorting(void)
 
 #ifdef __REACTOS__
         ok (result == entry->result_sortkey || broken(GetNTVersion() == _WIN32_WINNT_VISTA), "Test %d (%s, %s) - Expected %d, got %d\n",
+            i, wine_dbgstr_w(entry->first), wine_dbgstr_w(entry->second), entry->result_sortkey, result);
 #else
         ok (result == entry->result_sortkey, "Test %d (%s, %s) - Expected %d, got %d\n",
-#endif
             i, wine_dbgstr_w(entry->first), wine_dbgstr_w(entry->second), entry->result_sortkey, result);
+#endif
 
 #if !defined(__REACTOS__) || DLL_EXPORT_VERSION >= 0x600
 #if defined(__REACTOS__) && defined(_WIN64)
@@ -4518,14 +4519,16 @@ static void test_ConvertDefaultLocale(void)
       broken( lcid == 0x0404 ),  /* vista */
       "Expected lcid = %08x got %08lx\n", MAKELANGID( LANG_CHINESE, SUBLANG_CHINESE_HONGKONG ), lcid );
   lcid = ConvertDefaultLocale( LANG_SERBIAN_NEUTRAL );
-  ok( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_SERBIA_LATIN ) ||
 #ifdef __REACTOS__
+  ok( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_SERBIA_LATIN ) ||
       broken( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_LATIN ) ) || /* Vista */
       broken( lcid == LANG_SERBIAN_NEUTRAL ),  /* WS03 */
-#else
-      broken( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_LATIN ) ),  /* <= vista */
-#endif
       "Expected lcid = %08x got %08lx\n", MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_SERBIA_LATIN ), lcid );
+#else
+  ok( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_SERBIA_LATIN ) ||
+      broken( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_LATIN ) ),  /* <= vista */
+      "Expected lcid = %08x got %08lx\n", MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_SERBIA_LATIN ), lcid );
+#endif
 
   /* Invariant language is not treated specially */
   TEST_LCID(LANG_INVARIANT, SUBLANG_DEFAULT, SORT_DEFAULT);

@@ -300,7 +300,7 @@ TestVersion2Definition(VOID)
     ok(Definition != NULL, "CryptCATCDFOpen failed %lu\n", GetLastError());
     if (Definition)
     {
-        Member = (CRYPTCATMEMBER *)0xdeadbeef;
+        Member = (CRYPTCATMEMBER *)(ULONG_PTR)0xdeadbeef;
         SetLastError(0xdeadbeef);
         ok(CryptCATCDFEnumMembersByCDFTagEx(Definition, NULL, NULL, &Member, TRUE, NULL) == NULL, "got a tag\n");
         ok_err(ERROR_INVALID_PARAMETER);

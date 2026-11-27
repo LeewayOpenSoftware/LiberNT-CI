@@ -311,9 +311,9 @@ static struct
     { L"file://foo/%F0%9F%8D%B7/bar", L"file://foo/\xf0\x9f\x8d\xb7/bar" }, /* with 4 btyes utf-8 */
     { L"file://foo/%F0%9F%8D%B7/bar", L"file://foo/\xd83c\xdf77/bar", URL_UNESCAPE_AS_UTF8 },
     /* non-escaped chars between multi-byte escaped chars */
-    { L"file://foo/%E4%B8%ADabc%E6%96%87/bar", L"file://foo/\x4e2d""abc""\x6587/bar", URL_UNESCAPE_AS_UTF8 },
-    { L"file://foo/%E4B8%AD/bar", L"file://foo/\xfffd""B8\xfffd/bar", URL_UNESCAPE_AS_UTF8 },
-    { L"file://foo/%E4%G8%AD/bar", L"file://foo/\xfffd""%G8\xfffd/bar", URL_UNESCAPE_AS_UTF8 },
+    { L"file://foo/%E4%B8%ADabc%E6%96%87/bar", L"file://foo/\x4e2d" L"abc" L"\x6587/bar", URL_UNESCAPE_AS_UTF8 },
+    { L"file://foo/%E4B8%AD/bar", L"file://foo/\xfffd" L"B8\xfffd/bar", URL_UNESCAPE_AS_UTF8 },
+    { L"file://foo/%E4%G8%AD/bar", L"file://foo/\xfffd" L"%G8\xfffd/bar", URL_UNESCAPE_AS_UTF8 },
     { L"file://foo/%G4%B8%AD/bar", L"file://foo/%G4\xfffd\xfffd/bar", URL_UNESCAPE_AS_UTF8 },
 };
 

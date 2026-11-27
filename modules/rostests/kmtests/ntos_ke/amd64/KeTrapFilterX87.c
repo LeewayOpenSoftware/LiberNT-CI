@@ -12,6 +12,7 @@
 static LONG FilterCalls;
 static USHORT FilterControlWord;
 
+#ifdef __GNUC__
 static
 LONG
 TrapFilter(
@@ -21,9 +22,11 @@ TrapFilter(
     FilterCalls++;
     return (ExceptionCode == STATUS_ACCESS_VIOLATION) ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH;
 }
+#endif
 
 START_TEST(KeTrapFilterX87)
 {
+#ifdef __GNUC__
     static const double One = 1.0, Zero = 0.0;
     volatile double Result;
     KFLOATING_SAVE FloatSave;
@@ -78,4 +81,7 @@ START_TEST(KeTrapFilterX87)
     Size = 0;
     Status = ZwFreeVirtualMemory(ZwCurrentProcess(), &Base, &Size, MEM_RELEASE);
     ok_eq_hex(Status, STATUS_SUCCESS);
+#else
+    skip(FALSE, "this test needs the GNU assembler syntax for x87 instructions\n");
+#endif
 }

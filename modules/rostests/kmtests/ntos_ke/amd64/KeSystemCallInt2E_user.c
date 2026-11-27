@@ -64,6 +64,7 @@ START_TEST(KeSystemCallInt2E)
     if (!Handler)
         return;
 
+#ifdef __GNUC__
     __asm__ __volatile__("leaq 1f(%%rip), %%rdx\n\t"
                          "movq %%rdx, %0\n\t"
                          "movl $0xFFFFFFFF, %%eax\n\t"
@@ -80,4 +81,8 @@ START_TEST(KeSystemCallInt2E)
     ok_eq_ulongptr(Int2eFault.Information[0], 0);
     ok_eq_ulongptr(Int2eFault.Information[1], (ULONG_PTR)-1);
     ok_eq_pointer(Int2eFault.ExceptionAddress, Int2eFault.Address);
+#else
+    RtlRemoveVectoredExceptionHandler(Handler);
+    skip(FALSE, "this test needs the GNU assembler syntax to raise int 0x2e\n");
+#endif
 }
