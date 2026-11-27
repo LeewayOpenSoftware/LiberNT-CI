@@ -518,6 +518,18 @@ VOID
 WlHostStatus(
     _In_ PCWSTR Text);
 
+/* transition.c */
+typedef struct _WL_COVER *PWL_COVER;
+
+PWL_COVER
+WlSwitchDesktopCovered(
+    _In_ HDESK From,
+    _In_ HDESK To);
+
+VOID
+WlCoverRelease(
+    _In_opt_ PWL_COVER Cover);
+
 UINT
 WlHostStatusText(
     _In_ UINT ResourceId);
