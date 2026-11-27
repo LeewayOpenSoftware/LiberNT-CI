@@ -1033,14 +1033,45 @@ WlHlActionHandler(
 
 /* ---- the live host (SAS thread) ---------------------------------------------------- */
 
+/* Joined to a domain; when the machine cannot tell, it answers yes, so Ctrl+Alt+Del stays asked. */
+static BOOL
+WlHlDomainJoined(VOID)
+{
+    LSA_OBJECT_ATTRIBUTES Attributes;
+    LSA_HANDLE Policy;
+    PPOLICY_PRIMARY_DOMAIN_INFO Info = NULL;
+    BOOL Joined = TRUE;
+
+    ZeroMemory(&Attributes, sizeof(Attributes));
+    Attributes.Length = sizeof(Attributes);
+    if (!NT_SUCCESS(LsaOpenPolicy(NULL, &Attributes, POLICY_VIEW_LOCAL_INFORMATION, &Policy)))
+        return TRUE;
+    if (NT_SUCCESS(LsaQueryInformationPolicy(Policy, PolicyPrimaryDomainInformation, (PVOID *)&Info)) && Info)
+    {
+        Joined = (Info->Sid != NULL);
+        LsaFreeMemory(Info);
+    }
+    LsaClose(Policy);
+    return Joined;
+}
+
+/*
+ * Whether Ctrl+Alt+Del is optional, as Windows decides it: the policy value first, then the
+ * Winlogon value, else by membership: a workgroup PC does not ask for it, a domain member does.
+ */
 static BOOL
 WlHlDisableCad(VOID)
 {
     DWORD Value = 0, Size = sizeof(Value);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                     L"DisableCAD", RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS)
+        return Value != 0;
+    Size = sizeof(Value);
     if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"DisableCAD",
-                     RRF_RT_REG_DWORD, NULL, &Value, &Size) != ERROR_SUCCESS)
-        Value = 0;
-    return Value != 0;
+                     RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS)
+        return Value != 0;
+    return !WlHlDomainJoined();
 }
 
 /* P2: how long a lock or logoff waits for the host's first frame before switching anyway. */
