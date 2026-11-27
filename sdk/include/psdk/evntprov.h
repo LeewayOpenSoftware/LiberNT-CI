@@ -49,8 +49,15 @@ typedef ULONGLONG REGHANDLE, *PREGHANDLE;
 
 #define MAX_EVENT_DATA_DESCRIPTORS           (128)
 #define MAX_EVENT_FILTER_DATA_SIZE           (1024)
+#define MAX_EVENT_FILTERS_COUNT              (8)
 
+#define EVENT_FILTER_TYPE_NONE               (0x00000000)
 #define EVENT_FILTER_TYPE_SCHEMATIZED        (0x80000000)
+#define EVENT_FILTER_TYPE_SYSTEM_FLAGS       (0x80000001)
+#define EVENT_FILTER_TYPE_TRACEHANDLE        (0x80000002)
+#define EVENT_FILTER_TYPE_PID                (0x80000004)
+#define EVENT_FILTER_TYPE_EVENT_ID           (0x80000200)
+#define EVENT_FILTER_TYPE_EVENT_NAME         (0x80001000)
 
 typedef enum _EVENT_INFO_CLASS {
   EventProviderBinaryTrackInfo,
