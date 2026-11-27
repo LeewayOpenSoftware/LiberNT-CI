@@ -8,6 +8,7 @@
 #define COBJMACROS
 #include <windows.h>
 #include <strsafe.h>
+#include <wtsapi32.h>
 #include <wine/debug.h>
 #include "gfx.h"
 #include "resource.h"
@@ -96,6 +97,26 @@ StsLoadPicture(
     return Ok;
 }
 
+/*
+ * Windows 11 warns that others will lose unsaved work only when another session is signed in.
+ * When the sessions cannot be read, the warning stays: losing it is the worse mistake.
+ */
+static BOOL
+StsOthersSignedIn(VOID)
+{
+    PWTS_SESSION_INFOW Info = NULL;
+    DWORD Count = 0, Own, i;
+    BOOL Others = FALSE;
+
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &Own) ||
+        !WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1, &Info, &Count))
+        return TRUE;
+    for (i = 0; i < Count && !Others; i++)
+        Others = Info[i].SessionId != Own && (Info[i].State == WTSActive || Info[i].State == WTSDisconnected);
+    WTSFreeMemory(Info);
+    return Others;
+}
+
 /* Built once: the curtain picture and the dimmed desktop under it. Nothing is drawn per frame. */
 static BOOL
 StsBuild(VOID)
@@ -134,10 +155,13 @@ StsBuild(VOID)
      * prompt y 330, arrow y 368; the curtain is drawn bottom-aligned, so these follow it. */
     Small = LuhFontCreate(14, FW_NORMAL);
     Large = LuhFontCreate(24, FW_NORMAL);
-    LoadStringW(GetModuleHandleW(NULL), IDS_STS_WARNING, Text, ARRAYSIZE(Text));
-    SetRect(&Rect, 0, Bottom - LuhPx(107) - LuhPx(12), g_Sts.Width, Bottom - LuhPx(107) + LuhPx(12));
-    LuhDrawText(&g_Sts.Curtain, Small, Text, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
-                RGB(255, 255, 255), 255);
+    if (StsOthersSignedIn())
+    {
+        LoadStringW(GetModuleHandleW(NULL), IDS_STS_WARNING, Text, ARRAYSIZE(Text));
+        SetRect(&Rect, 0, Bottom - LuhPx(107) - LuhPx(12), g_Sts.Width, Bottom - LuhPx(107) + LuhPx(12));
+        LuhDrawText(&g_Sts.Curtain, Small, Text, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+                    RGB(255, 255, 255), 255);
+    }
     LoadStringW(GetModuleHandleW(NULL), IDS_STS_SLIDE, Text, ARRAYSIZE(Text));
     SetRect(&Rect, 0, Bottom - LuhPx(70) - LuhPx(20), g_Sts.Width, Bottom - LuhPx(70) + LuhPx(20));
     LuhDrawText(&g_Sts.Curtain, Large, Text, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
