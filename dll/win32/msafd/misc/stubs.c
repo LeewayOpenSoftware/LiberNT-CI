@@ -118,9 +118,126 @@ WSPDisconnectEx(
   IN DWORD dwFlags,
   IN DWORD reserved)
 {
-    UNIMPLEMENTED;
+    PIO_STATUS_BLOCK        IOSB;
+    IO_STATUS_BLOCK         DummyIOSB;
+    AFD_DISCONNECT_INFO     DisconnectInfo;
+    PSOCKET_INFORMATION     Socket;
+    NTSTATUS                Status;
+    PVOID                   APCContext;
+    HANDLE                  Event = NULL;
+    HANDLE                  SockEvent;
+    BOOLEAN                 SockEventShared, SockEventStale = FALSE;
+    LPOVERLAPPED            SyncOverlapped = NULL;
 
-    return FALSE;
+    /* Get the Socket Structure associate to this Socket */
+    Socket = GetSocketStructure(hSocket);
+    if (!Socket)
+    {
+        WSASetLastError(WSAENOTSOCK);
+        return FALSE;
+    }
+
+    /* The socket must be connected */
+    if (Socket->SharedData->State != SocketConnected)
+    {
+        WSASetLastError(WSAENOTCONN);
+        return FALSE;
+    }
+
+    /* Only a plain graceful disconnect is supported; every other request
+       must fail explicitly, never succeed silently */
+    if (reserved != 0 || (dwFlags & ~TF_REUSE_SOCKET) != 0)
+    {
+        WSASetLastError(WSAEINVAL);
+        return FALSE;
+    }
+    if (dwFlags & TF_REUSE_SOCKET)
+    {
+        /* Socket reuse requires AFD support (Stage B) */
+        WSASetLastError(WSAEOPNOTSUPP);
+        return FALSE;
+    }
+
+    Status = MsafdAcquireEvent(&SockEvent, &SockEventShared);
+    if (!NT_SUCCESS(Status))
+    {
+        WSASetLastError(WSAENOBUFS);
+        return FALSE;
+    }
+
+    /* Graceful disconnect: a FIN once the pending sends drain */
+    DisconnectInfo.DisconnectType = AFD_DISCONNECT_SEND;
+    DisconnectInfo.Timeout.QuadPart = -1000000LL;
+    Socket->SharedData->SendShutdown = TRUE;
+
+    /* A socket opened without WSA_FLAG_OVERLAPPED disconnects synchronously, as Win11 */
+    if (lpOverlapped && !(Socket->SharedData->CreateFlags & WSA_FLAG_OVERLAPPED))
+    {
+        SyncOverlapped = lpOverlapped;
+        lpOverlapped = NULL;
+    }
+
+    if (!lpOverlapped)
+    {
+        /* Synchronous: block on our own event */
+        APCContext = NULL;
+        Event = SockEvent;
+        IOSB = &DummyIOSB;
+    }
+    else
+    {
+        IOSB = (PIO_STATUS_BLOCK)lpOverlapped;
+        Event = lpOverlapped->hEvent;
+        APCContext = Event ? NULL : (PVOID)lpOverlapped;
+    }
+
+    IOSB->Information = 0;
+    IOSB->Status = STATUS_PENDING;
+
+    /* Send IOCTL */
+    Status = NtDeviceIoControlFile((HANDLE)hSocket,
+                                   Event,
+                                   NULL,
+                                   APCContext,
+                                   IOSB,
+                                   IOCTL_AFD_DISCONNECT,
+                                   &DisconnectInfo,
+                                   sizeof(DisconnectInfo),
+                                   NULL,
+                                   0);
+
+    if (!lpOverlapped)
+    {
+        if (Status == STATUS_PENDING)
+            Status = MsafdWaitForCompletion(Socket, SockEvent, IOSB, Socket->SharedData->SendTimeout);
+        else
+            SockEventStale = TRUE;
+    }
+
+    MsafdReleaseEvent(SockEvent, SockEventShared, SockEventStale);
+
+    if (SyncOverlapped)
+    {
+        SyncOverlapped->Internal = Status;
+        SyncOverlapped->InternalHigh = 0;
+        if (SyncOverlapped->hEvent)
+            SetEvent(SyncOverlapped->hEvent);
+    }
+
+    if (lpOverlapped && Status == STATUS_PENDING)
+    {
+        /* Queued: FALSE + WSA_IO_PENDING as Win11; exactly one completion follows */
+        WSASetLastError(WSA_IO_PENDING);
+        return FALSE;
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        WSASetLastError(TranslateNtStatusError(Status));
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 VOID

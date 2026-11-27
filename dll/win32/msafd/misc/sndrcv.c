@@ -774,6 +774,62 @@ WSPRecvMsg(SOCKET Handle,
     return Result;
 }
 
+INT
+PASCAL
+WSPWSASendMsg(SOCKET Handle,
+              LPWSAMSG lpMsg,
+              DWORD dwFlags,
+              LPDWORD lpdwNumberOfBytesSent,
+              LPWSAOVERLAPPED lpOverlapped,
+              LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine)
+{
+    PSOCKET_INFORMATION Socket = GetSocketStructure(Handle);
+    INT Errno = NO_ERROR;
+    INT Result;
+
+    if (!Socket)
+    {
+        WSASetLastError(WSAENOTSOCK);
+        return SOCKET_ERROR;
+    }
+    if (!lpMsg || (!lpdwNumberOfBytesSent && !lpOverlapped))
+    {
+        WSASetLastError(WSAEFAULT);
+        return SOCKET_ERROR;
+    }
+
+    /* A destination name is meaningless on a connection-oriented socket */
+    if (!(Socket->SharedData->ServiceFlags1 & XP1_CONNECTIONLESS) && lpMsg->name)
+    {
+        WSASetLastError(WSAEINVAL);
+        return SOCKET_ERROR;
+    }
+
+    /* Ancillary data needs AFD support (Stage B); fail explicitly.
+       NOTE: WSAEOPNOTSUPP is recorded pending the Win11 column; a differing
+       Win11 error is a one-line parity fix here and in the T10 row. */
+    if (lpMsg->Control.len != 0)
+    {
+        WSASetLastError(WSAEOPNOTSUPP);
+        return SOCKET_ERROR;
+    }
+
+    Result = WSPSendTo(Handle,
+                       lpMsg->lpBuffers,
+                       lpMsg->dwBufferCount,
+                       lpdwNumberOfBytesSent,
+                       dwFlags,
+                       lpMsg->name,
+                       lpMsg->namelen,
+                       lpOverlapped,
+                       lpCompletionRoutine,
+                       NULL,
+                       &Errno);
+    if (Result == SOCKET_ERROR)
+        WSASetLastError(Errno);
+    return Result;
+}
+
 
 int
 WSPAPI

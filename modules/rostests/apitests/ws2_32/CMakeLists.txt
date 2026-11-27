@@ -7,6 +7,7 @@ list(APPEND SOURCE
     ReuseDelivery.c
     accept_backlog.c
     addresslistsort.c
+    afdext.c
     afunix.c
     bind.c
     broadcast.c
