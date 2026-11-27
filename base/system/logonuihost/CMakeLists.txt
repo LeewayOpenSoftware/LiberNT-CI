@@ -1,19 +1,22 @@
 
 include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos)
 
+# The drawing layer, shared with SlideToShutDown.
+add_library(luhgfx gfx.c gfx.h)
+target_include_directories(luhgfx PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_dependencies(luhgfx psdk)
+
 list(APPEND SOURCE
     main.c
-    gfx.c
     ipc.c
     providers.c
     ui.c
     users.c
-    gfx.h
     logonuihost.h)
 
 add_executable(logonuihost ${SOURCE} logonuihost.rc)
 set_module_type(logonuihost win32gui UNICODE)
-target_link_libraries(logonuihost wluiclient credser uuid wine ${PSEH_LIB})
+target_link_libraries(logonuihost luhgfx wluiclient credser uuid wine ${PSEH_LIB})
 add_importlibs(logonuihost credprovhost netapi32 ole32 shell32 user32 gdi32 winmm powrprof advapi32 rpcrt4 msvcrt kernel32 ntdll)
 add_custom_command(TARGET logonuihost POST_BUILD
     COMMAND ${CMAKE_COMMAND} -DMODULE=$<TARGET_FILE:logonuihost> -P ${CMAKE_CURRENT_SOURCE_DIR}/nohooks.cmake)
@@ -24,7 +27,7 @@ if(ENABLE_ROSTESTS)
     add_executable(logonuihost_test ${SOURCE} testhooks.c logonuihost.rc)
     set_module_type(logonuihost_test win32gui UNICODE)
     target_compile_definitions(logonuihost_test PRIVATE LOGONUI_TEST_HOOKS)
-    target_link_libraries(logonuihost_test wluiclient credser uuid wine ${PSEH_LIB})
+    target_link_libraries(logonuihost_test luhgfx wluiclient credser uuid wine ${PSEH_LIB})
     add_importlibs(logonuihost_test credprovhost netapi32 ole32 shell32 user32 gdi32 winmm powrprof advapi32 rpcrt4 msvcrt kernel32 ntdll)
     add_rostests_file(TARGET logonuihost_test)
 endif()

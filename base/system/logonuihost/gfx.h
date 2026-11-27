@@ -1,5 +1,5 @@
 /*
- * PROJECT:     LiberNT LogonUI host
+ * PROJECT:     LiberNT LogonUI drawing layer (logonuihost, SlideToShutDown)
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     Drawing layer: premultiplied surfaces, shapes, text, blur, layered present, timed animation
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
@@ -21,6 +21,9 @@ typedef struct _LUH_SURFACE
     LONG Width;
     LONG Height;
 } LUH_SURFACE, *PLUH_SURFACE;
+
+/* Each program provides this: one LOGONSTAGE line (the animators' frame lines go there). */
+VOID LuhStage(_In_ PCSTR Line);
 
 /* Sizes are designed at 96 DPI and scaled with LuhPx. */
 VOID LuhGfxInit(VOID);

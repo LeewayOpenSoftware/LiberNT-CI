@@ -1,17 +1,20 @@
 /*
- * PROJECT:     LiberNT LogonUI host
+ * PROJECT:     LiberNT LogonUI drawing layer (logonuihost, SlideToShutDown)
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     Drawing layer: premultiplied surfaces, shapes, text, blur, layered present, timed animation
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
-#include "logonuihost.h"
+#define COBJMACROS
+#include <windows.h>
+#include <strsafe.h>
+#include <wine/debug.h>
 #include "gfx.h"
 #include <math.h>
 #include <wincodec.h>
 #include <mmsystem.h>
 
-WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
+WINE_DEFAULT_DEBUG_CHANNEL(luhgfx);
 
 static LONG g_Dpi = 96;
 static UINT g_RefreshHz = 60;
