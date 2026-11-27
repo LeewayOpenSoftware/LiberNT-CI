@@ -80,6 +80,12 @@ BOOL LuhSoften(_Inout_ PLUH_SURFACE Target, _In_ const LUH_SURFACE *Sharp);
 /* Source over Target at (X, Y) with an extra constant opacity. */
 VOID LuhBlend(_Inout_ PLUH_SURFACE Target, _In_ LONG X, _In_ LONG Y, _In_ const LUH_SURFACE *Source,
               _In_ BYTE Alpha);
+/*
+ * Target = From crossed to To by Alpha (255 = all To), pixel for pixel, From NULL = black.
+ * All three opaque and Target's size: one pass, where a fill and a blend take two.
+ */
+VOID LuhMix(_Inout_ PLUH_SURFACE Target, _In_opt_ const LUH_SURFACE *From, _In_ const LUH_SURFACE *To,
+            _In_ BYTE Alpha);
 /* Clip a circle out of Source (avatar): the largest circle centred in Source, over Target. */
 VOID LuhBlendCircle(_Inout_ PLUH_SURFACE Target, _In_ LONG X, _In_ LONG Y, _In_ const LUH_SURFACE *Source);
 

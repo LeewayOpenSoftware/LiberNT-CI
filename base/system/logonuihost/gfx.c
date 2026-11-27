@@ -694,6 +694,31 @@ LuhBlend(
 }
 
 VOID
+LuhMix(
+    _Inout_ PLUH_SURFACE Target,
+    _In_opt_ const LUH_SURFACE *From,
+    _In_ const LUH_SURFACE *To,
+    _In_ BYTE Alpha)
+{
+    /* 0..256, so 255 gives To exactly; red and blue share one multiply, as their lanes never carry. */
+    ULONG A = Alpha + (Alpha >> 7), B = 256 - A, F, T;
+    SIZE_T i, Count = (SIZE_T)Target->Width * Target->Height;
+
+    if (To->Width != Target->Width || To->Height != Target->Height ||
+        (From && (From->Width != Target->Width || From->Height != Target->Height)))
+        return;
+    GdiFlush();
+    for (i = 0; i < Count; i++)
+    {
+        T = To->Bits[i];
+        F = From ? From->Bits[i] : 0;
+        Target->Bits[i] = 0xFF000000 |
+                          ((((F & 0x00FF00FF) * B + (T & 0x00FF00FF) * A) >> 8) & 0x00FF00FF) |
+                          ((((F & 0x0000FF00) * B + (T & 0x0000FF00) * A) >> 8) & 0x0000FF00);
+    }
+}
+
+VOID
 LuhBlendCircle(
     _Inout_ PLUH_SURFACE Target,
     _In_ LONG X,

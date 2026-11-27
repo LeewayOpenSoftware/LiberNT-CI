@@ -2152,6 +2152,7 @@ LuhFadeInCurtain(
     LUH_ANIM Anim;
     double T, Ms;
     HDC Dc;
+    BOOL Dot = FALSE;
 
     if (!g_Ui.Curtain || !g_Ui.CurtainFadeIn)
         return;
@@ -2160,12 +2161,18 @@ LuhFadeInCurtain(
     {
         T = LuhAnimFrame(&Anim);
         Ms = T * (LUH_FADE_HOLD_MS + LUH_FADE_IN_MS);
-        BitBlt(g_Ui.Back.Dc, 0, 0, g_Ui.Back.Width, g_Ui.Back.Height, NULL, 0, 0, BLACKNESS);
         if (Ms < LUH_FADE_HOLD_MS)
-            LuhFillCircle(&g_Ui.Back, g_Ui.Back.Width / 2 - LuhPx(26), g_Ui.Back.Height / 2 - LuhPx(3),
-                          max(LuhPx(3), 2), RGB(255, 255, 255), 255);
+        {
+            if (!Dot)
+            {
+                BitBlt(g_Ui.Back.Dc, 0, 0, g_Ui.Back.Width, g_Ui.Back.Height, NULL, 0, 0, BLACKNESS);
+                LuhFillCircle(&g_Ui.Back, g_Ui.Back.Width / 2 - LuhPx(26), g_Ui.Back.Height / 2 - LuhPx(3),
+                              max(LuhPx(3), 2), RGB(255, 255, 255), 255);
+                Dot = TRUE;
+            }
+        }
         else
-            LuhBlend(&g_Ui.Back, 0, 0, &g_Ui.Face, (BYTE)(255.0 * LuhEaseOut((Ms - LUH_FADE_HOLD_MS) / LUH_FADE_IN_MS)));
+            LuhMix(&g_Ui.Back, NULL, &g_Ui.Face, (BYTE)(255.0 * LuhEaseOut((Ms - LUH_FADE_HOLD_MS) / LUH_FADE_IN_MS)));
         LuhAnimComposed(&Anim);
         Dc = GetDC(Window);
         if (Dc)
@@ -2270,12 +2277,11 @@ LuhDissolveCurtain(
     {
         T = LuhAnimFrame(&Anim);
         Ms = T * (LUH_DISSOLVE_CLOCK_MS + LUH_DISSOLVE_SOFT_MS);
-        BitBlt(g_Ui.Back.Dc, 0, 0, Width, Height, g_Ui.Sharp.Dc, 0, 0, SRCCOPY);
         if (Ms < LUH_DISSOLVE_CLOCK_MS)
-            LuhBlend(&g_Ui.Back, 0, 0, &g_Ui.Face, (BYTE)(255.0 * (1.0 - LuhEaseOut(Ms / LUH_DISSOLVE_CLOCK_MS))));
+            LuhMix(&g_Ui.Back, &g_Ui.Sharp, &g_Ui.Face, (BYTE)(255.0 * (1.0 - LuhEaseOut(Ms / LUH_DISSOLVE_CLOCK_MS))));
         else
-            LuhBlend(&g_Ui.Back, 0, 0, &g_Ui.Soft,
-                     (BYTE)(255.0 * LuhEaseOut((Ms - LUH_DISSOLVE_CLOCK_MS) / LUH_DISSOLVE_SOFT_MS)));
+            LuhMix(&g_Ui.Back, &g_Ui.Sharp, &g_Ui.Soft,
+                   (BYTE)(255.0 * LuhEaseOut((Ms - LUH_DISSOLVE_CLOCK_MS) / LUH_DISSOLVE_SOFT_MS)));
         LuhAnimComposed(&Anim);
         Dc = GetDC(Window);
         if (Dc)
