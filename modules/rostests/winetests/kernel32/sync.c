@@ -1567,10 +1567,11 @@ static void test_WaitForMultipleObjects(void)
     todo_wine ok(r == WAIT_FAILED, "expected WAIT_FAILED, got %lu\n", r);
 #if defined(__REACTOS__) && defined(_WIN64)
     todo_wine ok(GetLastError() == ERROR_INVALID_HANDLE || broken(status == STATUS_INVALID_PARAMETER_3) /* x86_64 */,
+                 "expected ERROR_INVALID_HANDLE, got %lu\n", GetLastError());
 #else
     todo_wine ok(GetLastError() == ERROR_INVALID_HANDLE,
-#endif
                  "expected ERROR_INVALID_HANDLE, got %lu\n", GetLastError());
+#endif
 
     timeout.QuadPart = 0;
     maxevents[0] = GetCurrentProcess();
