@@ -20,7 +20,6 @@
 #include <userenv.h>
 #include <ndk/setypes.h>
 #include <ndk/sefuncs.h>
-#include <reactos/desktopready.h>
 
 /* GLOBALS ******************************************************************/
 
@@ -61,44 +60,17 @@ typedef struct tagLOGON_SOUND_DATA
 static VOID
 WlDisplaySasNotice(IN PWLSESSION Session)
 {
-    if (Session->UseLogonUI)
-        WlHostDisplaySasNotice(Session);
-    else
-        Session->Gina.Functions.WlxDisplaySASNotice(Session->Gina.Context);
+    WlHostDisplaySasNotice(Session);
 }
 
-static VOID
-WlDisplayLockedNotice(IN PWLSESSION Session)
-{
-    /* Host mode: the unlock page WlHostLock requested is the locked notice. */
-    if (!Session->UseLogonUI)
-        Session->Gina.Functions.WlxDisplayLockedNotice(Session->Gina.Context);
-}
+
+/* A secure screen saver locks whatever DisableLockWorkstation says, as on Windows. */
+static BOOL g_SecureSaverLock;
 
 static BOOL
 WlIsLockOk(IN PWLSESSION Session)
 {
-    return Session->UseLogonUI ? TRUE : Session->Gina.Functions.WlxIsLockOk(Session->Gina.Context);
-}
-
-static BOOL
-WlIsLogoffOk(IN PWLSESSION Session)
-{
-    return Session->UseLogonUI ? TRUE : Session->Gina.Functions.WlxIsLogoffOk(Session->Gina.Context);
-}
-
-static VOID
-WlGinaLogoff(IN PWLSESSION Session)
-{
-    if (!Session->UseLogonUI)
-        Session->Gina.Functions.WlxLogoff(Session->Gina.Context);
-}
-
-static VOID
-WlGinaShutdown(IN PWLSESSION Session, IN DWORD wlxAction)
-{
-    if (!Session->UseLogonUI)
-        Session->Gina.Functions.WlxShutdown(Session->Gina.Context, wlxAction);
+    return WlHostIsLockOk(Session);
 }
 
 static BOOL
@@ -108,9 +80,6 @@ StartTaskManager(
     LPVOID lpEnvironment;
     BOOL ret;
 
-    if (!Session->UseLogonUI && !Session->Gina.Functions.WlxStartApplication)
-        return FALSE;
-
     if (!CreateEnvironmentBlock(
         &lpEnvironment,
         Session->UserToken,
@@ -119,14 +88,7 @@ StartTaskManager(
         return FALSE;
     }
 
-    if (Session->UseLogonUI)
-        ret = WlHostStartApplication(Session, L"Default", lpEnvironment, L"taskmgr.exe");
-    else
-        ret = Session->Gina.Functions.WlxStartApplication(
-            Session->Gina.Context,
-            L"Default",
-            lpEnvironment,
-            L"taskmgr.exe");
+    ret = WlHostStartApplication(Session, L"Default", lpEnvironment, L"taskmgr.exe");
 
     DestroyEnvironmentBlock(lpEnvironment);
     return ret;
@@ -199,68 +161,11 @@ StartSystemShell(VOID)
     return ret;
 }
 
-static HANDLE
-CreateUserDesktopReadyEvent(
-    _In_ PWLSESSION Session)
-{
-    HANDLE ReadyEvent;
-    BOOL Impersonated = FALSE;
-
-    if (Session->UserToken)
-    {
-        Impersonated = ImpersonateLoggedOnUser(Session->UserToken);
-        if (!Impersonated)
-            ERR("WL: Could not impersonate the user for the desktop ready event (error %lu)\n", GetLastError());
-    }
-
-    ReadyEvent = CreateEventW(NULL, TRUE, FALSE, REACTOS_USER_DESKTOP_READY_EVENT);
-    if (Impersonated && !RevertToSelf())
-        ERR("WL: RevertToSelf failed (error %lu)\n", GetLastError());
-    if (!ReadyEvent)
-    {
-        ERR("WL: Could not create the desktop ready event (error %lu)\n", GetLastError());
-        return NULL;
-    }
-
-    ResetEvent(ReadyEvent);
-    return ReadyEvent;
-}
-
-static VOID
-WaitForUserDesktopReady(
-    _In_ HANDLE ReadyEvent)
-{
-    DWORD Start = GetTickCount();
-    DWORD Elapsed;
-    DWORD Result;
-    MSG Msg;
-
-    for (;;)
-    {
-        PeekMessageW(&Msg, NULL, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
-        Elapsed = GetTickCount() - Start;
-        Result = MsgWaitForMultipleObjects(1,
-                                           &ReadyEvent,
-                                           FALSE,
-                                           Elapsed < REACTOS_USER_DESKTOP_READY_TIMEOUT_MS ?
-                                               REACTOS_USER_DESKTOP_READY_TIMEOUT_MS - Elapsed : 0,
-                                           QS_SENDMESSAGE);
-        if (Result != WAIT_OBJECT_0 + 1)
-            break;
-    }
-
-    if (Result == WAIT_TIMEOUT)
-        WARN("WL: The user desktop was not ready after %lu ms\n", (DWORD)REACTOS_USER_DESKTOP_READY_TIMEOUT_MS);
-    else if (Result != WAIT_OBJECT_0)
-        ERR("WL: Waiting for the user desktop failed (result %lu, error %lu)\n", Result, GetLastError());
-}
-
 static BOOL
 StartUserShell(
     IN OUT PWLSESSION Session)
 {
     LPVOID lpEnvironment = NULL;
-    HANDLE ReadyEvent;
     BOOLEAN Old;
     BOOL ret;
 
@@ -283,23 +188,9 @@ StartUserShell(
     /* FIXME: reverting to lower privileges after creating user shell? */
     RtlAdjustPrivilege(SE_ASSIGNPRIMARYTOKEN_PRIVILEGE, TRUE, FALSE, &Old);
 
-    ReadyEvent = CreateUserDesktopReadyEvent(Session);
-    if (Session->UseLogonUI)
-    {
-        /* The switch waits for ShellDesktopSwitchEvent (§6.3.1); the ready event stays for compatibility. */
-        WlHostCreateDesktopSwitchEvent(Session);
-        ret = WlHostActivateUserShell(Session, lpEnvironment);
-    }
-    else
-        ret = Session->Gina.Functions.WlxActivateUserShell(
-                    Session->Gina.Context,
-                    L"Default",
-                    NULL, /* FIXME */
-                    lpEnvironment);
-    if (ret && ReadyEvent && !Session->UseLogonUI)
-        WaitForUserDesktopReady(ReadyEvent);
-    if (ReadyEvent)
-        CloseHandle(ReadyEvent);
+    /* The switch waits for ShellDesktopSwitchEvent (§6.3.1). */
+    WlHostCreateDesktopSwitchEvent(Session);
+    ret = WlHostActivateUserShell(Session, lpEnvironment);
 
     DestroyEnvironmentBlock(lpEnvironment);
     return ret;
@@ -1061,8 +952,7 @@ HandleLogon(
     /* Start the user shell */
     CallNotificationDlls(Session, StartShellHandler);
     LogonStage("shell-start");
-    if (Session->UseLogonUI)
-        WlHostThemeWait();          /* msgina waited for the theme service here (§10.3, D-e) */
+    WlHostThemeWait();          /* msgina waited for the theme service here (§10.3, D-e) */
     if (!StartUserShell(Session))
     {
         //WCHAR StatusMsg[256];
@@ -1098,9 +988,7 @@ cleanup:
     if (!ret)
     {
         LogonStage("logon-failed");
-        if (Session->UseLogonUI)
-            WlHostLogonFailed(STATUS_UNSUCCESSFUL);
-        RemoveStatusMessage(Session);
+        WlHostLogonFailed(STATUS_UNSUCCESSFUL);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Session->UserName);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Session->Domain);
         Session->UserName = Session->Domain = NULL;
@@ -1125,16 +1013,11 @@ cleanup:
     }
     else // if (ret)
     {
-        /* Host mode: wait for the painted desktop, then the host fades across the switch (§6.3.1). */
-        if (Session->UseLogonUI)
-        {
-            WlHostWaitDesktopSwitch(Session);
-            WlHostBeforeDesktopSwitch();
-        }
+        /* Wait for the painted desktop, then the host fades across the switch (§6.3.1). */
+        WlHostWaitDesktopSwitch(Session);
+        WlHostBeforeDesktopSwitch();
         SwitchDesktop(Session->ApplicationDesktop);
-        RemoveStatusMessage(Session);
-        if (Session->UseLogonUI)
-            WlHostAfterDesktopSwitch();
+        WlHostAfterDesktopSwitch();
         Session->LogonState = STATE_LOGGED_ON;
         LogonStage("logged-on");
     }
@@ -1434,19 +1317,15 @@ HandleLogoff(
 
     LogonStage("logoff-start");
 
-    if (Session->UseLogonUI)
-    {
-        /* "Signing out" stands on the host before any user process is closed (plan, commit 7). */
-        DisplayStatusMessage(Session, Session->WinlogonDesktop, IDS_LOGGINGOFF);
-        SwitchDesktop(Session->WinlogonDesktop);
-    }
+    /* "Signing out" stands on the host before any user process is closed (plan, commit 7). */
+    DisplayStatusMessage(Session, Session->WinlogonDesktop, IDS_LOGGINGOFF);
+    SwitchDesktop(Session->WinlogonDesktop);
 
     Status = CreateLogoffSecurityAttributes(&psa);
     if (!NT_SUCCESS(Status))
     {
         ERR("Failed to create Logoff security descriptor. Status 0x%08lx\n", Status);
-        if (Session->UseLogonUI)
-            WlHostLogoffAborted(Session);
+        WlHostLogoffAborted(Session);
         return Status;
     }
 
@@ -1460,19 +1339,11 @@ HandleLogoff(
     {
         ERR("Failed to start the Logoff thread, Status 0x%08lx\n", Status);
         DestroyLogoffSecurityAttributes(psa);
-        if (Session->UseLogonUI)
-            WlHostLogoffAborted(Session);
+        WlHostLogoffAborted(Session);
         return Status;
     }
 
-    /* Invoke Logoff notifications on the application desktop (host mode: behind the host) */
-    if (!Session->UseLogonUI)
-    {
-        SwitchDesktop(Session->ApplicationDesktop);
-        DisplayStatusMessage(Session, Session->ApplicationDesktop, IDS_LOGGINGOFF);
-    }
     CallNotificationDlls(Session, LogoffHandler);
-    RemoveStatusMessage(Session);
 
     /* The remaining Logoff steps run on the Winlogon desktop */
     SwitchDesktop(Session->WinlogonDesktop);
@@ -1626,7 +1497,6 @@ HandleShutdown(
     {
         /* The interactive user has already agreed to log off. */
         CallNotificationDlls(Session, ShutdownHandler);
-        WlGinaShutdown(Session, wlxAction);
     }
 
     /* Setup and LiveCD shells also need a chance to save work or cancel. */
@@ -1641,7 +1511,6 @@ HandleShutdown(
     {
         /* A setup shell has no separate user-logoff phase. */
         CallNotificationDlls(Session, ShutdownHandler);
-        WlGinaShutdown(Session, wlxAction);
     }
 
     /* Show again the shutdown message */
@@ -1737,25 +1606,19 @@ DoGenericAction(
             else if (Session->LogonState == STATE_LOCKED_SAS)
             {
                 Session->LogonState = STATE_LOCKED;
-                WlDisplayLockedNotice(Session);
             }
             break;
         case WLX_SAS_ACTION_LOCK_WKSTA: /* 0x03 */
             if ((Session->LogonState == STATE_LOGGED_ON) ||
                 (Session->LogonState == STATE_LOGGED_ON_SAS))
             {
-                if (WlIsLockOk(Session))
+                if (g_SecureSaverLock || WlIsLockOk(Session))
                 {
                     Session->LogonState = STATE_LOCKED;
                     SwitchDesktop(Session->WinlogonDesktop);
-                    if (Session->UseLogonUI)
-                        WlHostLock(Session);    /* the lock is already in force; this only bounds when the page appears (P2) */
+                    WlHostLock(Session);    /* the lock is already in force; this only bounds when the page appears (P2) */
                     ReplyMessage(TRUE);
-                    /* We may be on the Logged-On SAS dialog, in which case
-                     * we need to close it if the lock action came via Win-L */
-                    CloseAllDialogWindows();
                     CallNotificationDlls(Session, LockHandler);
-                    WlDisplayLockedNotice(Session);
                 }
             }
             break;
@@ -1774,20 +1637,15 @@ DoGenericAction(
                        (Session->LogonState == STATE_LOCKED) ||
                        (Session->LogonState == STATE_LOCKED_SAS));
 
-                if (!WlIsLogoffOk(Session))
-                    break;
                 if (!NT_SUCCESS(HandleLogoff(Session, wlxAction)))
                 {
-                    RemoveStatusMessage(Session);
                     break;
                 }
-                WlGinaLogoff(Session);
             }
             if (WLX_SHUTTINGDOWN(wlxAction))
             {
                 if (!NT_SUCCESS(HandleShutdown(Session, wlxAction)))
                 {
-                    RemoveStatusMessage(Session);
                     if (Session->LogonState == STATE_INIT)
                         SwitchDesktop(Session->ApplicationDesktop);
                     else
@@ -1799,7 +1657,6 @@ DoGenericAction(
             }
             else
             {
-                RemoveStatusMessage(Session);
                 Session->LogonState = STATE_LOGGED_OFF;
                 WlDisplaySasNotice(Session);
             }
@@ -1825,12 +1682,9 @@ DoGenericAction(
                 (Session->LogonState == STATE_LOCKED_SAS))
             {
                 CallNotificationDlls(Session, UnlockHandler);
-                if (Session->UseLogonUI)
-                    WlHostBeforeDesktopSwitch();
+                WlHostBeforeDesktopSwitch();
                 SwitchDesktop(Session->ApplicationDesktop);
-                RemoveStatusMessage(Session);
-                if (Session->UseLogonUI)
-                    WlHostAfterDesktopSwitch();
+                WlHostAfterDesktopSwitch();
                 Session->LogonState = STATE_LOGGED_ON;
             }
             break;
@@ -1846,7 +1700,6 @@ DispatchSAS(
     IN DWORD dwSasType)
 {
     DWORD wlxAction = WLX_SAS_ACTION_NONE;
-    PSID LogonSid = NULL; /* FIXME */
     BOOL bSecure = TRUE;
 
     switch (dwSasType)
@@ -1856,7 +1709,6 @@ DispatchSAS(
             {
                 case STATE_INIT:
                     Session->LogonState = STATE_LOGGED_OFF;
-                    RemoveStatusMessage(Session);
                     WlDisplaySasNotice(Session);
                     return;
 
@@ -1864,24 +1716,9 @@ DispatchSAS(
                     Session->LogonState = STATE_LOGGED_OFF_SAS;
                     LogonStage("logged-out-sas");
 
-                    CloseAllDialogWindows();
-
                     Session->Options = 0;
 
-                    if (Session->UseLogonUI)
-                    {
-                        wlxAction = WlHostLoggedOutSas(Session);
-                        break;
-                    }
-                    wlxAction = (DWORD)Session->Gina.Functions.WlxLoggedOutSAS(
-                        Session->Gina.Context,
-                        Session->SASAction,
-                        &Session->LogonId,
-                        LogonSid,
-                        &Session->Options,
-                        &Session->UserToken,
-                        &Session->MprNotifyInfo,
-                        (PVOID*)&Session->Profile);
+                    wlxAction = WlHostLoggedOutSas(Session);
                     break;
 
                 case STATE_LOGGED_OFF_SAS:
@@ -1891,9 +1728,8 @@ DispatchSAS(
                 case STATE_LOGGED_ON:
                     Session->LogonState = STATE_LOGGED_ON_SAS;
                     SwitchDesktop(Session->WinlogonDesktop);
-                    /* Host mode: the Ctrl+Alt+Del options page is Phase 4; the SAS is cancelled. */
-                    wlxAction = Session->UseLogonUI ? WLX_SAS_ACTION_NONE :
-                        (DWORD)Session->Gina.Functions.WlxLoggedOnSAS(Session->Gina.Context, dwSasType, NULL);
+                    /* The host shows the Ctrl+Alt+Del options and is gone on return. */
+                    wlxAction = WlHostLoggedOnSas(Session);
                     if ((wlxAction == WLX_SAS_ACTION_NONE) ||
                         (wlxAction == WLX_SAS_ACTION_TASKLIST))
                     {
@@ -1921,10 +1757,10 @@ DispatchSAS(
                 case STATE_LOCKED:
                     Session->LogonState = STATE_LOCKED_SAS;
 
-                    CloseAllDialogWindows();
-
-                    wlxAction = Session->UseLogonUI ? WLX_SAS_ACTION_NONE :
-                        (DWORD)Session->Gina.Functions.WlxWkstaLockedSAS(Session->Gina.Context, dwSasType);
+                    /* The SAS brings up the unlock page; the station stays locked
+                     * until the host's unlock comes back as WLHOST_EVENT_UNLOCK. */
+                    WlHostLockedSas(Session);
+                    wlxAction = WLX_SAS_ACTION_NONE;
                     break;
 
                 case STATE_LOCKED_SAS:
@@ -1940,19 +1776,11 @@ DispatchSAS(
             return;
 
         case WLX_SAS_TYPE_SCRNSVR_TIMEOUT:
-            if (Session->UseLogonUI)
-            {
-                bSecure = WlHostScreenSaverSecure(Session);     /* msgina's WlxScreenSaverNotify, absorbed */
-            }
-            else if (!Session->Gina.Functions.WlxScreenSaverNotify(Session->Gina.Context, &bSecure))
-            {
-                /* Skip start of screen saver */
-                SetEvent(Session->hEndOfScreenSaver);
-                break;
-            }
+            bSecure = WlHostScreenSaverSecure(Session);     /* msgina's WlxScreenSaverNotify, absorbed */
             StartScreenSaver(Session);
             if (bSecure)
             {
+                g_SecureSaverLock = TRUE;
                 wlxAction = WLX_SAS_ACTION_LOCK_WKSTA;
 //                DoGenericAction(Session, WLX_SAS_ACTION_LOCK_WKSTA);
             }
@@ -1964,6 +1792,7 @@ DispatchSAS(
     }
 
     DoGenericAction(Session, wlxAction);
+    g_SecureSaverLock = FALSE;
 
     if (dwSasType != WLX_SAS_TYPE_CTRL_ALT_DEL)
         return;
@@ -1976,20 +1805,16 @@ DispatchSAS(
     else if (Session->LogonState == STATE_LOCKED_SAS)
     {
         Session->LogonState = STATE_LOCKED;
-        WlDisplayLockedNotice(Session);
     }
 }
 
-/* Host mode: verdicts and notices from RPC and supervisor threads, replayed here (hostlogon.c). */
+/* Verdicts and notices from RPC and supervisor threads, replayed here (hostlogon.c). */
 static
 VOID
 HostEvent(
     IN OUT PWLSESSION Session,
     IN DWORD Event)
 {
-    if (!Session->UseLogonUI)
-        return;
-
     switch (Event)
     {
         case WLHOST_EVENT_ENDED:
@@ -2114,8 +1939,8 @@ SASWindowProc(
                 case IDHK_CTRL_ALT_DEL:
                 {
                     TRACE("SAS: CONTROL+ALT+DELETE\n");
-                    if (!Session->Gina.UseCtrlAltDelete)
-                        break;
+                    /* Without a GINA, Ctrl+Alt+Del is always a SAS, whether or not
+                     * DisableCAD makes it optional. */
                     PostMessageW(Session->SASWindow, WLX_WM_SAS, WLX_SAS_TYPE_CTRL_ALT_DEL, 0);
                     return TRUE;
                 }
@@ -2373,8 +2198,7 @@ InitializeSAS(
         goto cleanup;
     }
 
-    if (Session->UseLogonUI)
-        WlHostAttach(Session);
+    WlHostAttach(Session);
 
     if (!SetDefaultLanguage(NULL))
         return FALSE;

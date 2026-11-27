@@ -22,6 +22,8 @@
 #define WLHL_CPUS_LOGON             1   /* CPUS_LOGON */
 #define WLHL_CPUS_UNLOCK            2   /* CPUS_UNLOCK_WORKSTATION */
 #define WLHL_CPUS_CHANGE_PASSWORD   3   /* CPUS_CHANGE_PASSWORD */
+#define WLHL_CHANGE_SIGNED_IN       0x200   /* g_ChangeFor: a change the signed-in user asked for from the options */
+#define WLHL_ACTION_CHANGED         0x1000  /* g_PendingAction: that change went through (never from the host) */
 
 #define WLHL_WINLOGON_KEY   L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
 #define WLHL_POLICY_KEY     L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System"
@@ -54,6 +56,8 @@ static DWORD g_PendingAction;           /* WLUI_ACTION from the host's power fly
 static PWLHOST_LAUNCH g_Launch;         /* the live host, if any (SAS thread owns it) */
 static DWORD g_HostScenario;            /* what the live host was asked to show; 0 = status only */
 static BOOL g_Accepting;                /* the SAS thread is waiting for a logon submit (R2) */
+static BOOL g_OptionsUp;                /* the SAS thread is waiting on the Ctrl+Alt+Del options */
+static DWORD g_OptionsFlags;            /* WLUI_FLAG_NO_* the options page was shown with */
 static BOOL g_SubmitBusy;               /* a submit is between the gate and the slot */
 static DWORD g_ChangeFor;               /* scenario a forced password change resumes; 0 = no change page */
 static BOOL g_LsaBroken;                /* the last logged-out SAS could not reach the LSA */
@@ -531,6 +535,40 @@ WlHlHandleLogon(
     return ERROR_SUCCESS;
 }
 
+/* The change a signed-in user asked for may only name that user (msgina fixes the name too). */
+static BOOL
+WlHlIsSessionAccount(
+    _In_ PCUNICODE_STRING Domain,
+    _In_ PCUNICODE_STRING Account)
+{
+    WCHAR Computer[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD Chars = ARRAYSIZE(Computer);
+    UNICODE_STRING Want, Here;
+    PCWSTR SessionDomain;
+    BOOL TypedLocal, SessionLocal;
+
+    if (g_Session == NULL || g_Session->MprNotifyInfo.pszUserName == NULL)
+        return FALSE;
+    RtlInitUnicodeString(&Want, g_Session->MprNotifyInfo.pszUserName);
+    if (!RtlEqualUnicodeString(Account, &Want, TRUE))
+        return FALSE;
+
+    /* "Local" is an empty domain, a lone dot, or this computer's name, on either side. */
+    if (!GetComputerNameW(Computer, &Chars))
+        Computer[0] = UNICODE_NULL;
+    RtlInitUnicodeString(&Here, Computer);
+    TypedLocal = Domain->Length == 0 ||
+                 (Domain->Length == sizeof(WCHAR) && Domain->Buffer[0] == L'.') ||
+                 (Here.Length != 0 && RtlEqualUnicodeString(Domain, &Here, TRUE));
+    SessionDomain = g_Session->MprNotifyInfo.pszDomain ? g_Session->MprNotifyInfo.pszDomain : L"";
+    RtlInitUnicodeString(&Want, SessionDomain);
+    SessionLocal = Want.Length == 0 || !wcscmp(SessionDomain, L".") ||
+                   (Here.Length != 0 && RtlEqualUnicodeString(&Want, &Here, TRUE));
+    if (TypedLocal || SessionLocal)
+        return TypedLocal && SessionLocal;
+    return RtlEqualUnicodeString(Domain, &Want, TRUE);
+}
+
 /* A change the host was asked for; on success the interrupted logon or unlock continues
  * with the new password, as Windows does. */
 static DWORD
@@ -547,10 +585,30 @@ WlHlHandleChange(
 
     if (!NT_SUCCESS(CredSerUnpackChangePassword(Copy, Size, &Change)))
         return ERROR_INVALID_PARAMETER;
+    if (Resume == WLHL_CHANGE_SIGNED_IN && !WlHlIsSessionAccount(&Change.DomainName, &Change.AccountName))
+    {
+        ERR("WL: a signed-in change named another account; refused\n");
+        WlHlPost(WluiCmdReportResult, WLHL_CPUS_CHANGE_PASSWORD, 0, STATUS_ACCESS_DENIED, 0, NULL, NULL);
+        return ERROR_SUCCESS;
+    }
+    /* LSA verifies the old password; nothing is checked here. */
     Status = WlHlLsaChangePassword(&Change);
     if (!NT_SUCCESS(Status))
     {
         WlHlPost(WluiCmdReportResult, WLHL_CPUS_CHANGE_PASSWORD, 0, Status, 0, NULL, NULL);
+        return ERROR_SUCCESS;
+    }
+    if (Resume == WLHL_CHANGE_SIGNED_IN)
+    {
+        /* The user stays signed in: no new logon, just the result, then back to the desktop. */
+        WlHlPost(WluiCmdReportResult, WLHL_CPUS_CHANGE_PASSWORD, 0, STATUS_SUCCESS, 0, NULL, NULL);
+        EnterCriticalSection(&g_SubmitLock);
+        if (g_OptionsUp)
+        {
+            g_PendingAction = WLHL_ACTION_CHANGED;
+            SetEvent(g_SubmitEvent);
+        }
+        LeaveCriticalSection(&g_SubmitLock);
         return ERROR_SUCCESS;
     }
 
@@ -692,6 +750,180 @@ WlHlHasLegalNotice(VOID)
     return (Error == ERROR_SUCCESS || Error == ERROR_MORE_DATA) && Size > sizeof(WCHAR);
 }
 
+/* ---- automatic sign-in (AutoAdminLogon), as msgina GetRegistrySettings + LogonUiSignIn ---- */
+
+static BOOL g_AutoLogonTried;           /* an automatic sign-in was considered this boot */
+static BOOL g_AutoLogonAgain;           /* ForceAutoLogon: the next logged-off state may sign in again */
+
+/* AutoAdminLogon and its companions are REG_SZ numbers on Windows; a REG_DWORD is accepted too. */
+static DWORD
+WlHlWinlogonNumber(
+    _In_ PCWSTR Name,
+    _In_ DWORD Default)
+{
+    WCHAR Text[16];
+    DWORD Type, Size = sizeof(Text) - sizeof(WCHAR), Value = Default;
+    HKEY Key;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, 0, KEY_QUERY_VALUE, &Key) != ERROR_SUCCESS)
+        return Default;
+    if (RegQueryValueExW(Key, Name, NULL, &Type, (PBYTE)Text, &Size) == ERROR_SUCCESS)
+    {
+        if (Type == REG_DWORD && Size == sizeof(DWORD))
+            Value = *(PDWORD)Text;
+        else if (Type == REG_SZ)
+        {
+            Text[Size / sizeof(WCHAR)] = UNICODE_NULL;
+            Value = wcstoul(Text, NULL, 10);
+        }
+    }
+    RegCloseKey(Key);
+    return Value;
+}
+
+static VOID
+WlHlWinlogonString(
+    _In_ PCWSTR Name,
+    _Out_writes_(Chars) PWSTR Text,
+    _In_ DWORD Chars)
+{
+    DWORD Size = Chars * sizeof(WCHAR);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, Name, RRF_RT_REG_SZ, NULL, Text, &Size) != ERROR_SUCCESS)
+        Text[0] = UNICODE_NULL;
+}
+
+/* The protected copy (LSA secret DefaultPassword) wins over the registry value. */
+static BOOL
+WlHlLsaDefaultPassword(
+    _Out_writes_(Chars) PWSTR Password,
+    _In_ DWORD Chars)
+{
+    LSA_OBJECT_ATTRIBUTES Attributes;
+    LSA_HANDLE Policy;
+    LSA_UNICODE_STRING Name, *Secret = NULL;
+    NTSTATUS Status;
+
+    Password[0] = UNICODE_NULL;
+    ZeroMemory(&Attributes, sizeof(Attributes));
+    Attributes.Length = sizeof(Attributes);
+    if (!NT_SUCCESS(LsaOpenPolicy(NULL, &Attributes, POLICY_GET_PRIVATE_INFORMATION, &Policy)))
+        return FALSE;
+    RtlInitUnicodeString(&Name, L"DefaultPassword");
+    Status = LsaRetrievePrivateData(Policy, &Name, &Secret);
+    LsaClose(Policy);
+    if (!NT_SUCCESS(Status) || Secret == NULL)
+        return FALSE;
+    if (Secret->Length / sizeof(WCHAR) >= Chars)
+        Status = STATUS_BUFFER_TOO_SMALL;
+    else if (Secret->Length != 0)
+        CopyMemory(Password, Secret->Buffer, Secret->Length);
+    if (NT_SUCCESS(Status))
+        Password[Secret->Length / sizeof(WCHAR)] = UNICODE_NULL;
+    if (Secret->Buffer != NULL)
+        SecureZeroMemory(Secret->Buffer, Secret->Length);
+    LsaFreeMemory(Secret);
+    return NT_SUCCESS(Status);
+}
+
+/* Windows turns automatic sign-in off with AutoAdminLogon "0"; a spent AutoLogonCount also drops the password. */
+static VOID
+WlHlDisableAutoLogon(
+    _In_ BOOL Spent)
+{
+    HKEY Key;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, 0, KEY_SET_VALUE, &Key) != ERROR_SUCCESS)
+        return;
+    RegSetValueExW(Key, L"AutoAdminLogon", 0, REG_SZ, (const BYTE *)L"0", sizeof(L"0"));
+    if (Spent)
+    {
+        RegDeleteValueW(Key, L"DefaultPassword");
+        RegDeleteValueW(Key, L"AutoLogonCount");
+    }
+    RegCloseKey(Key);
+}
+
+static BOOL
+WlHlAutoLogonWanted(VOID)
+{
+    if (g_AutoLogonTried && !g_AutoLogonAgain)
+        return FALSE;
+    return WlHlWinlogonNumber(L"AutoAdminLogon", 0) != 0 && !WlHlHasLegalNotice();
+}
+
+/* Signs in DefaultUserName once; the result goes to WlHostLoggedOutSas like a host submit. Never on unlock. */
+static BOOL
+WlHlTryAutoLogon(VOID)
+{
+    CREDSER_LOGON Logon;
+    WCHAR User[256], Domain[256], Password[256];
+    HKEY Key;
+    DWORD Left, Chars;
+    HANDLE Token = NULL;
+    LUID LogonId = { 0, 0 };
+    NTSTATUS Status, SubStatus = STATUS_SUCCESS;
+
+    if (!WlHlAutoLogonWanted())
+        return FALSE;
+    g_AutoLogonTried = TRUE;
+    g_AutoLogonAgain = FALSE;
+    if (WlHlWinlogonNumber(L"IgnoreShiftOverride", 0) == 0 && (GetAsyncKeyState(VK_SHIFT) & 0x8000))
+    {
+        ERR("WL: automatic sign-in skipped: Shift is held\n");
+        return FALSE;
+    }
+    Left = WlHlWinlogonNumber(L"AutoLogonCount", MAXDWORD);
+    if (Left == 0)
+    {
+        WlHlDisableAutoLogon(TRUE);
+        return FALSE;
+    }
+    WlHlWinlogonString(L"DefaultUserName", User, ARRAYSIZE(User));
+    if (User[0] == UNICODE_NULL)
+        return FALSE;
+    WlHlWinlogonString(L"DefaultDomainName", Domain, ARRAYSIZE(Domain));
+    Chars = ARRAYSIZE(Domain);
+    if (Domain[0] == UNICODE_NULL && !GetComputerNameW(Domain, &Chars))
+        Domain[0] = UNICODE_NULL;
+    if (!WlHlLsaDefaultPassword(Password, ARRAYSIZE(Password)))
+        WlHlWinlogonString(L"DefaultPassword", Password, ARRAYSIZE(Password));
+
+    ZeroMemory(&Logon, sizeof(Logon));
+    Logon.MessageType = KerbInteractiveLogon;
+    RtlInitUnicodeString(&Logon.LogonDomainName, Domain);
+    RtlInitUnicodeString(&Logon.UserName, User);
+    RtlInitUnicodeString(&Logon.Password, Password);
+    Status = WlHlLsaLogon(&Logon, FALSE, &Token, &LogonId, &SubStatus);
+    if (NT_SUCCESS(Status) && WlHlSafeModeBlocksNonAdmins() && !WlHlTokenIsAdmin(Token))
+    {
+        CloseHandle(Token);
+        Token = NULL;
+        Status = STATUS_ACCOUNT_RESTRICTION;
+    }
+    if (NT_SUCCESS(Status))
+    {
+        if (Left != MAXDWORD && --Left == 0)
+            WlHlDisableAutoLogon(TRUE);
+        else if (Left != MAXDWORD &&
+                 RegOpenKeyExW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, 0, KEY_SET_VALUE, &Key) == ERROR_SUCCESS)
+        {
+            RegSetValueExW(Key, L"AutoLogonCount", 0, REG_DWORD, (const BYTE *)&Left, sizeof(Left));
+            RegCloseKey(Key);
+        }
+        g_AutoLogonAgain = WlHlWinlogonNumber(L"ForceAutoLogon", 0) != 0;
+        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, 0);
+    }
+    else
+    {
+        ERR("WL: automatic sign-in failed (0x%08lx); AutoAdminLogon turned off\n", Status);
+        WlHlDisableAutoLogon(FALSE);
+    }
+    SecureZeroMemory(Password, sizeof(Password));
+    SecureZeroMemory(&Logon, sizeof(Logon));
+    return NT_SUCCESS(Status);
+}
+
 /* Flags for RequestCredentials that describe policy to the host; winlogon stays the gate. */
 static DWORD
 WlHlPolicyFlags(VOID)
@@ -717,10 +949,42 @@ WlHlActionHandler(
     UNREFERENCED_PARAMETER(State);
     UNREFERENCED_PARAMETER(Role);
 
-    if (Action != WluiActionShutdown && Action != WluiActionRestart && Action != WluiActionCancel)
+    if (Action < WluiActionShutdown || Action > WluiActionEmergencyRestart)
         return ERROR_INVALID_PARAMETER;
+
+    /* The Ctrl+Alt+Del options: only while that page is up, and only what its policy allowed. */
+    EnterCriticalSection(&g_SubmitLock);
+    if (g_OptionsUp)
+    {
+        DWORD Denied = 0;
+
+        if (Action == WluiActionLock)
+            Denied = g_OptionsFlags & WLUI_FLAG_NO_LOCK;
+        else if (Action == WluiActionLogoff)
+            Denied = g_OptionsFlags & WLUI_FLAG_NO_LOGOFF;
+        else if (Action == WluiActionChangePassword)
+            Denied = g_OptionsFlags & WLUI_FLAG_NO_CHANGE_PASSWORD;
+        else if (Action == WluiActionTaskManager)
+            Denied = g_OptionsFlags & WLUI_FLAG_NO_TASK_MANAGER;
+        else if (Action == WluiActionShutdown || Action == WluiActionRestart || Action == WluiActionEmergencyRestart)
+            Denied = g_OptionsFlags & WLUI_FLAG_NO_POWER;
+        if (Denied)
+        {
+            LeaveCriticalSection(&g_SubmitLock);
+            ERR("WL: option %lu refused by policy\n", Action);
+            return ERROR_ACCESS_DENIED;
+        }
+        g_PendingAction = Action;
+        SetEvent(g_SubmitEvent);
+        LeaveCriticalSection(&g_SubmitLock);
+        return ERROR_SUCCESS;
+    }
+    LeaveCriticalSection(&g_SubmitLock);
+
     if (Action == WluiActionCancel)
         return ERROR_SUCCESS;
+    if (Action != WluiActionShutdown && Action != WluiActionRestart)
+        return ERROR_ACCESS_DENIED;     /* an options action with no options page up */
 
     /* Nobody is signed in on the notice, the sign-in page or the locked station: policy decides. */
     LogonState = g_Session->LogonState;
@@ -952,6 +1216,23 @@ WlHlChangePrefill(
     LeaveCriticalSection(&g_SubmitLock);
 }
 
+/* The unlock page names the locked session's account, so the host lists only that tile. */
+static VOID
+WlHlUnlockPrefill(
+    _Out_writes_(Chars) PWCHAR Prefill,
+    _In_ ULONG Chars)
+{
+    PCWSTR Domain = g_Session ? g_Session->MprNotifyInfo.pszDomain : NULL;
+    PCWSTR User = g_Session ? g_Session->MprNotifyInfo.pszUserName : NULL;
+
+    if (User == NULL || User[0] == UNICODE_NULL)
+        Prefill[0] = UNICODE_NULL;
+    else if (Domain != NULL && Domain[0] != UNICODE_NULL)
+        StringCchPrintfW(Prefill, Chars, L"%s\\%s", Domain, User);
+    else
+        StringCchCopyW(Prefill, Chars, User);
+}
+
 /* Brings up a host for Scenario (0: status only). A live host is kept when it already shows
  * Scenario, or when it was status-only and the logon page is wanted (the host builds its
  * providers at the first RequestCredentials); any other change means a fresh host. */
@@ -980,6 +1261,8 @@ WlHlEnsureHost(
     Prefill[0] = UNICODE_NULL;
     if (Scenario == WLHL_CPUS_CHANGE_PASSWORD)
         WlHlChangePrefill(Prefill, ARRAYSIZE(Prefill));
+    else if (Scenario == WLHL_CPUS_UNLOCK)
+        WlHlUnlockPrefill(Prefill, ARRAYSIZE(Prefill));
 
     if (WlHlHostLive())
     {
@@ -1067,16 +1350,22 @@ WlHostAttach(
 /* ---- the logged-out SAS ------------------------------------------------------- */
 
 /* With CAD disabled the credential page is the notice: enter the logged-out SAS by ourselves.
- * With CAD enabled the screen stays as it is until the user's SAS (the CAD page is Phase 4). */
+ * With CAD enabled the host shows the Ctrl+Alt+Delete notice until the user's SAS. */
 VOID
 WlHostDisplaySasNotice(
     _In_ PWLSESSION Session)
 {
-    if (!WlHlDisableCad())
+    if (!WlHlDisableCad() && !WlHlAutoLogonWanted())
     {
-        /* A host still up from a logoff keeps showing a notice text instead of a stale status. */
-        if (WlHlHostLive())
-            WlHlPostResource(WluiCmdDisplayStatus, 0, IDS_PRESSCTRLALTDELETE);
+        /* G7: the Ctrl+Alt+Del notice is the host's clock curtain; a page host gives way to a status-only one. */
+        if (WlHlHostLive() && g_HostScenario != 0)
+            WlHlStopHost();
+        if (!WlHlHostLive() && !WlHlEnsureHost(0, 0, WlHlLockReadyMs()))
+        {
+            ERR("WL: no logon UI for the Ctrl+Alt+Delete notice; waiting for a user SAS\n");
+            return;
+        }
+        WlHlPostResource(WluiCmdDisplayStatus, WLUI_FLAG_CURTAIN, IDS_PRESSCTRLALTDELETE);
         return;
     }
     if (WlHostIsTerminal() || g_LsaBroken || WlHlTerminalUp())
@@ -1108,9 +1397,19 @@ WlHostLoggedOutSas(
     /* Only a SAS the user typed resets the levels; the self-posted one must not (R3). */
     if (UserSas)
         WlHostOnSas();
-    if (!WlHlEnsureHost(WLHL_CPUS_LOGON, CadFlag, WLHL_READY_MS))
-        return WLX_SAS_ACTION_NONE;
+
+    /* A self-posted SAS may be an automatic sign-in; with CAD required only a real one raises the page. */
     WlHlSetAccepting(TRUE);
+    if (!UserSas && !WlHlTryAutoLogon() && !WlHlDisableCad())
+    {
+        WlHlSetAccepting(FALSE);
+        return WLX_SAS_ACTION_NONE;
+    }
+    if (!WlHlEnsureHost(WLHL_CPUS_LOGON, CadFlag, WLHL_READY_MS))
+    {
+        WlHlSetAccepting(FALSE);
+        return WLX_SAS_ACTION_NONE;
+    }
 
     for (;;)
     {
@@ -1258,17 +1557,272 @@ WlHostLoggedOutSas(
     return Result;
 }
 
+/* ---- the Ctrl+Alt+Del options of a signed-in user --------------------------------- */
+
+#define WLHL_SCENARIO_OPTIONS       0x100   /* g_HostScenario while the options page is up; not a CPUS_* */
+#define WLHL_CHANGED_MS             2500    /* how long the 'password changed' result stays up */
+
+/* A DWORD policy under the signed-in user's HKCU (Software\...\Policies), read as that user. */
+static BOOL
+WlHlUserPolicy(
+    _In_ PWLSESSION Session,
+    _In_ PCWSTR SubKey,
+    _In_ PCWSTR Name)
+{
+    HKEY User = NULL;
+    DWORD Value = 0, Size = sizeof(Value);
+    BOOL Set = FALSE;
+
+    if (Session->UserToken == NULL || !ImpersonateLoggedOnUser(Session->UserToken))
+        return FALSE;
+    if (RegOpenCurrentUser(KEY_QUERY_VALUE, &User) != ERROR_SUCCESS)
+        User = NULL;
+    RevertToSelf();
+    if (User == NULL)
+        return FALSE;
+    if (RegGetValueW(User, SubKey, Name, RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS && Value != 0)
+        Set = TRUE;
+    RegCloseKey(User);
+    return Set;
+}
+
+/* Restart and Shut down from the options need the user's SeShutdownPrivilege (held, enabled or not). */
+static BOOL
+WlHlUserMayShutdown(
+    _In_ PWLSESSION Session)
+{
+    BYTE Buffer[2048];
+    PTOKEN_PRIVILEGES Privileges = (PTOKEN_PRIVILEGES)Buffer;
+    DWORD Size = 0, i;
+    LUID Shutdown;
+
+    if (Session->UserToken == NULL || !LookupPrivilegeValueW(NULL, L"SeShutdownPrivilege", &Shutdown) ||
+        !GetTokenInformation(Session->UserToken, TokenPrivileges, Buffer, sizeof(Buffer), &Size))
+        return FALSE;
+    for (i = 0; i < Privileges->PrivilegeCount; i++)
+    {
+        if (Privileges->Privileges[i].Luid.LowPart == Shutdown.LowPart &&
+            Privileges->Privileges[i].Luid.HighPart == Shutdown.HighPart)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* What the options page offers, as msgina's LoadOptions decides it (HKLM, then the user's policies). */
+static DWORD
+WlHlOptionsFlags(
+    _In_ PWLSESSION Session)
+{
+    static const PCWSTR System = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System";
+    static const PCWSTR Explorer = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer";
+    DWORD Flags = 0;
+
+    /* The same rule as every other lock path (WlIsLockOk): HKLM, then the user's policy. */
+    if (!WlHostIsLockOk(Session))
+        Flags |= WLUI_FLAG_NO_LOCK;
+    if (WlHlUserPolicy(Session, System, L"DisableChangePassword"))
+        Flags |= WLUI_FLAG_NO_CHANGE_PASSWORD;
+    if (WlHlUserPolicy(Session, System, L"DisableTaskMgr"))
+        Flags |= WLUI_FLAG_NO_TASK_MANAGER;
+    if (WlHlUserPolicy(Session, Explorer, L"NoLogoff"))
+        Flags |= WLUI_FLAG_NO_LOGOFF;
+    if (!WlHlUserMayShutdown(Session))
+        Flags |= WLUI_FLAG_NO_POWER;
+    return Flags;
+}
+
+/* Restart now, without notifying anyone: the options page's last resort (msgina Page::Emergency). */
+static VOID
+WlHlEmergencyRestart(VOID)
+{
+    BOOLEAN Old;
+
+    ERR("WL: emergency restart requested from the options page\n");
+    RtlAdjustPrivilege(SE_SHUTDOWN_PRIVILEGE, TRUE, FALSE, &Old);
+    NtShutdownSystem(ShutdownReboot);
+    RtlAdjustPrivilege(SE_SHUTDOWN_PRIVILEGE, Old, FALSE, &Old);
+}
+
+/*
+ * The SAS of a signed-in user: the host shows the options and the choice comes back as an
+ * action. Returns the WLX_SAS_ACTION_* for DispatchSAS; the host is gone when this returns.
+ */
+DWORD
+WlHostLoggedOnSas(
+    _In_ PWLSESSION Session)
+{
+    HANDLE Waits[2];
+    DWORD Result = WLX_SAS_ACTION_NONE;
+    DWORD Flags = WlHlOptionsFlags(Session);
+
+    if (g_SubmitEvent == NULL)
+        return WLX_SAS_ACTION_NONE;
+    WlHostOnSas();
+    WlHlStopHost();
+    if (!WlHlEnsureHost(0, 0, WLHL_READY_MS))
+        return WLX_SAS_ACTION_NONE;
+
+    EnterCriticalSection(&g_SubmitLock);
+    g_OptionsFlags = Flags;
+    g_PendingAction = 0;
+    g_OptionsUp = TRUE;
+    LeaveCriticalSection(&g_SubmitLock);
+    EnterCriticalSection(&g_LaunchLock);
+    g_HostScenario = WLHL_SCENARIO_OPTIONS;
+    LeaveCriticalSection(&g_LaunchLock);
+    WlHlPost(WluiCmdShowOptions, WLHL_SCENARIO_OPTIONS, Flags, 0, 0, Session->MprNotifyInfo.pszUserName, NULL);
+    LogonStage("options-shown");
+
+    for (;;)
+    {
+        DWORD Which, Action;
+
+        Waits[0] = g_SubmitEvent;
+        Waits[1] = WlHostEndedEvent(g_Launch);
+        Which = MsgWaitForMultipleObjects(2, Waits, FALSE, INFINITE, QS_ALLINPUT);
+        if (Which == WAIT_OBJECT_0 + 2)
+        {
+            MSG Msg;
+            BOOL Quit = FALSE;
+            while (!Quit && PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
+            {
+                if (Msg.message == WM_QUIT)
+                {
+                    PostQuitMessage((int)Msg.wParam);   /* belongs to winlogon's main loop */
+                    Quit = TRUE;
+                    break;
+                }
+                TranslateMessage(&Msg);
+                DispatchMessageW(&Msg);
+            }
+            /* A logoff or shutdown notification ran nested in here, or the host went away. */
+            if (Quit || Session->LogonState != STATE_LOGGED_ON_SAS || g_Launch == NULL)
+                break;
+            continue;
+        }
+        if (Which == WAIT_OBJECT_0 + 1)
+            break;                      /* the host ended: back to the desktop */
+
+        EnterCriticalSection(&g_SubmitLock);
+        Action = g_PendingAction;
+        g_PendingAction = 0;
+        LeaveCriticalSection(&g_SubmitLock);
+        if (Action == 0)
+            continue;
+        if (Action == WluiActionChangePassword)
+        {
+            /* The change page for the session's own account (WlHlChangePrefill names it); a submit
+             * is taken only for that page (WlHlScenarioExpected), Cancel still comes back here. */
+            EnterCriticalSection(&g_SubmitLock);
+            g_ChangeFor = WLHL_CHANGE_SIGNED_IN;
+            LeaveCriticalSection(&g_SubmitLock);
+            if (!WlHlEnsureHost(WLHL_CPUS_CHANGE_PASSWORD, WLUI_FLAG_NO_POWER, WLHL_READY_MS))
+                break;
+            continue;
+        }
+        if (Action == WLHL_ACTION_CHANGED)
+        {
+            /* Leave the result on screen for a moment, as the change confirmation, still pumping
+             * the SAS window (a logoff or shutdown notification may arrive meanwhile). */
+            ULONGLONG Until = GetTickCount64() + WLHL_CHANGED_MS;
+            while (g_Launch != NULL && Session->LogonState == STATE_LOGGED_ON_SAS)
+            {
+                ULONGLONG Now = GetTickCount64();
+                HANDLE Ended = WlHostEndedEvent(g_Launch);
+                MSG Msg;
+                BOOL Quit = FALSE;
+
+                if (Now >= Until ||
+                    MsgWaitForMultipleObjects(1, &Ended, FALSE, (DWORD)(Until - Now), QS_ALLINPUT) != WAIT_OBJECT_0 + 1)
+                    break;
+                while (PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
+                {
+                    if (Msg.message == WM_QUIT)
+                    {
+                        PostQuitMessage((int)Msg.wParam);
+                        Quit = TRUE;
+                        break;
+                    }
+                    TranslateMessage(&Msg);
+                    DispatchMessageW(&Msg);
+                }
+                if (Quit)
+                    break;
+            }
+            break;
+        }
+        if (Action == WluiActionLock)
+            Result = WLX_SAS_ACTION_LOCK_WKSTA;
+        else if (Action == WluiActionLogoff)
+            Result = WLX_SAS_ACTION_LOGOFF;
+        else if (Action == WluiActionTaskManager)
+            Result = WLX_SAS_ACTION_TASKLIST;
+        else if (Action == WluiActionShutdown)
+            Result = WLX_SAS_ACTION_SHUTDOWN_POWER_OFF;
+        else if (Action == WluiActionRestart)
+            Result = WLX_SAS_ACTION_SHUTDOWN_REBOOT;
+        else if (Action == WluiActionEmergencyRestart)
+            WlHlEmergencyRestart();
+        break;                          /* Cancel and anything else: back to the desktop */
+    }
+
+    EnterCriticalSection(&g_SubmitLock);
+    g_OptionsUp = FALSE;
+    g_PendingAction = 0;
+    if (g_ChangeFor == WLHL_CHANGE_SIGNED_IN)
+        g_ChangeFor = 0;
+    LeaveCriticalSection(&g_SubmitLock);
+    WlHlStopHost();
+    return Result;
+}
+
 /* ---- lock, unlock, screen saver (no thread waits: events come back through the SAS window) ---- */
 
 /* P2: the unlock page is requested and waited for within a bound; the caller switches to the
  * Winlogon desktop whether or not the host made it, so the lock never depends on the host. */
+static VOID
+WlHlRequestUnlock(
+    _In_ DWORD Flags)
+{
+    if (!WlHlEnsureHost(WLHL_CPUS_UNLOCK, (WlHlPolicyFlags() & WLUI_FLAG_NO_POWER) | Flags, WlHlLockReadyMs()))
+        ERR("WL: no logon UI for the locked station; it stays locked without a page\n");
+}
+
+/*
+ * As on the sign-in screen: with CAD optional the unlock page comes up at once (behind the
+ * host's curtain); with CAD required the station shows only the Ctrl+Alt+Delete notice, and
+ * the unlock page waits for the user's SAS (WlHostLockedSas).
+ */
 VOID
 WlHostLock(
     _In_ PWLSESSION Session)
 {
     UNREFERENCED_PARAMETER(Session);
-    if (!WlHlEnsureHost(WLHL_CPUS_UNLOCK, WlHlPolicyFlags() & WLUI_FLAG_NO_POWER, WlHlLockReadyMs()))
-        ERR("WL: no logon UI for the locked station; it stays locked without a page\n");
+    if (WlHlDisableCad())
+    {
+        WlHlRequestUnlock(WLUI_FLAG_DISABLE_CAD);
+        return;
+    }
+    /* A host showing a page (sign-in or unlock) gives way to the notice; a status-only host is kept. */
+    if (WlHlHostLive() && g_HostScenario != 0)
+        WlHlStopHost();
+    if (!WlHlHostLive() && !WlHlEnsureHost(0, 0, WlHlLockReadyMs()))
+    {
+        ERR("WL: no logon UI for the locked notice; the station stays locked\n");
+        return;
+    }
+    WlHlPostResource(WluiCmdDisplayStatus, WLUI_FLAG_CURTAIN, IDS_PRESSCTRLALTDELETEUNLOCK);
+}
+
+/* The SAS on the locked station: with CAD required, now the unlock page may come up. */
+VOID
+WlHostLockedSas(
+    _In_ PWLSESSION Session)
+{
+    UNREFERENCED_PARAMETER(Session);
+    WlHostOnSas();                      /* a user SAS resets the levels, as on the sign-in screen */
+    /* A live unlock page is kept as it is; a lost one comes back. */
+    WlHlRequestUnlock(WlHlDisableCad() ? WLUI_FLAG_DISABLE_CAD : 0);
 }
 
 /* A logoff that could not start: the user is still signed in, so the status must go. */
@@ -1349,6 +1903,34 @@ WlHostScreenSaverSecure(
     RevertToSelf();
     UNREFERENCED_PARAMETER(Value);
     return Secure;
+}
+
+/* msgina WlxIsLockOk: DisableLockWorkstation in HKLM, or in the session user's own hive under impersonation. */
+BOOL
+WlHostIsLockOk(
+    _In_ PWLSESSION Session)
+{
+    DWORD Value = 0, Size = sizeof(Value);
+    HKEY hUser;
+    BOOL Ok = TRUE;
+
+    if (WlHlPolicyDword(L"DisableLockWorkstation", 0) != 0)
+        Ok = FALSE;
+    else if (Session->UserToken != NULL && ImpersonateLoggedOnUser(Session->UserToken))
+    {
+        if (RegOpenCurrentUser(KEY_READ, &hUser) == ERROR_SUCCESS)
+        {
+            if (RegGetValueW(hUser, L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                             L"DisableLockWorkstation", RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS &&
+                Value != 0)
+                Ok = FALSE;
+            RegCloseKey(hUser);
+        }
+        RevertToSelf();
+    }
+    if (!Ok)
+        ERR("WL: lock refused: DisableLockWorkstation is set\n");
+    return Ok;
 }
 
 /* ---- status and hand-offs used by HandleLogon, HandleLogoff and HandleShutdown ------- */
@@ -1621,6 +2203,32 @@ WlHostStartApplication(
     return WlHlRunAsUser(Session, Desktop, Environment, Command, NULL);
 }
 
+/* The name the user signed in with, under the user's Explorer key (msgina WlxActivateUserShell). */
+static VOID
+WlHlStoreLogonUserName(
+    _In_ PWLSESSION Session)
+{
+    PCWSTR Name = Session->MprNotifyInfo.pszUserName;
+    HKEY User = NULL, Key;
+
+    if (Name == NULL || Name[0] == UNICODE_NULL || Session->UserToken == NULL ||
+        !ImpersonateLoggedOnUser(Session->UserToken))
+        return;
+    if (RegOpenCurrentUser(KEY_CREATE_SUB_KEY | KEY_SET_VALUE, &User) != ERROR_SUCCESS)
+        User = NULL;
+    if (User != NULL &&
+        RegCreateKeyExW(User, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer", 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &Key, NULL) == ERROR_SUCCESS)
+    {
+        RegSetValueExW(Key, L"Logon User Name", 0, REG_SZ, (const BYTE *)Name,
+                       (DWORD)((wcslen(Name) + 1) * sizeof(WCHAR)));
+        RegCloseKey(Key);
+    }
+    if (User != NULL)
+        RegCloseKey(User);
+    RevertToSelf();
+}
+
 /* Userinit is a comma-separated command list (msgina WlxActivateUserShell). */
 BOOL
 WlHostActivateUserShell(
@@ -1659,5 +2267,7 @@ WlHostActivateUserShell(
         if (WlHlRunAsUser(Session, L"Default", Environment, Command, Any ? NULL : &g_ShellProcess))
             Any = TRUE;
     }
+    if (Any)
+        WlHlStoreLogonUserName(Session);
     return Any;
 }

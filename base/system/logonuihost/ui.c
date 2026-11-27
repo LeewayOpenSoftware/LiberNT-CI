@@ -6,6 +6,7 @@
  */
 
 #include "logonuihost.h"
+#include "resource.h"
 #include <math.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
@@ -15,16 +16,29 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_TIMER_SPINNER   2
 #define LUH_TIMER_FADE      3
 #define LUH_TIMER_STARTUP   4   /* a page must arrive within the provider call bound */
+#define LUH_TIMER_CLOCK     5   /* the curtain's clock, only while the curtain is up */
+#define LUH_CLOCK_MS        500
 #define LUH_SPINNER_MS      50
 
 #define LUH_ID_FIELD_BASE   1000
 #define LUH_ID_RESTART      1900
 #define LUH_ID_SHUTDOWN     1901
+#define LUH_ID_POWER        1902    /* the power button: a menu of LUH_ID_RESTART and LUH_ID_SHUTDOWN */
+#define LUH_ID_OPTION_BASE  1920    /* + row of the Ctrl+Alt+Del options (LuhOptionRows) */
+#define LUH_ID_OPTION_CANCEL 1930
+#define LUH_POWER_WIDTH     120
+#define LUH_ID_TILE_BASE    2000    /* + tile index, below LUH_ID_TILE_BASE + LUH_MAX_TILES */
+
+#define LUH_TILE_WIDTH      260
+#define LUH_TILE_MARGIN     24
 
 #define LUH_PAGE_WIDTH      360
 #define LUH_ROW_HEIGHT      30
 #define LUH_ROW_GAP         10
 #define LUH_TEXT_ABOVE_PAGE 100     /* title 40 + gap 8 + result 28 + 24 clearance over the first row */
+#define LUH_DETAIL_WIDTH    560     /* a wrapped result line, e.g. the account restriction text */
+#define LUH_DETAIL_MARGIN   16
+#define LUH_CAPS_GAP        28      /* under the last password box: the Caps Lock line */
 
 typedef struct _LUH_UI
 {
@@ -49,9 +63,42 @@ typedef struct _LUH_UI
     int PageTop;            /* y of the first field row; the title and the result sit above it */
     BOOL PageBusy;          /* a submission is with winlogon; controls disabled */
     HWND PolicyButtons[2];
+    HWND TileButtons[LUH_MAX_TILES];    /* the other tiles, bottom left, as on the Windows sign-in screen */
+    HWND PowerButton;                   /* bottom right; absent when ShutdownWithoutLogon is 0 */
+    BOOL OptionsUp;                     /* the Ctrl+Alt+Del options of a signed-in user are shown */
+    HWND OptionButtons[5];              /* the options shown, then Cancel */
+    BOOL ChangeCancel;                  /* a change the user asked for (not forced): it can be cancelled */
+    HWND CancelButton;                  /* that Cancel, under the change page */
+    /* the curtain: clock and date before the tiles, CAD-less logon and unlock only */
+    BOOL Curtain;
+    BOOL CadCurtain;        /* the Ctrl+Alt+Del notice: Title is its text and only winlogon replaces it */
+    PLUH_PAGE CurtainPage;  /* a page that arrived under the curtain; shown when it lifts */
+    HFONT ClockFont;
+    HFONT DateFont;
+    WCHAR ClockText[64];
+    WCHAR DateText[128];
+    HWND CapsControl;       /* the focused password box while Caps Lock is on */
+    int CapsTop;            /* y of the gap reserved under the page's last password box */
 } LUH_UI;
 
 static LUH_UI g_Ui;
+
+/* The UI text, from the string table in the user's language (en-US, es-ES in the tree);
+ * loaded once per string on the UI thread. */
+static PCWSTR
+LuhText(
+    _In_ UINT Id)
+{
+    static WCHAR Cache[IDS_LUH_LAST - IDS_LUH_POWER + 1][256];
+    PWSTR Slot;
+
+    if (Id < IDS_LUH_POWER || Id > IDS_LUH_LAST)
+        return L"";
+    Slot = Cache[Id - IDS_LUH_POWER];
+    if (Slot[0] == UNICODE_NULL && LoadStringW(GetModuleHandleW(NULL), Id, Slot, ARRAYSIZE(Cache[0])) <= 0)
+        Slot[0] = UNICODE_NULL;
+    return Slot;
+}
 
 static void
 LuhBeginExit(
@@ -70,6 +117,45 @@ LuhBeginExit(
     DestroyWindow(Window);
 }
 
+/* Account restrictions the provider leaves unworded: LogonUI says them itself, as on Windows. */
+#define LUH_STATUS_ACCOUNT_RESTRICTION  ((LONG)0xC000006EL)
+#define LUH_STATUS_INVALID_LOGON_HOURS  ((LONG)0xC000006FL)
+#define LUH_STATUS_INVALID_WORKSTATION  ((LONG)0xC0000070L)
+#define LUH_STATUS_ACCOUNT_DISABLED     ((LONG)0xC0000072L)
+#define LUH_STATUS_ACCOUNT_EXPIRED      ((LONG)0xC0000193L)
+#define LUH_STATUS_ACCOUNT_LOCKED_OUT   ((LONG)0xC0000234L)
+
+static UINT
+LuhAccountStatusCode(
+    _In_ LONG Code)
+{
+    switch (Code)
+    {
+        case LUH_STATUS_ACCOUNT_DISABLED:   return IDS_LUH_ACCOUNT_DISABLED;
+        case LUH_STATUS_ACCOUNT_EXPIRED:    return IDS_LUH_ACCOUNT_EXPIRED;
+        case LUH_STATUS_INVALID_LOGON_HOURS: return IDS_LUH_LOGON_HOURS;
+        case LUH_STATUS_INVALID_WORKSTATION: return IDS_LUH_WORKSTATION;
+        case LUH_STATUS_ACCOUNT_LOCKED_OUT: return IDS_LUH_LOCKED_OUT;
+        case LUH_STATUS_ACCOUNT_RESTRICTION: return IDS_LUH_ACCOUNT_RESTRICTED;
+    }
+    return 0;
+}
+
+static UINT
+LuhAccountStatusText(
+    _In_ LONG Status,
+    _In_ LONG SubStatus)
+{
+    UINT Text = 0;
+
+    /* The sub-status says which restriction; one without its own sentence gets the general one. */
+    if (Status == LUH_STATUS_ACCOUNT_RESTRICTION && SubStatus < 0)
+        Text = LuhAccountStatusCode(SubStatus);
+    if (Text == 0)
+        Text = LuhAccountStatusCode(Status);
+    return Text;
+}
+
 static void
 LuhSetSpinner(
     _In_ HWND Window,
@@ -84,11 +170,39 @@ LuhSetSpinner(
 
 /* ---- credential page ----------------------------------------------------------- */
 
+/* Caps Lock warning, as on the Windows sign-in screen: only while a password box has the focus. */
+static void
+LuhUpdateCapsLock(
+    _In_ HWND Window)
+{
+    HWND Focus = GetFocus(), Show = NULL;
+    DWORD i;
+
+    if (g_Ui.Page && !g_Ui.Curtain && Focus != NULL && (GetKeyState(VK_CAPITAL) & 1))
+    {
+        for (i = 0; i < g_Ui.Page->Count; i++)
+        {
+            if (g_Ui.Page->Fields[i].Control == Focus && g_Ui.Page->Fields[i].Type == CPFT_PASSWORD_TEXT)
+            {
+                Show = Focus;
+                break;
+            }
+        }
+    }
+    if (Show != g_Ui.CapsControl)
+    {
+        g_Ui.CapsControl = Show;
+        InvalidateRect(Window, NULL, TRUE);
+    }
+}
+
 static void
 LuhDestroyPage(void)
 {
     DWORD i;
 
+    g_Ui.CapsControl = NULL;    /* its box goes away with the page */
+    g_Ui.CapsTop = 0;
     if (g_Ui.Page)
     {
         for (i = 0; i < g_Ui.Page->Count; i++)
@@ -118,7 +232,204 @@ LuhDestroyPage(void)
             g_Ui.PolicyButtons[i] = NULL;
         }
     }
+    for (i = 0; i < LUH_MAX_TILES; i++)
+    {
+        if (g_Ui.TileButtons[i])
+        {
+            DestroyWindow(g_Ui.TileButtons[i]);
+            g_Ui.TileButtons[i] = NULL;
+        }
+    }
+    if (g_Ui.PowerButton)
+    {
+        DestroyWindow(g_Ui.PowerButton);
+        g_Ui.PowerButton = NULL;
+    }
+    for (i = 0; i < ARRAYSIZE(g_Ui.OptionButtons); i++)
+    {
+        if (g_Ui.OptionButtons[i])
+        {
+            DestroyWindow(g_Ui.OptionButtons[i]);
+            g_Ui.OptionButtons[i] = NULL;
+        }
+    }
+    g_Ui.OptionsUp = FALSE;
+    if (g_Ui.CancelButton)
+    {
+        DestroyWindow(g_Ui.CancelButton);
+        g_Ui.CancelButton = NULL;
+    }
     g_Ui.PageBusy = FALSE;
+}
+
+/*
+ * The power button of the sign-in screen. Hiding it is only the visible half: winlogon's
+ * action handler refuses Restart and Shut down itself while ShutdownWithoutLogon is 0.
+ */
+static void
+LuhCreatePowerButton(
+    _In_ HWND Window)
+{
+    RECT Client;
+
+    if (g_Options.NoPower)
+        return;
+    GetClientRect(Window, &Client);
+    g_Ui.PowerButton = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_POWER), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                       Client.right - LUH_TILE_MARGIN - LUH_POWER_WIDTH,
+                                       Client.bottom - LUH_TILE_MARGIN - LUH_ROW_HEIGHT,
+                                       LUH_POWER_WIDTH, LUH_ROW_HEIGHT, Window, (HMENU)LUH_ID_POWER, NULL, NULL);
+    if (g_Ui.PowerButton)
+        SendMessageW(g_Ui.PowerButton, WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+}
+
+/* Restart and Shut down, above the button; the choice goes to winlogon, which decides. */
+static void
+LuhPowerMenu(
+    _In_ HWND Window)
+{
+    HMENU Menu;
+    RECT Button;
+    UINT Choice;
+
+    if (g_Ui.PowerButton == NULL || g_Ui.PageBusy)
+        return;
+    if (g_Ui.OptionsUp && (GetKeyState(VK_CONTROL) & 0x8000))
+    {
+        if (MessageBoxW(Window, LuhText(IDS_LUH_EMERGENCY_TEXT), LuhText(IDS_LUH_EMERGENCY_TITLE),
+                        MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND) == IDOK)
+        {
+            LuhTrace("power", L"emergency");
+            WluiClientRequestAction(&g_Connection, WluiActionEmergencyRestart);
+        }
+        return;
+    }
+    Menu = CreatePopupMenu();
+    if (Menu == NULL)
+        return;
+    AppendMenuW(Menu, MF_STRING, LUH_ID_RESTART, LuhText(IDS_LUH_RESTART));
+    AppendMenuW(Menu, MF_STRING, LUH_ID_SHUTDOWN, LuhText(IDS_LUH_SHUTDOWN));
+    GetWindowRect(g_Ui.PowerButton, &Button);
+    Choice = (UINT)TrackPopupMenu(Menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_BOTTOMALIGN | TPM_NONOTIFY,
+                                  Button.right, Button.top, 0, Window, NULL);
+    DestroyMenu(Menu);
+    if (Choice == LUH_ID_RESTART || Choice == LUH_ID_SHUTDOWN)
+    {
+        LuhTrace("power", Choice == LUH_ID_RESTART ? L"restart" : L"shutdown");
+        WluiClientRequestAction(&g_Connection, Choice == LUH_ID_RESTART ? WluiActionRestart : WluiActionShutdown);
+    }
+}
+
+static void LuhDropCurtain(_In_ HWND Window);
+
+/* The Ctrl+Alt+Del options, in msgina's order; a row policy turned off is not shown. */
+static const struct
+{
+    UINT Text;
+    DWORD Hide;
+    WLUI_ACTION Action;
+} LuhOptionRows[] =
+{
+    { IDS_LUH_LOCK, WLUI_FLAG_NO_LOCK, WluiActionLock },
+    { IDS_LUH_SIGN_OUT, WLUI_FLAG_NO_LOGOFF, WluiActionLogoff },
+    { IDS_LUH_CHANGE_PASSWORD, WLUI_FLAG_NO_CHANGE_PASSWORD, WluiActionChangePassword },
+    { IDS_LUH_TASK_MANAGER, WLUI_FLAG_NO_TASK_MANAGER, WluiActionTaskManager },
+};
+
+static void
+LuhShowOptionsPage(
+    _In_ HWND Window,
+    _In_ DWORD Flags,
+    _In_ PCWSTR User)
+{
+    RECT Client;
+    int X, Y;
+    DWORD i, Shown = 0;
+
+    LuhDropCurtain(Window);
+    LuhDestroyPage();
+    LuhSetSpinner(Window, FALSE);
+    GetClientRect(Window, &Client);
+    StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), User);
+    g_Ui.Detail[0] = UNICODE_NULL;
+    X = (Client.right - LUH_PAGE_WIDTH) / 2;
+    Y = Client.bottom / 2 - 2 * (LUH_ROW_HEIGHT + LUH_ROW_GAP);
+    g_Ui.PageTop = Y;
+    for (i = 0; i < ARRAYSIZE(LuhOptionRows); i++)
+    {
+        if (Flags & LuhOptionRows[i].Hide)
+            continue;
+        g_Ui.OptionButtons[Shown] = CreateWindowExW(0, L"BUTTON", LuhText(LuhOptionRows[i].Text),
+                                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                                    X, Y, LUH_PAGE_WIDTH, LUH_ROW_HEIGHT, Window,
+                                                    (HMENU)(UINT_PTR)(LUH_ID_OPTION_BASE + i), NULL, NULL);
+        if (g_Ui.OptionButtons[Shown])
+            SendMessageW(g_Ui.OptionButtons[Shown++], WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+        Y += LUH_ROW_HEIGHT + LUH_ROW_GAP;
+    }
+    Y += LUH_ROW_HEIGHT;
+    g_Ui.OptionButtons[Shown] = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_CANCEL),
+                                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                                X + LUH_PAGE_WIDTH / 2, Y, LUH_PAGE_WIDTH / 2, LUH_ROW_HEIGHT, Window,
+                                                (HMENU)LUH_ID_OPTION_CANCEL, NULL, NULL);
+    if (g_Ui.OptionButtons[Shown])
+        SendMessageW(g_Ui.OptionButtons[Shown], WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+    g_Options.NoPower = (Flags & WLUI_FLAG_NO_POWER) != 0;
+    LuhCreatePowerButton(Window);
+    g_Ui.OptionsUp = TRUE;
+    SetFocus(g_Ui.OptionButtons[0] ? g_Ui.OptionButtons[0] : Window);
+    LuhTrace("options", NULL);
+    InvalidateRect(Window, NULL, TRUE);
+}
+
+/* An option picked (or Cancel): winlogon decides and takes the host down; no second pick. */
+static void
+LuhPickOption(
+    _In_ WLUI_ACTION Action)
+{
+    DWORD i;
+    WCHAR Num[16];
+
+    if (!g_Ui.OptionsUp && !(g_Ui.ChangeCancel && Action == WluiActionCancel))
+        return;
+    for (i = 0; i < ARRAYSIZE(g_Ui.OptionButtons); i++)
+        if (g_Ui.OptionButtons[i])
+            EnableWindow(g_Ui.OptionButtons[i], FALSE);
+    if (g_Ui.CancelButton)
+        EnableWindow(g_Ui.CancelButton, FALSE);
+    StringCchPrintfW(Num, ARRAYSIZE(Num), L"%u", (UINT)Action);
+    LuhTrace("option", Num);
+    WluiClientRequestAction(&g_Connection, Action);
+}
+
+/* With more than one tile, every tile is listed bottom left; the selected one is checked. */
+static void
+LuhCreateTileList(
+    _In_ HWND Window,
+    _In_ PLUH_PAGE Page)
+{
+    RECT Client;
+    DWORD i, Count = min(Page->TileCount, (DWORD)LUH_MAX_TILES);
+    int Y;
+
+    if (Count < 2)
+        return;
+    GetClientRect(Window, &Client);
+    Y = Client.bottom - LUH_TILE_MARGIN - (int)Count * (LUH_ROW_HEIGHT + LUH_ROW_GAP);
+    for (i = 0; i < Count; i++)
+    {
+        g_Ui.TileButtons[i] = CreateWindowExW(0, L"BUTTON", Page->TileNames[i],
+                                              WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | BS_PUSHLIKE | BS_LEFT,
+                                              LUH_TILE_MARGIN, Y, LUH_TILE_WIDTH, LUH_ROW_HEIGHT, Window,
+                                              (HMENU)(UINT_PTR)(LUH_ID_TILE_BASE + i), NULL, NULL);
+        if (g_Ui.TileButtons[i])
+        {
+            SendMessageW(g_Ui.TileButtons[i], WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+            if (i == Page->TileSelected)
+                SendMessageW(g_Ui.TileButtons[i], BM_SETCHECK, BST_CHECKED, 0);
+        }
+        Y += LUH_ROW_HEIGHT + LUH_ROW_GAP;
+    }
 }
 
 static PLUH_FIELD
@@ -157,7 +468,7 @@ LuhCreatePage(
 {
     RECT Client;
     int X, Y, Rows = 0;
-    DWORD i;
+    DWORD i, LastPassword = (DWORD)-1;
     HWND Focus = NULL;
     WCHAR Num[16];
 
@@ -168,10 +479,15 @@ LuhCreatePage(
     for (i = 0; i < Page->Count; i++)
         if (LuhFieldVisible(&Page->Fields[i]) && Page->Fields[i].Type != CPFT_TILE_IMAGE)
             Rows += LuhFieldHasLabelRow(&Page->Fields[i]) ? 2 : 1;
+    /* Only a page with a password box makes room for the Caps Lock line, under its last one. */
+    for (i = 0; i < Page->Count; i++)
+        if (LuhFieldVisible(&Page->Fields[i]) && Page->Fields[i].Type == CPFT_PASSWORD_TEXT)
+            LastPassword = i;
 
     X = (Client.right - LUH_PAGE_WIDTH) / 2;
-    Y = Client.bottom / 2 - (Rows * (LUH_ROW_HEIGHT + LUH_ROW_GAP)) / 2;
+    Y = Client.bottom / 2 - (Rows * (LUH_ROW_HEIGHT + LUH_ROW_GAP) + (LastPassword != (DWORD)-1 ? LUH_CAPS_GAP : 0)) / 2;
     g_Ui.PageTop = Y;
+    g_Ui.CapsTop = 0;
 
     for (i = 0; i < Page->Count; i++)
     {
@@ -236,12 +552,34 @@ LuhCreatePage(
             }
         }
         Y += LUH_ROW_HEIGHT + LUH_ROW_GAP;
+        if (i == LastPassword)
+        {
+            g_Ui.CapsTop = Y - LUH_ROW_GAP + 2;
+            Y += LUH_CAPS_GAP;
+        }
     }
 
+    if (g_Ui.ChangeCancel && Page->Scenario == CPUS_CHANGE_PASSWORD)
+    {
+        g_Ui.CancelButton = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_CANCEL),
+                                            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                            X + LUH_PAGE_WIDTH / 2, Y, LUH_PAGE_WIDTH / 2, LUH_ROW_HEIGHT, Window,
+                                            (HMENU)LUH_ID_OPTION_CANCEL, NULL, NULL);
+        if (g_Ui.CancelButton)
+            SendMessageW(g_Ui.CancelButton, WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+    }
+    LuhCreateTileList(Window, Page);
+    LuhCreatePowerButton(Window);
     if (Focus)
         SetFocus(Focus);
+    LuhUpdateCapsLock(Window);
     StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu", Page->Count);
     LuhTrace("page", Num);
+    if (Page->TileCount > 1)
+    {
+        StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu/%lu", Page->TileSelected, Page->TileCount);
+        LuhTrace("tiles", Num);
+    }
     InvalidateRect(Window, NULL, TRUE);
 }
 
@@ -255,6 +593,12 @@ LuhEnablePage(
     for (i = 0; i < g_Ui.Page->Count; i++)
         if (g_Ui.Page->Fields[i].Control && g_Ui.Page->Fields[i].Interactive != CPFIS_DISABLED)
             EnableWindow(g_Ui.Page->Fields[i].Control, Enable);
+    /* No switching tiles and no power menu while a submission is with winlogon. */
+    for (i = 0; i < LUH_MAX_TILES; i++)
+        if (g_Ui.TileButtons[i])
+            EnableWindow(g_Ui.TileButtons[i], Enable);
+    if (g_Ui.PowerButton)
+        EnableWindow(g_Ui.PowerButton, Enable);
     g_Ui.PageBusy = !Enable;
 }
 
@@ -334,7 +678,7 @@ LuhLegalNotice(
         return;
     LuhTrace("legal-notice", NULL);
     /* Modal on the UI thread: the heartbeat timer is still dispatched by the message box loop. */
-    MessageBoxW(Window, Text, Caption[0] ? Caption : L"Notice", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+    MessageBoxW(Window, Text, Caption[0] ? Caption : LuhText(IDS_LUH_NOTICE), MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
     HeapFree(GetProcessHeap(), 0, Text);
 }
 
@@ -347,17 +691,17 @@ LuhShowPolicyPage(
 
     LuhDestroyPage();
     GetClientRect(Window, &Client);
-    StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"Sign-in is not available on this computer.");
-    StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), L"Contact your administrator.");
+    StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), LuhText(IDS_LUH_NO_SIGNIN));
+    StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), LuhText(IDS_LUH_CONTACT_ADMIN));
     LuhSetSpinner(Window, FALSE);
     X = (Client.right - LUH_PAGE_WIDTH) / 2;
     /* ShutdownWithoutLogon=0: no power buttons; winlogon refuses the action anyway. */
     if (!g_Options.NoPower)
     {
-        g_Ui.PolicyButtons[0] = CreateWindowExW(0, L"BUTTON", L"Restart", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        g_Ui.PolicyButtons[0] = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_RESTART), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                                 X, Client.bottom / 2 + 60, LUH_PAGE_WIDTH / 2 - 5, LUH_ROW_HEIGHT,
                                                 Window, (HMENU)LUH_ID_RESTART, NULL, NULL);
-        g_Ui.PolicyButtons[1] = CreateWindowExW(0, L"BUTTON", L"Shut down", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        g_Ui.PolicyButtons[1] = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_SHUTDOWN), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                                 X + LUH_PAGE_WIDTH / 2 + 5, Client.bottom / 2 + 60, LUH_PAGE_WIDTH / 2 - 5, LUH_ROW_HEIGHT,
                                                 Window, (HMENU)LUH_ID_SHUTDOWN, NULL, NULL);
     }
@@ -404,7 +748,7 @@ LuhSubmit(
         case LuhSubmitFailed:
         case LuhSubmitRefused:
             StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail),
-                           Status[0] ? Status : L"Sign-in could not be completed. Try again.");
+                           Status[0] ? Status : LuhText(IDS_LUH_SIGNIN_FAILED));
             LuhClearSecrets();
             LuhEnablePage(TRUE);
             break;
@@ -417,10 +761,30 @@ LuhSubmit(
 ProviderGone:
     /* providers.c already reported the fault and is re-enumerating; a new page will arrive. */
     LuhDestroyPage();
-    StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"Please wait");
+    StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), LuhText(IDS_LUH_PLEASE_WAIT));
     g_Ui.Detail[0] = UNICODE_NULL;
     LuhSetSpinner(Window, TRUE);
     SetTimer(Window, LUH_TIMER_STARTUP, LUH_PROVIDER_CALL_MS, NULL);
+    InvalidateRect(Window, NULL, TRUE);
+}
+
+/* Another tile picked: the provider thread switches and posts the new page (WM_LUH_PAGE). */
+static void
+LuhSelectTile(
+    _In_ HWND Window,
+    _In_ DWORD Index)
+{
+    if (g_Ui.Page == NULL || g_Ui.PageBusy || Index >= g_Ui.Page->TileCount || Index == g_Ui.Page->TileSelected)
+        return;
+    g_Ui.Detail[0] = UNICODE_NULL;
+    if (!LuhProviderSelectTile(Index))
+    {
+        /* Refused: keep the page, put the check back on the selected tile. */
+        if (g_Ui.TileButtons[Index])
+            SendMessageW(g_Ui.TileButtons[Index], BM_SETCHECK, BST_UNCHECKED, 0);
+        if (g_Ui.Page && g_Ui.Page->TileSelected < LUH_MAX_TILES && g_Ui.TileButtons[g_Ui.Page->TileSelected])
+            SendMessageW(g_Ui.TileButtons[g_Ui.Page->TileSelected], BM_SETCHECK, BST_CHECKED, 0);
+    }
     InvalidateRect(Window, NULL, TRUE);
 }
 
@@ -460,6 +824,88 @@ LuhApplyFieldUpdate(
     }
 }
 
+/* ---- the curtain ------------------------------------------------------------------ */
+
+static BOOL
+LuhUpdateClock(void)
+{
+    WCHAR Time[64], Date[128];
+
+    if (!GetTimeFormatW(LOCALE_USER_DEFAULT, TIME_NOSECONDS, NULL, NULL, Time, ARRAYSIZE(Time)))
+        Time[0] = UNICODE_NULL;
+    if (!GetDateFormatW(LOCALE_USER_DEFAULT, DATE_LONGDATE, NULL, NULL, Date, ARRAYSIZE(Date)))
+        Date[0] = UNICODE_NULL;
+    if (!wcscmp(Time, g_Ui.ClockText) && !wcscmp(Date, g_Ui.DateText))
+        return FALSE;
+    StringCchCopyW(g_Ui.ClockText, ARRAYSIZE(g_Ui.ClockText), Time);
+    StringCchCopyW(g_Ui.DateText, ARRAYSIZE(g_Ui.DateText), Date);
+    return TRUE;
+}
+
+static void
+LuhFreeCurtainPage(void)
+{
+    if (g_Ui.CurtainPage)
+    {
+        SecureZeroMemory(g_Ui.CurtainPage, sizeof(*g_Ui.CurtainPage));
+        HeapFree(GetProcessHeap(), 0, g_Ui.CurtainPage);
+        g_Ui.CurtainPage = NULL;
+    }
+}
+
+/*
+ * The clock page Windows shows before the tiles. Only when CAD is not required: with CAD,
+ * winlogon asks for credentials only after the user's SAS, which is the curtain lifting.
+ */
+static void
+LuhShowCurtain(
+    _In_ HWND Window)
+{
+    g_Ui.Curtain = TRUE;
+    LuhUpdateClock();
+    SetTimer(Window, LUH_TIMER_CLOCK, LUH_CLOCK_MS, NULL);
+    SetFocus(Window);
+    LuhTrace("curtain", NULL);
+    InvalidateRect(Window, NULL, TRUE);
+}
+
+static void
+LuhDropCurtain(
+    _In_ HWND Window)
+{
+    if (!g_Ui.Curtain)
+        return;
+    g_Ui.Curtain = FALSE;
+    g_Ui.CadCurtain = FALSE;
+    KillTimer(Window, LUH_TIMER_CLOCK);
+    LuhFreeCurtainPage();
+}
+
+/* A key or a click lifts the curtain: the page that waited under it comes up. */
+static void
+LuhLiftCurtain(
+    _In_ HWND Window)
+{
+    PLUH_PAGE Page = g_Ui.CurtainPage;
+
+    if (!g_Ui.Curtain || g_Ui.CadCurtain)
+        return;
+    g_Ui.CurtainPage = NULL;
+    LuhDropCurtain(Window);
+    LuhTrace("curtain-lifted", NULL);
+    if (Page)
+    {
+        LuhSetSpinner(Window, FALSE);
+        LuhCreatePage(Window, Page);
+        if (g_Ui.Page && g_Ui.Page->AutoSubmit)
+        {
+            LuhTrace("auto-submit", NULL);
+            LuhSubmit(Window);
+        }
+    }
+    InvalidateRect(Window, NULL, TRUE);
+}
+
 /* ---- commands from winlogon ---------------------------------------------------- */
 
 static void
@@ -478,14 +924,28 @@ LuhHandleCommand(
         case WluiCmdDisplayStatus:
             StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), Command->Text);
             g_Ui.Detail[0] = UNICODE_NULL;
+            if (Command->Flags & WLUI_FLAG_CURTAIN)
+            {
+                LuhDestroyPage();
+                LuhSetSpinner(Window, FALSE);
+                if (!g_Ui.Curtain)
+                    LuhShowCurtain(Window);
+                g_Ui.CadCurtain = TRUE;
+                LuhTrace("cad-curtain", g_Ui.Title);
+                InvalidateRect(Window, NULL, TRUE);
+                break;
+            }
+            if (g_Ui.CadCurtain)
+                LuhDropCurtain(Window);
             LuhSetSpinner(Window, (Command->Flags & WLUI_FLAG_SPINNER) != 0);
             LuhTrace("status", g_Ui.Title);
             InvalidateRect(Window, NULL, TRUE);
             break;
 
         case WluiCmdDisplayWelcome:
+            LuhDropCurtain(Window);
             LuhDestroyPage();
-            StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"Welcome");
+            StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), LuhText(IDS_LUH_WELCOME));
             StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Command->User);
             LuhSetSpinner(Window, TRUE);
             LuhTrace("welcome", g_Ui.Detail);
@@ -497,17 +957,23 @@ LuhHandleCommand(
             Status[0] = UNICODE_NULL;
             if (g_Ui.ProvidersStarted && LuhProviderReportResult(Command->Status, Command->SubStatus, Status, ARRAYSIZE(Status)) && Status[0])
                 StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Status);
+            else if (Command->Text[0] == UNICODE_NULL && LuhAccountStatusText(Command->Status, Command->SubStatus))
+                StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail),
+                               LuhText(LuhAccountStatusText(Command->Status, Command->SubStatus)));
             else
                 StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Command->Text);
             LuhSetSpinner(Window, FALSE);
             LuhClearSecrets();
             LuhEnablePage(TRUE);
             LuhFocusForRetry();
+            LuhUpdateCapsLock(Window);  /* the focus moved without key input */
             LuhTrace("result", g_Ui.Detail);
             InvalidateRect(Window, NULL, TRUE);
             break;
 
         case WluiCmdRequestCredentials:
+            if (g_Ui.CadCurtain)
+                LuhDropCurtain(Window);     /* the user's SAS came first: the notice gives way to the page */
             StringCchCopyW(g_Options.PrefillUser, ARRAYSIZE(g_Options.PrefillUser), Command->User);
             if (g_Ui.InLegalNotice)
             {
@@ -520,6 +986,8 @@ LuhHandleCommand(
             if (Command->Flags & WLUI_FLAG_FALLBACK)
                 g_Options.Fallback = TRUE;
             g_Options.NoPower = (Command->Flags & WLUI_FLAG_NO_POWER) != 0;
+            /* A change the signed-in user asked for comes without WLUI_FLAG_FORCED_CHANGE. */
+            g_Ui.ChangeCancel = g_Options.Scenario == CPUS_CHANGE_PASSWORD && !(Command->Flags & WLUI_FLAG_FORCED_CHANGE);
             if ((Command->Flags & WLUI_FLAG_LEGAL_NOTICE) && !g_Ui.ProvidersStarted)
             {
                 g_Ui.InLegalNotice = TRUE;
@@ -539,6 +1007,13 @@ LuhHandleCommand(
             StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"");
             g_Ui.Detail[0] = UNICODE_NULL;
             LuhSetSpinner(Window, TRUE);
+            if (!g_Ui.ProvidersStarted && (Command->Flags & WLUI_FLAG_DISABLE_CAD) &&
+                !(Command->Flags & WLUI_FLAG_FORCED_CHANGE) &&
+                (g_Options.Scenario == CPUS_LOGON || g_Options.Scenario == CPUS_UNLOCK_WORKSTATION))
+            {
+                LuhSetSpinner(Window, FALSE);
+                LuhShowCurtain(Window);
+            }
             if (!g_Ui.ProvidersStarted)
             {
                 g_Ui.ProvidersStarted = LuhProvidersStart(Window);
@@ -556,6 +1031,7 @@ LuhHandleCommand(
             {
                 g_Ui.Fading = TRUE;
                 g_Ui.FadeStep = 0;
+                LuhDropCurtain(Window);
                 LuhDestroyPage();
                 LuhSetSpinner(Window, FALSE);
                 SetTimer(Window, LUH_TIMER_FADE, LUH_FADE_MS / LUH_FADE_STEPS, NULL);
@@ -564,6 +1040,10 @@ LuhHandleCommand(
 
         case WluiCmdDismiss:
             LuhBeginExit(Window, WluiExitDismissed, LUH_EXIT_OK);
+            break;
+
+        case WluiCmdShowOptions:
+            LuhShowOptionsPage(Window, Command->Flags, Command->User);
             break;
 
         default:
@@ -580,9 +1060,9 @@ LuhPaint(
 {
     PAINTSTRUCT Ps;
     HDC Dc;
-    RECT Client, Rect;
+    RECT Client, Rect, Wrap;
     HGDIOBJ OldFont;
-    int TextTop;
+    int TextTop, Width, Extra;
 
     Dc = BeginPaint(Window, &Ps);
     GetClientRect(Window, &Client);
@@ -591,21 +1071,78 @@ LuhPaint(
     SetBkMode(Dc, TRANSPARENT);
     SetTextColor(Dc, RGB(255, 255, 255));
 
+    if (g_Ui.Curtain)
+    {
+        /* Time and date bottom left, the prompt below them, as on the Windows lock screen. */
+        Rect = Client;
+        Rect.left = 64;
+        Rect.top = Client.bottom - 300;
+        Rect.bottom = Rect.top + 140;
+        OldFont = SelectObject(Dc, g_Ui.ClockFont);
+        DrawTextW(Dc, g_Ui.ClockText, -1, &Rect, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
+        Rect.top = Rect.bottom;
+        Rect.bottom = Rect.top + 48;
+        SelectObject(Dc, g_Ui.DateFont);
+        DrawTextW(Dc, g_Ui.DateText, -1, &Rect, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+        Rect = Client;
+        Rect.top = Client.bottom - 72;
+        Rect.bottom = Client.bottom - 32;
+        SelectObject(Dc, g_Ui.TextFont);
+        DrawTextW(Dc, g_Ui.CadCurtain ? g_Ui.Title :
+                      LuhText(g_Options.Scenario == CPUS_UNLOCK_WORKSTATION ? IDS_LUH_HINT_UNLOCK : IDS_LUH_HINT_SIGNIN),
+                  -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        SelectObject(Dc, OldFont);
+        EndPaint(Window, &Ps);
+        if (!g_Ui.FirstPaintDone)
+        {
+            g_Ui.FirstPaintDone = TRUE;
+            GdiFlush();
+            LuhIpcReady();
+        }
+        return;
+    }
+
     /* With a credential page up, the text sits above its first row (the page grows with its
      * label rows, a fixed offset put the result under the title); otherwise it is centred. */
-    TextTop = g_Ui.Page ? g_Ui.PageTop - LUH_TEXT_ABOVE_PAGE : Client.bottom / 2 - 40;
+    TextTop = (g_Ui.Page || g_Ui.OptionsUp) ? g_Ui.PageTop - LUH_TEXT_ABOVE_PAGE : Client.bottom / 2 - 40;
+
+    /* A long account message wraps. Measure it first: it keeps its bottom edge (so the page
+     * below never moves) and grows upwards, and the title moves up by the extra lines. */
+    OldFont = SelectObject(Dc, g_Ui.TextFont);
+    Width = min(Client.right - 2 * LUH_DETAIL_MARGIN, LUH_DETAIL_WIDTH);
+    Width = max(Width, 1);
+    Extra = 0;
+    if (g_Ui.Detail[0] != UNICODE_NULL)
+    {
+        SetRect(&Wrap, 0, 0, Width, 0);
+        DrawTextW(Dc, g_Ui.Detail, -1, &Wrap, DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
+        if (Wrap.bottom - Wrap.top > 28)
+            Extra = (Wrap.bottom - Wrap.top) - 28;
+    }
+
     Rect = Client;
-    Rect.top = TextTop;
+    Rect.top = TextTop - Extra;
     Rect.bottom = Rect.top + 40;
-    OldFont = SelectObject(Dc, g_Ui.TitleFont);
+    SelectObject(Dc, g_Ui.TitleFont);
     DrawTextW(Dc, g_Ui.Title, -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     if (g_Ui.Detail[0] != UNICODE_NULL)
     {
         Rect.top = Rect.bottom + 8;
-        Rect.bottom = Rect.top + 28;
+        Rect.bottom = TextTop + 40 + 8 + 28;
         SelectObject(Dc, g_Ui.TextFont);
-        DrawTextW(Dc, g_Ui.Detail, -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (Extra == 0)
+        {
+            DrawTextW(Dc, g_Ui.Detail, -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+        else
+        {
+            Rect.left = (Client.right - Width) / 2;
+            Rect.right = Rect.left + Width;
+            DrawTextW(Dc, g_Ui.Detail, -1, &Rect, DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS);
+            Rect.left = Client.left;
+            Rect.right = Client.right;
+        }
     }
 
     if (g_Ui.Spinner)
@@ -621,6 +1158,17 @@ LuhPaint(
             FillRect(Dc, &Dot, B);
             DeleteObject(B);
         }
+    }
+
+    if (g_Ui.CapsControl != NULL && g_Ui.CapsTop > 0 && GetWindowRect(g_Ui.CapsControl, &Wrap))
+    {
+        /* Under the box, as on Windows, in the gap the page keeps under its last password box
+         * (on a page with several, that is where the line shows whichever box has the focus). */
+        MapWindowPoints(NULL, Window, (LPPOINT)&Wrap, 2);
+        Wrap.top = g_Ui.CapsTop;
+        Wrap.bottom = Wrap.top + LUH_CAPS_GAP;
+        SelectObject(Dc, g_Ui.TextFont);
+        DrawTextW(Dc, LuhText(IDS_LUH_CAPS_LOCK), -1, &Wrap, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 
     SelectObject(Dc, OldFont);
@@ -679,6 +1227,11 @@ LuhWindowProc(
                 else
                     LuhBeginExit(Window, WluiExitProviderInitFailed, LUH_EXIT_NOT_SUPPORTED);
             }
+            else if (wParam == LUH_TIMER_CLOCK)
+            {
+                if (g_Ui.Curtain && LuhUpdateClock())
+                    InvalidateRect(Window, NULL, FALSE);
+            }
             else if (wParam == LUH_TIMER_FADE)
             {
                 g_Ui.FadeStep++;
@@ -704,7 +1257,24 @@ LuhWindowProc(
                     WluiClientRequestAction(&g_Connection,
                                             Id == LUH_ID_RESTART ? WluiActionRestart : WluiActionShutdown);
                 }
-                else if (Id >= LUH_ID_FIELD_BASE && g_Ui.Page && Id - LUH_ID_FIELD_BASE < g_Ui.Page->Count)
+                else if (Id == LUH_ID_POWER)
+                {
+                    LuhPowerMenu(Window);
+                }
+                else if (Id >= LUH_ID_OPTION_BASE && Id < LUH_ID_OPTION_BASE + ARRAYSIZE(LuhOptionRows))
+                {
+                    LuhPickOption(LuhOptionRows[Id - LUH_ID_OPTION_BASE].Action);
+                }
+                else if (Id == LUH_ID_OPTION_CANCEL)
+                {
+                    LuhPickOption(WluiActionCancel);
+                }
+                else if (Id >= LUH_ID_TILE_BASE && Id < LUH_ID_TILE_BASE + LUH_MAX_TILES)
+                {
+                    LuhSelectTile(Window, Id - LUH_ID_TILE_BASE);
+                }
+                else if (Id >= LUH_ID_FIELD_BASE && Id < LUH_ID_RESTART && g_Ui.Page &&
+                         Id - LUH_ID_FIELD_BASE < g_Ui.Page->Count)
                 {
                     PLUH_FIELD Field = &g_Ui.Page->Fields[Id - LUH_ID_FIELD_BASE];
                     if (Field->Type == CPFT_SUBMIT_BUTTON || Field->Type == CPFT_COMMAND_LINK)
@@ -741,13 +1311,24 @@ LuhWindowProc(
                 return 0;
             }
             KillTimer(Window, LUH_TIMER_STARTUP);
-            if (wParam == LUH_PAGE_READY && lParam)
+            if (wParam == LUH_PAGE_READY && lParam && g_Ui.Curtain)
+            {
+                LuhFreeCurtainPage();
+                g_Ui.CurtainPage = (PLUH_PAGE)lParam;
+            }
+            else if (wParam == LUH_PAGE_READY && lParam)
             {
                 LuhSetSpinner(Window, FALSE);
                 LuhCreatePage(Window, (PLUH_PAGE)lParam);
+                if (g_Ui.Page && g_Ui.Page->AutoSubmit)
+                {
+                    LuhTrace("auto-submit", NULL);
+                    LuhSubmit(Window);
+                }
             }
             else if (wParam == LUH_PAGE_POLICY)
             {
+                LuhDropCurtain(Window);
                 LuhShowPolicyPage(Window);
             }
             else
@@ -781,6 +1362,18 @@ LuhWindowProc(
             }
             return 0;
 
+        case WM_KEYDOWN:
+        case WM_LBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+            if (g_Ui.Curtain)
+            {
+                /* The Ctrl+Alt+Del notice has no lift path; only winlogon moves it on after the SAS. */
+                if (!g_Ui.CadCurtain)
+                    LuhLiftCurtain(Window);
+                return 0;
+            }
+            break;
+
         case WM_CLOSE:
             /* Only winlogon closes this window, through Dismiss. */
             return 0;
@@ -791,6 +1384,8 @@ LuhWindowProc(
             KillTimer(Window, LUH_TIMER_SPINNER);
             KillTimer(Window, LUH_TIMER_FADE);
             KillTimer(Window, LUH_TIMER_STARTUP);
+            KillTimer(Window, LUH_TIMER_CLOCK);
+            LuhFreeCurtainPage();
             PostQuitMessage(g_Ui.ExitCode);
             return 0;
     }
@@ -812,6 +1407,13 @@ LuhUiCreate(
     g_Ui.TextFont = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                 DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    /* The curtain uses the faces and sizes of the msgina clock page, so both modes match. */
+    g_Ui.ClockFont = CreateFontW(-132, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 DEFAULT_PITCH | FF_DONTCARE, L"Selawik Light");
+    g_Ui.DateFont = CreateFontW(-32, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                DEFAULT_PITCH | FF_DONTCARE, L"Selawik Semilight");
 
     ZeroMemory(&Class, sizeof(Class));
     Class.cbSize = sizeof(Class);
@@ -846,15 +1448,27 @@ LuhUiRun(
             LuhSubmit(Window);
             continue;
         }
-        if (g_Ui.Page && IsDialogMessageW(Window, &Msg))
+        if (Msg.message == WM_KEYDOWN && Msg.wParam == VK_ESCAPE && (g_Ui.OptionsUp || (g_Ui.ChangeCancel && g_Ui.Page)))
+        {
+            LuhPickOption(WluiActionCancel);
             continue;
-        TranslateMessage(&Msg);
-        DispatchMessageW(&Msg);
+        }
+        if (!((g_Ui.Page || g_Ui.OptionsUp) && IsDialogMessageW(Window, &Msg)))
+        {
+            TranslateMessage(&Msg);
+            DispatchMessageW(&Msg);
+        }
+        /* Caps Lock toggles and focus moves come in as key and mouse input. */
+        if ((Msg.message >= WM_KEYFIRST && Msg.message <= WM_KEYLAST) ||
+            Msg.message == WM_LBUTTONDOWN || Msg.message == WM_LUH_PAGE)
+            LuhUpdateCapsLock(Window);
     }
 
     if (g_Ui.ProvidersStarted)
         LuhProvidersStop();
     if (g_Ui.TitleFont) DeleteObject(g_Ui.TitleFont);
     if (g_Ui.TextFont) DeleteObject(g_Ui.TextFont);
+    if (g_Ui.ClockFont) DeleteObject(g_Ui.ClockFont);
+    if (g_Ui.DateFont) DeleteObject(g_Ui.DateFont);
     return (int)Msg.wParam;
 }

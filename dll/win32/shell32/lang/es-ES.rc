@@ -715,6 +715,19 @@ BEGIN
     PUSHBUTTON "Cancelar", IDCANCEL, 185, 120, 60, 15
 END
 
+IDD_SHUTDOWN DIALOGEX 0, 0, 220, 112
+STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Apagar Orosi"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    ICON IDI_SHELL_SHUTDOWN, -1, 10, 12, 20, 20
+    LTEXT "¿&Qué quieres que haga el equipo?", -1, 40, 12, 170, 10
+    COMBOBOX IDC_SHUTDOWN_ACTION, 40, 24, 170, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "", IDC_SHUTDOWN_DESC, 40, 42, 170, 40
+    DEFPUSHBUTTON "Aceptar", IDOK, 55, 90, 50, 15
+    PUSHBUTTON "Cancelar", IDCANCEL, 115, 90, 50, 15
+END
+
 STRINGTABLE
 BEGIN
     /* columns in the shellview */
@@ -819,6 +832,16 @@ BEGIN
     IDS_RESTART_PROMPT "¿Desea reiniciar el equipo?"
     IDS_SHUTDOWN_TITLE "Apagar"
     IDS_SHUTDOWN_PROMPT "¿Desea apagar el equipo?"
+    IDS_SHUTDOWN_LOGOFF "Cerrar sesión"
+    IDS_SHUTDOWN_POWEROFF "Apagar"
+    IDS_SHUTDOWN_REBOOT "Reiniciar"
+    IDS_SHUTDOWN_SLEEP "Suspender"
+    IDS_SHUTDOWN_HIBERNATE "Hibernar"
+    IDS_SHUTDOWN_LOGOFF_DESC "Cierra todas las aplicaciones y cierra la sesión."
+    IDS_SHUTDOWN_POWEROFF_DESC "Cierra todas las aplicaciones y apaga el equipo."
+    IDS_SHUTDOWN_REBOOT_DESC "Cierra todas las aplicaciones, apaga el equipo y vuelve a encenderlo."
+    IDS_SHUTDOWN_SLEEP_DESC "El equipo sigue encendido, pero consume poca energía. Las aplicaciones siguen abiertas, así que al reactivarlo vuelves al punto donde lo dejaste."
+    IDS_SHUTDOWN_HIBERNATE_DESC "El equipo se apaga, pero las aplicaciones siguen abiertas. Al encenderlo, vuelves al punto donde lo dejaste."
 
     /* Format Dialog Strings */
     IDS_FORMAT_TITLE "Formatear Disco Local"

@@ -36,6 +36,8 @@ typedef struct
 typedef BOOL (WINAPI * LPFNOFN) (OPENFILENAMEW *);
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
+
+#include "shutdown.h"
 static INT_PTR CALLBACK RunDlgProc(HWND, UINT, WPARAM, LPARAM);
 static void FillList(HWND, LPWSTR, UINT, BOOL);
 
@@ -1055,18 +1057,11 @@ int WINAPI RestartDialogEx(HWND hWndOwner, LPCWSTR lpwstrReason, DWORD uFlags, D
 
 EXTERN_C int WINAPI LogoffWindowsDialog(HWND hWndOwner)
 {
-    typedef DWORD (WINAPI *ShellShFunc)(HWND hWndParent, LPCWSTR pUserName, DWORD dwExcludeOptions);
-    HINSTANCE msginaDll = LoadLibraryW(L"msgina.dll");
-    ShellShFunc pShellShutdownDialog;
-
-    if (!msginaDll)
-        return 0;
-
-    pShellShutdownDialog = (ShellShFunc)GetProcAddress(msginaDll, "ShellShutdownDialog");
-    if (pShellShutdownDialog && pShellShutdownDialog(hWndOwner, NULL, ~0x01UL) == 0x01)
+    /* Windows 11 signs out at once; only NoLogoff stops it. */
+    UNREFERENCED_PARAMETER(hWndOwner);
+    if (ShellGetAllowedShutdownOptions() & 0x01)
         ExitWindowsEx(EWX_LOGOFF, 0);
 
-    FreeLibrary(msginaDll);
     return 0;
 }
 
@@ -1077,25 +1072,6 @@ EXTERN_C int WINAPI LogoffWindowsDialog(HWND hWndOwner)
 int WINAPI RestartDialog(HWND hWndOwner, LPCWSTR lpstrReason, DWORD uFlags)
 {
     return RestartDialogEx(hWndOwner, lpstrReason, uFlags, 0);
-}
-
-/*************************************************************************
- * ExitWindowsDialog_backup
- *
- * NOTES
- *     Used as a backup solution to shutdown the OS in case msgina.dll
- *     somehow cannot be found.
- */
-VOID ExitWindowsDialog_backup(HWND hWndOwner)
-{
-    TRACE("(%p)\n", hWndOwner);
-
-    if (ConfirmDialog(hWndOwner, IDS_SHUTDOWN_PROMPT, IDS_SHUTDOWN_TITLE))
-    {
-        EnablePrivilege(L"SeShutdownPrivilege", TRUE);
-        ExitWindowsEx(EWX_SHUTDOWN, 0);
-        EnablePrivilege(L"SeShutdownPrivilege", FALSE);
-    }
 }
 
 /*************************************************************************
@@ -1111,30 +1087,22 @@ VOID ExitWindowsDialog_backup(HWND hWndOwner)
  */
 void WINAPI ExitWindowsDialog(HWND hWndOwner)
 {
-    typedef DWORD (WINAPI *ShellShFunc)(HWND hWndParent, LPCWSTR pUserName, DWORD dwExcludeOptions);
-    HINSTANCE msginaDll = LoadLibraryW(L"msgina.dll");
+    DWORD returnValue;
 
     TRACE("(%p)\n", hWndOwner);
 
-    HWND parent = hWndOwner;
-
-    /* If the DLL cannot be found for any reason, then it simply uses a
-       dialog box to ask if the user wants to shut down the computer. */
-    if (!msginaDll)
+    /* NoClose: Windows shows the Restrictions message box, not the dialog. */
+    if (SHRestricted(REST_NOCLOSE))
     {
-        TRACE("Unable to load msgina.dll.\n");
-        ExitWindowsDialog_backup(parent);
+        SHRestrictedMessageBox(hWndOwner);
         return;
     }
 
-    ShellShFunc pShellShutdownDialog = (ShellShFunc)GetProcAddress(msginaDll, "ShellShutdownDialog");
-    if (pShellShutdownDialog)
-    {
-        /* Actually call the function */
-        DWORD returnValue = pShellShutdownDialog(parent, NULL, 0);
+    /* On Vista+ the "Shut Down Windows" dialog lives in shell32 itself. */
+    returnValue = ShellShutdownWindowsDialog(hWndOwner, 0);
 
-        switch (returnValue)
-        {
+    switch (returnValue)
+    {
         case 0x01: /* Log off user */
         {
             ExitWindowsEx(EWX_LOGOFF, 0);
@@ -1178,17 +1146,8 @@ void WINAPI ExitWindowsDialog(HWND hWndOwner)
             }
             break;
         }
-        /* If the option is any other value */
-        default:
-            break;
-        }
+    /* If the option is any other value */
+    default:
+        break;
     }
-    else
-    {
-        /* If the function cannot be found, then revert to using the backup solution */
-        TRACE("Unable to find the 'ShellShutdownDialog' function");
-        ExitWindowsDialog_backup(parent);
-    }
-
-    FreeLibrary(msginaDll);
 }

@@ -1,0 +1,37 @@
+/*
+ * PROJECT:     LiberNT LogonUI host
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     English (United States) resource file
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+STRINGTABLE
+BEGIN
+    IDS_LUH_POWER           "Power"
+    IDS_LUH_RESTART         "Restart"
+    IDS_LUH_SHUTDOWN        "Shut down"
+    IDS_LUH_HINT_SIGNIN     "Press any key or click to sign in"
+    IDS_LUH_HINT_UNLOCK     "Press any key or click to unlock"
+    IDS_LUH_NOTICE          "Notice"
+    IDS_LUH_NO_SIGNIN       "Sign-in is not available on this computer."
+    IDS_LUH_CONTACT_ADMIN   "Contact your administrator."
+    IDS_LUH_SIGNIN_FAILED   "Sign-in could not be completed. Try again."
+    IDS_LUH_PLEASE_WAIT     "Please wait"
+    IDS_LUH_WELCOME         "Welcome"
+    IDS_LUH_LOCK            "Lock"
+    IDS_LUH_SIGN_OUT        "Sign out"
+    IDS_LUH_CHANGE_PASSWORD "Change a password"
+    IDS_LUH_TASK_MANAGER    "Task Manager"
+    IDS_LUH_CANCEL          "Cancel"
+    IDS_LUH_EMERGENCY_TITLE "Emergency restart"
+    IDS_LUH_EMERGENCY_TEXT  "Select OK to restart right away. Anything you haven't saved will be lost. Use this only as a last resort."
+    IDS_LUH_ACCOUNT_DISABLED "Your account has been disabled.  Please see your system administrator."
+    IDS_LUH_ACCOUNT_EXPIRED "The user's account has expired."
+    IDS_LUH_LOGON_HOURS     "Your account has time restrictions that prevent you from signing in at this time.\nPlease try again later."
+    IDS_LUH_WORKSTATION     "Your account is configured to prevent you from using this PC. Please try another PC."
+    IDS_LUH_ACCOUNT_RESTRICTED "Account restrictions are preventing this user from signing in. For example: blank passwords aren't allowed, sign-in times are limited, or a policy restriction has been enforced."
+    IDS_LUH_LOCKED_OUT      "The referenced account is currently locked out and may not be logged on to."
+    IDS_LUH_CAPS_LOCK       "Caps Lock is on"
+END

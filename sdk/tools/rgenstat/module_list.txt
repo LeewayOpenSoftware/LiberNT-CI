@@ -75,7 +75,6 @@ mmdrv dll\win32\mmdrv
 mpr dll\win32\mpr
 msacm32 dll\win32\msacm32
 msafd dll\win32\msafd
-msgina dll\win32\msgina
 msi dll\win32\msi
 msimg32 dll\win32\msimg32
 msvcrt dll\win32\msvcrt

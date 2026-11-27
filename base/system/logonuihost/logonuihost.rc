@@ -5,3 +5,16 @@
 #define REACTOS_STR_INTERNAL_NAME     "logonuihost"
 #define REACTOS_STR_ORIGINAL_FILENAME "logonuihost.exe"
 #include <reactos/version.rc>
+
+#include "resource.h"
+
+/* UTF-8 */
+#pragma code_page(65001)
+
+/* English always: a build with neither in-tree locale must not show blank text. */
+#if defined(LANGUAGE_EN_US) || !defined(LANGUAGE_ES_ES)
+    #include "lang/en-US.rc"
+#endif
+#ifdef LANGUAGE_ES_ES
+    #include "lang/es-ES.rc"
+#endif
