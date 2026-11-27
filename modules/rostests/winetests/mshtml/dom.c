@@ -15452,8 +15452,6 @@ static void test_docfrag(IHTMLDocument2 *doc)
         ET_BR
     };
 
-    static const elem_type_t empty_types[] = {};
-
     static const elem_type_t frag_types[] = {
             ET_HTML,
             ET_DIV,
@@ -15482,7 +15480,7 @@ static void test_docfrag(IHTMLDocument2 *doc)
     ok(hres == S_OK, "get_all failed: %08lx\n", hres);
     ok(col != NULL, "got null elements collection\n");
     if (col) {
-        test_elem_collection((IUnknown *) col, empty_types, ARRAY_SIZE(empty_types));
+        test_elem_collection((IUnknown *) col, NULL, 0);
         IHTMLElementCollection_Release(col);
     }
 

@@ -1876,11 +1876,10 @@ static void test_simple_joystick( DWORD version )
         .todo_extra = version < 0x700,
     };
 
-    const DIEFFECTINFOW expect_effects[] = {};
     struct check_effects_params check_effects_params =
     {
-        .expect_count = ARRAY_SIZE(expect_effects),
-        .expect_effects = expect_effects,
+        .expect_count = 0,
+        .expect_effects = NULL,
     };
     DIPROPGUIDANDPATH prop_guid_path =
     {
