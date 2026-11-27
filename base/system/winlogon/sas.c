@@ -75,10 +75,13 @@ WlDisplayLockedNotice(IN PWLSESSION Session)
         Session->Gina.Functions.WlxDisplayLockedNotice(Session->Gina.Context);
 }
 
+/* A secure screen saver locks whatever DisableLockWorkstation says, as on Windows. */
+static BOOL g_SecureSaverLock;
+
 static BOOL
 WlIsLockOk(IN PWLSESSION Session)
 {
-    return Session->UseLogonUI ? TRUE : Session->Gina.Functions.WlxIsLockOk(Session->Gina.Context);
+    return Session->UseLogonUI ? WlHostIsLockOk(Session) : Session->Gina.Functions.WlxIsLockOk(Session->Gina.Context);
 }
 
 static BOOL
@@ -1744,7 +1747,7 @@ DoGenericAction(
             if ((Session->LogonState == STATE_LOGGED_ON) ||
                 (Session->LogonState == STATE_LOGGED_ON_SAS))
             {
-                if (WlIsLockOk(Session))
+                if (g_SecureSaverLock || WlIsLockOk(Session))
                 {
                     Session->LogonState = STATE_LOCKED;
                     SwitchDesktop(Session->WinlogonDesktop);
@@ -1960,6 +1963,7 @@ DispatchSAS(
             StartScreenSaver(Session);
             if (bSecure)
             {
+                g_SecureSaverLock = TRUE;
                 wlxAction = WLX_SAS_ACTION_LOCK_WKSTA;
 //                DoGenericAction(Session, WLX_SAS_ACTION_LOCK_WKSTA);
             }
@@ -1971,6 +1975,7 @@ DispatchSAS(
     }
 
     DoGenericAction(Session, wlxAction);
+    g_SecureSaverLock = FALSE;
 
     if (dwSasType != WLX_SAS_TYPE_CTRL_ALT_DEL)
         return;

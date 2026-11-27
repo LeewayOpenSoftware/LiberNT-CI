@@ -502,6 +502,10 @@ BOOL
 WlHostScreenSaverSecure(
     _In_ PWLSESSION Session);
 
+BOOL
+WlHostIsLockOk(
+    _In_ PWLSESSION Session);
+
 VOID
 WlHostDisplaySasNotice(
     _In_ PWLSESSION Session);
