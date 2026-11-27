@@ -241,6 +241,8 @@ wmain(
     {
         if (Verbose)
             fwprintf(stderr, L"BCDBOOT: status 0x%08lx\n", Status);
+        if (Status == STATUS_UNRECOGNIZED_VOLUME)
+            fputws(L"BCDBOOT: The system partition must use the FAT32 file system.\n", stderr);
         fputws(L"Failure when attempting to copy boot files.\n", stderr);
         return RtlNtStatusToDosError(Status);
     }

@@ -2010,8 +2010,9 @@ InstallEfiSystemPartition(
  * Boot files of an installed system (bcdboot): the boot manager from <system>\Boot\EFI and a store from
  * <system>\System32\config\BCD-Template go to \EFI\LiberNT\Boot of the system partition, with the OS loader on the
  * system's own partition and directory; then the firmware boot entry (unless BOOT_OPTION_NO_FIRMWARE_ENTRY or not
- * on UEFI firmware) and the removable-media fallback loader. Other systems' boot files are never replaced: their
- * directories are not touched, and a fallback loader that is not ours stays (*FallbackKept).
+ * on UEFI firmware) and the removable-media fallback loader. The system partition must be FAT; a previous store
+ * is kept as BCD.bak. Other systems' boot files are never replaced: their directories are not touched, and a
+ * fallback loader that is not ours stays (*FallbackKept).
  */
 NTSTATUS
 NTAPI
@@ -2030,7 +2031,12 @@ InstallSystemBootFiles(
     WCHAR TemplatePath[MAX_PATH];
     WCHAR OwnManagerPath[MAX_PATH];
     WCHAR FallbackPath[MAX_PATH];
+    WCHAR BackupPath[MAX_PATH];
     WCHAR Path[MAX_PATH];
+    WCHAR FileSystem[MAX_PATH + 1];
+    UNICODE_STRING RootPartition;
+    HANDLE Handle;
+    BOOLEAN FallbackOurs;
     NTSTATUS Status;
 
     if (FallbackKept)
@@ -2043,6 +2049,19 @@ InstallSystemBootFiles(
     if (!DoesFileExist(NULL, BootManagerPath) || !DoesFileExist(NULL, TemplatePath))
         return STATUS_OBJECT_NAME_NOT_FOUND;
 
+    /* UEFI firmware reads FAT only: anything else would get an entry it cannot start */
+    RootPartition = *SystemRootPath;
+    TrimTrailingPathSeparators_UStr(&RootPartition);
+    Status = pOpenDeviceEx_UStr(&RootPartition, &Handle, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = GetFileSystemName_UStr(NULL, Handle, FileSystem, sizeof(FileSystem));
+    NtClose(Handle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (_wcsicmp(FileSystem, L"FAT") != 0 && _wcsicmp(FileSystem, L"FAT32") != 0)
+        return STATUS_UNRECOGNIZED_VOLUME;
+
     Status = GetPartitionDeviceNumber(SystemVolume, &DeviceNumber);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -2050,6 +2069,24 @@ InstallSystemBootFiles(
     Status = GetBcdPartitionElement(DeviceNumber.DeviceNumber, DeviceNumber.PartitionNumber, FALSE, OsElement);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    /* Ours is the fallback loader that is missing, or the same file as our boot manager before or after this
+     * update (an older Orosi build is ours too); decided before the manager is replaced. */
+    CombinePaths(OwnManagerPath, ARRAYSIZE(OwnManagerPath), 2, SystemRootPath->Buffer, &EFI_BOOT_MANAGER_FILE[1]);
+    CombinePaths(FallbackPath, ARRAYSIZE(FallbackPath), 2, SystemRootPath->Buffer, EFI_FALLBACK_FILE);
+    FallbackOurs = !DoesFileExist(NULL, FallbackPath) ||
+                   (DoesFileExist(NULL, OwnManagerPath) && AreFilesIdentical(FallbackPath, OwnManagerPath)) ||
+                   AreFilesIdentical(FallbackPath, BootManagerPath);
+
+    /* The store is rebuilt from the template; the previous one stays beside it as BCD.bak */
+    CombinePaths(Path, ARRAYSIZE(Path), 2, SystemRootPath->Buffer, L"EFI\\LiberNT\\Boot\\BCD");
+    if (DoesFileExist(NULL, Path))
+    {
+        CombinePaths(BackupPath, ARRAYSIZE(BackupPath), 2, SystemRootPath->Buffer, L"EFI\\LiberNT\\Boot\\BCD.bak");
+        Status = SetupCopyFile(Path, BackupPath, FALSE);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
 
     Status = InstallBcdStore(SystemRootPath, TemplatePath, BootManagerPath, OsElement,
                              SystemDirectory, Locale, Description);
@@ -2063,9 +2100,7 @@ InstallSystemBootFiles(
             return Status;
     }
 
-    CombinePaths(OwnManagerPath, ARRAYSIZE(OwnManagerPath), 2, SystemRootPath->Buffer, &EFI_BOOT_MANAGER_FILE[1]);
-    CombinePaths(FallbackPath, ARRAYSIZE(FallbackPath), 2, SystemRootPath->Buffer, EFI_FALLBACK_FILE);
-    if (DoesFileExist(NULL, FallbackPath) && !AreFilesIdentical(FallbackPath, OwnManagerPath))
+    if (!FallbackOurs)
     {
         DPRINT1("Keep %S, which belongs to another operating system\n", FallbackPath);
         if (FallbackKept)
