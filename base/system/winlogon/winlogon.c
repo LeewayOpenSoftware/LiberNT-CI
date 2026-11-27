@@ -365,6 +365,9 @@ DisplayStatusMessage(
     if (Session->UseLogonUI)
     {
         /* The host shows status in place; it keeps the text until the next command. */
+        ResourceId = WlHostStatusText(ResourceId);
+        if (ResourceId == 0)
+            return TRUE;
         if (LoadStringW(hAppInstance, ResourceId, StatusMsg, MAX_PATH) != 0)
             WlHostStatus(StatusMsg);
         return TRUE;

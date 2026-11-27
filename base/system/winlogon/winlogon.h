@@ -518,6 +518,10 @@ VOID
 WlHostStatus(
     _In_ PCWSTR Text);
 
+UINT
+WlHostStatusText(
+    _In_ UINT ResourceId);
+
 VOID
 WlHostThemeWait(VOID);
 

@@ -1936,6 +1936,30 @@ WlHostIsLockOk(
 /* ---- status and hand-offs used by HandleLogon, HandleLogoff and HandleShutdown ------- */
 
 /* A status page needs a host; logoff and shutdown start one when none is up (bounded, P2). */
+/* Windows 11 wording (INVESTIGACION.md 2.3, 0b/0b+): the logon steps stay under "Welcome", the
+ * logoff steps read "Signing out". 0 keeps what the host shows. */
+UINT
+WlHostStatusText(
+    _In_ UINT ResourceId)
+{
+    switch (ResourceId)
+    {
+        case IDS_PREPARENETWORKCONNECTIONS:
+        case IDS_APPLYINGCOMPUTERSETTINGS:
+        case IDS_LOADINGYOURPERSONALSETTINGS:
+        case IDS_APPLYINGYOURPERSONALSETTINGS:
+        case IDS_RUNNINGLOGONSCRIPTS:
+            return 0;
+
+        case IDS_LOGGINGOFF:
+        case IDS_SAVEYOURSETTINGS:
+        case IDS_CLOSINGNETWORKCONNECTIONS:
+        case IDS_RUNNINGLOGOFFSCRIPTS:
+            return IDS_SIGNINGOUT;
+    }
+    return ResourceId;
+}
+
 VOID
 WlHostStatus(
     _In_ PCWSTR Text)

@@ -77,5 +77,10 @@ END
 
 STRINGTABLE
 BEGIN
+    IDS_SIGNINGOUT "Signing out"
+END
+
+STRINGTABLE
+BEGIN
     IDS_FAILEDACTIVATEUSERSHELL "Winlogon failed to activate user shell!"
 END
