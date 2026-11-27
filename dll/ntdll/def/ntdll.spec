@@ -931,7 +931,7 @@
 @ stdcall RtlFillMemory(ptr long long)
 @ stdcall -arch=!x86_64 RtlFillMemoryUlong(ptr long long)
 @ stdcall RtlFinalReleaseOutOfProcessMemoryStream(ptr)
-@ stdcall -stub -version=0x600+ RtlFindAceByType(long long ptr)
+@ stdcall -version=0x600+ RtlFindAceByType(long long ptr)
 @ stdcall RtlFindActivationContextSectionGuid(long ptr long ptr ptr)
 @ stdcall RtlFindActivationContextSectionString(long ptr long ptr ptr)
 @ stdcall RtlFindCharInUnicodeString(long ptr ptr ptr)
