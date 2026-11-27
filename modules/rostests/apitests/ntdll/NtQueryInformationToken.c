@@ -343,8 +343,15 @@ QueryTokenOwnerTests(
 {
     NTSTATUS Status;
     PTOKEN_OWNER Owner;
+    PTOKEN_USER User = NULL;
+    PTOKEN_GROUPS Groups = NULL;
+    PSID AdminsSid = NULL;
+    PSID Expected;
+    BOOLEAN AdminsIsOwner = FALSE;
+    ULONG Index;
     ULONG BufferLength;
     UNICODE_STRING SidString;
+    static SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
 
     /*
      * Query the exact buffer length to hold
@@ -367,8 +374,8 @@ QueryTokenOwnerTests(
     }
 
     /*
-     * Now do the actual query and validate the
-     * token owner (must be the local admin).
+     * Now do the actual query and validate the token owner
+     * (the Administrators alias for an admin token, the user otherwise).
      */
     Status = NtQueryInformationToken(Token,
                                      TokenOwner,
@@ -377,10 +384,56 @@ QueryTokenOwnerTests(
                                      &BufferLength);
     ok_ntstatus(Status, STATUS_SUCCESS);
 
+    Status = RtlAllocateAndInitializeSid(&NtAuthority,
+                                         2,
+                                         SECURITY_BUILTIN_DOMAIN_RID,
+                                         DOMAIN_ALIAS_RID_ADMINS,
+                                         0, 0, 0, 0, 0, 0,
+                                         &AdminsSid);
+    ok(NT_SUCCESS(Status), "Failed to build the Administrators SID (0x%lx)\n", Status);
+
+    /* The default owner is the Administrators alias only when the token carries it as an enabled owner group; otherwise it is the user, as on Windows. */
+    BufferLength = 0;
+    NtQueryInformationToken(Token, TokenGroups, NULL, 0, &BufferLength);
+    if (BufferLength != 0)
+        Groups = RtlAllocateHeap(RtlGetProcessHeap(), 0, BufferLength);
+    if (Groups != NULL && AdminsSid != NULL &&
+        NT_SUCCESS(NtQueryInformationToken(Token, TokenGroups, Groups, BufferLength, &BufferLength)))
+    {
+        for (Index = 0; Index < Groups->GroupCount; Index++)
+        {
+            if ((Groups->Groups[Index].Attributes & SE_GROUP_OWNER) &&
+                (Groups->Groups[Index].Attributes & SE_GROUP_ENABLED) &&
+                RtlEqualSid(Groups->Groups[Index].Sid, AdminsSid))
+            {
+                AdminsIsOwner = TRUE;
+                break;
+            }
+        }
+    }
+
+    BufferLength = 0;
+    NtQueryInformationToken(Token, TokenUser, NULL, 0, &BufferLength);
+    if (BufferLength != 0)
+        User = RtlAllocateHeap(RtlGetProcessHeap(), 0, BufferLength);
+    if (User != NULL)
+        NtQueryInformationToken(Token, TokenUser, User, BufferLength, &BufferLength);
+
+    Expected = AdminsIsOwner ? AdminsSid : (User != NULL ? User->User.Sid : NULL);
     RtlConvertSidToUnicodeString(&SidString, Owner->Owner, TRUE);
-    ok_wstr(SidString.Buffer, L"S-1-5-32-544");
+    if (Expected != NULL)
+        ok(RtlEqualSid(Owner->Owner, Expected),
+           "Token owner %wZ is not the expected default owner\n", &SidString);
+    else
+        ok(FALSE, "Could not determine the expected token owner\n");
     RtlFreeUnicodeString(&SidString);
 
+    if (Groups != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Groups);
+    if (User != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, User);
+    if (AdminsSid != NULL)
+        RtlFreeSid(AdminsSid);
     RtlFreeHeap(RtlGetProcessHeap(), 0, Owner);
 }
 
