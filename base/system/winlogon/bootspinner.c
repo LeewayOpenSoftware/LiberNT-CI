@@ -250,7 +250,7 @@ WlSpinThread(
 
     if (Spinner->Ready)
     {
-        ULONGLONG Start = WlSpinNowMs(), Last = Start, Now;
+        ULONGLONG Start = WlSpinNowMs(), Last = Start, Now, Next = Start;
         DWORD Frames = 0, Late = 0, Longest = 0, Interval;
         CHAR Line[96];
 
@@ -284,7 +284,14 @@ WlSpinThread(
                               (const BITMAPINFO *)&Spinner->Info, DIB_RGB_COLORS);
             Frames++;
 
-            if (WlSpinWait(Spinner->Stop, INBV_SPIN_FRAME_MS))
+            /* Wait to a fixed cadence (deadline += 15 ms), not 15 ms after this frame, so the
+             * render time does not accumulate; if we fell behind, resync to now and skip the
+             * missed slots instead of bursting to catch up. */
+            Next += INBV_SPIN_FRAME_MS;
+            Now = WlSpinNowMs();
+            if (Next <= Now)
+                Next = Now;
+            if (WlSpinWait(Spinner->Stop, (DWORD)(Next - Now)))
                 break;
         }
 
