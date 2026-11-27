@@ -1829,6 +1829,16 @@ DoGenericAction(
         case WLX_SAS_ACTION_SHUTDOWN_SLEEP: /* 0x0c */
         case WLX_SAS_ACTION_SHUTDOWN_SLEEP2: /* 0x0d */
         case WLX_SAS_ACTION_SHUTDOWN_HIBERNATE: /* 0x0e */
+            /* Waking asks for the password, as on Windows: a signed-in session is locked before it sleeps. */
+            if ((Session->LogonState == STATE_LOGGED_ON) ||
+                (Session->LogonState == STATE_LOGGED_ON_SAS))
+            {
+                BOOL OldSecureSaverLock = g_SecureSaverLock;
+
+                g_SecureSaverLock = TRUE;   /* the wake password is not DisableLockWorkstation's to waive */
+                DoGenericAction(Session, WLX_SAS_ACTION_LOCK_WKSTA);
+                g_SecureSaverLock = OldSecureSaverLock;
+            }
             HandleSuspend(wlxAction);
             DoGenericAction(Session, WLX_SAS_ACTION_NONE);
             break;
