@@ -17,7 +17,7 @@
 
 #include "precomp.h"
 
-#include "shutdown.h"  /* WLX_SHUTDOWN_STATE_* */
+#include "shutdown.h"
 #include <powrprof.h>
 
 EXTERN_C BOOL WINAPI SHTestTokenPrivilegeW(_In_opt_ HANDLE hToken, _In_ LPCWSTR lpName);
@@ -73,7 +73,7 @@ ShellGetAllowedShutdownOptions(VOID)
     ShellGetPolicyDWORD(L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer",
                         L"NoLogoff", &dwPolicyValue);
     if (dwPolicyValue == 0)
-        Options |= WLX_SHUTDOWN_STATE_LOGOFF;
+        Options |= SHELL_SHUTDOWN_LOGOFF;
 
     /* Shutdown/restart (and the power options) need the shutdown privilege. */
     if (!SHTestTokenPrivilegeW(NULL, SE_SHUTDOWN_NAME))
@@ -86,12 +86,12 @@ ShellGetAllowedShutdownOptions(VOID)
     if (dwPolicyValue != 0)
         return Options;
 
-    Options |= WLX_SHUTDOWN_STATE_POWER_OFF | WLX_SHUTDOWN_STATE_REBOOT;
+    Options |= SHELL_SHUTDOWN_POWER_OFF | SHELL_SHUTDOWN_REBOOT;
 
     if (IsPwrSuspendAllowed())
-        Options |= WLX_SHUTDOWN_STATE_SLEEP;
+        Options |= SHELL_SHUTDOWN_SLEEP;
     if (IsPwrHibernateAllowed())
-        Options |= WLX_SHUTDOWN_STATE_HIBERNATE;
+        Options |= SHELL_SHUTDOWN_HIBERNATE;
 
     return Options;
 }
@@ -109,11 +109,11 @@ ShutdownChoiceDescription(DWORD Code)
 {
     switch (Code)
     {
-        case WLX_SHUTDOWN_STATE_LOGOFF:    return IDS_SHUTDOWN_LOGOFF_DESC;
-        case WLX_SHUTDOWN_STATE_POWER_OFF: return IDS_SHUTDOWN_POWEROFF_DESC;
-        case WLX_SHUTDOWN_STATE_REBOOT:    return IDS_SHUTDOWN_REBOOT_DESC;
-        case WLX_SHUTDOWN_STATE_SLEEP:     return IDS_SHUTDOWN_SLEEP_DESC;
-        case WLX_SHUTDOWN_STATE_HIBERNATE: return IDS_SHUTDOWN_HIBERNATE_DESC;
+        case SHELL_SHUTDOWN_LOGOFF:    return IDS_SHUTDOWN_LOGOFF_DESC;
+        case SHELL_SHUTDOWN_POWER_OFF: return IDS_SHUTDOWN_POWEROFF_DESC;
+        case SHELL_SHUTDOWN_REBOOT:    return IDS_SHUTDOWN_REBOOT_DESC;
+        case SHELL_SHUTDOWN_SLEEP:     return IDS_SHUTDOWN_SLEEP_DESC;
+        case SHELL_SHUTDOWN_HIBERNATE: return IDS_SHUTDOWN_HIBERNATE_DESC;
     }
     return 0;
 }
@@ -164,11 +164,11 @@ ShutdownDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
             SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)Ctx);
             hCombo = GetDlgItem(hDlg, IDC_SHUTDOWN_ACTION);
             /* Windows order: Sign out, Sleep, Hibernate, Shut down, Restart (Switch user is not offered). */
-            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_LOGOFF, WLX_SHUTDOWN_STATE_LOGOFF, Ctx);
-            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_SLEEP, WLX_SHUTDOWN_STATE_SLEEP, Ctx);
-            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_HIBERNATE, WLX_SHUTDOWN_STATE_HIBERNATE, Ctx);
-            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_POWEROFF, WLX_SHUTDOWN_STATE_POWER_OFF, Ctx);
-            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_REBOOT, WLX_SHUTDOWN_STATE_REBOOT, Ctx);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_LOGOFF, SHELL_SHUTDOWN_LOGOFF, Ctx);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_SLEEP, SHELL_SHUTDOWN_SLEEP, Ctx);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_HIBERNATE, SHELL_SHUTDOWN_HIBERNATE, Ctx);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_POWEROFF, SHELL_SHUTDOWN_POWER_OFF, Ctx);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_REBOOT, SHELL_SHUTDOWN_REBOOT, Ctx);
             if (SendMessageW(hCombo, CB_GETCURSEL, 0, 0) == CB_ERR)
                 SendMessageW(hCombo, CB_SETCURSEL, 0, 0);
             ShutdownShowDescription(hDlg);
@@ -208,7 +208,7 @@ ShellShutdownWindowsDialog(HWND hWndOwner, DWORD dwExcludeOptions)
 
     /* Windows 11 opens on Shut down every time and keeps no choice (win11-shutdown-dialog.md). */
     Ctx.Options = ShellGetAllowedShutdownOptions() & ~dwExcludeOptions;
-    Ctx.Selected = WLX_SHUTDOWN_STATE_POWER_OFF;
+    Ctx.Selected = SHELL_SHUTDOWN_POWER_OFF;
     if (Ctx.Options == 0)
         return 0;
 
