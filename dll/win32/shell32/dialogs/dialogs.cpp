@@ -1091,6 +1091,13 @@ void WINAPI ExitWindowsDialog(HWND hWndOwner)
 
     TRACE("(%p)\n", hWndOwner);
 
+    /* NoClose: Windows shows the Restrictions message box, not the dialog. */
+    if (SHRestricted(REST_NOCLOSE))
+    {
+        SHRestrictedMessageBox(hWndOwner);
+        return;
+    }
+
     /* On Vista+ the "Shut Down Windows" dialog lives in shell32 itself. */
     returnValue = ShellShutdownWindowsDialog(hWndOwner, 0);
 
