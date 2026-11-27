@@ -35,4 +35,6 @@ BEGIN
     IDS_LUH_LOCKED_OUT      "La cuenta a la que se hace referencia está bloqueada y no se puede usar para iniciar sesión."
     IDS_LUH_CAPS_LOCK       "Bloq Mayús está activado"
     IDS_LUH_OK              "Aceptar"
+    IDS_LUH_TIP_SHUTDOWN    "Cierra todas las aplicaciones y apaga el equipo."
+    IDS_LUH_TIP_RESTART     "Cierra todas las aplicaciones, apaga el equipo y vuelve a encenderlo."
 END

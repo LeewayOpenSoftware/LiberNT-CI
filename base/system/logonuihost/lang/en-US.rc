@@ -35,4 +35,6 @@ BEGIN
     IDS_LUH_LOCKED_OUT      "The referenced account is currently locked out and may not be logged on to."
     IDS_LUH_CAPS_LOCK       "Caps Lock is on"
     IDS_LUH_OK              "OK"
+    IDS_LUH_TIP_SHUTDOWN    "Closes all apps and turns off the PC."
+    IDS_LUH_TIP_RESTART     "Closes all apps, turns off the PC, and then turns it on again."
 END

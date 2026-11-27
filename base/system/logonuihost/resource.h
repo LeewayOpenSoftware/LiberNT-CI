@@ -33,5 +33,7 @@
 #define IDS_LUH_LOCKED_OUT          123
 #define IDS_LUH_CAPS_LOCK           124
 #define IDS_LUH_OK                  125
+#define IDS_LUH_TIP_SHUTDOWN        126
+#define IDS_LUH_TIP_RESTART         127
 
-#define IDS_LUH_LAST                IDS_LUH_OK
+#define IDS_LUH_LAST                IDS_LUH_TIP_RESTART
