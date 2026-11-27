@@ -582,6 +582,10 @@ WinMain(
         ExitProcess(1);
     }
 
+    /* The Winlogon desktop is on screen: the boot spinner goes on turning until the logon UI is up. */
+    if (WLSession->UseLogonUI)
+        WlBootSpinnerShow(WLSession);
+
     LockWorkstation(WLSession);
 
     /* Load default keyboard layouts */
