@@ -84,6 +84,9 @@ typedef struct _LUH_UI
     LUH_SURFACE Sharp;      /* the wallpaper, filled to the screen: the curtain */
     LUH_SURFACE Soft;       /* the same, blurred and darkened once: behind every other page */
     LUH_SURFACE Face;       /* Sharp with the clock and date: rebuilt once a minute */
+    LUH_SURFACE Still;      /* Soft with the page's text: rebuilt only when that text changes */
+    WCHAR StillKey[640];    /* what Still shows */
+    LONG SpinnerY;          /* the spinner's centre under the text in Still */
     HBRUSH SoftBrush;       /* Soft as a pattern, behind static controls */
     LONG Lift;              /* how far the curtain is pulled up, in pixels */
     BOOL Dragging;
@@ -862,6 +865,7 @@ LuhBuildBackdrop(
     RECT All = { 0, 0, Width, Height };
 
     if (!LuhSurfaceCreate(&g_Ui.Back, Width, Height) || !LuhSurfaceCreate(&g_Ui.Sharp, Width, Height) ||
+        !LuhSurfaceCreate(&g_Ui.Still, Width, Height) ||
         !LuhSurfaceCreate(&g_Ui.Soft, Width, Height) || !LuhSurfaceCreate(&g_Ui.Face, Width, Height) ||
         !LuhSurfaceCreate(&Small, max(Width / LUH_SOFT_SCALE, 1), max(Height / LUH_SOFT_SCALE, 1)))
     {
@@ -1288,25 +1292,20 @@ LuhHandleCommand(
 
 /* ---- painting --------------------------------------------------------------------- */
 
-/*
- * Every frame is composed in Back from the cached soft backdrop and blitted once, so nothing
- * flickers and nothing is recomputed; child controls paint themselves on top (WS_CLIPCHILDREN).
- */
+/* The page's still picture: the soft backdrop and its text, drawn only when the text changes. */
 static void
-LuhCompose(
-    _In_ const RECT *Client)
+LuhComposeStill(
+    _In_ const RECT *Client,
+    _In_ int TextTop,
+    _In_ const RECT *Caps)
 {
-    PLUH_SURFACE Back = &g_Ui.Back;
+    PLUH_SURFACE Back = &g_Ui.Still;
     const COLORREF White = RGB(255, 255, 255);
     RECT Rect, Wrap;
     HGDIOBJ OldFont;
-    int TextTop, Width, Extra, i;
+    int Width, Extra;
 
     BitBlt(Back->Dc, 0, 0, Back->Width, Back->Height, g_Ui.Soft.Dc, 0, 0, SRCCOPY);
-
-    /* With a credential page up, the text sits above its first row (the page grows with its
-     * label rows, a fixed offset put the result under the title); otherwise it is centred. */
-    TextTop = (g_Ui.Page || g_Ui.OptionsUp) ? g_Ui.PageTop - LUH_TEXT_ABOVE_PAGE : Client->bottom / 2 - 40;
 
     /* A long account message wraps. Measure it first: it keeps its bottom edge (so the page
      * below never moves) and grows upwards, and the title moves up by the extra lines. */
@@ -1348,26 +1347,57 @@ LuhCompose(
         }
     }
 
-    if (g_Ui.Spinner)
-    {
-        int Cx = Client->right / 2, Cy = Rect.bottom + 48;
-        for (i = 0; i < 8; i++)
-        {
-            double A = (g_Ui.SpinnerAngle + i * 45) * 3.14159265 / 180.0;
-            LuhFillCircle(Back, Cx + (LONG)(18.0 * cos(A)), Cy + (LONG)(18.0 * sin(A)), 3, White,
-                          (BYTE)(60 + i * 24));
-        }
-    }
+    g_Ui.SpinnerY = Rect.bottom + 48;
 
-    if (g_Ui.CapsControl != NULL && g_Ui.CapsTop > 0 && GetWindowRect(g_Ui.CapsControl, &Wrap))
+    if (Caps->right > Caps->left)
     {
         /* Under the box, as on Windows, in the gap the page keeps under its last password box
          * (on a page with several, that is where the line shows whichever box has the focus). */
-        MapWindowPoints(NULL, GetParent(g_Ui.CapsControl), (LPPOINT)&Wrap, 2);
-        Wrap.top = g_Ui.CapsTop;
-        Wrap.bottom = Wrap.top + LUH_CAPS_GAP;
-        LuhDrawText(Back, g_Ui.TextFont, LuhText(IDS_LUH_CAPS_LOCK), &Wrap,
+        LuhDrawText(Back, g_Ui.TextFont, LuhText(IDS_LUH_CAPS_LOCK), Caps,
                     DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, White, 255);
+    }
+}
+
+/*
+ * A frame is the cached still picture plus what moves (the spinner), composed in Back and
+ * blitted once; child controls paint themselves on top (WS_CLIPCHILDREN).
+ */
+static void
+LuhCompose(
+    _In_ const RECT *Client)
+{
+    WCHAR Key[ARRAYSIZE(g_Ui.StillKey)];
+    RECT Caps = { 0, 0, 0, 0 };
+    int TextTop, i;
+
+    /* With a credential page up, the text sits above its first row (the page grows with its
+     * label rows, a fixed offset put the result under the title); otherwise it is centred. */
+    TextTop = (g_Ui.Page || g_Ui.OptionsUp) ? g_Ui.PageTop - LUH_TEXT_ABOVE_PAGE : Client->bottom / 2 - 40;
+    if (g_Ui.CapsControl != NULL && g_Ui.CapsTop > 0 && GetWindowRect(g_Ui.CapsControl, &Caps))
+    {
+        MapWindowPoints(NULL, GetParent(g_Ui.CapsControl), (LPPOINT)&Caps, 2);
+        Caps.top = g_Ui.CapsTop;
+        Caps.bottom = Caps.top + LUH_CAPS_GAP;
+    }
+
+    StringCchPrintfW(Key, ARRAYSIZE(Key), L"%d|%ld|%ld|%ld|%ld|%ls|%ls", TextTop, Caps.left, Caps.top,
+                     Caps.right, Caps.bottom, g_Ui.Title, g_Ui.Detail);
+    if (wcscmp(Key, g_Ui.StillKey) != 0)
+    {
+        LuhComposeStill(Client, TextTop, &Caps);
+        StringCchCopyW(g_Ui.StillKey, ARRAYSIZE(g_Ui.StillKey), Key);
+    }
+
+    BitBlt(g_Ui.Back.Dc, 0, 0, g_Ui.Back.Width, g_Ui.Back.Height, g_Ui.Still.Dc, 0, 0, SRCCOPY);
+    if (g_Ui.Spinner)
+    {
+        int Cx = Client->right / 2, Cy = g_Ui.SpinnerY;
+        for (i = 0; i < 8; i++)
+        {
+            double A = (g_Ui.SpinnerAngle + i * 45) * 3.14159265 / 180.0;
+            LuhFillCircle(&g_Ui.Back, Cx + (LONG)(18.0 * cos(A)), Cy + (LONG)(18.0 * sin(A)), 3,
+                          RGB(255, 255, 255), (BYTE)(60 + i * 24));
+        }
     }
 }
 
@@ -1734,5 +1764,7 @@ LuhUiRun(
     LuhSurfaceDestroy(&g_Ui.Sharp);
     LuhSurfaceDestroy(&g_Ui.Soft);
     LuhSurfaceDestroy(&g_Ui.Face);
+    LuhSurfaceDestroy(&g_Ui.Still);
+    LuhGfxShutdown();
     return (int)Msg.wParam;
 }

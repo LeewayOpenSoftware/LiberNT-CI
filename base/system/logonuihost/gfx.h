@@ -24,6 +24,7 @@ typedef struct _LUH_SURFACE
 
 /* Sizes are designed at 96 DPI and scaled with LuhPx. */
 VOID LuhGfxInit(VOID);
+VOID LuhGfxShutdown(VOID);
 LONG LuhPx(_In_ LONG Design);
 UINT LuhRefreshHz(VOID);
 
@@ -48,14 +49,17 @@ SIZE LuhMeasureText(_In_ HFONT Font, _In_ PCWSTR Text);
 
 /* Decode an image file (WIC) into a new surface of its own size. */
 BOOL LuhSurfaceLoad(_Out_ PLUH_SURFACE Surface, _In_ PCWSTR Path);
-/* Fill the whole of Target with Source (halftone), cropping Source to Target's aspect, then make Target opaque. */
+/*
+ * Fill the whole of Target with Source (halftone), cropping Source to Target's aspect.
+ * For opaque pictures only (wallpaper, backdrop): every target pixel ends with alpha 0xFF.
+ */
 BOOL LuhSurfaceScaleFrom(_Inout_ PLUH_SURFACE Target, _In_ const LUH_SURFACE *Source);
 /* Three box passes approximate a Gaussian; run once per backdrop, never per frame. */
 VOID LuhBlur(_Inout_ PLUH_SURFACE Surface, _In_ LONG Radius);
 /* Source over Target at (X, Y) with an extra constant opacity. */
 VOID LuhBlend(_Inout_ PLUH_SURFACE Target, _In_ LONG X, _In_ LONG Y, _In_ const LUH_SURFACE *Source,
               _In_ BYTE Alpha);
-/* Clip a circle out of Source (avatar): Target gets Source inside the circle only. */
+/* Clip a circle out of Source (avatar): the largest circle centred in Source, over Target. */
 VOID LuhBlendCircle(_Inout_ PLUH_SURFACE Target, _In_ LONG X, _In_ LONG Y, _In_ const LUH_SURFACE *Source);
 
 BOOL LuhPresent(_In_ HWND Window, _In_ const LUH_SURFACE *Surface, _In_ BYTE Alpha);
@@ -73,6 +77,7 @@ typedef struct _LUH_ANIM
     LONGLONG Last;
     LONGLONG Next;
     LONGLONG Target;            /* one frame at the display rate, in counter ticks */
+    BOOL FineTimer;             /* timeBeginPeriod(1) is held for this run */
     DWORD DurationMs;
     DWORD Frames;
     DWORD Late;
@@ -83,8 +88,8 @@ VOID LuhAnimStart(_Out_ PLUH_ANIM Anim, _In_ PCSTR Name, _In_ DWORD DurationMs);
 /* Records a frame and returns the linear progress 0..1 at this instant. */
 double LuhAnimFrame(_Inout_ PLUH_ANIM Anim);
 BOOL LuhAnimDone(_In_ const LUH_ANIM *Anim);
-/* Sleeps to the next frame deadline; returns early (TRUE) when input is waiting. */
-BOOL LuhAnimWait(_Inout_ PLUH_ANIM Anim);
+/* Sleeps to the next frame deadline of the fixed schedule. */
+VOID LuhAnimWait(_Inout_ PLUH_ANIM Anim);
 VOID LuhAnimEnd(_Inout_ PLUH_ANIM Anim);
 
 double LuhEaseOut(_In_ double T);

@@ -9,11 +9,14 @@
 #include "gfx.h"
 #include <math.h>
 #include <wincodec.h>
+#include <mmsystem.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 
 static LONG g_Dpi = 96;
 static UINT g_RefreshHz = 60;
+/* One scratch mask for text, grown when a larger string comes: no DIB per string drawn. */
+static LUH_SURFACE g_Mask;
 
 VOID
 LuhGfxInit(VOID)
@@ -31,6 +34,12 @@ LuhGfxInit(VOID)
     if (Value >= 30 && Value <= 240)
         g_RefreshHz = (UINT)Value;
     ReleaseDC(NULL, Screen);
+}
+
+VOID
+LuhGfxShutdown(VOID)
+{
+    LuhSurfaceDestroy(&g_Mask);
 }
 
 LONG
@@ -360,7 +369,7 @@ LuhDrawText(
     _In_ COLORREF Color,
     _In_ BYTE Alpha)
 {
-    LUH_SURFACE Mask;
+    LONG Width = Rect->right - Rect->left, Height = Rect->bottom - Rect->top;
     RECT Local, Area;
     HGDIOBJ Old;
     LONG X, Y;
@@ -369,21 +378,28 @@ LuhDrawText(
 
     if (Alpha == 0 || Text == NULL || Text[0] == UNICODE_NULL || !LuhClip(Surface, Rect, &Area))
         return;
-    if (!LuhSurfaceCreate(&Mask, Rect->right - Rect->left, Rect->bottom - Rect->top))
-        return;
+    if (g_Mask.Width < Width || g_Mask.Height < Height)
+    {
+        LONG NewWidth = max(Width, g_Mask.Width), NewHeight = max(Height, g_Mask.Height);
 
-    SetRect(&Local, 0, 0, Mask.Width, Mask.Height);
-    Old = SelectObject(Mask.Dc, Font);
-    SetBkMode(Mask.Dc, TRANSPARENT);
-    SetTextColor(Mask.Dc, RGB(255, 255, 255));
-    DrawTextW(Mask.Dc, Text, -1, &Local, Format | DT_NOPREFIX);
-    SelectObject(Mask.Dc, Old);
+        LuhSurfaceDestroy(&g_Mask);
+        if (!LuhSurfaceCreate(&g_Mask, NewWidth, NewHeight))
+            return;
+    }
+
+    SetRect(&Local, 0, 0, Width, Height);
+    FillRect(g_Mask.Dc, &Local, (HBRUSH)GetStockObject(BLACK_BRUSH));
+    Old = SelectObject(g_Mask.Dc, Font);
+    SetBkMode(g_Mask.Dc, TRANSPARENT);
+    SetTextColor(g_Mask.Dc, RGB(255, 255, 255));
+    DrawTextW(g_Mask.Dc, Text, -1, &Local, Format | DT_NOPREFIX);
+    SelectObject(g_Mask.Dc, Old);
     GdiFlush();
 
     for (Y = Area.top; Y < Area.bottom; Y++)
     {
         Row = Surface->Bits + (SIZE_T)Y * Surface->Width;
-        MaskRow = Mask.Bits + (SIZE_T)(Y - Rect->top) * Mask.Width;
+        MaskRow = g_Mask.Bits + (SIZE_T)(Y - Rect->top) * g_Mask.Width;
         for (X = Area.left; X < Area.right; X++)
         {
             Cover = (MaskRow[X - Rect->left] >> 8) & 0xFF;
@@ -391,7 +407,6 @@ LuhDrawText(
                 Row[X] = LuhOver(Row[X], Color, (Cover * Alpha) / 255);
         }
     }
-    LuhSurfaceDestroy(&Mask);
 }
 
 BOOL
@@ -554,8 +569,9 @@ LuhBlendCircle(
     _In_ LONG Y,
     _In_ const LUH_SURFACE *Source)
 {
-    RECT Circle = { 0, 0, Source->Width, Source->Height };
     LONG Radius = min(Source->Width, Source->Height) / 2, Sx, Sy, Tx, Ty;
+    LONG Left = (Source->Width - 2 * Radius) / 2, Top = (Source->Height - 2 * Radius) / 2;
+    RECT Circle = { Left, Top, Left + 2 * Radius, Top + 2 * Radius };
     ULONG Cover;
 
     GdiFlush();
@@ -617,6 +633,9 @@ LuhAnimStart(
     Anim->Frequency = Frequency.QuadPart;
     Anim->Target = Frequency.QuadPart / LuhRefreshHz();
     Anim->DurationMs = DurationMs;
+    /* A timed run sleeps between frames: hold 1 ms timer ticks, not the default 15.6 ms. */
+    if (DurationMs != 0)
+        Anim->FineTimer = (timeBeginPeriod(1) == TIMERR_NOERROR);
     Anim->Start = LuhNow();
     Anim->Last = Anim->Start;
     Anim->Next = Anim->Start;
@@ -653,25 +672,32 @@ LuhAnimDone(
            (Anim->Last - Anim->Start) * 1000 >= (LONGLONG)Anim->DurationMs * Anim->Frequency;
 }
 
-BOOL
+VOID
 LuhAnimWait(
     _Inout_ PLUH_ANIM Anim)
 {
-    LONGLONG Now;
-    DWORD Ms;
+    LONGLONG Now = LuhNow(), Left;
 
-    /* Deadlines follow a fixed schedule from the start, so a late frame does not push the rest. */
+    /*
+     * Deadlines sit on a fixed schedule from the start: after a late frame the next deadline
+     * is the first slot still ahead, whole frames later, so the schedule is never re-based.
+     */
     Anim->Next += Anim->Target;
-    Now = LuhNow();
     if (Anim->Next <= Now)
+        Anim->Next += ((Now - Anim->Next) / Anim->Target + 1) * Anim->Target;
+
+    /* Sleep whole milliseconds while more than one is left, then yield up to the deadline. */
+    for (;;)
     {
-        Anim->Next = Now;
-        return FALSE;
+        Now = LuhNow();
+        Left = Anim->Next - Now;
+        if (Left <= 0)
+            break;
+        if (Left * 1000 > Anim->Frequency)
+            Sleep((DWORD)((Left * 1000) / Anim->Frequency));
+        else
+            SwitchToThread();
     }
-    Ms = (DWORD)(((Anim->Next - Now) * 1000) / Anim->Frequency);
-    if (Ms == 0)
-        return FALSE;
-    return MsgWaitForMultipleObjectsEx(0, NULL, Ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE) == WAIT_OBJECT_0;
 }
 
 VOID
@@ -679,6 +705,12 @@ LuhAnimEnd(
     _Inout_ PLUH_ANIM Anim)
 {
     CHAR Line[128];
+
+    if (Anim->FineTimer)
+    {
+        timeEndPeriod(1);
+        Anim->FineTimer = FALSE;
+    }
 
     /* Pam's harness reads this line: a late frame is an interval over twice the target. */
     StringCchPrintfA(Line, ARRAYSIZE(Line), "anim %s frames=%lu longest-ms=%lu late=%lu target-ms=%lu",
