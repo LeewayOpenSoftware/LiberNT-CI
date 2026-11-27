@@ -35,9 +35,9 @@ set(BCD_OS_ENTRY "{${BOOTLOADER_ID_NAMESPACE}}")
 set(BCD_DEFAULT_ENTRY "${BCD_OS_ENTRY}")
 set(BCD_DISPLAY_ORDER "\"${BCD_OS_ENTRY}\"")
 set(BCD_HTTP_ENTRY "")
-string(UUID BOOTLOADER_DISK_ID NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "LiberNT disk" TYPE SHA1)
-string(UUID BOOTLOADER_ESP_ID NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "LiberNT EFI system partition" TYPE SHA1)
-string(UUID BOOTLOADER_SYSTEM_ID NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "LiberNT system partition" TYPE SHA1)
+string(UUID BOOTLOADER_DISK_ID NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "Orosi disk" TYPE SHA1)
+string(UUID BOOTLOADER_ESP_ID NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "Orosi EFI system partition" TYPE SHA1)
+string(UUID BOOTLOADER_SYSTEM_ID NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "Orosi system partition" TYPE SHA1)
 
 function(bootloader_guid_bytes _out _guid)
     string(REPLACE "-" "" _hex "${_guid}")
@@ -132,14 +132,14 @@ bootloader_bcd_store(${CMAKE_CURRENT_BINARY_DIR})
 add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/esp.fat
     COMMAND native-fatten ${CMAKE_CURRENT_BINARY_DIR}/esp.fat
-        -format ${BOOTLOADER_ESP_SECTORS} fat32 LIBERNT
+        -format ${BOOTLOADER_ESP_SECTORS} fat32 OROSI
         -mkdir EFI
         -mkdir EFI/BOOT
-        -mkdir EFI/LiberNT
-        -mkdir EFI/LiberNT/Boot
+        -mkdir EFI/Orosi
+        -mkdir EFI/Orosi/Boot
         -add $<TARGET_FILE:bootmgfw> EFI/BOOT/${_efi_name}
-        -add $<TARGET_FILE:bootmgfw> EFI/LiberNT/Boot/bootmgfw.efi
-        -add ${CMAKE_CURRENT_BINARY_DIR}/BCD EFI/LiberNT/Boot/BCD
+        -add $<TARGET_FILE:bootmgfw> EFI/Orosi/Boot/bootmgfw.efi
+        -add ${CMAKE_CURRENT_BINARY_DIR}/BCD EFI/Orosi/Boot/BCD
     DEPENDS native-fatten bootmgfw ${CMAKE_CURRENT_BINARY_DIR}/BCD
     VERBATIM)
 
@@ -151,7 +151,7 @@ endif()
 
 add_custom_target(bootloaderimg
     COMMAND native-mkdiskimg -gpt -diskid ${BOOTLOADER_DISK_ID}
-        -o ${CMAKE_CURRENT_BINARY_DIR}/LiberNT.img
+        -o ${CMAKE_CURRENT_BINARY_DIR}/Orosi.img
         -partition ${CMAKE_CURRENT_BINARY_DIR}/esp.fat
         -start ${BOOTLOADER_ESP_START}
         -guid c12a7328-f81f-11d2-ba4b-00a0c93ec93b
@@ -161,7 +161,7 @@ add_custom_target(bootloaderimg
         -start ${BOOTLOADER_SYSTEM_START}
         -guid ebd0a0a2-b9e5-4433-87c0-68b6b72699c7
         -id ${BOOTLOADER_SYSTEM_ID}
-        -name LiberNT
+        -name Orosi
     DEPENDS native-mkdiskimg ${CMAKE_CURRENT_BINARY_DIR}/esp.fat
     VERBATIM)
 
@@ -174,7 +174,7 @@ set(_ramdisk_header "${_zero},${_zero},00,00,00,00,01,00,00,00")
 set(_ramdisk_body "00,00,00,00,03,00,00,00,00,00,00,00,${_zero},${_zero},01,00,00,00")
 set(BCD_BOOT_DEVICE "${_zero},${_zero},${_boot_device}")
 set(BCD_LOADER_DEVICE "${BCD_BOOT_DEVICE}")
-set(BCD_LOADER_PATH "\\EFI\\LiberNT\\Boot\\winload.efi")
+set(BCD_LOADER_PATH "\\EFI\\Orosi\\Boot\\winload.efi")
 set(BCD_LOAD_OPTIONS "RDRAMSIZE=${BOOTLOADER_MEDIA_RAMDISK_EXTRA} ${BOOTLOADER_LOAD_OPTIONS}${BOOTLOADER_DEBUG_LOAD_OPTIONS}")
 set(BCD_WINPE_ELEMENT
     "BCD,\"BCD00000000\\Objects\\${BCD_OS_ENTRY}\\Elements\\26000022\",\"Element\",0x1,01")
@@ -187,11 +187,11 @@ function(bootloader_media _target _directory _image)
             -format ${BOOTLOADER_MEDIA_SECTORS} fat EFIBOOT
             -mkdir EFI
             -mkdir EFI/BOOT
-            -mkdir EFI/LiberNT
-            -mkdir EFI/LiberNT/Boot
+            -mkdir EFI/Orosi
+            -mkdir EFI/Orosi/Boot
             -add $<TARGET_FILE:bootmgfw> EFI/BOOT/${_efi_name}
-            -add $<TARGET_FILE:winload> EFI/LiberNT/Boot/winload.efi
-            -add ${_directory}/BCD EFI/LiberNT/Boot/BCD
+            -add $<TARGET_FILE:winload> EFI/Orosi/Boot/winload.efi
+            -add ${_directory}/BCD EFI/Orosi/Boot/BCD
         COMMAND ${CMAKE_COMMAND} -DMODE=list
             -DBASE=${REACTOS_BINARY_DIR}/boot/livecd.$<CONFIG>.lst
             -DOPTIONAL=${REACTOS_BINARY_DIR}/boot/livecd.optional.$<CONFIG>.lst
@@ -205,7 +205,7 @@ function(bootloader_media _target _directory _image)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/medialist.cmake
         COMMAND native-mkisofs -quiet -o ${_image}
             -iso-level 4 -relaxed-filenames
-            -publisher "LiberNT Project" -preparer "LiberNT Project" -volid LiberNT -volset LiberNT
+            -publisher "Orosi Project" -preparer "Orosi Project" -volid Orosi -volset Orosi
             -eltorito-platform efi -eltorito-boot efi/efisys.bin -no-emul-boot
             -hide boot.catalog
             -duplicates-once -no-cache-inodes -graft-points
@@ -257,7 +257,7 @@ function(bootloader_http_boot_entry _options)
     endif()
 
     if(BOOTLOADER_HTTP_BOOT AND BOOTLOADER_HTTP_BOOT_URL AND NOT BOOTLOADER_HTTP_SYNC)
-        string(UUID _http_entry NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "LiberNT HTTP boot" TYPE SHA1)
+        string(UUID _http_entry NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "Orosi HTTP boot" TYPE SHA1)
         set(_http_entry "{${_http_entry}}")
         bootloader_ramdisk_device(_http_device "")
         set(_http_options "RDRAMSIZE=${BOOTLOADER_MEDIA_RAMDISK_EXTRA} HTTPBOOTURL=${BOOTLOADER_HTTP_BOOT_URL}")
@@ -269,7 +269,7 @@ function(bootloader_http_boot_entry _options)
         set(BCD_HTTP_ENTRY "
 ${_object}\\Description\",\"Type\",0x00010001,0x10200003
 ${_object}\\Elements\\11000001\",\"Element\",0x1,${BCD_BOOT_DEVICE}
-${_object}\\Elements\\12000002\",\"Element\",,\"\\EFI\\LiberNT\\Boot\\${BOOTLOADER_OS_LOADER}\"
+${_object}\\Elements\\12000002\",\"Element\",,\"\\EFI\\Orosi\\Boot\\${BOOTLOADER_OS_LOADER}\"
 ${_object}\\Elements\\12000004\",\"Element\",,\"HTTP boot\"
 ${_object}\\Elements\\12000005\",\"Element\",,\"en-US\"
 ${_object}\\Elements\\14000006\",\"Element\",0x10000,\"{6efb52bf-1766-41db-a6b3-0ee5eff72bd7}\"
@@ -294,10 +294,10 @@ endfunction()
 
 bootloader_http_boot_entry("${BOOTLOADER_LOAD_OPTIONS}${BOOTLOADER_DEBUG_LOAD_OPTIONS}")
 bootloader_ramdisk_device(BCD_OS_DEVICE "")
-bootloader_media(bootloadercd ${CMAKE_CURRENT_BINARY_DIR}/media ${CMAKE_CURRENT_BINARY_DIR}/LiberNT.iso)
+bootloader_media(bootloadercd ${CMAKE_CURRENT_BINARY_DIR}/media ${CMAKE_CURRENT_BINARY_DIR}/Orosi.iso)
 
 bootloader_ramdisk_device(BCD_OS_DEVICE "\\boot.wim")
-bootloader_media(bootloaderwimcd ${CMAKE_CURRENT_BINARY_DIR}/mediawim ${CMAKE_CURRENT_BINARY_DIR}/LiberNT-wim.iso
+bootloader_media(bootloaderwimcd ${CMAKE_CURRENT_BINARY_DIR}/mediawim ${CMAKE_CURRENT_BINARY_DIR}/Orosi-wim.iso
     -DWIM=${CMAKE_CURRENT_BINARY_DIR}/mediawim/boot.wim
     -DSTAGE=${CMAKE_CURRENT_BINARY_DIR}/mediawim/stage
     -DWIMAGE=$<TARGET_FILE:native-wimage>)
@@ -334,7 +334,7 @@ if(_standard_signature)
     bootloader_http_boot_entry("${BCD_LOAD_OPTIONS}")
 
     if(BOOTLOADER_HTTP_IMAGE_URL AND NOT BOOTLOADER_HTTP_SYNC)
-        string(UUID _image_entry NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "LiberNT HTTP disk image" TYPE SHA1)
+        string(UUID _image_entry NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "Orosi HTTP disk image" TYPE SHA1)
         set(_image_entry "{${_image_entry}}")
         string(LENGTH "${_zero},${_zero}," _image_parent_offset)
         string(SUBSTRING "${BCD_OS_DEVICE}" ${_image_parent_offset} -1 _image_parent)
@@ -348,7 +348,7 @@ if(_standard_signature)
         string(APPEND BCD_HTTP_ENTRY "
 ${_object}\\Description\",\"Type\",0x00010001,0x10200003
 ${_object}\\Elements\\11000001\",\"Element\",0x1,${BCD_BOOT_DEVICE}
-${_object}\\Elements\\12000002\",\"Element\",,\"\\EFI\\LiberNT\\Boot\\${BOOTLOADER_OS_LOADER}\"
+${_object}\\Elements\\12000002\",\"Element\",,\"\\EFI\\Orosi\\Boot\\${BOOTLOADER_OS_LOADER}\"
 ${_object}\\Elements\\12000004\",\"Element\",,\"Orosi (HTTP disk image)\"
 ${_object}\\Elements\\12000005\",\"Element\",,\"en-US\"
 ${_object}\\Elements\\14000006\",\"Element\",0x10000,\"{6efb52bf-1766-41db-a6b3-0ee5eff72bd7}\"

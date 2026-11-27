@@ -70,7 +70,7 @@ static void NewImage(WCHAR *root, const WCHAR *name)
 
 static void InstallTrust(const LN_TARGET *t)
 {
-    WCHAR *dst = LnTargetPath(t, L"trust\\Leeway-LiberNT-Update-DEV.cer");
+    WCHAR *dst = LnTargetPath(t, L"trust\\Leeway-Orosi-Update-DEV.cer");
 
     LnCopyFileFlush(g_cer, dst);
     free(dst);
@@ -78,7 +78,7 @@ static void InstallTrust(const LN_TARGET *t)
 
 static void InstallApplierStub(const LN_TARGET *t)
 {
-    WCHAR *dst = LnTargetFile(t, L"Windows\\System32\\LiberNTUpdatePending.exe");
+    WCHAR *dst = LnTargetFile(t, L"Windows\\System32\\OrosiUpdatePending.exe");
 
     WriteText(dst, "boot applier stub");
     free(dst);
@@ -176,7 +176,7 @@ static void TestPaths(void)
     CHECK(!LnTargetPathAllowed(L"Windows\\System32\\wininit.exe") && !LnTargetPathAllowed(L"Windows\\System32\\winlogon.exe"));
     CHECK(!LnTargetPathAllowed(L"Windows\\System32\\services.exe") && !LnTargetPathAllowed(L"Windows\\System32\\lsass.exe"));
     CHECK(!LnTargetPathAllowed(L"Windows\\System32\\ci.dll"));
-    CHECK(!LnTargetPathAllowed(L"LiberNT\\Servicing\\journal\\x.dll"));
+    CHECK(!LnTargetPathAllowed(L"Orosi\\Servicing\\journal\\x.dll"));
     CHECK(!LnTargetPathAllowed(L"Users\\x\\a.dll"));
     /* drivers: only System32\drivers and only Start >= 2 */
     CHECK(!LnTargetPathAllowed(L"Windows\\System32\\drivers\\lnfix.sys"));                       /* no declared Start */
@@ -193,7 +193,7 @@ static void TestManifest(void)
 {
     LN_MANIFEST m;
     static const char head[] = "{\"schemaVersion\":1,\"packageId\":\"p.id\",\"releaseVersion\":\"1.0\",\"type\":\"driver\","
-        "\"targetFamily\":\"LiberNT\",\"architecture\":\"amd64\","
+        "\"targetFamily\":\"Orosi\",\"architecture\":\"amd64\","
         "\"certificateSha256\":\"829459d8db6adc0a4fe7500e0572149e1d469b6a3707cf48e374b7660d754a34\",\"payloads\":[";
     static const char sha[] = "197c7c60ef8a8470a38d1a9212bdfde9cfe6fd4be910825fe6ac7880ac765d16";
     char text[1400];
@@ -931,7 +931,7 @@ static void TestSecurityAcl(void)
         WCHAR parent[MAX_PATH];
 
         wcscpy(parent, root);
-        wcscat(parent, L"\\LiberNT");
+        wcscat(parent, L"\\Orosi");
         wcscpy(sddl, L"D:P(A;OICI;FA;;;WD)");
         SetDaclSddl(parent, sddl, TRUE);
         CHECK_ERR(LN_E_INSECURE_TARGET, LnTargetOpen(&t2, LnTargetImage, root, FALSE));
@@ -1367,28 +1367,28 @@ TestBootExecuteListed(void)
     Section("BootExecute walk: bytes limit, tokens, case, paths (review F1/F2)");
     memset(buf, 0, sizeof(buf));
     wcscpy(buf, L"autocheck autochk *");
-    wcscpy(buf + wcslen(buf) + 1, L"LiberNTUpdatePending");
+    wcscpy(buf + wcslen(buf) + 1, L"OrosiUpdatePending");
     CHECK(LnBootExecuteListed(buf, (wcslen(buf) + 1 + 20) * sizeof(WCHAR)));      /* plain MULTI_SZ */
     CHECK(LnBootExecuteListed(buf, sizeof(buf)));                                  /* zeroed tail hides a missing double NUL */
 
     memset(buf, 0, sizeof(buf));
-    wcscpy(buf, L"autocheck autochk * LiberNTUpdatePending");                      /* REG_SZ: the applier is not the first token of the entry */
+    wcscpy(buf, L"autocheck autochk * OrosiUpdatePending");                      /* REG_SZ: the applier is not the first token of the entry */
     CHECK(!LnBootExecuteListed(buf, (wcslen(buf) + 1) * sizeof(WCHAR)));
-    wcscpy(buf, L"LiberNTUpdatePending /log");                                     /* entry with arguments: first token matches */
+    wcscpy(buf, L"OrosiUpdatePending /log");                                     /* entry with arguments: first token matches */
     CHECK(LnBootExecuteListed(buf, sizeof(buf)));
 
     memset(buf, 0, sizeof(buf));
     wcscpy(buf, L"liberntupdatepending");                                          /* case-insensitive */
     CHECK(LnBootExecuteListed(buf, sizeof(buf)));
-    wcscpy(buf, L"C:\\Windows\\System32\\LiberNTUpdatePending.exe");               /* path and .exe stripped */
+    wcscpy(buf, L"C:\\Windows\\System32\\OrosiUpdatePending.exe");               /* path and .exe stripped */
     CHECK(LnBootExecuteListed(buf, sizeof(buf)));
 
     memset(buf, 0, sizeof(buf));
     wcscpy(buf, L"autocheck autochk *");
     CHECK(!LnBootExecuteListed(buf, sizeof(buf)));                                 /* absent */
-    wcscpy(buf, L"C:\\Windows\\LiberNTUpdatePending.exe.bak");                     /* not the exe: .bak survives the strip */
+    wcscpy(buf, L"C:\\Windows\\OrosiUpdatePending.exe.bak");                     /* not the exe: .bak survives the strip */
     CHECK(!LnBootExecuteListed(buf, sizeof(buf)));
-    wcscpy(buf, L"x\\NotLiberNTUpdatePending");                                    /* not a token */
+    wcscpy(buf, L"x\\NotOrosiUpdatePending");                                    /* not a token */
     CHECK(!LnBootExecuteListed(buf, sizeof(buf)));
     buf[0] = 0;
     CHECK(!LnBootExecuteListed(buf, sizeof(buf)));                                 /* empty list */

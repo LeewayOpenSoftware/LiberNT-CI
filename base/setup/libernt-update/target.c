@@ -218,7 +218,7 @@ BsTargetValidateReal(
     if (!BsIsSafeRelativePath(Relative))
         return ERROR_BAD_PATHNAME;
     /* Root has no trailing backslash; without the separator the first
-     * component would be appended drive-relative ("C:LiberNT"), the walk
+     * component would be appended drive-relative ("C:Orosi"), the walk
      * would inspect nothing, and Deepest would never advance — leaving the
      * reparse check vacuous online and the canonical compare vacuous in
      * image mode (Pam's review of the online relaxation). */
@@ -302,7 +302,7 @@ BsValidateTargetRelPath(
      * shortcuts; the narrow third prefix is the only exception and keeps
      * the installer out of the rest of the profile. */
     if (_wcsnicmp(Relative, L"Windows\\", 8) != 0 &&
-        _wcsnicmp(Relative, L"LiberNT\\", 8) != 0 &&
+        _wcsnicmp(Relative, L"Orosi\\", 8) != 0 &&
         _wcsnicmp(Relative, L"ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\",
                   RTL_NUMBER_OF(L"ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\") - 1) != 0)
         return ERROR_BAD_PATHNAME;
@@ -500,7 +500,7 @@ BsEnsureSecureTree(
     _In_ const BS_TARGET *Target)
 {
     static const PCWSTR Dirs[] = {
-        L"LiberNT",
+        L"Orosi",
         BS_SERVICING_DIR,
         BS_STORE_DIR,
         BS_JOURNAL_DIR,

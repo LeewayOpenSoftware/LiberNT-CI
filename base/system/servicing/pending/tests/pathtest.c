@@ -7,7 +7,7 @@
 
 /*
  * Regression for Dwight's online run 4: the boot applier hardcoded
- * \SystemRoot\LiberNT\Servicing, but \SystemRoot names the Windows
+ * \SystemRoot\Orosi\Servicing, but \SystemRoot names the Windows
  * DIRECTORY ("\??\C:\Windows" or its ARC form), so the plan was searched
  * under the Windows directory, never found, and the applier silently
  * exited 0 — the plan sat unconsumed across every boot. The resolution
@@ -72,31 +72,31 @@ main(void)
 {
     WCHAR WinDir[MAX_PATH], Synthesized[MAX_PATH * 2];
 
-    Case(L"\\??\\C:\\Windows", L"\\??\\C:\\LiberNT\\Servicing");
-    Case(L"\\??\\C:\\ReactOS", L"\\??\\C:\\LiberNT\\Servicing");
-    Case(L"\\??\\C:\\", L"\\??\\C:\\LiberNT\\Servicing");
-    Case(L"\\??\\C:\\LiberNT\\Windows", L"\\??\\C:\\LiberNT\\Servicing");
-    Case(L"\\??\\C:\\a\\b\\Windows", L"\\??\\C:\\LiberNT\\Servicing");
-    Case(L"\\??\\C:\\Win(1)", L"\\??\\C:\\LiberNT\\Servicing");
-    Case(L"\\??\\C:\\HarddiskTools\\Windows", L"\\??\\C:\\LiberNT\\Servicing");
+    Case(L"\\??\\C:\\Windows", L"\\??\\C:\\Orosi\\Servicing");
+    Case(L"\\??\\C:\\ReactOS", L"\\??\\C:\\Orosi\\Servicing");
+    Case(L"\\??\\C:\\", L"\\??\\C:\\Orosi\\Servicing");
+    Case(L"\\??\\C:\\Orosi\\Windows", L"\\??\\C:\\Orosi\\Servicing");
+    Case(L"\\??\\C:\\a\\b\\Windows", L"\\??\\C:\\Orosi\\Servicing");
+    Case(L"\\??\\C:\\Win(1)", L"\\??\\C:\\Orosi\\Servicing");
+    Case(L"\\??\\C:\\HarddiskTools\\Windows", L"\\??\\C:\\Orosi\\Servicing");
     Case(L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\ReactOS",
-         L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\LiberNT\\Servicing");
+         L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\Orosi\\Servicing");
     Case(L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\Windows\\",
-         L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\LiberNT\\Servicing");
+         L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\Orosi\\Servicing");
     Case(L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\a\\b\\ReactOS",
-         L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\LiberNT\\Servicing");
+         L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\Orosi\\Servicing");
     Case(L"\\Device\\HarddiskVolume1",
-         L"\\Device\\HarddiskVolume1\\LiberNT\\Servicing");
+         L"\\Device\\HarddiskVolume1\\Orosi\\Servicing");
     Case(L"\\Device\\HarddiskVolume1\\",
-         L"\\Device\\HarddiskVolume1\\LiberNT\\Servicing");
+         L"\\Device\\HarddiskVolume1\\Orosi\\Servicing");
     Case(L"\\Device\\HarddiskVolume1\\Windows",
-         L"\\Device\\HarddiskVolume1\\LiberNT\\Servicing");
+         L"\\Device\\HarddiskVolume1\\Orosi\\Servicing");
     Case(L"\\Device\\HarddiskVolume1\\nested\\deeper\\Windows",
-         L"\\Device\\HarddiskVolume1\\LiberNT\\Servicing");
+         L"\\Device\\HarddiskVolume1\\Orosi\\Servicing");
     Case(L"\\Device\\Harddisk0\\Partition1\\Windows",
-         L"\\Device\\Harddisk0\\Partition1\\LiberNT\\Servicing");
+         L"\\Device\\Harddisk0\\Partition1\\Orosi\\Servicing");
     Case(L"\\Device\\CdRom0\\Windows",
-         L"\\Device\\CdRom0\\LiberNT\\Servicing");
+         L"\\Device\\CdRom0\\Orosi\\Servicing");
     CaseRejected(L"\\garbage\\path");
     CaseRejected(L"\\??\\NoColon");
     CaseRejected(L"\\Device\\RamDisk0\\Windows");
@@ -106,7 +106,7 @@ main(void)
     if (GetWindowsDirectoryW(WinDir, RTL_NUMBER_OF(WinDir)) && WinDir[1] == L':')
     {
         swprintf(Synthesized, RTL_NUMBER_OF(Synthesized), L"\\??\\%s", WinDir);
-        swprintf(WinDir, RTL_NUMBER_OF(WinDir), L"\\??\\%c:\\LiberNT\\Servicing",
+        swprintf(WinDir, RTL_NUMBER_OF(WinDir), L"\\??\\%c:\\Orosi\\Servicing",
                  Synthesized[4]);
         Case(Synthesized, WinDir);
     }

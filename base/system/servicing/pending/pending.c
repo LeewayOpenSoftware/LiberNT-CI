@@ -4,8 +4,8 @@
  * PURPOSE:     First-boot pending operations applier (bootstrap-stable)
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * LiberNTUpdatePending.exe runs from the SMSS BootExecute list before the
- * service control manager starts. It applies the pending plan of LiberNT
+ * OrosiUpdatePending.exe runs from the SMSS BootExecute list before the
+ * service control manager starts. It applies the pending plan of Orosi
  * Update per S1-CONTRACTS.md: the plan itself is NOT trusted (it is a local
  * view); the trust root is the package manifest signature made on the host
  * (manifest.sig, RSA-2048 PKCS#1 v1.5 over SHA-256, development key). This
@@ -35,7 +35,7 @@
 /* The servicing tree lives at the root of the system volume. The native
  * build resolves it at runtime from the \SystemRoot link, which names the
  * Windows directory ("\??\C:\Windows" or its ARC form) — NOT the volume
- * root. A compile-time \SystemRoot\LiberNT\Servicing made the applier look
+ * root. A compile-time \SystemRoot\Orosi\Servicing made the applier look
  * for the plan under the Windows directory, find nothing, and silently exit
  * (found by Dwight's online run 4). The host shim provides the same g_*
  * globals via ShimSetFakeRoot. */
@@ -225,7 +225,7 @@ S1ReadWholeFile(
  * flush. The boot writer used to go through a temp file + rename, but the
  * rename needs directory rights (DELETE on the temp, add-file on the
  * parent) that the BootExecute context does not reliably hold at smss
- * time: LiberNT denied the well-formed rename with STATUS_ACCESS_DENIED
+ * time: Orosi denied the well-formed rename with STATUS_ACCESS_DENIED
  * (Dwight's run 6). A whole-file rewrite needs only write access to the
  * file, which the protected servicing DACL always grants the writer; a
  * crash mid-write leaves the file torn but recoverable (the plan stays
@@ -378,7 +378,7 @@ S1MoveFileEx(
     SIZE_T BufferSize;
 
     /* Rename-by-handle requires DELETE access on the handle (Windows and
-     * LiberNT), so the open must grant it and share FILE_SHARE_DELETE. */
+     * Orosi), so the open must grant it and share FILE_SHARE_DELETE. */
     Status = S1NtOpen(Source, FILE_READ_DATA | FILE_WRITE_DATA | DELETE,
                       FILE_OPEN, &Handle);
     if (!NT_SUCCESS(Status))
@@ -699,7 +699,7 @@ S1ServicingRootFromSystemRoot(
 #undef S1_NEXT_COMPONENT
 #undef S1_KEEP_COMPONENT
 
-    swprintf(Out, OutCch, L"\\%s\\LiberNT\\Servicing", Built);
+    swprintf(Out, OutCch, L"\\%s\\Orosi\\Servicing", Built);
     return TRUE;
 }
 
@@ -728,7 +728,7 @@ S1ResolveServicingRoot(VOID)
     if (!S1ServicingRootFromSystemRoot(Buf, g_ServicingRoot, RTL_NUMBER_OF(g_ServicingRoot)))
         return STATUS_OBJECT_PATH_INVALID;
     {
-        static const WCHAR ServicingSuffix[] = L"\\LiberNT\\Servicing";
+        static const WCHAR ServicingSuffix[] = L"\\Orosi\\Servicing";
         size_t RootLen = wcslen(g_ServicingRoot);
         size_t SuffixLen = RTL_NUMBER_OF(ServicingSuffix) - 1;
 

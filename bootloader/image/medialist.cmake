@@ -43,7 +43,7 @@ if(WIM)
     endif()
 
     execute_process(
-        COMMAND "${WIMAGE}" capture "${STAGE}" "${WIM}" "LiberNT" --compress=xpress --boot --threads=${_threads}
+        COMMAND "${WIMAGE}" capture "${STAGE}" "${WIM}" "Orosi" --compress=xpress --boot --threads=${_threads}
         RESULT_VARIABLE _result
         OUTPUT_VARIABLE _log
         ERROR_VARIABLE _log)

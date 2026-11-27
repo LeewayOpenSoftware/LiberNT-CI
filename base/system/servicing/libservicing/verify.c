@@ -504,7 +504,7 @@ DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const c
     free(wid);
     free(wver);
     dir = LnTargetPath(t, rel);
-    cer = LnTargetPath(t, L"trust\\Leeway-LiberNT-Update-DEV.cer");
+    cer = LnTargetPath(t, L"trust\\Leeway-Orosi-Update-DEV.cer");
     free(rel);
     if (!dir || !cer)
     {
