@@ -362,21 +362,12 @@ DisplayStatusMessage(
     if (Session->SuppressStatus)
         return TRUE;
 
-    if (Session->UseLogonUI)
-    {
-        /* The host shows status in place; it keeps the text until the next command. */
-        if (LoadStringW(hAppInstance, ResourceId, StatusMsg, MAX_PATH) != 0)
-            WlHostStatus(StatusMsg);
-        return TRUE;
-    }
+    UNREFERENCED_PARAMETER(hDesktop);
 
-    if (Session->Gina.Version < WLX_VERSION_1_3)
-        return TRUE;
-
-    if (LoadStringW(hAppInstance, ResourceId, StatusMsg, MAX_PATH) == 0)
-        return FALSE;
-
-    return Session->Gina.Functions.WlxDisplayStatusMessage(Session->Gina.Context, hDesktop, 0, NULL, StatusMsg);
+    /* The host shows status in place; it keeps the text until the next command. */
+    if (LoadStringW(hAppInstance, ResourceId, StatusMsg, MAX_PATH) != 0)
+        WlHostStatus(StatusMsg);
+    return TRUE;
 }
 
 
@@ -385,57 +376,8 @@ RemoveStatusMessage(
     IN PWLSESSION Session)
 {
     /* In host mode the status lives in the host window until the next command replaces it. */
-    if (Session->UseLogonUI || Session->Gina.Version < WLX_VERSION_1_3)
-        return TRUE;
-
-    return Session->Gina.Functions.WlxRemoveStatusMessage(Session->Gina.Context);
-}
-
-
-static
-INT_PTR
-CALLBACK
-GinaLoadFailedWindowProc(
-    IN HWND hwndDlg,
-    IN UINT uMsg,
-    IN WPARAM wParam,
-    IN LPARAM lParam)
-{
-    switch (uMsg)
-    {
-        case WM_COMMAND:
-        {
-            switch (LOWORD(wParam))
-            {
-                case IDOK:
-                    EndDialog(hwndDlg, IDOK);
-                    return TRUE;
-            }
-            break;
-        }
-
-        case WM_INITDIALOG:
-        {
-            int len;
-            WCHAR templateText[MAX_PATH], text[MAX_PATH];
-
-            len = GetDlgItemTextW(hwndDlg, IDC_GINALOADFAILED, templateText, MAX_PATH);
-            if (len)
-            {
-                wsprintfW(text, templateText, (LPWSTR)lParam);
-                SetDlgItemTextW(hwndDlg, IDC_GINALOADFAILED, text);
-            }
-            return TRUE;
-        }
-
-        case WM_CLOSE:
-        {
-            EndDialog(hwndDlg, IDCANCEL);
-            return TRUE;
-        }
-    }
-
-    return FALSE;
+    UNREFERENCED_PARAMETER(Session);
+    return TRUE;
 }
 
 
@@ -563,11 +505,9 @@ WinMain(
 
     ZeroMemory(WLSession, sizeof(WLSESSION));
     WLSession->DialogTimeout = 120; /* 2 minutes */
-    WLSession->UseLogonUI = TRUE;
     NoteIgnoredLogonSettings();
     WlHostInit();
-    if (WLSession->UseLogonUI)
-        WlHostLogonInit(WLSession);     /* before the first status message, which starts a host */
+    WlHostLogonInit(WLSession);     /* before the first status message, which starts a host */
 
     /* Initialize the dialog tracking list */
     InitDialogListHead();
@@ -604,21 +544,9 @@ WinMain(
     /* Init Notifications */
     InitNotifications();
 
-    /* Load and initialize gina; host mode has none, the logon UI is a supervised process. */
-    if (WLSession->UseLogonUI)
-    {
-        LogonStage("host-mode");
-        WlHostThemeWatch();     /* msgina's WlxInitialize did this; winlogon hosts the theme hooks */
-    }
-    else if (!GinaInit(WLSession))
-    {
-        ERR("WL: Failed to initialize Gina\n");
-        // FIXME: Retrieve the real name of the GINA DLL we were trying to load.
-        // It is known only inside the GinaInit function...
-        DialogBoxParam(hAppInstance, MAKEINTRESOURCE(IDD_GINALOADFAILED), GetDesktopWindow(), GinaLoadFailedWindowProc, (LPARAM)L"msgina.dll");
-        HandleShutdown(WLSession, WLX_SAS_ACTION_SHUTDOWN_REBOOT);
-        ExitProcess(1);
-    }
+    /* Host mode has no GINA; the logon UI is a supervised process. */
+    LogonStage("host-mode");
+    WlHostThemeWatch();     /* msgina's WlxInitialize did this; winlogon hosts the theme hooks */
 
     LogonStage("gina-loaded");
 
