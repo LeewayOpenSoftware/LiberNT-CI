@@ -501,6 +501,7 @@ BochsSetCurrentMode(
     if (!Ret)
     {
         VideoDebugPrint((Error, "Bochs: failed to change mode\n"));
+        StatusBlock->Status = ERROR_INVALID_PARAMETER;
         return FALSE;
     }
 
@@ -529,7 +530,7 @@ BochsQueryCurrentMode(
 {
     PBOCHS_SIZE AvailableModeInfo;
 
-    if (DeviceExtension->CurrentMode > DeviceExtension->AvailableModeCount)
+    if (DeviceExtension->CurrentMode >= DeviceExtension->AvailableModeCount)
     {
         StatusBlock->Status = ERROR_INVALID_PARAMETER;
         return FALSE;
