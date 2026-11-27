@@ -97,6 +97,16 @@ ExpPoolHeapHasRoom(
         KIRQL OldIrql;
         SIZE_T Free;
 
+        /* One unit can come from any free unit, so the free count settles
+           it; a multi-unit request needs that many units in a single
+           contiguous run, which only a map scan can confirm. */
+        if (Units >= 2)
+        {
+            if (PoolVaHasFreeRun(Region, Units))
+                return TRUE;
+            continue;
+        }
+
         POOL_LOCK_ACQUIRE(&Region->Lock, &OldIrql);
         POOL_ASSERT(Region->UnitsInUse <= Region->UnitCount);
         Free = Region->UnitCount - Region->UnitsInUse;
