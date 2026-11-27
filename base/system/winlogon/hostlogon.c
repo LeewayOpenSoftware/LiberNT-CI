@@ -1994,13 +1994,15 @@ WlHostWaitStatusShown(VOID)
     WlHlWaitShown(g_StatusSequence);
 }
 
-/* Unlock: the frame that crosses to the user's desktop shows Welcome, never the credential page. */
-VOID
+/* Unlock: the frame that crosses to the user's desktop shows Welcome, never the credential page.
+ * FALSE when that is not confirmed; the caller then switches without a cover. */
+BOOL
 WlHostShowUnlockWelcome(
     _In_ PWLSESSION Session)
 {
-    if (WlHlHostLive())
-        WlHlWaitShown(WlHlPost(WluiCmdDisplayWelcome, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, Session->UserName, NULL));
+    if (!WlHlHostLive())
+        return FALSE;
+    return WlHlWaitShown(WlHlPost(WluiCmdDisplayWelcome, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, Session->UserName, NULL));
 }
 
 /* Theme service wait msgina did before starting the shell (shsvcs ordinal 2). */

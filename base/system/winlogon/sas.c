@@ -1839,10 +1839,18 @@ DoGenericAction(
                 CallNotificationDlls(Session, UnlockHandler);
                 if (Session->UseLogonUI)
                 {
-                    PWL_COVER Cover;
+                    PWL_COVER Cover = NULL;
 
-                    WlHostShowUnlockWelcome(Session);
-                    Cover = WlSwitchDesktopCovered(Session->WinlogonDesktop, Session->ApplicationDesktop);
+                    if (WlHostShowUnlockWelcome(Session))
+                    {
+                        Cover = WlSwitchDesktopCovered(Session->WinlogonDesktop, Session->ApplicationDesktop);
+                    }
+                    else
+                    {
+                        /* A cut is acceptable; the credential page on the user's desktop is not. */
+                        SwitchDesktop(Session->ApplicationDesktop);
+                        LogonStage("desktop-switch-plain-unshown");
+                    }
 
                     WlHostBeforeDesktopSwitch();
                     WlCoverRelease(Cover);

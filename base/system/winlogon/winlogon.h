@@ -549,7 +549,7 @@ WlHostStatusText(
 VOID
 WlHostWaitStatusShown(VOID);
 
-VOID
+BOOL
 WlHostShowUnlockWelcome(
     _In_ PWLSESSION Session);
 
