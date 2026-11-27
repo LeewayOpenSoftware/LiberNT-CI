@@ -456,10 +456,11 @@ static BOOL query_image_section( int id, const char *dll_name, const IMAGE_NT_HE
             !(cor_header->Flags & COMIMAGE_FLAGS_32BITREQUIRED))
 #ifdef __REACTOS__
             ok( image.ComPlusNativeReady || broken(GetNTVersion() < _WIN32_WINNT_VISTA),
+                "%u: wrong ComPlusNativeReady flags %02x\n", id, image.ImageFlags );
 #else
             ok( image.ComPlusNativeReady,
-#endif
                 "%u: wrong ComPlusNativeReady flags %02x\n", id, image.ImageFlags );
+#endif
         else
             ok( !image.ComPlusNativeReady,
                 "%u: wrong ComPlusNativeReady flags %02x\n", id, image.ImageFlags );
@@ -482,10 +483,11 @@ static BOOL query_image_section( int id, const char *dll_name, const IMAGE_NT_HE
     else
 #ifdef __REACTOS__
         ok( image.ImageMappedFlat || broken(GetNTVersion() < _WIN32_WINNT_VISTA),
+        "%u: wrong ImageMappedFlat flags %02x\n", id, image.ImageFlags );
 #else
         ok( image.ImageMappedFlat,
-#endif
         "%u: wrong ImageMappedFlat flags %02x\n", id, image.ImageFlags );
+#endif
 
     if (!(nt_header->OptionalHeader.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE))
         ok( !image.ImageDynamicallyRelocated || broken( image.ComPlusILOnly ), /* <= win7 */
@@ -493,10 +495,11 @@ static BOOL query_image_section( int id, const char *dll_name, const IMAGE_NT_HE
     else if (image.ImageContainsCode && !image.ImageMappedFlat && !cor_header)
 #ifdef __REACTOS__
         ok( image.ImageDynamicallyRelocated || broken(GetNTVersion() < _WIN32_WINNT_VISTA),
+            "%u: wrong ImageDynamicallyRelocated flags %02x\n", id, image.ImageFlags );
 #else
         ok( image.ImageDynamicallyRelocated,
-#endif
             "%u: wrong ImageDynamicallyRelocated flags %02x\n", id, image.ImageFlags );
+#endif
     else
         ok( !image.ImageDynamicallyRelocated || broken(TRUE), /* <= win8 */
             "%u: wrong ImageDynamicallyRelocated flags %02x\n", id, image.ImageFlags );
@@ -708,14 +711,18 @@ static NTSTATUS map_image_section( const IMAGE_NT_HEADERS *nt_header, const IMAG
 #ifdef __REACTOS__
             ok( !expect_status || broken(is_win64) /* Broken on Vista, 8.1 x64 */, "%u: got fallback but expected failure %lx\n", line, expect_status );
             ok( expect_fallback || broken(is_win64) /* Broken on Vista, 8.1 x64 */ ||
-#else
-            ok( !expect_status, "%u: got fallback but expected failure %lx\n", line, expect_status );
-            ok( expect_fallback ||
-#endif
                 /* win10 also falls back for 32-bit dll without code, even though it could be loaded */
                 (is_win64 && !has_code &&
                  nt_header->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC),
                 "%u: got fallback but expected test dll\n", line );
+#else
+            ok( !expect_status, "%u: got fallback but expected failure %lx\n", line, expect_status );
+            ok( expect_fallback ||
+                /* win10 also falls back for 32-bit dll without code, even though it could be loaded */
+                (is_win64 && !has_code &&
+                 nt_header->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC),
+                "%u: got fallback but expected test dll\n", line );
+#endif
         }
         else ok( 0, "%u: got unexpected path %s instead of %s\n", line, wine_dbgstr_w(path), wine_dbgstr_w(load_test_name));
         pLdrUnloadDll( ldr_mod );
@@ -2427,10 +2434,11 @@ static void test_import_resolution(void)
             ok( !status, "NtQuerySection failed %lx\n", status );
 #ifdef __REACTOS__
             ok( test == 6 ? !image.ImageDynamicallyRelocated : image.ImageDynamicallyRelocated || broken(GetNTVersion() < _WIN32_WINNT_VISTA),
+                "image flags %x\n", image.ImageFlags);
 #else
             ok( test == 6 ? !image.ImageDynamicallyRelocated : image.ImageDynamicallyRelocated,
-#endif
                 "image flags %x\n", image.ImageFlags);
+#endif
             ok( !image.ImageContainsCode, "contains code %x\n", image.ImageContainsCode);
             ok( mapping != 0, "CreateFileMappingA failed err %lu\n", GetLastError() );
             /* make sure that the address is not available */
@@ -2444,10 +2452,11 @@ static void test_import_resolution(void)
             todo_wine_if (test == 5)
 #ifdef __REACTOS__
             ok( status == (test == 6 ? STATUS_IMAGE_NOT_AT_BASE : STATUS_SUCCESS) || broken(GetNTVersion() < _WIN32_WINNT_VISTA),
+                "NtMapViewOfSection failed %lx\n", status );
 #else
             ok( status == (test == 6 ? STATUS_IMAGE_NOT_AT_BASE : STATUS_SUCCESS),
-#endif
                 "NtMapViewOfSection failed %lx\n", status );
+#endif
             ok( mod != (void *)nt.OptionalHeader.ImageBase,  "loaded at image base %p\n", mod );
             pnt = pRtlImageNtHeader( mod );
             ptr = (void *)((char *)mod + page_size);
