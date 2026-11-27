@@ -59,6 +59,7 @@ TestVerifyFunctions(VOID)
         return;
 
     ok(VerifyPackageFamilyName(L"Contoso.App_8wekyb3d8bbwe") == ERROR_SUCCESS, "valid family rejected\n");
+    ok(VerifyPackageFamilyName(L"a_8wekyb3d8bbwe") == ERROR_SUCCESS, "single-character family rejected\n");
     ok(VerifyPackageFamilyName(L"Contoso.App_bad") == ERROR_INVALID_PARAMETER, "invalid family accepted\n");
     ok(VerifyPackageFullName(L"Contoso.App_1.2.3.4_x64__8wekyb3d8bbwe") == ERROR_SUCCESS, "valid full name rejected\n");
     ok(VerifyPackageFullName(L"Contoso.App_1.2.3_x64__8wekyb3d8bbwe") == ERROR_INVALID_PARAMETER, "invalid full name accepted\n");
@@ -78,7 +79,9 @@ TestVerifyFunctions(VOID)
     Id.publisherId = L"8wekyb3d8bbwe";
     ok(VerifyPackageId(&Id) == ERROR_SUCCESS, "valid package ID rejected\n");
     Id.reserved = 1;
-    ok(VerifyPackageId(&Id) == ERROR_INVALID_PARAMETER, "reserved package ID accepted\n");
+    ok(VerifyPackageId(&Id) == ERROR_SUCCESS, "reserved package ID rejected\n");
+    Id.resourceId = NULL;
+    ok(VerifyPackageId(&Id) == ERROR_SUCCESS, "null resource ID rejected\n");
 }
 
 static VOID
@@ -149,6 +152,9 @@ TestConversions(VOID)
     Length = 0;
     Result = PackageIdFromFullName(FullName, PACKAGE_INFORMATION_FULL, &Length, NULL);
     ok(Result == ERROR_NOT_FOUND, "full PackageIdFromFullName returned %ld\n", Result);
+    Length = 0;
+    Result = PackageIdFromFullName(FullName, 0x200, &Length, NULL);
+    ok(Result == ERROR_INSUFFICIENT_BUFFER, "flags 0x200 returned %ld\n", Result);
     HeapFree(GetProcessHeap(), 0, Buffer);
 }
 
@@ -166,7 +172,7 @@ TestUnpackagedAndPolicy(VOID)
         { "AppPolicyGetLifecycleManagement", AppPolicyLifecycleManagement_Unmanaged },
         { "AppPolicyGetMediaFoundationCodecLoading", AppPolicyMediaFoundationCodecLoading_All },
         { "AppPolicyGetProcessTerminationMethod", AppPolicyProcessTerminationMethod_ExitProcess },
-        { "AppPolicyGetShowDeveloperDiagnostic", AppPolicyShowDeveloperDiagnostic_None },
+        { "AppPolicyGetShowDeveloperDiagnostic", AppPolicyShowDeveloperDiagnostic_ShowUI },
         { "AppPolicyGetThreadInitializationType", AppPolicyThreadInitializationType_None },
         { "AppPolicyGetWindowingModel", AppPolicyWindowingModel_ClassicDesktop }
     };
@@ -194,12 +200,16 @@ TestUnpackagedAndPolicy(VOID)
         Length = Count = 0;
         Result = GetCurrentPackageInfo2(PACKAGE_FILTER_HEAD, PackagePathType_Install, &Length, NULL, &Count);
         ok(Result == APPMODEL_ERROR_NO_PACKAGE, "GetCurrentPackageInfo2 returned %ld\n", Result);
+        Result = GetCurrentPackageInfo2(~0u, (PackagePathType)99, &Length, NULL, &Count);
+        ok(Result == APPMODEL_ERROR_NO_PACKAGE, "GetCurrentPackageInfo2 bad type returned %ld\n", Result);
     }
     if (GetCurrentPackagePath2)
     {
         Length = 0;
         Result = GetCurrentPackagePath2(PackagePathType_Install, &Length, NULL);
         ok(Result == APPMODEL_ERROR_NO_PACKAGE, "GetCurrentPackagePath2 returned %ld\n", Result);
+        Result = GetCurrentPackagePath2((PackagePathType)99, &Length, NULL);
+        ok(Result == APPMODEL_ERROR_NO_PACKAGE, "GetCurrentPackagePath2 bad type returned %ld\n", Result);
     }
 
     Result = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &Token);
@@ -216,6 +226,10 @@ TestUnpackagedAndPolicy(VOID)
         Result = Function(Token, &Value);
         ok(Result == ERROR_SUCCESS, "%s returned %ld\n", Policies[Index].Name, Result);
         ok(Value == Policies[Index].Expected, "%s returned value %u\n", Policies[Index].Name, Value);
+        Value = MAXUINT32;
+        Result = Function((HANDLE)(ULONG_PTR)0x1234, &Value);
+        ok((ULONG)Result == 0xD0000008, "%s invalid token returned 0x%08lx\n", Policies[Index].Name, Result);
+        ok(Value == 0, "%s invalid token left value %u\n", Policies[Index].Name, Value);
         ok(Function(NULL, &Value) == ERROR_INVALID_PARAMETER, "%s accepted null token\n", Policies[Index].Name);
         ok(Function(Token, NULL) == ERROR_INVALID_PARAMETER, "%s accepted null output\n", Policies[Index].Name);
     }

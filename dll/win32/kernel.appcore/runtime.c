@@ -25,6 +25,16 @@ typedef struct _APPCORE_FULL_NAME_PARTS
     PCWSTR PublisherId;
 } APPCORE_FULL_NAME_PARTS;
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+NtQueryInformationToken(
+    _In_ HANDLE TokenHandle,
+    _In_ TOKEN_INFORMATION_CLASS TokenInformationClass,
+    _Out_writes_bytes_to_(TokenInformationLength, *ReturnLength) PVOID TokenInformation,
+    _In_ ULONG TokenInformationLength,
+    _Out_ PULONG ReturnLength);
+
 static BOOL
 AppCoreIsAsciiLetter(WCHAR Character)
 {
@@ -267,7 +277,7 @@ AppCoreParseFamilyName(PCWSTR Family, UINT32 *NameLength, PCWSTR *PublisherId)
             Separator = Index;
         }
     }
-    if (Separator == MAXUINT32 || !AppCoreIsPackageString(Family, Separator, 3, APPCORE_MAX_PACKAGE_NAME, FALSE) ||
+    if (Separator == MAXUINT32 || !AppCoreIsPackageString(Family, Separator, 1, APPCORE_MAX_PACKAGE_NAME, FALSE) ||
         Length - Separator - 1 != APPCORE_PUBLISHER_ID_LENGTH || !AppCoreIsPublisherId(Family + Separator + 1))
         return FALSE;
     *NameLength = Separator;
@@ -343,12 +353,15 @@ static LONG
 AppCorePolicy(HANDLE Token, PVOID Policy, UINT32 Value)
 {
     TOKEN_TYPE Type;
-    DWORD Length;
+    ULONG Length;
+    NTSTATUS Status;
 
     if (!Token || !Policy)
         return ERROR_INVALID_PARAMETER;
-    if (!GetTokenInformation(Token, TokenType, &Type, sizeof(Type), &Length))
-        return GetLastError();
+    *(UINT32 *)Policy = 0;
+    Status = NtQueryInformationToken(Token, TokenType, &Type, sizeof(Type), &Length);
+    if (Status < 0)
+        return Status;
     *(UINT32 *)Policy = Value;
     return ERROR_SUCCESS;
 }
@@ -363,7 +376,7 @@ LONG WINAPI AppPolicyGetCreateFileAccess(HANDLE Token, AppPolicyCreateFileAccess
 LONG WINAPI AppPolicyGetLifecycleManagement(HANDLE Token, AppPolicyLifecycleManagement *Policy) { return AppCorePolicy(Token, Policy, AppPolicyLifecycleManagement_Unmanaged); }
 LONG WINAPI AppPolicyGetMediaFoundationCodecLoading(HANDLE Token, AppPolicyMediaFoundationCodecLoading *Policy) { return AppCorePolicy(Token, Policy, AppPolicyMediaFoundationCodecLoading_All); }
 LONG WINAPI AppPolicyGetProcessTerminationMethod(HANDLE Token, AppPolicyProcessTerminationMethod *Policy) { return AppCorePolicy(Token, Policy, AppPolicyProcessTerminationMethod_ExitProcess); }
-LONG WINAPI AppPolicyGetShowDeveloperDiagnostic(HANDLE Token, AppPolicyShowDeveloperDiagnostic *Policy) { return AppCorePolicy(Token, Policy, AppPolicyShowDeveloperDiagnostic_None); }
+LONG WINAPI AppPolicyGetShowDeveloperDiagnostic(HANDLE Token, AppPolicyShowDeveloperDiagnostic *Policy) { return AppCorePolicy(Token, Policy, AppPolicyShowDeveloperDiagnostic_ShowUI); }
 LONG WINAPI AppPolicyGetThreadInitializationType(HANDLE Token, AppPolicyThreadInitializationType *Policy) { return AppCorePolicy(Token, Policy, AppPolicyThreadInitializationType_None); }
 LONG WINAPI AppPolicyGetWindowingModel(HANDLE Token, AppPolicyWindowingModel *Policy) { return AppCorePolicy(Token, Policy, AppPolicyWindowingModel_ClassicDesktop); }
 APPCORE_HRESULT_STUB(CheckIsMSIXPackage, (PCWSTR FullName, BOOL *IsMsix))
@@ -423,9 +436,9 @@ WINAPI
 VerifyPackageId(
     _In_ const PACKAGE_ID *Id)
 {
-    if (!Id || Id->reserved || !AppCoreArchitectureName(Id->processorArchitecture) ||
+    if (!Id || !AppCoreArchitectureName(Id->processorArchitecture) ||
         !AppCoreIsPackageString(Id->name, Id->name ? lstrlenW(Id->name) : 0, 3, APPCORE_MAX_PACKAGE_NAME, FALSE) ||
-        !AppCoreIsPackageString(Id->resourceId, Id->resourceId ? lstrlenW(Id->resourceId) : 0, 0, APPCORE_MAX_RESOURCE_ID, TRUE) ||
+        (Id->resourceId && !AppCoreIsPackageString(Id->resourceId, lstrlenW(Id->resourceId), 0, APPCORE_MAX_RESOURCE_ID, TRUE)) ||
         !AppCoreIsPublisherId(Id->publisherId))
         return ERROR_INVALID_PARAMETER;
     return ERROR_SUCCESS;
@@ -525,7 +538,7 @@ PackageFullNameFromId(
         return ERROR_INVALID_PARAMETER;
     Architecture = AppCoreArchitectureName(Id->processorArchitecture);
     NameLength = lstrlenW(Id->name);
-    ResourceLength = lstrlenW(Id->resourceId);
+    ResourceLength = Id->resourceId ? lstrlenW(Id->resourceId) : 0;
     CopyMemory(Cursor, Id->name, NameLength * sizeof(WCHAR));
     Cursor += NameLength;
     *Cursor++ = L'_';
@@ -540,7 +553,8 @@ PackageFullNameFromId(
     CopyMemory(Cursor, Architecture, lstrlenW(Architecture) * sizeof(WCHAR));
     Cursor += lstrlenW(Architecture);
     *Cursor++ = L'_';
-    CopyMemory(Cursor, Id->resourceId, ResourceLength * sizeof(WCHAR));
+    if (ResourceLength)
+        CopyMemory(Cursor, Id->resourceId, ResourceLength * sizeof(WCHAR));
     Cursor += ResourceLength;
     *Cursor++ = L'_';
     CopyMemory(Cursor, Id->publisherId, APPCORE_PUBLISHER_ID_LENGTH * sizeof(WCHAR));
@@ -596,10 +610,9 @@ PackageIdFromFullName(
     PWSTR Cursor;
     UINT32 Required;
 
-    if (!Length || (Flags != PACKAGE_INFORMATION_BASIC && Flags != PACKAGE_INFORMATION_FULL) ||
-        !AppCoreParseFullName(FullName, &Parts))
+    if (!Length || !AppCoreParseFullName(FullName, &Parts))
         return ERROR_INVALID_PARAMETER;
-    if (Flags == PACKAGE_INFORMATION_FULL)
+    if (Flags & PACKAGE_INFORMATION_FULL)
         return ERROR_NOT_FOUND;
     Required = sizeof(PACKAGE_ID) +
                (Parts.NameLength + Parts.ResourceIdLength + APPCORE_PUBLISHER_ID_LENGTH + 3) * sizeof(WCHAR);
@@ -653,9 +666,10 @@ GetCurrentPackageInfo2(
     _Out_ UINT32 *Count)
 {
     UNREFERENCED_PARAMETER(Flags);
+    UNREFERENCED_PARAMETER(Type);
     UNREFERENCED_PARAMETER(Buffer);
 
-    if (!Length || !Count || Type < PackagePathType_Install || Type > PackagePathType_EffectiveExternal)
+    if (!Length || !Count)
         return ERROR_INVALID_PARAMETER;
     return APPMODEL_ERROR_NO_PACKAGE;
 }
@@ -668,8 +682,9 @@ GetCurrentPackagePath2(
     _Out_writes_opt_(*Length) PWSTR Path)
 {
     UNREFERENCED_PARAMETER(Path);
+    UNREFERENCED_PARAMETER(Type);
 
-    if (!Length || Type < PackagePathType_Install || Type > PackagePathType_EffectiveExternal)
+    if (!Length)
         return ERROR_INVALID_PARAMETER;
     return APPMODEL_ERROR_NO_PACKAGE;
 }
