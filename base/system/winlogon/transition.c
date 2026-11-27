@@ -8,6 +8,8 @@
 
 #include "winlogon.h"
 
+#include <mmsystem.h>  /* timeBeginPeriod */
+
 #define WL_COVER_CLASS      L"WinlogonTransitionCover"
 #define WL_COVER_FADE_MS    500
 #define WL_COVER_FRAME_MS   16      /* target interval of the fade */
@@ -123,19 +125,31 @@ WlCoverProc(
     return DefWindowProcW(Window, Message, wParam, lParam);
 }
 
-/* Pumps the cover thread's messages until Event is set or Ms pass. */
+/* Milliseconds from the high-resolution counter (GetTickCount64 steps by about 15.6 ms). */
+static
+ULONGLONG
+WlCoverNowMs(VOID)
+{
+    LARGE_INTEGER Count, Frequency;
+
+    if (!QueryPerformanceFrequency(&Frequency) || Frequency.QuadPart == 0 || !QueryPerformanceCounter(&Count))
+        return GetTickCount64();
+    return (ULONGLONG)(Count.QuadPart / (Frequency.QuadPart / 1000 ? Frequency.QuadPart / 1000 : 1));
+}
+
+/* Pumps the cover thread's messages until Event is set or Ms pass (timed on the high-resolution counter). */
 static
 BOOL
 WlCoverWait(
     _In_opt_ HANDLE Event,
     _In_ DWORD Ms)
 {
-    ULONGLONG End = GetTickCount64() + Ms;
+    ULONGLONG End = WlCoverNowMs() + Ms;
     MSG Msg;
 
     for (;;)
     {
-        ULONGLONG Now = GetTickCount64();
+        ULONGLONG Now = WlCoverNowMs();
         DWORD Left = (Now < End) ? (DWORD)(End - Now) : 0;
         DWORD Result = MsgWaitForMultipleObjects(Event ? 1 : 0, Event ? &Event : NULL, FALSE, Left, QS_ALLINPUT);
 
@@ -151,7 +165,7 @@ WlCoverWait(
     }
 }
 
-/* The captured frame itself is the window content; only its constant alpha changes. */
+/* The captured frame itself is the window content, given once when the cover appears. */
 static
 BOOL
 WlCoverPresent(
@@ -168,16 +182,16 @@ WlCoverPresent(
     return UpdateLayeredWindow(Window, NULL, &Origin, &Size, Memory, &Source, 0, &Blend, ULW_ALPHA);
 }
 
-/* Milliseconds from the high-resolution counter (GetTickCount64 steps by about 15.6 ms). */
+/* The fade steps: the window keeps the frame it was given once, only the constant alpha changes. */
 static
-ULONGLONG
-WlCoverNowMs(VOID)
+BOOL
+WlCoverSetAlpha(
+    _In_ HWND Window,
+    _In_ BYTE Alpha)
 {
-    LARGE_INTEGER Count, Frequency;
+    BLENDFUNCTION Blend = { AC_SRC_OVER, 0, Alpha, 0 };
 
-    if (!QueryPerformanceFrequency(&Frequency) || Frequency.QuadPart == 0 || !QueryPerformanceCounter(&Count))
-        return GetTickCount64();
-    return (ULONGLONG)(Count.QuadPart / (Frequency.QuadPart / 1000 ? Frequency.QuadPart / 1000 : 1));
+    return UpdateLayeredWindow(Window, NULL, NULL, NULL, NULL, NULL, 0, &Blend, ULW_ALPHA);
 }
 
 /* Time-based ease-out (cubic): the alpha follows the clock, not the number of frames drawn. */
@@ -198,13 +212,15 @@ WlCoverAlpha(
 static
 VOID
 WlCoverFade(
-    _In_ HWND Window,
-    _In_ PWL_COVER Cover,
-    _In_ HDC Memory)
+    _In_ HWND Window)
 {
-    ULONGLONG Start = WlCoverNowMs(), Last = Start, Now;
-    DWORD Frames = 0, Late = 0, Longest = 0, Interval;
-    CHAR Line[80];
+    ULONGLONG Start, Last, Next, Now, Before;
+    DWORD Frames = 0, Late = 0, Longest = 0, Present = 0, Interval, Took;
+    CHAR Line[112];
+
+    /* 1 ms timer resolution for the fade only: a 16 ms wait on the default ~15.6 ms tick lasts two ticks. */
+    timeBeginPeriod(1);
+    Start = Last = Next = WlCoverNowMs();
 
     for (;;)
     {
@@ -218,16 +234,32 @@ WlCoverFade(
                 Late++;
         }
         Last = Now;
-        WlCoverPresent(Window, Cover, Memory, WlCoverAlpha(Now - Start));
+
+        /* The frame went once with the window; each step only changes its constant alpha. */
+        Before = WlCoverNowMs();
+        WlCoverSetAlpha(Window, WlCoverAlpha(Now - Start));
+        Took = (DWORD)(WlCoverNowMs() - Before);
+        if (Took > Present)
+            Present = Took;
         Frames++;
         if (Now - Start >= WL_COVER_FADE_MS)
             break;
-        WlCoverWait(NULL, WL_COVER_FRAME_MS);
+
+        /* A fixed cadence (deadline += frame), so the step's own cost does not add to the interval; after a
+         * stall, resync to now instead of bursting. */
+        Next += WL_COVER_FRAME_MS;
+        Now = WlCoverNowMs();
+        if (Next <= Now)
+            Next = Now;
+        WlCoverWait(NULL, (DWORD)(Next - Now));
     }
 
-    /* The lab judges smoothness from this line: a late frame is an interval over twice the target. */
-    StringCchPrintfA(Line, ARRAYSIZE(Line), "cover-fade frames=%lu longest-ms=%lu late=%lu target-ms=%u",
-                     Frames, Longest, Late, WL_COVER_FRAME_MS);
+    timeEndPeriod(1);
+
+    /* The lab judges smoothness from this line: a late frame is an interval over twice the target;
+     * present-ms is the longest alpha update. */
+    StringCchPrintfA(Line, ARRAYSIZE(Line), "cover-fade frames=%lu longest-ms=%lu late=%lu target-ms=%u present-ms=%lu",
+                     Frames, Longest, Late, WL_COVER_FRAME_MS, Present);
     LogonStage(Line);
 }
 
@@ -282,7 +314,7 @@ WlCoverThread(
     if (Cover->Ready)
     {
         WlCoverWait(Cover->Release, WL_COVER_HOLD_MS);
-        WlCoverFade(Window, Cover, Memory);
+        WlCoverFade(Window);
     }
 
     if (Window != NULL)
