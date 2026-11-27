@@ -333,9 +333,8 @@ EtwpDeliver(
     {
         One = EtwpLogModernEvent(Targets[i], &Provider->Guid, Descriptor, ActivityId,
                                  UserDataCount, UserData, DataMode, NarrowCaller);
-        /* a user buffer that faults is the caller's error; a full session is not */
-        if (One == STATUS_ACCESS_VIOLATION || One == STATUS_DATATYPE_MISALIGNMENT ||
-            One == STATUS_BUFFER_OVERFLOW)
+        /* a payload dropped on a faulting user buffer is not an error; a full session is */
+        if (One == STATUS_BUFFER_OVERFLOW)
             Status = One;
     }
     return Status;
