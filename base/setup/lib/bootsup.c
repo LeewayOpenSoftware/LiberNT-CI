@@ -1416,6 +1416,30 @@ GetArcPathBcdElement(
 #define BCD_STORE_LIVE      0x1     /* the store is the system's, loaded at \Registry\Machine\BCD00000000 */
 #define BCD_STORE_BACKUP    0x2     /* keep the previous store as BCD.bak */
 
+/* Replaces the whole content of a loaded store with a hive file. */
+static
+NTSTATUS
+RestoreStoreFromFile(
+    _In_ HANDLE Key,
+    _In_ PCWSTR HivePath)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    UNICODE_STRING Name;
+    HANDLE File;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&Name, HivePath);
+    InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = NtOpenFile(&File, GENERIC_READ | SYNCHRONIZE, &ObjectAttributes, &IoStatusBlock,
+                        FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = NtRestoreKey(Key, File, REG_FORCE_RESTORE);
+    NtClose(File);
+    return Status;
+}
+
 /* The loaded system store cannot be copied or loaded again: save it through the registry and rebuild it in place. */
 static
 NTSTATUS
@@ -1445,15 +1469,7 @@ RebuildLoadedStore(
             return Status;
     }
 
-    RtlInitUnicodeString(&Name, TemplatePath);
-    InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    Status = NtOpenFile(&File, GENERIC_READ | SYNCHRONIZE, &ObjectAttributes, &IoStatusBlock,
-                        FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    Status = NtRestoreKey(Key, File, REG_FORCE_RESTORE);
-    NtClose(File);
-    return Status;
+    return RestoreStoreFromFile(Key, TemplatePath);
 }
 
 /* Build the store in \EFI\LiberNT\Boot of the system partition from the template and point it at that partition
@@ -1481,7 +1497,7 @@ InstallBcdStore(
     WCHAR BackupPath[MAX_PATH];
     WCHAR Path[MAX_PATH];
     BOOLEAN PrivilegeSet[2] = {FALSE, FALSE};
-    BOOLEAN Live = !!(Flags & BCD_STORE_LIVE), Loaded = FALSE;
+    BOOLEAN Live = !!(Flags & BCD_STORE_LIVE), Loaded = FALSE, Rebuilt = FALSE;
     PCWSTR Store = Live ? L"BCD00000000" : L"SetupBcd";
     HANDLE Key = NULL;
     NTSTATUS Status;
@@ -1529,7 +1545,10 @@ InstallBcdStore(
         {
             Status = NtOpenKey(&Key, KEY_ALL_ACCESS, &KeyAttributes);
             if (NT_SUCCESS(Status))
+            {
                 Status = RebuildLoadedStore(Key, (Flags & BCD_STORE_BACKUP) ? BackupPath : NULL, TemplatePath);
+                Rebuilt = NT_SUCCESS(Status);
+            }
         }
         else
         {
@@ -1559,8 +1578,14 @@ InstallBcdStore(
             }
             if (NT_SUCCESS(Status) && Description)
                 Status = SetBcdStringElement(Store, BCD_OSLOADER_OBJECT, BCD_DESCRIPTION, Description);
-            if (NT_SUCCESS(Status) && Key)
-                Status = NtFlushKey(Key);
+            /* The running system must not keep a bare template: put the saved store back. */
+            if (!NT_SUCCESS(Status) && Rebuilt && (Flags & BCD_STORE_BACKUP) &&
+                !NT_SUCCESS(RestoreStoreFromFile(Key, BackupPath)))
+            {
+                DPRINT1("Restoring the boot store from %S failed\n", BackupPath);
+            }
+            if (Key)
+                NtFlushKey(Key);
         }
 
         if (Loaded)
@@ -1578,21 +1603,22 @@ InstallBcdStore(
     return SetupCopyFile(BootManagerPath, Path, FALSE);
 }
 
-/* Whether the store on this system partition is the one smss loaded for the running system (BCD00000000). */
+/* Whether the store on this system partition is the one loaded for the running system: hivelist names the file
+ * behind \Registry\Machine\BCD00000000 (smss may have loaded \Boot\BCD instead, or another partition's). */
 static
 BOOLEAN
 IsLoadedSystemStore(
     _In_ PCUNICODE_STRING SystemRootPath)
 {
-    UNICODE_STRING StoreKey = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\BCD00000000");
-    UNICODE_STRING SetupKey = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\Setup");
-    UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"SystemPartition");
-    STORAGE_DEVICE_NUMBER Target, System;
+    static const WCHAR StoreFile[] = L"\\EFI\\LiberNT\\Boot\\BCD";
+    UNICODE_STRING ListKey = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\hivelist");
+    UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"\\REGISTRY\\MACHINE\\BCD00000000");
+    STORAGE_DEVICE_NUMBER Target, Loaded;
     OBJECT_ATTRIBUTES ObjectAttributes;
-    UNICODE_STRING Partition;
-    WCHAR StorePath[MAX_PATH];
+    UNICODE_STRING Device;
     HANDLE Key;
-    ULONG Length;
+    ULONG Length, Chars, Suffix = ARRAYSIZE(StoreFile) - 1;
+    PWCHAR File;
     NTSTATUS Status;
     union
     {
@@ -1600,16 +1626,7 @@ IsLoadedSystemStore(
         UCHAR Buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + MAX_PATH * sizeof(WCHAR)];
     } Value;
 
-    CombinePaths(StorePath, ARRAYSIZE(StorePath), 2, SystemRootPath->Buffer, L"EFI\\LiberNT\\Boot\\BCD");
-    if (!DoesFileExist(NULL, StorePath))
-        return FALSE;
-
-    InitializeObjectAttributes(&ObjectAttributes, &StoreKey, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    if (!NT_SUCCESS(NtOpenKey(&Key, KEY_QUERY_VALUE, &ObjectAttributes)))
-        return FALSE;
-    NtClose(Key);
-
-    InitializeObjectAttributes(&ObjectAttributes, &SetupKey, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    InitializeObjectAttributes(&ObjectAttributes, &ListKey, OBJ_CASE_INSENSITIVE, NULL, NULL);
     if (!NT_SUCCESS(NtOpenKey(&Key, KEY_QUERY_VALUE, &ObjectAttributes)))
         return FALSE;
     Status = NtQueryValueKey(Key, &ValueName, KeyValuePartialInformation,
@@ -1617,13 +1634,20 @@ IsLoadedSystemStore(
     NtClose(Key);
     if (!NT_SUCCESS(Status) || Value.Info.Type != REG_SZ || Value.Info.DataLength < sizeof(WCHAR))
         return FALSE;
-    ((PWCHAR)Value.Info.Data)[Value.Info.DataLength / sizeof(WCHAR)] = UNICODE_NULL;
-    RtlInitUnicodeString(&Partition, (PCWSTR)Value.Info.Data);
+
+    /* \Device\HarddiskVolumeN\EFI\LiberNT\Boot\BCD: our store's name, on the target partition */
+    File = (PWCHAR)Value.Info.Data;
+    File[Value.Info.DataLength / sizeof(WCHAR)] = UNICODE_NULL;
+    Chars = (ULONG)wcslen(File);
+    if (Chars <= Suffix || _wcsicmp(File + Chars - Suffix, StoreFile) != 0)
+        return FALSE;
+    File[Chars - Suffix] = UNICODE_NULL;
+    RtlInitUnicodeString(&Device, File);
 
     return NT_SUCCESS(GetPartitionDeviceNumber(SystemRootPath, &Target)) &&
-           NT_SUCCESS(GetPartitionDeviceNumber(&Partition, &System)) &&
-           Target.DeviceNumber == System.DeviceNumber &&
-           Target.PartitionNumber == System.PartitionNumber;
+           NT_SUCCESS(GetPartitionDeviceNumber(&Device, &Loaded)) &&
+           Target.DeviceNumber == Loaded.DeviceNumber &&
+           Target.PartitionNumber == Loaded.PartitionNumber;
 }
 
 static
