@@ -1,0 +1,15 @@
+/*
+ * PROJECT:     Orosi SlideToShutDown
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Spanish (Spain) resource file
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_SPANISH, SUBLANG_NEUTRAL
+
+STRINGTABLE
+BEGIN
+    IDS_STS_WARNING "Cualquier otra persona que use este equipo perderá el trabajo no guardado."
+    IDS_STS_SLIDE   "Deslice para apagar el equipo"
+    IDS_STS_FAILED  "No se pudo apagar el equipo. Puede que no tenga permiso para apagarlo."
+END

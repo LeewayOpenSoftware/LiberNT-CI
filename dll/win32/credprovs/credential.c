@@ -579,7 +579,16 @@ PasswordCredential_Create(_In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenario,
         This->Sid = NULL;
         LoadText(IDS_FRIENDLY_OTHER_USER, This->Text[PWFIELD_FRIENDLY_NAME], PWFIELD_TEXT_CHARS);
         if (PrefillUserName && wcslen(PrefillUserName) < PWFIELD_TEXT_CHARS)
+        {
             wcscpy(This->Text[PWFIELD_USER_NAME], PrefillUserName);
+            /* Changing a password for a given account: Windows 11 shows it read only in the first
+             * box, with no "Other user" tile name and no user name edit beside it. */
+            if (Scenario == CPUS_CHANGE_PASSWORD && PrefillUserName[0])
+            {
+                wcscpy(This->Text[PWFIELD_FRIENDLY_NAME], PrefillUserName);
+                This->KnownUser = TRUE;
+            }
+        }
     }
 
     *Credential = This;

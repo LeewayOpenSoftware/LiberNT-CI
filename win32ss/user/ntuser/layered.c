@@ -390,7 +390,17 @@ IntUpdateLayeredWindowI( PWND pWnd,
       }
    }
    else
+   {
+      /* No source: the window keeps its content, and a new constant alpha or colorkey still applies, as on
+       * Windows. A fade then sends its frame once and only the alpha afterwards. */
       ret = TRUE;
+      if ((info->dwFlags & (ULW_ALPHA | ULW_COLORKEY)) && IntIsUpdateLayeredWindow(pWnd) &&
+          !IntSetUpdateLayeredAttributes(pWnd, info))
+      {
+         EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+         ret = FALSE;
+      }
+   }
 
    co_WinPosSetWindowPosSilent(pWnd, Window.left, Window.top, Window.right - Window.left, Window.bottom - Window.top, flags);
    return ret;
@@ -542,8 +552,11 @@ NtUserUpdateLayeredWindow(
          ProbeForRead(pptSrc, sizeof(POINT), 1);
          Src = *pptSrc;
       }
-      ProbeForRead(psize, sizeof(SIZE), 1);
-      Size = *psize;
+      if (psize)
+      {
+         ProbeForRead(psize, sizeof(SIZE), 1);
+         Size = *psize;
+      }
       if (pblend)
       {
          ProbeForRead(pblend, sizeof(BLENDFUNCTION), 1);
@@ -574,16 +587,20 @@ NtUserUpdateLayeredWindow(
    if (UserDpiIsVirtualCaller())
    {
       INT X = pptDst ? Dst.x : 0, Y = pptDst ? Dst.y : 0;
+      INT Cx = psize ? Size.cx : 0, Cy = psize ? Size.cy : 0;
 
-      UserDpiWindowPosToPhysical(pWnd, &X, &Y, (PINT)&Size.cx, (PINT)&Size.cy, pptDst ? 0 : SWP_NOMOVE);
+      UserDpiWindowPosToPhysical(pWnd, &X, &Y, &Cx, &Cy, (pptDst ? 0 : SWP_NOMOVE) | (psize ? 0 : SWP_NOSIZE));
       Dst.x = X;
       Dst.y = Y;
+      Size.cx = Cx;
+      Size.cy = Cy;
    }
 
+   /* No size means the current one (only meaningful when hdcSrc is NULL too, as on Windows). */
    info.cbSize   = sizeof(info);
    info.hdcDst   = hdcDst;
    info.pptDst   = pptDst? &Dst : NULL;
-   info.psize    = &Size;
+   info.psize    = psize ? &Size : NULL;
    info.hdcSrc   = hdcSrc;
    info.pptSrc   = pptSrc ? &Src : NULL;
    info.crKey    = crKey;
