@@ -933,12 +933,11 @@ NpCommonFileSystemControl(IN PDEVICE_OBJECT DeviceObject,
         case FSCTL_PIPE_CREATE_SYMLINK:
         case FSCTL_PIPE_DELETE_SYMLINK:
             /* No silo or symlink support: Win11 answers user-mode callers
-               with STATUS_ILLEGAL_FUNCTION; kernel mode keeps the default */
+               with STATUS_ILLEGAL_FUNCTION; kernel mode keeps the default.
+               Return directly: the VCB is not acquired on this path. */
             if (Irp->RequestorMode != KernelMode)
-            {
-                Status = STATUS_ILLEGAL_FUNCTION;
-                break;
-            }
+                return STATUS_ILLEGAL_FUNCTION;
+
             return STATUS_NOT_SUPPORTED;
 
         default:

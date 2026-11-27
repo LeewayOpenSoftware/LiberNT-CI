@@ -9,14 +9,14 @@
 #include <ndk/iofuncs.h>
 
 #define TEST_PIPE_DEVICE_NAMED_PIPE 0x11
-#define RQMV_CTL_CODE(fn, method, access) \
+#define NPFS_CTL_CODE(fn, method, access) \
     ((TEST_PIPE_DEVICE_NAMED_PIPE << 16) | ((access) << 14) | ((fn) << 2) | (method))
 
-#define RQMV_GET_CONNECTION_ATTRIBUTE RQMV_CTL_CODE(12, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define RQMV_PIPE_FLUSH               RQMV_CTL_CODE(16, METHOD_BUFFERED, FILE_WRITE_DATA)
-#define RQMV_SILO_ARRIVAL             RQMV_CTL_CODE(18, METHOD_BUFFERED, FILE_WRITE_DATA)
-#define RQMV_CREATE_SYMLINK           RQMV_CTL_CODE(19, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define RQMV_DELETE_SYMLINK           RQMV_CTL_CODE(20, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define NPFS_GET_CONNECTION_ATTRIBUTE NPFS_CTL_CODE(12, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define NPFS_PIPE_FLUSH               NPFS_CTL_CODE(16, METHOD_BUFFERED, FILE_WRITE_DATA)
+#define NPFS_SILO_ARRIVAL             NPFS_CTL_CODE(18, METHOD_BUFFERED, FILE_WRITE_DATA)
+#define NPFS_CREATE_SYMLINK           NPFS_CTL_CODE(19, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define NPFS_DELETE_SYMLINK           NPFS_CTL_CODE(20, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 static WCHAR g_PipeName[64];
 
@@ -43,7 +43,7 @@ GetConnectionAttribute(HANDLE Pipe, PCSTR Name, ULONG NameLength, PULONG Value)
 
     RtlZeroMemory(buffer, sizeof(buffer));
     memcpy(buffer, Name, NameLength);
-    status = Fsctl(Pipe, RQMV_GET_CONNECTION_ATTRIBUTE, buffer, NameLength, buffer, outLength);
+    status = Fsctl(Pipe, NPFS_GET_CONNECTION_ATTRIBUTE, buffer, NameLength, buffer, outLength);
     if (NT_SUCCESS(status))
         memcpy(Value, buffer, sizeof(*Value));
     return status;
@@ -111,7 +111,7 @@ TestPipeFlushOnServer(HANDLE Server)
     NTSTATUS status;
 
     /* P5: FSCTL_PIPE_FLUSH on the server end succeeds through the flush path */
-    status = Fsctl(Server, RQMV_PIPE_FLUSH, NULL, 0, NULL, 0);
+    status = Fsctl(Server, NPFS_PIPE_FLUSH, NULL, 0, NULL, 0);
     ok(status == STATUS_SUCCESS, "server FLUSH -> 0x%08lx\n", status);
 }
 
@@ -124,11 +124,11 @@ TestSiloAndSymlinkRejections(HANDLE Server)
     RtlZeroMemory(input, sizeof(input));
 
     /* P11: Win11 rejects these from user mode with STATUS_ILLEGAL_FUNCTION */
-    status = Fsctl(Server, RQMV_SILO_ARRIVAL, input, sizeof(input), NULL, 0);
+    status = Fsctl(Server, NPFS_SILO_ARRIVAL, input, sizeof(input), NULL, 0);
     ok(status == STATUS_ILLEGAL_FUNCTION, "SILO_ARRIVAL -> 0x%08lx\n", status);
-    status = Fsctl(Server, RQMV_CREATE_SYMLINK, input, sizeof(input), NULL, 0);
+    status = Fsctl(Server, NPFS_CREATE_SYMLINK, input, sizeof(input), NULL, 0);
     ok(status == STATUS_ILLEGAL_FUNCTION, "CREATE_SYMLINK -> 0x%08lx\n", status);
-    status = Fsctl(Server, RQMV_DELETE_SYMLINK, input, sizeof(input), NULL, 0);
+    status = Fsctl(Server, NPFS_DELETE_SYMLINK, input, sizeof(input), NULL, 0);
     ok(status == STATUS_ILLEGAL_FUNCTION, "DELETE_SYMLINK -> 0x%08lx\n", status);
 }
 
