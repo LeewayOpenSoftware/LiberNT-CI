@@ -1327,6 +1327,32 @@ PcVideoMaskFromField(
     return ((1UL << Size) - 1) << Position;
 }
 
+BOOLEAN BiosIsVesaDdcSupported(VOID);
+BOOLEAN BiosVesaReadEdid(VOID);
+
+/* The monitor's preferred mode: the first detailed timing of its EDID (VBE/DDC). */
+static BOOLEAN
+PcVideoEdidPreferredSize(
+    _Out_ PULONG Width,
+    _Out_ PULONG Height)
+{
+    static const UCHAR Header[8] = { 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00 };
+    UCHAR Edid[128];
+
+    *Width = *Height = 0;
+    if (!BiosIsVesaDdcSupported() || !BiosVesaReadEdid())
+        return FALSE;
+    RtlCopyMemory(Edid, (PVOID)BIOSCALLBUFFER, sizeof(Edid));
+    if (RtlCompareMemory(Edid, Header, sizeof(Header)) != sizeof(Header) ||
+        (Edid[54] == 0 && Edid[55] == 0))
+    {
+        return FALSE;
+    }
+    *Width = Edid[56] | ((Edid[58] & 0xF0) << 4);
+    *Height = Edid[59] | ((Edid[61] & 0xF0) << 4);
+    return *Width != 0 && *Height != 0;
+}
+
 BOOLEAN
 PcVideoInitializeBootFramebuffer(
     _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBuffer)
@@ -1335,9 +1361,16 @@ PcVideoInitializeBootFramebuffer(
     SVGA_MODE_INFORMATION Best = {0};
     USHORT Mode, BestMode = 0;
     ULONG BestPixels = 0, Pitch;
+    ULONG PreferredWidth, PreferredHeight;
+    BOOLEAN Preferred, BestPreferred = FALSE;
     ULONGLONG Size;
 
     RtlZeroMemory(FrameBuffer, sizeof(*FrameBuffer));
+
+    /* Boot straight into the mode the display driver will keep, so the boot screen is never redrawn
+     * after a mode change (INVESTIGACION.md 6.4: one resolution from the boot logo to the desktop). */
+    if (PcVideoEdidPreferredSize(&PreferredWidth, &PreferredHeight))
+        TRACE("Boot framebuffer: EDID preferred %lux%lu\n", PreferredWidth, PreferredHeight);
 
     for (Mode = 0x100; Mode < 0x200; ++Mode)
     {
@@ -1361,11 +1394,12 @@ PcVideoInitializeBootFramebuffer(
         BluePosition = Candidate.LinearBlueMaskSize ?
                            Candidate.LinearBlueMaskPosition : Candidate.BlueMaskPosition;
 
+        Preferred = Candidate.WidthInPixels == PreferredWidth && Candidate.HeightInPixels == PreferredHeight;
         if ((Candidate.ModeAttributes & 0x91) != 0x91 ||
             Candidate.MemoryModel != 6 || Candidate.BitsPerPixel != 32 ||
             Candidate.LinearVideoBufferAddress == 0 ||
             Candidate.WidthInPixels == 0 || Candidate.HeightInPixels == 0 ||
-            Candidate.WidthInPixels > 1024 || Candidate.HeightInPixels > 768 ||
+            (!Preferred && (Candidate.WidthInPixels > 1024 || Candidate.HeightInPixels > 768)) ||
             RedSize != 8 || RedPosition != 16 ||
             GreenSize != 8 || GreenPosition != 8 ||
             BlueSize != 8 || BluePosition != 0)
@@ -1374,11 +1408,14 @@ PcVideoInitializeBootFramebuffer(
         }
 
         Pixels = (ULONG)Candidate.WidthInPixels * Candidate.HeightInPixels;
-        if (Pixels > BestPixels)
+        if (BestPreferred && !Preferred)
+            continue;
+        if ((Preferred && !BestPreferred) || Pixels > BestPixels)
         {
             Best = Candidate;
             BestMode = Mode;
             BestPixels = Pixels;
+            BestPreferred = Preferred;
         }
     }
 
