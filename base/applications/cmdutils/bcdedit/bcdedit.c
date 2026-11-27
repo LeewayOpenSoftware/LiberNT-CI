@@ -1241,6 +1241,153 @@ DeleteValueCommand(
     return Ok ? 0 : 1;
 }
 
+/* Pack object ids into a REG_MULTI_SZ in Multi; FALSE on overflow. *Chars gets the total length
+ * including the final empty string that terminates the list. */
+static
+BOOL
+BuildIdList(
+    _Out_writes_(Cap) PWSTR Multi,
+    _In_ SIZE_T Cap,
+    _In_reads_(Count) PCWSTR *Ids,
+    _In_ int Count,
+    _Out_ PSIZE_T Chars)
+{
+    SIZE_T Off = 0;
+    int i;
+
+    for (i = 0; i < Count; i++)
+    {
+        SIZE_T Len = wcslen(Ids[i]);
+        if (Off + Len + 2 > Cap)
+            return FALSE;
+        memcpy(Multi + Off, Ids[i], (Len + 1) * sizeof(WCHAR));
+        Off += Len + 1;
+    }
+    Multi[Off++] = 0;
+    *Chars = Off;
+    return TRUE;
+}
+
+/* /displayorder <id> [<id>...] [/addfirst | /addlast | /remove]: edit {bootmgr} DisplayOrder.
+ * With no flag the list is set to exactly the given ids; the flags add to or remove from it. */
+static
+int
+DisplayOrderCommand(
+    _In_opt_ PCWSTR StoreFile,
+    _In_ int Argc,
+    _In_reads_(Argc) WCHAR **Argv,
+    _In_ int First)
+{
+    enum { SET, ADDFIRST, ADDLAST, REMOVE } Mode = SET;
+    WCHAR IdBuf[64][48], BmBuf[48], Sub[96], Multi[4096], Existing[4096];
+    PCWSTR Given[64], Final[128], BootMgr;
+    int NumGiven = 0, NumFinal = 0, i, j;
+    HKEY Store;
+    SIZE_T Chars;
+    DWORD RegType = 0, Len;
+    BOOL Ok;
+
+    for (i = First; i < Argc; i++)
+    {
+        if (_wcsicmp(Argv[i], L"/addfirst") == 0)
+            Mode = ADDFIRST;
+        else if (_wcsicmp(Argv[i], L"/addlast") == 0)
+            Mode = ADDLAST;
+        else if (_wcsicmp(Argv[i], L"/remove") == 0)
+            Mode = REMOVE;
+        else
+        {
+            WCHAR Tmp[48];
+            PCWSTR Id = IdForAlias(Argv[i], Tmp, ARRAYSIZE(Tmp));
+            if (NumGiven >= ARRAYSIZE(Given))
+            {
+                PrintResource(IDS_ERR_BADPARAM);
+                return 1;
+            }
+            if (!IsValidGuid(Id))
+            {
+                PrintResource(IDS_ERR_BADID);
+                return 1;
+            }
+            StringCchCopyW(IdBuf[NumGiven], ARRAYSIZE(IdBuf[0]), Id);
+            Given[NumGiven] = IdBuf[NumGiven];
+            NumGiven++;
+        }
+    }
+    if (NumGiven == 0)
+    {
+        PrintResource(IDS_ERR_BADPARAM);
+        return 1;
+    }
+
+    if (OpenStore(StoreFile, KEY_READ | KEY_WRITE, &Store) != ERROR_SUCCESS)
+    {
+        PrintResource(IDS_ERR_OPENSTORE);
+        return 1;
+    }
+    BootMgr = IdForAlias(L"{bootmgr}", BmBuf, ARRAYSIZE(BmBuf));
+
+    if (Mode == SET)
+    {
+        for (i = 0; i < NumGiven; i++)
+            Final[NumFinal++] = Given[i];
+    }
+    else
+    {
+        /* Carry over the current order, dropping any id that is being re-added or removed. */
+        StringCchPrintfW(Sub, ARRAYSIZE(Sub), L"Objects\\%s\\Elements\\24000001", BootMgr);
+        Len = sizeof(Existing) - 2 * sizeof(WCHAR);
+        if (RegGetValueW(Store, Sub, L"Element", RRF_RT_REG_MULTI_SZ, &RegType, Existing, &Len) == ERROR_SUCCESS)
+        {
+            PCWSTR p = Existing;
+            while (*p && NumFinal < ARRAYSIZE(Final))
+            {
+                BOOL Skip = FALSE;
+                for (j = 0; j < NumGiven; j++)
+                {
+                    if (_wcsicmp(p, Given[j]) == 0)
+                    {
+                        Skip = TRUE;
+                        break;
+                    }
+                }
+                if (!Skip)
+                    Final[NumFinal++] = p;
+                p += wcslen(p) + 1;
+            }
+        }
+        if (Mode == ADDLAST)
+        {
+            for (i = 0; i < NumGiven && NumFinal < ARRAYSIZE(Final); i++)
+                Final[NumFinal++] = Given[i];
+        }
+        else if (Mode == ADDFIRST)
+        {
+            PCWSTR Reordered[128];
+            int n = 0;
+            for (i = 0; i < NumGiven && n < ARRAYSIZE(Reordered); i++)
+                Reordered[n++] = Given[i];
+            for (i = 0; i < NumFinal && n < ARRAYSIZE(Reordered); i++)
+                Reordered[n++] = Final[i];
+            for (i = 0; i < n; i++)
+                Final[i] = Reordered[i];
+            NumFinal = n;
+        }
+    }
+
+    if (!BuildIdList(Multi, ARRAYSIZE(Multi), Final, NumFinal, &Chars))
+    {
+        RegCloseKey(Store);
+        PrintResource(IDS_ERR_SETFAIL);
+        return 1;
+    }
+    Ok = WriteElement(Store, BootMgr, 0x24000001, REG_MULTI_SZ, Multi, (DWORD)(Chars * sizeof(WCHAR)));
+    RegCloseKey(Store);
+
+    PrintResource(Ok ? IDS_OK : IDS_ERR_SETFAIL);
+    return Ok ? 0 : 1;
+}
+
 int
 wmain(
     _In_ int argc,
@@ -1337,6 +1484,17 @@ wmain(
             return 1;
         }
         return EditElement(StoreFile, L"{bootmgr}", NULL, 0x23000003, argc, argv, i + 1);
+    }
+
+    if (_wcsicmp(Command, L"/displayorder") == 0)
+    {
+        /* /displayorder <id> [<id>...] [/addfirst | /addlast | /remove] */
+        if (i + 1 >= argc)
+        {
+            PrintResource(IDS_ERR_BADPARAM);
+            return 1;
+        }
+        return DisplayOrderCommand(StoreFile, argc, argv, i + 1);
     }
 
     PrintResource(IDS_ERR_BADPARAM);

@@ -13,6 +13,7 @@
 #define EL_DEBUG        0x260000a0  /* boolean -> REG_BINARY, 1 byte */
 #define EL_DEFAULT      0x23000003  /* object  -> REG_SZ, on {bootmgr} */
 #define EL_TIMEOUT      0x25000004  /* integer -> REG_BINARY, 8 bytes LE, on {bootmgr} */
+#define EL_DISPLAYORDER 0x24000001  /* list    -> REG_MULTI_SZ, on {bootmgr} */
 
 static const WCHAR Loader[]  = L"{11111111-2222-3333-4444-555555555555}";
 static const WCHAR Other[]   = L"{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}";
@@ -194,6 +195,35 @@ START_TEST(BcdEdit)
     Length = sizeof(Buffer);
     RegType = ReadElement(File, BootMgr, EL_DEFAULT, B, &Length);
     ok(RegType == REG_SZ && wcscmp(Buffer, Loader) == 0, "/default stored %ls\n", Buffer);
+
+    /* /displayorder sets {bootmgr} DisplayOrder to exactly the given ids, as a REG_MULTI_SZ. */
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /displayorder %s", File, Loader);
+    Code = RunBcd(Args);
+    ok(Code == 0, "/displayorder set exit %lu\n", Code);
+    Length = sizeof(Buffer);
+    RegType = ReadElement(File, BootMgr, EL_DISPLAYORDER, B, &Length);
+    ok(RegType == REG_MULTI_SZ && wcscmp(Buffer, Loader) == 0 &&
+       Length == (DWORD)((wcslen(Loader) + 2) * sizeof(WCHAR)),
+       "/displayorder set: type %lu len %lu\n", RegType, Length);
+
+    /* /addlast appends: the list becomes loader then other. */
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /displayorder %s /addlast", File, Other);
+    Code = RunBcd(Args);
+    ok(Code == 0, "/displayorder addlast exit %lu\n", Code);
+    Length = sizeof(Buffer);
+    RegType = ReadElement(File, BootMgr, EL_DISPLAYORDER, B, &Length);
+    ok(RegType == REG_MULTI_SZ && wcscmp(Buffer, Loader) == 0 &&
+       wcscmp(Buffer + wcslen(Loader) + 1, Other) == 0, "/displayorder addlast order wrong\n");
+
+    /* /remove drops loader, leaving other as the single entry. */
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /displayorder %s /remove", File, Loader);
+    Code = RunBcd(Args);
+    ok(Code == 0, "/displayorder remove exit %lu\n", Code);
+    Length = sizeof(Buffer);
+    RegType = ReadElement(File, BootMgr, EL_DISPLAYORDER, B, &Length);
+    ok(RegType == REG_MULTI_SZ && wcscmp(Buffer, Other) == 0 &&
+       Length == (DWORD)((wcslen(Other) + 2) * sizeof(WCHAR)),
+       "/displayorder remove: type %lu len %lu\n", RegType, Length);
 
     /* /deletevalue removes the element; deleting it again, now absent, fails with exit 1. */
     StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /deletevalue %s description", File, Loader);
