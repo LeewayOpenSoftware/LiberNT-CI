@@ -123,12 +123,9 @@ LuhBeginExit(
 #define LUH_STATUS_ACCOUNT_LOCKED_OUT   ((LONG)0xC0000234L)
 
 static UINT
-LuhAccountStatusText(
-    _In_ LONG Status,
-    _In_ LONG SubStatus)
+LuhAccountStatusCode(
+    _In_ LONG Code)
 {
-    LONG Code = (Status == LUH_STATUS_ACCOUNT_RESTRICTION && SubStatus < 0) ? SubStatus : Status;
-
     switch (Code)
     {
         case LUH_STATUS_ACCOUNT_DISABLED:   return IDS_LUH_ACCOUNT_DISABLED;
@@ -139,6 +136,21 @@ LuhAccountStatusText(
         case LUH_STATUS_ACCOUNT_RESTRICTION: return IDS_LUH_ACCOUNT_RESTRICTED;
     }
     return 0;
+}
+
+static UINT
+LuhAccountStatusText(
+    _In_ LONG Status,
+    _In_ LONG SubStatus)
+{
+    UINT Text = 0;
+
+    /* The sub-status says which restriction; one without its own sentence gets the general one. */
+    if (Status == LUH_STATUS_ACCOUNT_RESTRICTION && SubStatus < 0)
+        Text = LuhAccountStatusCode(SubStatus);
+    if (Text == 0)
+        Text = LuhAccountStatusCode(Status);
+    return Text;
 }
 
 static void
@@ -1005,9 +1017,9 @@ LuhPaint(
 {
     PAINTSTRUCT Ps;
     HDC Dc;
-    RECT Client, Rect;
+    RECT Client, Rect, Wrap;
     HGDIOBJ OldFont;
-    int TextTop;
+    int TextTop, Width, Extra;
 
     Dc = BeginPaint(Window, &Ps);
     GetClientRect(Window, &Client);
@@ -1050,34 +1062,43 @@ LuhPaint(
     /* With a credential page up, the text sits above its first row (the page grows with its
      * label rows, a fixed offset put the result under the title); otherwise it is centred. */
     TextTop = (g_Ui.Page || g_Ui.OptionsUp) ? g_Ui.PageTop - LUH_TEXT_ABOVE_PAGE : Client.bottom / 2 - 40;
+
+    /* A long account message wraps. Measure it first: it keeps its bottom edge (so the page
+     * below never moves) and grows upwards, and the title moves up by the extra lines. */
+    OldFont = SelectObject(Dc, g_Ui.TextFont);
+    Width = min(Client.right - 2 * LUH_DETAIL_MARGIN, LUH_DETAIL_WIDTH);
+    Width = max(Width, 1);
+    Extra = 0;
+    if (g_Ui.Detail[0] != UNICODE_NULL)
+    {
+        SetRect(&Wrap, 0, 0, Width, 0);
+        DrawTextW(Dc, g_Ui.Detail, -1, &Wrap, DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
+        if (Wrap.bottom - Wrap.top > 28)
+            Extra = (Wrap.bottom - Wrap.top) - 28;
+    }
+
     Rect = Client;
-    Rect.top = TextTop;
+    Rect.top = TextTop - Extra;
     Rect.bottom = Rect.top + 40;
-    OldFont = SelectObject(Dc, g_Ui.TitleFont);
+    SelectObject(Dc, g_Ui.TitleFont);
     DrawTextW(Dc, g_Ui.Title, -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     if (g_Ui.Detail[0] != UNICODE_NULL)
     {
-        RECT Wrap;
-        int Width = min(Client.right - 2 * LUH_DETAIL_MARGIN, LUH_DETAIL_WIDTH);
-
         Rect.top = Rect.bottom + 8;
-        Rect.bottom = Rect.top + 28;
+        Rect.bottom = TextTop + 40 + 8 + 28;
         SelectObject(Dc, g_Ui.TextFont);
-        /* A long account message wraps; it grows upwards so the page below never moves. */
-        SetRect(&Wrap, 0, 0, max(Width, 1), 0);
-        DrawTextW(Dc, g_Ui.Detail, -1, &Wrap, DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
-        if (Wrap.bottom <= 28)
+        if (Extra == 0)
         {
             DrawTextW(Dc, g_Ui.Detail, -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
         else
         {
-            Wrap.left = (Client.right - Width) / 2;
-            Wrap.right = Wrap.left + Width;
-            Wrap.top = max(Rect.bottom - (Wrap.bottom - Wrap.top), Client.top);
-            Wrap.bottom = Rect.bottom;
-            DrawTextW(Dc, g_Ui.Detail, -1, &Wrap, DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS);
+            Rect.left = (Client.right - Width) / 2;
+            Rect.right = Rect.left + Width;
+            DrawTextW(Dc, g_Ui.Detail, -1, &Rect, DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS);
+            Rect.left = Client.left;
+            Rect.right = Client.right;
         }
     }
 
