@@ -1785,7 +1785,8 @@ static
 NTSTATUS
 LsapSetPrivileges(
     IN PVOID TokenInformation,
-    IN LSA_TOKEN_INFORMATION_TYPE TokenInformationType)
+    IN LSA_TOKEN_INFORMATION_TYPE TokenInformationType,
+    IN SECURITY_LOGON_TYPE LogonType)
 {
     PLSA_TOKEN_INFORMATION_V1 TokenInfo1;
     LSAPR_HANDLE PolicyHandle = NULL;
@@ -1850,7 +1851,8 @@ LsapSetPrivileges(
             {
                 if (RtlEqualLuid(&TokenInfo1->Privileges->Privileges[i].Luid, &SeChangeNotifyPrivilege) ||
                     RtlEqualLuid(&TokenInfo1->Privileges->Privileges[i].Luid, &SeCreateGlobalPrivilege) ||
-                    RtlEqualLuid(&TokenInfo1->Privileges->Privileges[i].Luid, &SeImpersonatePrivilege))
+                    RtlEqualLuid(&TokenInfo1->Privileges->Privileges[i].Luid, &SeImpersonatePrivilege) ||
+                    LogonType == Network) /* a network client cannot adjust its token: everything held is enabled */
                 {
                     TokenInfo1->Privileges->Privileges[i].Attributes |= SE_PRIVILEGE_ENABLED | SE_PRIVILEGE_ENABLED_BY_DEFAULT;
                 }
@@ -2258,7 +2260,8 @@ LsapLogonUser(PLSA_API_MSG RequestMsg,
     }
 
     Status = LsapSetPrivileges(TokenInformation,
-                               TokenInformationType);
+                               TokenInformationType,
+                               LogonType);
     if (!NT_SUCCESS(Status))
     {
         ERR("LsapSetPrivileges() failed (Status 0x%08lx)\n", Status);
