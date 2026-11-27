@@ -104,6 +104,31 @@ LuhTrace(
 #endif
 }
 
+VOID
+LuhStage(
+    _In_ PCSTR Line)
+{
+    static LONG Enabled = -1;
+    DWORD Value = 0, Size = sizeof(Value);
+    CHAR Text[192];
+
+    /* Same switch as winlogon, so one trace shows both sides of a transition. */
+    if (Enabled < 0)
+    {
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                         L"LiberNTStageTrace", RRF_RT_REG_DWORD, NULL, &Value, &Size) != ERROR_SUCCESS)
+        {
+            Value = 0;
+        }
+        Enabled = (Value != 0);
+    }
+    TRACE("%s\n", Line);
+    if (!Enabled)
+        return;
+    StringCchPrintfA(Text, ARRAYSIZE(Text), "LOGONSTAGE %lu logonui %s\n", GetTickCount(), Line);
+    OutputDebugStringA(Text);
+}
+
 /* §8.10 f: a crash must not leave a dump with credential memory behind. */
 static LONG WINAPI
 LuhUnhandledException(

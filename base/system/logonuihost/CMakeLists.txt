@@ -3,10 +3,12 @@ include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos)
 
 list(APPEND SOURCE
     main.c
+    gfx.c
     ipc.c
     providers.c
     ui.c
     users.c
+    gfx.h
     logonuihost.h)
 
 add_executable(logonuihost ${SOURCE} logonuihost.rc)

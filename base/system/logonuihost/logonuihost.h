@@ -135,6 +135,8 @@ HRESULT LuhUsersCreate(_In_ BOOL Unlock, _In_opt_ PCWSTR Only, _Outptr_ ICredent
 /* main.c */
 BOOL LuhParseCommandLine(_In_ int argc, _In_reads_(argc) WCHAR **argv, _Out_ PLUH_OPTIONS Options);
 VOID LuhTrace(_In_ PCSTR Event, _In_opt_ PCWSTR Detail);
+/* One "LOGONSTAGE <tick> logonui <line>" debug line when Winlogon\LiberNTStageTrace is set. */
+VOID LuhStage(_In_ PCSTR Line);
 
 /* ipc.c */
 BOOL LuhIpcConnect(VOID);
