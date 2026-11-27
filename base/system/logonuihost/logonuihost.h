@@ -72,7 +72,7 @@ typedef struct _LUH_FIELD
     WCHAR Label[LUH_FIELD_TEXT];
     WCHAR Value[LUH_FIELD_TEXT];
     HWND Control;
-    HWND LabelControl;          /* the label row above an edit field; destroyed with the page */
+    RECT Box;                   /* an edit field: the drawn box its borderless control sits in */
 } LUH_FIELD, *PLUH_FIELD;
 
 typedef struct _LUH_PAGE

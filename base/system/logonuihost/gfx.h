@@ -41,13 +41,16 @@ VOID LuhFrameRound(_Inout_ PLUH_SURFACE Surface, _In_ const RECT *Rect, _In_ LON
 VOID LuhFillCircle(_Inout_ PLUH_SURFACE Surface, _In_ LONG CenterX, _In_ LONG CenterY, _In_ LONG Radius,
                    _In_ COLORREF Color, _In_ BYTE Alpha);
 
+VOID LuhStroke(_Inout_ PLUH_SURFACE Surface, _In_ double X0, _In_ double Y0, _In_ double X1, _In_ double Y1,
+               _In_ double Width, _In_ COLORREF Color, _In_ BYTE Alpha);
+
 HFONT LuhFontCreate(_In_ LONG DesignHeight, _In_ LONG Weight);
 /* Grayscale-antialiased text, blended with its own coverage; DrawText Format flags. */
 VOID LuhDrawText(_Inout_ PLUH_SURFACE Surface, _In_ HFONT Font, _In_ PCWSTR Text, _In_ const RECT *Rect,
              _In_ UINT Format, _In_ COLORREF Color, _In_ BYTE Alpha);
 SIZE LuhMeasureText(_In_ HFONT Font, _In_ PCWSTR Text);
 
-/* Decode an open image file (WIC) into a new surface, scaled down to fit MaxWidth x MaxHeight. */
+/* Decode an open image file (WIC) into a new surface, scaled down until it just covers MaxWidth x MaxHeight. */
 BOOL LuhSurfaceLoad(_Out_ PLUH_SURFACE Surface, _In_ HANDLE File, _In_ LONG MaxWidth, _In_ LONG MaxHeight);
 /*
  * Fill the whole of Target with Source (halftone), cropping Source to Target's aspect.

@@ -312,6 +312,49 @@ LuhFillCircle(
     LuhFillRound(Surface, &Rect, Radius, Color, Alpha);
 }
 
+/* A line with round ends and a one-pixel antialiased edge (glyph strokes). */
+VOID
+LuhStroke(
+    _Inout_ PLUH_SURFACE Surface,
+    _In_ double X0,
+    _In_ double Y0,
+    _In_ double X1,
+    _In_ double Y1,
+    _In_ double Width,
+    _In_ COLORREF Color,
+    _In_ BYTE Alpha)
+{
+    double Dx = X1 - X0, Dy = Y1 - Y0, Length2 = Dx * Dx + Dy * Dy, Half = Width / 2.0;
+    double Px, Py, T, Cx, Cy, Distance, Cover;
+    RECT Bounds, Area;
+    LONG X, Y;
+    PULONG Row;
+
+    SetRect(&Bounds, (LONG)floor(min(X0, X1) - Half - 1), (LONG)floor(min(Y0, Y1) - Half - 1),
+            (LONG)ceil(max(X0, X1) + Half + 1), (LONG)ceil(max(Y0, Y1) + Half + 1));
+    if (Alpha == 0 || !LuhClip(Surface, &Bounds, &Area))
+        return;
+    GdiFlush();
+    for (Y = Area.top; Y < Area.bottom; Y++)
+    {
+        Row = Surface->Bits + (SIZE_T)Y * Surface->Width;
+        for (X = Area.left; X < Area.right; X++)
+        {
+            Px = X + 0.5;
+            Py = Y + 0.5;
+            T = Length2 > 0.0 ? ((Px - X0) * Dx + (Py - Y0) * Dy) / Length2 : 0.0;
+            T = T < 0.0 ? 0.0 : (T > 1.0 ? 1.0 : T);
+            Cx = X0 + T * Dx - Px;
+            Cy = Y0 + T * Dy - Py;
+            Distance = sqrt(Cx * Cx + Cy * Cy);
+            Cover = Half + 0.5 - Distance;
+            if (Cover <= 0.0)
+                continue;
+            Row[X] = LuhOver(Row[X], Color, (ULONG)((Cover >= 1.0 ? 1.0 : Cover) * Alpha));
+        }
+    }
+}
+
 HFONT
 LuhFontCreate(
     _In_ LONG DesignHeight,
@@ -451,8 +494,9 @@ LuhSurfaceLoad(
     if (SUCCEEDED(Hr))
     {
         Source = (IWICBitmapSource *)Converter;
-        /* Never keep more than the caller can show: scale down to fit Max, keeping the aspect. */
-        Scale = min((double)MaxWidth / Width, (double)MaxHeight / Height);
+        /* Never keep more than the caller can show: scale down until the picture just covers
+         * MaxWidth x MaxHeight (cover, not contain), so a crop-fill never has to upscale it. */
+        Scale = max((double)MaxWidth / Width, (double)MaxHeight / Height);
         if (Scale < 1.0)
         {
             Width = max((UINT)(Width * Scale), 1);
