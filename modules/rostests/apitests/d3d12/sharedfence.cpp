@@ -33,7 +33,7 @@ static BOOL WaitFence(ID3D12Fence *fence, UINT64 value, DWORD timeout)
 static void TestShareRules(ID3D12Device *device)
 {
     ID3D12Fence *fence = NULL;
-    HANDLE handle = (HANDLE)0xdeadbeef;
+    HANDLE handle = (HANDLE)(ULONG_PTR)0xdeadbeef;
     HRESULT hr;
 
     hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, __uuidof(ID3D12Fence), reinterpret_cast<void **>(&fence));
@@ -41,7 +41,7 @@ static void TestShareRules(ID3D12Device *device)
     if (!fence) return;
     hr = device->CreateSharedHandle(fence, NULL, GENERIC_ALL, NULL, &handle);
     ok(hr == E_INVALIDARG, "CreateSharedHandle(unshared fence): %#lx\n", hr);
-    ok(handle == (HANDLE)0xdeadbeef, "unshared fence wrote handle %p\n", handle);
+    ok(handle == (HANDLE)(ULONG_PTR)0xdeadbeef, "unshared fence wrote handle %p\n", handle);
     if (SUCCEEDED(hr) && handle) CloseHandle(handle);
     fence->Release();
 }
@@ -238,7 +238,7 @@ static BOOL QueryObjectName(HANDLE handle, WCHAR *name, ULONG count)
 static void TestNamedSharing(ID3D12Device *device)
 {
     ID3D12Fence *fence = NULL, *second = NULL, *opened = NULL;
-    HANDLE handle = NULL, by_name = NULL, collision = (HANDLE)0xdeadbeef, missing = (HANDLE)0xdeadbeef;
+    HANDLE handle = NULL, by_name = NULL, collision = (HANDLE)(ULONG_PTR)0xdeadbeef, missing = (HANDLE)(ULONG_PTR)0xdeadbeef;
     WCHAR name[64], global_name[80], object_name[260];
     DWORD session = 0;
     HRESULT hr;
@@ -261,8 +261,8 @@ static void TestNamedSharing(ID3D12Device *device)
     }
     hr = device->CreateSharedHandle(fence, NULL, GENERIC_ALL, name, &collision);
     ok(hr == DXGI_ERROR_NAME_ALREADY_EXISTS, "CreateSharedHandle(same name): %#lx\n", hr);
-    ok(collision == (HANDLE)0xdeadbeef, "CreateSharedHandle(same name) wrote handle %p\n", collision);
-    if (SUCCEEDED(hr) && collision && collision != (HANDLE)0xdeadbeef) CloseHandle(collision);
+    ok(collision == (HANDLE)(ULONG_PTR)0xdeadbeef, "CreateSharedHandle(same name) wrote handle %p\n", collision);
+    if (SUCCEEDED(hr) && collision && collision != (HANDLE)(ULONG_PTR)0xdeadbeef) CloseHandle(collision);
 
     hr = device->OpenSharedHandleByName(name, GENERIC_ALL, &by_name);
     ok(hr == S_OK, "OpenSharedHandleByName: %#lx\n", hr);
