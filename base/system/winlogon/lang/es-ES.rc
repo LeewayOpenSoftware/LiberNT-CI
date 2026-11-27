@@ -57,7 +57,7 @@ BEGIN
     IDS_LOADINGYOURPERSONALSETTINGS "Cargando su configuración personal"
     IDS_CLOSINGNETWORKCONNECTIONS "Cerrando las conexiones de red"
     IDS_REACTOSISRESTARTING "Reiniciando"
-    IDS_REACTOSISSHUTTINGDOWN "Apagando el equipo"
+    IDS_REACTOSISSHUTTINGDOWN "Apagando"
     IDS_PREPARETOSTANDBY "Entrando en modo de espera (Standby)"
     IDS_PREPARETOHIBERNATE "Hibernando"
     IDS_SAVEYOURSETTINGS "Guardando su configuración personal"
@@ -67,6 +67,7 @@ BEGIN
     IDS_TIMEOUTLONGFORMAT "%d días"
     IDS_PRESSCTRLALTDELETE "Press Ctrl+Alt+Delete to sign in"
     IDS_UNLOCKONLYSESSIONUSER "This computer is locked. Only the signed-in user can unlock it."
+    IDS_PRESSCTRLALTDELETEUNLOCK "Presione Ctrl+Alt+Supr para desbloquear"
     IDS_LOGONUI_TERMINAL_LEVELS "The sign-in user interface failed repeatedly and cannot be started again. Restart the computer; if this keeps happening, contact your administrator."
     IDS_LOGONUI_TERMINAL_MISSING "The sign-in components are missing from this installation. Repair the installation offline, then restart the computer."
     IDS_LOGONUI_TERMINAL_POLICY "Sign-in is not available on this computer. Policy requires a credential that the sign-in user interface cannot offer right now. Contact your administrator."
@@ -74,6 +75,11 @@ BEGIN
     IDS_REMINDER_TITLE "You're about to be signed out"
     IDS_REMINDER_SHUTDOWN "Orosi will shut down in %s."
     IDS_REMINDER_RESTART "Orosi will restart in %s."
+END
+
+STRINGTABLE
+BEGIN
+    IDS_SIGNINGOUT "Cerrando sesión"
 END
 
 STRINGTABLE

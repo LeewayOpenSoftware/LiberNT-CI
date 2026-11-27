@@ -30,6 +30,7 @@ typedef enum _WLUI_AUTH_OP
     WluiOpRequestAction,
     WluiOpReportProviderFault,
     WluiOpExiting,
+    WluiOpCommandShown,
     WluiOpCount
 } WLUI_AUTH_OP;
 
@@ -127,6 +128,8 @@ typedef struct _WLUI_LAUNCH_STATE
     GUID LastFaultClsid;
     DWORD LastFaultReason;
     LONG SequenceCounter;
+    DWORD ShownSequence;     /* the newest command whose screen the host has painted */
+    HANDLE ShownEvent;
     SIZE_T ItemSize;
     ULONG Head;
     ULONG Count;
@@ -149,6 +152,10 @@ DWORD NTAPI WluiStateWait(_In_ PWLUI_LAUNCH_STATE State, _In_ DWORD TimeoutMs,
                           _Out_writes_bytes_(Size) VOID *Item, _In_ SIZE_T Size, _Out_ PBOOL Got);
 
 VOID NTAPI WluiStateSetReady(_In_ PWLUI_LAUNCH_STATE State);
+/* FALSE for 0 or a sequence never handed out (beyond SequenceCounter); an older one is accepted and ignored. */
+BOOL NTAPI WluiStateSetShown(_In_ PWLUI_LAUNCH_STATE State, _In_ DWORD Sequence);
+/* TRUE once the host painted command Sequence (or a later one); FALSE on timeout or a dead launch. */
+BOOL NTAPI WluiStateWaitShown(_In_ PWLUI_LAUNCH_STATE State, _In_ DWORD Sequence, _In_ DWORD TimeoutMs);
 BOOL NTAPI WluiStateWaitReady(_In_ PWLUI_LAUNCH_STATE State, _In_ DWORD TimeoutMs);
 VOID NTAPI WluiStateTouch(_In_ PWLUI_LAUNCH_STATE State);
 ULONGLONG NTAPI WluiStateLastHeartbeat(_In_ PWLUI_LAUNCH_STATE State);

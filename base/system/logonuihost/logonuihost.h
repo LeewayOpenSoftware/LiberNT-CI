@@ -58,6 +58,8 @@ extern WLUI_CONNECTION g_Connection;
 #define LUH_FAULT_STARTUP    2
 #define LUH_MAX_FIELDS       32
 #define LUH_FIELD_TEXT       256
+#define LUH_MAX_TILES        64
+#define LUH_TILE_TEXT        128
 
 #include <credentialprovider.h>
 
@@ -70,7 +72,7 @@ typedef struct _LUH_FIELD
     WCHAR Label[LUH_FIELD_TEXT];
     WCHAR Value[LUH_FIELD_TEXT];
     HWND Control;
-    HWND LabelControl;          /* the label row above an edit field; destroyed with the page */
+    RECT Box;                   /* an edit field: the drawn box its borderless control sits in */
 } LUH_FIELD, *PLUH_FIELD;
 
 typedef struct _LUH_PAGE
@@ -81,6 +83,10 @@ typedef struct _LUH_PAGE
     DWORD SubmitField;
     DWORD SubmitAdjacentTo;
     LUH_FIELD Fields[LUH_MAX_FIELDS];
+    DWORD TileCount;            /* every credential of every provider; one means no tile list */
+    DWORD TileSelected;         /* the tile whose fields are above */
+    BOOL AutoSubmit;            /* the provider asked for its default to be submitted at once */
+    WCHAR TileNames[LUH_MAX_TILES][LUH_TILE_TEXT];
 } LUH_PAGE, *PLUH_PAGE;
 
 typedef enum _LUH_FIELD_UPDATE_KIND
@@ -120,10 +126,17 @@ LUH_SUBMIT_RESULT LuhProviderSubmit(_Out_writes_(StatusChars) PWSTR StatusText, 
 BOOL LuhProviderReportResult(_In_ NTSTATUS Status, _In_ NTSTATUS SubStatus,
                              _Out_writes_(StatusChars) PWSTR StatusText, _In_ SIZE_T StatusChars);
 VOID LuhProviderDeselect(VOID);
+BOOL LuhProviderSelectTile(_In_ DWORD Index);
+
+/* users.c */
+#define LUH_MAX_USERS        64
+HRESULT LuhUsersCreate(_In_ BOOL Unlock, _In_opt_ PCWSTR Only, _Outptr_ ICredentialProviderUserArray **Out);
 
 /* main.c */
 BOOL LuhParseCommandLine(_In_ int argc, _In_reads_(argc) WCHAR **argv, _Out_ PLUH_OPTIONS Options);
 VOID LuhTrace(_In_ PCSTR Event, _In_opt_ PCWSTR Detail);
+/* One "LOGONSTAGE <tick> logonui <line>" debug line when Winlogon\LiberNTStageTrace is set. */
+VOID LuhStage(_In_ PCSTR Line);
 
 /* ipc.c */
 BOOL LuhIpcConnect(VOID);

@@ -26,7 +26,8 @@ typedef enum _LUH_REQUEST_TYPE
     LuhReqSetString,
     LuhReqGetSerialization,
     LuhReqReportResult,
-    LuhReqDeselect
+    LuhReqDeselect,
+    LuhReqSelectTile
 } LUH_REQUEST_TYPE;
 
 typedef struct _LUH_REQUEST
@@ -43,6 +44,17 @@ typedef struct _LUH_REQUEST
     WCHAR StatusText[LUH_FIELD_TEXT];
 } LUH_REQUEST;
 
+/* One credential of one provider: an entry in the tile list. */
+typedef struct _LUH_TILE
+{
+    ICredentialProvider *Provider;
+    ICredentialProviderCredential *Credential;
+    CLSID Clsid;
+    WCHAR Name[LUH_TILE_TEXT];
+} LUH_TILE;
+
+typedef struct _LUH_EVENTS LUH_EVENTS;
+
 typedef struct _LUH_PROVIDER_THREAD
 {
     HANDLE Thread;
@@ -55,7 +67,12 @@ typedef struct _LUH_PROVIDER_THREAD
     /* owned by the thread */
     PCPH_PROVIDER_SET Set;
     ICredentialProvider *Provider;
-    ICredentialProviderCredential *Credential;
+    ICredentialProviderCredential *Credential;  /* the selected tile's, advised */
+    LUH_EVENTS *Events;
+    LUH_TILE Tiles[LUH_MAX_TILES];
+    DWORD TileCount;
+    DWORD Selected;
+    BOOL AutoSubmit;                /* the first page only: submit the default without waiting for input */
 } LUH_PROVIDER_THREAD, *PLUH_PROVIDER_THREAD;
 
 static PLUH_PROVIDER_THREAD g_Current;
@@ -65,12 +82,12 @@ static ULONG g_FaultCount;
 
 /* ---- events sink: the provider may change a field while the page is up ---- */
 
-typedef struct _LUH_EVENTS
+struct _LUH_EVENTS
 {
     ICredentialProviderCredentialEvents ICredentialProviderCredentialEvents_iface;
     LONG RefCount;
     PLUH_PROVIDER_THREAD Owner;     /* updates from an abandoned thread's credential are dropped */
-} LUH_EVENTS;
+};
 
 static LUH_EVENTS *
 EventsFrom(ICredentialProviderCredentialEvents *iface)
@@ -217,36 +234,236 @@ IsFaulted(
 }
 
 /* Picks the first provider that is not faulted and offers a credential. */
-static BOOL
-SelectCredential(
-    _In_ PLUH_PROVIDER_THREAD T,
-    _In_ LUH_EVENTS *Events)
+/* The text a tile shows: the first large-text field the credential puts in a deselected tile. */
+static VOID
+TileName(
+    _In_ ICredentialProvider *Provider,
+    _In_ ICredentialProviderCredential *Credential,
+    _Out_writes_(Chars) PWSTR Name,
+    _In_ SIZE_T Chars)
 {
-    ULONG i;
+    DWORD Count = 0, i;
 
-    for (i = 0; i < T->Set->Count; i++)
+    Name[0] = UNICODE_NULL;
+    if (FAILED(ICredentialProvider_GetFieldDescriptorCount(Provider, &Count)))
+        return;
+    for (i = 0; i < Count && Name[0] == UNICODE_NULL; i++)
+    {
+        CREDENTIAL_PROVIDER_FIELD_DESCRIPTOR *Desc = NULL;
+        CREDENTIAL_PROVIDER_FIELD_STATE State = CPFS_HIDDEN;
+        CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE Interactive = CPFIS_NONE;
+        PWSTR Value = NULL;
+        DWORD Id;
+        BOOL Large;
+
+        if (FAILED(ICredentialProvider_GetFieldDescriptorAt(Provider, i, &Desc)) || Desc == NULL)
+            continue;
+        Id = Desc->dwFieldID;
+        Large = Desc->cpft == CPFT_LARGE_TEXT;
+        CoTaskMemFree(Desc->pszLabel);
+        CoTaskMemFree(Desc);
+        if (!Large ||
+            FAILED(ICredentialProviderCredential_GetFieldState(Credential, Id, &State, &Interactive)) ||
+            (State != CPFS_DISPLAY_IN_DESELECTED_TILE && State != CPFS_DISPLAY_IN_BOTH))
+            continue;
+        if (SUCCEEDED(ICredentialProviderCredential_GetStringValue(Credential, Id, &Value)) && Value)
+        {
+            StringCchCopyW(Name, Chars, Value);
+            CoTaskMemFree(Value);
+        }
+    }
+}
+
+/* TRUE for the empty ("Other user") tile: a credential with no user behind it (ICredentialProviderCredential2). */
+static BOOL
+TileIsEmpty(
+    _In_ ICredentialProviderCredential *Credential)
+{
+    ICredentialProviderCredential2 *Credential2 = NULL;
+    LPWSTR Sid = NULL;
+    BOOL Empty = FALSE;
+
+    if (SUCCEEDED(ICredentialProviderCredential_QueryInterface(Credential, &IID_ICredentialProviderCredential2,
+                                                               (void **)&Credential2)) && Credential2 != NULL)
+    {
+        Empty = ICredentialProviderCredential2_GetUserSid(Credential2, &Sid) != S_OK || Sid == NULL;
+        CoTaskMemFree(Sid);
+        ICredentialProviderCredential2_Release(Credential2);
+    }
+    return Empty;
+}
+
+static BOOL
+ReadPolicyFlag(
+    _In_ PCWSTR Key,
+    _In_ PCWSTR Name)
+{
+    DWORD Value = 0, Size = sizeof(Value);
+
+    return RegGetValueW(HKEY_LOCAL_MACHINE, Key, Name, RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS &&
+           Value != 0;
+}
+
+static BOOL
+ReadPolicyText(
+    _In_ PCWSTR Key,
+    _In_ PCWSTR Name,
+    _Out_writes_(Chars) PWSTR Text,
+    _In_ DWORD Chars)
+{
+    DWORD Size = Chars * sizeof(WCHAR);
+
+    Text[0] = UNICODE_NULL;
+    return RegGetValueW(HKEY_LOCAL_MACHINE, Key, Name, RRF_RT_REG_SZ, NULL, Text, &Size) == ERROR_SUCCESS &&
+           Text[0] != UNICODE_NULL;
+}
+
+/*
+ * Every credential of every provider becomes a tile. The default one: the empty tile when
+ * DontDisplayLastUserName is set, else the first default a provider names, else the
+ * DefaultUserName account the msgina page preselects among the first provider's tiles,
+ * else the first tile.
+ */
+static VOID
+CollectTiles(
+    _In_ PLUH_PROVIDER_THREAD T)
+{
+    WCHAR LastUser[LUH_TILE_TEXT];
+    DWORD ProviderDefault = MAXDWORD, i, j;
+    BOOL HideLast, ProviderAutoLogon = FALSE;
+
+    T->TileCount = 0;
+    T->AutoSubmit = FALSE;
+    for (i = 0; i < T->Set->Count && T->TileCount < LUH_MAX_TILES; i++)
     {
         ICredentialProvider *Provider = T->Set->Providers[i].Provider;
-        ICredentialProviderCredential *Credential = NULL;
-        DWORD Count = 0, Default = 0;
+        DWORD Count = 0, Default = CREDENTIAL_PROVIDER_NO_DEFAULT;
         BOOL AutoLogon = FALSE;
 
         if (IsFaulted(&T->Set->Providers[i].Clsid))
             continue;
         if (FAILED(ICredentialProvider_GetCredentialCount(Provider, &Count, &Default, &AutoLogon)) || Count == 0)
             continue;
-        if (FAILED(ICredentialProvider_GetCredentialAt(Provider, (Default < Count) ? Default : 0, &Credential)))
-            continue;
-        if (FAILED(ICredentialProviderCredential_Advise(Credential, &Events->ICredentialProviderCredentialEvents_iface)))
+        if (Default >= Count)
+            AutoLogon = FALSE;      /* CREDENTIAL_PROVIDER_NO_DEFAULT: nothing to submit */
+        for (j = 0; j < Count && T->TileCount < LUH_MAX_TILES; j++)
         {
-            ICredentialProviderCredential_Release(Credential);
-            continue;
+            LUH_TILE *Tile = &T->Tiles[T->TileCount];
+
+            Tile->Credential = NULL;
+            if (FAILED(ICredentialProvider_GetCredentialAt(Provider, j, &Tile->Credential)) || Tile->Credential == NULL)
+                continue;
+            Tile->Provider = Provider;
+            Tile->Clsid = T->Set->Providers[i].Clsid;
+            TileName(Provider, Tile->Credential, Tile->Name, ARRAYSIZE(Tile->Name));
+            if (j == Default && ProviderDefault == MAXDWORD)
+            {
+                ProviderDefault = T->TileCount;
+                ProviderAutoLogon = AutoLogon;
+            }
+            T->TileCount++;
         }
-        ICredentialProviderCredential_SetSelected(Credential, &AutoLogon);
-        T->Provider = Provider;
-        T->Credential = Credential;
-        T->CredentialClsid = T->Set->Providers[i].Clsid;
+    }
+
+    T->Selected = 0;
+    /* The logon screen only: unlock keeps the locked account selected. */
+    HideLast = g_Options.Scenario == CPUS_LOGON &&
+               ReadPolicyFlag(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                              L"DontDisplayLastUserName");
+    if (HideLast)
+    {
+        for (i = 0; i < T->TileCount; i++)
+        {
+            if (TileIsEmpty(T->Tiles[i].Credential))
+            {
+                T->Selected = i;
+                return;
+            }
+        }
+    }
+    if (ProviderDefault != MAXDWORD)
+    {
+        /* Windows submits the provider's default at once when it asks (pbAutoLogonWithDefault). */
+        T->Selected = ProviderDefault;
+        T->AutoSubmit = ProviderAutoLogon;
+        return;
+    }
+    if (!HideLast &&
+        ReadPolicyText(L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon", L"DefaultUserName",
+                       LastUser, ARRAYSIZE(LastUser)))
+    {
+        for (i = 0; i < T->TileCount; i++)
+        {
+            /* Only among the first provider's tiles: without a provider default, the first
+             * provider keeps the selection as before, and DefaultUserName picks its account. */
+            if (!IsEqualGUID(&T->Tiles[i].Clsid, &T->Tiles[0].Clsid))
+                break;
+            if (!TileIsEmpty(T->Tiles[i].Credential) && !_wcsicmp(T->Tiles[i].Name, LastUser))
+            {
+                T->Selected = i;
+                return;
+            }
+        }
+    }
+}
+
+static VOID
+ReleaseTiles(
+    _In_ PLUH_PROVIDER_THREAD T)
+{
+    DWORD i;
+
+    for (i = 0; i < T->TileCount; i++)
+        ICredentialProviderCredential_Release(T->Tiles[i].Credential);
+    ZeroMemory(T->Tiles, sizeof(T->Tiles));
+    T->TileCount = 0;
+}
+
+/* Leaves the selected tile (SetDeselected, UnAdvise) and selects tile Index (Advise, SetSelected). */
+static BOOL
+SelectTile(
+    _In_ PLUH_PROVIDER_THREAD T,
+    _In_ DWORD Index)
+{
+    LUH_TILE *Tile;
+    BOOL AutoLogon = FALSE;
+
+    if (Index >= T->TileCount)
+        return FALSE;
+    if (T->Credential != NULL)
+    {
+        ICredentialProviderCredential_SetDeselected(T->Credential);
+        ICredentialProviderCredential_UnAdvise(T->Credential);
+        T->Credential = NULL;
+        T->Provider = NULL;
+    }
+    Tile = &T->Tiles[Index];
+    if (FAILED(ICredentialProviderCredential_Advise(Tile->Credential, &T->Events->ICredentialProviderCredentialEvents_iface)))
+        return FALSE;
+    ICredentialProviderCredential_SetSelected(Tile->Credential, &AutoLogon);
+    T->Provider = Tile->Provider;
+    T->Credential = Tile->Credential;
+    T->CredentialClsid = Tile->Clsid;
+    T->Selected = Index;
+    return TRUE;
+}
+
+/* The first tile that takes the selection, starting at the default. */
+static BOOL
+SelectCredential(
+    _In_ PLUH_PROVIDER_THREAD T)
+{
+    DWORD i;
+
+    CollectTiles(T);
+    if (T->TileCount == 0)
+        return FALSE;
+    if (SelectTile(T, T->Selected))
         return TRUE;
+    for (i = 0; i < T->TileCount; i++)
+    {
+        if (SelectTile(T, i))
+            return TRUE;
     }
     return FALSE;
 }
@@ -261,6 +478,12 @@ BuildPage(
 
     ZeroMemory(Page, sizeof(*Page));
     Page->Scenario = g_Options.Scenario;
+    for (i = 0; i < T->TileCount; i++)
+        StringCchCopyW(Page->TileNames[i], ARRAYSIZE(Page->TileNames[i]), T->Tiles[i].Name);
+    Page->TileCount = T->TileCount;
+    Page->TileSelected = T->Selected;
+    Page->AutoSubmit = T->AutoSubmit;
+    T->AutoSubmit = FALSE;
     if (FAILED(ICredentialProvider_GetFieldDescriptorCount(T->Provider, &Count)))
         return;
 
@@ -307,6 +530,37 @@ BuildPage(
     }
 }
 
+/* The page is handed to the UI thread, which frees it when it tears the page down.
+ * A thread the UI already gave up on drops its late page right here, traced the
+ * same way as a drop in the UI's WM_LUH_PAGE handler. */
+static VOID
+PostPage(
+    _In_ PLUH_PROVIDER_THREAD T)
+{
+    PLUH_PAGE Page = T->Abandoned ? NULL : HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Page));
+
+    if (Page != NULL)
+    {
+        BuildPage(T, Page);
+        Page->Owner = T;
+        if (T->Abandoned || !PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_READY, (LPARAM)Page))
+        {
+            SecureZeroMemory(Page, sizeof(*Page));
+            HeapFree(GetProcessHeap(), 0, Page);
+            if (T->Abandoned)
+                LuhTrace("page-dropped", NULL);
+        }
+    }
+    else if (!T->Abandoned)
+    {
+        PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_FAILED, (LPARAM)T);
+    }
+    else
+    {
+        LuhTrace("page-dropped", NULL);
+    }
+}
+
 static VOID
 ServeRequest(
     _In_ PLUH_PROVIDER_THREAD T)
@@ -317,6 +571,11 @@ ServeRequest(
 
     R->Hr = E_UNEXPECTED;
     R->StatusText[0] = UNICODE_NULL;
+    if (T->Credential == NULL && R->Type != LuhReqSelectTile)
+    {
+        SecureZeroMemory(R->Text, sizeof(R->Text));
+        return;                     /* a failed switch left no tile selected */
+    }
 
     switch (R->Type)
     {
@@ -338,6 +597,22 @@ ServeRequest(
         case LuhReqDeselect:
             R->Hr = ICredentialProviderCredential_SetDeselected(T->Credential);
             break;
+
+        case LuhReqSelectTile:
+        {
+            DWORD Previous = T->Selected;
+
+            if (R->Field == Previous || R->Field >= T->TileCount)
+            {
+                R->Hr = E_INVALIDARG;
+                break;
+            }
+            /* A tile that refuses the selection puts the previous one back. */
+            R->Hr = SelectTile(T, R->Field) ? S_OK : (SelectTile(T, Previous) ? S_FALSE : E_FAIL);
+            if (R->Hr == S_OK)
+                PostPage(T);
+            break;
+        }
 
         default:
             break;
@@ -386,6 +661,48 @@ PrefillProviders(
     SecureZeroMemory(Buffer, sizeof(Buffer));
 }
 
+/* Windows order: SetUsageScenario (done by the enumeration), then SetUserArray, then the
+ * first GetCredentialCount. Logon and unlock only; the other scenarios keep one empty tile.
+ * Each provider gets an array of its own: SetProviderFilter changes the array it is called on. */
+static VOID
+SetUserArrays(
+    _In_ PCPH_PROVIDER_SET Set)
+{
+    BOOL Unlock = g_Options.Scenario == CPUS_UNLOCK_WORKSTATION;
+    BOOL Traced = FALSE;
+    ULONG i;
+
+    if (g_Options.Scenario != CPUS_LOGON && !Unlock)
+        return;
+    for (i = 0; i < Set->Count; i++)
+    {
+        ICredentialProviderSetUserArray *Sink = NULL;
+        ICredentialProviderUserArray *Users = NULL;
+
+        if (IsFaulted(&Set->Providers[i].Clsid))
+            continue;
+        if (FAILED(ICredentialProvider_QueryInterface(Set->Providers[i].Provider, &IID_ICredentialProviderSetUserArray,
+                                                      (void **)&Sink)) || Sink == NULL)
+            continue;
+        if (SUCCEEDED(LuhUsersCreate(Unlock, g_Options.PrefillUser, &Users)))
+        {
+            if (!Traced)
+            {
+                WCHAR Num[16];
+                DWORD Count = 0;
+
+                ICredentialProviderUserArray_GetCount(Users, &Count);
+                StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu", Count);
+                LuhTrace("users", Num);
+                Traced = TRUE;
+            }
+            ICredentialProviderSetUserArray_SetUserArray(Sink, Users);
+            ICredentialProviderUserArray_Release(Users);
+        }
+        ICredentialProviderSetUserArray_Release(Sink);
+    }
+}
+
 static DWORD WINAPI
 ProviderThread(
     _In_ LPVOID Parameter)
@@ -420,13 +737,20 @@ ProviderThread(
                                         g_Options.Fallback ? CPH_FLAG_FALLBACK : 0, &T->Set);
     StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu", T->Set ? T->Set->Count : 0);
     LuhTrace("providers", Num);
-    if (SUCCEEDED(hr) && T->Set != NULL && g_Options.PrefillUser[0] != UNICODE_NULL)
+    /* On unlock the name only picks the account for the user array; Other user stays empty. */
+    if (SUCCEEDED(hr) && T->Set != NULL && g_Options.PrefillUser[0] != UNICODE_NULL &&
+        g_Options.Scenario != CPUS_UNLOCK_WORKSTATION)
         PrefillProviders(T->Set, g_Options.PrefillUser);
+    if (SUCCEEDED(hr) && T->Set != NULL)
+        SetUserArrays(T->Set);
 
-    if (FAILED(hr) || T->Set == NULL || !SelectCredential(T, Events))
+    T->Events = Events;
+    if (FAILED(hr) || T->Set == NULL || !SelectCredential(T))
     {
         WPARAM Why = (T->Set && T->Set->PolicyDeniesPassword) ? LUH_PAGE_POLICY : LUH_PAGE_FAILED;
+        ReleaseTiles(T);
         ICredentialProviderCredentialEvents_Release(&Events->ICredentialProviderCredentialEvents_iface);
+        T->Events = NULL;
         CredProvHostFreeProviders(T->Set);
         T->Set = NULL;
         /* A thread the UI already gave up on must not steer it; the UI re-checks the owner. */
@@ -436,32 +760,7 @@ ProviderThread(
         return 0;
     }
 
-    /* The page is handed to the UI thread, which frees it when it tears the page down.
-     * A thread the UI already gave up on drops its late page right here, traced the
-     * same way as a drop in the UI's WM_LUH_PAGE handler. */
-    {
-        PLUH_PAGE Page = T->Abandoned ? NULL : HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Page));
-        if (Page != NULL)
-        {
-            BuildPage(T, Page);
-            Page->Owner = T;
-            if (T->Abandoned || !PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_READY, (LPARAM)Page))
-            {
-                SecureZeroMemory(Page, sizeof(*Page));
-                HeapFree(GetProcessHeap(), 0, Page);
-                if (T->Abandoned)
-                    LuhTrace("page-dropped", NULL);
-            }
-        }
-        else if (!T->Abandoned)
-        {
-            PostMessageW(g_Window, WM_LUH_PAGE, LUH_PAGE_FAILED, (LPARAM)T);
-        }
-        else
-        {
-            LuhTrace("page-dropped", NULL);
-        }
-    }
+    PostPage(T);
 
     Waits[0] = T->StopEvent;
     Waits[1] = T->RequestEvent;
@@ -474,10 +773,14 @@ ProviderThread(
         SetEvent(T->DoneEvent);
     }
 
-    ICredentialProviderCredential_SetDeselected(T->Credential);
-    ICredentialProviderCredential_UnAdvise(T->Credential);
-    ICredentialProviderCredential_Release(T->Credential);
+    if (T->Credential != NULL)
+    {
+        ICredentialProviderCredential_SetDeselected(T->Credential);
+        ICredentialProviderCredential_UnAdvise(T->Credential);
+    }
+    ReleaseTiles(T);
     ICredentialProviderCredentialEvents_Release(&Events->ICredentialProviderCredentialEvents_iface);
+    T->Events = NULL;
     CredProvHostFreeProviders(T->Set);
     CoUninitialize();
     return 0;
@@ -724,6 +1027,19 @@ LuhProviderReportResult(
         StringCchCopyW(StatusText, StatusChars, R.StatusText);
     SecureZeroMemory(&R, sizeof(R));
     return Ok;
+}
+
+/* The user picked another tile: the provider thread switches and posts the new page. */
+BOOL
+LuhProviderSelectTile(
+    _In_ DWORD Index)
+{
+    LUH_REQUEST R;
+
+    ZeroMemory(&R, sizeof(R));
+    R.Type = LuhReqSelectTile;
+    R.Field = Index;
+    return ProviderCall(&R) && SUCCEEDED(R.Hr);
 }
 
 VOID

@@ -72,6 +72,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(winlogon);
 #define WLHOST_EVENT_SHUTDOWN       3   /* power flyout while locked or logged off outside a SAS */
 #define WLHOST_EVENT_RESTART        4
 #define WLHOST_EVENT_MUST_CHANGE    5   /* the unlock credentials must change their password first */
+#define WLHOST_EVENT_SLEEP          6   /* power flyout Sleep while locked or logged off outside a SAS */
 
 typedef BOOL (WINAPI * PFWLXNEGOTIATE)  (DWORD, DWORD *);
 typedef BOOL (WINAPI * PFWLXINITIALIZE) (LPWSTR, HANDLE, PVOID, PVOID, PVOID *);
@@ -267,7 +268,7 @@ typedef struct _WLSESSION
     WLX_MPR_NOTIFY_INFO MprNotifyInfo;
     PWLX_PROFILE_V2_0 Profile;
 
-    /* Experimental LogonUI-mode selector (Winlogon\UseLogonUI), read once at start */
+    /* Always TRUE: the LogonUI host is the logon UI; the GINA paths go away next */
     BOOL UseLogonUI;
     BOOL HostAutoSas;           /* the pending SAS came from hostlogon.c, not from the user */
 } WLSESSION, *PWLSESSION;
@@ -372,10 +373,16 @@ VOID
 WluiLaunchUnregister(
     _In_ PWLUI_LAUNCH_STATE State);
 
-BOOL
+DWORD
 WluiLaunchPostCommand(
     _In_ PWLUI_LAUNCH_STATE State,
     _In_ const struct _WLUI_COMMAND *Command);
+
+BOOL
+WluiLaunchWaitShown(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ DWORD Sequence,
+    _In_ DWORD TimeoutMs);
 
 BOOL
 WluiLaunchWaitReady(
@@ -442,10 +449,16 @@ WlHostWaitReady(
     _In_ PWLHOST_LAUNCH Launch,
     _In_ DWORD TimeoutMs);
 
-BOOL
+DWORD
 WlHostPost(
     _In_ PWLHOST_LAUNCH Launch,
     _In_ const struct _WLUI_COMMAND *Command);
+
+BOOL
+WlHostWaitShown(
+    _In_ PWLHOST_LAUNCH Launch,
+    _In_ DWORD Sequence,
+    _In_ DWORD TimeoutMs);
 
 HANDLE
 WlHostEndedEvent(
@@ -478,8 +491,16 @@ DWORD
 WlHostLoggedOutSas(
     _In_ PWLSESSION Session);
 
+DWORD
+WlHostLoggedOnSas(
+    _In_ PWLSESSION Session);
+
 VOID
 WlHostLock(
+    _In_ PWLSESSION Session);
+
+VOID
+WlHostLockedSas(
     _In_ PWLSESSION Session);
 
 VOID
@@ -498,6 +519,10 @@ BOOL
 WlHostScreenSaverSecure(
     _In_ PWLSESSION Session);
 
+BOOL
+WlHostIsLockOk(
+    _In_ PWLSESSION Session);
+
 VOID
 WlHostDisplaySasNotice(
     _In_ PWLSESSION Session);
@@ -505,6 +530,29 @@ WlHostDisplaySasNotice(
 VOID
 WlHostStatus(
     _In_ PCWSTR Text);
+
+/* transition.c */
+typedef struct _WL_COVER *PWL_COVER;
+
+PWL_COVER
+WlSwitchDesktopCovered(
+    _In_ HDESK From,
+    _In_ HDESK To);
+
+VOID
+WlCoverRelease(
+    _In_opt_ PWL_COVER Cover);
+
+UINT
+WlHostStatusText(
+    _In_ UINT ResourceId);
+
+VOID
+WlHostWaitStatusShown(VOID);
+
+BOOL
+WlHostShowUnlockWelcome(
+    _In_ PWLSESSION Session);
 
 VOID
 WlHostThemeWait(VOID);
