@@ -437,24 +437,30 @@ HeadingForType(
     return IDS_HDR_UNKNOWN;
 }
 
-/* The object class picks which name a shared element id prints under. An application object's
- * class is the low 20 bits of its Type; settings and device objects carry only library elements. */
+/* The object class picks which name a shared element id prints under. Match the whole application
+ * Type, like the heading table, so the image-type nibble is not ignored: 0x10200006 (startup) and
+ * 0x10300006 (ntldr) are different classes. A class with no application-specific shared elements
+ * (ntldr, boot sector, settings, device, unknown) falls to S_ANY, which carries library elements. */
 static
 BCD_SCOPE
 ScopeForObjectType(
     _In_ ULONG Type)
 {
-    if ((Type & 0xF0000000) != 0x10000000)
-        return S_ANY;
-
-    switch (Type & 0x000FFFFF)
+    switch (Type)
     {
-        case 0x00002: return S_BOOTMGR;
-        case 0x00003: return S_OSLOADER;
-        case 0x00004: return S_RESUME;
-        case 0x00005: return S_MEMTEST;
-        case 0x00006: return S_STARTUP;
-        default:      return S_ANY;
+        case 0x10100001:    /* {fwbootmgr} */
+        case 0x10100002:    /* {bootmgr} */
+            return S_BOOTMGR;
+        case 0x10200003:    /* OS loader */
+            return S_OSLOADER;
+        case 0x10200004:    /* resume */
+            return S_RESUME;
+        case 0x10200005:    /* memory diagnostic */
+            return S_MEMTEST;
+        case 0x10200006:    /* Windows setup / startup */
+            return S_STARTUP;
+        default:
+            return S_ANY;
     }
 }
 
