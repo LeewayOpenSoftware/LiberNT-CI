@@ -694,7 +694,8 @@ WlHlHasLegalNotice(VOID)
 
 /* ---- automatic sign-in (AutoAdminLogon), as msgina GetRegistrySettings + LogonUiSignIn ---- */
 
-static BOOL g_AutoLogonTried;           /* once per boot, unless ForceAutoLogon */
+static BOOL g_AutoLogonTried;           /* an automatic sign-in was considered this boot */
+static BOOL g_AutoLogonAgain;           /* ForceAutoLogon: the next logged-off state may sign in again */
 
 /* AutoAdminLogon and its companions are REG_SZ numbers on Windows; a REG_DWORD is accepted too. */
 static DWORD
@@ -788,13 +789,13 @@ WlHlDisableAutoLogon(
 static BOOL
 WlHlAutoLogonWanted(VOID)
 {
-    if (g_AutoLogonTried && WlHlWinlogonNumber(L"ForceAutoLogon", 0) == 0)
+    if (g_AutoLogonTried && !g_AutoLogonAgain)
         return FALSE;
     return WlHlWinlogonNumber(L"AutoAdminLogon", 0) != 0 && !WlHlHasLegalNotice();
 }
 
 /* Signs in DefaultUserName once; the result goes to WlHostLoggedOutSas like a host submit. Never on unlock. */
-static VOID
+static BOOL
 WlHlTryAutoLogon(VOID)
 {
     CREDSER_LOGON Logon;
@@ -806,22 +807,23 @@ WlHlTryAutoLogon(VOID)
     NTSTATUS Status, SubStatus = STATUS_SUCCESS;
 
     if (!WlHlAutoLogonWanted())
-        return;
+        return FALSE;
     g_AutoLogonTried = TRUE;
+    g_AutoLogonAgain = FALSE;
     if (WlHlWinlogonNumber(L"IgnoreShiftOverride", 0) == 0 && (GetAsyncKeyState(VK_SHIFT) & 0x8000))
     {
         ERR("WL: automatic sign-in skipped: Shift is held\n");
-        return;
+        return FALSE;
     }
     Left = WlHlWinlogonNumber(L"AutoLogonCount", MAXDWORD);
     if (Left == 0)
     {
         WlHlDisableAutoLogon(TRUE);
-        return;
+        return FALSE;
     }
     WlHlWinlogonString(L"DefaultUserName", User, ARRAYSIZE(User));
     if (User[0] == UNICODE_NULL)
-        return;
+        return FALSE;
     WlHlWinlogonString(L"DefaultDomainName", Domain, ARRAYSIZE(Domain));
     Chars = ARRAYSIZE(Domain);
     if (Domain[0] == UNICODE_NULL && !GetComputerNameW(Domain, &Chars))
@@ -851,6 +853,7 @@ WlHlTryAutoLogon(VOID)
             RegSetValueExW(Key, L"AutoLogonCount", 0, REG_DWORD, (const BYTE *)&Left, sizeof(Left));
             RegCloseKey(Key);
         }
+        g_AutoLogonAgain = WlHlWinlogonNumber(L"ForceAutoLogon", 0) != 0;
         WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, 0);
     }
     else
@@ -860,6 +863,7 @@ WlHlTryAutoLogon(VOID)
     }
     SecureZeroMemory(Password, sizeof(Password));
     SecureZeroMemory(&Logon, sizeof(Logon));
+    return NT_SUCCESS(Status);
 }
 
 /* Flags for RequestCredentials that describe policy to the host; winlogon stays the gate. */
@@ -1297,10 +1301,19 @@ WlHostLoggedOutSas(
     /* Only a SAS the user typed resets the levels; the self-posted one must not (R3). */
     if (UserSas)
         WlHostOnSas();
-    if (!WlHlEnsureHost(WLHL_CPUS_LOGON, CadFlag, WLHL_READY_MS))
-        return WLX_SAS_ACTION_NONE;
+
+    /* A self-posted SAS may be an automatic sign-in; with CAD required only a real one raises the page. */
     WlHlSetAccepting(TRUE);
-    WlHlTryAutoLogon();
+    if (!UserSas && !WlHlTryAutoLogon() && !WlHlDisableCad())
+    {
+        WlHlSetAccepting(FALSE);
+        return WLX_SAS_ACTION_NONE;
+    }
+    if (!WlHlEnsureHost(WLHL_CPUS_LOGON, CadFlag, WLHL_READY_MS))
+    {
+        WlHlSetAccepting(FALSE);
+        return WLX_SAS_ACTION_NONE;
+    }
 
     for (;;)
     {
