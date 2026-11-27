@@ -1379,7 +1379,6 @@ public:
             HeapFree(GetProcessHeap(), 0, Request);
             SetWindowTextW(ConfirmEdit, L"");
             Fail(IDS_LOGONUI_MISMATCH, NULL, NewEdit);
-            SetWindowTextW(NewEdit, L"");
             return;
         }
         SecureZeroMemory(Confirm, sizeof(Confirm));
