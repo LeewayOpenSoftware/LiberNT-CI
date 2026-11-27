@@ -31,7 +31,11 @@
 #include "wingdi.h"
 #include "winuser.h"
 #include "winreg.h"
+#ifdef _MSC_VER
+#include <wine/winternl.h>
+#else
 #include "winternl.h"
+#endif
 
 #include "wine/test.h"
 
