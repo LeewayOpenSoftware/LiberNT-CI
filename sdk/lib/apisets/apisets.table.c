@@ -28,10 +28,14 @@ const ROS_APISET g_Apisets[] = {
     { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-identity-l1-2-0"), RTL_CONSTANT_STRING(L"kernel32.dll"), APISET_WIN10 }, // kernel.appcore.dll
     { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-internal-l1-1-0"), RTL_CONSTANT_STRING(L"kernel32.dll"), APISET_WIN81 | APISET_WIN10 }, // kernel.appcore.dll
     { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-internal-l1-1-7"), RTL_CONSTANT_STRING(L"kernel32.dll"), APISET_WIN10 }, // kernel.appcore.dll
-    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-0"), RTL_CONSTANT_STRING(L"kernel32.dll"), APISET_WIN8 | APISET_WIN81 | APISET_WIN10 },
-    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-1"), RTL_CONSTANT_STRING(L"kernel32.dll"), APISET_WIN81 | APISET_WIN10 }, // kernel.appcore.dll
-    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-2"), RTL_CONSTANT_STRING(L"kernel32.dll"), APISET_WIN10 }, // kernel.appcore.dll
-    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-3"), RTL_CONSTANT_STRING(L"kernel32.dll"), APISET_WIN10 }, // kernel.appcore.dll
+    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-0"), RTL_CONSTANT_STRING(L"kernel.appcore.dll"), APISET_WIN8 | APISET_WIN81 | APISET_WIN10 }, // kernel32.dll
+    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-1"), RTL_CONSTANT_STRING(L"kernel.appcore.dll"), APISET_WIN81 | APISET_WIN10 },
+    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-2"), RTL_CONSTANT_STRING(L"kernel.appcore.dll"), APISET_WIN10 },
+    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-3"), RTL_CONSTANT_STRING(L"kernel.appcore.dll"), APISET_WIN10 },
+    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-4"), RTL_CONSTANT_STRING(L"kernel.appcore.dll"), APISET_WIN11 },
+    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-5"), RTL_CONSTANT_STRING(L"kernel.appcore.dll"), APISET_WIN11 },
+    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-6"), RTL_CONSTANT_STRING(L"kernel.appcore.dll"), APISET_WIN11 },
+    { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-runtime-l1-1-7"), RTL_CONSTANT_STRING(L"kernel.appcore.dll"), APISET_WIN11 },
     { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-state-l1-1-0"), RTL_CONSTANT_STRING(L"kernel32.dll"), APISET_WIN8 | APISET_WIN81 | APISET_WIN10 },
     { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-state-l1-1-1"), RTL_CONSTANT_STRING(L"kernel32.dll"), APISET_WIN81 | APISET_WIN10 }, // kernel.appcore.dll
     { RTL_CONSTANT_STRING(L"api-ms-win-appmodel-state-l1-1-2"), RTL_CONSTANT_STRING(L"kernel32.dll"), APISET_WIN10 }, // kernel.appcore.dll

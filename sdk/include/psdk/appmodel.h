@@ -40,7 +40,38 @@ typedef enum AppPolicyWindowingModel
 typedef enum AppPolicyMediaFoundationCodecLoading
 {
     AppPolicyMediaFoundationCodecLoading_All = 0,
+    AppPolicyMediaFoundationCodecLoading_InboxOnly = 1,
 } AppPolicyMediaFoundationCodecLoading;
+
+typedef enum AppPolicyLifecycleManagement
+{
+    AppPolicyLifecycleManagement_Unmanaged = 0,
+    AppPolicyLifecycleManagement_Managed = 1,
+} AppPolicyLifecycleManagement;
+
+typedef enum AppPolicyClrCompat
+{
+    AppPolicyClrCompat_Other = 0,
+    AppPolicyClrCompat_ClassicDesktop = 1,
+    AppPolicyClrCompat_Universal = 2,
+    AppPolicyClrCompat_PackagedDesktop = 3,
+} AppPolicyClrCompat;
+
+typedef enum AppPolicyCreateFileAccess
+{
+    AppPolicyCreateFileAccess_Full = 0,
+    AppPolicyCreateFileAccess_Limited = 1,
+} AppPolicyCreateFileAccess;
+
+typedef enum PackagePathType
+{
+    PackagePathType_Install = 0,
+    PackagePathType_Mutable = 1,
+    PackagePathType_Effective = 2,
+    PackagePathType_MachineExternal = 3,
+    PackagePathType_UserExternal = 4,
+    PackagePathType_EffectiveExternal = 5,
+} PackagePathType;
 
 typedef struct PACKAGE_VERSION
 {
@@ -67,6 +98,79 @@ typedef struct PACKAGE_ID
     PWSTR resourceId;
     PWSTR publisherId;
 } PACKAGE_ID;
+
+typedef enum PackageOrigin
+{
+    PackageOrigin_Unknown = 0,
+    PackageOrigin_Unsigned = 1,
+    PackageOrigin_Inbox = 2,
+    PackageOrigin_Store = 3,
+    PackageOrigin_DeveloperUnsigned = 4,
+    PackageOrigin_DeveloperSigned = 5,
+    PackageOrigin_LineOfBusiness = 6,
+} PackageOrigin;
+
+typedef struct _PACKAGE_INFO_REFERENCE
+{
+    PVOID reserved;
+} *PACKAGE_INFO_REFERENCE;
+
+typedef struct PACKAGE_INFO
+{
+    UINT32 reserved;
+    UINT32 flags;
+    PWSTR path;
+    PWSTR packageFullName;
+    PWSTR packageFamilyName;
+    PACKAGE_ID packageId;
+} PACKAGE_INFO;
+
+typedef enum CreatePackageDependencyOptions
+{
+    CreatePackageDependencyOptions_None = 0,
+    CreatePackageDependencyOptions_DoNotVerifyDependencyResolution = 0x00000001,
+    CreatePackageDependencyOptions_ScopeIsSystem = 0x00000002,
+} CreatePackageDependencyOptions;
+
+typedef enum PackageDependencyLifetimeKind
+{
+    PackageDependencyLifetimeKind_Process = 0,
+    PackageDependencyLifetimeKind_FilePath = 1,
+    PackageDependencyLifetimeKind_RegistryKey = 2,
+} PackageDependencyLifetimeKind;
+
+typedef enum AddPackageDependencyOptions
+{
+    AddPackageDependencyOptions_None = 0,
+    AddPackageDependencyOptions_PrependIfRankCollision = 0x00000001,
+} AddPackageDependencyOptions;
+
+typedef enum AddPackageDependencyOptions2
+{
+    AddPackageDependencyOptions2_None = 0,
+    AddPackageDependencyOptions2_PrependIfRankCollision = 0x00000001,
+    AddPackageDependencyOptions2_SpecifiedPackageFamilyOnly = 0x00000002,
+} AddPackageDependencyOptions2;
+
+typedef enum PackageDependencyProcessorArchitectures
+{
+    PackageDependencyProcessorArchitectures_None = 0,
+    PackageDependencyProcessorArchitectures_Neutral = 0x00000001,
+    PackageDependencyProcessorArchitectures_X86 = 0x00000002,
+    PackageDependencyProcessorArchitectures_X64 = 0x00000004,
+    PackageDependencyProcessorArchitectures_Arm = 0x00000008,
+    PackageDependencyProcessorArchitectures_Arm64 = 0x00000010,
+    PackageDependencyProcessorArchitectures_X86A64 = 0x00000020,
+} PackageDependencyProcessorArchitectures;
+
+DECLARE_HANDLE(PACKAGEDEPENDENCY_CONTEXT);
+
+typedef struct FindPackageDependencyCriteria
+{
+    PSID User;
+    BOOL ScopeIsSystem;
+    PCWSTR PackageFamilyName;
+} FindPackageDependencyCriteria;
 
 #define PACKAGE_PROPERTY_FRAMEWORK          0x00000001
 #define PACKAGE_PROPERTY_RESOURCE           0x00000002
