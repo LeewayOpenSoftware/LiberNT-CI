@@ -34,6 +34,7 @@ Use ""bcdedit /?"" for help.\n"
     IDS_ERR_NOSTORE "The requested system device cannot be found.\n"
     IDS_OK "The operation completed successfully.\n"
     IDS_ERR_SETFAIL "The store entry or element could not be set.\n"
+    IDS_ERR_BADID "The specified identifier is not valid.\n"
 
     IDS_HDR_FWBOOTMGR      "Firmware Boot Manager"
     IDS_HDR_BOOTMGR        "Windows Boot Manager"

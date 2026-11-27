@@ -34,6 +34,7 @@ Use ""bcdedit /?"" para obtener ayuda.\n"
     IDS_ERR_NOSTORE "No se encuentra el dispositivo de sistema solicitado.\n"
     IDS_OK "La operacion se completo correctamente.\n"
     IDS_ERR_SETFAIL "No se pudo establecer la entrada o el elemento del almacen.\n"
+    IDS_ERR_BADID "El identificador especificado no es valido.\n"
 
     IDS_HDR_FWBOOTMGR      "Administrador de arranque de firmware"
     IDS_HDR_BOOTMGR        "Administrador de arranque de Windows"

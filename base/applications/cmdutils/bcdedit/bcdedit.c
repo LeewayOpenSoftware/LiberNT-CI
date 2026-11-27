@@ -510,6 +510,58 @@ IdForAlias(
     return Buffer;
 }
 
+static
+BOOL
+IsHexDigit(
+    _In_ WCHAR c)
+{
+    return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F');
+}
+
+/* The {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx} form, so a value with a backslash or an
+ * unresolved alias is not taken as a key path or a real id. */
+static
+BOOL
+IsValidGuid(
+    _In_ PCWSTR Id)
+{
+    SIZE_T i;
+
+    if (wcslen(Id) != 38 || Id[0] != L'{' || Id[37] != L'}')
+        return FALSE;
+    for (i = 1; i <= 36; i++)
+    {
+        if (i == 9 || i == 14 || i == 19 || i == 24)
+        {
+            if (Id[i] != L'-')
+                return FALSE;
+        }
+        else if (!IsHexDigit(Id[i]))
+        {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/* Decimal, or hex with a 0x prefix; no sign, like Windows bcdedit. */
+static
+BOOL
+ParseInteger(
+    _In_ PCWSTR String,
+    _Out_ PULONGLONG Value)
+{
+    WCHAR *End;
+    int Base = 10;
+
+    if (String[0] == L'-' || String[0] == L'+' || String[0] == 0)
+        return FALSE;
+    if (String[0] == L'0' && (String[1] == L'x' || String[1] == L'X'))
+        Base = 16;
+    *Value = _wcstoui64(String, &End, Base);
+    return (End != String && *End == 0);
+}
+
 /* Map an element name (timeout), a custom:xxxxxxxx, or a raw 8-hex type to its identifier. */
 static
 BOOL
@@ -531,8 +583,15 @@ TypeForName(
     }
     if (_wcsnicmp(Name, L"custom:", 7) == 0)
         Digits = Name + 7;
+    if (wcslen(Digits) != 8)
+        return FALSE;
+    for (i = 0; i < 8; i++)
+    {
+        if (!IsHexDigit(Digits[i]))
+            return FALSE;
+    }
     *Type = wcstoul(Digits, &End, 16);
-    return (End != Digits && *End == 0);
+    return TRUE;
 }
 
 static
@@ -649,6 +708,8 @@ SetValue(
             if (First >= Argc)
                 return FALSE;
             Guid = IdForAlias(Argv[First], Buffer, ARRAYSIZE(Buffer));
+            if (!IsValidGuid(Guid))
+                return FALSE;
             return WriteElement(Store, Id, Type, REG_SZ, Guid,
                                 (DWORD)((wcslen(Guid) + 1) * sizeof(WCHAR)));
         }
@@ -666,8 +727,10 @@ SetValue(
                 PCWSTR Guid = IdForAlias(Argv[i], Buffer, ARRAYSIZE(Buffer));
                 SIZE_T Chars = wcslen(Guid);
 
+                if (!IsValidGuid(Guid))
+                    return FALSE;
                 if (Off + Chars + 2 > ARRAYSIZE(Multi))
-                    break;
+                    return FALSE;
                 memcpy(Multi + Off, Guid, (Chars + 1) * sizeof(WCHAR));
                 Off += Chars + 1;
             }
@@ -679,13 +742,9 @@ SetValue(
         {
             BYTE Bytes[8];
             ULONGLONG Value;
-            WCHAR *End;
             int i;
 
-            if (First >= Argc)
-                return FALSE;
-            Value = _wcstoui64(Argv[First], &End, 0);
-            if (End == Argv[First] || *End != 0)
+            if (First >= Argc || !ParseInteger(Argv[First], &Value))
                 return FALSE;
             for (i = 0; i < 8; i++)
             {
@@ -731,6 +790,12 @@ EditElement(
         return 1;
     }
     Id = IdForAlias(IdArg, Buffer, ARRAYSIZE(Buffer));
+    if (!IsValidGuid(Id))
+    {
+        RegCloseKey(Store);
+        PrintResource(IDS_ERR_BADID);
+        return 1;
+    }
     Ok = SetValue(Store, Id, Type, Argc, Argv, First);
     RegCloseKey(Store);
 
@@ -762,6 +827,12 @@ DeleteValueCommand(
         return 1;
     }
     Id = IdForAlias(IdArg, Buffer, ARRAYSIZE(Buffer));
+    if (!IsValidGuid(Id))
+    {
+        RegCloseKey(Store);
+        PrintResource(IDS_ERR_BADID);
+        return 1;
+    }
     Ok = DeleteElement(Store, Id, Type);
     RegCloseKey(Store);
 
