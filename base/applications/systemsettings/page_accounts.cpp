@@ -13,6 +13,7 @@
 
 #define WINLOGON_KEY L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
 #define PERSONALIZATION_POLICY_KEY L"SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization"
+#define SYSTEM_POLICY_KEY L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System"
 
 static std::wstring
 CurrentUser()
@@ -190,6 +191,53 @@ SignInScreenToggle(PageBuilder &page, UINT title, UINT detail, LPCWSTR icon, LPC
                 }).Enabled = IsAdmin();
 }
 
+/* A domain member; when that cannot be read, yes, as winlogon assumes. */
+static bool
+DomainJoined()
+{
+    LPWSTR name = NULL;
+    NETSETUP_JOIN_STATUS status = NetSetupUnknownStatus;
+
+    if (NetGetJoinInformation(NULL, &name, &status) != NERR_Success)
+        return true;
+    if (name)
+        NetApiBufferFree(name);
+    return status == NetSetupDomainName;
+}
+
+/*
+ * Ctrl+Alt+Del as winlogon decides it: the policy value, then the Winlogon value, then
+ * membership (a domain member asks for it). A policy value greys the switch, as Windows
+ * shows a setting an administrator manages by policy.
+ */
+static void
+CadToggle(PageBuilder &page)
+{
+    SettingsHost *host = page.Host;
+    DWORD policy = 0, local = 0, policySize = sizeof(policy), localSize = sizeof(local);
+    bool managed = false, required = false;
+
+    if (!page.Indexing)
+    {
+        managed = RegGetValueW(HKEY_LOCAL_MACHINE, SYSTEM_POLICY_KEY, L"DisableCAD", RRF_RT_REG_DWORD, NULL,
+                               &policy, &policySize) == ERROR_SUCCESS;
+        if (managed)
+            required = (policy == 0);
+        else if (RegGetValueW(HKEY_LOCAL_MACHINE, WINLOGON_KEY, L"DisableCAD", RRF_RT_REG_DWORD, NULL, &local,
+                              &localSize) == ERROR_SUCCESS)
+            required = (local == 0);
+        else
+            required = DomainJoined();
+    }
+
+    page.Toggle(Str(IDS_REQUIRE_CAD), Str(IDS_REQUIRE_CAD_DESC), L"keyboard_20_regular", required,
+                [host](int on)
+                {
+                    if (!WriteDword(HKEY_LOCAL_MACHINE, WINLOGON_KEY, L"DisableCAD", on ? 0 : 1))
+                        ShowError(host->Window(), ERROR_ACCESS_DENIED);
+                }).Enabled = IsAdmin() && !managed;
+}
+
 static std::wstring
 WellKnownGroup(WELL_KNOWN_SID_TYPE type)
 {
@@ -339,8 +387,7 @@ BuildSignIn(PageBuilder &page)
     page.Group(Str(IDS_SIGNIN_SCREEN));
     SignInScreenToggle(page, IDS_SHOW_LOCK_SCREEN, IDS_SHOW_LOCK_SCREEN_DESC, L"lock_closed_20_regular",
                        PERSONALIZATION_POLICY_KEY, L"NoLockScreen", 0, 0);
-    SignInScreenToggle(page, IDS_REQUIRE_CAD, IDS_REQUIRE_CAD_DESC, L"keyboard_20_regular", WINLOGON_KEY,
-                       L"DisableCAD", 1, 0);
+    CadToggle(page);
     SignInScreenToggle(page, IDS_SHOW_LAST_USER, IDS_SHOW_LAST_USER_DESC, L"person_20_regular", WINLOGON_KEY,
                        L"DontDisplayLastUserName", 0, 0);
     SignInScreenToggle(page, IDS_SIGNIN_POWER, IDS_SIGNIN_POWER_DESC, L"power_20_regular", WINLOGON_KEY,
