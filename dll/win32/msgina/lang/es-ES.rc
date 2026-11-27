@@ -35,7 +35,7 @@ BEGIN
     IDS_LOGONUI_USERNAME "Nombre de usuario"
     IDS_LOGONUI_PASSWORD "Contraseña"
     IDS_LOGONUI_OTHER_USER "Otro usuario"
-    IDS_LOGONUI_WELCOME "Bienvenido"
+    IDS_LOGONUI_WELCOME "Te damos la bienvenida"
     IDS_LOGONUI_CAPSLOCK "Bloq Mayús está activado"
     IDS_LOGONUI_WRONG_PASSWORD "El nombre de usuario o la contraseña no son correctos. Inténtelo de nuevo."
     IDS_LOGONUI_DISABLED "Esta cuenta está deshabilitada."
