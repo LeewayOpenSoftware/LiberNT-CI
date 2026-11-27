@@ -289,12 +289,36 @@ AddUser(
     Array->Users[Array->Count++] = User;
 }
 
+/* SpecialAccounts\UserList: a DWORD 0 under the account name keeps it off the sign-in screen, as on Windows. */
+static BOOL
+IsHiddenAccount(
+    _In_ PCWSTR Name)
+{
+    DWORD Value = 1, Size = sizeof(Value);
+
+    return RegGetValueW(HKEY_LOCAL_MACHINE,
+                        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\SpecialAccounts\\UserList",
+                        Name, RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS && Value == 0;
+}
+
+static BOOL
+DontDisplayLastUserName(VOID)
+{
+    DWORD Value = 0, Size = sizeof(Value);
+
+    return RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                        L"DontDisplayLastUserName", RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS &&
+           Value != 0;
+}
+
 /*
- * The accounts the msgina page lists: every enabled normal local account (msgina LoadUsers).
- * Only, when given (the locked user on unlock), keeps just that account.
+ * Logon: every enabled normal local account (msgina LoadUsers) not hidden by
+ * SpecialAccounts\UserList; none at all under DontDisplayLastUserName, so only the empty
+ * tile is offered. Unlock: only the locked account Only names; without a name, none.
  */
 HRESULT
 LuhUsersCreate(
+    _In_ BOOL Unlock,
     _In_opt_ PCWSTR Only,
     _Outptr_ ICredentialProviderUserArray **Out)
 {
@@ -320,6 +344,13 @@ LuhUsersCreate(
         return E_OUTOFMEMORY;
     Array->ICredentialProviderUserArray_iface.lpVtbl = &LuhUserArrayVtbl;
     Array->Ref = 1;
+    if ((Unlock && OnlyName == NULL) || (!Unlock && DontDisplayLastUserName()))
+    {
+        TRACE("no users listed (unlock %d)
+", Unlock);
+        *Out = &Array->ICredentialProviderUserArray_iface;
+        return S_OK;
+    }
 
     do
     {
@@ -333,7 +364,7 @@ LuhUsersCreate(
         {
             if (Info[i].usri1_flags & UF_ACCOUNTDISABLE)
                 continue;
-            if (OnlyName != NULL && _wcsicmp(Info[i].usri1_name, OnlyName))
+            if (Unlock ? _wcsicmp(Info[i].usri1_name, OnlyName) != 0 : IsHiddenAccount(Info[i].usri1_name))
                 continue;
             AddUser(Array, Computer, Info[i].usri1_name);
         }
