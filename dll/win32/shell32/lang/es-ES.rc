@@ -836,6 +836,8 @@ BEGIN
     IDS_SHUTDOWN_REBOOT "Reiniciar"
     IDS_SHUTDOWN_SLEEP "Suspender"
     IDS_SHUTDOWN_HIBERNATE "Hibernar"
+    IDS_LOGOFF_TITLE "Cerrar sesión de Orosi"
+    IDS_LOGOFF_PROMPT "¿Está seguro de que desea cerrar la sesión?"
 
     /* Format Dialog Strings */
     IDS_FORMAT_TITLE "Formatear Disco Local"
