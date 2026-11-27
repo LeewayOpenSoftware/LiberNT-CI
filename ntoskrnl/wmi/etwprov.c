@@ -73,6 +73,9 @@ typedef struct _ETWP_ENABLE_FILTERS
     /* the captured filter data follows the descriptors in this allocation */
 } ETWP_ENABLE_FILTERS, *PETWP_ENABLE_FILTERS;
 
+static PETWP_ENABLE_FILTERS EtwpReferenceEnableFilters(IN PETWP_ENABLE_FILTERS Filters);
+static VOID EtwpReleaseEnableFilters(_In_opt_ PETWP_ENABLE_FILTERS Filters);
+
 typedef struct _ETWP_SESSION_ENABLE
 {
     ULONG LoggerId;
@@ -349,7 +352,7 @@ EtwpReferenceEnableFilters(IN PETWP_ENABLE_FILTERS Filters)
 
 static
 VOID
-EtwpReleaseEnableFilters(IN_opt_ PETWP_ENABLE_FILTERS Filters)
+EtwpReleaseEnableFilters(_In_opt_ PETWP_ENABLE_FILTERS Filters)
 {
     if (Filters && InterlockedDecrement(&Filters->RefCount) == 0)
         ExFreePoolWithTag(Filters, ETWP_FILTERS_TAG);
