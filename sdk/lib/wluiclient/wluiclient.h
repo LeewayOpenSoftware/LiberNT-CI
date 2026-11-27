@@ -58,6 +58,7 @@ DWORD NTAPI WluiClientRequestAction(_In_ PWLUI_CONNECTION Connection, _In_ WLUI_
 DWORD NTAPI WluiClientReportProviderFault(_In_ PWLUI_CONNECTION Connection, _In_ const GUID *ProviderClsid,
                                           _In_ DWORD Reason);
 DWORD NTAPI WluiClientExiting(_In_ PWLUI_CONNECTION Connection, _In_ WLUI_EXIT_REASON Reason);
+DWORD NTAPI WluiClientCommandShown(_In_ PWLUI_CONNECTION Connection, _In_ DWORD Sequence);
 
 #ifdef __cplusplus
 }

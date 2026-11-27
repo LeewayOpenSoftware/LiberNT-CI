@@ -14,9 +14,9 @@
 /* Role matrix: which operations each role may perform. Everything else is denied. */
 static const BOOL Allowed[3][WluiOpCount] =
 {
-    /* (unused)  */ { FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE },
-    /* Host      */ { TRUE,  TRUE,  TRUE,  TRUE,  TRUE,  TRUE,  TRUE  },
-    /* Recovery  */ { TRUE,  TRUE,  TRUE,  TRUE,  TRUE,  FALSE, TRUE  }
+    /* (unused)  */ { FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE },
+    /* Host      */ { TRUE,  TRUE,  TRUE,  TRUE,  TRUE,  TRUE,  TRUE,  TRUE  },
+    /* Recovery  */ { TRUE,  TRUE,  TRUE,  TRUE,  TRUE,  FALSE, TRUE,  FALSE }
 };
 
 VOID

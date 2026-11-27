@@ -1,0 +1,28 @@
+Lock-screen picture asset record
+================================
+
+Copyright (C) 2026 Leeway Open Software
+SPDX-License-Identifier: GPL-3.0-or-later
+
+The text of this notice is licensed under GPL-3.0-or-later. That license does
+not apply to the image file. The image remains subject to the rights and terms
+attached to its generation.
+
+Owner-supplied asset record
+---------------------------
+
+Supplied by the project owner on 2026-11-27 (owner order of 2026-11-27: the
+default LogonUI curtain picture). Shipped byte-identical to the supplied file:
+no resampling, re-encoding or metadata change. 1672 x 941 RGB PNG (16:9).
+Installed as %SystemRoot%\Web\Screen\Midnight Glass Waves.png.
+
+File: Midnight Glass Waves.png (default lock-screen picture)
+Source: Ondas de vidrio en azul medianoche.png
+SHA-256: fbc4edf6e8669b9e62f5d04c34e1187d774879be30bcfc0ba2e27af73a23b01c
+Size: 1527703 bytes
+Production: OpenAI-generated under Leeway Open Software direction. The file
+            carries the generator's embedded C2PA (Content Credentials)
+            manifest, kept as supplied.
+Director: Leeway Open Software
+Terms: maintained and distributed by Leeway Open Software, subject to
+       applicable rights and terms.

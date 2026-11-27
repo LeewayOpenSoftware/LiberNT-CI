@@ -7,6 +7,7 @@
 
 #include <apitest.h>
 #include <sddl.h>
+#include <lm.h>
 #include <strsafe.h>
 #include <wluiclient.h>
 #include <wluiauth.h>
@@ -417,6 +418,212 @@ Test_Providers(PCWSTR Exe, PCWSTR Endpoint, PSID Own, PCWSTR Trace)
     RegisterTestProvider(FALSE);
 }
 
+/* ---- tiles: the user array, the tile list, the curtain, the power button ------ */
+
+/* The accounts the host should list: the enabled normal local accounts, as the msgina page lists them. */
+static DWORD
+ExpectedUsers(void)
+{
+    PUSER_INFO_1 Info;
+    DWORD Read, Total, Resume = 0, i, Count = 0;
+    NET_API_STATUS Status;
+
+    do
+    {
+        Info = NULL;
+        Read = 0;
+        Status = NetUserEnum(NULL, 1, FILTER_NORMAL_ACCOUNT, (LPBYTE *)&Info, MAX_PREFERRED_LENGTH, &Read, &Total,
+                             &Resume);
+        if (Status != NERR_Success && Status != ERROR_MORE_DATA)
+            break;
+        for (i = 0; Info != NULL && i < Read; i++)
+        {
+            if (Info[i].usri1_flags & UF_ACCOUNTDISABLE)
+                continue;
+            Count++;
+        }
+        if (Info != NULL)
+            NetApiBufferFree(Info);
+    } while (Status == ERROR_MORE_DATA && Read);
+    return Count;
+}
+
+static void
+PostScenario(DWORD Scenario, DWORD Flags, PCWSTR User)
+{
+    WLUI_COMMAND Cmd;
+    ZeroMemory(&Cmd, sizeof(Cmd));
+    Cmd.Type = WluiCmdRequestCredentials;
+    Cmd.Scenario = Scenario;
+    Cmd.Flags = Flags;
+    if (User) StringCchCopyW(Cmd.User, ARRAYSIZE(Cmd.User), User);
+    ok(WluiStatePost(g_State, &Cmd, sizeof(Cmd)), "post RequestCredentials\n");
+}
+
+/* The host's power button control id (LUH_ID_POWER in ui.c); its text is localized. */
+#define LUH_TEST_ID_POWER 1902
+
+static HWND
+HostWindow(void)
+{
+    HWND Window = NULL;
+    DWORD Started = GetTickCount();
+    while (!Window && GetTickCount() - Started < 3000)
+    {
+        Window = FindWindowW(L"LiberNT_LogonUIHost", NULL);
+        if (!Window) Sleep(100);
+    }
+    return Window;
+}
+
+/* Starts a host, asks for Scenario's credentials, leaves it up for the checks; Dismiss ends it. */
+static HANDLE
+StartTilesRun(PCWSTR Exe, PCWSTR Endpoint, PSID Own, PCWSTR Trace, DWORD Scenario, DWORD Flags, PCWSTR User)
+{
+    HANDLE Process;
+
+    ResetRun();
+    DeleteFileW(Trace);
+    Process = LaunchHost(Exe, Endpoint, Own, Trace, L"/fallback");
+    ok(Process != NULL, "launch (tiles)\n");
+    if (Process == NULL)
+        return NULL;
+    ok(WaitForSingleObject(g_ReadyEvent, 5000) == WAIT_OBJECT_0, "no Ready (tiles)\n");
+    PostScenario(Scenario, WLUI_FLAG_FALLBACK | Flags, User);
+    Sleep(3000);
+    return Process;
+}
+
+static void
+EndTilesRun(HANDLE Process, PCSTR What)
+{
+    DWORD Code;
+
+    PostCmd(WluiCmdDismiss, 0, NULL, NULL);
+    Code = WaitExit(Process, 5000);
+    ok(Code == 0, "%s run exit %lu\n", What, Code);
+}
+
+static void
+Test_Tiles(PCWSTR Exe, PCWSTR Endpoint, PSID Own, PCWSTR Trace)
+{
+    DWORD Users = ExpectedUsers();
+    CHAR Needle[64];
+    WCHAR Me[UNLEN + 1];
+    DWORD MeChars = ARRAYSIZE(Me);
+    HANDLE Process;
+    HWND Window;
+    BOOL Listed = FALSE;
+
+    /* Logon: one tile per listed account plus Other user, and the power button. */
+    Process = StartTilesRun(Exe, Endpoint, Own, Trace, 1, 0, NULL);
+    if (Process)
+    {
+        StringCchPrintfA(Needle, ARRAYSIZE(Needle), "users %lu\r\n", Users);
+        ok(TraceHas(Trace, Needle), "logon: expected '%s' in the trace\n", "users N");
+        if (Users > 0)
+        {
+            StringCchPrintfA(Needle, ARRAYSIZE(Needle), "/%lu\r\n", Users + 1);
+            ok(TraceHas(Trace, "tiles ") && TraceHas(Trace, Needle), "logon: expected %lu tiles\n", Users + 1);
+        }
+        Window = HostWindow();
+        ok(Window != NULL && GetDlgItem(Window, LUH_TEST_ID_POWER) != NULL, "logon: no power button\n");
+        EndTilesRun(Process, "logon");
+    }
+
+    /* ShutdownWithoutLogon=0: no power button. */
+    Process = StartTilesRun(Exe, Endpoint, Own, Trace, 1, WLUI_FLAG_NO_POWER, NULL);
+    if (Process)
+    {
+        Window = HostWindow();
+        ok(Window != NULL, "no-power: host window not found\n");
+        ok(Window == NULL || GetDlgItem(Window, LUH_TEST_ID_POWER) == NULL, "no-power: power button shown\n");
+        EndTilesRun(Process, "no-power");
+    }
+
+    /* CAD off: the curtain comes first; the page waits under it until a key. */
+    Process = StartTilesRun(Exe, Endpoint, Own, Trace, 1, WLUI_FLAG_DISABLE_CAD, NULL);
+    if (Process)
+    {
+        ok(TraceHas(Trace, "curtain"), "CAD off: no curtain\n");
+        ok(!TraceHas(Trace, "page "), "CAD off: the page came up under the curtain\n");
+        Window = HostWindow();
+        if (Window)
+            PostMessageW(Window, WM_KEYDOWN, VK_SPACE, 0);
+        Sleep(1000);
+        ok(TraceHas(Trace, "curtain-lifted"), "CAD off: a key did not lift the curtain\n");
+        ok(TraceHas(Trace, "page "), "CAD off: no page after the curtain\n");
+        EndTilesRun(Process, "curtain");
+    }
+
+    /* CAD required: no curtain, the page at once. */
+    Process = StartTilesRun(Exe, Endpoint, Own, Trace, 1, 0, NULL);
+    if (Process)
+    {
+        ok(!TraceHas(Trace, "curtain"), "CAD on: a curtain was shown\n");
+        ok(TraceHas(Trace, "page "), "CAD on: no page\n");
+        EndTilesRun(Process, "cad");
+    }
+
+    /* Ctrl+Alt+Del notice: clock and text; neither a key nor a click lifts it, only the next RequestCredentials. */
+    ResetRun();
+    DeleteFileW(Trace);
+    Process = LaunchHost(Exe, Endpoint, Own, Trace, L"/fallback");
+    ok(Process != NULL, "launch (CAD notice)\n");
+    if (Process)
+    {
+        ok(WaitForSingleObject(g_ReadyEvent, 5000) == WAIT_OBJECT_0, "no Ready (CAD notice)\n");
+        PostCmd(WluiCmdDisplayStatus, WLUI_FLAG_CURTAIN, L"Press Ctrl+Alt+Delete to sign in.", NULL);
+        Sleep(1000);
+        ok(TraceHas(Trace, "cad-curtain"), "CAD notice: no curtain\n");
+        Window = HostWindow();
+        if (Window)
+        {
+            PostMessageW(Window, WM_KEYDOWN, VK_SPACE, 0);
+            PostMessageW(Window, WM_KEYDOWN, VK_RETURN, 0);
+            PostMessageW(Window, WM_LBUTTONDOWN, 0, 0);
+        }
+        Sleep(1000);
+        ok(!TraceHas(Trace, "curtain-lifted"), "CAD notice: a key or a click lifted it\n");
+        ok(!TraceHas(Trace, "page "), "CAD notice: a page came up without the SAS\n");
+        PostScenario(1, WLUI_FLAG_FALLBACK, NULL);
+        Sleep(3000);
+        ok(TraceHas(Trace, "page "), "CAD notice: no page after RequestCredentials\n");
+        EndTilesRun(Process, "CAD notice");
+    }
+
+    /* Unlock: only the named account; without a name, none. */
+    if (GetUserNameW(Me, &MeChars))
+    {
+        PUSER_INFO_1 Info = NULL;
+
+        /* Only an enabled local account (not SYSTEM) can be the one the host lists. */
+        Listed = NetUserGetInfo(NULL, Me, 1, (LPBYTE *)&Info) == NERR_Success && Info != NULL &&
+                 !(Info->usri1_flags & UF_ACCOUNTDISABLE);
+        if (Info)
+            NetApiBufferFree(Info);
+    }
+    if (!Listed)
+    {
+        skip("unlock: the test account is not a listed local account\n");
+    }
+    else
+    {
+        Process = StartTilesRun(Exe, Endpoint, Own, Trace, 2, 0, Me);
+        if (Process)
+        {
+            ok(TraceHas(Trace, "users 1\r\n"), "unlock: the locked account was not the only one listed\n");
+            EndTilesRun(Process, "unlock");
+        }
+    }
+    Process = StartTilesRun(Exe, Endpoint, Own, Trace, 2, 0, NULL);
+    if (Process)
+    {
+        ok(TraceHas(Trace, "users 0\r\n"), "unlock without a name: accounts were listed\n");
+        EndTilesRun(Process, "unlock-noname");
+    }
+}
+
 /* ---- tests ------------------------------------------------------------------ */
 
 START_TEST(Host)
@@ -533,6 +740,7 @@ START_TEST(Host)
     ok(g_WrongId == 0, "%ld call(s) with a wrong launch id\n", g_WrongId);
 
     Test_Providers(Exe, Endpoint, Own, Trace);
+    Test_Tiles(Exe, Endpoint, Own, Trace);
 
     RpcMgmtStopServerListening(NULL);
     RpcServerUnregisterIf(wlui_v1_0_s_ifspec, NULL, TRUE);

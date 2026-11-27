@@ -67,6 +67,7 @@ BEGIN
     IDS_TIMEOUTLONGFORMAT "%d Tage"
     IDS_PRESSCTRLALTDELETE "Press Ctrl+Alt+Delete to sign in"
     IDS_UNLOCKONLYSESSIONUSER "This computer is locked. Only the signed-in user can unlock it."
+    IDS_PRESSCTRLALTDELETEUNLOCK "Press Ctrl+Alt+Delete to unlock"
     IDS_LOGONUI_TERMINAL_LEVELS "The sign-in user interface failed repeatedly and cannot be started again. Restart the computer; if this keeps happening, contact your administrator."
     IDS_LOGONUI_TERMINAL_MISSING "The sign-in components are missing from this installation. Repair the installation offline, then restart the computer."
     IDS_LOGONUI_TERMINAL_POLICY "Sign-in is not available on this computer. Policy requires a credential that the sign-in user interface cannot offer right now. Contact your administrator."

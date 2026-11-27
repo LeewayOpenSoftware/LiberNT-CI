@@ -87,6 +87,17 @@ START_TEST(LaunchState)
     ok(!WluiStateWaitReady(S, 0), "ready before Ready\n");
     WluiStateSetReady(S);
     ok(WluiStateWaitReady(S, 0), "ready after Ready\n");
+
+    /* CommandShown: only sequences winlogon handed out count, and only forward. */
+    ok(!WluiStateSetShown(S, 1), "shown before any command\n");
+    ok(!WluiStateSetShown(S, 0), "shown 0\n");
+    ok(!WluiStateWaitShown(S, 1, 0), "wait shown before any command\n");
+    InterlockedExchange(&S->SequenceCounter, 3);
+    ok(!WluiStateSetShown(S, 4), "shown beyond the counter\n");
+    ok(WluiStateSetShown(S, 2), "shown 2\n");
+    ok(WluiStateWaitShown(S, 2, 0) && WluiStateWaitShown(S, 1, 0), "wait shown 2\n");
+    ok(!WluiStateWaitShown(S, 3, 0), "3 not shown yet\n");
+    ok(WluiStateSetShown(S, 1) && S->ShownSequence == 2, "an older sequence moved it back\n");
     {
         ULONGLONG Before = WluiStateLastHeartbeat(S);
         Sleep(20);
