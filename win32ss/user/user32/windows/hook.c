@@ -451,6 +451,33 @@ SetWindowsHookExW(
 }
 
 static
+HINSTANCE
+LoadUserApiHookModule(
+    PCWSTR pszName)
+{
+    WCHAR szPath[MAX_PATH];
+    PCWSTR pszFile = pszName;
+    UINT cchDir;
+
+    cchDir = GetSystemDirectoryW(szPath, ARRAYSIZE(szPath));
+    if (cchDir == 0 || cchDir >= ARRAYSIZE(szPath))
+        return NULL;
+    if (wcschr(pszName, L'\\') || wcschr(pszName, L'/'))
+    {
+        if (_wcsnicmp(pszName, szPath, cchDir) != 0 || pszName[cchDir] != L'\\')
+            return NULL;
+        pszFile = pszName + cchDir + 1;
+    }
+    if (*pszFile == UNICODE_NULL || wcschr(pszFile, L'\\') || wcschr(pszFile, L'/') || wcschr(pszFile, L':'))
+        return NULL;
+    if (cchDir + 1 + wcslen(pszFile) >= ARRAYSIZE(szPath))
+        return NULL;
+    szPath[cchDir] = L'\\';
+    wcscpy(szPath + cchDir + 1, pszFile);
+    return LoadLibraryW(szPath);
+}
+
+static
 BOOL
 ClientLoadLibrary(
     PUNICODE_STRING pstrLibName,
@@ -478,7 +505,10 @@ ClientLoadLibrary(
         ASSERT(pstrLibName->Buffer != NULL);
 
         /* Load it */
-        hLibrary = LoadLibrary(pstrLibName->Buffer);
+        if (bApiHook)
+            hLibrary = LoadUserApiHookModule(pstrLibName->Buffer);
+        else
+            hLibrary = LoadLibrary(pstrLibName->Buffer);
         if (hLibrary == 0)
         {
             return FALSE;

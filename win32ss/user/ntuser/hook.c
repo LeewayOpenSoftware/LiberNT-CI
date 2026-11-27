@@ -133,6 +133,15 @@ UserLoadApiHook(VOID)
     return IntLoadHookModule(WH_APIHOOK, 0, FALSE);
 }
 
+static BOOL
+IntUserApiHookAccessCheck(VOID)
+{
+    if (SeSinglePrivilegeCheck(RtlConvertLongToLuid(SE_TCB_PRIVILEGE), UserMode))
+        return TRUE;
+    EngSetLastError(ERROR_ACCESS_DENIED);
+    return FALSE;
+}
+
 BOOL
 FASTCALL
 UserRegisterUserApiHook(
@@ -1848,6 +1857,9 @@ NtUserRegisterUserApiHook(
     UNICODE_STRING strFuncNameSafe;
     NTSTATUS Status;
 
+    if (!IntUserApiHookAccessCheck())
+        return FALSE;
+
     /* Probe and capture parameters */
     Status = ProbeAndCaptureUnicodeString(&strDllNameSafe, UserMode, m_dllname1);
     if(!NT_SUCCESS(Status))
@@ -1886,6 +1898,9 @@ APIENTRY
 NtUserUnregisterUserApiHook(VOID)
 {
     BOOL ret;
+
+    if (!IntUserApiHookAccessCheck())
+        return FALSE;
 
     UserEnterExclusive();
     ret = UserUnregisterUserApiHook();
