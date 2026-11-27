@@ -263,6 +263,13 @@ MountMgrCreatePoint(IN PDEVICE_EXTENSION DeviceExtension,
 
     Point = (PMOUNTMGR_CREATE_POINT_INPUT)Irp->AssociatedIrp.SystemBuffer;
 
+    /* A mount point needs a name: an empty one would be stored as MountedDevices' default value, and an empty
+     * name in a later IOCTL_MOUNTMGR_DELETE_POINTS means every mount point (Windows refuses it here too) */
+    if (Point->SymbolicLinkNameLength == 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     MaxLength = MAX((Point->DeviceNameOffset + Point->DeviceNameLength),
                     (Point->SymbolicLinkNameLength + Point->SymbolicLinkNameOffset));
     if (MaxLength > Stack->Parameters.DeviceIoControl.InputBufferLength)
