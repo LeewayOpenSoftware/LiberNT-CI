@@ -244,6 +244,16 @@ wmain(
         if (Status == STATUS_UNRECOGNIZED_VOLUME)
             fputws(L"BCDBOOT: The system partition must use the FAT32 file system.\n", stderr);
         fputws(L"Failure when attempting to copy boot files.\n", stderr);
+        /* \??\X -> \\?\X; \Device\... -> \\?\GLOBALROOT\Device\... */
+        if (SUCCEEDED(StringCchPrintfW(Check, ARRAYSIZE(Check),
+                                       wcsncmp(SystemPartition, L"\\??\\", 4) == 0 ? L"\\\\?\\%sEFI\\LiberNT\\Boot\\BCD.bak"
+                                                                                  : L"\\\\?\\GLOBALROOT%sEFI\\LiberNT\\Boot\\BCD.bak",
+                                       wcsncmp(SystemPartition, L"\\??\\", 4) == 0 ? SystemPartition + 4 : SystemPartition)) &&
+            GetFileAttributesW(Check) != INVALID_FILE_ATTRIBUTES)
+        {
+            fputws(L"A copy of the earlier boot configuration is \\EFI\\LiberNT\\Boot\\BCD.bak on the system partition.\n",
+                   stderr);
+        }
         return RtlNtStatusToDosError(Status);
     }
 
