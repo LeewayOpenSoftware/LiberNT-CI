@@ -669,6 +669,7 @@
 #define IDD_FOLDER_CUSTOMIZE    38
 #define IDD_LINK_PROBLEM 39
 #define IDD_SHUTDOWN     40
+#define IDHELP           9
 
 /* Control IDs for IDD_FOLDER_CUSTOMIZE dialog */
 #define IDC_FOLDERCUST_COMBOBOX             14001
