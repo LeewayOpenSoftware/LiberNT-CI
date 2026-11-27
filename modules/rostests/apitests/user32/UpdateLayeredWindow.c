@@ -257,6 +257,68 @@ static void TestOwnedPill(void)
     Settle();
 }
 
+static BOOL Composited(void)
+{
+    HRESULT (WINAPI *pDwmIsCompositionEnabled)(BOOL *);
+    HMODULE dwmapi = LoadLibraryW(L"dwmapi.dll");
+    BOOL enabled = FALSE;
+
+    if (!dwmapi)
+        return FALSE;
+    pDwmIsCompositionEnabled = (void *)GetProcAddress(dwmapi, "DwmIsCompositionEnabled");
+    if (!pDwmIsCompositionEnabled || FAILED(pDwmIsCompositionEnabled(&enabled)))
+        enabled = FALSE;
+    FreeLibrary(dwmapi);
+    return enabled;
+}
+
+/* No source DC and no size: the content stays and only the blend changes, the way a layered window is faded. */
+static void TestAlphaOnly(void)
+{
+    BLENDFUNCTION half = { AC_SRC_OVER, 0, 128, AC_SRC_ALPHA };
+    HWND hwnd = CreateLayered();
+    HBITMAP hbm = NULL;
+    HDC hdcSrc;
+    COLORREF cr;
+    BOOL ret;
+
+    ok(hwnd != NULL, "CreateWindowExW failed, error %lu\n", GetLastError());
+    if (!hwnd)
+        return;
+
+    /* Before any content there is nothing to fade: accepted, nothing appears */
+    SetLastError(0xdeadbeef);
+    ret = UpdateLayeredWindow(hwnd, NULL, NULL, NULL, NULL, NULL, 0, &half, ULW_ALPHA);
+    ok(ret, "UpdateLayeredWindow (no content, no source) failed, error %lu\n", GetLastError());
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    Settle();
+    cr = ScreenPixel(72, 72);
+    ok(NearColor(cr, 255, 255, 255, 2), "no content: screen pixel is %#lx, expected the white backdrop\n", cr);
+
+    hdcSrc = CreateSource(64, 64, 255, 0, 0, 255, &hbm);
+    ok(hdcSrc != NULL, "could not create the source DIB\n");
+    if (hdcSrc)
+    {
+        ok(Ulw(hwnd, hdcSrc, 40, 40, 64, 64, 255), "UpdateLayeredWindow (content) failed, error %lu\n", GetLastError());
+        Settle();
+        cr = ScreenPixel(72, 72);
+        ok(NearColor(cr, 255, 0, 0, 2), "content: screen pixel is %#lx, expected red\n", cr);
+
+        SetLastError(0xdeadbeef);
+        ret = UpdateLayeredWindow(hwnd, NULL, NULL, NULL, NULL, NULL, 0, &half, ULW_ALPHA);
+        ok(ret, "UpdateLayeredWindow (alpha only) failed, error %lu\n", GetLastError());
+        Settle();
+        cr = ScreenPixel(72, 72);
+        if (Composited())
+            ok(NearColor(cr, 255, 127, 127, 6), "alpha only: screen pixel is %#lx, expected about (255,127,127)\n", cr);
+        else
+            skip("composition is off; an alpha-only update has no retained content to blend (pixel %#lx)\n", cr);
+    }
+    DestroySource(hdcSrc, hbm);
+    DestroyWindow(hwnd);
+    Settle();
+}
+
 START_TEST(UpdateLayeredWindow)
 {
     WNDCLASSW wc = { 0 };
@@ -282,6 +344,7 @@ START_TEST(UpdateLayeredWindow)
     TestShowThenUpdate();
     TestAlpha();
     TestOwnedPill();
+    TestAlphaOnly();
 
     DestroyWindow(s_Backdrop);
     PumpMessages();
