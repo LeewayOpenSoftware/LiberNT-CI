@@ -1220,7 +1220,7 @@ typedef enum _TOKEN_INFORMATION_CLASS {
   TokenChildProcessFlags,
   TokenIsLessPrivilegedAppContainer,
   TokenIsSandboxed,
-  TokenOriginatingProcessTrustLevel,
+  TokenIsAppSilo,
   MaxTokenInfoClass
 } TOKEN_INFORMATION_CLASS, *PTOKEN_INFORMATION_CLASS;
 

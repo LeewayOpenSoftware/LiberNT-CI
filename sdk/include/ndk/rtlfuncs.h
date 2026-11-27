@@ -1533,6 +1533,23 @@ RtlIsParentOfChildAppContainer(
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlSidHashInitialize(
+    _In_reads_(SidCount) PSID_AND_ATTRIBUTES SidAttr,
+    _In_ ULONG SidCount,
+    _Out_ PSID_AND_ATTRIBUTES_HASH SidAttrHash
+);
+
+NTSYSAPI
+PSID_AND_ATTRIBUTES
+NTAPI
+RtlSidHashLookup(
+    _In_ PSID_AND_ATTRIBUTES_HASH SidAttrHash,
+    _In_ PSID Sid
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlCheckTokenMembershipEx(
     _In_opt_ HANDLE TokenHandle,
     _In_ PSID SidToCheck,

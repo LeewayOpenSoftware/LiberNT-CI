@@ -2149,6 +2149,15 @@ NtDuplicateToken(
         return Status;
     }
 
+    if (TokenType == TokenImpersonation && QoSPresent &&
+        !VALID_IMPERSONATION_LEVEL(CapturedSecurityQualityOfService->ImpersonationLevel))
+    {
+        SepReleaseSecurityQualityOfService(CapturedSecurityQualityOfService,
+                                           PreviousMode,
+                                           FALSE);
+        return STATUS_BAD_IMPERSONATION_LEVEL;
+    }
+
     Status = ObReferenceObjectByHandle(ExistingTokenHandle,
                                        TOKEN_DUPLICATE,
                                        SeTokenObjectType,

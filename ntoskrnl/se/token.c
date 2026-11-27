@@ -423,10 +423,9 @@ SepImpersonateAnonymousToken(
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("SepImpersonateAnonymousToken(): Failed to impersonate, bail out...\n");
-        ObDereferenceObject(TokenToImpersonate);
-        return Status;
     }
 
+    ObDereferenceObject(TokenToImpersonate);
     return Status;
 }
 
