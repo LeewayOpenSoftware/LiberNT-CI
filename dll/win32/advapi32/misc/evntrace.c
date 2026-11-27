@@ -652,6 +652,18 @@ CloseTrace(IN TRACEHANDLE TraceHandle)
 
 ULONG
 WINAPI
+TraceSetInformation(IN TRACEHANDLE TraceHandle,
+                    IN TRACE_INFO_CLASS TraceInformationClass,
+                    IN PVOID TraceInformation OPTIONAL,
+                    IN ULONG InformationLength)
+{
+    /* No TRACE_INFO_CLASS maps to a working NtTraceControl path yet; fail
+       honestly instead of succeeding silently. */
+    return ERROR_NOT_SUPPORTED;
+}
+
+ULONG
+WINAPI
 EnableTraceEx2(IN TRACEHANDLE TraceHandle,
                IN LPCGUID ProviderId,
                IN ULONG ControlCode,
@@ -680,19 +692,58 @@ EnableTraceEx2(IN TRACEHANDLE TraceHandle,
     /* A session handle is its logger id; the enable is synchronous, so Timeout does not matter */
     {
         ETW_ENABLE_PARAMETERS Params;
+        PEVENT_FILTER_DESCRIPTOR Descs = NULL;
+        ULONG DescCount = 0;
+        ULONG MessageLength;
+        PUCHAR Message = NULL;
         ULONG ReturnSize;
         NTSTATUS Status;
 
         if (TraceHandle >> 16)
             return ERROR_INVALID_HANDLE;
+
+        if (EnableParameters)
+        {
+            DescCount = EnableParameters->EnableFilterDescCount;
+            if (DescCount > MAX_EVENT_FILTERS_COUNT)
+                return ERROR_INVALID_PARAMETER;
+            if (DescCount && !EnableParameters->EnableFilterDesc)
+                return ERROR_INVALID_PARAMETER;
+        }
+
         RtlZeroMemory(&Params, sizeof(Params));
         Params.ProviderId = *ProviderId;
         Params.LoggerId = (ULONG)TraceHandle;
         Params.ControlCode = (UCHAR)ControlCode;
         Params.Level = Level;
+        Params.Version = EnableParameters ? EnableParameters->Version : ENABLE_TRACE_PARAMETERS_VERSION;
         Params.MatchAnyKeyword = MatchAnyKeyword;
         Params.MatchAllKeyword = MatchAllKeyword;
-        Status = NtTraceControl(EtwEnableGuidCode, &Params, sizeof(Params), NULL, 0, &ReturnSize);
+        Params.EnableFilterDescCount = DescCount;
+        if (EnableParameters)
+        {
+            Params.EnableProperty = EnableParameters->EnableProperty;
+            Params.SourceId = EnableParameters->SourceId;
+        }
+
+        MessageLength = sizeof(Params) + DescCount * sizeof(EVENT_FILTER_DESCRIPTOR);
+        if (DescCount)
+        {
+            Message = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, MessageLength);
+            if (!Message)
+                return ERROR_NOT_ENOUGH_MEMORY;
+            RtlCopyMemory(Message, &Params, sizeof(Params));
+            Descs = (PEVENT_FILTER_DESCRIPTOR)(Message + sizeof(Params));
+            RtlCopyMemory(Descs, EnableParameters->EnableFilterDesc,
+                          DescCount * sizeof(EVENT_FILTER_DESCRIPTOR));
+        }
+
+        Status = NtTraceControl(EtwEnableGuidCode,
+                                Message ? (PVOID)Message : (PVOID)&Params,
+                                MessageLength,
+                                NULL, 0, &ReturnSize);
+        if (Message)
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Message);
         return RtlNtStatusToDosError(Status);
     }
 }
