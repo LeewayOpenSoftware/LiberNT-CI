@@ -31,9 +31,10 @@ WluiStateCreate(
     InitializeCriticalSection(&State->Lock);
     State->Queue = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ItemSize * WLUI_STATE_QUEUE_LENGTH);
     State->ReadyEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    State->ShownEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
     /* One extra count so MarkDead can always wake a waiter even with a full queue. */
     State->QueueSemaphore = CreateSemaphoreW(NULL, 0, WLUI_STATE_QUEUE_LENGTH + 1, NULL);
-    if (State->Queue == NULL || State->ReadyEvent == NULL || State->QueueSemaphore == NULL)
+    if (State->Queue == NULL || State->ReadyEvent == NULL || State->ShownEvent == NULL || State->QueueSemaphore == NULL)
     {
         WluiStateRelease(State);
         return NULL;
@@ -59,6 +60,7 @@ WluiStateRelease(
 
     DeleteCriticalSection(&State->Lock);
     if (State->ReadyEvent) CloseHandle(State->ReadyEvent);
+    if (State->ShownEvent) CloseHandle(State->ShownEvent);
     if (State->QueueSemaphore) CloseHandle(State->QueueSemaphore);
     if (State->Queue)
     {
@@ -79,6 +81,7 @@ WluiStateMarkDead(
     LeaveCriticalSection(&State->Lock);
     ReleaseSemaphore(State->QueueSemaphore, 1, NULL);
     SetEvent(State->ReadyEvent);
+    SetEvent(State->ShownEvent);
 }
 
 BOOL
@@ -173,6 +176,46 @@ WluiStateSetReady(
     State->LastHeartbeat = GetTickCount64();
     LeaveCriticalSection(&State->Lock);
     SetEvent(State->ReadyEvent);
+}
+
+BOOL
+NTAPI
+WluiStateSetShown(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ DWORD Sequence)
+{
+    if (Sequence == 0 || Sequence > (DWORD)InterlockedCompareExchange(&State->SequenceCounter, 0, 0))
+        return FALSE;
+    EnterCriticalSection(&State->Lock);
+    if (Sequence > State->ShownSequence)
+        State->ShownSequence = Sequence;
+    LeaveCriticalSection(&State->Lock);
+    SetEvent(State->ShownEvent);
+    return TRUE;
+}
+
+BOOL
+NTAPI
+WluiStateWaitShown(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ DWORD Sequence,
+    _In_ DWORD TimeoutMs)
+{
+    ULONGLONG End = GetTickCount64() + TimeoutMs;
+    BOOL Shown, Dead;
+
+    for (;;)
+    {
+        ULONGLONG Now = GetTickCount64();
+
+        EnterCriticalSection(&State->Lock);
+        Shown = State->ShownSequence >= Sequence;
+        Dead = State->Dead;
+        LeaveCriticalSection(&State->Lock);
+        if (Shown || Dead || Now >= End)
+            return Shown && !Dead;
+        WaitForSingleObject(State->ShownEvent, (DWORD)(End - Now));
+    }
 }
 
 BOOL

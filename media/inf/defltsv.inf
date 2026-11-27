@@ -113,7 +113,6 @@ SeUndockPrivilege = *S-1-5-32-544, *S-1-5-32-547
 ;   4: REG_DWORD
 ;   7: REG_MULTI_SZ
 
-MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\DisableCAD = 4, 0
 MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\DontDisplayLastUserName = 4, 0
 MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\LegalNoticeCaption = 1, ""
 MACHINE\Software\Microsoft\Windows\CurrentVersion\Policies\System\LegalNoticeText = 7, ""

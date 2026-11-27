@@ -18,6 +18,7 @@
 #define WLHL_READY_MS       2000
 #define WLHL_HOST_EXIT_MS   3000    /* the host leaves on its own after its fade; then it is stopped */
 #define WLHL_SWITCH_CAP_S   600     /* upper bound for DelayedDesktopSwitchTimeout */
+#define WLHL_SHOWN_MS       1500    /* how long a switch waits for the host to paint its screen */
 #define WLHL_LOCK_READY_MS  2000    /* default for HKLM Winlogon\LockReadyTimeoutMs (P2) */
 #define WLHL_CPUS_LOGON             1   /* CPUS_LOGON */
 #define WLHL_CPUS_UNLOCK            2   /* CPUS_UNLOCK_WORKSTATION */
@@ -62,6 +63,7 @@ static BOOL g_SubmitBusy;               /* a submit is between the gate and the 
 static DWORD g_ChangeFor;               /* scenario a forced password change resumes; 0 = no change page */
 static BOOL g_LsaBroken;                /* the last logged-out SAS could not reach the LSA */
 static HANDLE g_SwitchEvent;            /* ShellDesktopSwitchEvent of the logon in progress */
+static DWORD g_StatusSequence;          /* the last status command; a switch waits for its paint */
 static HANDLE g_ShellProcess;           /* first Userinit process of the logon in progress */
 static HWND g_TerminalDialog;           /* the N4 dialog, while it stands (owned by its own thread) */
 static HANDLE g_TerminalThread;         /* the thread that pumps that dialog */
@@ -366,7 +368,7 @@ WlHlLsaChangePassword(
 
 /* ---- commands and events to the SAS thread --------------------------------------- */
 
-static VOID
+static DWORD
 WlHlPost(
     _In_ WLUI_COMMAND_TYPE Type,
     _In_ DWORD Scenario,
@@ -377,6 +379,7 @@ WlHlPost(
     _In_opt_ PCWSTR Text)
 {
     WLUI_COMMAND Command;
+    DWORD Sequence = 0;
 
     ZeroMemory(&Command, sizeof(Command));
     Command.Type = Type;
@@ -390,9 +393,24 @@ WlHlPost(
     /* RPC threads post results while the SAS thread may be swapping hosts. */
     EnterCriticalSection(&g_LaunchLock);
     if (g_Launch != NULL)
-        WlHostPost(g_Launch, &Command);
+        Sequence = WlHostPost(g_Launch, &Command);
     LeaveCriticalSection(&g_LaunchLock);
     SecureZeroMemory(&Command, sizeof(Command));
+    return Sequence;
+}
+
+/* Waits until the host has painted the screen of command Sequence; bounded, never a hang. */
+static
+BOOL
+WlHlWaitShown(
+    _In_ DWORD Sequence)
+{
+    BOOL Shown = FALSE;
+
+    if (Sequence != 0 && g_Launch != NULL)
+        Shown = WlHostWaitShown(g_Launch, Sequence, WLHL_SHOWN_MS);
+    LogonStage(Shown ? "host-shown" : "host-shown-timeout");
+    return Shown;
 }
 
 static VOID
@@ -547,9 +565,9 @@ WlHlIsSessionAccount(
     PCWSTR SessionDomain;
     BOOL TypedLocal, SessionLocal;
 
-    if (g_Session == NULL || g_Session->MprNotifyInfo.pszUserName == NULL)
+    if (g_Session == NULL || g_Session->UserName == NULL)
         return FALSE;
-    RtlInitUnicodeString(&Want, g_Session->MprNotifyInfo.pszUserName);
+    RtlInitUnicodeString(&Want, g_Session->UserName);
     if (!RtlEqualUnicodeString(Account, &Want, TRUE))
         return FALSE;
 
@@ -560,7 +578,7 @@ WlHlIsSessionAccount(
     TypedLocal = Domain->Length == 0 ||
                  (Domain->Length == sizeof(WCHAR) && Domain->Buffer[0] == L'.') ||
                  (Here.Length != 0 && RtlEqualUnicodeString(Domain, &Here, TRUE));
-    SessionDomain = g_Session->MprNotifyInfo.pszDomain ? g_Session->MprNotifyInfo.pszDomain : L"";
+    SessionDomain = g_Session->Domain ? g_Session->Domain : L"";
     RtlInitUnicodeString(&Want, SessionDomain);
     SessionLocal = Want.Length == 0 || !wcscmp(SessionDomain, L".") ||
                    (Here.Length != 0 && RtlEqualUnicodeString(&Want, &Here, TRUE));
@@ -949,7 +967,7 @@ WlHlActionHandler(
     UNREFERENCED_PARAMETER(State);
     UNREFERENCED_PARAMETER(Role);
 
-    if (Action < WluiActionShutdown || Action > WluiActionEmergencyRestart)
+    if (Action < WluiActionShutdown || Action > WluiActionSleep)
         return ERROR_INVALID_PARAMETER;
 
     /* The Ctrl+Alt+Del options: only while that page is up, and only what its policy allowed. */
@@ -966,7 +984,8 @@ WlHlActionHandler(
             Denied = g_OptionsFlags & WLUI_FLAG_NO_CHANGE_PASSWORD;
         else if (Action == WluiActionTaskManager)
             Denied = g_OptionsFlags & WLUI_FLAG_NO_TASK_MANAGER;
-        else if (Action == WluiActionShutdown || Action == WluiActionRestart || Action == WluiActionEmergencyRestart)
+        else if (Action == WluiActionShutdown || Action == WluiActionRestart || Action == WluiActionEmergencyRestart ||
+                 Action == WluiActionSleep)
             Denied = g_OptionsFlags & WLUI_FLAG_NO_POWER;
         if (Denied)
         {
@@ -983,7 +1002,7 @@ WlHlActionHandler(
 
     if (Action == WluiActionCancel)
         return ERROR_SUCCESS;
-    if (Action != WluiActionShutdown && Action != WluiActionRestart)
+    if (Action != WluiActionShutdown && Action != WluiActionRestart && Action != WluiActionSleep)
         return ERROR_ACCESS_DENIED;     /* an options action with no options page up */
 
     /* Nobody is signed in on the notice, the sign-in page or the locked station: policy decides. */
@@ -1005,7 +1024,8 @@ WlHlActionHandler(
     }
     else
     {
-        WlHlPostEvent(Action == WluiActionShutdown ? WLHOST_EVENT_SHUTDOWN : WLHOST_EVENT_RESTART);
+        WlHlPostEvent(Action == WluiActionShutdown ? WLHOST_EVENT_SHUTDOWN :
+                      Action == WluiActionSleep ? WLHOST_EVENT_SLEEP : WLHOST_EVENT_RESTART);
     }
     LeaveCriticalSection(&g_SubmitLock);
     return ERROR_SUCCESS;
@@ -1013,14 +1033,45 @@ WlHlActionHandler(
 
 /* ---- the live host (SAS thread) ---------------------------------------------------- */
 
+/* Joined to a domain; when the machine cannot tell, it answers yes, so Ctrl+Alt+Del stays asked. */
+static BOOL
+WlHlDomainJoined(VOID)
+{
+    LSA_OBJECT_ATTRIBUTES Attributes;
+    LSA_HANDLE Policy;
+    PPOLICY_PRIMARY_DOMAIN_INFO Info = NULL;
+    BOOL Joined = TRUE;
+
+    ZeroMemory(&Attributes, sizeof(Attributes));
+    Attributes.Length = sizeof(Attributes);
+    if (!NT_SUCCESS(LsaOpenPolicy(NULL, &Attributes, POLICY_VIEW_LOCAL_INFORMATION, &Policy)))
+        return TRUE;
+    if (NT_SUCCESS(LsaQueryInformationPolicy(Policy, PolicyPrimaryDomainInformation, (PVOID *)&Info)) && Info)
+    {
+        Joined = (Info->Sid != NULL);
+        LsaFreeMemory(Info);
+    }
+    LsaClose(Policy);
+    return Joined;
+}
+
+/*
+ * Whether Ctrl+Alt+Del is optional, as Windows decides it: the policy value first, then the
+ * Winlogon value, else by membership: a workgroup PC does not ask for it, a domain member does.
+ */
 static BOOL
 WlHlDisableCad(VOID)
 {
     DWORD Value = 0, Size = sizeof(Value);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                     L"DisableCAD", RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS)
+        return Value != 0;
+    Size = sizeof(Value);
     if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"DisableCAD",
-                     RRF_RT_REG_DWORD, NULL, &Value, &Size) != ERROR_SUCCESS)
-        Value = 0;
-    return Value != 0;
+                     RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS)
+        return Value != 0;
+    return !WlHlDomainJoined();
 }
 
 /* P2: how long a lock or logoff waits for the host's first frame before switching anyway. */
@@ -1204,8 +1255,8 @@ WlHlChangePrefill(
     }
     else if (g_Session != NULL)
     {
-        Domain = g_Session->MprNotifyInfo.pszDomain;
-        User = g_Session->MprNotifyInfo.pszUserName;
+        Domain = g_Session->Domain;
+        User = g_Session->UserName;
     }
     if (User == NULL || User[0] == UNICODE_NULL)
         Prefill[0] = UNICODE_NULL;
@@ -1222,8 +1273,8 @@ WlHlUnlockPrefill(
     _Out_writes_(Chars) PWCHAR Prefill,
     _In_ ULONG Chars)
 {
-    PCWSTR Domain = g_Session ? g_Session->MprNotifyInfo.pszDomain : NULL;
-    PCWSTR User = g_Session ? g_Session->MprNotifyInfo.pszUserName : NULL;
+    PCWSTR Domain = g_Session ? g_Session->Domain : NULL;
+    PCWSTR User = g_Session ? g_Session->UserName : NULL;
 
     if (User == NULL || User[0] == UNICODE_NULL)
         Prefill[0] = UNICODE_NULL;
@@ -1470,6 +1521,11 @@ WlHostLoggedOutSas(
                 Result = WLX_SAS_ACTION_SHUTDOWN_REBOOT;
                 break;
             }
+            if (Action == WluiActionSleep)
+            {
+                Result = WLX_SAS_ACTION_SHUTDOWN_SLEEP;
+                break;
+            }
             continue;
         }
         if (!g_Submit.Pending)
@@ -1670,7 +1726,7 @@ WlHostLoggedOnSas(
     EnterCriticalSection(&g_LaunchLock);
     g_HostScenario = WLHL_SCENARIO_OPTIONS;
     LeaveCriticalSection(&g_LaunchLock);
-    WlHlPost(WluiCmdShowOptions, WLHL_SCENARIO_OPTIONS, Flags, 0, 0, Session->MprNotifyInfo.pszUserName, NULL);
+    WlHlPost(WluiCmdShowOptions, WLHL_SCENARIO_OPTIONS, Flags, 0, 0, Session->UserName, NULL);
     LogonStage("options-shown");
 
     for (;;)
@@ -1761,6 +1817,8 @@ WlHostLoggedOnSas(
             Result = WLX_SAS_ACTION_SHUTDOWN_POWER_OFF;
         else if (Action == WluiActionRestart)
             Result = WLX_SAS_ACTION_SHUTDOWN_REBOOT;
+        else if (Action == WluiActionSleep)
+            Result = WLX_SAS_ACTION_SHUTDOWN_SLEEP;
         else if (Action == WluiActionEmergencyRestart)
             WlHlEmergencyRestart();
         break;                          /* Cancel and anything else: back to the desktop */
@@ -1784,7 +1842,9 @@ static VOID
 WlHlRequestUnlock(
     _In_ DWORD Flags)
 {
-    if (!WlHlEnsureHost(WLHL_CPUS_UNLOCK, (WlHlPolicyFlags() & WLUI_FLAG_NO_POWER) | Flags, WlHlLockReadyMs()))
+    /* The station is locked: its user is signed in and could lose work if the power flyout is used. */
+    if (!WlHlEnsureHost(WLHL_CPUS_UNLOCK, (WlHlPolicyFlags() & WLUI_FLAG_NO_POWER) | WLUI_FLAG_USERS_SIGNED_IN | Flags,
+                        WlHlLockReadyMs()))
         ERR("WL: no logon UI for the locked station; it stays locked without a page\n");
 }
 
@@ -1811,7 +1871,9 @@ WlHostLock(
         ERR("WL: no logon UI for the locked notice; the station stays locked\n");
         return;
     }
-    WlHlPostResource(WluiCmdDisplayStatus, WLUI_FLAG_CURTAIN, IDS_PRESSCTRLALTDELETEUNLOCK);
+    /* The signed-in flag marks the lock curtain, which comes up from black as on Windows 11. */
+    WlHlPostResource(WluiCmdDisplayStatus, WLUI_FLAG_CURTAIN | WLUI_FLAG_USERS_SIGNED_IN,
+                     IDS_PRESSCTRLALTDELETEUNLOCK);
 }
 
 /* The SAS on the locked station: with CAD required, now the unlock page may come up. */
@@ -1843,7 +1905,8 @@ WlHostMustChange(
     EnterCriticalSection(&g_SubmitLock);
     g_ChangeFor = WLHL_CPUS_UNLOCK;
     LeaveCriticalSection(&g_SubmitLock);
-    WlHlEnsureHost(WLHL_CPUS_CHANGE_PASSWORD, WLUI_FLAG_FORCED_CHANGE | (WlHlPolicyFlags() & WLUI_FLAG_NO_POWER),
+    WlHlEnsureHost(WLHL_CPUS_CHANGE_PASSWORD, WLUI_FLAG_FORCED_CHANGE | WLUI_FLAG_USERS_SIGNED_IN |
+                   (WlHlPolicyFlags() & WLUI_FLAG_NO_POWER),
                    WlHlLockReadyMs());
 }
 
@@ -1935,6 +1998,30 @@ WlHostIsLockOk(
 
 /* ---- status and hand-offs used by HandleLogon, HandleLogoff and HandleShutdown ------- */
 
+/* Windows 11 wording (INVESTIGACION.md 2.3, 0b/0b+): the logon steps stay under "Welcome", the
+ * logoff steps read "Signing out". 0 keeps what the host shows. */
+UINT
+WlHostStatusText(
+    _In_ UINT ResourceId)
+{
+    switch (ResourceId)
+    {
+        case IDS_PREPARENETWORKCONNECTIONS:
+        case IDS_APPLYINGCOMPUTERSETTINGS:
+        case IDS_LOADINGYOURPERSONALSETTINGS:
+        case IDS_APPLYINGYOURPERSONALSETTINGS:
+        case IDS_RUNNINGLOGONSCRIPTS:
+            return 0;
+
+        case IDS_LOGGINGOFF:
+        case IDS_SAVEYOURSETTINGS:
+        case IDS_CLOSINGNETWORKCONNECTIONS:
+        case IDS_RUNNINGLOGOFFSCRIPTS:
+            return IDS_SIGNINGOUT;
+    }
+    return ResourceId;
+}
+
 /* A status page needs a host; logoff and shutdown start one when none is up (bounded, P2). */
 VOID
 WlHostStatus(
@@ -1942,7 +2029,25 @@ WlHostStatus(
 {
     if (!WlHlHostLive() && !WlHlEnsureHost(0, 0, WlHlLockReadyMs()))
         return;
-    WlHlPost(WluiCmdDisplayStatus, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, NULL, Text);
+    g_StatusSequence = WlHlPost(WluiCmdDisplayStatus, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, NULL, Text);
+}
+
+/* Before the screen switches to the host, its status page must be on screen. */
+VOID
+WlHostWaitStatusShown(VOID)
+{
+    WlHlWaitShown(g_StatusSequence);
+}
+
+/* Unlock: the frame that crosses to the user's desktop shows Welcome, never the credential page.
+ * FALSE when that is not confirmed; the caller then switches without a cover. */
+BOOL
+WlHostShowUnlockWelcome(
+    _In_ PWLSESSION Session)
+{
+    if (!WlHlHostLive())
+        return FALSE;
+    return WlHlWaitShown(WlHlPost(WluiCmdDisplayWelcome, g_HostScenario, WLUI_FLAG_SPINNER, 0, 0, Session->UserName, NULL));
 }
 
 /* Theme service wait msgina did before starting the shell (shsvcs ordinal 2). */
@@ -2208,7 +2313,7 @@ static VOID
 WlHlStoreLogonUserName(
     _In_ PWLSESSION Session)
 {
-    PCWSTR Name = Session->MprNotifyInfo.pszUserName;
+    PCWSTR Name = Session->UserName;
     HKEY User = NULL, Key;
 
     if (Name == NULL || Name[0] == UNICODE_NULL || Session->UserToken == NULL ||

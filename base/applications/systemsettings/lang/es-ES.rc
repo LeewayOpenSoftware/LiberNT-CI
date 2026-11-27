@@ -802,4 +802,9 @@ BEGIN
     IDS_FIREWALL_DESC "Activar o desactivar el firewall y elegir las aplicaciones que permite"
     IDS_GFX_LINK_DESC "Motor Direct3D, sombreadores, multimuestreo, memoria de vídeo e implementación de OpenGL"
     IDS_GFX_LINK_KEYWORDS "gráficos graficos tarjeta gráfica gpu 3d direct3d d3d opengl motor sombreadores multimuestreo memoria de vídeo graphics"
+    IDS_LOCK_CLOCK "Posición del reloj"
+    IDS_LOCK_CLOCK_DESC "Dónde aparecen la hora y la fecha en la pantalla de bloqueo"
+    IDS_LOCK_CLOCK_TOP "Arriba en el centro"
+    IDS_LOCK_CLOCK_BOTTOM_LEFT "Abajo a la izquierda"
+    IDS_LOCK_CLOCK_ADMIN_DESC "Se aplica a todos los usuarios de este equipo. Solo un administrador puede cambiarlo."
 END

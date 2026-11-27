@@ -62,6 +62,8 @@ START_TEST(Authorize)
     ok(WluiAuthorize(&Table, 200, g_System, &Recovery, WluiOpReportProviderFault, &Role, NULL) == WluiAuthRoleDenied,
        "recovery provider fault\n");
     ok(Role == 0, "role leaked on denial\n");
+    ok(WluiAuthorize(&Table, 200, g_System, &Recovery, WluiOpCommandShown, NULL, NULL) == WluiAuthRoleDenied,
+       "recovery command shown\n");
     ok(WluiAuthorize(&Table, 200, g_System, &Recovery, WluiOpSubmitSerialization, &Role, NULL) == WluiAuthOk,
        "recovery submit\n");
     ok(Role == WluiAuthRoleRecovery, "recovery role %u\n", Role);
