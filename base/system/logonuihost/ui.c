@@ -571,6 +571,7 @@ LuhCreatePage(
     LuhCreatePowerButton(Window);
     if (Focus)
         SetFocus(Focus);
+    LuhUpdateCapsLock(Window);
     StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu", Page->Count);
     LuhTrace("page", Num);
     if (Page->TileCount > 1)
@@ -964,6 +965,7 @@ LuhHandleCommand(
             LuhClearSecrets();
             LuhEnablePage(TRUE);
             LuhFocusForRetry();
+            LuhUpdateCapsLock(Window);  /* the focus moved without key input */
             LuhTrace("result", g_Ui.Detail);
             InvalidateRect(Window, NULL, TRUE);
             break;
