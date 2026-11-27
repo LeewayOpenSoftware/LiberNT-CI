@@ -1096,6 +1096,22 @@ NpCommonFileSystemControl(IN PDEVICE_OBJECT DeviceObject,
             Status = NpGetConnectionAttribute(DeviceObject, Irp);
             break;
 
+        case FSCTL_PIPE_FLUSH:
+            NpAcquireSharedVcb();
+            Status = NpCommonFlushBuffers(DeviceObject, Irp);
+            break;
+
+        case FSCTL_PIPE_SILO_ARRIVAL:
+        case FSCTL_PIPE_CREATE_SYMLINK:
+        case FSCTL_PIPE_DELETE_SYMLINK:
+            /* No silo or symlink support: Win11 answers user-mode callers
+               with STATUS_ILLEGAL_FUNCTION; kernel mode keeps the default.
+               Return directly: the VCB is not acquired on this path. */
+            if (Irp->RequestorMode != KernelMode)
+                return STATUS_ILLEGAL_FUNCTION;
+
+            return STATUS_NOT_SUPPORTED;
+
         case FSCTL_PIPE_SET_CONNECTION_ATTRIBUTE:
             NpAcquireExclusiveVcb();
             Status = NpSetConnectionAttribute(DeviceObject, Irp);

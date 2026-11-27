@@ -716,6 +716,11 @@ NpFsdFlushBuffers(IN PDEVICE_OBJECT DeviceObject,
 
 NTSTATUS
 NTAPI
+NpCommonFlushBuffers(IN PDEVICE_OBJECT DeviceObject,
+                     IN PIRP Irp);
+
+NTSTATUS
+NTAPI
 NpFsdSetInformation(IN PDEVICE_OBJECT DeviceObject,
                     IN PIRP Irp);
 
