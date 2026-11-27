@@ -7,6 +7,7 @@
 
 #include "logonuihost.h"
 #include "resource.h"
+#include "gfx.h"
 #include <math.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
@@ -17,7 +18,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_TIMER_FADE      3
 #define LUH_TIMER_STARTUP   4   /* a page must arrive within the provider call bound */
 #define LUH_TIMER_CLOCK     5   /* the curtain's clock, only while the curtain is up */
-#define LUH_CLOCK_MS        500
 #define LUH_SPINNER_MS      50
 
 #define LUH_ID_FIELD_BASE   1000
@@ -79,6 +79,19 @@ typedef struct _LUH_UI
     WCHAR DateText[128];
     HWND CapsControl;       /* the focused password box while Caps Lock is on */
     int CapsTop;            /* y of the gap reserved under the page's last password box */
+    /* drawing: built once per screen size, then only blitted */
+    LUH_SURFACE Back;       /* the frame being composed */
+    LUH_SURFACE Sharp;      /* the wallpaper, filled to the screen: the curtain */
+    LUH_SURFACE Soft;       /* the same, blurred and darkened once: behind every other page */
+    LUH_SURFACE Face;       /* Sharp with the clock and date: rebuilt once a minute */
+    HBRUSH SoftBrush;       /* Soft as a pattern, behind static controls */
+    LONG Lift;              /* how far the curtain is pulled up, in pixels */
+    BOOL Dragging;
+    LONG DragStartY;
+    LONG DragLastY;
+    DWORD DragLastTime;
+    double DragVelocity;    /* pixels per millisecond, positive upwards */
+    LUH_ANIM DragAnim;
 } LUH_UI;
 
 static LUH_UI g_Ui;
@@ -826,6 +839,161 @@ LuhApplyFieldUpdate(
 
 /* ---- the curtain ------------------------------------------------------------------ */
 
+/* ---- backdrop and lock screen ----------------------------------------------------- */
+
+#define LUH_SOFT_SCALE      8       /* the blur runs on an eighth of the screen, then scales up */
+#define LUH_SOFT_RADIUS     3
+#define LUH_SOFT_DARKEN     96      /* about 38 % black over the blurred wallpaper (Win11 shots) */
+#define LUH_LIFT_MS         350     /* a whole-screen lift; a partial one takes its share */
+#define LUH_LIFT_MIN_MS     120
+#define LUH_LIFT_VELOCITY   0.6     /* pixels per millisecond upwards at release: a flick lifts */
+
+/*
+ * Built once per launch: the wallpaper of the logon session filled to the screen (the
+ * curtain), and the same picture blurred and darkened (behind every other page).
+ */
+static BOOL
+LuhBuildBackdrop(
+    _In_ LONG Width,
+    _In_ LONG Height)
+{
+    WCHAR Path[MAX_PATH];
+    LUH_SURFACE Image, Small;
+    RECT All = { 0, 0, Width, Height };
+
+    if (!LuhSurfaceCreate(&g_Ui.Back, Width, Height) || !LuhSurfaceCreate(&g_Ui.Sharp, Width, Height) ||
+        !LuhSurfaceCreate(&g_Ui.Soft, Width, Height) || !LuhSurfaceCreate(&g_Ui.Face, Width, Height) ||
+        !LuhSurfaceCreate(&Small, max(Width / LUH_SOFT_SCALE, 1), max(Height / LUH_SOFT_SCALE, 1)))
+    {
+        return FALSE;
+    }
+
+    Path[0] = UNICODE_NULL;
+    if (SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(Path), Path, 0) && Path[0] != UNICODE_NULL &&
+        LuhSurfaceLoad(&Image, Path))
+    {
+        LuhSurfaceScaleFrom(&g_Ui.Sharp, &Image);
+        LuhSurfaceDestroy(&Image);
+    }
+    else
+    {
+        /* The picture was removed or cannot be read: a plain deep blue is still a lock screen. */
+        LuhFillRect(&g_Ui.Sharp, &All, RGB(0, 40, 120), 255);
+    }
+
+    LuhSurfaceScaleFrom(&Small, &g_Ui.Sharp);
+    LuhBlur(&Small, LUH_SOFT_RADIUS);
+    LuhSurfaceScaleFrom(&g_Ui.Soft, &Small);
+    LuhSurfaceDestroy(&Small);
+    LuhFillRect(&g_Ui.Soft, &All, RGB(0, 0, 0), LUH_SOFT_DARKEN);
+
+    g_Ui.SoftBrush = CreatePatternBrush(g_Ui.Soft.Bitmap);
+    return g_Ui.SoftBrush != NULL;
+}
+
+/* The curtain picture: sharp wallpaper, clock and date centred near the top, as on Windows 11. */
+static void
+LuhBuildFace(void)
+{
+    LONG Width = g_Ui.Face.Width, Height = g_Ui.Face.Height, Y;
+    RECT Rect;
+
+    BitBlt(g_Ui.Face.Dc, 0, 0, Width, Height, g_Ui.Sharp.Dc, 0, 0, SRCCOPY);
+
+    /* Measured at 1024x768: clock centre y 180, date centre y 256; kept in proportion. */
+    Y = MulDiv(Height, 180, 768);
+    SetRect(&Rect, 0, Y - LuhPx(72), Width, Y + LuhPx(72));
+    LuhDrawText(&g_Ui.Face, g_Ui.ClockFont, g_Ui.ClockText, &Rect,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE, RGB(255, 255, 255), 255);
+    Y = MulDiv(Height, 256, 768);
+    SetRect(&Rect, 0, Y - LuhPx(20), Width, Y + LuhPx(20));
+    LuhDrawText(&g_Ui.Face, g_Ui.DateFont, g_Ui.DateText, &Rect,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, RGB(255, 255, 255), 255);
+
+    /* The Ctrl+Alt+Del notice is the one curtain with words: winlogon's prompt, near the bottom. */
+    if (g_Ui.CadCurtain)
+    {
+        SetRect(&Rect, 0, Height - LuhPx(104), Width, Height - LuhPx(56));
+        LuhDrawText(&g_Ui.Face, g_Ui.TextFont, g_Ui.Title, &Rect,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, RGB(255, 255, 255), 255);
+    }
+}
+
+/* Once a minute, just after it turns: nothing else wakes the host while the curtain is idle. */
+static void
+LuhArmClock(
+    _In_ HWND Window)
+{
+    SYSTEMTIME Now;
+
+    GetLocalTime(&Now);
+    SetTimer(Window, LUH_TIMER_CLOCK, (60 - Now.wSecond) * 1000 - Now.wMilliseconds + 50, NULL);
+}
+
+/* The curtain pulled up by Lift: its lower part at the top, the soft backdrop showing below it. */
+static void
+LuhBlitLift(
+    _In_ HDC Dc,
+    _In_ LONG Lift)
+{
+    LONG Width = g_Ui.Face.Width, Height = g_Ui.Face.Height;
+
+    if (Lift < Height)
+        BitBlt(Dc, 0, 0, Width, Height - Lift, g_Ui.Face.Dc, 0, Lift, SRCCOPY);
+    if (Lift > 0)
+        BitBlt(Dc, 0, Height - Lift, Width, Lift, g_Ui.Soft.Dc, 0, Height - Lift, SRCCOPY);
+}
+
+static void
+LuhPresentLift(
+    _In_ HWND Window,
+    _In_ LONG Lift)
+{
+    HDC Dc;
+
+    g_Ui.Lift = min(max(Lift, 0), g_Ui.Face.Height);
+    Dc = GetDC(Window);
+    if (Dc == NULL)
+        return;
+    LuhBlitLift(Dc, g_Ui.Lift);
+    GdiFlush();
+    ReleaseDC(Window, Dc);
+}
+
+/*
+ * Move the curtain to To (0 down, the screen height gone) on the clock with an ease-out.
+ * A release velocity shortens the run so the motion carries on at the finger's speed.
+ */
+static void
+LuhSlideCurtain(
+    _In_ HWND Window,
+    _In_ LONG To,
+    _In_ double Velocity,
+    _In_ PCSTR Name)
+{
+    LONG From = g_Ui.Lift, Distance = To > From ? To - From : From - To;
+    DWORD Ms;
+    LUH_ANIM Anim;
+    double T;
+
+    if (Distance == 0)
+        return;
+    Ms = (DWORD)(((LONGLONG)LUH_LIFT_MS * Distance) / max(g_Ui.Face.Height, 1));
+    /* An ease-out cubic starts at 3 * distance / duration: match the speed of the release. */
+    if (Velocity > 0.0 && (DWORD)(3.0 * Distance / Velocity) < Ms)
+        Ms = (DWORD)(3.0 * Distance / Velocity);
+    LuhAnimStart(&Anim, Name, max(Ms, LUH_LIFT_MIN_MS));
+    for (;;)
+    {
+        T = LuhAnimFrame(&Anim);
+        LuhPresentLift(Window, LuhLerp(From, To, LuhEaseOut(T)));
+        if (T >= 1.0)
+            break;
+        LuhAnimWait(&Anim);
+    }
+    LuhAnimEnd(&Anim);
+}
+
 static BOOL
 LuhUpdateClock(void)
 {
@@ -862,8 +1030,10 @@ LuhShowCurtain(
     _In_ HWND Window)
 {
     g_Ui.Curtain = TRUE;
+    g_Ui.Lift = 0;
     LuhUpdateClock();
-    SetTimer(Window, LUH_TIMER_CLOCK, LUH_CLOCK_MS, NULL);
+    LuhBuildFace();
+    LuhArmClock(Window);
     SetFocus(Window);
     LuhTrace("curtain", NULL);
     InvalidateRect(Window, NULL, TRUE);
@@ -875,13 +1045,19 @@ LuhDropCurtain(
 {
     if (!g_Ui.Curtain)
         return;
+    if (g_Ui.Dragging)
+    {
+        g_Ui.Dragging = FALSE;
+        ReleaseCapture();
+    }
     g_Ui.Curtain = FALSE;
     g_Ui.CadCurtain = FALSE;
+    g_Ui.Lift = 0;
     KillTimer(Window, LUH_TIMER_CLOCK);
     LuhFreeCurtainPage();
 }
 
-/* A key or a click lifts the curtain: the page that waited under it comes up. */
+/* Once the curtain is gone: the page that waited under it comes up. */
 static void
 LuhLiftCurtain(
     _In_ HWND Window)
@@ -904,6 +1080,63 @@ LuhLiftCurtain(
         }
     }
     InvalidateRect(Window, NULL, TRUE);
+}
+
+/* The curtain follows the pointer while the button is down; each move is one frame. */
+static void
+LuhDragBegin(
+    _In_ HWND Window,
+    _In_ LONG Y)
+{
+    g_Ui.Dragging = TRUE;
+    g_Ui.DragStartY = Y;
+    g_Ui.DragLastY = Y;
+    g_Ui.DragLastTime = GetMessageTime();
+    g_Ui.DragVelocity = 0.0;
+    SetCapture(Window);
+    LuhAnimStart(&g_Ui.DragAnim, "curtain-drag", 0);
+}
+
+static void
+LuhDragMove(
+    _In_ HWND Window,
+    _In_ LONG Y)
+{
+    DWORD Now = GetMessageTime(), Elapsed = Now - g_Ui.DragLastTime;
+
+    if (Elapsed > 0)
+    {
+        /* Smoothed, so one jittery event does not decide a flick. */
+        g_Ui.DragVelocity = 0.6 * ((double)(g_Ui.DragLastY - Y) / Elapsed) + 0.4 * g_Ui.DragVelocity;
+        g_Ui.DragLastY = Y;
+        g_Ui.DragLastTime = Now;
+    }
+    LuhAnimFrame(&g_Ui.DragAnim);
+    LuhPresentLift(Window, g_Ui.DragStartY - Y);
+}
+
+/* Released: a third of the way, a flick upwards or a plain click lifts it; otherwise it drops back. */
+static void
+LuhDragEnd(
+    _In_ HWND Window)
+{
+    double Velocity = g_Ui.DragVelocity;
+
+    g_Ui.Dragging = FALSE;
+    ReleaseCapture();
+    LuhAnimEnd(&g_Ui.DragAnim);
+    if (GetMessageTime() - g_Ui.DragLastTime > 100)
+        Velocity = 0.0;
+
+    if (g_Ui.Lift > g_Ui.Face.Height / 3 || Velocity > LUH_LIFT_VELOCITY || g_Ui.Lift < LuhPx(4))
+    {
+        LuhSlideCurtain(Window, g_Ui.Face.Height, Velocity, "curtain-lift");
+        LuhLiftCurtain(Window);
+    }
+    else
+    {
+        LuhSlideCurtain(Window, 0, 0.0, "curtain-return");
+    }
 }
 
 /* ---- commands from winlogon ---------------------------------------------------- */
@@ -931,6 +1164,7 @@ LuhHandleCommand(
                 if (!g_Ui.Curtain)
                     LuhShowCurtain(Window);
                 g_Ui.CadCurtain = TRUE;
+                LuhBuildFace();
                 LuhTrace("cad-curtain", g_Ui.Title);
                 InvalidateRect(Window, NULL, TRUE);
                 break;
@@ -1054,109 +1288,74 @@ LuhHandleCommand(
 
 /* ---- painting --------------------------------------------------------------------- */
 
+/*
+ * Every frame is composed in Back from the cached soft backdrop and blitted once, so nothing
+ * flickers and nothing is recomputed; child controls paint themselves on top (WS_CLIPCHILDREN).
+ */
 static void
-LuhPaint(
-    _In_ HWND Window)
+LuhCompose(
+    _In_ const RECT *Client)
 {
-    PAINTSTRUCT Ps;
-    HDC Dc;
-    RECT Client, Rect, Wrap;
+    PLUH_SURFACE Back = &g_Ui.Back;
+    const COLORREF White = RGB(255, 255, 255);
+    RECT Rect, Wrap;
     HGDIOBJ OldFont;
-    int TextTop, Width, Extra;
+    int TextTop, Width, Extra, i;
 
-    Dc = BeginPaint(Window, &Ps);
-    GetClientRect(Window, &Client);
-
-    FillRect(Dc, &Client, (HBRUSH)GetStockObject(BLACK_BRUSH));
-    SetBkMode(Dc, TRANSPARENT);
-    SetTextColor(Dc, RGB(255, 255, 255));
-
-    if (g_Ui.Curtain)
-    {
-        /* Time and date bottom left, the prompt below them, as on the Windows lock screen. */
-        Rect = Client;
-        Rect.left = 64;
-        Rect.top = Client.bottom - 300;
-        Rect.bottom = Rect.top + 140;
-        OldFont = SelectObject(Dc, g_Ui.ClockFont);
-        DrawTextW(Dc, g_Ui.ClockText, -1, &Rect, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
-        Rect.top = Rect.bottom;
-        Rect.bottom = Rect.top + 48;
-        SelectObject(Dc, g_Ui.DateFont);
-        DrawTextW(Dc, g_Ui.DateText, -1, &Rect, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
-        Rect = Client;
-        Rect.top = Client.bottom - 72;
-        Rect.bottom = Client.bottom - 32;
-        SelectObject(Dc, g_Ui.TextFont);
-        DrawTextW(Dc, g_Ui.CadCurtain ? g_Ui.Title :
-                      LuhText(g_Options.Scenario == CPUS_UNLOCK_WORKSTATION ? IDS_LUH_HINT_UNLOCK : IDS_LUH_HINT_SIGNIN),
-                  -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        SelectObject(Dc, OldFont);
-        EndPaint(Window, &Ps);
-        if (!g_Ui.FirstPaintDone)
-        {
-            g_Ui.FirstPaintDone = TRUE;
-            GdiFlush();
-            LuhIpcReady();
-        }
-        return;
-    }
+    BitBlt(Back->Dc, 0, 0, Back->Width, Back->Height, g_Ui.Soft.Dc, 0, 0, SRCCOPY);
 
     /* With a credential page up, the text sits above its first row (the page grows with its
      * label rows, a fixed offset put the result under the title); otherwise it is centred. */
-    TextTop = (g_Ui.Page || g_Ui.OptionsUp) ? g_Ui.PageTop - LUH_TEXT_ABOVE_PAGE : Client.bottom / 2 - 40;
+    TextTop = (g_Ui.Page || g_Ui.OptionsUp) ? g_Ui.PageTop - LUH_TEXT_ABOVE_PAGE : Client->bottom / 2 - 40;
 
     /* A long account message wraps. Measure it first: it keeps its bottom edge (so the page
      * below never moves) and grows upwards, and the title moves up by the extra lines. */
-    OldFont = SelectObject(Dc, g_Ui.TextFont);
-    Width = min(Client.right - 2 * LUH_DETAIL_MARGIN, LUH_DETAIL_WIDTH);
+    Width = min(Client->right - 2 * LUH_DETAIL_MARGIN, LUH_DETAIL_WIDTH);
     Width = max(Width, 1);
     Extra = 0;
     if (g_Ui.Detail[0] != UNICODE_NULL)
     {
+        OldFont = SelectObject(Back->Dc, g_Ui.TextFont);
         SetRect(&Wrap, 0, 0, Width, 0);
-        DrawTextW(Dc, g_Ui.Detail, -1, &Wrap, DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
+        DrawTextW(Back->Dc, g_Ui.Detail, -1, &Wrap, DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
+        SelectObject(Back->Dc, OldFont);
         if (Wrap.bottom - Wrap.top > 28)
             Extra = (Wrap.bottom - Wrap.top) - 28;
     }
 
-    Rect = Client;
+    Rect = *Client;
     Rect.top = TextTop - Extra;
     Rect.bottom = Rect.top + 40;
-    SelectObject(Dc, g_Ui.TitleFont);
-    DrawTextW(Dc, g_Ui.Title, -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    LuhDrawText(Back, g_Ui.TitleFont, g_Ui.Title, &Rect,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, White, 255);
 
     if (g_Ui.Detail[0] != UNICODE_NULL)
     {
         Rect.top = Rect.bottom + 8;
         Rect.bottom = TextTop + 40 + 8 + 28;
-        SelectObject(Dc, g_Ui.TextFont);
         if (Extra == 0)
         {
-            DrawTextW(Dc, g_Ui.Detail, -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            LuhDrawText(Back, g_Ui.TextFont, g_Ui.Detail, &Rect,
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, White, 255);
         }
         else
         {
-            Rect.left = (Client.right - Width) / 2;
+            Rect.left = (Client->right - Width) / 2;
             Rect.right = Rect.left + Width;
-            DrawTextW(Dc, g_Ui.Detail, -1, &Rect, DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS);
-            Rect.left = Client.left;
-            Rect.right = Client.right;
+            LuhDrawText(Back, g_Ui.TextFont, g_Ui.Detail, &Rect, DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS, White, 255);
+            Rect.left = Client->left;
+            Rect.right = Client->right;
         }
     }
 
     if (g_Ui.Spinner)
     {
-        int Cx = Client.right / 2, Cy = Rect.bottom + 48, i;
+        int Cx = Client->right / 2, Cy = Rect.bottom + 48;
         for (i = 0; i < 8; i++)
         {
             double A = (g_Ui.SpinnerAngle + i * 45) * 3.14159265 / 180.0;
-            int X = Cx + (int)(18.0 * cos(A)), Y = Cy + (int)(18.0 * sin(A));
-            int Gray = 60 + i * 24;
-            HBRUSH B = CreateSolidBrush(RGB(Gray, Gray, Gray));
-            RECT Dot = { X - 3, Y - 3, X + 3, Y + 3 };
-            FillRect(Dc, &Dot, B);
-            DeleteObject(B);
+            LuhFillCircle(Back, Cx + (LONG)(18.0 * cos(A)), Cy + (LONG)(18.0 * sin(A)), 3, White,
+                          (BYTE)(60 + i * 24));
         }
     }
 
@@ -1164,14 +1363,36 @@ LuhPaint(
     {
         /* Under the box, as on Windows, in the gap the page keeps under its last password box
          * (on a page with several, that is where the line shows whichever box has the focus). */
-        MapWindowPoints(NULL, Window, (LPPOINT)&Wrap, 2);
+        MapWindowPoints(NULL, GetParent(g_Ui.CapsControl), (LPPOINT)&Wrap, 2);
         Wrap.top = g_Ui.CapsTop;
         Wrap.bottom = Wrap.top + LUH_CAPS_GAP;
-        SelectObject(Dc, g_Ui.TextFont);
-        DrawTextW(Dc, LuhText(IDS_LUH_CAPS_LOCK), -1, &Wrap, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        LuhDrawText(Back, g_Ui.TextFont, LuhText(IDS_LUH_CAPS_LOCK), &Wrap,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, White, 255);
     }
+}
 
-    SelectObject(Dc, OldFont);
+static void
+LuhPaint(
+    _In_ HWND Window)
+{
+    PAINTSTRUCT Ps;
+    HDC Dc;
+    RECT Client;
+
+    Dc = BeginPaint(Window, &Ps);
+    GetClientRect(Window, &Client);
+
+    if (g_Ui.Curtain)
+    {
+        /* The curtain is one cached picture; mid-drag a repaint shows the same position. */
+        LuhBlitLift(Dc, g_Ui.Lift);
+    }
+    else
+    {
+        LuhCompose(&Client);
+        BitBlt(Dc, Ps.rcPaint.left, Ps.rcPaint.top, Ps.rcPaint.right - Ps.rcPaint.left,
+               Ps.rcPaint.bottom - Ps.rcPaint.top, g_Ui.Back.Dc, Ps.rcPaint.left, Ps.rcPaint.top, SRCCOPY);
+    }
     EndPaint(Window, &Ps);
 
     if (!g_Ui.FirstPaintDone)
@@ -1204,9 +1425,16 @@ LuhWindowProc(
             return 1;
 
         case WM_CTLCOLORSTATIC:
+        {
+            /* Labels sit on the soft backdrop: the same picture as a brush, aligned to the control. */
+            POINT Origin = { 0, 0 };
+
+            MapWindowPoints((HWND)lParam, Window, &Origin, 1);
             SetTextColor((HDC)wParam, RGB(255, 255, 255));
-            SetBkColor((HDC)wParam, RGB(0, 0, 0));
-            return (LRESULT)GetStockObject(BLACK_BRUSH);
+            SetBkMode((HDC)wParam, TRANSPARENT);
+            SetBrushOrgEx((HDC)wParam, -Origin.x, -Origin.y, NULL);
+            return (LRESULT)g_Ui.SoftBrush;
+        }
 
         case WM_TIMER:
             if (wParam == LUH_TIMER_HEARTBEAT)
@@ -1229,8 +1457,16 @@ LuhWindowProc(
             }
             else if (wParam == LUH_TIMER_CLOCK)
             {
-                if (g_Ui.Curtain && LuhUpdateClock())
-                    InvalidateRect(Window, NULL, FALSE);
+                if (g_Ui.Curtain)
+                {
+                    if (LuhUpdateClock())
+                    {
+                        LuhBuildFace();
+                        if (!g_Ui.Dragging)
+                            InvalidateRect(Window, NULL, FALSE);
+                    }
+                    LuhArmClock(Window);
+                }
             }
             else if (wParam == LUH_TIMER_FADE)
             {
@@ -1363,13 +1599,41 @@ LuhWindowProc(
             return 0;
 
         case WM_KEYDOWN:
-        case WM_LBUTTONDOWN:
         case WM_RBUTTONDOWN:
             if (g_Ui.Curtain)
             {
                 /* The Ctrl+Alt+Del notice has no lift path; only winlogon moves it on after the SAS. */
-                if (!g_Ui.CadCurtain)
+                if (!g_Ui.CadCurtain && !g_Ui.Dragging)
+                {
+                    LuhSlideCurtain(Window, g_Ui.Face.Height, 0.0, "curtain-lift");
                     LuhLiftCurtain(Window);
+                }
+                return 0;
+            }
+            break;
+
+        case WM_LBUTTONDOWN:
+            if (g_Ui.Curtain)
+            {
+                if (!g_Ui.CadCurtain)
+                    LuhDragBegin(Window, (SHORT)HIWORD(lParam));
+                return 0;
+            }
+            break;
+
+        case WM_MOUSEMOVE:
+            if (g_Ui.Dragging)
+            {
+                LuhDragMove(Window, (SHORT)HIWORD(lParam));
+                return 0;
+            }
+            break;
+
+        case WM_LBUTTONUP:
+        case WM_CAPTURECHANGED:
+            if (g_Ui.Dragging)
+            {
+                LuhDragEnd(Window);
                 return 0;
             }
             break;
@@ -1401,19 +1665,14 @@ LuhUiCreate(
     int Width = GetSystemMetrics(SM_CXSCREEN), Height = GetSystemMetrics(SM_CYSCREEN);
 
     ZeroMemory(&g_Ui, sizeof(g_Ui));
-    g_Ui.TitleFont = CreateFontW(-32, 0, 0, 0, FW_LIGHT, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                 DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_Ui.TextFont = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    /* The curtain uses the faces and sizes of the msgina clock page, so both modes match. */
-    g_Ui.ClockFont = CreateFontW(-132, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                 DEFAULT_PITCH | FF_DONTCARE, L"Selawik Light");
-    g_Ui.DateFont = CreateFontW(-32, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                DEFAULT_PITCH | FF_DONTCARE, L"Selawik Semilight");
+    LuhGfxInit();
+    g_Ui.TitleFont = LuhFontCreate(32, FW_LIGHT);
+    g_Ui.TextFont = LuhFontCreate(20, FW_NORMAL);
+    /* The lock screen as Windows 11 draws it: a large semibold clock, the date under it. */
+    g_Ui.ClockFont = LuhFontCreate(100, FW_SEMIBOLD);
+    g_Ui.DateFont = LuhFontCreate(20, FW_SEMIBOLD);
+    if (!LuhBuildBackdrop(Width, Height))
+        return NULL;
 
     ZeroMemory(&Class, sizeof(Class));
     Class.cbSize = sizeof(Class);
@@ -1426,7 +1685,7 @@ LuhUiCreate(
 
     /* Layered so the desktop-switch fade can drop the alpha; top-most on its desktop. */
     Window = CreateWindowExW(WS_EX_TOPMOST | WS_EX_LAYERED, LUH_CLASS, L"",
-                             WS_POPUP | WS_VISIBLE, 0, 0, Width, Height, NULL, NULL, Instance, NULL);
+                             WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN, 0, 0, Width, Height, NULL, NULL, Instance, NULL);
     if (Window == NULL)
         return NULL;
     SetLayeredWindowAttributes(Window, 0, 255, LWA_ALPHA);
@@ -1470,5 +1729,10 @@ LuhUiRun(
     if (g_Ui.TextFont) DeleteObject(g_Ui.TextFont);
     if (g_Ui.ClockFont) DeleteObject(g_Ui.ClockFont);
     if (g_Ui.DateFont) DeleteObject(g_Ui.DateFont);
+    if (g_Ui.SoftBrush) DeleteObject(g_Ui.SoftBrush);
+    LuhSurfaceDestroy(&g_Ui.Back);
+    LuhSurfaceDestroy(&g_Ui.Sharp);
+    LuhSurfaceDestroy(&g_Ui.Soft);
+    LuhSurfaceDestroy(&g_Ui.Face);
     return (int)Msg.wParam;
 }

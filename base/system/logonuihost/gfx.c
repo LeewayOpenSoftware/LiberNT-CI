@@ -8,6 +8,7 @@
 #include "logonuihost.h"
 #include "gfx.h"
 #include <math.h>
+#include <wincodec.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 
@@ -325,7 +326,7 @@ LuhFontCreate(
 }
 
 SIZE
-LuhTextSize(
+LuhMeasureText(
     _In_ HFONT Font,
     _In_ PCWSTR Text)
 {
@@ -350,7 +351,7 @@ LuhTextSize(
  * surface whose green channel then serves as the coverage of each pixel.
  */
 VOID
-LuhText(
+LuhDrawText(
     _Inout_ PLUH_SURFACE Surface,
     _In_ HFONT Font,
     _In_ PCWSTR Text,
@@ -394,17 +395,76 @@ LuhText(
 }
 
 BOOL
+LuhSurfaceLoad(
+    _Out_ PLUH_SURFACE Surface,
+    _In_ PCWSTR Path)
+{
+    IWICImagingFactory *Factory = NULL;
+    IWICBitmapDecoder *Decoder = NULL;
+    IWICBitmapFrameDecode *Frame = NULL;
+    IWICFormatConverter *Converter = NULL;
+    UINT Width = 0, Height = 0;
+    HRESULT Hr, Init;
+    BOOL Ok = FALSE;
+
+    ZeroMemory(Surface, sizeof(*Surface));
+    Init = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    Hr = CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
+                          &IID_IWICImagingFactory, (void **)&Factory);
+    if (SUCCEEDED(Hr))
+        Hr = IWICImagingFactory_CreateDecoderFromFilename(Factory, Path, NULL, GENERIC_READ,
+                                                          WICDecodeMetadataCacheOnDemand, &Decoder);
+    if (SUCCEEDED(Hr))
+        Hr = IWICBitmapDecoder_GetFrame(Decoder, 0, &Frame);
+    if (SUCCEEDED(Hr))
+        Hr = IWICImagingFactory_CreateFormatConverter(Factory, &Converter);
+    if (SUCCEEDED(Hr))
+        Hr = IWICFormatConverter_Initialize(Converter, (IWICBitmapSource *)Frame, &GUID_WICPixelFormat32bppPBGRA,
+                                            WICBitmapDitherTypeNone, NULL, 0.0, WICBitmapPaletteTypeCustom);
+    if (SUCCEEDED(Hr))
+        Hr = IWICFormatConverter_GetSize(Converter, &Width, &Height);
+    if (SUCCEEDED(Hr) && Width > 0 && Height > 0 && Width <= 16384 && Height <= 16384 &&
+        LuhSurfaceCreate(Surface, (LONG)Width, (LONG)Height))
+    {
+        Hr = IWICFormatConverter_CopyPixels(Converter, NULL, Width * sizeof(ULONG),
+                                            Width * Height * sizeof(ULONG), (BYTE *)Surface->Bits);
+        Ok = SUCCEEDED(Hr);
+        if (!Ok)
+            LuhSurfaceDestroy(Surface);
+    }
+    if (!Ok)
+        WARN("cannot load %ls (0x%08lx)\n", Path, Hr);
+
+    if (Converter) IWICFormatConverter_Release(Converter);
+    if (Frame) IWICBitmapFrameDecode_Release(Frame);
+    if (Decoder) IWICBitmapDecoder_Release(Decoder);
+    if (Factory) IWICImagingFactory_Release(Factory);
+    if (SUCCEEDED(Init))
+        CoUninitialize();
+    return Ok;
+}
+
+BOOL
 LuhSurfaceScaleFrom(
     _Inout_ PLUH_SURFACE Target,
     _In_ const LUH_SURFACE *Source)
 {
     SIZE_T Count, i;
+    LONG Width = Source->Width, Height = Source->Height;
     BOOL Ok;
+
+    /* Fill, as the lock screen does: keep the aspect, crop the overhang evenly. */
+    if ((LONGLONG)Width * Target->Height > (LONGLONG)Height * Target->Width)
+        Width = (LONG)(((LONGLONG)Height * Target->Width) / Target->Height);
+    else
+        Height = (LONG)(((LONGLONG)Width * Target->Height) / Target->Width);
+    Width = max(Width, 1);
+    Height = max(Height, 1);
 
     SetStretchBltMode(Target->Dc, HALFTONE);
     SetBrushOrgEx(Target->Dc, 0, 0, NULL);
     Ok = StretchBlt(Target->Dc, 0, 0, Target->Width, Target->Height,
-                    Source->Dc, 0, 0, Source->Width, Source->Height, SRCCOPY);
+                    Source->Dc, (Source->Width - Width) / 2, (Source->Height - Height) / 2, Width, Height, SRCCOPY);
     GdiFlush();
     Count = (SIZE_T)Target->Width * Target->Height;
     for (i = 0; i < Count; i++)
