@@ -2793,6 +2793,9 @@ LuhWindowProc(
             if (Command)
             {
                 LuhHandleCommand(Window, Command);
+                /* winlogon switches the screen to us only after this paint (INVESTIGACION.md 6.3) */
+                UpdateWindow(Window);
+                WluiClientCommandShown(&g_Connection, Command->Sequence);
                 SecureZeroMemory(Command, sizeof(*Command));
                 HeapFree(GetProcessHeap(), 0, Command);
             }

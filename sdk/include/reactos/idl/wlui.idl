@@ -83,7 +83,9 @@ typedef enum _WLUI_ACTION
     WluiActionLogoff = 5,
     WluiActionChangePassword = 6,
     WluiActionTaskManager = 7,
-    WluiActionEmergencyRestart = 8
+    WluiActionEmergencyRestart = 8,
+    /* The power flyout and the options' power button; the host offers it only when the machine can sleep. */
+    WluiActionSleep = 9
 } WLUI_ACTION;
 
 [
@@ -162,4 +164,12 @@ interface wlui
         [in] handle_t hBinding,
         [in] GUID LaunchId,
         [in] WLUI_EXIT_REASON Reason);
+
+    /* Function 7: the screen for command Sequence is painted (the host's first WM_PAINT after it). */
+    DWORD
+    __stdcall
+    WluiCommandShown(
+        [in] handle_t hBinding,
+        [in] GUID LaunchId,
+        [in] DWORD Sequence);
 }

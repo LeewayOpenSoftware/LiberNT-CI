@@ -1131,13 +1131,20 @@ cleanup:
         /* Host mode: wait for the painted desktop, then the host fades across the switch (§6.3.1). */
         if (Session->UseLogonUI)
         {
+            PWL_COVER Cover;
+
             WlHostWaitDesktopSwitch(Session);
+            /* The last host frame covers the painted desktop, then fades out over it. */
+            Cover = WlSwitchDesktopCovered(Session->WinlogonDesktop, Session->ApplicationDesktop);
             WlHostBeforeDesktopSwitch();
-        }
-        SwitchDesktop(Session->ApplicationDesktop);
-        RemoveStatusMessage(Session);
-        if (Session->UseLogonUI)
+            WlCoverRelease(Cover);
             WlHostAfterDesktopSwitch();
+        }
+        else
+        {
+            SwitchDesktop(Session->ApplicationDesktop);
+            RemoveStatusMessage(Session);
+        }
         Session->LogonState = STATE_LOGGED_ON;
         LogonStage("logged-on");
     }
@@ -1439,9 +1446,11 @@ HandleLogoff(
 
     if (Session->UseLogonUI)
     {
-        /* "Signing out" stands on the host before any user process is closed (plan, commit 7). */
+        /* "Signing out" stands on the host before any user process is closed (plan, commit 7);
+         * the desktop fades into it instead of cutting. */
         DisplayStatusMessage(Session, Session->WinlogonDesktop, IDS_LOGGINGOFF);
-        SwitchDesktop(Session->WinlogonDesktop);
+        WlHostWaitStatusShown();
+        WlCoverRelease(WlSwitchDesktopCovered(Session->ApplicationDesktop, Session->WinlogonDesktop));
     }
 
     Status = CreateLogoffSecurityAttributes(&psa);
@@ -1829,11 +1838,29 @@ DoGenericAction(
             {
                 CallNotificationDlls(Session, UnlockHandler);
                 if (Session->UseLogonUI)
+                {
+                    PWL_COVER Cover = NULL;
+
+                    if (WlHostShowUnlockWelcome(Session))
+                    {
+                        Cover = WlSwitchDesktopCovered(Session->WinlogonDesktop, Session->ApplicationDesktop);
+                    }
+                    else
+                    {
+                        /* A cut is acceptable; the credential page on the user's desktop is not. */
+                        SwitchDesktop(Session->ApplicationDesktop);
+                        LogonStage("desktop-switch-plain-unshown");
+                    }
+
                     WlHostBeforeDesktopSwitch();
-                SwitchDesktop(Session->ApplicationDesktop);
-                RemoveStatusMessage(Session);
-                if (Session->UseLogonUI)
+                    WlCoverRelease(Cover);
                     WlHostAfterDesktopSwitch();
+                }
+                else
+                {
+                    SwitchDesktop(Session->ApplicationDesktop);
+                    RemoveStatusMessage(Session);
+                }
                 Session->LogonState = STATE_LOGGED_ON;
             }
             break;
@@ -2019,6 +2046,9 @@ HostEvent(
             break;
         case WLHOST_EVENT_RESTART:
             DoGenericAction(Session, WLX_SAS_ACTION_SHUTDOWN_REBOOT);
+            break;
+        case WLHOST_EVENT_SLEEP:
+            DoGenericAction(Session, WLX_SAS_ACTION_SHUTDOWN_SLEEP);
             break;
         default:
             WARN("Unknown host event %lu\n", Event);
