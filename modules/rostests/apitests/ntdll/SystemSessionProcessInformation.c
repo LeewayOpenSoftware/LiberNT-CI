@@ -1,0 +1,297 @@
+/*
+ * PROJECT:     Orosi API tests
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     Win11/Orosi comparison probe for NtQuerySystemInformation(SystemSessionProcessInformation)
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+#include "precomp.h"
+
+#define BIG_SIZE (4 * 1024 * 1024)
+
+static ULONG OwnSession;
+static BOOLEAN HaveTcb;
+
+static
+NTSTATUS
+QuerySession(ULONG SessionId, PVOID Buffer, ULONG BufferSize, PULONG ReturnLength)
+{
+    SYSTEM_SESSION_PROCESS_INFORMATION Info;
+
+    Info.SessionId = SessionId;
+    Info.SizeOfBuf = BufferSize;
+    Info.Buffer = Buffer;
+    return NtQuerySystemInformation(SystemSessionProcessInformation, &Info, sizeof(Info), ReturnLength);
+}
+
+/* Walks a record chain; returns the record count, the count of records not in Session, and whether Pid is in it */
+static
+ULONG
+WalkChain(PVOID Buffer, ULONG Size, ULONG Session, PULONG Foreign, HANDLE Pid, PBOOLEAN FoundPid)
+{
+    PSYSTEM_PROCESS_INFORMATION Spi = Buffer;
+    ULONG Count = 0, Offset = 0;
+
+    *Foreign = 0;
+    *FoundPid = FALSE;
+    for (;;)
+    {
+        if (Offset + sizeof(*Spi) > Size)
+            break;
+        Spi = (PSYSTEM_PROCESS_INFORMATION)((PUCHAR)Buffer + Offset);
+        Count++;
+        if (Spi->SessionId != Session)
+            (*Foreign)++;
+        if (Spi->UniqueProcessId == Pid)
+            *FoundPid = TRUE;
+        if (Spi->NextEntryOffset == 0)
+            break;
+        Offset += Spi->NextEntryOffset;
+    }
+    return Count;
+}
+
+/* P1 + P9 + P10: own session, compared with class 5 filtered by SessionId */
+static
+VOID
+TestOwnSession(PUCHAR Buffer)
+{
+    NTSTATUS Status;
+    ULONG Ret = 0xDEADBEEF, Count, Foreign, Count5, InSession5 = 0, Foreign5, Offset = 0;
+    BOOLEAN Found, Found5;
+    PSYSTEM_PROCESS_INFORMATION Spi;
+    HANDLE Pid = UlongToHandle(GetCurrentProcessId());
+
+    Status = QuerySession(OwnSession, Buffer, BIG_SIZE, &Ret);
+    trace("PROBE P1 own session %lu -> 0x%lx ret=%lu\n", OwnSession, Status, Ret);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+    {
+        skip("own-session query failed: 0x%lx\n", Status);
+        return;
+    }
+    /* Only the returned bytes hold records */
+    Count = WalkChain(Buffer, Ret, OwnSession, &Foreign, Pid, &Found);
+    trace("PROBE P1 records=%lu foreign=%lu ownpid=%d\n", Count, Foreign, Found);
+    ok(Foreign == 0, "%lu records are not in session %lu\n", Foreign, OwnSession);
+    ok(Found, "own process not listed\n");
+    ok(Count > 0, "no records\n");
+
+    Status = QuerySession(OwnSession, Buffer, BIG_SIZE, NULL);
+    trace("PROBE P9 ReturnLength NULL -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    Ret = 0;
+    Status = NtQuerySystemInformation(SystemProcessInformation, Buffer, BIG_SIZE, &Ret);
+    trace("PROBE class 5 -> 0x%lx ret=%lu\n", Status, Ret);
+    if (!NT_SUCCESS(Status))
+        return;
+    Count5 = WalkChain(Buffer, BIG_SIZE, OwnSession, &Foreign5, Pid, &Found5);
+    for (;;)
+    {
+        Spi = (PSYSTEM_PROCESS_INFORMATION)(Buffer + Offset);
+        if (Spi->SessionId == OwnSession)
+            InSession5++;
+        if (Spi->NextEntryOffset == 0)
+            break;
+        Offset += Spi->NextEntryOffset;
+    }
+    trace("PROBE P1 class 5: records=%lu in session %lu: %lu (class 53 gave %lu)\n",
+          Count5, OwnSession, InSession5, Count);
+}
+
+/* P2 + P3: the outer length and alignment */
+static
+VOID
+TestOuter(PUCHAR Buffer)
+{
+    static const ULONG Lengths[] = { 0, sizeof(SYSTEM_SESSION_PROCESS_INFORMATION) - 1,
+                                     sizeof(SYSTEM_SESSION_PROCESS_INFORMATION) + 4 };
+    UCHAR Raw[sizeof(SYSTEM_SESSION_PROCESS_INFORMATION) + 16];
+    PSYSTEM_SESSION_PROCESS_INFORMATION Info;
+    NTSTATUS Status;
+    ULONG i, Ret;
+
+    Info = (PSYSTEM_SESSION_PROCESS_INFORMATION)(((ULONG_PTR)Raw + 7) & ~(ULONG_PTR)7);
+    for (i = 0; i < _countof(Lengths); i++)
+    {
+        Info->SessionId = OwnSession;
+        Info->SizeOfBuf = BIG_SIZE;
+        Info->Buffer = Buffer;
+        Ret = 0xDEADBEEF;
+        Status = NtQuerySystemInformation(SystemSessionProcessInformation, Info, Lengths[i], &Ret);
+        trace("PROBE P2 outer length %lu -> 0x%lx ret=%lu\n", Lengths[i], Status, Ret);
+        if (Lengths[i] < sizeof(SYSTEM_SESSION_PROCESS_INFORMATION))
+        {
+            /* Win11: the size the outer structure needs */
+            ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+            ok_eq_ulong(Ret, (ULONG)sizeof(SYSTEM_SESSION_PROCESS_INFORMATION));
+        }
+        else
+        {
+            ok_hex(Status, STATUS_SUCCESS);
+        }
+    }
+
+    Info = (PSYSTEM_SESSION_PROCESS_INFORMATION)((PUCHAR)Info + 1);
+    Info->SessionId = OwnSession;
+    Info->SizeOfBuf = BIG_SIZE;
+    Info->Buffer = Buffer;
+    Ret = 0xDEADBEEF;
+    Status = NtQuerySystemInformation(SystemSessionProcessInformation, Info, sizeof(*Info), &Ret);
+    trace("PROBE P3 outer misaligned +1 -> 0x%lx ret=%lu\n", Status, Ret);
+    ok_hex(Status, STATUS_DATATYPE_MISALIGNMENT);
+    ok_eq_ulong(Ret, 0xDEADBEEFUL);
+}
+
+/* P4 + P5 + P6 + P7: the inner buffer */
+static
+VOID
+TestInner(PUCHAR Buffer)
+{
+    static const ULONG Sizes[] = { 16, sizeof(SYSTEM_PROCESS_INFORMATION) - 1, sizeof(SYSTEM_PROCESS_INFORMATION) };
+    static const ULONG Misalign[] = { 1, 4 };
+    PVOID Kernel = (PVOID)((ULONG_PTR)1 << (sizeof(PVOID) * 8 - 1));
+    NTSTATUS Status;
+    ULONG i, Ret;
+
+    Ret = 0xDEADBEEF;
+    Status = QuerySession(OwnSession, NULL, 0, &Ret);
+    trace("PROBE P4 inner NULL/0 -> 0x%lx ret=%lu\n", Status, Ret);
+    /* Win11: a short inner buffer reports the size the list needs */
+    ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok(Ret > sizeof(SYSTEM_PROCESS_INFORMATION) && Ret != 0xDEADBEEF, "needed size %lu\n", Ret);
+
+    for (i = 0; i < _countof(Sizes); i++)
+    {
+        Ret = 0xDEADBEEF;
+        Status = QuerySession(OwnSession, Buffer, Sizes[i], &Ret);
+        trace("PROBE P5 inner size %lu -> 0x%lx ret=%lu\n", Sizes[i], Status, Ret);
+        ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+        ok(Ret > Sizes[i] && Ret != 0xDEADBEEF, "needed size %lu for %lu\n", Ret, Sizes[i]);
+    }
+
+    for (i = 0; i < _countof(Misalign); i++)
+    {
+        Ret = 0xDEADBEEF;
+        Status = QuerySession(OwnSession, Buffer + Misalign[i], BIG_SIZE - 8, &Ret);
+        trace("PROBE P6 inner misaligned +%lu -> 0x%lx ret=%lu\n", Misalign[i], Status, Ret);
+        /* Win11 probes the inner buffer at ULONG alignment */
+        if (Misalign[i] % sizeof(ULONG))
+        {
+            ok_hex(Status, STATUS_DATATYPE_MISALIGNMENT);
+            ok_eq_ulong(Ret, 0xDEADBEEFUL);
+        }
+        else
+        {
+            ok_hex(Status, STATUS_SUCCESS);
+        }
+    }
+
+    Ret = 0xDEADBEEF;
+    Status = QuerySession(OwnSession, (PVOID)(ULONG_PTR)0x1000, BIG_SIZE, &Ret);
+    trace("PROBE P7 inner 0x1000 -> 0x%lx ret=%lu\n", Status, Ret);
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
+    ok_eq_ulong(Ret, 0xDEADBEEFUL);
+    Ret = 0xDEADBEEF;
+    Status = QuerySession(OwnSession, Kernel, BIG_SIZE, &Ret);
+    trace("PROBE P7 inner kernel %p -> 0x%lx ret=%lu\n", Kernel, Status, Ret);
+    ok_hex(Status, STATUS_ACCESS_VIOLATION);
+    ok_eq_ulong(Ret, 0xDEADBEEFUL);
+}
+
+/* P8: other session ids, with the caller's TCB state, then with TCB disabled */
+static
+VOID
+TestOtherSessions(PUCHAR Buffer)
+{
+    ULONG Sessions[3], i, Ret, Count, Foreign;
+    BOOLEAN Found, Old, Pass;
+    NTSTATUS Status;
+
+    Sessions[0] = OwnSession ? 0 : 1;
+    Sessions[1] = OwnSession + 1;
+    Sessions[2] = 0xFFFFFFFF;
+    for (Pass = 0; Pass < 2; Pass++)
+    {
+        if (Pass == 1)
+        {
+            if (!HaveTcb)
+                break;
+            RtlAdjustPrivilege(SE_TCB_PRIVILEGE, FALSE, FALSE, &Old);
+        }
+        for (i = 0; i < _countof(Sessions); i++)
+        {
+            Ret = 0xDEADBEEF;
+            Status = QuerySession(Sessions[i], Buffer, BIG_SIZE, &Ret);
+            Count = Foreign = 0;
+            Found = FALSE;
+            if (NT_SUCCESS(Status))
+                Count = WalkChain(Buffer, Ret, Sessions[i], &Foreign, NULL, &Found);
+            trace("PROBE P8 tcb=%s session %lu -> 0x%lx ret=%lu records=%lu foreign=%lu\n",
+                  (HaveTcb && Pass == 0) ? "on" : "off", Sessions[i], Status, Ret, Count, Foreign);
+            /* Win11: no privilege rule for another session; an unknown one is an empty list */
+            ok_hex(Status, STATUS_SUCCESS);
+            if (NT_SUCCESS(Status))
+                ok(Foreign == 0, "session %lu: %lu records from another session\n", Sessions[i], Foreign);
+            if (Sessions[i] == 0xFFFFFFFF)
+                ok_eq_ulong(Ret, 0UL);
+        }
+    }
+    if (HaveTcb)
+        RtlAdjustPrivilege(SE_TCB_PRIVILEGE, TRUE, FALSE, &Old);
+}
+
+/* S1: the call writes only what it returns; Win11 26100 leaves the rest of the inner buffer as it was */
+static
+VOID
+TestSentinel(PUCHAR Buffer)
+{
+    NTSTATUS Status;
+    ULONG Ret, i, Touched;
+
+    RtlFillMemory(Buffer, 4096, 0xCC);
+    Ret = 0xDEADBEEF;
+    Status = QuerySession(0xFFFFFFFF, Buffer, 4096, &Ret);
+    for (i = 0, Touched = 0; i < 4096; i++)
+        if (Buffer[i] != 0xCC)
+            Touched++;
+    ok(Status == STATUS_SUCCESS, "S1 unknown session: status 0x%lx\n", Status);
+    ok(Ret == 0, "S1 unknown session: ret %lu\n", Ret);
+    ok(*(PULONG)Buffer == 0, "S1 unknown session: terminator 0x%lx\n", *(PULONG)Buffer);
+    ok(Touched <= sizeof(ULONG), "S1 unknown session: %lu bytes changed, expected only the terminator\n", Touched);
+
+    RtlFillMemory(Buffer, BIG_SIZE, 0xCC);
+    Ret = 0;
+    Status = QuerySession(OwnSession, Buffer, BIG_SIZE, &Ret);
+    if (NT_SUCCESS(Status) && Ret < BIG_SIZE - 4096)
+    {
+        for (i = Ret, Touched = 0; i < Ret + 4096; i++)
+            if (Buffer[i] != 0xCC)
+                Touched++;
+        ok(Touched == 0, "S1 own session: %lu bytes changed in the 4096 after ret=%lu\n", Touched, Ret);
+    }
+}
+
+START_TEST(SystemSessionProcessInformation)
+{
+    PUCHAR Buffer;
+    BOOLEAN Old;
+
+    OwnSession = NtCurrentPeb()->SessionId;
+    HaveTcb = NT_SUCCESS(RtlAdjustPrivilege(SE_TCB_PRIVILEGE, TRUE, FALSE, &Old));
+    trace("session %lu, TCB %s\n", OwnSession, HaveTcb ? "held" : "not held");
+
+    Buffer = VirtualAlloc(NULL, BIG_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!Buffer)
+    {
+        skip("no buffer\n");
+        return;
+    }
+    TestOwnSession(Buffer);
+    TestOuter(Buffer);
+    TestInner(Buffer);
+    TestOtherSessions(Buffer);
+    TestSentinel(Buffer);
+    VirtualFree(Buffer, 0, MEM_RELEASE);
+}

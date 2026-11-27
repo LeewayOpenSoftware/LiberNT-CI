@@ -1341,7 +1341,7 @@ QSI_DEF(SystemPathInformation)
     return STATUS_NOT_IMPLEMENTED;
 }
 
-/* Class 5 - Process Information / 57 - SystemExtendedProcessInformation  */
+/* Class 5 - Process Information / 57 - SystemExtendedProcessInformation / 53 - one session's processes */
 #define TAG_EXP_PROCESS_INFO 'PIxE'
 static
 NTSTATUS
@@ -1349,7 +1349,9 @@ ExpQuerySystemProcessInformation(
     _Out_writes_bytes_(Size) PVOID Buffer,
     _In_ ULONG Size,
     _Out_ PULONG ReqSize,
-    _In_ BOOLEAN Extended)
+    _In_ BOOLEAN Extended,
+    _In_ BOOLEAN FilterSession,
+    _In_ ULONG SessionId)
 {
     const ULONG ThreadInfoSize = Extended ? sizeof(SYSTEM_EXTENDED_THREAD_INFORMATION) : sizeof(SYSTEM_THREAD_INFORMATION);
     PSYSTEM_PROCESS_INFORMATION SpiCurrent, SpiLast = NULL;
@@ -1394,8 +1396,15 @@ ExpQuerySystemProcessInformation(
             Overflow = TRUE;
         }
 
-        /* Zero user's buffer */
-        if (!Overflow) RtlZeroMemory(Spi, Size);
+        /* Zero user's buffer. Class 53 writes only the empty-list terminator: Windows leaves
+           the bytes past the records as they were (the records themselves are copied whole) */
+        if (!Overflow)
+        {
+            if (FilterSession)
+                Spi->NextEntryOffset = 0;
+            else
+                RtlZeroMemory(Spi, Size);
+        }
 
         SystemProcess = PsIdleProcess;
         Process = SystemProcess;
@@ -1410,10 +1419,12 @@ ExpQuerySystemProcessInformation(
             ExAcquirePushLockShared(&Process->ProcessLock);
             Locked = TRUE;
 
-            if ((Process->ProcessExiting) &&
-                (Process->Pcb.Header.SignalState) &&
-                !(Process->ActiveThreads) &&
-                (IsListEmpty(&Process->Pcb.ThreadListHead)))
+            /* Class 53 lists one session: other processes take no room and no record */
+            if ((FilterSession && MmGetSessionId(Process) != SessionId) ||
+                ((Process->ProcessExiting) &&
+                 (Process->Pcb.Header.SignalState) &&
+                 !(Process->ActiveThreads) &&
+                 (IsListEmpty(&Process->Pcb.ThreadListHead))))
             {
                 CurrentSize = 0;
                 ImageNameMaximumLength = 0;
@@ -1664,7 +1675,7 @@ Skip:
 /* Class 5 - Process Information */
 QSI_DEF(SystemProcessInformation)
 {
-    return ExpQuerySystemProcessInformation(Buffer, Size, ReqSize, FALSE);
+    return ExpQuerySystemProcessInformation(Buffer, Size, ReqSize, FALSE, FALSE, 0);
 }
 
 /* Class 6 - Call Count Information */
@@ -2989,9 +3000,25 @@ SSI_DEF(SystemVerifierThunkExtend)
 /* Class 53 - A session's processes */
 QSI_DEF(SystemSessionProcessInformation)
 {
-    /* FIXME */
-    DPRINT1("NtQuerySystemInformation - SystemSessionProcessInformation not implemented\n");
-    return STATUS_NOT_IMPLEMENTED;
+    SYSTEM_SESSION_PROCESS_INFORMATION Info;
+
+    /* A short outer structure reports the size it needs (Win11) */
+    *ReqSize = sizeof(SYSTEM_SESSION_PROCESS_INFORMATION);
+    if (Size < sizeof(SYSTEM_SESSION_PROCESS_INFORMATION))
+        return STATUS_INFO_LENGTH_MISMATCH;
+
+    /*
+     * One read of the caller's structure; NtQuerySystemInformation probed it and its SEH
+     * frame catches a fault here and in the inner probe below. The inner buffer is the
+     * caller's too, so it gets its own probe, at ULONG alignment as on Win11.
+     * Win11 applies no privilege check for another session id, and an unknown id gives
+     * an empty list (STATUS_SUCCESS, ReturnLength 0).
+     */
+    RtlCopyMemory(&Info, Buffer, sizeof(Info));
+    if (ExGetPreviousMode() != KernelMode)
+        ProbeForWrite(Info.Buffer, Info.SizeOfBuf, TYPE_ALIGNMENT(ULONG));
+
+    return ExpQuerySystemProcessInformation(Info.Buffer, Info.SizeOfBuf, ReqSize, FALSE, TRUE, Info.SessionId);
 }
 
 /* Class 54 - Load & map in system space */
@@ -3058,7 +3085,7 @@ QSI_DEF(SystemPrefetcherInformation)
 /* Class 57 - Extended process information */
 QSI_DEF(SystemExtendedProcessInformation)
 {
-    return ExpQuerySystemProcessInformation(Buffer, Size, ReqSize, TRUE);
+    return ExpQuerySystemProcessInformation(Buffer, Size, ReqSize, TRUE, FALSE, 0);
 }
 
 /* Class 58 - Recommended shared data alignment */

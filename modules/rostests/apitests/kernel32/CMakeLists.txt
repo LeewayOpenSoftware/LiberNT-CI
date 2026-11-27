@@ -23,6 +23,7 @@ list(APPEND SOURCE
     ApiSetCoreSynch.c
     ApplicationRecovery.c
     ApplicationRestart.c
+    LocalAtomExhaustion.c
     AuditAlarmApis.c
     BaseSetLastNTError.c
     BaseThreadInitThunk.c
