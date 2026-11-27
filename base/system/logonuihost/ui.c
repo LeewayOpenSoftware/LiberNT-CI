@@ -22,6 +22,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_ID_FIELD_BASE   1000
 #define LUH_ID_RESTART      1900
 #define LUH_ID_SHUTDOWN     1901
+#define LUH_ID_POWER        1902    /* the power button: a menu of LUH_ID_RESTART and LUH_ID_SHUTDOWN */
+#define LUH_POWER_WIDTH     120
 #define LUH_ID_TILE_BASE    2000    /* + tile index, below LUH_ID_TILE_BASE + LUH_MAX_TILES */
 
 #define LUH_TILE_WIDTH      260
@@ -56,6 +58,7 @@ typedef struct _LUH_UI
     BOOL PageBusy;          /* a submission is with winlogon; controls disabled */
     HWND PolicyButtons[2];
     HWND TileButtons[LUH_MAX_TILES];    /* the other tiles, bottom left, as on the Windows sign-in screen */
+    HWND PowerButton;                   /* bottom right; absent when ShutdownWithoutLogon is 0 */
     /* the curtain: clock and date before the tiles, CAD-less logon and unlock only */
     BOOL Curtain;
     PLUH_PAGE CurtainPage;  /* a page that arrived under the curtain; shown when it lifts */
@@ -140,7 +143,60 @@ LuhDestroyPage(void)
             g_Ui.TileButtons[i] = NULL;
         }
     }
+    if (g_Ui.PowerButton)
+    {
+        DestroyWindow(g_Ui.PowerButton);
+        g_Ui.PowerButton = NULL;
+    }
     g_Ui.PageBusy = FALSE;
+}
+
+/*
+ * The power button of the sign-in screen. Hiding it is only the visible half: winlogon's
+ * action handler refuses Restart and Shut down itself while ShutdownWithoutLogon is 0.
+ */
+static void
+LuhCreatePowerButton(
+    _In_ HWND Window)
+{
+    RECT Client;
+
+    if (g_Options.NoPower)
+        return;
+    GetClientRect(Window, &Client);
+    g_Ui.PowerButton = CreateWindowExW(0, L"BUTTON", L"Power", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                       Client.right - LUH_TILE_MARGIN - LUH_POWER_WIDTH,
+                                       Client.bottom - LUH_TILE_MARGIN - LUH_ROW_HEIGHT,
+                                       LUH_POWER_WIDTH, LUH_ROW_HEIGHT, Window, (HMENU)LUH_ID_POWER, NULL, NULL);
+    if (g_Ui.PowerButton)
+        SendMessageW(g_Ui.PowerButton, WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+}
+
+/* Restart and Shut down, above the button; the choice goes to winlogon, which decides. */
+static void
+LuhPowerMenu(
+    _In_ HWND Window)
+{
+    HMENU Menu;
+    RECT Button;
+    UINT Choice;
+
+    if (g_Ui.PowerButton == NULL || g_Ui.PageBusy)
+        return;
+    Menu = CreatePopupMenu();
+    if (Menu == NULL)
+        return;
+    AppendMenuW(Menu, MF_STRING, LUH_ID_RESTART, L"Restart");
+    AppendMenuW(Menu, MF_STRING, LUH_ID_SHUTDOWN, L"Shut down");
+    GetWindowRect(g_Ui.PowerButton, &Button);
+    Choice = (UINT)TrackPopupMenu(Menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_BOTTOMALIGN | TPM_NONOTIFY,
+                                  Button.right, Button.top, 0, Window, NULL);
+    DestroyMenu(Menu);
+    if (Choice == LUH_ID_RESTART || Choice == LUH_ID_SHUTDOWN)
+    {
+        LuhTrace("power", Choice == LUH_ID_RESTART ? L"restart" : L"shutdown");
+        WluiClientRequestAction(&g_Connection, Choice == LUH_ID_RESTART ? WluiActionRestart : WluiActionShutdown);
+    }
 }
 
 /* With more than one tile, every tile is listed bottom left; the selected one is checked. */
@@ -291,6 +347,7 @@ LuhCreatePage(
     }
 
     LuhCreateTileList(Window, Page);
+    LuhCreatePowerButton(Window);
     if (Focus)
         SetFocus(Focus);
     StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu", Page->Count);
@@ -313,10 +370,12 @@ LuhEnablePage(
     for (i = 0; i < g_Ui.Page->Count; i++)
         if (g_Ui.Page->Fields[i].Control && g_Ui.Page->Fields[i].Interactive != CPFIS_DISABLED)
             EnableWindow(g_Ui.Page->Fields[i].Control, Enable);
-    /* No switching tiles while a submission is with winlogon. */
+    /* No switching tiles and no power menu while a submission is with winlogon. */
     for (i = 0; i < LUH_MAX_TILES; i++)
         if (g_Ui.TileButtons[i])
             EnableWindow(g_Ui.TileButtons[i], Enable);
+    if (g_Ui.PowerButton)
+        EnableWindow(g_Ui.PowerButton, Enable);
     g_Ui.PageBusy = !Enable;
 }
 
@@ -911,6 +970,10 @@ LuhWindowProc(
                 {
                     WluiClientRequestAction(&g_Connection,
                                             Id == LUH_ID_RESTART ? WluiActionRestart : WluiActionShutdown);
+                }
+                else if (Id == LUH_ID_POWER)
+                {
+                    LuhPowerMenu(Window);
                 }
                 else if (Id >= LUH_ID_TILE_BASE && Id < LUH_ID_TILE_BASE + LUH_MAX_TILES)
                 {
