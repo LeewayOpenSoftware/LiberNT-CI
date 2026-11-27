@@ -167,6 +167,15 @@ START_TEST(afdext)
        "DisconnectEx(flags=0x80000000) got %d err %d\n", bret, WSAGetLastError());
     CheckSocketStillConnected(connector);
 
+    /* The peer drains the three bytes the checks above sent */
+    for (bytes = 0; bytes < 3; bytes += ret)
+    {
+        ret = recv(accepted, data, 3 - bytes, 0);
+        if (ret <= 0)
+            break;
+    }
+    ok(bytes == 3, "peer drained %lu bytes, expected 3\n", bytes);
+
     /* --- DisconnectEx overlapped on a connected socket --- */
     memset(&overlapped, 0, sizeof(overlapped));
     overlapped.hEvent = WSACreateEvent();
@@ -175,10 +184,9 @@ START_TEST(afdext)
     bret = pDisconnectEx(connector, &overlapped, 0, 0);
     if (bret)
     {
-        ok(overlapped.Internal == STATUS_PENDING,
-           "expected STATUS_PENDING, got %08Ix\n", (SIZE_T)overlapped.Internal);
-        /* the disconnect still has to complete before the peer sees EOF */
-        bret = WSAGetOverlappedResult(connector, &overlapped, &bytes, TRUE, &flags);
+        /* completed at once */
+        ok(overlapped.Internal == 0,
+           "expected a completed request, got %08lx\n", (ULONG)overlapped.Internal);
     }
     else
     {
@@ -266,6 +274,7 @@ START_TEST(afdext)
 
     /* Control.len == 0 goes down the WSPSend path */
     strcpy(data, "afdext-t10");
+    buffer.len = (ULONG)strlen(data);
     WSASetLastError(0);
     bytes = 0;
     ret = pWSASendMsg(connector, &msg, 0, &bytes, NULL, NULL);
