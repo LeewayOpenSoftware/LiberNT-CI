@@ -338,16 +338,6 @@ DisplayStatusMessage(
 }
 
 
-BOOL
-RemoveStatusMessage(
-    IN PWLSESSION Session)
-{
-    /* In host mode the status lives in the host window until the next command replaces it. */
-    UNREFERENCED_PARAMETER(Session);
-    return TRUE;
-}
-
-
 static
 BOOL
 IsPlugPlayServiceRunning(VOID)

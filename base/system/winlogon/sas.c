@@ -989,7 +989,6 @@ cleanup:
     {
         LogonStage("logon-failed");
         WlHostLogonFailed(STATUS_UNSUCCESSFUL);
-        RemoveStatusMessage(Session);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Session->UserName);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Session->Domain);
         Session->UserName = Session->Domain = NULL;
@@ -1018,7 +1017,6 @@ cleanup:
         WlHostWaitDesktopSwitch(Session);
         WlHostBeforeDesktopSwitch();
         SwitchDesktop(Session->ApplicationDesktop);
-        RemoveStatusMessage(Session);
         WlHostAfterDesktopSwitch();
         Session->LogonState = STATE_LOGGED_ON;
         LogonStage("logged-on");
@@ -1346,7 +1344,6 @@ HandleLogoff(
     }
 
     CallNotificationDlls(Session, LogoffHandler);
-    RemoveStatusMessage(Session);
 
     /* The remaining Logoff steps run on the Winlogon desktop */
     SwitchDesktop(Session->WinlogonDesktop);
@@ -1644,7 +1641,6 @@ DoGenericAction(
 
                 if (!NT_SUCCESS(HandleLogoff(Session, wlxAction)))
                 {
-                    RemoveStatusMessage(Session);
                     break;
                 }
             }
@@ -1652,7 +1648,6 @@ DoGenericAction(
             {
                 if (!NT_SUCCESS(HandleShutdown(Session, wlxAction)))
                 {
-                    RemoveStatusMessage(Session);
                     if (Session->LogonState == STATE_INIT)
                         SwitchDesktop(Session->ApplicationDesktop);
                     else
@@ -1664,7 +1659,6 @@ DoGenericAction(
             }
             else
             {
-                RemoveStatusMessage(Session);
                 Session->LogonState = STATE_LOGGED_OFF;
                 WlDisplaySasNotice(Session);
             }
@@ -1692,7 +1686,6 @@ DoGenericAction(
                 CallNotificationDlls(Session, UnlockHandler);
                 WlHostBeforeDesktopSwitch();
                 SwitchDesktop(Session->ApplicationDesktop);
-                RemoveStatusMessage(Session);
                 WlHostAfterDesktopSwitch();
                 Session->LogonState = STATE_LOGGED_ON;
             }
@@ -1719,7 +1712,6 @@ DispatchSAS(
             {
                 case STATE_INIT:
                     Session->LogonState = STATE_LOGGED_OFF;
-                    RemoveStatusMessage(Session);
                     WlDisplaySasNotice(Session);
                     return;
 

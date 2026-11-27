@@ -603,9 +603,6 @@ DisplayStatusMessage(IN PWLSESSION Session,
                      IN HDESK hDesktop,
                      IN UINT ResourceId);
 
-BOOL
-RemoveStatusMessage(IN PWLSESSION Session);
-
 /* wlx.c */
 BOOL
 CreateWindowStationAndDesktops(
