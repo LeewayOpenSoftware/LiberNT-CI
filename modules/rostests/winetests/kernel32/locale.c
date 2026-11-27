@@ -3876,10 +3876,11 @@ static void test_unicode_sorting(void)
 
 #ifdef __REACTOS__
         ok (result == entry->result_sortkey || broken(GetNTVersion() == _WIN32_WINNT_VISTA), "Test %d (%s, %s) - Expected %d, got %d\n",
+            i, wine_dbgstr_w(entry->first), wine_dbgstr_w(entry->second), entry->result_sortkey, result);
 #else
         ok (result == entry->result_sortkey, "Test %d (%s, %s) - Expected %d, got %d\n",
-#endif
             i, wine_dbgstr_w(entry->first), wine_dbgstr_w(entry->second), entry->result_sortkey, result);
+#endif
 
 #if !defined(__REACTOS__) || DLL_EXPORT_VERSION >= 0x600
 #if defined(__REACTOS__) && defined(_WIN64)

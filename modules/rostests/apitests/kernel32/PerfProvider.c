@@ -141,10 +141,10 @@ TestProviderStart(const PERF_FUNCTIONS *Perf, PCSTR Module)
     HANDLE Provider, Provider2, Duplicate;
     ULONG Ret;
 
-    Provider = (HANDLE)0xdeadbeef;
+    Provider = (HANDLE)(ULONG_PTR)0xdeadbeef;
     Ret = Perf->StartProvider(NULL, ControlCallback, &Provider);
     ok(Ret == ERROR_INVALID_PARAMETER, "%s: PerfStartProvider(NULL) returned %lu\n", Module, Ret);
-    ok(Provider == (HANDLE)0xdeadbeef, "%s: the provider handle was written\n", Module);
+    ok(Provider == (HANDLE)(ULONG_PTR)0xdeadbeef, "%s: the provider handle was written\n", Module);
     Ret = Perf->StartProvider(&ProviderGuid, ControlCallback, NULL);
     ok(Ret == ERROR_INVALID_PARAMETER, "%s: PerfStartProvider(NULL handle) returned %lu\n", Module, Ret);
 
@@ -166,17 +166,17 @@ TestProviderStart(const PERF_FUNCTIONS *Perf, PCSTR Module)
     ok_long(Perf->StopProvider(Provider), ERROR_SUCCESS);
 
     ZeroMemory(&Context, sizeof(Context));
-    Provider = (HANDLE)0xdeadbeef;
+    Provider = (HANDLE)(ULONG_PTR)0xdeadbeef;
     Ret = Perf->StartProviderEx(&ProviderGuid, &Context, &Provider);
     ok(Ret == ERROR_INVALID_PARAMETER, "%s: PerfStartProviderEx(size 0) returned %lu\n", Module, Ret);
-    ok(Provider == (HANDLE)0xdeadbeef, "%s: the provider handle was written\n", Module);
+    ok(Provider == (HANDLE)(ULONG_PTR)0xdeadbeef, "%s: the provider handle was written\n", Module);
     Context.ContextSize = sizeof(Context) + 1;
     Ret = Perf->StartProviderEx(&ProviderGuid, &Context, &Provider);
     ok(Ret == ERROR_SUCCESS, "%s: PerfStartProviderEx returned %lu\n", Module, Ret);
     if (Ret == ERROR_SUCCESS)
         ok_long(Perf->StopProvider(Provider), ERROR_SUCCESS);
 
-    Provider = (HANDLE)0xdeadbeef;
+    Provider = (HANDLE)(ULONG_PTR)0xdeadbeef;
     Ret = Perf->StartProviderEx(&ProviderGuid, NULL, &Provider);
     ok(Ret == ERROR_SUCCESS, "%s: PerfStartProviderEx(NULL context) returned %lu\n", Module, Ret);
     if (Ret == ERROR_SUCCESS)

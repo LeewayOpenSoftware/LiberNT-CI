@@ -73,7 +73,8 @@ TestWow64View(VOID)
     HKEY hKey;
     LONG Error;
 
-    if (sizeof(PVOID) == sizeof(ULONG) && (!IsWow64Process(GetCurrentProcess(), &IsWow64) || !IsWow64))
+    IsWow64Process(GetCurrentProcess(), &IsWow64);
+    if (sizeof(PVOID) == sizeof(ULONG) && !IsWow64)
     {
         skip("No 32-bit registry view on a 32-bit system\n");
         return;

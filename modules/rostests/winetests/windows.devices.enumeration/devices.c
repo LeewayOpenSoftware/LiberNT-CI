@@ -364,7 +364,7 @@ struct iterable_hstring
     HSTRING values[];
 };
 
-C_ASSERT( sizeof( struct iterable_hstring ) == offsetof( struct iterable_hstring, values[0] ) );
+C_ASSERT( sizeof( struct iterable_hstring ) == offsetof( struct iterable_hstring, values ) );
 
 static inline struct iterable_hstring *impl_from_IIterable_HSTRING( IIterable_HSTRING *iface )
 {

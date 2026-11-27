@@ -9091,10 +9091,11 @@ static void test_GetSecurityInfo(void)
         ok(ace->Mask == PROCESS_ALL_ACCESS, "Current User ACE has unexpected mask %#lx\n", ace->Mask);
     }
     ok(domain_users_ace_id != -1,
+       "Domain Users ACE not found.\n");
 #else
     ok(domain_users_ace_id != -1 || broken(domain_users_ace_id == -1) /* win2k */,
-#endif
        "Domain Users ACE not found.\n");
+#endif
     if (domain_users_ace_id != -1)
     {
         bret = GetAce(pDacl, domain_users_ace_id, (VOID **)&ace);
@@ -9113,10 +9114,11 @@ static void test_GetSecurityInfo(void)
     }
 #ifdef __REACTOS__
     ok(admins_ace_id != -1,
+       "Builtin Admins ACE not found.\n");
 #else
     ok(admins_ace_id != -1 || broken(admins_ace_id == -1) /* xp */,
-#endif
        "Builtin Admins ACE not found.\n");
+#endif
     if (admins_ace_id != -1)
     {
         bret = GetAce(pDacl, admins_ace_id, (VOID **)&ace);
