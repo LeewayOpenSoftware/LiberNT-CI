@@ -739,7 +739,7 @@ EnableTraceEx2(IN TRACEHANDLE TraceHandle,
         }
 
         Status = NtTraceControl(EtwEnableGuidCode,
-                                Message ? Message : &Params,
+                                Message ? (PVOID)Message : (PVOID)&Params,
                                 MessageLength,
                                 NULL, 0, &ReturnSize);
         if (Message)

@@ -34,8 +34,8 @@
 
 typedef struct _TLG_READER
 {
-    PCUCHAR Ptr;
-    PCUCHAR End;
+    const UCHAR * Ptr;
+    const UCHAR * End;
 } TLG_READER;
 
 static
@@ -80,7 +80,7 @@ static
 BOOLEAN
 TlgReadString(IN OUT TLG_READER *Reader, OUT PCSTR *Start, OUT PUSHORT Length)
 {
-    PCUCHAR p = Reader->Ptr;
+    const UCHAR * p = Reader->Ptr;
 
     while (p < Reader->End && *p)
         p++;
@@ -312,7 +312,7 @@ TlgParseEventFields(IN OUT TLG_READER *Reader, IN OUT PTLG_DECODE Decode)
 /* Locates the EVENT_SCHEMA_TL extended item and the provider traits item */
 static
 BOOLEAN
-TlgFindExtendedItem(IN PEVENT_RECORD Event, IN USHORT ExtType, OUT PCUCHAR *Data, OUT PUSHORT DataSize)
+TlgFindExtendedItem(IN PEVENT_RECORD Event, IN USHORT ExtType, OUT const UCHAR * *Data, OUT PUSHORT DataSize)
 {
     USHORT i;
 
@@ -322,7 +322,7 @@ TlgFindExtendedItem(IN PEVENT_RECORD Event, IN USHORT ExtType, OUT PCUCHAR *Data
 
         if (Item->ExtType == ExtType && Item->DataSize && Item->DataPtr)
         {
-            *Data = (PCUCHAR)(ULONG_PTR)Item->DataPtr;
+            *Data = (const UCHAR *)(ULONG_PTR)Item->DataPtr;
             *DataSize = Item->DataSize;
             return TRUE;
         }
@@ -334,7 +334,7 @@ TlgFindExtendedItem(IN PEVENT_RECORD Event, IN USHORT ExtType, OUT PCUCHAR *Data
    UINT16 Size, then the UTF-8 provider name, then optional chunks. */
 static
 BOOLEAN
-TlgParseProviderName(IN PCUCHAR Data, IN USHORT DataSize, OUT PCSTR *Name, OUT PUSHORT NameLength)
+TlgParseProviderName(IN const UCHAR * Data, IN USHORT DataSize, OUT PCSTR *Name, OUT PUSHORT NameLength)
 {
     TLG_READER Reader;
     USHORT Size;
@@ -376,7 +376,7 @@ TdhGetEventInformation(
     _Out_writes_bytes_opt_(*BufferSize) PTRACE_EVENT_INFO Buffer,
     _Inout_ PULONG BufferSize)
 {
-    PCUCHAR Schema, Traits;
+    const UCHAR * Schema, Traits;
     USHORT SchemaSize, TraitsSize;
     TLG_READER Reader;
     UCHAR BlobType, Channel, Level, Opcode;
