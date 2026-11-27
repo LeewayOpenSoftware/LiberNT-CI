@@ -358,7 +358,9 @@ CollectTiles(
     }
 
     T->Selected = 0;
-    HideLast = ReadPolicyFlag(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+    /* The logon screen only: unlock keeps the locked account selected. */
+    HideLast = g_Options.Scenario == CPUS_LOGON &&
+               ReadPolicyFlag(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
                               L"DontDisplayLastUserName");
     if (HideLast)
     {
@@ -644,37 +646,45 @@ PrefillProviders(
 }
 
 /* Windows order: SetUsageScenario (done by the enumeration), then SetUserArray, then the
- * first GetCredentialCount. Logon and unlock only; the other scenarios keep one empty tile. */
+ * first GetCredentialCount. Logon and unlock only; the other scenarios keep one empty tile.
+ * Each provider gets an array of its own: SetProviderFilter changes the array it is called on. */
 static VOID
 SetUserArrays(
     _In_ PCPH_PROVIDER_SET Set)
 {
-    ICredentialProviderUserArray *Users = NULL;
-    WCHAR Num[16];
-    DWORD Count = 0;
+    BOOL Unlock = g_Options.Scenario == CPUS_UNLOCK_WORKSTATION;
+    BOOL Traced = FALSE;
     ULONG i;
 
-    if (g_Options.Scenario != CPUS_LOGON && g_Options.Scenario != CPUS_UNLOCK_WORKSTATION)
+    if (g_Options.Scenario != CPUS_LOGON && !Unlock)
         return;
-    if (FAILED(LuhUsersCreate(g_Options.Scenario == CPUS_UNLOCK_WORKSTATION ? g_Options.PrefillUser : NULL, &Users)))
-        return;
-    ICredentialProviderUserArray_GetCount(Users, &Count);
-    StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu", Count);
-    LuhTrace("users", Num);
     for (i = 0; i < Set->Count; i++)
     {
         ICredentialProviderSetUserArray *Sink = NULL;
+        ICredentialProviderUserArray *Users = NULL;
 
         if (IsFaulted(&Set->Providers[i].Clsid))
             continue;
-        if (SUCCEEDED(ICredentialProvider_QueryInterface(Set->Providers[i].Provider, &IID_ICredentialProviderSetUserArray,
-                                                         (void **)&Sink)) && Sink != NULL)
+        if (FAILED(ICredentialProvider_QueryInterface(Set->Providers[i].Provider, &IID_ICredentialProviderSetUserArray,
+                                                      (void **)&Sink)) || Sink == NULL)
+            continue;
+        if (SUCCEEDED(LuhUsersCreate(Unlock, g_Options.PrefillUser, &Users)))
         {
+            if (!Traced)
+            {
+                WCHAR Num[16];
+                DWORD Count = 0;
+
+                ICredentialProviderUserArray_GetCount(Users, &Count);
+                StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu", Count);
+                LuhTrace("users", Num);
+                Traced = TRUE;
+            }
             ICredentialProviderSetUserArray_SetUserArray(Sink, Users);
-            ICredentialProviderSetUserArray_Release(Sink);
+            ICredentialProviderUserArray_Release(Users);
         }
+        ICredentialProviderSetUserArray_Release(Sink);
     }
-    ICredentialProviderUserArray_Release(Users);
 }
 
 static DWORD WINAPI

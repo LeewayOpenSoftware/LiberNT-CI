@@ -129,7 +129,7 @@ BOOL LuhProviderSelectTile(_In_ DWORD Index);
 
 /* users.c */
 #define LUH_MAX_USERS        64
-HRESULT LuhUsersCreate(_In_opt_ PCWSTR Only, _Outptr_ ICredentialProviderUserArray **Out);
+HRESULT LuhUsersCreate(_In_ BOOL Unlock, _In_opt_ PCWSTR Only, _Outptr_ ICredentialProviderUserArray **Out);
 
 /* main.c */
 BOOL LuhParseCommandLine(_In_ int argc, _In_reads_(argc) WCHAR **argv, _Out_ PLUH_OPTIONS Options);

@@ -290,11 +290,13 @@ AddUser(
 }
 
 /*
- * The accounts the msgina page lists: every enabled normal local account (msgina LoadUsers).
- * Only, when given (the locked user on unlock), keeps just that account.
+ * Logon: the accounts the msgina page lists, every enabled normal local account (msgina
+ * LoadUsers). Unlock: only the locked account Only names, as msgina lists only the session's
+ * user; without a name, none at all, so nothing is enumerated on the lock screen.
  */
 HRESULT
 LuhUsersCreate(
+    _In_ BOOL Unlock,
     _In_opt_ PCWSTR Only,
     _Outptr_ ICredentialProviderUserArray **Out)
 {
@@ -320,6 +322,12 @@ LuhUsersCreate(
         return E_OUTOFMEMORY;
     Array->ICredentialProviderUserArray_iface.lpVtbl = &LuhUserArrayVtbl;
     Array->Ref = 1;
+    if (Unlock && OnlyName == NULL)
+    {
+        TRACE("unlock without an account name: no users\n");
+        *Out = &Array->ICredentialProviderUserArray_iface;
+        return S_OK;
+    }
 
     do
     {
@@ -333,7 +341,7 @@ LuhUsersCreate(
         {
             if (Info[i].usri1_flags & UF_ACCOUNTDISABLE)
                 continue;
-            if (OnlyName != NULL && _wcsicmp(Info[i].usri1_name, OnlyName))
+            if (Unlock && _wcsicmp(Info[i].usri1_name, OnlyName) != 0)
                 continue;
             AddUser(Array, Computer, Info[i].usri1_name);
         }
