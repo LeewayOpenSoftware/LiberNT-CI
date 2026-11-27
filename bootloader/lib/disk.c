@@ -305,14 +305,45 @@ static
 BOOLEAN
 DkMatchBcdPartition(
     _In_ PBCD_DEVICE BcdDevice,
+    _In_ BOOLEAN AnyDisk,
     _In_ ULONG Index,
     _Inout_ PDK_DEVICE Disk,
     _Out_ PDK_DEVICE Device)
 {
     Disk->DiskIndex = Index;
     return BcdDevice->Type == BcdDeviceGptPartition ?
-           GptFindPartition(Disk, BcdDevice->Disk, BcdDevice->Partition, Device) :
+           GptFindPartition(Disk, AnyDisk ? NULL : BcdDevice->Disk, BcdDevice->Partition, Device) :
            DkFindMbrPartition(Disk, BcdDevice->Signature, BcdDevice->PartitionOffset, Device);
+}
+
+/* The boot disk first, then every disk, connecting all controllers once if nothing matched. */
+static
+BOOLEAN
+DkFindBcdPartition(
+    _In_ PBCD_DEVICE BcdDevice,
+    _In_ BOOLEAN AnyDisk,
+    _Out_ PDK_DEVICE Device)
+{
+    DK_DEVICE Disk;
+    ULONG Index;
+
+    if (FwGetBootDiskIndex(&Index) &&
+        FwGetDisk(Index, &Disk) &&
+        DkMatchBcdPartition(BcdDevice, AnyDisk, Index, &Disk, Device))
+    {
+        return TRUE;
+    }
+
+    do
+    {
+        for (Index = 0; FwGetDisk(Index, &Disk); Index++)
+        {
+            if (DkMatchBcdPartition(BcdDevice, AnyDisk, Index, &Disk, Device))
+                return TRUE;
+        }
+    } while (FwRescanDisks());
+
+    return FALSE;
 }
 
 BOOLEAN
@@ -320,32 +351,19 @@ DkOpenBcdDevice(
     _In_ PBCD_DEVICE BcdDevice,
     _Out_ PDK_DEVICE Device)
 {
-    DK_DEVICE Disk;
-    ULONG Index;
-
     switch (BcdDevice->Type)
     {
         case BcdDeviceBoot:
             return DkLocateBootPartition(Device) || FwGetBootDevice(Device);
 
         case BcdDeviceGptPartition:
-        case BcdDeviceMbrPartition:
-            if (FwGetBootDiskIndex(&Index) &&
-                FwGetDisk(Index, &Disk) &&
-                DkMatchBcdPartition(BcdDevice, Index, &Disk, Device))
-            {
-                return TRUE;
-            }
+            /* A partition GUID is unique on its own. When no disk carries both GUIDs (the disk was cloned or its
+             * table rewritten with a new disk GUID), take the partition by its GUID on any disk. */
+            return DkFindBcdPartition(BcdDevice, FALSE, Device) ||
+                   DkFindBcdPartition(BcdDevice, TRUE, Device);
 
-            do
-            {
-                for (Index = 0; FwGetDisk(Index, &Disk); Index++)
-                {
-                    if (DkMatchBcdPartition(BcdDevice, Index, &Disk, Device))
-                        return TRUE;
-                }
-            } while (FwRescanDisks());
-            break;
+        case BcdDeviceMbrPartition:
+            return DkFindBcdPartition(BcdDevice, FALSE, Device);
     }
 
     return FALSE;
