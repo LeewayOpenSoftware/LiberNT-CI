@@ -5,17 +5,15 @@
  * PURPOSE:     storeinst: install a visual style into the protected theme store the way the ThemeLoader4 trust gate
  *              expects it, so an ordinary user can load a version-4 style. It copies <style>.msstyles (and its MUI)
  *              into %SystemRoot%\Resources\Themes\<name>\<name>.msstyles, stamps the store security descriptor on the
- *              files and their directories, optionally turns the ordinary-user v4 gate on (--enable-v4), optionally
- *              writes a <name>.theme descriptor for the shell, and optionally makes the style the active system theme
+ *              files and their directories, optionally writes a <name>.theme descriptor for the shell, and optionally makes the style the active system theme
  *              (--set-active) using the style's own default colour and size. Run it elevated, inside the test VM only;
  *              it never overwrites an existing store entry. --set-active must be run by the ordinary user who will see
  *              the theme (it writes that user's HKCU and applies in that user's session).
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * Usage: storeinst <style.msstyles> <name> [--mui <file.msstyles.mui> <locale>] [--enable-v4] [--theme] [--set-active]
+ * Usage: storeinst <style.msstyles> <name> [--mui <file.msstyles.mui> <locale>] [--theme] [--set-active]
  *   <name>        1..32 of [A-Za-z0-9_-], starting with a letter or digit (matches the gate's UXT_NAME_MAX)
  *   --mui         install a language module as <name>\<locale>\<name>.msstyles.mui (<locale> like en-US)
- *   --enable-v4   set HKLM\SOFTWARE\Leeway\UxTheme\EnableV4Ordinary = 1 (ordinary processes' user theme; privileged ones use the machine default)
  *   --theme       write %SystemRoot%\Resources\Themes\<name>.theme pointing at the installed style (for the shell)
  *   --set-active  make the style the active system theme for the CURRENT (ordinary) user, using the colour and size
  *                 the style declares as its default; a non-zero exit means the apply did not take
@@ -36,7 +34,6 @@
 static const WCHAR STORE_SDDL[] =
     L"O:BAG:SYD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
 
-static const WCHAR GATE_KEY[]   = L"SOFTWARE\\Leeway\\UxTheme";
 static const WCHAR THEMEMGR[]   = L"Software\\Microsoft\\Windows\\CurrentVersion\\ThemeManager";
 
 /* GetThemeDefaults and SetSystemVisualStyle are exported by ordinal only (7 and 65), here and on Windows. */
@@ -162,7 +159,7 @@ static BOOL ensure_dir(const WCHAR *path)
 int wmain(int argc, WCHAR **argv)
 {
     const WCHAR *styleArg = NULL, *name = NULL, *muiArg = NULL, *locale = NULL;
-    BOOL enableV4 = FALSE, writeTheme = FALSE, setActive = FALSE, haveDefaults = FALSE;
+    BOOL writeTheme = FALSE, setActive = FALSE, haveDefaults = FALSE;
     int i, rc = 0;
     WCHAR win[MAX_PATH], root[MAX_PATH], nameDir[MAX_PATH], styleDst[MAX_PATH];
     WCHAR color[64] = L"", size[64] = L"";
@@ -171,7 +168,6 @@ int wmain(int argc, WCHAR **argv)
     for (i = 1; i < argc; i++)
     {
         if (!wcscmp(argv[i], L"--mui") && i + 2 < argc) { muiArg = argv[++i]; locale = argv[++i]; }
-        else if (!wcscmp(argv[i], L"--enable-v4"))  enableV4 = TRUE;
         else if (!wcscmp(argv[i], L"--theme"))      writeTheme = TRUE;
         else if (!wcscmp(argv[i], L"--set-active")) setActive = TRUE;
         else if (argv[i][0] == L'-')                return fail(L"storeinst: unknown argument %ls", argv[i]);
@@ -182,7 +178,7 @@ int wmain(int argc, WCHAR **argv)
 
     if (!styleArg || !name)
         return fail(L"usage: storeinst <style.msstyles> <name> [--mui <file.msstyles.mui> <locale>]"
-                    L" [--enable-v4] [--theme] [--set-active]");
+                    L" [--theme] [--set-active]");
     if (!valid_name(name))
         return fail(L"storeinst: the name must be 1-32 of [A-Za-z0-9_-] starting with a letter or digit");
     if (muiArg && !valid_locale(locale))
@@ -194,7 +190,7 @@ int wmain(int argc, WCHAR **argv)
     StringCchPrintfW(nameDir, MAX_PATH, L"%ls\\%ls", root, name);
     StringCchPrintfW(styleDst, MAX_PATH, L"%ls\\%ls.msstyles", nameDir, name);
 
-    /* Install, unless the store entry is already there (then just proceed to the gate/active steps). */
+    /* Install, unless the store entry is already there (then just proceed to the theme/active steps). */
     if (GetFileAttributesW(styleDst) == INVALID_FILE_ATTRIBUTES)
     {
         if (!ensure_dir(root) || !ensure_dir(nameDir))
@@ -216,21 +212,6 @@ int wmain(int argc, WCHAR **argv)
     }
     else
         wprintf(L"%ls already present; keeping it\n", styleDst);
-
-    if (enableV4)
-    {
-        HKEY hk;
-        DWORD one = 1;
-        LONG r = RegCreateKeyExW(HKEY_LOCAL_MACHINE, GATE_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hk, NULL);
-        if (r == ERROR_SUCCESS)
-        {
-            r = RegSetValueExW(hk, L"EnableV4Ordinary", 0, REG_DWORD, (const BYTE *)&one, sizeof(one));
-            RegCloseKey(hk);
-        }
-        if (r != ERROR_SUCCESS)
-            return fail(L"storeinst: cannot set HKLM\\%ls EnableV4Ordinary (error %ld)", GATE_KEY, r);
-        wprintf(L"HKLM\\%ls EnableV4Ordinary = 1 (ordinary processes' user theme; privileged ones use the machine default)\n", GATE_KEY);
-    }
 
     /* Resolve the style's own default colour and size (GetThemeDefaults is UXTHEME ordinal 7, no name). */
     if (writeTheme || setActive)
