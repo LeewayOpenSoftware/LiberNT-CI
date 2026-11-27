@@ -2449,6 +2449,44 @@ LuhDropCurtain(
     LuhFreeCurtainPage();
 }
 
+/*
+ * A legal notice deferred to the curtain's lift runs before the first credential page, on every
+ * path that shows one. Page (may be NULL) is parked meanwhile, with any page that arrives under
+ * the notice; a RequestCredentials under it is queued as on the other notice path. Returns the
+ * page to show, or NULL when there is none or the host is leaving.
+ */
+static PLUH_PAGE
+LuhDeferredNotice(
+    _In_ HWND Window,
+    _In_opt_ PLUH_PAGE Page)
+{
+    if (!g_Ui.NoticeAfterLift)
+        return Page;
+    g_Ui.NoticeAfterLift = FALSE;
+    g_Ui.CurtainPage = Page;
+    g_Ui.InLegalNotice = TRUE;
+    LuhLegalNotice(Window);
+    g_Ui.InLegalNotice = FALSE;
+    Page = g_Ui.CurtainPage;
+    g_Ui.CurtainPage = NULL;
+    if (g_Ui.Exiting)
+    {
+        g_Ui.CurtainPage = Page;
+        LuhFreeCurtainPage();
+        return NULL;
+    }
+    if (g_Ui.PendingScenario)
+    {
+        g_Options.Scenario = g_Ui.PendingScenario;
+        if (g_Ui.PendingFlags & WLUI_FLAG_FALLBACK)
+            g_Options.Fallback = TRUE;
+        g_Options.NoPower = (g_Ui.PendingFlags & WLUI_FLAG_NO_POWER) != 0;
+        g_Ui.UsersSignedIn = (g_Ui.PendingFlags & WLUI_FLAG_USERS_SIGNED_IN) != 0;
+        g_Ui.PendingScenario = 0;
+    }
+    return Page;
+}
+
 /* Once the curtain is gone: the page that waited under it comes up. */
 static void
 LuhLiftCurtain(
@@ -2461,22 +2499,10 @@ LuhLiftCurtain(
     g_Ui.CurtainPage = NULL;
     LuhDropCurtain(Window);
     LuhTrace("curtain-lifted", NULL);
-    if (g_Ui.NoticeAfterLift)
-    {
-        /* Windows 11 without Ctrl+Alt+Del: lock screen, lift, legal notice, sign-in. The notice
-         * paints only once the curtain is gone; a page that arrives under it waits as before. */
-        g_Ui.NoticeAfterLift = FALSE;
-        g_Ui.CurtainPage = Page;
-        LuhLegalNotice(Window);
-        Page = g_Ui.CurtainPage;
-        g_Ui.CurtainPage = NULL;
-        if (g_Ui.Exiting)
-        {
-            g_Ui.CurtainPage = Page;
-            LuhFreeCurtainPage();
-            return;
-        }
-    }
+    /* Windows 11 without Ctrl+Alt+Del: lock screen, lift, legal notice, sign-in. */
+    Page = LuhDeferredNotice(Window, Page);
+    if (g_Ui.Exiting)
+        return;
     if (Page)
     {
         LuhSetSpinner(Window, FALSE);
@@ -3162,8 +3188,13 @@ LuhWindowProc(
             }
             else if (wParam == LUH_PAGE_READY && lParam)
             {
+                /* Whatever dropped the curtain, a deferred legal notice still comes first. */
+                PLUH_PAGE Page = LuhDeferredNotice(Window, (PLUH_PAGE)lParam);
+
+                if (g_Ui.Exiting || Page == NULL)
+                    return 0;
                 LuhSetSpinner(Window, FALSE);
-                LuhCreatePage(Window, (PLUH_PAGE)lParam);
+                LuhCreatePage(Window, Page);
                 if (g_Ui.Page && g_Ui.Page->AutoSubmit)
                 {
                     LuhTrace("auto-submit", NULL);
