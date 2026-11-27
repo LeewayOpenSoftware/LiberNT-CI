@@ -11,7 +11,7 @@
 #include <wluiclient.h>
 #include <wluiauth.h>
 
-extern RPC_IF_HANDLE wlui_v1_0_s_ifspec;
+extern RPC_IF_HANDLE Testwlui_v1_0_s_ifspec;
 
 /* ---- the test server ------------------------------------------------------ */
 
@@ -107,7 +107,7 @@ StartServer(PCWSTR Endpoint, PSID Own)
     LocalFree(Sd);
     if (Status != RPC_S_OK)
         return FALSE;
-    if (RpcServerRegisterIfEx(wlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
+    if (RpcServerRegisterIfEx(Testwlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
                               RPC_C_LISTEN_MAX_CALLS_DEFAULT, WluiServerIfCallback) != RPC_S_OK)
         return FALSE;
     Status = RpcServerListen(1, 4, TRUE);
@@ -535,7 +535,7 @@ START_TEST(Host)
     Test_Providers(Exe, Endpoint, Own, Trace);
 
     RpcMgmtStopServerListening(NULL);
-    RpcServerUnregisterIf(wlui_v1_0_s_ifspec, NULL, TRUE);
+    RpcServerUnregisterIf(Testwlui_v1_0_s_ifspec, NULL, TRUE);
     WluiStateRelease(g_State);
     CloseHandle(g_ReadyEvent);
     CloseHandle(g_ExitEvent);

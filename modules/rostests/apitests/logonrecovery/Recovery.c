@@ -13,7 +13,7 @@
 #include <ntsecapi.h>
 #include <credser.h>
 
-extern RPC_IF_HANDLE wlui_v1_0_s_ifspec;
+extern RPC_IF_HANDLE Testwlui_v1_0_s_ifspec;
 
 static const GUID CLSID_PasswordProvider =
     { 0x60b78e88, 0xead8, 0x445c, { 0x9c, 0xfd, 0x0b, 0x87, 0xf7, 0x4e, 0xa6, 0xcd } };
@@ -125,7 +125,7 @@ StartServer(PCWSTR Endpoint, PSID Own)
     LocalFree(Sd);
     if (Status != RPC_S_OK)
         return FALSE;
-    if (RpcServerRegisterIfEx(wlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
+    if (RpcServerRegisterIfEx(Testwlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
                               RPC_C_LISTEN_MAX_CALLS_DEFAULT, WluiServerIfCallback) != RPC_S_OK)
         return FALSE;
     Status = RpcServerListen(1, 4, TRUE);
@@ -443,5 +443,5 @@ START_TEST(Recovery)
 
     DeleteFileW(Trace);
     RpcMgmtStopServerListening(NULL);
-    RpcServerUnregisterIf(wlui_v1_0_s_ifspec, NULL, TRUE);
+    RpcServerUnregisterIf(Testwlui_v1_0_s_ifspec, NULL, TRUE);
 }
