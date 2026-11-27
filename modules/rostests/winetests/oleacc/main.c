@@ -1287,11 +1287,13 @@ static void test_default_client_accessible_object(void)
     /* Window names don't have keyboard shortcuts */
 #ifndef __REACTOS__
     todo_wine ok(!lstrcmpW(str, L"wnd &t &junk") ||
-#else
-    ok(!lstrcmpW(str, L"wnd &t &junk") ||
-#endif
        broken(!lstrcmpW(str, L"wnd t &junk")), /* Windows < 10 1607 */
        "name = %s\n", wine_dbgstr_w(str));
+#else
+    ok(!lstrcmpW(str, L"wnd &t &junk") ||
+       broken(!lstrcmpW(str, L"wnd t &junk")), /* Windows < 10 1607 */
+       "name = %s\n", wine_dbgstr_w(str));
+#endif
     SysFreeString(str);
 
     hr = IAccessible_get_accKeyboardShortcut(acc, vid, &str);

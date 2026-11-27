@@ -40,6 +40,10 @@
 #include "initguid.h"
 #include "driver_hid.h"
 
+#ifdef _MSC_VER
+int _fltused = 0;
+#endif
+
 static DRIVER_OBJECT *expect_driver;
 
 struct hid_device

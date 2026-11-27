@@ -7203,12 +7203,12 @@ static void run_test_impl(const char *str, const WCHAR *res, testfunc_t test)
 
 static void run_test(const char *str, testfunc_t test)
 {
-    return run_test_impl(str, NULL, test);
+    run_test_impl(str, NULL, test);
 }
 
 static void run_test_from_res(const WCHAR *res, testfunc_t test)
 {
-    return run_test_impl(NULL, res, test);
+    run_test_impl(NULL, res, test);
 }
 
 static HWND create_container_window(void)

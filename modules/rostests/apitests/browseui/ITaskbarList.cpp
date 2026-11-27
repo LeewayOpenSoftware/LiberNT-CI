@@ -201,7 +201,7 @@ START_TEST(ITaskbarList)
             iface->Release();
         }
         if (identity) identity->Release();
-        IUnknown *unknown = (IUnknown *)0xdeadbeef;
+        IUnknown *unknown = (IUnknown *)(ULONG_PTR)0xdeadbeef;
         hr = taskbar->QueryInterface(IID_IClassFactory, (void **)&unknown);
         ok(hr == E_NOINTERFACE && !unknown, "unsupported IID: %#lx, %p\n", hr, unknown);
         TestDecorations(taskbar);

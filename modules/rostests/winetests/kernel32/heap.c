@@ -644,10 +644,11 @@ static void test_HeapCreate(void)
         else if (entries[i].wFlags & PROCESS_HEAP_ENTRY_BUSY)
 #ifdef __REACTOS__
             ok( rtl_entries[i].wFlags == (RTL_HEAP_ENTRY_COMMITTED|RTL_HEAP_ENTRY_BLOCK|RTL_HEAP_ENTRY_BUSY) || broken(rtl_entries[i].wFlags == 0x411) /* win7 */ || broken(rtl_entries[i].wFlags == RTL_HEAP_ENTRY_BUSY) /* WS03 */,
+                "got wFlags %#x\n", rtl_entries[i].wFlags );
 #else
             ok( rtl_entries[i].wFlags == (RTL_HEAP_ENTRY_COMMITTED|RTL_HEAP_ENTRY_BLOCK|RTL_HEAP_ENTRY_BUSY) || broken(rtl_entries[i].wFlags == 0x411) /* win7 */,
-#endif
                 "got wFlags %#x\n", rtl_entries[i].wFlags );
+#endif
         else if (entries[i].wFlags & PROCESS_HEAP_UNCOMMITTED_RANGE)
             ok( rtl_entries[i].wFlags == RTL_HEAP_ENTRY_UNCOMMITTED || broken(rtl_entries[i].wFlags == 0x100) /* win7 */,
                 "got wFlags %#x\n", rtl_entries[i].wFlags );
@@ -748,10 +749,11 @@ static void test_HeapCreate(void)
         else if (entries[i].wFlags & PROCESS_HEAP_ENTRY_BUSY)
 #ifdef __REACTOS__
             ok( rtl_entries[i].wFlags == (RTL_HEAP_ENTRY_COMMITTED|RTL_HEAP_ENTRY_BLOCK|RTL_HEAP_ENTRY_BUSY) || broken(rtl_entries[i].wFlags == 0x411) /* win7 */ || broken(rtl_entries[i].wFlags == RTL_HEAP_ENTRY_BUSY) /* WS03 */ || broken(rtl_entries[i].wFlags == (RTL_HEAP_ENTRY_BLOCK|0x9)) /* WS03 */,
+                "got wFlags %#x\n", rtl_entries[i].wFlags );
 #else
             ok( rtl_entries[i].wFlags == (RTL_HEAP_ENTRY_COMMITTED|RTL_HEAP_ENTRY_BLOCK|RTL_HEAP_ENTRY_BUSY) || broken(rtl_entries[i].wFlags == 0x411) /* win7 */,
-#endif
                 "got wFlags %#x\n", rtl_entries[i].wFlags );
+#endif
         else if (entries[i].wFlags & PROCESS_HEAP_UNCOMMITTED_RANGE)
             ok( rtl_entries[i].wFlags == RTL_HEAP_ENTRY_UNCOMMITTED || broken(rtl_entries[i].wFlags == 0x100) /* win7 */,
                 "got wFlags %#x\n", rtl_entries[i].wFlags );
@@ -770,13 +772,15 @@ static void test_HeapCreate(void)
         winetest_pop_context();
     }
 
-    ok( entries[3].wFlags == PROCESS_HEAP_ENTRY_BUSY ||
 #ifdef __REACTOS__
+    ok( entries[3].wFlags == PROCESS_HEAP_ENTRY_BUSY ||
         broken(entries[3].wFlags == (PROCESS_HEAP_ENTRY_BUSY | PROCESS_HEAP_ENTRY_DDESHARE)) /* win7 */ || broken(entries[3].wFlags == PROCESS_HEAP_UNCOMMITTED_RANGE) /* WS03 */,
-#else
-        broken(entries[3].wFlags == (PROCESS_HEAP_ENTRY_BUSY | PROCESS_HEAP_ENTRY_DDESHARE)) /* win7 */,
-#endif
         "got wFlags %#x\n", entries[3].wFlags );
+#else
+    ok( entries[3].wFlags == PROCESS_HEAP_ENTRY_BUSY ||
+        broken(entries[3].wFlags == (PROCESS_HEAP_ENTRY_BUSY | PROCESS_HEAP_ENTRY_DDESHARE)) /* win7 */,
+        "got wFlags %#x\n", entries[3].wFlags );
+#endif
 #ifdef __REACTOS__
     if (GetNTVersion() >= _WIN32_WINNT_VISTA) {
 #endif
@@ -834,10 +838,11 @@ static void test_HeapCreate(void)
         else if (entries[i].wFlags & PROCESS_HEAP_ENTRY_BUSY)
 #ifdef __REACTOS__
             ok( rtl_entries[i].wFlags == (RTL_HEAP_ENTRY_COMMITTED|RTL_HEAP_ENTRY_BLOCK|RTL_HEAP_ENTRY_BUSY) || broken(rtl_entries[i].wFlags == 0x411) /* win7 */ || broken(rtl_entries[i].wFlags == RTL_HEAP_ENTRY_BUSY) /* WS03 */ || broken(rtl_entries[i].wFlags == (RTL_HEAP_ENTRY_BLOCK|0x9)) /* WS03 */,
+                "got wFlags %#x\n", rtl_entries[i].wFlags );
 #else
             ok( rtl_entries[i].wFlags == (RTL_HEAP_ENTRY_COMMITTED|RTL_HEAP_ENTRY_BLOCK|RTL_HEAP_ENTRY_BUSY) || broken(rtl_entries[i].wFlags == 0x411) /* win7 */,
-#endif
                 "got wFlags %#x\n", rtl_entries[i].wFlags );
+#endif
         else if (entries[i].wFlags & PROCESS_HEAP_UNCOMMITTED_RANGE)
             ok( rtl_entries[i].wFlags == RTL_HEAP_ENTRY_UNCOMMITTED || broken(rtl_entries[i].wFlags == 0x100) /* win7 */,
                 "got wFlags %#x\n", rtl_entries[i].wFlags );

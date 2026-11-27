@@ -162,8 +162,8 @@ TestDynamicTable(PUCHAR Code, ULONG64 *Stack)
 
 START_TEST(RtlVirtualUnwindFragment)
 {
-    ULONG64 Stack[16] = { LOCAL_VALUE, LOCAL_VALUE, LOCAL_VALUE, LOCAL_VALUE, SAVED_RBX, RETURN_RIP, SAVED_RSI };
 #ifdef __GNUC__
+    ULONG64 Stack[16] = { LOCAL_VALUE, LOCAL_VALUE, LOCAL_VALUE, LOCAL_VALUE, SAVED_RBX, RETURN_RIP, SAVED_RSI };
     PUCHAR Code = UnwindFragmentCode;
 
     CheckCaller(Code + PRIMARY_TO_FRAGMENT, Stack, 0, INITIAL_RSI, "image primary to fragment");
