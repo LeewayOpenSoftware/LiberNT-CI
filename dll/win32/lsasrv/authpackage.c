@@ -1481,6 +1481,29 @@ LsapIntegrityLabelsDisabled(VOID)
 
 
 static
+BOOLEAN
+LsapIsHighIntegrityPrivilege(
+    _In_ PLUID Luid)
+{
+    if (Luid->HighPart != 0)
+        return FALSE;
+
+    switch (Luid->LowPart)
+    {
+        case SE_TAKE_OWNERSHIP_PRIVILEGE:
+        case SE_LOAD_DRIVER_PRIVILEGE:
+        case SE_BACKUP_PRIVILEGE:
+        case SE_RESTORE_PRIVILEGE:
+        case SE_DEBUG_PRIVILEGE:
+        case SE_IMPERSONATE_PRIVILEGE:
+        case SE_DELEGATE_SESSION_USER_IMPERSONATE_PRIVILEGE:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+static
 ULONG
 LsapGetIntegrityRid(
     IN PLSA_TOKEN_INFORMATION_V1 TokenInfo1)
@@ -1512,6 +1535,15 @@ LsapGetIntegrityRid(
             {
                 return SECURITY_MANDATORY_HIGH_RID;
             }
+        }
+    }
+
+    if (TokenInfo1->Privileges != NULL)
+    {
+        for (i = 0; i < TokenInfo1->Privileges->PrivilegeCount; i++)
+        {
+            if (LsapIsHighIntegrityPrivilege(&TokenInfo1->Privileges->Privileges[i].Luid))
+                return SECURITY_MANDATORY_HIGH_RID;
         }
     }
 
@@ -1753,7 +1785,8 @@ static
 NTSTATUS
 LsapSetPrivileges(
     IN PVOID TokenInformation,
-    IN LSA_TOKEN_INFORMATION_TYPE TokenInformationType)
+    IN LSA_TOKEN_INFORMATION_TYPE TokenInformationType,
+    IN SECURITY_LOGON_TYPE LogonType)
 {
     PLSA_TOKEN_INFORMATION_V1 TokenInfo1;
     LSAPR_HANDLE PolicyHandle = NULL;
@@ -1818,7 +1851,8 @@ LsapSetPrivileges(
             {
                 if (RtlEqualLuid(&TokenInfo1->Privileges->Privileges[i].Luid, &SeChangeNotifyPrivilege) ||
                     RtlEqualLuid(&TokenInfo1->Privileges->Privileges[i].Luid, &SeCreateGlobalPrivilege) ||
-                    RtlEqualLuid(&TokenInfo1->Privileges->Privileges[i].Luid, &SeImpersonatePrivilege))
+                    RtlEqualLuid(&TokenInfo1->Privileges->Privileges[i].Luid, &SeImpersonatePrivilege) ||
+                    LogonType == Network) /* a network client cannot adjust its token: everything held is enabled */
                 {
                     TokenInfo1->Privileges->Privileges[i].Attributes |= SE_PRIVILEGE_ENABLED | SE_PRIVILEGE_ENABLED_BY_DEFAULT;
                 }
@@ -2209,14 +2243,6 @@ LsapLogonUser(PLSA_API_MSG RequestMsg,
         goto done;
     }
 
-    Status = LsapAddIntegrityGroup(TokenInformation,
-                                   TokenInformationType);
-    if (!NT_SUCCESS(Status))
-    {
-        ERR("LsapAddIntegrityGroup() failed (Status 0x%08lx)\n", Status);
-        goto done;
-    }
-
     Status = LsapSetTokenOwner(TokenInformation,
                                TokenInformationType);
     if (!NT_SUCCESS(Status))
@@ -2234,10 +2260,19 @@ LsapLogonUser(PLSA_API_MSG RequestMsg,
     }
 
     Status = LsapSetPrivileges(TokenInformation,
-                               TokenInformationType);
+                               TokenInformationType,
+                               LogonType);
     if (!NT_SUCCESS(Status))
     {
         ERR("LsapSetPrivileges() failed (Status 0x%08lx)\n", Status);
+        goto done;
+    }
+
+    Status = LsapAddIntegrityGroup(TokenInformation,
+                                   TokenInformationType);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("LsapAddIntegrityGroup() failed (Status 0x%08lx)\n", Status);
         goto done;
     }
 
