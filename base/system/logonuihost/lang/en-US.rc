@@ -34,4 +34,13 @@ BEGIN
     IDS_LUH_ACCOUNT_RESTRICTED "Account restrictions are preventing this user from signing in. For example: blank passwords aren't allowed, sign-in times are limited, or a policy restriction has been enforced."
     IDS_LUH_LOCKED_OUT      "The referenced account is currently locked out and may not be logged on to."
     IDS_LUH_CAPS_LOCK       "Caps Lock is on"
+    IDS_LUH_OK              "OK"
+    IDS_LUH_TIP_SHUTDOWN    "Closes all apps and turns off the PC."
+    IDS_LUH_TIP_RESTART     "Closes all apps, turns off the PC, and then turns it on again."
+    IDS_LUH_SLEEP           "Sleep"
+    IDS_LUH_TIP_SLEEP       "The PC stays on but uses low power. Apps stay open so when the PC wakes up, you're instantly back to where you left off."
+    IDS_LUH_WARN_RESTART    "If you restart now, you and any other people using this PC could lose unsaved work."
+    IDS_LUH_WARN_SHUTDOWN   "If you shut down now, you and any other people using this PC could lose unsaved work."
+    IDS_LUH_RESTART_ANYWAY  "Restart anyway"
+    IDS_LUH_SHUTDOWN_ANYWAY "Shut down anyway"
 END

@@ -789,4 +789,9 @@ BEGIN
     IDS_FIREWALL_DESC "Turn the firewall on or off and choose the apps it allows"
     IDS_GFX_LINK_DESC "Direct3D engine, shaders, multisampling, video memory and OpenGL implementation"
     IDS_GFX_LINK_KEYWORDS "graphics gpu 3d direct3d d3d opengl gl renderer shader multisampling antialiasing video memory wined3d gráficos"
+    IDS_LOCK_CLOCK "Clock position"
+    IDS_LOCK_CLOCK_DESC "Where the time and date appear on the lock screen"
+    IDS_LOCK_CLOCK_TOP "Top center"
+    IDS_LOCK_CLOCK_BOTTOM_LEFT "Bottom left"
+    IDS_LOCK_CLOCK_ADMIN_DESC "Applies to everyone on this PC. Only an administrator can change it."
 END

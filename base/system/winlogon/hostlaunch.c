@@ -429,12 +429,21 @@ WlHostWaitReady(
     return WluiLaunchWaitReady(Launch->State, TimeoutMs);
 }
 
-BOOL
+DWORD
 WlHostPost(
     _In_ PWLHOST_LAUNCH Launch,
     _In_ const struct _WLUI_COMMAND *Command)
 {
     return WluiLaunchPostCommand(Launch->State, Command);
+}
+
+BOOL
+WlHostWaitShown(
+    _In_ PWLHOST_LAUNCH Launch,
+    _In_ DWORD Sequence,
+    _In_ DWORD TimeoutMs)
+{
+    return WluiLaunchWaitShown(Launch->State, Sequence, TimeoutMs);
 }
 
 HANDLE

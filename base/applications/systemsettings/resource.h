@@ -797,3 +797,8 @@
 #define IDS_SCALE_DEFAULT              882
 #define IDS_GFX_LINK_DESC              884
 #define IDS_GFX_LINK_KEYWORDS          885
+#define IDS_LOCK_CLOCK                 886
+#define IDS_LOCK_CLOCK_DESC            887
+#define IDS_LOCK_CLOCK_TOP             888
+#define IDS_LOCK_CLOCK_BOTTOM_LEFT     889
+#define IDS_LOCK_CLOCK_ADMIN_DESC      890
