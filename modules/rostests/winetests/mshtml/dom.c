@@ -827,7 +827,7 @@ static void _test_disp2(unsigned line, IUnknown *unk, const IID *diid, const IID
 #define test_disp(a,b,c,d) _test_disp(__LINE__,a,b,c,d)
 static void _test_disp(unsigned line, IUnknown *unk, const IID *diid, const CLSID *clsid, const WCHAR *val)
 {
-    return _test_disp2(line, unk, diid, NULL, clsid, val);
+    _test_disp2(line, unk, diid, NULL, clsid, val);
 }
 
 #define set_dispex_value(a,b,c) _set_dispex_value(__LINE__,a,b,c)

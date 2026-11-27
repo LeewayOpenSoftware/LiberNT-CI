@@ -3,7 +3,7 @@ include_directories(
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl
     ${CMAKE_CURRENT_BINARY_DIR})
 
-add_rpc_files(server ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/wlui.idl)
+add_rpc_file(server ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/wlui.idl PREFIX_SERVER Test)
 
 list(APPEND SOURCE
     Host.c

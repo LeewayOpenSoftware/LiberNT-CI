@@ -1207,17 +1207,17 @@ static void dump_rgb(const BYTE *data, DWORD length, const SIZE *size, HANDLE ou
 
 void dump_rgb32(const BYTE *data, DWORD length, const SIZE *size, HANDLE output)
 {
-    return dump_rgb(data, length, size, output, 32);
+    dump_rgb(data, length, size, output, 32);
 }
 
 void dump_rgb24(const BYTE *data, DWORD length, const SIZE *size, HANDLE output)
 {
-    return dump_rgb(data, length, size, output, 24);
+    dump_rgb(data, length, size, output, 24);
 }
 
 void dump_rgb16(const BYTE *data, DWORD length, const SIZE *size, HANDLE output)
 {
-    return dump_rgb(data, length, size, output, 16);
+    dump_rgb(data, length, size, output, 16);
 }
 
 void dump_nv12(const BYTE *data, DWORD length, const SIZE *size, HANDLE output)

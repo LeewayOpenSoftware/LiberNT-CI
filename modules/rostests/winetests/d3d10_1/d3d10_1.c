@@ -860,7 +860,7 @@ static void test_fx_4_1_blend_state(void)
     memset(&desc, 0, sizeof(desc));
     hr = blend->lpVtbl->GetBackingStore(blend, 0, &desc);
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
-    ok(!desc.AlphaToCoverageEnable, "Unexpected value %#x.\n", desc1.AlphaToCoverageEnable);
+    ok(!desc.AlphaToCoverageEnable, "Unexpected value %#x.\n", desc.AlphaToCoverageEnable);
     for (i = 0; i < ARRAY_SIZE(desc.BlendEnable); ++i)
         ok(desc.BlendEnable[i], "Unexpected value[%u] %#x.\n", i, desc.BlendEnable[i]);
     ok(desc.SrcBlend == D3D10_BLEND_ZERO, "Unexpected value %u.\n", desc.SrcBlend);
@@ -877,7 +877,7 @@ static void test_fx_4_1_blend_state(void)
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
 
     ID3D10BlendState_GetDesc(bs, &desc);
-    ok(!desc.AlphaToCoverageEnable, "Unexpected value %#x.\n", desc1.AlphaToCoverageEnable);
+    ok(!desc.AlphaToCoverageEnable, "Unexpected value %#x.\n", desc.AlphaToCoverageEnable);
     for (i = 0; i < ARRAY_SIZE(desc.BlendEnable); ++i)
         ok(desc.BlendEnable[i], "Unexpected value[%u] %#x.\n", i, desc.BlendEnable[i]);
     ok(desc.SrcBlend == D3D10_BLEND_ZERO, "Unexpected value %u.\n", desc.SrcBlend);
@@ -925,7 +925,7 @@ static void test_fx_4_1_blend_state(void)
     memset(&desc, 0, sizeof(desc));
     hr = blend->lpVtbl->GetBackingStore(blend, 0, &desc);
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
-    ok(!desc.AlphaToCoverageEnable, "Unexpected value %#x.\n", desc1.AlphaToCoverageEnable);
+    ok(!desc.AlphaToCoverageEnable, "Unexpected value %#x.\n", desc.AlphaToCoverageEnable);
     for (i = 0; i < ARRAY_SIZE(desc.BlendEnable); ++i)
         ok(!desc.BlendEnable[i], "Unexpected value[%u] %#x.\n", i, desc.BlendEnable[i]);
     ok(desc.SrcBlend == D3D10_BLEND_ONE, "Unexpected value %u.\n", desc.SrcBlend);
@@ -1012,7 +1012,7 @@ static void test_fx_4_1_blend_state(void)
     memset(&desc, 0, sizeof(desc));
     hr = blend->lpVtbl->GetBackingStore(blend, 0, &desc);
     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
-    ok(!desc.AlphaToCoverageEnable, "Unexpected value %#x.\n", desc1.AlphaToCoverageEnable);
+    ok(!desc.AlphaToCoverageEnable, "Unexpected value %#x.\n", desc.AlphaToCoverageEnable);
     for (i = 0; i < ARRAY_SIZE(desc.BlendEnable); ++i)
         ok(!desc.BlendEnable[i], "Unexpected value[%u] %#x.\n", i, desc.BlendEnable[i]);
     ok(desc.SrcBlend == D3D10_BLEND_ONE, "Unexpected value %u.\n", desc.SrcBlend);
