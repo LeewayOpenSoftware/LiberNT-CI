@@ -444,7 +444,6 @@ static const CATEGORY_RULE Rules[] =
     { "advapi32_apitest", "*", "security:tokens" },
     { "advapi32_winetest", "*", "security:tokens" },
     { "credui_winetest", "*", "security:tokens" },
-    { "msgina_apitest", "*", "security:tokens" },
     { "sandbox_apitest", "*", "security:tokens" },
     { "userenv_apitest", "*", "security:tokens" },
     { "userenv_winetest", "*", "security:tokens" },
