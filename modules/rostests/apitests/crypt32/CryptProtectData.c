@@ -7,6 +7,8 @@
 
 #include <apitest.h>
 #include <wincrypt.h>
+#include <winreg.h>
+#include <sddl.h>
 
 static const BYTE Secret[] = { 'h','u','n','t','2',0,'w','a','b','b','i','t',0xff,0x00,0x10 };
 
@@ -234,6 +236,127 @@ TestScopeParity(void)
     }
 }
 
+/* Q8/D1/D3: new user blobs are LDP2 and concurrent first use creates exactly
+ * one master key. The lane-only negative tests (wrong password, cross-user
+ * ACL, reparse refusal, LPD1 legacy vector, interrupted re-key) run from the
+ * design note's test plan, D5. */
+static DWORD WINAPI
+ProtectThread(_In_ LPVOID Parameter)
+{
+    DATA_BLOB In = { sizeof(Secret), (BYTE *)Secret }, Out = {0};
+    BOOL *Result = Parameter;
+
+    *Result = CryptProtectData(&In, NULL, NULL, NULL, NULL, 0, &Out);
+    if (*Result)
+        LocalFree(Out.pbData);
+    return 0;
+}
+
+static VOID
+TestUserMasterKeyBinding(void)
+{
+    DATA_BLOB In, Out = {0}, Back = {0};
+    BYTE TokenBuffer[256];
+    TOKEN_USER *TokenInfo = (TOKEN_USER *)TokenBuffer;
+    DWORD Size, KeyCount, Index;
+    LPWSTR SidString = NULL;
+    WCHAR ProtectDir[MAX_PATH];
+    WIN32_FIND_DATAW FindData;
+    HANDLE Token = NULL, FindHandle;
+    HANDLE Threads[8];
+    BOOL Results[8];
+    BOOL HaveKeyDir = FALSE;
+
+    In.cbData = sizeof(Secret);
+    In.pbData = (BYTE *)Secret;
+
+    if (!CryptProtectData(&In, NULL, NULL, NULL, NULL, 0, &Out))
+    {
+        skip("user-scope protect unavailable (no pre-key?), error %lu\n", GetLastError());
+        return;
+    }
+
+    ok(Out.cbData >= 4 && memcmp(Out.pbData, "LDP2", 4) == 0,
+       "user blob is not an LDP2 blob\n");
+    ok(Out.cbData >= 24, "LDP2 blob too small for its key GUID\n");
+
+    ok(CryptUnprotectData(&Out, NULL, NULL, NULL, NULL, 0, &Back),
+       "LDP2 blob did not round-trip, error %lu\n", GetLastError());
+    ok(Back.cbData == sizeof(Secret) && memcmp(Back.pbData, Secret, sizeof(Secret)) == 0,
+       "LDP2 plaintext did not round-trip\n");
+    LocalFree(Back.pbData);
+    Back.pbData = NULL;
+
+    /* Locate Protect\<SID> through ProfileList, like lsasrv does. */
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &Token) &&
+        GetTokenInformation(Token, TokenUser, TokenBuffer, sizeof(TokenBuffer), &Size) &&
+        ConvertSidToStringSidW(TokenInfo->User.Sid, &SidString))
+    {
+        WCHAR KeyPath[256];
+        WCHAR ProfilePath[MAX_PATH];
+        DWORD ProfilePathSize = sizeof(ProfilePath);
+        HKEY Key;
+
+        _snwprintf(KeyPath, ARRAYSIZE(KeyPath),
+                   L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\%s",
+                   SidString);
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, KeyPath, 0, KEY_READ, &Key) == ERROR_SUCCESS)
+        {
+            if (RegGetValueW(Key, NULL, L"ProfileImagePath", RRF_RT_REG_EXPAND_SZ,
+                             NULL, ProfilePath, &ProfilePathSize) == ERROR_SUCCESS)
+            {
+                _snwprintf(ProtectDir, ARRAYSIZE(ProtectDir),
+                           L"%s\\AppData\\Roaming\\Microsoft\\Protect\\%s",
+                           ProfilePath, SidString);
+                HaveKeyDir = TRUE;
+            }
+            RegCloseKey(Key);
+        }
+    }
+
+    /* Concurrent protects racing the first master-key creation (D3). */
+    memset(Results, 0, sizeof(Results));
+    for (Index = 0; Index < ARRAYSIZE(Threads); Index++)
+        Threads[Index] = CreateThread(NULL, 0, ProtectThread, &Results[Index], 0, NULL);
+    for (Index = 0; Index < ARRAYSIZE(Threads); Index++)
+    {
+        if (Threads[Index])
+        {
+            WaitForSingleObject(Threads[Index], INFINITE);
+            CloseHandle(Threads[Index]);
+        }
+    }
+    for (Index = 0; Index < ARRAYSIZE(Results); Index++)
+        ok(Results[Index], "concurrent protect %lu failed, error %lu\n",
+           Index, GetLastError());
+
+    if (HaveKeyDir)
+    {
+        WCHAR Pattern[MAX_PATH];
+
+        KeyCount = 0;
+        _snwprintf(Pattern, ARRAYSIZE(Pattern), L"%s\\*", ProtectDir);
+        FindHandle = FindFirstFileW(Pattern, &FindData);
+        if (FindHandle != INVALID_HANDLE_VALUE)
+        {
+            do
+            {
+                if (wcslen(FindData.cFileName) == 36 &&
+                    wcscmp(FindData.cFileName, L"Preferred") != 0)
+                    KeyCount++;
+            } while (FindNextFileW(FindHandle, &FindData));
+            FindClose(FindHandle);
+            ok(KeyCount == 1, "expected exactly one master key, found %lu\n", KeyCount);
+        }
+    }
+
+    if (SidString)
+        LocalFree(SidString);
+    if (Token)
+        CloseHandle(Token);
+    LocalFree(Out.pbData);
+}
+
 START_TEST(CryptProtectData)
 {
     static const BYTE Entropy[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x55 };
@@ -258,4 +381,5 @@ START_TEST(CryptProtectData)
     TestWrongEntropy();
     TestScopeParity();
     TestBadBlobs();
+    TestUserMasterKeyBinding();
 }

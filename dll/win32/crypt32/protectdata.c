@@ -92,13 +92,12 @@ static handle_t dpapi_bind(void)
     if (status != RPC_S_OK)
         return NULL;
 
-    /* Authenticate and seal the channel. The data (and the description) travel over the pipe, so use
-     * packet privacy; the server only queries the caller's token, so identification-level QOS is
-     * enough. Fail closed: if this does not take, do not send plaintext over an unauthenticated pipe. */
+    /* Seal the channel (the data travels over the pipe) and let lsass impersonate: the user's
+     * master-key file I/O runs under the caller's token, which an identification token cannot do. */
     qos.Version = RPC_C_SECURITY_QOS_VERSION_3;
     qos.Capabilities = RPC_C_QOS_CAPABILITIES_DEFAULT;
     qos.IdentityTracking = RPC_C_QOS_IDENTITY_STATIC;
-    qos.ImpersonationType = RPC_C_IMP_LEVEL_IDENTIFY;
+    qos.ImpersonationType = RPC_C_IMP_LEVEL_IMPERSONATE;
     qos.AdditionalSecurityInfoType = 0;
     qos.u.HttpCredentials = NULL;
     qos.Sid = (PSID)&LocalSystemSid;

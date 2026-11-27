@@ -36,7 +36,19 @@ typedef struct _SYS_SHUTDOWN_PARAMS
     BOOLEAN bRebootAfterShutdown;
     BOOLEAN bForceAppsClosed;
     DWORD dwReason;
+
+    /* An abort followed by a new request can overlap the old countdown thread: each
+     * request gets a generation, and a thread that lost it leaves without touching the rest. */
+    ULONG Generation;
+    HANDLE hAbortEvent;             /* auto-reset; set by TerminateSystemShutdown */
 } SYS_SHUTDOWN_PARAMS, *PSYS_SHUTDOWN_PARAMS;
+
+/* What the inline dialog sees: the shared parameters and the generation of its own thread. */
+typedef struct _SHUTDOWN_DIALOG_CONTEXT
+{
+    PSYS_SHUTDOWN_PARAMS Params;
+    ULONG Generation;
+} SHUTDOWN_DIALOG_CONTEXT, *PSHUTDOWN_DIALOG_CONTEXT;
 
 /* GLOBALS *******************************************************************/
 
@@ -71,8 +83,9 @@ static
 VOID
 OnTimer(
     IN HWND hwndDlg,
-    IN PSYS_SHUTDOWN_PARAMS pShutdownParams)
+    IN PSHUTDOWN_DIALOG_CONTEXT pContext)
 {
+    PSYS_SHUTDOWN_PARAMS pShutdownParams = pContext->Params;
     HDESK hInputDesktop;
     BOOL bSuccess;
     DWORD dwSize;
@@ -81,9 +94,9 @@ OnTimer(
     WCHAR szBuffer[32];
     WCHAR DesktopName[512];
 
-    if (!pShutdownParams->bShuttingDown)
+    if (!pShutdownParams->bShuttingDown || pShutdownParams->Generation != pContext->Generation)
     {
-        /* Shutdown has been cancelled, close the dialog and bail out */
+        /* Shutdown cancelled, or a newer request owns the countdown: close and bail out */
         EndDialog(hwndDlg, IDABORT);
         return;
     }
@@ -174,16 +187,19 @@ ShutdownDialogProc(
     IN WPARAM wParam,
     IN LPARAM lParam)
 {
+    PSHUTDOWN_DIALOG_CONTEXT pContext;
     PSYS_SHUTDOWN_PARAMS pShutdownParams;
 
-    pShutdownParams = (PSYS_SHUTDOWN_PARAMS)GetWindowLongPtrW(hwndDlg, DWLP_USER);
+    pContext = (PSHUTDOWN_DIALOG_CONTEXT)GetWindowLongPtrW(hwndDlg, DWLP_USER);
+    pShutdownParams = pContext ? pContext->Params : NULL;
 
     switch (uMsg)
     {
         case WM_INITDIALOG:
         {
-            pShutdownParams = (PSYS_SHUTDOWN_PARAMS)lParam;
-            SetWindowLongPtrW(hwndDlg, DWLP_USER, (LONG_PTR)pShutdownParams);
+            pContext = (PSHUTDOWN_DIALOG_CONTEXT)lParam;
+            pShutdownParams = pContext->Params;
+            SetWindowLongPtrW(hwndDlg, DWLP_USER, (LONG_PTR)pContext);
 
             /* Display the shutdown message */
             if (pShutdownParams->pszMessage)
@@ -215,7 +231,7 @@ ShutdownDialogProc(
             break;
 
         case WM_TIMER:
-            OnTimer(hwndDlg, pShutdownParams);
+            OnTimer(hwndDlg, pContext);
             break;
 
         default:
@@ -235,12 +251,52 @@ InitiateSystemShutdownThread(
     HDESK hInputDesktop;
     DWORD dwSize;
     INT_PTR res;
+    ULONG Generation;
+    WLR_REMINDER Reminder;
+    SHUTDOWN_DIALOG_CONTEXT Context;
+    BOOL Aborted = FALSE;
 
     pShutdownParams = (PSYS_SHUTDOWN_PARAMS)lpParameter;
+    Generation = pShutdownParams->Generation;
+    Context.Params = pShutdownParams;
+    Context.Generation = Generation;
 
     /* Default to initial dialog position */
     pShutdownParams->wpPos.length = 0;
 
+    /* The Windows shape first: wlrmdr as the signed-in user on the user's desktop, dismissed
+     * through its stop event when the countdown ends or the shutdown is aborted. When it
+     * cannot run (no user, no binary, launch failure) the inline dialog below serves as before. */
+    if (WlrShowShutdownReminder(&Reminder, pShutdownParams->pszMessage, pShutdownParams->dwTimeout,
+                                pShutdownParams->bRebootAfterShutdown))
+    {
+        while (pShutdownParams->bShuttingDown &&
+               pShutdownParams->Generation == Generation &&
+               pShutdownParams->dwTimeout > 0)
+        {
+            /* The abort event cuts the second short: shutdown /a dismisses at once. A wake
+             * through it is an abort whatever the flag says afterwards (a new request may
+             * have set it again before its own renumbering). */
+            DWORD Wait = WaitForSingleObject(pShutdownParams->hAbortEvent, 1000);
+            if (Wait == WAIT_OBJECT_0)
+            {
+                Aborted = TRUE;
+                break;
+            }
+            if (Wait == WAIT_TIMEOUT && pShutdownParams->Generation == Generation)
+                pShutdownParams->dwTimeout--;
+        }
+        WlrDismissShutdownReminder(&Reminder);
+        if (pShutdownParams->Generation != Generation || (Aborted && pShutdownParams->bShuttingDown))
+        {
+            /* A newer request owns the parameters now; this thread only reports its abort. */
+            WlrShowAbortNotice();
+            return ERROR_SUCCESS;
+        }
+        if (!pShutdownParams->bShuttingDown)
+            WlrShowAbortNotice();
+    }
+    else
     /* Continuously display the shutdown dialog on the current input desktop */
     while (TRUE)
     {
@@ -273,7 +329,7 @@ InitiateSystemShutdownThread(
                               MAKEINTRESOURCEW(IDD_SYSSHUTDOWN),
                               NULL,
                               ShutdownDialogProc,
-                              (LPARAM)pShutdownParams);
+                              (LPARAM)&Context);
 
         /* Close the desktop */
         CloseDesktop(hInputDesktop);
@@ -293,11 +349,15 @@ InitiateSystemShutdownThread(
          *   loop again and recreate it on the new desktop.
          */
         if ((res == -1) || (res != IDCANCEL) ||
+            (pShutdownParams->Generation != Generation) ||
             !(pShutdownParams->bShuttingDown && (pShutdownParams->dwTimeout > 0)))
         {
             break;
         }
     }
+
+    if (pShutdownParams->Generation != Generation)
+        return ERROR_SUCCESS;           /* superseded: the message and the shutdown belong to the new request */
 
     /* Reset dialog information */
     pShutdownParams->hShutdownDesk = NULL;
@@ -330,6 +390,8 @@ TerminateSystemShutdown(VOID)
     if (_InterlockedCompareExchange8((volatile char*)&g_ShutdownParams.bShuttingDown, FALSE, TRUE) == FALSE)
         return ERROR_NO_SHUTDOWN_IN_PROGRESS;
 
+    if (g_ShutdownParams.hAbortEvent)
+        SetEvent(g_ShutdownParams.hAbortEvent);
     return ERROR_SUCCESS;
 }
 
@@ -349,6 +411,9 @@ StartSystemShutdown(
 
     if (_InterlockedCompareExchange8((volatile char*)&g_ShutdownParams.bShuttingDown, TRUE, FALSE) == TRUE)
         return g_ShutdownParams.dwTimeout ? ERROR_SHUTDOWN_IS_SCHEDULED : ERROR_SHUTDOWN_IN_PROGRESS;
+
+    /* Renumber first: an older countdown thread that wakes from here on must stand down. */
+    g_ShutdownParams.Generation++;
 
     if ((dwTimeout != 0) && pMessage && pMessage->Length && pMessage->Buffer)
     {
@@ -384,6 +449,10 @@ StartSystemShutdown(
     }
     else
     {
+        if (g_ShutdownParams.hAbortEvent == NULL)
+            g_ShutdownParams.hAbortEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+        else
+            ResetEvent(g_ShutdownParams.hAbortEvent);
         hThread = CreateThread(NULL, 0, InitiateSystemShutdownThread,
                                &g_ShutdownParams, 0, NULL);
         if (hThread)

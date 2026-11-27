@@ -1276,9 +1276,10 @@ public:
 
     void Fail(UINT Id, PCWSTR Argument, HWND Clear)
     {
-        SetMessage(Id, Argument);
+        /* Clearing the edit sends EN_CHANGE, which wipes Message: clear first, then set the text. */
         if (Clear)
             SetWindowTextW(Clear, L"");
+        SetMessage(Id, Argument);
         Start(Anim::Shake, 360);
         if (Clear)
             SetFocus(Clear);
@@ -1501,7 +1502,8 @@ public:
                 return;
             }
             Retry = ExpiredFlow ? NewEdit : OldEdit;
-            if (Done->Status == STATUS_PASSWORD_RESTRICTION)
+            if (Done->Status == STATUS_PASSWORD_RESTRICTION || Done->Status == STATUS_PWD_TOO_SHORT ||
+                Done->Status == STATUS_PWD_TOO_RECENT || Done->Status == STATUS_PWD_HISTORY_CONFLICT)
                 Error = IDS_LOGONUI_PASSWORD_RULES;
             else if (Done->Status == STATUS_WRONG_PASSWORD || Done->Status == STATUS_LOGON_FAILURE)
                 Error = IDS_LOGONUI_WRONG_PASSWORD;

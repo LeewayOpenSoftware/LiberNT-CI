@@ -57,6 +57,26 @@ LogonStage(
     OutputDebugStringA(Line);
 }
 
+/* Read once at start: the logon mode must never flip mid-session. */
+static
+BOOL
+ReadUseLogonUISelector(VOID)
+{
+    DWORD Value = 0, Size = sizeof(Value);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                     L"UseLogonUI",
+                     RRF_RT_REG_DWORD,
+                     NULL,
+                     &Value,
+                     &Size) != ERROR_SUCCESS)
+    {
+        Value = 0;
+    }
+    return (Value != 0);
+}
+
 /**
  * @brief
  * Duplicates the given string, allocating a buffer on the heap.
@@ -325,10 +345,18 @@ DisplayStatusMessage(
 {
     WCHAR StatusMsg[MAX_PATH];
 
-    if (Session->Gina.Version < WLX_VERSION_1_3)
+    if (Session->SuppressStatus)
         return TRUE;
 
-    if (Session->SuppressStatus)
+    if (Session->UseLogonUI)
+    {
+        /* The host shows status in place; it keeps the text until the next command. */
+        if (LoadStringW(hAppInstance, ResourceId, StatusMsg, MAX_PATH) != 0)
+            WlHostStatus(StatusMsg);
+        return TRUE;
+    }
+
+    if (Session->Gina.Version < WLX_VERSION_1_3)
         return TRUE;
 
     if (LoadStringW(hAppInstance, ResourceId, StatusMsg, MAX_PATH) == 0)
@@ -342,7 +370,8 @@ BOOL
 RemoveStatusMessage(
     IN PWLSESSION Session)
 {
-    if (Session->Gina.Version < WLX_VERSION_1_3)
+    /* In host mode the status lives in the host window until the next command replaces it. */
+    if (Session->UseLogonUI || Session->Gina.Version < WLX_VERSION_1_3)
         return TRUE;
 
     return Session->Gina.Functions.WlxRemoveStatusMessage(Session->Gina.Context);
@@ -520,6 +549,11 @@ WinMain(
 
     ZeroMemory(WLSession, sizeof(WLSESSION));
     WLSession->DialogTimeout = 120; /* 2 minutes */
+    WLSession->UseLogonUI = ReadUseLogonUISelector();
+    TRACE("WL: UseLogonUI selector = %d\n", WLSession->UseLogonUI);
+    WlHostInit();
+    if (WLSession->UseLogonUI)
+        WlHostLogonInit(WLSession);     /* before the first status message, which starts a host */
 
     /* Initialize the dialog tracking list */
     InitDialogListHead();
@@ -556,8 +590,13 @@ WinMain(
     /* Init Notifications */
     InitNotifications();
 
-    /* Load and initialize gina */
-    if (!GinaInit(WLSession))
+    /* Load and initialize gina; host mode has none, the logon UI is a supervised process. */
+    if (WLSession->UseLogonUI)
+    {
+        LogonStage("host-mode");
+        WlHostThemeWatch();     /* msgina's WlxInitialize did this; winlogon hosts the theme hooks */
+    }
+    else if (!GinaInit(WLSession))
     {
         ERR("WL: Failed to initialize Gina\n");
         // FIXME: Retrieve the real name of the GINA DLL we were trying to load.

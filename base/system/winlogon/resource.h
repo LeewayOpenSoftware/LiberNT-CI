@@ -39,5 +39,20 @@
 #define IDS_TIMEOUTSHORTFORMAT           1695
 #define IDS_TIMEOUTLONGFORMAT            1696
 #define IDS_REACTOSISRESTARTING          1697
+#define IDS_PRESSCTRLALTDELETE           1698
+#define IDS_UNLOCKONLYSESSIONUSER        1699
+#define IDS_LOGONUI_TERMINAL_LEVELS      1700
+#define IDS_LOGONUI_TERMINAL_MISSING     1701
+#define IDS_LOGONUI_TERMINAL_POLICY      1702
+#define IDS_SAFEMODEADMINSONLY           1703
+#define IDS_REMINDER_TITLE               1704
+#define IDS_REMINDER_SHUTDOWN            1705
+#define IDS_REMINDER_RESTART             1706
+
+/* Host mode N4: the terminal dialog drawn by winlogon itself */
+#define IDD_LOGONUITERMINAL              600
+#define IDC_LUT_TEXT                     1601
+#define IDC_LUT_RESTART                  1602
+#define IDC_LUT_SHUTDOWN                 1603
 
 #define IDS_FAILEDACTIVATEUSERSHELL 1001

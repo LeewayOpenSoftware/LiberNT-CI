@@ -1254,6 +1254,13 @@ cmdUser(
             result = 1;
             goto done;
         }
+
+        /* NetUserGetInfo never returns the password; set the one given */
+        pUserInfo->usri4_password = lpPassword;
+
+        /* An admin reset ends must-change; /logonpasswordchg:yes below can set it again */
+        if (lpPassword != NULL)
+            pUserInfo->usri4_password_expired = FALSE;
     }
     else if (bAdd)
     {
@@ -1273,7 +1280,7 @@ cmdUser(
     {
         if (_wcsnicmp(argv[j], L"/active:", 8) == 0)
         {
-            p = &argv[i][8];
+            p = &argv[j][8];
             if (_wcsicmp(p, L"yes") == 0)
             {
                 pUserInfo->usri4_flags &= ~UF_ACCOUNTDISABLE;
@@ -1295,7 +1302,7 @@ cmdUser(
         }
         else if (_wcsnicmp(argv[j], L"/countrycode:", 13) == 0)
         {
-            p = &argv[i][13];
+            p = &argv[j][13];
             value = wcstoul(p, &endptr, 10);
             if (*endptr != 0)
             {
@@ -1310,7 +1317,7 @@ cmdUser(
         }
         else if (_wcsnicmp(argv[j], L"/expires:", 9) == 0)
         {
-            p = &argv[i][9];
+            p = &argv[j][9];
             if (_wcsicmp(p, L"never") == 0)
             {
                 pUserInfo->usri4_acct_expires = TIMEQ_FOREVER;
@@ -1330,9 +1337,27 @@ cmdUser(
         {
             pUserInfo->usri4_home_dir = &argv[j][9];
         }
+        else if (_wcsnicmp(argv[j], L"/logonpasswordchg:", 18) == 0)
+        {
+            p = &argv[j][18];
+            if (_wcsicmp(p, L"yes") == 0)
+            {
+                pUserInfo->usri4_password_expired = TRUE;
+            }
+            else if (_wcsicmp(p, L"no") == 0)
+            {
+                pUserInfo->usri4_password_expired = FALSE;
+            }
+            else
+            {
+                PrintMessageStringV(3952, L"/LOGONPASSWORDCHG");
+                result = 1;
+                goto done;
+            }
+        }
         else if (_wcsnicmp(argv[j], L"/passwordchg:", 13) == 0)
         {
-            p = &argv[i][13];
+            p = &argv[j][13];
             if (_wcsicmp(p, L"yes") == 0)
             {
                 pUserInfo->usri4_flags &= ~UF_PASSWD_CANT_CHANGE;
@@ -1350,7 +1375,7 @@ cmdUser(
         }
         else if (_wcsnicmp(argv[j], L"/passwordreq:", 13) == 0)
         {
-            p = &argv[i][13];
+            p = &argv[j][13];
             if (_wcsicmp(p, L"yes") == 0)
             {
                 pUserInfo->usri4_flags &= ~UF_PASSWD_NOTREQD;
@@ -1396,7 +1421,7 @@ cmdUser(
         }
         else if (_wcsnicmp(argv[j], L"/workstations:", 14) == 0)
         {
-            p = &argv[i][14];
+            p = &argv[j][14];
             if (wcscmp(p, L"*") == 0 || wcscmp(p, L"") == 0)
             {
                 pUserInfo->usri4_workstations = NULL;
