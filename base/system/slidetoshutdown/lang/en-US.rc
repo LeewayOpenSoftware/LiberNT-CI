@@ -1,0 +1,15 @@
+/*
+ * PROJECT:     Orosi SlideToShutDown
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     English (United States) resource file
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+STRINGTABLE
+BEGIN
+    IDS_STS_WARNING "Anyone else using this PC will lose unsaved work."
+    IDS_STS_SLIDE   "Slide to shut down your PC"
+    IDS_STS_FAILED  "The PC couldn't be shut down. You might not have permission to shut it down."
+END

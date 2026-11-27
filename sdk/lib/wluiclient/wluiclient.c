@@ -169,3 +169,8 @@ DWORD NTAPI WluiClientExiting(_In_ PWLUI_CONNECTION C, _In_ WLUI_EXIT_REASON Rea
 {
     WLUI_CALL(WluiExiting(C->Binding, C->LaunchId, Reason));
 }
+
+DWORD NTAPI WluiClientCommandShown(_In_ PWLUI_CONNECTION C, _In_ DWORD Sequence)
+{
+    WLUI_CALL(WluiCommandShown(C->Binding, C->LaunchId, Sequence));
+}
