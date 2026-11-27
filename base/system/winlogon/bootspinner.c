@@ -13,6 +13,7 @@
 
 #include "winlogon.h"
 #include <reactos/bootspin.h>
+#include <mmsystem.h>  /* timeBeginPeriod */
 
 #define WL_SPIN_CLASS   L"WinlogonBootSpinner"
 
@@ -20,6 +21,7 @@ typedef struct _WL_SPINNER
 {
     HDESK Desktop;
     INBV_SPIN_RECT Rect;
+    ULONG Dpi;                  /* the DPI the rect was built at; logged for Pam's 1:1 check */
     PINBV_SPIN_SAMPLE Samples;
     PULONG PixelStart;
     PULONG Ease;                /* INBV_SPIN_EASE_STEPS + 1 entries */
@@ -155,6 +157,7 @@ WlSpinBuild(
     }
 
     Spinner->Rect = InbvSpinComputeRect(ScreenW, ScreenH, Dpi);
+    Spinner->Dpi = Dpi;
     if (Spinner->Rect.Width == 0 || Spinner->Rect.Height == 0)
         return FALSE;
 
@@ -251,7 +254,15 @@ WlSpinThread(
         DWORD Frames = 0, Late = 0, Longest = 0, Interval;
         CHAR Line[96];
 
-        LogonStage("boot-spinner-shown");
+        /* Raise the timer resolution to 1 ms for the hand-over, so the 15 ms pump is not
+         * quantised to the ~15.6 ms default tick (which would make every other frame late).
+         * Bounded to the hand-over, so no idle cost. */
+        timeBeginPeriod(1);
+
+        StringCchPrintfA(Line, ARRAYSIZE(Line), "boot-spinner-shown dpi=%lu rect=%lu,%lu,%lu,%lu",
+                         Spinner->Dpi, Spinner->Rect.Left, Spinner->Rect.Top,
+                         Spinner->Rect.Width, Spinner->Rect.Height);
+        LogonStage(Line);
 
         for (;;)
         {
@@ -276,6 +287,8 @@ WlSpinThread(
             if (WlSpinWait(Spinner->Stop, INBV_SPIN_FRAME_MS))
                 break;
         }
+
+        timeEndPeriod(1);
 
         /* Pam reads the hand-over from this line, in the cover-fade style: a late frame is an
          * interval over twice the target. */
