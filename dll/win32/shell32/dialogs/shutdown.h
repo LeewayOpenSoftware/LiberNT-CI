@@ -19,10 +19,6 @@
    shell32 runs in the user's context, so HKCU is the user's own hive. */
 DWORD ShellGetAllowedShutdownOptions(VOID);
 
-/* Remembered selection (WLX_SHUTDOWN_STATE_* value) in HKCU Explorer. */
-DWORD ShellLoadShutdownSelState(VOID);
-VOID  ShellSaveShutdownSelState(DWORD State);
-
 /* HKLM policy value trumps HKCU, under the same sub-key. */
 LONG  ShellGetPolicyDWORD(PCWSTR pPolicyKey, PCWSTR ValueName, PDWORD pValue);
 

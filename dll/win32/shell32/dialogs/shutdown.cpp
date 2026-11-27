@@ -98,41 +98,6 @@ ShellGetAllowedShutdownOptions(VOID)
     return Options;
 }
 
-DWORD
-ShellLoadShutdownSelState(VOID)
-{
-    HKEY hKey;
-    DWORD dwValue = WLX_SHUTDOWN_STATE_POWER_OFF; /* default */
-    DWORD dwTemp, dwSize = sizeof(dwTemp);
-
-    if (RegOpenKeyExW(HKEY_CURRENT_USER,
-                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer",
-                      0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
-    {
-        if (RegQueryValueExW(hKey, L"Shutdown Setting", NULL, NULL,
-                             (LPBYTE)&dwTemp, &dwSize) == ERROR_SUCCESS)
-            dwValue = dwTemp;
-        RegCloseKey(hKey);
-    }
-    return dwValue;
-}
-
-VOID
-ShellSaveShutdownSelState(_In_ DWORD State)
-{
-    HKEY hKey;
-
-    if (RegCreateKeyExW(HKEY_CURRENT_USER,
-                        L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer",
-                        0, NULL, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE,
-                        NULL, &hKey, NULL) != ERROR_SUCCESS)
-        return;
-
-    RegSetValueExW(hKey, L"Shutdown Setting", 0, REG_DWORD,
-                   (const BYTE *)&State, sizeof(State));
-    RegCloseKey(hKey);
-}
-
 /* --- The classic "Shut Down Windows" dialog (on Vista+ it lives in shell32). --- */
 
 struct SHUTDOWN_DLG_CTX
@@ -140,6 +105,34 @@ struct SHUTDOWN_DLG_CTX
     DWORD Options;
     DWORD Selected;
 };
+
+static UINT
+ShutdownChoiceDescription(DWORD Code)
+{
+    switch (Code)
+    {
+        case WLX_SHUTDOWN_STATE_LOGOFF:    return IDS_SHUTDOWN_LOGOFF_DESC;
+        case WLX_SHUTDOWN_STATE_POWER_OFF: return IDS_SHUTDOWN_POWEROFF_DESC;
+        case WLX_SHUTDOWN_STATE_REBOOT:    return IDS_SHUTDOWN_REBOOT_DESC;
+        case WLX_SHUTDOWN_STATE_SLEEP:     return IDS_SHUTDOWN_SLEEP_DESC;
+        case WLX_SHUTDOWN_STATE_HIBERNATE: return IDS_SHUTDOWN_HIBERNATE_DESC;
+    }
+    return 0;
+}
+
+static VOID
+ShutdownShowDescription(HWND hDlg)
+{
+    HWND hCombo = GetDlgItem(hDlg, IDC_SHUTDOWN_ACTION);
+    WCHAR szText[256] = L"";
+    int iSel = (int)SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
+    UINT Id = (iSel == CB_ERR) ? 0 :
+        ShutdownChoiceDescription((DWORD)SendMessageW(hCombo, CB_GETITEMDATA, iSel, 0));
+
+    if (Id != 0)
+        LoadStringW(shell32_hInstance, Id, szText, _countof(szText));
+    SetDlgItemTextW(hDlg, IDC_SHUTDOWN_DESC, szText);
+}
 
 static VOID
 ShutdownAddChoice(HWND hCombo, UINT StringId, DWORD Code, const SHUTDOWN_DLG_CTX *Ctx)
@@ -172,13 +165,15 @@ ShutdownDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
             Ctx = (SHUTDOWN_DLG_CTX *)lParam;
             SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)Ctx);
             hCombo = GetDlgItem(hDlg, IDC_SHUTDOWN_ACTION);
+            /* Windows order: Sign out, Sleep, Hibernate, Shut down, Restart (Switch user is not offered). */
             ShutdownAddChoice(hCombo, IDS_SHUTDOWN_LOGOFF, WLX_SHUTDOWN_STATE_LOGOFF, Ctx);
-            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_POWEROFF, WLX_SHUTDOWN_STATE_POWER_OFF, Ctx);
-            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_REBOOT, WLX_SHUTDOWN_STATE_REBOOT, Ctx);
             ShutdownAddChoice(hCombo, IDS_SHUTDOWN_SLEEP, WLX_SHUTDOWN_STATE_SLEEP, Ctx);
             ShutdownAddChoice(hCombo, IDS_SHUTDOWN_HIBERNATE, WLX_SHUTDOWN_STATE_HIBERNATE, Ctx);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_POWEROFF, WLX_SHUTDOWN_STATE_POWER_OFF, Ctx);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_REBOOT, WLX_SHUTDOWN_STATE_REBOOT, Ctx);
             if (SendMessageW(hCombo, CB_GETCURSEL, 0, 0) == CB_ERR)
                 SendMessageW(hCombo, CB_SETCURSEL, 0, 0);
+            ShutdownShowDescription(hDlg);
             return TRUE;
 
         case WM_COMMAND:
@@ -198,6 +193,10 @@ ShutdownDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 case IDCANCEL:
                     EndDialog(hDlg, IDCANCEL);
                     return TRUE;
+                case IDC_SHUTDOWN_ACTION:
+                    if (HIWORD(wParam) == CBN_SELCHANGE)
+                        ShutdownShowDescription(hDlg);
+                    return TRUE;
             }
             break;
     }
@@ -209,8 +208,9 @@ ShellShutdownWindowsDialog(HWND hWndOwner, DWORD dwExcludeOptions)
 {
     SHUTDOWN_DLG_CTX Ctx;
 
+    /* Windows 11 opens on Shut down every time and keeps no choice (win11-shutdown-dialog.md). */
     Ctx.Options = ShellGetAllowedShutdownOptions() & ~dwExcludeOptions;
-    Ctx.Selected = ShellLoadShutdownSelState();
+    Ctx.Selected = WLX_SHUTDOWN_STATE_POWER_OFF;
     if (Ctx.Options == 0)
         return 0;
 
@@ -218,8 +218,5 @@ ShellShutdownWindowsDialog(HWND hWndOwner, DWORD dwExcludeOptions)
                         hWndOwner, ShutdownDlgProc, (LPARAM)&Ctx) != IDOK)
         return 0;
 
-    /* Don't persist the choice for a restricted prompt (e.g. logoff-only). */
-    if (Ctx.Selected != 0 && dwExcludeOptions == 0)
-        ShellSaveShutdownSelState(Ctx.Selected);
     return Ctx.Selected;
 }
