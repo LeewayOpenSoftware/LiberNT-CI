@@ -692,6 +692,176 @@ WlHlHasLegalNotice(VOID)
     return (Error == ERROR_SUCCESS || Error == ERROR_MORE_DATA) && Size > sizeof(WCHAR);
 }
 
+/* ---- automatic sign-in (AutoAdminLogon), as msgina GetRegistrySettings + LogonUiSignIn ---- */
+
+static BOOL g_AutoLogonTried;           /* once per boot, unless ForceAutoLogon */
+
+/* AutoAdminLogon and its companions are REG_SZ numbers on Windows; a REG_DWORD is accepted too. */
+static DWORD
+WlHlWinlogonNumber(
+    _In_ PCWSTR Name,
+    _In_ DWORD Default)
+{
+    WCHAR Text[16];
+    DWORD Type, Size = sizeof(Text) - sizeof(WCHAR), Value = Default;
+    HKEY Key;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, 0, KEY_QUERY_VALUE, &Key) != ERROR_SUCCESS)
+        return Default;
+    if (RegQueryValueExW(Key, Name, NULL, &Type, (PBYTE)Text, &Size) == ERROR_SUCCESS)
+    {
+        if (Type == REG_DWORD && Size == sizeof(DWORD))
+            Value = *(PDWORD)Text;
+        else if (Type == REG_SZ)
+        {
+            Text[Size / sizeof(WCHAR)] = UNICODE_NULL;
+            Value = wcstoul(Text, NULL, 10);
+        }
+    }
+    RegCloseKey(Key);
+    return Value;
+}
+
+static VOID
+WlHlWinlogonString(
+    _In_ PCWSTR Name,
+    _Out_writes_(Chars) PWSTR Text,
+    _In_ DWORD Chars)
+{
+    DWORD Size = Chars * sizeof(WCHAR);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, Name, RRF_RT_REG_SZ, NULL, Text, &Size) != ERROR_SUCCESS)
+        Text[0] = UNICODE_NULL;
+}
+
+/* The protected copy (LSA secret DefaultPassword) wins over the registry value. */
+static BOOL
+WlHlLsaDefaultPassword(
+    _Out_writes_(Chars) PWSTR Password,
+    _In_ DWORD Chars)
+{
+    LSA_OBJECT_ATTRIBUTES Attributes;
+    LSA_HANDLE Policy;
+    LSA_UNICODE_STRING Name, *Secret = NULL;
+    NTSTATUS Status;
+
+    Password[0] = UNICODE_NULL;
+    ZeroMemory(&Attributes, sizeof(Attributes));
+    Attributes.Length = sizeof(Attributes);
+    if (!NT_SUCCESS(LsaOpenPolicy(NULL, &Attributes, POLICY_GET_PRIVATE_INFORMATION, &Policy)))
+        return FALSE;
+    RtlInitUnicodeString(&Name, L"DefaultPassword");
+    Status = LsaRetrievePrivateData(Policy, &Name, &Secret);
+    LsaClose(Policy);
+    if (!NT_SUCCESS(Status) || Secret == NULL)
+        return FALSE;
+    if (Secret->Length / sizeof(WCHAR) >= Chars)
+        Status = STATUS_BUFFER_TOO_SMALL;
+    else if (Secret->Length != 0)
+        CopyMemory(Password, Secret->Buffer, Secret->Length);
+    if (NT_SUCCESS(Status))
+        Password[Secret->Length / sizeof(WCHAR)] = UNICODE_NULL;
+    if (Secret->Buffer != NULL)
+        SecureZeroMemory(Secret->Buffer, Secret->Length);
+    LsaFreeMemory(Secret);
+    return NT_SUCCESS(Status);
+}
+
+/* Windows turns automatic sign-in off with AutoAdminLogon "0"; a spent AutoLogonCount also drops the password. */
+static VOID
+WlHlDisableAutoLogon(
+    _In_ BOOL Spent)
+{
+    HKEY Key;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, 0, KEY_SET_VALUE, &Key) != ERROR_SUCCESS)
+        return;
+    RegSetValueExW(Key, L"AutoAdminLogon", 0, REG_SZ, (const BYTE *)L"0", sizeof(L"0"));
+    if (Spent)
+    {
+        RegDeleteValueW(Key, L"DefaultPassword");
+        RegDeleteValueW(Key, L"AutoLogonCount");
+    }
+    RegCloseKey(Key);
+}
+
+static BOOL
+WlHlAutoLogonWanted(VOID)
+{
+    if (g_AutoLogonTried && WlHlWinlogonNumber(L"ForceAutoLogon", 0) == 0)
+        return FALSE;
+    return WlHlWinlogonNumber(L"AutoAdminLogon", 0) != 0 && !WlHlHasLegalNotice();
+}
+
+/* Signs in DefaultUserName once; the result goes to WlHostLoggedOutSas like a host submit. Never on unlock. */
+static VOID
+WlHlTryAutoLogon(VOID)
+{
+    CREDSER_LOGON Logon;
+    WCHAR User[256], Domain[256], Password[256];
+    HKEY Key;
+    DWORD Left, Chars;
+    HANDLE Token = NULL;
+    LUID LogonId = { 0, 0 };
+    NTSTATUS Status, SubStatus = STATUS_SUCCESS;
+
+    if (!WlHlAutoLogonWanted())
+        return;
+    g_AutoLogonTried = TRUE;
+    if (WlHlWinlogonNumber(L"IgnoreShiftOverride", 0) == 0 && (GetAsyncKeyState(VK_SHIFT) & 0x8000))
+    {
+        ERR("WL: automatic sign-in skipped: Shift is held\n");
+        return;
+    }
+    Left = WlHlWinlogonNumber(L"AutoLogonCount", MAXDWORD);
+    if (Left == 0)
+    {
+        WlHlDisableAutoLogon(TRUE);
+        return;
+    }
+    WlHlWinlogonString(L"DefaultUserName", User, ARRAYSIZE(User));
+    if (User[0] == UNICODE_NULL)
+        return;
+    WlHlWinlogonString(L"DefaultDomainName", Domain, ARRAYSIZE(Domain));
+    Chars = ARRAYSIZE(Domain);
+    if (Domain[0] == UNICODE_NULL && !GetComputerNameW(Domain, &Chars))
+        Domain[0] = UNICODE_NULL;
+    if (!WlHlLsaDefaultPassword(Password, ARRAYSIZE(Password)))
+        WlHlWinlogonString(L"DefaultPassword", Password, ARRAYSIZE(Password));
+
+    ZeroMemory(&Logon, sizeof(Logon));
+    Logon.MessageType = KerbInteractiveLogon;
+    RtlInitUnicodeString(&Logon.LogonDomainName, Domain);
+    RtlInitUnicodeString(&Logon.UserName, User);
+    RtlInitUnicodeString(&Logon.Password, Password);
+    Status = WlHlLsaLogon(&Logon, FALSE, &Token, &LogonId, &SubStatus);
+    if (NT_SUCCESS(Status) && WlHlSafeModeBlocksNonAdmins() && !WlHlTokenIsAdmin(Token))
+    {
+        CloseHandle(Token);
+        Token = NULL;
+        Status = STATUS_ACCOUNT_RESTRICTION;
+    }
+    if (NT_SUCCESS(Status))
+    {
+        if (Left != MAXDWORD && --Left == 0)
+            WlHlDisableAutoLogon(TRUE);
+        else if (Left != MAXDWORD &&
+                 RegOpenKeyExW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, 0, KEY_SET_VALUE, &Key) == ERROR_SUCCESS)
+        {
+            RegSetValueExW(Key, L"AutoLogonCount", 0, REG_DWORD, (const BYTE *)&Left, sizeof(Left));
+            RegCloseKey(Key);
+        }
+        WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, 0);
+    }
+    else
+    {
+        ERR("WL: automatic sign-in failed (0x%08lx); AutoAdminLogon turned off\n", Status);
+        WlHlDisableAutoLogon(FALSE);
+    }
+    SecureZeroMemory(Password, sizeof(Password));
+    SecureZeroMemory(&Logon, sizeof(Logon));
+}
+
 /* Flags for RequestCredentials that describe policy to the host; winlogon stays the gate. */
 static DWORD
 WlHlPolicyFlags(VOID)
@@ -1091,7 +1261,7 @@ VOID
 WlHostDisplaySasNotice(
     _In_ PWLSESSION Session)
 {
-    if (!WlHlDisableCad())
+    if (!WlHlDisableCad() && !WlHlAutoLogonWanted())
     {
         /* A host still up from a logoff keeps showing a notice text instead of a stale status. */
         if (WlHlHostLive())
@@ -1130,6 +1300,7 @@ WlHostLoggedOutSas(
     if (!WlHlEnsureHost(WLHL_CPUS_LOGON, CadFlag, WLHL_READY_MS))
         return WLX_SAS_ACTION_NONE;
     WlHlSetAccepting(TRUE);
+    WlHlTryAutoLogon();
 
     for (;;)
     {
