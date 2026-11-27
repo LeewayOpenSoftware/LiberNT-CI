@@ -2166,12 +2166,15 @@ LuhFadeInCurtain(
                           max(LuhPx(3), 2), RGB(255, 255, 255), 255);
         else
             LuhBlend(&g_Ui.Back, 0, 0, &g_Ui.Face, (BYTE)(255.0 * LuhEaseOut((Ms - LUH_FADE_HOLD_MS) / LUH_FADE_IN_MS)));
+        LuhAnimComposed(&Anim);
         Dc = GetDC(Window);
         if (Dc)
         {
             BitBlt(Dc, 0, 0, g_Ui.Back.Width, g_Ui.Back.Height, g_Ui.Back.Dc, 0, 0, SRCCOPY);
+            GdiFlush();
             ReleaseDC(Window, Dc);
         }
+        LuhAnimPresented(&Anim);
         if (T >= 1.0)
             break;
         LuhAnimWait(&Anim);
@@ -2240,6 +2243,7 @@ LuhSlideCurtain(
     {
         T = LuhAnimFrame(&Anim);
         LuhPresentLift(Window, LuhLerp(From, To, LuhEaseOut(T)));
+        LuhAnimPresented(&Anim);
         if (T >= 1.0)
             break;
         LuhAnimWait(&Anim);
@@ -2272,6 +2276,7 @@ LuhDissolveCurtain(
         else
             LuhBlend(&g_Ui.Back, 0, 0, &g_Ui.Soft,
                      (BYTE)(255.0 * LuhEaseOut((Ms - LUH_DISSOLVE_CLOCK_MS) / LUH_DISSOLVE_SOFT_MS)));
+        LuhAnimComposed(&Anim);
         Dc = GetDC(Window);
         if (Dc)
         {
@@ -2279,6 +2284,7 @@ LuhDissolveCurtain(
             GdiFlush();
             ReleaseDC(Window, Dc);
         }
+        LuhAnimPresented(&Anim);
         if (T >= 1.0)
             break;
         LuhAnimWait(&Anim);
@@ -2418,6 +2424,7 @@ LuhDragMove(
     }
     LuhAnimFrame(&g_Ui.DragAnim);
     LuhPresentLift(Window, g_Ui.DragStartY - Y);
+    LuhAnimPresented(&g_Ui.DragAnim);
 }
 
 /* Released: a third of the way, a flick upwards or a plain click lifts it; otherwise it drops back. */
@@ -2736,6 +2743,7 @@ LuhCompose(
                           g_Ui.SpinnerY + (LONG)(LuhPx(LUH_SPINNER_RING) * sin(A)), max(LuhPx(3), 2),
                           RGB(255, 255, 255), 255);
         }
+        LuhAnimComposed(&g_Ui.SpinnerAnim);
     }
 }
 
@@ -2799,6 +2807,11 @@ LuhPaint(
         LuhCompose(&Client, &Ps.rcPaint, Rebuild);
         BitBlt(Dc, Ps.rcPaint.left, Ps.rcPaint.top, Ps.rcPaint.right - Ps.rcPaint.left,
                Ps.rcPaint.bottom - Ps.rcPaint.top, g_Ui.Back.Dc, Ps.rcPaint.left, Ps.rcPaint.top, SRCCOPY);
+        if (g_Ui.Spinner)
+        {
+            GdiFlush();
+            LuhAnimPresented(&g_Ui.SpinnerAnim);
+        }
         if (Rebuild)
             EnumChildWindows(Window, LuhRedrawOwnerDrawn, 0);
     }

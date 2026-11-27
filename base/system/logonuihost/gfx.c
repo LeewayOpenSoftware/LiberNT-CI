@@ -788,11 +788,31 @@ LuhAnimFrame(
     }
     Anim->Frames++;
     Anim->Last = Now;
+    Anim->Composed = 0;
 
     if (Anim->DurationMs == 0)
         return 1.0;
     T = (double)(Now - Anim->Start) * 1000.0 / ((double)Anim->Frequency * Anim->DurationMs);
     return T >= 1.0 ? 1.0 : T;
+}
+
+VOID
+LuhAnimComposed(
+    _Inout_ PLUH_ANIM Anim)
+{
+    Anim->Composed = LuhNow();
+    if (Anim->Composed - Anim->Last > Anim->LongestCompose)
+        Anim->LongestCompose = Anim->Composed - Anim->Last;
+}
+
+VOID
+LuhAnimPresented(
+    _Inout_ PLUH_ANIM Anim)
+{
+    LONGLONG Now = LuhNow(), From = Anim->Composed ? Anim->Composed : Anim->Last;
+
+    if (Now - From > Anim->LongestPresent)
+        Anim->LongestPresent = Now - From;
 }
 
 double
@@ -842,7 +862,7 @@ VOID
 LuhAnimEnd(
     _Inout_ PLUH_ANIM Anim)
 {
-    CHAR Line[128];
+    CHAR Line[192];
 
     if (Anim->FineTimer)
     {
@@ -851,10 +871,13 @@ LuhAnimEnd(
     }
 
     /* Pam's harness reads this line: a late frame is an interval over twice the target. */
-    StringCchPrintfA(Line, ARRAYSIZE(Line), "anim %s frames=%lu longest-ms=%lu late=%lu target-ms=%lu",
+    StringCchPrintfA(Line, ARRAYSIZE(Line),
+                     "anim %s frames=%lu longest-ms=%lu late=%lu target-ms=%lu compose-ms=%lu present-ms=%lu",
                      Anim->Name ? Anim->Name : "?", Anim->Frames,
                      (ULONG)((Anim->Longest * 1000) / Anim->Frequency), Anim->Late,
-                     (ULONG)((Anim->Target * 1000) / Anim->Frequency));
+                     (ULONG)((Anim->Target * 1000) / Anim->Frequency),
+                     (ULONG)((Anim->LongestCompose * 1000) / Anim->Frequency),
+                     (ULONG)((Anim->LongestPresent * 1000) / Anim->Frequency));
     LuhStage(Line);
 }
 

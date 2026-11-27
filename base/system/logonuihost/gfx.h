@@ -98,16 +98,22 @@ typedef struct _LUH_ANIM
     LONGLONG Last;
     LONGLONG Next;
     LONGLONG Target;            /* one frame at the display rate, in counter ticks */
+    LONGLONG Composed;          /* when this frame's picture was ready, 0 before */
     BOOL FineTimer;             /* timeBeginPeriod(1) is held for this run */
     DWORD DurationMs;
     DWORD Frames;
     DWORD Late;
     LONGLONG Longest;
+    LONGLONG LongestCompose;
+    LONGLONG LongestPresent;
 } LUH_ANIM, *PLUH_ANIM;
 
 VOID LuhAnimStart(_Out_ PLUH_ANIM Anim, _In_ PCSTR Name, _In_ DWORD DurationMs);
 /* Records a frame and returns the linear progress 0..1 at this instant. */
 double LuhAnimFrame(_Inout_ PLUH_ANIM Anim);
+/* The frame's picture is composed / on screen: the line reports the longest of each part. */
+VOID LuhAnimComposed(_Inout_ PLUH_ANIM Anim);
+VOID LuhAnimPresented(_Inout_ PLUH_ANIM Anim);
 BOOL LuhAnimDone(_In_ const LUH_ANIM *Anim);
 double LuhAnimElapsedMs(_In_ const LUH_ANIM *Anim);
 /* Sleeps to the next frame deadline of the fixed schedule. */
