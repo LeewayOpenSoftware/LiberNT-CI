@@ -16,6 +16,16 @@
 #define LUH_LOCK_FILL       RGB(18, 58, 112)
 
 /*
+ * Where the curtain puts its clock and date: a machine-wide Orosi setting, not a policy, so it
+ * sits outside the Policies tree. Settings writes it for administrators; a missing key or any
+ * other value means top-centre.
+ */
+#define LUH_LOCK_KEY            L"SOFTWARE\\Orosi\\LockScreen"
+#define LUH_LOCK_CLOCK_VALUE    L"ClockPosition"
+#define LUH_CLOCK_TOP_CENTRE    0
+#define LUH_CLOCK_BOTTOM_LEFT   1
+
+/*
  * Every screen is drawn once into a 32 bpp top-down DIB whose pixels hold
  * premultiplied BGRA. Animation never redraws a page: it moves or blends the
  * finished surfaces and hands the result to UpdateLayeredWindow.

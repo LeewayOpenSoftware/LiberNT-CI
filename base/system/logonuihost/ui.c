@@ -133,6 +133,7 @@ typedef struct _LUH_UI
     HFONT DateFont;
     WCHAR ClockText[64];
     WCHAR DateText[128];
+    DWORD ClockPosition;    /* LUH_CLOCK_*: read at each show */
     HWND CapsControl;       /* the focused password box while Caps Lock is on */
     int CapsTop;            /* y of the gap reserved under the page's last password box */
     /* drawing: built once per screen size, then only blitted */
@@ -2140,24 +2141,52 @@ LuhBuildBackdrop(
     return TRUE;
 }
 
-/* The curtain picture: sharp wallpaper, clock and date centred near the top, as on Windows 11. */
+/* The administrator's choice of clock position; anything unreadable or unknown is top-centre. */
+static DWORD
+LuhReadClockPosition(void)
+{
+    DWORD Position = LUH_CLOCK_TOP_CENTRE, Size = sizeof(Position);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, LUH_LOCK_KEY, LUH_LOCK_CLOCK_VALUE, RRF_RT_REG_DWORD, NULL,
+                     &Position, &Size) != ERROR_SUCCESS ||
+        Position != LUH_CLOCK_BOTTOM_LEFT)
+    {
+        Position = LUH_CLOCK_TOP_CENTRE;
+    }
+    return Position;
+}
+
+/*
+ * The curtain picture: sharp wallpaper with the clock and date. Top-centre is the Windows 11
+ * layout; bottom-left keeps the same type and spacing, left-aligned near the bottom edge.
+ */
 static void
 LuhBuildFace(void)
 {
-    LONG Width = g_Ui.Face.Width, Height = g_Ui.Face.Height, Y;
+    LONG Width = g_Ui.Face.Width, Height = g_Ui.Face.Height, ClockY, DateY, Left = 0;
+    UINT Align = DT_CENTER;
     RECT Rect;
 
     BitBlt(g_Ui.Face.Dc, 0, 0, Width, Height, g_Ui.Sharp.Dc, 0, 0, SRCCOPY);
 
     /* Measured at 1024x768: clock centre y 180, date centre y 256; kept in proportion. */
-    Y = MulDiv(Height, 180, 768);
-    SetRect(&Rect, 0, Y - LuhPx(72), Width, Y + LuhPx(72));
+    ClockY = MulDiv(Height, 180, 768);
+    DateY = MulDiv(Height, 256, 768);
+    if (g_Ui.ClockPosition == LUH_CLOCK_BOTTOM_LEFT)
+    {
+        /* The date's centre 96/768 above the bottom, the clock 76/768 above it as at the top;
+         * on the Ctrl+Alt+Del curtain both stand clear of its notice line. */
+        DateY = Height - MulDiv(Height, 96, 768) - (g_Ui.CadCurtain ? LuhPx(64) : 0);
+        ClockY = DateY - MulDiv(Height, 76, 768);
+        Left = LuhPx(48);
+        Align = DT_LEFT;
+    }
+    SetRect(&Rect, Left, ClockY - LuhPx(72), Width - Left, ClockY + LuhPx(72));
     LuhDrawText(&g_Ui.Face, g_Ui.ClockFont, g_Ui.ClockText, &Rect,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE, RGB(255, 255, 255), 255);
-    Y = MulDiv(Height, 256, 768);
-    SetRect(&Rect, 0, Y - LuhPx(20), Width, Y + LuhPx(20));
+                Align | DT_VCENTER | DT_SINGLELINE, RGB(255, 255, 255), 255);
+    SetRect(&Rect, Left, DateY - LuhPx(20), Width - Left, DateY + LuhPx(20));
     LuhDrawText(&g_Ui.Face, g_Ui.DateFont, g_Ui.DateText, &Rect,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, RGB(255, 255, 255), 255);
+                Align | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, RGB(255, 255, 255), 255);
 
     /* The Ctrl+Alt+Del notice is the one curtain with words: winlogon's prompt, near the bottom. */
     if (g_Ui.CadCurtain)
@@ -2387,6 +2416,7 @@ LuhShowCurtain(
         g_Ui.CurtainFirst = TRUE;
     }
     g_Ui.FadeInPosted = FALSE;
+    g_Ui.ClockPosition = LuhReadClockPosition();
     LuhUpdateClock();
     LuhBuildFace();
     LuhArmClock(Window);
