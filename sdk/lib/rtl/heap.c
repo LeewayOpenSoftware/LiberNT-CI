@@ -1282,8 +1282,9 @@ RtlpCoalesceFreeBlocks (PHEAP Heap,
 {
     PHEAP_FREE_ENTRY CurrentEntry, NextEntry;
     HEAP_ENTRY Entry, Neighbor;
+    ULONGLONG Key = RtlpHeapEncodingKey(Heap);
 
-    RtlpCheckHeapEntry(Heap, FreeEntry, &Entry);
+    RtlpCheckHeapEntryKeyed(Heap, FreeEntry, &Entry, Key);
 
     /* Get the previous entry */
     CurrentEntry = (PHEAP_FREE_ENTRY)((PHEAP_ENTRY)FreeEntry - Entry.PreviousSize);
@@ -1291,7 +1292,7 @@ RtlpCoalesceFreeBlocks (PHEAP Heap,
     /* Check it */
     if (CurrentEntry != FreeEntry)
     {
-        RtlpCheckHeapEntry(Heap, CurrentEntry, &Neighbor);
+        RtlpCheckHeapEntryKeyed(Heap, CurrentEntry, &Neighbor, Key);
         if (!(Neighbor.Flags & HEAP_ENTRY_BUSY) &&
             (*FreeSize + Neighbor.Size) <= HEAP_MAX_BLOCK_SIZE)
         {
@@ -1319,13 +1320,13 @@ RtlpCoalesceFreeBlocks (PHEAP Heap,
             *FreeSize = *FreeSize + Neighbor.Size;
             Heap->TotalFreeSize -= Neighbor.Size;
             Neighbor.Size = (USHORT)(*FreeSize);
-            RtlpEncodeHeapEntry(Heap, FreeEntry, &Neighbor);
+            RtlpEncodeHeapEntryKeyed(FreeEntry, &Neighbor, Key);
             Entry = Neighbor;
 
             /* Also update previous size if needed */
             if (!(Entry.Flags & HEAP_ENTRY_LAST_ENTRY))
             {
-                RtlpEntrySetPreviousSize(Heap, (PHEAP_ENTRY)FreeEntry + *FreeSize, (USHORT)(*FreeSize));
+                RtlpEntrySetPreviousSizeKeyed((PHEAP_ENTRY)FreeEntry + *FreeSize, (USHORT)(*FreeSize), Key);
             }
             else
             {
@@ -1338,7 +1339,7 @@ RtlpCoalesceFreeBlocks (PHEAP Heap,
     if (!(Entry.Flags & HEAP_ENTRY_LAST_ENTRY))
     {
         NextEntry = (PHEAP_FREE_ENTRY)((PHEAP_ENTRY)FreeEntry + *FreeSize);
-        RtlpCheckHeapEntry(Heap, NextEntry, &Neighbor);
+        RtlpCheckHeapEntryKeyed(Heap, NextEntry, &Neighbor, Key);
 
         if (!(Neighbor.Flags & HEAP_ENTRY_BUSY) &&
             Neighbor.Size + *FreeSize <= HEAP_MAX_BLOCK_SIZE)
@@ -1363,12 +1364,12 @@ RtlpCoalesceFreeBlocks (PHEAP Heap,
             *FreeSize = *FreeSize + Neighbor.Size;
             Heap->TotalFreeSize -= Neighbor.Size;
             Entry.Size = (USHORT)(*FreeSize);
-            RtlpEncodeHeapEntry(Heap, FreeEntry, &Entry);
+            RtlpEncodeHeapEntryKeyed(FreeEntry, &Entry, Key);
 
             /* Also update previous size if needed */
             if (!(Entry.Flags & HEAP_ENTRY_LAST_ENTRY))
             {
-                RtlpEntrySetPreviousSize(Heap, (PHEAP_ENTRY)FreeEntry + *FreeSize, (USHORT)(*FreeSize));
+                RtlpEntrySetPreviousSizeKeyed((PHEAP_ENTRY)FreeEntry + *FreeSize, (USHORT)(*FreeSize), Key);
             }
             else
             {
@@ -2636,10 +2637,11 @@ RtlpIsValidBusyEntry(PHEAP Heap, PHEAP_ENTRY HeapEntry)
     PHEAP_ENTRY Neighbor;
     HEAP_ENTRY Entry, Other;
     BOOLEAN Valid = FALSE;
+    ULONGLONG Key = RtlpHeapEncodingKey(Heap);
 
     _SEH2_TRY
     {
-        RtlpDecodeHeapEntry(Heap, HeapEntry, &Entry);
+        RtlpDecodeHeapEntryKeyed(HeapEntry, &Entry, Key);
         if (!RtlpHeapEntryValid(Heap, &Entry) || !(Entry.Flags & HEAP_ENTRY_BUSY))
             _SEH2_LEAVE;
 
@@ -2663,7 +2665,7 @@ RtlpIsValidBusyEntry(PHEAP Heap, PHEAP_ENTRY HeapEntry)
         if (!(Entry.Flags & HEAP_ENTRY_LAST_ENTRY))
         {
             Neighbor = HeapEntry + Entry.Size;
-            RtlpDecodeHeapEntry(Heap, Neighbor, &Other);
+            RtlpDecodeHeapEntryKeyed(Neighbor, &Other, Key);
             if (!RtlpHeapEntryValid(Heap, &Other) || Other.PreviousSize != Entry.Size)
                 _SEH2_LEAVE;
             if (!(Other.Flags & HEAP_ENTRY_BUSY) &&
@@ -2678,7 +2680,7 @@ RtlpIsValidBusyEntry(PHEAP Heap, PHEAP_ENTRY HeapEntry)
             if (Entry.PreviousSize > (SIZE_T)(HeapEntry - (PHEAP_ENTRY)Segment->BaseAddress))
                 _SEH2_LEAVE;
             Neighbor = HeapEntry - Entry.PreviousSize;
-            RtlpDecodeHeapEntry(Heap, Neighbor, &Other);
+            RtlpDecodeHeapEntryKeyed(Neighbor, &Other, Key);
             if (!RtlpHeapEntryValid(Heap, &Other) || Other.Size != Entry.PreviousSize)
                 _SEH2_LEAVE;
             if (!(Other.Flags & HEAP_ENTRY_BUSY) &&
@@ -2780,7 +2782,7 @@ BOOLEAN NTAPI RtlFreeHeap(
     }
 
     /* The header is trusted now; read it under the lock */
-    RtlpDecodeHeapEntry(Heap, HeapEntry, &Entry);
+    RtlpDecodeHeapEntryKeyed(HeapEntry, &Entry, RtlpHeapEncodingKey(Heap));
 
     if (Entry.Flags & HEAP_ENTRY_VIRTUAL_ALLOC)
     {

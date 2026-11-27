@@ -424,6 +424,26 @@ RtlpCheckHeapEntry(PHEAP Heap, PVOID Entry, PHEAP_ENTRY Decoded)
 }
 
 FORCEINLINE
+VOID
+RtlpCheckHeapEntryKeyed(PHEAP Heap, PVOID Entry, PHEAP_ENTRY Decoded, ULONGLONG Key)
+{
+    RtlpDecodeHeapEntryKeyed(Entry, Decoded, Key);
+    if (!RtlpHeapEntryValid(Heap, Decoded))
+        RtlpHeapCorruption(Heap, Entry);
+}
+
+FORCEINLINE
+VOID
+RtlpEntrySetPreviousSizeKeyed(PVOID Entry, USHORT PreviousSize, ULONGLONG Key)
+{
+    HEAP_ENTRY Clear;
+
+    RtlpDecodeHeapEntryKeyed(Entry, &Clear, Key);
+    Clear.PreviousSize = PreviousSize;
+    RtlpEncodeHeapEntryKeyed(Entry, &Clear, Key);
+}
+
+FORCEINLINE
 USHORT
 RtlpEntrySize(PHEAP Heap, PVOID Entry)
 {
