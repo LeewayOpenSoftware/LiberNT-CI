@@ -1013,7 +1013,7 @@ cleanup:
     }
     else // if (ret)
     {
-        /* Host mode: wait for the painted desktop, then the host fades across the switch (§6.3.1). */
+        /* Wait for the painted desktop, then the host fades across the switch (§6.3.1). */
         WlHostWaitDesktopSwitch(Session);
         WlHostBeforeDesktopSwitch();
         SwitchDesktop(Session->ApplicationDesktop);
@@ -1618,8 +1618,6 @@ DoGenericAction(
                     SwitchDesktop(Session->WinlogonDesktop);
                     WlHostLock(Session);    /* the lock is already in force; this only bounds when the page appears (P2) */
                     ReplyMessage(TRUE);
-                    /* We may be on the Logged-On SAS dialog, in which case
-                     * we need to close it if the lock action came via Win-L */
                     CallNotificationDlls(Session, LockHandler);
                 }
             }
@@ -1719,7 +1717,6 @@ DispatchSAS(
                     Session->LogonState = STATE_LOGGED_OFF_SAS;
                     LogonStage("logged-out-sas");
 
-
                     Session->Options = 0;
 
                     wlxAction = WlHostLoggedOutSas(Session);
@@ -1732,7 +1729,7 @@ DispatchSAS(
                 case STATE_LOGGED_ON:
                     Session->LogonState = STATE_LOGGED_ON_SAS;
                     SwitchDesktop(Session->WinlogonDesktop);
-                    /* Host mode: the host shows the Ctrl+Alt+Del options and is gone on return. */
+                    /* The host shows the Ctrl+Alt+Del options and is gone on return. */
                     wlxAction = WlHostLoggedOnSas(Session);
                     if ((wlxAction == WLX_SAS_ACTION_NONE) ||
                         (wlxAction == WLX_SAS_ACTION_TASKLIST))
@@ -1761,8 +1758,7 @@ DispatchSAS(
                 case STATE_LOCKED:
                     Session->LogonState = STATE_LOCKED_SAS;
 
-
-                    /* Host mode: the SAS brings up the unlock page; the station stays locked
+                    /* The SAS brings up the unlock page; the station stays locked
                      * until the host's unlock comes back as WLHOST_EVENT_UNLOCK. */
                     WlHostLockedSas(Session);
                     wlxAction = WLX_SAS_ACTION_NONE;
@@ -1813,7 +1809,7 @@ DispatchSAS(
     }
 }
 
-/* Host mode: verdicts and notices from RPC and supervisor threads, replayed here (hostlogon.c). */
+/* Verdicts and notices from RPC and supervisor threads, replayed here (hostlogon.c). */
 static
 VOID
 HostEvent(
