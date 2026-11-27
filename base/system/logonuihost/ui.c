@@ -15,6 +15,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_TIMER_SPINNER   2
 #define LUH_TIMER_FADE      3
 #define LUH_TIMER_STARTUP   4   /* a page must arrive within the provider call bound */
+#define LUH_TIMER_CLOCK     5   /* the curtain's clock, only while the curtain is up */
+#define LUH_CLOCK_MS        500
 #define LUH_SPINNER_MS      50
 
 #define LUH_ID_FIELD_BASE   1000
@@ -54,6 +56,13 @@ typedef struct _LUH_UI
     BOOL PageBusy;          /* a submission is with winlogon; controls disabled */
     HWND PolicyButtons[2];
     HWND TileButtons[LUH_MAX_TILES];    /* the other tiles, bottom left, as on the Windows sign-in screen */
+    /* the curtain: clock and date before the tiles, CAD-less logon and unlock only */
+    BOOL Curtain;
+    PLUH_PAGE CurtainPage;  /* a page that arrived under the curtain; shown when it lifts */
+    HFONT ClockFont;
+    HFONT DateFont;
+    WCHAR ClockText[64];
+    WCHAR DateText[128];
 } LUH_UI;
 
 static LUH_UI g_Ui;
@@ -533,6 +542,87 @@ LuhApplyFieldUpdate(
     }
 }
 
+/* ---- the curtain ------------------------------------------------------------------ */
+
+static BOOL
+LuhUpdateClock(void)
+{
+    WCHAR Time[64], Date[128];
+
+    if (!GetTimeFormatW(LOCALE_USER_DEFAULT, TIME_NOSECONDS, NULL, NULL, Time, ARRAYSIZE(Time)))
+        Time[0] = UNICODE_NULL;
+    if (!GetDateFormatW(LOCALE_USER_DEFAULT, DATE_LONGDATE, NULL, NULL, Date, ARRAYSIZE(Date)))
+        Date[0] = UNICODE_NULL;
+    if (!wcscmp(Time, g_Ui.ClockText) && !wcscmp(Date, g_Ui.DateText))
+        return FALSE;
+    StringCchCopyW(g_Ui.ClockText, ARRAYSIZE(g_Ui.ClockText), Time);
+    StringCchCopyW(g_Ui.DateText, ARRAYSIZE(g_Ui.DateText), Date);
+    return TRUE;
+}
+
+static void
+LuhFreeCurtainPage(void)
+{
+    if (g_Ui.CurtainPage)
+    {
+        SecureZeroMemory(g_Ui.CurtainPage, sizeof(*g_Ui.CurtainPage));
+        HeapFree(GetProcessHeap(), 0, g_Ui.CurtainPage);
+        g_Ui.CurtainPage = NULL;
+    }
+}
+
+/*
+ * The clock page Windows shows before the tiles. Only when CAD is not required: with CAD,
+ * winlogon asks for credentials only after the user's SAS, which is the curtain lifting.
+ */
+static void
+LuhShowCurtain(
+    _In_ HWND Window)
+{
+    g_Ui.Curtain = TRUE;
+    LuhUpdateClock();
+    SetTimer(Window, LUH_TIMER_CLOCK, LUH_CLOCK_MS, NULL);
+    SetFocus(Window);
+    LuhTrace("curtain", NULL);
+    InvalidateRect(Window, NULL, TRUE);
+}
+
+static void
+LuhDropCurtain(
+    _In_ HWND Window)
+{
+    if (!g_Ui.Curtain)
+        return;
+    g_Ui.Curtain = FALSE;
+    KillTimer(Window, LUH_TIMER_CLOCK);
+    LuhFreeCurtainPage();
+}
+
+/* A key or a click lifts the curtain: the page that waited under it comes up. */
+static void
+LuhLiftCurtain(
+    _In_ HWND Window)
+{
+    PLUH_PAGE Page = g_Ui.CurtainPage;
+
+    if (!g_Ui.Curtain)
+        return;
+    g_Ui.CurtainPage = NULL;
+    LuhDropCurtain(Window);
+    LuhTrace("curtain-lifted", NULL);
+    if (Page)
+    {
+        LuhSetSpinner(Window, FALSE);
+        LuhCreatePage(Window, Page);
+        if (g_Ui.Page && g_Ui.Page->AutoSubmit)
+        {
+            LuhTrace("auto-submit", NULL);
+            LuhSubmit(Window);
+        }
+    }
+    InvalidateRect(Window, NULL, TRUE);
+}
+
 /* ---- commands from winlogon ---------------------------------------------------- */
 
 static void
@@ -557,6 +647,7 @@ LuhHandleCommand(
             break;
 
         case WluiCmdDisplayWelcome:
+            LuhDropCurtain(Window);
             LuhDestroyPage();
             StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"Welcome");
             StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Command->User);
@@ -612,6 +703,13 @@ LuhHandleCommand(
             StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"");
             g_Ui.Detail[0] = UNICODE_NULL;
             LuhSetSpinner(Window, TRUE);
+            if (!g_Ui.ProvidersStarted && (Command->Flags & WLUI_FLAG_DISABLE_CAD) &&
+                !(Command->Flags & WLUI_FLAG_FORCED_CHANGE) &&
+                (g_Options.Scenario == CPUS_LOGON || g_Options.Scenario == CPUS_UNLOCK_WORKSTATION))
+            {
+                LuhSetSpinner(Window, FALSE);
+                LuhShowCurtain(Window);
+            }
             if (!g_Ui.ProvidersStarted)
             {
                 g_Ui.ProvidersStarted = LuhProvidersStart(Window);
@@ -629,6 +727,7 @@ LuhHandleCommand(
             {
                 g_Ui.Fading = TRUE;
                 g_Ui.FadeStep = 0;
+                LuhDropCurtain(Window);
                 LuhDestroyPage();
                 LuhSetSpinner(Window, FALSE);
                 SetTimer(Window, LUH_TIMER_FADE, LUH_FADE_MS / LUH_FADE_STEPS, NULL);
@@ -663,6 +762,37 @@ LuhPaint(
     FillRect(Dc, &Client, (HBRUSH)GetStockObject(BLACK_BRUSH));
     SetBkMode(Dc, TRANSPARENT);
     SetTextColor(Dc, RGB(255, 255, 255));
+
+    if (g_Ui.Curtain)
+    {
+        /* Time and date bottom left, the prompt below them, as on the Windows lock screen. */
+        Rect = Client;
+        Rect.left = 64;
+        Rect.top = Client.bottom - 300;
+        Rect.bottom = Rect.top + 140;
+        OldFont = SelectObject(Dc, g_Ui.ClockFont);
+        DrawTextW(Dc, g_Ui.ClockText, -1, &Rect, DT_LEFT | DT_BOTTOM | DT_SINGLELINE);
+        Rect.top = Rect.bottom;
+        Rect.bottom = Rect.top + 48;
+        SelectObject(Dc, g_Ui.DateFont);
+        DrawTextW(Dc, g_Ui.DateText, -1, &Rect, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+        Rect = Client;
+        Rect.top = Client.bottom - 72;
+        Rect.bottom = Client.bottom - 32;
+        SelectObject(Dc, g_Ui.TextFont);
+        DrawTextW(Dc, g_Options.Scenario == CPUS_UNLOCK_WORKSTATION ? L"Press any key or click to unlock"
+                                                                     : L"Press any key or click to sign in",
+                  -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(Dc, OldFont);
+        EndPaint(Window, &Ps);
+        if (!g_Ui.FirstPaintDone)
+        {
+            g_Ui.FirstPaintDone = TRUE;
+            GdiFlush();
+            LuhIpcReady();
+        }
+        return;
+    }
 
     /* With a credential page up, the text sits above its first row (the page grows with its
      * label rows, a fixed offset put the result under the title); otherwise it is centred. */
@@ -752,6 +882,11 @@ LuhWindowProc(
                 else
                     LuhBeginExit(Window, WluiExitProviderInitFailed, LUH_EXIT_NOT_SUPPORTED);
             }
+            else if (wParam == LUH_TIMER_CLOCK)
+            {
+                if (g_Ui.Curtain && LuhUpdateClock())
+                    InvalidateRect(Window, NULL, FALSE);
+            }
             else if (wParam == LUH_TIMER_FADE)
             {
                 g_Ui.FadeStep++;
@@ -819,7 +954,12 @@ LuhWindowProc(
                 return 0;
             }
             KillTimer(Window, LUH_TIMER_STARTUP);
-            if (wParam == LUH_PAGE_READY && lParam)
+            if (wParam == LUH_PAGE_READY && lParam && g_Ui.Curtain)
+            {
+                LuhFreeCurtainPage();
+                g_Ui.CurtainPage = (PLUH_PAGE)lParam;
+            }
+            else if (wParam == LUH_PAGE_READY && lParam)
             {
                 LuhSetSpinner(Window, FALSE);
                 LuhCreatePage(Window, (PLUH_PAGE)lParam);
@@ -831,6 +971,7 @@ LuhWindowProc(
             }
             else if (wParam == LUH_PAGE_POLICY)
             {
+                LuhDropCurtain(Window);
                 LuhShowPolicyPage(Window);
             }
             else
@@ -864,6 +1005,16 @@ LuhWindowProc(
             }
             return 0;
 
+        case WM_KEYDOWN:
+        case WM_LBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+            if (g_Ui.Curtain)
+            {
+                LuhLiftCurtain(Window);
+                return 0;
+            }
+            break;
+
         case WM_CLOSE:
             /* Only winlogon closes this window, through Dismiss. */
             return 0;
@@ -874,6 +1025,8 @@ LuhWindowProc(
             KillTimer(Window, LUH_TIMER_SPINNER);
             KillTimer(Window, LUH_TIMER_FADE);
             KillTimer(Window, LUH_TIMER_STARTUP);
+            KillTimer(Window, LUH_TIMER_CLOCK);
+            LuhFreeCurtainPage();
             PostQuitMessage(g_Ui.ExitCode);
             return 0;
     }
@@ -893,6 +1046,12 @@ LuhUiCreate(
                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     g_Ui.TextFont = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    g_Ui.ClockFont = CreateFontW(-128, 0, 0, 0, FW_LIGHT, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    g_Ui.DateFont = CreateFontW(-40, 0, 0, 0, FW_LIGHT, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                 DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 
@@ -939,5 +1098,7 @@ LuhUiRun(
         LuhProvidersStop();
     if (g_Ui.TitleFont) DeleteObject(g_Ui.TitleFont);
     if (g_Ui.TextFont) DeleteObject(g_Ui.TextFont);
+    if (g_Ui.ClockFont) DeleteObject(g_Ui.ClockFont);
+    if (g_Ui.DateFont) DeleteObject(g_Ui.DateFont);
     return (int)Msg.wParam;
 }
