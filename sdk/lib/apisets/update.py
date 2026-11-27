@@ -25,6 +25,7 @@ REDIRECT_HOSTS = {
 # module-wide fallback above. Contract overrides always take precedence.
 CONTRACT_HOST_OVERRIDES = {
     'api-ms-win-core-com-l1-1-1.dll': 'combase.dll',
+    'api-ms-win-core-com-midlproxystub-l1-1-0.dll': 'combase.dll',
     'api-ms-win-core-featurestaging-l1-1-0.dll': 'shcore.dll',
     'api-ms-win-core-featurestaging-l1-1-1.dll': 'shcore.dll',
     'api-ms-win-core-libraryloader-l1-1-0.dll': 'kernelbase.dll',
@@ -43,6 +44,7 @@ CONTRACT_HOST_OVERRIDES = {
     'api-ms-win-core-shlwapi-obsolete-l1-2-0.dll': 'kernelbase.dll',
     'api-ms-win-core-string-l2-1-0.dll': 'kernelbase.dll',
     'api-ms-win-core-string-l2-1-1.dll': 'kernelbase.dll',
+    'api-ms-win-core-stringansi-l1-1-0.dll': 'kernelbase.dll',
     'api-ms-win-core-url-l1-1-0.dll': 'kernelbase.dll',
     'api-ms-win-core-version-l1-1-0.dll': 'version.dll',
     'api-ms-win-core-version-l1-1-1.dll': 'version.dll',
@@ -62,6 +64,7 @@ CONTRACT_HOST_OVERRIDES = {
     'api-ms-win-eventing-controller-l1-1-0.dll': 'sechost.dll',
     'api-ms-win-eventing-provider-l1-1-0.dll': 'kernelbase.dll',
     'api-ms-win-security-base-l1-1-0.dll': 'advapi32.dll',
+    'api-ms-win-security-base-l1-1-1.dll': 'kernelbase.dll',
     'api-ms-win-security-base-l1-2-0.dll': 'kernelbase.dll',
     'api-ms-win-shcore-obsolete-l1-1-0.dll': 'shcore.dll',
     'api-ms-win-shcore-path-l1-1-0.dll': 'shcore.dll',
@@ -70,6 +73,7 @@ CONTRACT_HOST_OVERRIDES = {
     'api-ms-win-shcore-scaling-l1-1-2.dll': 'shcore.dll',
     'api-ms-win-shcore-stream-l1-1-0.dll': 'shcore.dll',
     'api-ms-win-shcore-stream-winrt-l1-1-0.dll': 'shcore.dll',
+    'api-ms-win-shcore-unicodeansi-l1-1-0.dll': 'shcore.dll',
     'api-ms-win-shell-shellfolders-l1-1-0.dll': 'shell32.dll',
 }
 
