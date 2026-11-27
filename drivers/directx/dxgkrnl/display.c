@@ -3983,10 +3983,15 @@ DxgkDisplayPresentBootScreen(
     if (Pixels == NULL)
         return;
 
+    /* A smaller boot screen (the POST mode) stays where it was seen: centred, black around it. */
     if (InbvQueryBootScreen(NULL, 0, &Width, &Height) == STATUS_BUFFER_TOO_SMALL &&
-        Width == Adapter->CommittedWidth && Height == Adapter->CommittedHeight)
+        Width <= Adapter->CommittedWidth && Height <= Adapter->CommittedHeight)
     {
-        (VOID)InbvCopyBootScreen(Pixels, (LONG)Pitch, Width, Height);
+        PUCHAR Origin = (PUCHAR)Pixels +
+                        (SIZE_T)((Adapter->CommittedHeight - Height) / 2) * Pitch +
+                        (SIZE_T)((Adapter->CommittedWidth - Width) / 2) * sizeof(ULONG);
+
+        (VOID)InbvCopyBootScreen(Origin, (LONG)Pitch, Width, Height);
     }
 
     Rect.left = 0;
