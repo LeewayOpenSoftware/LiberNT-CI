@@ -460,7 +460,7 @@ TdhGetEventInformation(
     Buffer->DecodingSource = DecodingSourceTlg;
     Buffer->PropertyCount = Decode.Count;
     Buffer->TopLevelPropertyCount = Decode.TopLevelCount;
-    Buffer->DUMMYUNIONNAME7.Tags = EventTags & 0x0FFFFFFF;
+    Buffer->Tags = EventTags & 0x0FFFFFFF;
 
     StringOffset = FIELD_OFFSET(TRACE_EVENT_INFO, EventPropertyInfoArray) +
                    Decode.Count * sizeof(EVENT_PROPERTY_INFO);
@@ -474,7 +474,7 @@ TdhGetEventInformation(
     if (TlgWideSize(EventName, EventNameLength))
     {
         Buffer->TaskNameOffset = StringOffset;
-        Buffer->DUMMYUNIONNAME5.EventNameOffset = StringOffset;
+        Buffer->EventNameOffset = StringOffset;
         TlgWideCopy(EventName, EventNameLength, (PWSTR)((PUCHAR)Buffer + StringOffset));
         StringOffset += (TlgWideSize(EventName, EventNameLength) + 1) * sizeof(WCHAR);
     }

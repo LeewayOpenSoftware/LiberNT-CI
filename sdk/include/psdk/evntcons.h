@@ -97,6 +97,7 @@ struct _EVENT_RECORD {
   PVOID UserContext;
 };
 
+typedef struct _EVENT_RECORD EVENT_RECORD, *PEVENT_RECORD;
 typedef const EVENT_RECORD *PCEVENT_RECORD;
 #endif
 
@@ -246,12 +247,12 @@ typedef struct _TRACE_EVENT_INFO
     {
         ULONG EventNameOffset;
         ULONG ActivityIDNameOffset;
-    } DUMMYUNIONNAME5;
+    };
     union
     {
         ULONG EventAttributesOffset;
         ULONG RelatedActivityIDNameOffset;
-    } DUMMYUNIONNAME6;
+    };
     ULONG PropertyCount;
     ULONG TopLevelPropertyCount;
     union
@@ -262,9 +263,20 @@ typedef struct _TRACE_EVENT_INFO
             ULONG Reserved : 4;
             ULONG Tags : 28;
         };
-    } DUMMYUNIONNAME7;
+    };
     EVENT_PROPERTY_INFO EventPropertyInfoArray[ANYSIZE_ARRAY];
 } TRACE_EVENT_INFO, *PTRACE_EVENT_INFO;
+
+typedef ULONG TDHSTATUS;
+
+TDHSTATUS
+WINAPI
+TdhGetEventInformation(
+    _In_ PEVENT_RECORD Event,
+    _In_ ULONG TdhContextCount,
+    _In_reads_opt_(TdhContextCount) PTDH_CONTEXT TdhContext,
+    _Out_writes_bytes_opt_(*BufferSize) PTRACE_EVENT_INFO Buffer,
+    _Inout_ PULONG BufferSize);
 
 #ifdef __cplusplus
 }

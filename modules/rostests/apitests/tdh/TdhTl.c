@@ -140,7 +140,7 @@ TestValidEvent(VOID)
     ULONG Size;
     ULONG Error;
     PTRACE_EVENT_INFO Info = (PTRACE_EVENT_INFO)Buffer;
-    PEVENT_PROPERTY_INFO Alpha, Beta, Group, G1;
+    PEVENT_PROPERTY_INFO Props, Alpha, Beta, Group, G1;
 
     BlobSize = BuildValidBlob(Blob);
     SetupEvent(&Event, &Item, Blob, BlobSize);
@@ -180,12 +180,13 @@ TestValidEvent(VOID)
     ok(Info->TaskNameOffset != 0, "TaskNameOffset 0\n");
     ok(!wcscmp((PWSTR)((PUCHAR)Info + Info->TaskNameOffset), L"TestEvent"),
        "TaskName %ls\n", (PWSTR)((PUCHAR)Info + Info->TaskNameOffset));
-    ok(Info->DUMMYUNIONNAME5.EventNameOffset == Info->TaskNameOffset, "EventNameOffset\n");
+    ok(Info->EventNameOffset == Info->TaskNameOffset, "EventNameOffset\n");
 
-    Alpha = &Info->EventPropertyInfoArray[0];
-    Beta = &Info->EventPropertyInfoArray[1];
-    Group = &Info->EventPropertyInfoArray[2];
-    G1 = &Info->EventPropertyInfoArray[3];
+    Props = Info->EventPropertyInfoArray;
+    Alpha = &Props[0];
+    Beta = &Props[1];
+    Group = &Props[2];
+    G1 = &Props[3];
     ok(!wcscmp((PWSTR)((PUCHAR)Info + Alpha->NameOffset), L"Alpha"), "field 0 name\n");
     ok(Alpha->nonStructType.InType == TDH_INTYPE_INT32, "Alpha InType %u\n",
        Alpha->nonStructType.InType);
@@ -204,10 +205,10 @@ TestValidEvent(VOID)
     /* nested structs flatten with each struct's direct members contiguous:
        Outer, Inner, Tail, Ix, Iy with Outer { Inner, Tail } and Inner { Ix, Iy } */
     {
-        PEVENT_PROPERTY_INFO Outer = &Info->EventPropertyInfoArray[5];
-        PEVENT_PROPERTY_INFO Inner = &Info->EventPropertyInfoArray[6];
-        PEVENT_PROPERTY_INFO Tail = &Info->EventPropertyInfoArray[7];
-        PEVENT_PROPERTY_INFO Ix = &Info->EventPropertyInfoArray[8];
+        PEVENT_PROPERTY_INFO Outer = &Props[5];
+        PEVENT_PROPERTY_INFO Inner = &Props[6];
+        PEVENT_PROPERTY_INFO Tail = &Props[7];
+        PEVENT_PROPERTY_INFO Ix = &Props[8];
 
         ok(!wcscmp((PWSTR)((PUCHAR)Info + Outer->NameOffset), L"Outer"), "Outer name\n");
         ok(Outer->structType.StructStartIndex == 6 && Outer->structType.NumOfStructMembers == 2,
