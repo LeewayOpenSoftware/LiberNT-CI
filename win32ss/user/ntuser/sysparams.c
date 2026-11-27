@@ -1348,6 +1348,8 @@ SpiSetBootScreenWallpaper(VOID)
 
     OldBitmap = gspv.hbmWallpaper;
     SpiAdoptBootScreenWallpaper(Bitmap, Width, Height);
+    /* The lab reads from this line whether win32k or dxgkrnl took the boot screen first. */
+    ERR("K2TRACE: W32K boot screen adopted %lux%lu\n", Width, Height);
 
     if (OldBitmap && OldBitmap != Bitmap)
     {
