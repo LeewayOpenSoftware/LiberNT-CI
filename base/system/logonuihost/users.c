@@ -289,6 +289,19 @@ AddUser(
     Array->Users[Array->Count++] = User;
 }
 
+static DWORD
+ReadPolicyDword(
+    _In_ PCWSTR Name,
+    _In_ DWORD Default)
+{
+    DWORD Value = Default, Size = sizeof(Value);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                     Name, RRF_RT_REG_DWORD, NULL, &Value, &Size) != ERROR_SUCCESS)
+        Value = Default;
+    return Value;
+}
+
 /*
  * Logon: the accounts the msgina page lists, every enabled normal local account (msgina
  * LoadUsers). Unlock: only the locked local account Only names (DOMAIN\user, the domain being
@@ -333,6 +346,13 @@ LuhUsersCreate(
     if (Unlock && OnlyName == NULL)
     {
         TRACE("unlock without an account name: no users\n");
+        *Out = &Array->ICredentialProviderUserArray_iface;
+        return S_OK;
+    }
+    /* As on Windows: DontDisplayLastUserName=1 lists no account at all, only the empty tile. */
+    if (!Unlock && ReadPolicyDword(L"DontDisplayLastUserName", 0) != 0)
+    {
+        TRACE("DontDisplayLastUserName: no users\n");
         *Out = &Array->ICredentialProviderUserArray_iface;
         return S_OK;
     }
