@@ -8,6 +8,7 @@
 #include "settings.h"
 #include <lm.h>
 #include <winternl.h>
+#include <ntsecapi.h>
 #include <ntsam.h>
 #include <algorithm>
 
@@ -191,18 +192,25 @@ SignInScreenToggle(PageBuilder &page, UINT title, UINT detail, LPCWSTR icon, LPC
                 }).Enabled = IsAdmin();
 }
 
-/* A domain member; when that cannot be read, yes, as winlogon assumes. */
+/* A domain member, read from LSA as winlogon reads it; when that cannot be read, yes, as winlogon assumes. */
 static bool
 DomainJoined()
 {
-    LPWSTR name = NULL;
-    NETSETUP_JOIN_STATUS status = NetSetupUnknownStatus;
+    LSA_OBJECT_ATTRIBUTES attributes = {};
+    LSA_HANDLE policy = NULL;
+    PPOLICY_PRIMARY_DOMAIN_INFO info = NULL;
+    bool joined = true;
 
-    if (NetGetJoinInformation(NULL, &name, &status) != NERR_Success)
+    attributes.Length = sizeof(attributes);
+    if ((LONG)LsaOpenPolicy(NULL, &attributes, POLICY_VIEW_LOCAL_INFORMATION, &policy) < 0)
         return true;
-    if (name)
-        NetApiBufferFree(name);
-    return status == NetSetupDomainName;
+    if ((LONG)LsaQueryInformationPolicy(policy, PolicyPrimaryDomainInformation, (PVOID *)&info) >= 0 && info)
+    {
+        joined = (info->Sid != NULL);
+        LsaFreeMemory(info);
+    }
+    LsaClose(policy);
+    return joined;
 }
 
 /*
