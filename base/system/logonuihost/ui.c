@@ -1062,7 +1062,9 @@ LuhComposeStatus(
     LONG Cy = Client->bottom / 2;
     RECT Rect;
 
-    LuhFillRect(Surface, Client, RGB(0, 0, 0), 255);
+    /* A status is on black; the wait for the providers' first page stays on the credentials backdrop. */
+    if (g_Ui.Title[0] != UNICODE_NULL || !g_Ui.ProvidersStarted)
+        LuhFillRect(Surface, Client, RGB(0, 0, 0), 255);
     g_Ui.SpinnerY = Cy + LuhPx(LUH_STATUS_DOTS_DY);
     SetRect(&Rect, 0, Cy + LuhPx(LUH_STATUS_TEXT_DY) - LuhPx(20), Client->right, Cy + LuhPx(LUH_STATUS_TEXT_DY) + LuhPx(20));
     LuhDrawText(Surface, g_Ui.StatusFont, g_Ui.Title, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
@@ -2315,12 +2317,13 @@ LuhFreeCurtainPage(void)
  */
 static void
 LuhShowCurtain(
-    _In_ HWND Window)
+    _In_ HWND Window,
+    _In_ BOOL Locked)
 {
     g_Ui.Curtain = TRUE;
     g_Ui.Lift = 0;
     /* On a lock Windows 11 shows black first, then fades the lock screen in. */
-    g_Ui.CurtainFadeIn = (g_Options.Scenario == CPUS_UNLOCK_WORKSTATION);
+    g_Ui.CurtainFadeIn = Locked;
     if (!g_Ui.CurtainFadeIn)
     {
         /* The picture is decoded before the window exists; this line shows it costs no frame. */
@@ -2465,8 +2468,9 @@ LuhHandleCommand(
             {
                 LuhDestroyPage();
                 LuhSetSpinner(Window, FALSE);
+                /* winlogon marks the lock notice with the signed-in flag. */
                 if (!g_Ui.Curtain)
-                    LuhShowCurtain(Window);
+                    LuhShowCurtain(Window, (Command->Flags & WLUI_FLAG_USERS_SIGNED_IN) != 0);
                 g_Ui.CadCurtain = TRUE;
                 LuhBuildFace();
                 LuhTrace("cad-curtain", g_Ui.Title);
@@ -2533,7 +2537,12 @@ LuhHandleCommand(
 
         case WluiCmdRequestCredentials:
             if (g_Ui.CadCurtain)
-                LuhDropCurtain(Window);     /* the user's SAS came first: the notice gives way to the page */
+            {
+                /* The user's SAS came first: the notice dissolves into the backdrop the page comes up on. */
+                if (g_Ui.Curtain && !g_Ui.CurtainFadeIn)
+                    LuhDissolveCurtain(Window);
+                LuhDropCurtain(Window);
+            }
             StringCchCopyW(g_Options.PrefillUser, ARRAYSIZE(g_Options.PrefillUser), Command->User);
             if (g_Ui.InLegalNotice)
             {
@@ -2574,7 +2583,7 @@ LuhHandleCommand(
                 (g_Options.Scenario == CPUS_LOGON || g_Options.Scenario == CPUS_UNLOCK_WORKSTATION))
             {
                 LuhSetSpinner(Window, FALSE);
-                LuhShowCurtain(Window);
+                LuhShowCurtain(Window, g_Options.Scenario == CPUS_UNLOCK_WORKSTATION);
             }
             if (!g_Ui.ProvidersStarted)
             {
