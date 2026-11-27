@@ -27,6 +27,13 @@ _Thread_local volatile int *PoolHostLockBlocked;
 int TestFailures;
 int TestChecks;
 
+_Noreturn VOID
+KeBugCheckEx(ULONG Code, ULONG_PTR A, ULONG_PTR B, ULONG_PTR C, ULONG_PTR D)
+{
+    fprintf(stderr, "bugcheck %x %zx %zx %zx %zx\n", Code, (size_t)A, (size_t)B, (size_t)C, (size_t)D);
+    abort();
+}
+
 static
 NTSTATUS
 ArenaCommit(PVOID Context, PVOID Base, SIZE_T Bytes)
