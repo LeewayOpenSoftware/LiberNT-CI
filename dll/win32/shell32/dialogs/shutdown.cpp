@@ -81,6 +81,13 @@ ShellGetAllowedShutdownOptions(VOID)
     if (!SHTestTokenPrivilegeW(NULL, SE_SHUTDOWN_NAME))
         return Options;
 
+    /* NoClose removes shut down / restart / sleep / hibernate (log off may remain). */
+    dwPolicyValue = 0;
+    ShellGetPolicyDWORD(L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer",
+                        L"NoClose", &dwPolicyValue);
+    if (dwPolicyValue != 0)
+        return Options;
+
     Options |= WLX_SHUTDOWN_STATE_POWER_OFF | WLX_SHUTDOWN_STATE_REBOOT;
 
     if (IsPwrSuspendAllowed())
@@ -211,7 +218,8 @@ ShellShutdownWindowsDialog(HWND hWndOwner, DWORD dwExcludeOptions)
                         hWndOwner, ShutdownDlgProc, (LPARAM)&Ctx) != IDOK)
         return 0;
 
-    if (Ctx.Selected != 0)
+    /* Don't persist the choice for a restricted prompt (e.g. logoff-only). */
+    if (Ctx.Selected != 0 && dwExcludeOptions == 0)
         ShellSaveShutdownSelState(Ctx.Selected);
     return Ctx.Selected;
 }
