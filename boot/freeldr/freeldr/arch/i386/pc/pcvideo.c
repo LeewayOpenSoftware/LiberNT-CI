@@ -1327,27 +1327,17 @@ PcVideoMaskFromField(
     return ((1UL << Size) - 1) << Position;
 }
 
-BOOLEAN BiosIsVesaDdcSupported(VOID);
-BOOLEAN BiosVesaReadEdid(VOID);
-
 /* The monitor's preferred mode: the first detailed timing of its EDID (VBE/DDC). */
 static BOOLEAN
 PcVideoEdidPreferredSize(
     _Out_ PULONG Width,
     _Out_ PULONG Height)
 {
-    static const UCHAR Header[8] = { 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00 };
     UCHAR Edid[128];
 
     *Width = *Height = 0;
-    if (!BiosIsVesaDdcSupported() || !BiosVesaReadEdid())
+    if (!BiosVesaGetEdid(Edid) || (Edid[54] == 0 && Edid[55] == 0))
         return FALSE;
-    RtlCopyMemory(Edid, (PVOID)BIOSCALLBUFFER, sizeof(Edid));
-    if (RtlCompareMemory(Edid, Header, sizeof(Header)) != sizeof(Header) ||
-        (Edid[54] == 0 && Edid[55] == 0))
-    {
-        return FALSE;
-    }
     *Width = Edid[56] | ((Edid[58] & 0xF0) << 4);
     *Height = Edid[59] | ((Edid[61] & 0xF0) << 4);
     return *Width != 0 && *Height != 0;
