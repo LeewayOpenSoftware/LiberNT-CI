@@ -67,19 +67,20 @@ WlSpinInterruptTime(VOID)
     return (ULONGLONG)Time.QuadPart;
 }
 
-/* Pumps the spinner thread's messages until Event is set or Ms pass. Returns TRUE if Event was set. */
+/* Pumps the spinner thread's messages until Event is set or Ms pass (timed on WlSpinNowMs/QPC, so a
+ * message wakeup does not skew the remaining wait by a timer tick). Returns TRUE if Event was set. */
 static
 BOOL
 WlSpinWait(
     _In_opt_ HANDLE Event,
     _In_ DWORD Ms)
 {
-    ULONGLONG End = GetTickCount64() + Ms;
+    ULONGLONG End = WlSpinNowMs() + Ms;
     MSG Msg;
 
     for (;;)
     {
-        ULONGLONG Now = GetTickCount64();
+        ULONGLONG Now = WlSpinNowMs();
         DWORD Left = (Now < End) ? (DWORD)(End - Now) : 0;
         DWORD Result = MsgWaitForMultipleObjects(Event ? 1 : 0, Event ? &Event : NULL, FALSE, Left, QS_ALLINPUT);
 
