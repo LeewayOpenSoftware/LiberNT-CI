@@ -33,6 +33,7 @@ list(APPEND SOURCE
     changenotify.cpp
     windowpropertystore.cpp
     dialogs/dialogs.cpp
+    dialogs/shutdown.cpp
     dialogs/drive.cpp
     dialogs/drvdefext.cpp
     dialogs/filedefext.cpp
