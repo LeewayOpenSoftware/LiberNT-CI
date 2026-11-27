@@ -16,11 +16,9 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 
 #define LUH_CLASS           L"LiberNT_LogonUIHost"
 #define LUH_TIMER_HEARTBEAT 1
-#define LUH_TIMER_SPINNER   2
 #define LUH_TIMER_FADE      3
 #define LUH_TIMER_STARTUP   4   /* a page must arrive within the provider call bound */
 #define LUH_TIMER_CLOCK     5   /* the curtain's clock, only while the curtain is up */
-#define LUH_SPINNER_MS      16      /* a frame at 60 Hz; the phase comes from the clock */
 #define LUH_SPINNER_PERIOD  2000    /* ms per cycle of the chasing dots */
 #define LUH_SPINNER_DOTS    6
 #define LUH_SPINNER_RING    28      /* ring radius at 96 DPI */
@@ -291,14 +289,56 @@ LuhSetSpinner(
     if (On && !g_Ui.Spinner)
     {
         LuhAnimStart(&g_Ui.SpinnerAnim, "spinner", 0);
-        SetTimer(Window, LUH_TIMER_SPINNER, LUH_SPINNER_MS, NULL);
+        LuhAnimSchedule(&g_Ui.SpinnerAnim);
     }
     else if (!On && g_Ui.Spinner)
     {
-        KillTimer(Window, LUH_TIMER_SPINNER);
         LuhAnimEnd(&g_Ui.SpinnerAnim);
     }
     g_Ui.Spinner = On;
+}
+
+/* One frame of the dots: their square only; the still page under it comes from the cache. */
+static void
+LuhSpinnerTick(
+    _In_ HWND Window)
+{
+    RECT Square;
+
+    GetClientRect(Window, &Square);
+    SetRect(&Square, Square.right / 2 - LuhPx(LUH_SPINNER_RING + 6), g_Ui.SpinnerY - LuhPx(LUH_SPINNER_RING + 6),
+            Square.right / 2 + LuhPx(LUH_SPINNER_RING + 6), g_Ui.SpinnerY + LuhPx(LUH_SPINNER_RING + 6));
+    InvalidateRect(Window, &Square, FALSE);
+    UpdateWindow(Window);
+}
+
+/*
+ * The next message; while the dots turn, their frames come between messages on the clock's
+ * deadlines. A WM_TIMER fires on the 15.6 ms system tick: a 16 ms timer gave one frame in 31 ms.
+ */
+static BOOL
+LuhNextMessage(
+    _In_ HWND Window,
+    _Out_ PMSG Msg)
+{
+    DWORD Due;
+
+    while (g_Ui.Spinner)
+    {
+        if (PeekMessageW(Msg, NULL, 0, 0, PM_REMOVE))
+            return Msg->message != WM_QUIT;
+        Due = LuhAnimDueMs(&g_Ui.SpinnerAnim);
+        if (Due == 0)
+        {
+            LuhSpinnerTick(Window);
+            LuhAnimSchedule(&g_Ui.SpinnerAnim);
+        }
+        else
+        {
+            MsgWaitForMultipleObjectsEx(0, NULL, Due, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
+    }
+    return GetMessageW(Msg, NULL, 0, 0) > 0;
 }
 
 /* ---- credential page ----------------------------------------------------------- */
@@ -2887,16 +2927,6 @@ LuhWindowProc(
             {
                 LuhIpcHeartbeat();
             }
-            else if (wParam == LUH_TIMER_SPINNER)
-            {
-                RECT Square;
-
-                /* The dots' square only; the still page under it comes from the cache. */
-                GetClientRect(Window, &Square);
-                SetRect(&Square, Square.right / 2 - LuhPx(LUH_SPINNER_RING + 6), g_Ui.SpinnerY - LuhPx(LUH_SPINNER_RING + 6),
-                        Square.right / 2 + LuhPx(LUH_SPINNER_RING + 6), g_Ui.SpinnerY + LuhPx(LUH_SPINNER_RING + 6));
-                InvalidateRect(Window, &Square, FALSE);
-            }
             else if (wParam == LUH_TIMER_STARTUP)
             {
                 /* Start-up wedged somewhere a CLSID cannot be named: one fallback try, then give up. */
@@ -3203,7 +3233,6 @@ LuhWindowProc(
         case WM_DESTROY:
             LuhDestroyPage();
             KillTimer(Window, LUH_TIMER_HEARTBEAT);
-            KillTimer(Window, LUH_TIMER_SPINNER);
             KillTimer(Window, LUH_TIMER_FADE);
             KillTimer(Window, LUH_TIMER_STARTUP);
             KillTimer(Window, LUH_TIMER_CLOCK);
@@ -3264,7 +3293,7 @@ LuhUiRun(
 {
     MSG Msg;
 
-    while (GetMessageW(&Msg, NULL, 0, 0) > 0)
+    while (LuhNextMessage(Window, &Msg))
     {
         /* Enter in an edit field submits; Tab moves between the page's controls. */
         if (Msg.message == WM_KEYDOWN && Msg.wParam == VK_ESCAPE && (g_Ui.FlyoutUp || g_Ui.CardUp))

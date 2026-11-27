@@ -789,9 +789,8 @@ LuhAnimStart(
     Anim->Frequency = Frequency.QuadPart;
     Anim->Target = Frequency.QuadPart / LuhRefreshHz();
     Anim->DurationMs = DurationMs;
-    /* A timed run sleeps between frames: hold 1 ms timer ticks, not the default 15.6 ms. */
-    if (DurationMs != 0)
-        Anim->FineTimer = (timeBeginPeriod(1) == TIMERR_NOERROR);
+    /* Frames are waited for: hold 1 ms timer ticks, not the default 15.6 ms. */
+    Anim->FineTimer = (timeBeginPeriod(1) == TIMERR_NOERROR);
     Anim->Start = LuhNow();
     Anim->Last = Anim->Start;
     Anim->Next = Anim->Start;
@@ -856,10 +855,10 @@ LuhAnimDone(
 }
 
 VOID
-LuhAnimWait(
+LuhAnimSchedule(
     _Inout_ PLUH_ANIM Anim)
 {
-    LONGLONG Now = LuhNow(), Left;
+    LONGLONG Now = LuhNow();
 
     /*
      * Deadlines sit on a fixed schedule from the start: after a late frame the next deadline
@@ -868,6 +867,26 @@ LuhAnimWait(
     Anim->Next += Anim->Target;
     if (Anim->Next <= Now)
         Anim->Next += ((Now - Anim->Next) / Anim->Target + 1) * Anim->Target;
+}
+
+DWORD
+LuhAnimDueMs(
+    _In_ const LUH_ANIM *Anim)
+{
+    LONGLONG Left = Anim->Next - LuhNow();
+
+    if (Left <= 0)
+        return 0;
+    return (DWORD)((Left * 1000 + Anim->Frequency - 1) / Anim->Frequency);
+}
+
+VOID
+LuhAnimWait(
+    _Inout_ PLUH_ANIM Anim)
+{
+    LONGLONG Now, Left;
+
+    LuhAnimSchedule(Anim);
 
     /* Sleep whole milliseconds while more than one is left, then yield up to the deadline. */
     for (;;)
