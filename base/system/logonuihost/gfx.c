@@ -789,8 +789,6 @@ LuhAnimStart(
     Anim->Frequency = Frequency.QuadPart;
     Anim->Target = Frequency.QuadPart / LuhRefreshHz();
     Anim->DurationMs = DurationMs;
-    /* Frames are waited for: hold 1 ms timer ticks, not the default 15.6 ms. */
-    Anim->FineTimer = (timeBeginPeriod(1) == TIMERR_NOERROR);
     Anim->Start = LuhNow();
     Anim->Last = Anim->Start;
     Anim->Next = Anim->Start;
@@ -858,7 +856,12 @@ VOID
 LuhAnimSchedule(
     _Inout_ PLUH_ANIM Anim)
 {
-    LONGLONG Now = LuhNow();
+    LONGLONG Now;
+
+    /* A run that waits for deadlines holds 1 ms timer ticks, not the default 15.6 ms, until LuhAnimEnd. */
+    if (!Anim->FineTimer)
+        Anim->FineTimer = (timeBeginPeriod(1) == TIMERR_NOERROR);
+    Now = LuhNow();
 
     /*
      * Deadlines sit on a fixed schedule from the start: after a late frame the next deadline

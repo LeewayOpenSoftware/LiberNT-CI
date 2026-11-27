@@ -122,7 +122,10 @@ VOID LuhAnimComposed(_Inout_ PLUH_ANIM Anim);
 VOID LuhAnimPresented(_Inout_ PLUH_ANIM Anim);
 BOOL LuhAnimDone(_In_ const LUH_ANIM *Anim);
 double LuhAnimElapsedMs(_In_ const LUH_ANIM *Anim);
-/* Moves the deadline to the next slot of the fixed schedule still ahead. */
+/*
+ * Moves the deadline to the next slot of the fixed schedule still ahead. The run then holds 1 ms
+ * timer ticks until LuhAnimEnd; an untimed run that never schedules takes none.
+ */
 VOID LuhAnimSchedule(_Inout_ PLUH_ANIM Anim);
 /* Whole milliseconds, rounded up, until the deadline; 0 once it is due. */
 DWORD LuhAnimDueMs(_In_ const LUH_ANIM *Anim);
