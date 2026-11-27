@@ -83,7 +83,9 @@ typedef enum _WLUI_ACTION
     WluiActionLogoff = 5,
     WluiActionChangePassword = 6,
     WluiActionTaskManager = 7,
-    WluiActionEmergencyRestart = 8
+    WluiActionEmergencyRestart = 8,
+    /* The power flyout and the options' power button; the host offers it only when the machine can sleep. */
+    WluiActionSleep = 9
 } WLUI_ACTION;
 
 [

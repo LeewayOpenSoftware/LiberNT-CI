@@ -2047,6 +2047,9 @@ HostEvent(
         case WLHOST_EVENT_RESTART:
             DoGenericAction(Session, WLX_SAS_ACTION_SHUTDOWN_REBOOT);
             break;
+        case WLHOST_EVENT_SLEEP:
+            DoGenericAction(Session, WLX_SAS_ACTION_SHUTDOWN_SLEEP);
+            break;
         default:
             WARN("Unknown host event %lu\n", Event);
             break;

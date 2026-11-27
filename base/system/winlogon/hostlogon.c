@@ -967,7 +967,7 @@ WlHlActionHandler(
     UNREFERENCED_PARAMETER(State);
     UNREFERENCED_PARAMETER(Role);
 
-    if (Action < WluiActionShutdown || Action > WluiActionEmergencyRestart)
+    if (Action < WluiActionShutdown || Action > WluiActionSleep)
         return ERROR_INVALID_PARAMETER;
 
     /* The Ctrl+Alt+Del options: only while that page is up, and only what its policy allowed. */
@@ -984,7 +984,8 @@ WlHlActionHandler(
             Denied = g_OptionsFlags & WLUI_FLAG_NO_CHANGE_PASSWORD;
         else if (Action == WluiActionTaskManager)
             Denied = g_OptionsFlags & WLUI_FLAG_NO_TASK_MANAGER;
-        else if (Action == WluiActionShutdown || Action == WluiActionRestart || Action == WluiActionEmergencyRestart)
+        else if (Action == WluiActionShutdown || Action == WluiActionRestart || Action == WluiActionEmergencyRestart ||
+                 Action == WluiActionSleep)
             Denied = g_OptionsFlags & WLUI_FLAG_NO_POWER;
         if (Denied)
         {
@@ -1001,7 +1002,7 @@ WlHlActionHandler(
 
     if (Action == WluiActionCancel)
         return ERROR_SUCCESS;
-    if (Action != WluiActionShutdown && Action != WluiActionRestart)
+    if (Action != WluiActionShutdown && Action != WluiActionRestart && Action != WluiActionSleep)
         return ERROR_ACCESS_DENIED;     /* an options action with no options page up */
 
     /* Nobody is signed in on the notice, the sign-in page or the locked station: policy decides. */
@@ -1023,7 +1024,8 @@ WlHlActionHandler(
     }
     else
     {
-        WlHlPostEvent(Action == WluiActionShutdown ? WLHOST_EVENT_SHUTDOWN : WLHOST_EVENT_RESTART);
+        WlHlPostEvent(Action == WluiActionShutdown ? WLHOST_EVENT_SHUTDOWN :
+                      Action == WluiActionSleep ? WLHOST_EVENT_SLEEP : WLHOST_EVENT_RESTART);
     }
     LeaveCriticalSection(&g_SubmitLock);
     return ERROR_SUCCESS;
@@ -1488,6 +1490,11 @@ WlHostLoggedOutSas(
                 Result = WLX_SAS_ACTION_SHUTDOWN_REBOOT;
                 break;
             }
+            if (Action == WluiActionSleep)
+            {
+                Result = WLX_SAS_ACTION_SHUTDOWN_SLEEP;
+                break;
+            }
             continue;
         }
         if (!g_Submit.Pending)
@@ -1779,6 +1786,8 @@ WlHostLoggedOnSas(
             Result = WLX_SAS_ACTION_SHUTDOWN_POWER_OFF;
         else if (Action == WluiActionRestart)
             Result = WLX_SAS_ACTION_SHUTDOWN_REBOOT;
+        else if (Action == WluiActionSleep)
+            Result = WLX_SAS_ACTION_SHUTDOWN_SLEEP;
         else if (Action == WluiActionEmergencyRestart)
             WlHlEmergencyRestart();
         break;                          /* Cancel and anything else: back to the desktop */

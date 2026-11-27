@@ -72,6 +72,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(winlogon);
 #define WLHOST_EVENT_SHUTDOWN       3   /* power flyout while locked or logged off outside a SAS */
 #define WLHOST_EVENT_RESTART        4
 #define WLHOST_EVENT_MUST_CHANGE    5   /* the unlock credentials must change their password first */
+#define WLHOST_EVENT_SLEEP          6   /* power flyout Sleep while locked or logged off outside a SAS */
 
 typedef BOOL (WINAPI * PFWLXNEGOTIATE)  (DWORD, DWORD *);
 typedef BOOL (WINAPI * PFWLXINITIALIZE) (LPWSTR, HANDLE, PVOID, PVOID, PVOID *);
