@@ -3,9 +3,10 @@
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     bcdedit.exe - lists and edits the boot configuration data store.
  *              The store is the system BCD hive (HKLM\BCD00000000) by default, or a hive
- *              file opened with /store. Element and object identifiers come from the boot
- *              loader's own definitions (bootloader/include/bcd.h); the registry layout is
- *              Objects\{id}\Description\Type and Objects\{id}\Elements\<type>\Element.
+ *              file opened with /store. Object and element identifiers and the element/device
+ *              layout come from the boot loader's own definitions (reactos/bcddef.h and
+ *              bootloader/include/bcd.h); the registry layout is Objects\{id}\Description\Type
+ *              and Objects\{id}\Elements\<type>\Element.
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -19,34 +20,12 @@
 #include <winuser.h>
 #include <strsafe.h>
 
+#include <reactos/bcddef.h>
 #include "resource.h"
 
 #define BCD_SYSTEM_STORE    L"BCD00000000"
-
-/* The element's format is the third nibble of its identifier. */
-#define BCD_FORMAT(e)       (((e) >> 24) & 0xF)
-#define BCD_FMT_DEVICE      1
-#define BCD_FMT_STRING      2
-#define BCD_FMT_OBJECT      3
-#define BCD_FMT_OBJECTLIST  4
-#define BCD_FMT_INTEGER     5
-#define BCD_FMT_BOOLEAN     6
-#define BCD_FMT_INTEGERLIST 7
-
-/* The device descriptor sits after a 16-byte element header; offsets within it. */
-#define BCD_ELEMENT_DEVICE_OFFSET   0x10
-#define BCD_DEVICE_SIZE_OFFSET      0x08
-#define BCD_DEVICE_PARTITION_OFFSET 0x10
-#define BCD_DEVICE_LOCAL_OFFSET     0x20
-#define BCD_DEVICE_STYLE_OFFSET     0x24
-#define BCD_DEVICE_DISK_OFFSET      0x28
-#define BCD_DEVICE_TYPE_BOOT        1
-#define BCD_DEVICE_TYPE_PARTITION   6
-#define BCD_DEVICE_TYPE_RAMDISK     8
-#define BCD_PARTITION_STYLE_GPT     0
-#define BCD_PARTITION_STYLE_MBR     1
-
-#define BCD_FIELD_WIDTH             24
+#define BCD_FIELD_WIDTH     24
+#define BCD_MAX_ELEMENTS    256
 
 /* The fixed, store-independent object identifiers, so /enum shows {bootmgr} and friends. */
 static const struct { PCWSTR Guid; PCWSTR Alias; } g_WellKnownIds[] =
@@ -74,7 +53,7 @@ static const struct { ULONG Type; PCWSTR Name; } g_ElementNames[] =
     { 0x12000004, L"description" },
     { 0x12000005, L"locale" },
     { 0x14000006, L"inherit" },
-    { 0x16000010, L"debug" },
+    { 0x16000010, L"bootdebug" },
     { 0x12000030, L"loadoptions" },
     { 0x21000001, L"osdevice" },
     { 0x22000002, L"systemroot" },
@@ -87,6 +66,7 @@ static const struct { ULONG Type; PCWSTR Name; } g_ElementNames[] =
     { 0x25000061, L"numproc" },
     { 0x25000080, L"safeboot" },
     { 0x26000010, L"detecthal" },
+    { 0x260000a0, L"debug" },
     { 0x22000011, L"kernel" },
     { 0x22000012, L"hal" },
     { 0x26000022, L"winpe" },
@@ -114,7 +94,6 @@ static const struct { ULONG Type; UINT Heading; } g_ObjectHeadings[] =
     { 0x20100001, IDS_HDR_DBGSETTINGS },
     { 0x20100002, IDS_HDR_EMSSETTINGS },
     { 0x20100003, IDS_HDR_BADMEMORY },
-    { 0x20300000, IDS_HDR_HYPERVISORSET },
     { 0x30000000, IDS_HDR_DEVOPTIONS },
 };
 
@@ -185,7 +164,7 @@ LeDword(
     return (ULONG)Data[0] | ((ULONG)Data[1] << 8) | ((ULONG)Data[2] << 16) | ((ULONG)Data[3] << 24);
 }
 
-/* Print "name" padded to the field column, then nothing else (the caller adds the value). */
+/* Print "name" padded to the field column; the caller adds the value. */
 static
 VOID
 PrintFieldName(
@@ -198,6 +177,20 @@ PrintFieldName(
         fputwc(L' ', stdout);
 }
 
+/* The 16-byte GUID as it is stored (Data1/2/3 little-endian, Data4 as bytes). */
+static
+VOID
+PrintGuidBytes(
+    _In_reads_bytes_(16) const BYTE *Guid)
+{
+    wprintf(L"{%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
+            LeDword(Guid),
+            (unsigned)(Guid[4] | (Guid[5] << 8)),
+            (unsigned)(Guid[6] | (Guid[7] << 8)),
+            Guid[8], Guid[9], Guid[10], Guid[11], Guid[12], Guid[13], Guid[14], Guid[15]);
+}
+
+/* A REG_MULTI_SZ of object ids, one per line, aligned under the value column. */
 static
 VOID
 PrintGuidList(
@@ -227,9 +220,10 @@ PrintDevice(
     _In_ ULONG Length)
 {
     const BYTE *Dev;
-    ULONG Type, Style;
+    ULONG Type;
 
-    if (Length < BCD_ELEMENT_DEVICE_OFFSET + 0x2C)
+    /* Need the device type and the disk sub-type at least. */
+    if (Length < BCD_ELEMENT_DEVICE_OFFSET + BCD_DISK_TYPE_OFFSET + 4)
     {
         fputws(L"unknown\n", stdout);
         return;
@@ -239,35 +233,51 @@ PrintDevice(
 
     switch (Type)
     {
-        case BCD_DEVICE_TYPE_BOOT:
+        case BCD_DEVICE_BOOT:
             fputws(L"boot\n", stdout);
             return;
-        case BCD_DEVICE_TYPE_RAMDISK:
-            fputws(L"ramdisk\n", stdout);
+
+        case BCD_DEVICE_DISK:
+            if (LeDword(Dev + BCD_DISK_TYPE_OFFSET) == BCD_DISK_RAMDISK)
+                fputws(L"ramdisk\n", stdout);
+            else
+                fputws(L"disk\n", stdout);
             return;
-        case BCD_DEVICE_TYPE_PARTITION:
-            Style = LeDword(Dev + BCD_DEVICE_STYLE_OFFSET);
-            if (Style == BCD_PARTITION_STYLE_MBR)
+
+        case BCD_DEVICE_PARTITION:
+            if (Length < BCD_ELEMENT_DEVICE_OFFSET + BCD_DEVICE_DISK_OFFSET + 16)
+            {
+                fputws(L"partition\n", stdout);
+                return;
+            }
+            if (LeDword(Dev + BCD_DEVICE_STYLE_OFFSET) == BCD_PARTITION_MBR)
             {
                 wprintf(L"partition=mbr,signature=%08lx,offset=%08lx%08lx\n",
-                        LeDword(Dev + BCD_DEVICE_DISK_OFFSET),
+                        LeDword(Dev + BCD_DEVICE_SIGNATURE_OFFSET),
                         LeDword(Dev + BCD_DEVICE_PARTITION_OFFSET + 4),
                         LeDword(Dev + BCD_DEVICE_PARTITION_OFFSET));
             }
             else
             {
-                wprintf(L"partition=gpt,disk=%08lx,partition=%08lx\n",
-                        LeDword(Dev + BCD_DEVICE_DISK_OFFSET),
-                        LeDword(Dev + BCD_DEVICE_PARTITION_OFFSET));
+                fputws(L"partition=gpt,disk=", stdout);
+                PrintGuidBytes(Dev + BCD_DEVICE_DISK_OFFSET);
+                fputws(L",partition=", stdout);
+                PrintGuidBytes(Dev + BCD_DEVICE_PARTITION_OFFSET);
+                fputwc(L'\n', stdout);
             }
             return;
+
         default:
             wprintf(L"device type %lu\n", Type);
             return;
     }
 }
 
-/* Read Elements\<type>\Element and print it under its field name. Returns FALSE if absent. */
+/*
+ * Read Elements\<type>\Element and print it under its field name. The value may be untrusted
+ * (a /store file), unterminated, or larger than a fixed buffer: size it, add room for a double
+ * NUL, terminate it, and only walk a string/list when its registry type matches the format.
+ */
 static
 BOOL
 PrintElement(
@@ -276,38 +286,67 @@ PrintElement(
 {
     WCHAR Sub[16], Custom[32];
     HKEY Key;
-    BYTE Data[1024];
-    DWORD Length = sizeof(Data), RegType = 0;
+    BYTE *Data;
+    DWORD Length = 0, RegType = 0;
+    ULONG Format = BCD_ELEMENT_FORMAT(Type);
     LONG Error;
 
     StringCchPrintfW(Sub, ARRAYSIZE(Sub), L"%08lx", Type);
     if (RegOpenKeyExW(Elements, Sub, 0, KEY_READ, &Key) != ERROR_SUCCESS)
         return FALSE;
 
+    Error = RegQueryValueExW(Key, L"Element", NULL, &RegType, NULL, &Length);
+    if (Error != ERROR_SUCCESS || Length == 0)
+    {
+        RegCloseKey(Key);
+        return FALSE;
+    }
+
+    Data = HeapAlloc(GetProcessHeap(), 0, Length + 2 * sizeof(WCHAR));
+    if (Data == NULL)
+    {
+        RegCloseKey(Key);
+        return FALSE;
+    }
+
     Error = RegQueryValueExW(Key, L"Element", NULL, &RegType, Data, &Length);
     RegCloseKey(Key);
     if (Error != ERROR_SUCCESS)
+    {
+        HeapFree(GetProcessHeap(), 0, Data);
         return FALSE;
+    }
+    /* Guarantee a double-NUL terminator past the data for string and list walks. */
+    Data[Length] = 0;
+    Data[Length + 1] = 0;
+    Data[Length + 2] = 0;
+    Data[Length + 3] = 0;
 
     PrintFieldName(NameForElement(Type, Custom, ARRAYSIZE(Custom)));
 
-    switch (BCD_FORMAT(Type))
+    switch (Format)
     {
-        case BCD_FMT_STRING:
-            fputws((PCWSTR)Data, stdout);
+        case BCD_ELEMENT_FORMAT_STRING:
+            if (RegType == REG_SZ)
+                fputws((PCWSTR)Data, stdout);
             fputwc(L'\n', stdout);
             break;
-        case BCD_FMT_OBJECT:
-            fputws(AliasForId((PCWSTR)Data), stdout);
+        case BCD_ELEMENT_FORMAT_OBJECT:
+            if (RegType == REG_SZ)
+                fputws(AliasForId((PCWSTR)Data), stdout);
             fputwc(L'\n', stdout);
             break;
-        case BCD_FMT_OBJECTLIST:
-            PrintGuidList((PCWSTR)Data);
+        case BCD_ELEMENT_FORMAT_OBJECTLIST:
+            if (RegType == REG_MULTI_SZ)
+                PrintGuidList((PCWSTR)Data);
+            else
+                fputwc(L'\n', stdout);
             break;
-        case BCD_FMT_BOOLEAN:
+        case BCD_ELEMENT_FORMAT_BOOLEAN:
             fputws((Length >= 1 && Data[0]) ? L"Yes\n" : L"No\n", stdout);
             break;
-        case BCD_FMT_INTEGER:
+        case BCD_ELEMENT_FORMAT_INTEGER:
+        case BCD_ELEMENT_FORMAT_INTEGERLIST:
         {
             ULONGLONG Value = 0;
             DWORD i;
@@ -316,14 +355,30 @@ PrintElement(
             wprintf(L"%llu\n", Value);
             break;
         }
-        case BCD_FMT_DEVICE:
+        case BCD_ELEMENT_FORMAT_DEVICE:
             PrintDevice(Data, Length);
             break;
         default:
-            fputws(L"\n", stdout);
+            fputwc(L'\n', stdout);
             break;
     }
+
+    HeapFree(GetProcessHeap(), 0, Data);
     return TRUE;
+}
+
+static
+int
+__cdecl
+CompareUlong(
+    _In_ const void *A,
+    _In_ const void *B)
+{
+    ULONG Ua = *(const ULONG *)A, Ub = *(const ULONG *)B;
+
+    if (Ua < Ub) return -1;
+    if (Ua > Ub) return 1;
+    return 0;
 }
 
 static
@@ -334,7 +389,8 @@ PrintObject(
 {
     HKEY Object, Description, Elements;
     WCHAR Heading[128];
-    DWORD Type = 0, Length = sizeof(Type), RegType = 0;
+    DWORD Type = 0, Length = sizeof(Type), RegType = 0, Index;
+    ULONG Types[BCD_MAX_ELEMENTS], Count = 0;
     SIZE_T i;
 
     if (RegOpenKeyExW(Objects, Id, 0, KEY_READ, &Object) != ERROR_SUCCESS)
@@ -362,9 +418,19 @@ PrintObject(
 
     if (RegOpenKeyExW(Object, L"Elements", 0, KEY_READ, &Elements) == ERROR_SUCCESS)
     {
-        /* Print the known elements in a stable order so the output is comparable. */
-        for (i = 0; i < ARRAYSIZE(g_ElementNames); i++)
-            PrintElement(Elements, g_ElementNames[i].Type);
+        /* Enumerate every element present, not only the named ones, so nothing is hidden. */
+        for (Index = 0; Count < ARRAYSIZE(Types); Index++)
+        {
+            WCHAR Name[16];
+            DWORD Chars = ARRAYSIZE(Name);
+
+            if (RegEnumKeyExW(Elements, Index, Name, &Chars, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+                break;
+            Types[Count++] = wcstoul(Name, NULL, 16);
+        }
+        qsort(Types, Count, sizeof(ULONG), CompareUlong);
+        for (i = 0; i < Count; i++)
+            PrintElement(Elements, Types[i]);
         RegCloseKey(Elements);
     }
 
@@ -386,7 +452,7 @@ OpenStore(
 }
 
 static
-int
+BOOL
 EnumStore(
     _In_opt_ PCWSTR StoreFile)
 {
@@ -398,7 +464,7 @@ EnumStore(
     if (Error != ERROR_SUCCESS)
     {
         PrintResource(IDS_ERR_OPENSTORE);
-        return Error;
+        return FALSE;
     }
 
     Error = RegOpenKeyExW(Store, L"Objects", 0, KEY_READ, &Objects);
@@ -406,7 +472,7 @@ EnumStore(
     {
         RegCloseKey(Store);
         PrintResource(IDS_ERR_OPENSTORE);
-        return Error;
+        return FALSE;
     }
 
     for (Index = 0; ; Index++)
@@ -415,8 +481,6 @@ EnumStore(
         DWORD Chars = ARRAYSIZE(Name);
 
         Error = RegEnumKeyExW(Objects, Index, Name, &Chars, NULL, NULL, NULL, NULL);
-        if (Error == ERROR_NO_MORE_ITEMS)
-            break;
         if (Error != ERROR_SUCCESS)
             break;
         PrintObject(Objects, Name);
@@ -424,7 +488,7 @@ EnumStore(
 
     RegCloseKey(Objects);
     RegCloseKey(Store);
-    return ERROR_SUCCESS;
+    return TRUE;
 }
 
 int
@@ -437,7 +501,7 @@ wmain(
     int i;
 
     if (argc == 1)
-        DoEnum = TRUE;   /* "bcdedit" with no arguments enumerates the system store. */
+        DoEnum = TRUE;   /* a bare "bcdedit" lists the store */
 
     for (i = 1; i < argc; i++)
     {
@@ -445,34 +509,43 @@ wmain(
             _wcsicmp(argv[i], L"/help") == 0)
         {
             PrintResource(IDS_USAGE);
-            return ERROR_SUCCESS;
+            return 0;
         }
         else if (_wcsicmp(argv[i], L"/enum") == 0)
         {
             DoEnum = TRUE;
-            /* An optional type/id filter after /enum is accepted but not yet narrowed on. */
+            /* The only filter understood so far is "all"; /enum lists every object either way.
+             * A narrower filter (ACTIVE, a type, an id) is a later change, so reject the rest
+             * rather than ignore it. */
             if (i + 1 < argc && argv[i + 1][0] != L'/')
+            {
+                if (_wcsicmp(argv[i + 1], L"all") != 0)
+                {
+                    PrintResource(IDS_ERR_BADPARAM);
+                    return 1;
+                }
                 i++;
+            }
         }
         else if (_wcsicmp(argv[i], L"/store") == 0)
         {
             if (i + 1 >= argc)
             {
                 PrintResource(IDS_ERR_BADPARAM);
-                return ERROR_INVALID_PARAMETER;
+                return 1;
             }
             StoreFile = argv[++i];
         }
         else
         {
             PrintResource(IDS_ERR_BADPARAM);
-            return ERROR_INVALID_PARAMETER;
+            return 1;
         }
     }
 
     if (DoEnum)
-        return EnumStore(StoreFile);
+        return EnumStore(StoreFile) ? 0 : 1;
 
     PrintResource(IDS_USAGE);
-    return ERROR_SUCCESS;
+    return 0;
 }

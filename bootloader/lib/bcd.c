@@ -7,29 +7,7 @@
 
 #include <bl.h>
 
-#define BCD_ELEMENT_DEVICE_OFFSET   0x10
-#define BCD_DEVICE_SIZE_OFFSET      0x08
-#define BCD_DEVICE_PARTITION_OFFSET 0x10
-#define BCD_DEVICE_LOCAL_OFFSET     0x20
-#define BCD_DEVICE_STYLE_OFFSET     0x24
-#define BCD_DEVICE_DISK_OFFSET      0x28
-#define BCD_DEVICE_SIGNATURE_OFFSET 0x28
-#define BCD_DEVICE_HEADER_LENGTH    0x10
-#define BCD_DEVICE_PARTITION_LENGTH 0x48
-#define BCD_DISK_TYPE_OFFSET        0x10
-#define BCD_DISK_FILE_OFFSET        0x28
-#define BCD_FILE_LENGTH_OFFSET      0x04
-#define BCD_FILE_TYPE_OFFSET        0x08
-#define BCD_FILE_DEVICE_OFFSET      0x0C
-
-#define BCD_DEVICE_DISK      0
-#define BCD_DEVICE_BOOT      5
-#define BCD_DEVICE_PARTITION 6
-#define BCD_DISK_RAMDISK     3
-#define BCD_FILE_VERSION     1
-#define BCD_FILE_PATH        5
-#define BCD_PARTITION_GPT    0
-#define BCD_PARTITION_MBR    1
+#include <reactos/bcddef.h>
 
 static CMHIVE BcdHive;
 static HCELL_INDEX BcdObjects = HCELL_NIL;
