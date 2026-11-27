@@ -271,15 +271,6 @@ typedef struct _TRACE_EVENT_INFO
 
 typedef ULONG TDHSTATUS;
 
-TDHSTATUS
-WINAPI
-TdhGetEventInformation(
-    _In_ PEVENT_RECORD Event,
-    _In_ ULONG TdhContextCount,
-    _In_reads_opt_(TdhContextCount) PTDH_CONTEXT TdhContext,
-    _Out_writes_bytes_opt_(*BufferSize) PTRACE_EVENT_INFO Buffer,
-    _Inout_ PULONG BufferSize);
-
 #ifdef __cplusplus
 }
 #endif

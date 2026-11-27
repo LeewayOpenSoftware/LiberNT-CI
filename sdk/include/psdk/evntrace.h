@@ -14,6 +14,8 @@
 
 #include <guiddef.h>
 
+#include <wmistr.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif

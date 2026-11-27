@@ -7,7 +7,7 @@
  */
 
 #include <apitest.h>
-#include <evntcons.h>
+#include <tdh.h>
 #include <string.h>
 
 /*
