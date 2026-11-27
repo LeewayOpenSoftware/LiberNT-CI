@@ -1368,6 +1368,7 @@ EtwpLogModernEvent(
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
             /* Win11 semantics: a payload that faults is dropped, the write succeeds */
+            Logger->EventsLost++;
             PayloadFault = TRUE;
         }
         _SEH2_END;
