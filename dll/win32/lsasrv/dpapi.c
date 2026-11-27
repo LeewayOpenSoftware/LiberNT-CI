@@ -1194,7 +1194,7 @@ DpapiSecureWriteFile(
         return STATUS_INVALID_PARAMETER;
 
     _snwprintf(TempName, ARRAYSIZE(TempName), L"tmp%lx%lx",
-               GetCurrentProcessId(), GetTickCount64() & 0xffffffff);
+               GetCurrentProcessId(), (ULONG)(GetTickCount64() & 0xffffffff));
 
     Status = DpapiOpenDirHandle(Dir, IoMode, &DirHandle);
     if (!NT_SUCCESS(Status))
@@ -1551,7 +1551,7 @@ DpapiSysWrite(
     NTSTATUS Status;
 
     _snwprintf(TempName, ARRAYSIZE(TempName), L"tmp%lx%lx",
-               GetCurrentProcessId(), GetTickCount64() & 0xffffffff);
+               GetCurrentProcessId(), (ULONG)(GetTickCount64() & 0xffffffff));
 
     Status = DpapiOpenNoReparse(DirHandle, TempName,
                                 FILE_GENERIC_WRITE | DELETE,
