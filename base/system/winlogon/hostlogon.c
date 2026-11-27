@@ -1285,8 +1285,8 @@ WlHlUnlockPrefill(
 }
 
 /* Brings up a host for Scenario (0: status only). A live host is kept when it already shows
- * Scenario, or when it was status-only and the logon page is wanted (the host builds its
- * providers at the first RequestCredentials); any other change means a fresh host. */
+ * Scenario, or when it was status-only and the logon or unlock page is wanted (the host builds
+ * its providers at the first RequestCredentials); any other change means a fresh host. */
 static BOOL
 WlHlEnsureHost(
     _In_ DWORD Scenario,
@@ -1319,10 +1319,13 @@ WlHlEnsureHost(
     {
         if (Scenario == 0 || g_HostScenario == Scenario)
             return TRUE;
-        if (g_HostScenario == 0 && Scenario == WLHL_CPUS_LOGON)
+        /* The Ctrl+Alt+Delete notice (sign-in or locked) is a status-only host: after the user's SAS
+         * the same host raises the page under its curtain. A fresh host here would leave the bare
+         * Winlogon desktop on screen until it paints. */
+        if (g_HostScenario == 0 && (Scenario == WLHL_CPUS_LOGON || Scenario == WLHL_CPUS_UNLOCK))
         {
             g_HostScenario = Scenario;
-            WlHlPost(WluiCmdRequestCredentials, Scenario, Flags, 0, 0, NULL, NULL);
+            WlHlPost(WluiCmdRequestCredentials, Scenario, Flags, 0, 0, Prefill[0] ? Prefill : NULL, NULL);
             return TRUE;
         }
     }
