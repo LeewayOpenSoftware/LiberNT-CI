@@ -412,14 +412,15 @@ QueryTokenOwnerTests(
         }
     }
 
+    Status = STATUS_UNSUCCESSFUL;
     BufferLength = 0;
     NtQueryInformationToken(Token, TokenUser, NULL, 0, &BufferLength);
     if (BufferLength != 0)
         User = RtlAllocateHeap(RtlGetProcessHeap(), 0, BufferLength);
     if (User != NULL)
-        NtQueryInformationToken(Token, TokenUser, User, BufferLength, &BufferLength);
+        Status = NtQueryInformationToken(Token, TokenUser, User, BufferLength, &BufferLength);
 
-    Expected = AdminsIsOwner ? AdminsSid : (User != NULL ? User->User.Sid : NULL);
+    Expected = AdminsIsOwner ? AdminsSid : (NT_SUCCESS(Status) ? User->User.Sid : NULL);
     RtlConvertSidToUnicodeString(&SidString, Owner->Owner, TRUE);
     if (Expected != NULL)
         ok(RtlEqualSid(Owner->Owner, Expected),
