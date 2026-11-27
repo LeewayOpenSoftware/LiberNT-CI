@@ -2197,6 +2197,32 @@ WlHostStartApplication(
     return WlHlRunAsUser(Session, Desktop, Environment, Command, NULL);
 }
 
+/* The name the user signed in with, under the user's Explorer key (msgina WlxActivateUserShell). */
+static VOID
+WlHlStoreLogonUserName(
+    _In_ PWLSESSION Session)
+{
+    PCWSTR Name = Session->MprNotifyInfo.pszUserName;
+    HKEY User = NULL, Key;
+
+    if (Name == NULL || Name[0] == UNICODE_NULL || Session->UserToken == NULL ||
+        !ImpersonateLoggedOnUser(Session->UserToken))
+        return;
+    if (RegOpenCurrentUser(KEY_CREATE_SUB_KEY | KEY_SET_VALUE, &User) != ERROR_SUCCESS)
+        User = NULL;
+    if (User != NULL &&
+        RegCreateKeyExW(User, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer", 0, NULL, 0,
+                        KEY_SET_VALUE, NULL, &Key, NULL) == ERROR_SUCCESS)
+    {
+        RegSetValueExW(Key, L"Logon User Name", 0, REG_SZ, (const BYTE *)Name,
+                       (DWORD)((wcslen(Name) + 1) * sizeof(WCHAR)));
+        RegCloseKey(Key);
+    }
+    if (User != NULL)
+        RegCloseKey(User);
+    RevertToSelf();
+}
+
 /* Userinit is a comma-separated command list (msgina WlxActivateUserShell). */
 BOOL
 WlHostActivateUserShell(
@@ -2235,5 +2261,7 @@ WlHostActivateUserShell(
         if (WlHlRunAsUser(Session, L"Default", Environment, Command, Any ? NULL : &g_ShellProcess))
             Any = TRUE;
     }
+    if (Any)
+        WlHlStoreLogonUserName(Session);
     return Any;
 }
