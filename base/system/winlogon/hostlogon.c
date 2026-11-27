@@ -22,6 +22,8 @@
 #define WLHL_CPUS_LOGON             1   /* CPUS_LOGON */
 #define WLHL_CPUS_UNLOCK            2   /* CPUS_UNLOCK_WORKSTATION */
 #define WLHL_CPUS_CHANGE_PASSWORD   3   /* CPUS_CHANGE_PASSWORD */
+#define WLHL_CHANGE_SIGNED_IN       0x200   /* g_ChangeFor: a change the signed-in user asked for from the options */
+#define WLHL_ACTION_CHANGED         0x1000  /* g_PendingAction: that change went through (never from the host) */
 
 #define WLHL_WINLOGON_KEY   L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
 #define WLHL_POLICY_KEY     L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System"
@@ -533,6 +535,40 @@ WlHlHandleLogon(
     return ERROR_SUCCESS;
 }
 
+/* The change a signed-in user asked for may only name that user (msgina fixes the name too). */
+static BOOL
+WlHlIsSessionAccount(
+    _In_ PCUNICODE_STRING Domain,
+    _In_ PCUNICODE_STRING Account)
+{
+    WCHAR Computer[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD Chars = ARRAYSIZE(Computer);
+    UNICODE_STRING Want, Here;
+    PCWSTR SessionDomain;
+    BOOL TypedLocal, SessionLocal;
+
+    if (g_Session == NULL || g_Session->MprNotifyInfo.pszUserName == NULL)
+        return FALSE;
+    RtlInitUnicodeString(&Want, g_Session->MprNotifyInfo.pszUserName);
+    if (!RtlEqualUnicodeString(Account, &Want, TRUE))
+        return FALSE;
+
+    /* "Local" is an empty domain, a lone dot, or this computer's name, on either side. */
+    if (!GetComputerNameW(Computer, &Chars))
+        Computer[0] = UNICODE_NULL;
+    RtlInitUnicodeString(&Here, Computer);
+    TypedLocal = Domain->Length == 0 ||
+                 (Domain->Length == sizeof(WCHAR) && Domain->Buffer[0] == L'.') ||
+                 (Here.Length != 0 && RtlEqualUnicodeString(Domain, &Here, TRUE));
+    SessionDomain = g_Session->MprNotifyInfo.pszDomain ? g_Session->MprNotifyInfo.pszDomain : L"";
+    RtlInitUnicodeString(&Want, SessionDomain);
+    SessionLocal = Want.Length == 0 || !wcscmp(SessionDomain, L".") ||
+                   (Here.Length != 0 && RtlEqualUnicodeString(&Want, &Here, TRUE));
+    if (TypedLocal || SessionLocal)
+        return TypedLocal && SessionLocal;
+    return RtlEqualUnicodeString(Domain, &Want, TRUE);
+}
+
 /* A change the host was asked for; on success the interrupted logon or unlock continues
  * with the new password, as Windows does. */
 static DWORD
@@ -549,10 +585,30 @@ WlHlHandleChange(
 
     if (!NT_SUCCESS(CredSerUnpackChangePassword(Copy, Size, &Change)))
         return ERROR_INVALID_PARAMETER;
+    if (Resume == WLHL_CHANGE_SIGNED_IN && !WlHlIsSessionAccount(&Change.DomainName, &Change.AccountName))
+    {
+        ERR("WL: a signed-in change named another account; refused\n");
+        WlHlPost(WluiCmdReportResult, WLHL_CPUS_CHANGE_PASSWORD, 0, STATUS_ACCESS_DENIED, 0, NULL, NULL);
+        return ERROR_SUCCESS;
+    }
+    /* LSA verifies the old password; nothing is checked here. */
     Status = WlHlLsaChangePassword(&Change);
     if (!NT_SUCCESS(Status))
     {
         WlHlPost(WluiCmdReportResult, WLHL_CPUS_CHANGE_PASSWORD, 0, Status, 0, NULL, NULL);
+        return ERROR_SUCCESS;
+    }
+    if (Resume == WLHL_CHANGE_SIGNED_IN)
+    {
+        /* The user stays signed in: no new logon, just the result, then back to the desktop. */
+        WlHlPost(WluiCmdReportResult, WLHL_CPUS_CHANGE_PASSWORD, 0, STATUS_SUCCESS, 0, NULL, NULL);
+        EnterCriticalSection(&g_SubmitLock);
+        if (g_OptionsUp)
+        {
+            g_PendingAction = WLHL_ACTION_CHANGED;
+            SetEvent(g_SubmitEvent);
+        }
+        LeaveCriticalSection(&g_SubmitLock);
         return ERROR_SUCCESS;
     }
 
@@ -1498,6 +1554,7 @@ WlHostLoggedOutSas(
 /* ---- the Ctrl+Alt+Del options of a signed-in user --------------------------------- */
 
 #define WLHL_SCENARIO_OPTIONS       0x100   /* g_HostScenario while the options page is up; not a CPUS_* */
+#define WLHL_CHANGED_MS             2500    /* how long the 'password changed' result stays up */
 
 /* A DWORD policy under the signed-in user's HKCU (Software\...\Policies), read as that user. */
 static BOOL
@@ -1565,8 +1622,6 @@ WlHlOptionsFlags(
         Flags |= WLUI_FLAG_NO_LOGOFF;
     if (!WlHlUserMayShutdown(Session))
         Flags |= WLUI_FLAG_NO_POWER;
-    /* The change page for a signed-in user is not wired yet: the option stays off. */
-    Flags |= WLUI_FLAG_NO_CHANGE_PASSWORD;
     return Flags;
 }
 
@@ -1648,6 +1703,24 @@ WlHostLoggedOnSas(
         LeaveCriticalSection(&g_SubmitLock);
         if (Action == 0)
             continue;
+        if (Action == WluiActionChangePassword)
+        {
+            /* The change page for the session's own account (WlHlChangePrefill names it); a submit
+             * is taken only for that page (WlHlScenarioExpected), Cancel still comes back here. */
+            EnterCriticalSection(&g_SubmitLock);
+            g_ChangeFor = WLHL_CHANGE_SIGNED_IN;
+            LeaveCriticalSection(&g_SubmitLock);
+            if (!WlHlEnsureHost(WLHL_CPUS_CHANGE_PASSWORD, WLUI_FLAG_NO_POWER, WLHL_READY_MS))
+                break;
+            continue;
+        }
+        if (Action == WLHL_ACTION_CHANGED)
+        {
+            /* Leave the result on screen for a moment, as the change confirmation. */
+            if (g_Launch != NULL)
+                WaitForSingleObject(WlHostEndedEvent(g_Launch), WLHL_CHANGED_MS);
+            break;
+        }
         if (Action == WluiActionLock)
             Result = WLX_SAS_ACTION_LOCK_WKSTA;
         else if (Action == WluiActionLogoff)
@@ -1666,6 +1739,8 @@ WlHostLoggedOnSas(
     EnterCriticalSection(&g_SubmitLock);
     g_OptionsUp = FALSE;
     g_PendingAction = 0;
+    if (g_ChangeFor == WLHL_CHANGE_SIGNED_IN)
+        g_ChangeFor = 0;
     LeaveCriticalSection(&g_SubmitLock);
     WlHlStopHost();
     return Result;

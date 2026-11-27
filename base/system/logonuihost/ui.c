@@ -64,6 +64,8 @@ typedef struct _LUH_UI
     HWND PowerButton;                   /* bottom right; absent when ShutdownWithoutLogon is 0 */
     BOOL OptionsUp;                     /* the Ctrl+Alt+Del options of a signed-in user are shown */
     HWND OptionButtons[5];              /* the options shown, then Cancel */
+    BOOL ChangeCancel;                  /* a change the user asked for (not forced): it can be cancelled */
+    HWND CancelButton;                  /* that Cancel, under the change page */
     /* the curtain: clock and date before the tiles, CAD-less logon and unlock only */
     BOOL Curtain;
     PLUH_PAGE CurtainPage;  /* a page that arrived under the curtain; shown when it lifts */
@@ -179,6 +181,11 @@ LuhDestroyPage(void)
         }
     }
     g_Ui.OptionsUp = FALSE;
+    if (g_Ui.CancelButton)
+    {
+        DestroyWindow(g_Ui.CancelButton);
+        g_Ui.CancelButton = NULL;
+    }
     g_Ui.PageBusy = FALSE;
 }
 
@@ -310,11 +317,13 @@ LuhPickOption(
     DWORD i;
     WCHAR Num[16];
 
-    if (!g_Ui.OptionsUp)
+    if (!g_Ui.OptionsUp && !(g_Ui.ChangeCancel && Action == WluiActionCancel))
         return;
     for (i = 0; i < ARRAYSIZE(g_Ui.OptionButtons); i++)
         if (g_Ui.OptionButtons[i])
             EnableWindow(g_Ui.OptionButtons[i], FALSE);
+    if (g_Ui.CancelButton)
+        EnableWindow(g_Ui.CancelButton, FALSE);
     StringCchPrintfW(Num, ARRAYSIZE(Num), L"%u", (UINT)Action);
     LuhTrace("option", Num);
     WluiClientRequestAction(&g_Connection, Action);
@@ -467,6 +476,15 @@ LuhCreatePage(
         Y += LUH_ROW_HEIGHT + LUH_ROW_GAP;
     }
 
+    if (g_Ui.ChangeCancel && Page->Scenario == CPUS_CHANGE_PASSWORD)
+    {
+        g_Ui.CancelButton = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_CANCEL),
+                                            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                            X + LUH_PAGE_WIDTH / 2, Y, LUH_PAGE_WIDTH / 2, LUH_ROW_HEIGHT, Window,
+                                            (HMENU)LUH_ID_OPTION_CANCEL, NULL, NULL);
+        if (g_Ui.CancelButton)
+            SendMessageW(g_Ui.CancelButton, WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+    }
     LuhCreateTileList(Window, Page);
     LuhCreatePowerButton(Window);
     if (Focus)
@@ -864,6 +882,8 @@ LuhHandleCommand(
             if (Command->Flags & WLUI_FLAG_FALLBACK)
                 g_Options.Fallback = TRUE;
             g_Options.NoPower = (Command->Flags & WLUI_FLAG_NO_POWER) != 0;
+            /* A change the signed-in user asked for comes without WLUI_FLAG_FORCED_CHANGE. */
+            g_Ui.ChangeCancel = g_Options.Scenario == CPUS_CHANGE_PASSWORD && !(Command->Flags & WLUI_FLAG_FORCED_CHANGE);
             if ((Command->Flags & WLUI_FLAG_LEGAL_NOTICE) && !g_Ui.ProvidersStarted)
             {
                 g_Ui.InLegalNotice = TRUE;
@@ -1284,7 +1304,7 @@ LuhUiRun(
             LuhSubmit(Window);
             continue;
         }
-        if (Msg.message == WM_KEYDOWN && Msg.wParam == VK_ESCAPE && g_Ui.OptionsUp)
+        if (Msg.message == WM_KEYDOWN && Msg.wParam == VK_ESCAPE && (g_Ui.OptionsUp || (g_Ui.ChangeCancel && g_Ui.Page)))
         {
             LuhPickOption(WluiActionCancel);
             continue;
