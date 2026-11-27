@@ -32,6 +32,8 @@ Use ""bcdedit /?"" para obtener ayuda.\n"
     IDS_ERR_OPENSTORE "No se pudo abrir el almacen de datos de configuracion de arranque.\n"
     IDS_ERR_BADPARAM "El parametro no es correcto.\n"
     IDS_ERR_NOSTORE "No se encuentra el dispositivo de sistema solicitado.\n"
+    IDS_OK "La operacion se completo correctamente.\n"
+    IDS_ERR_SETFAIL "No se pudo establecer la entrada o el elemento del almacen.\n"
 
     IDS_HDR_FWBOOTMGR      "Administrador de arranque de firmware"
     IDS_HDR_BOOTMGR        "Administrador de arranque de Windows"

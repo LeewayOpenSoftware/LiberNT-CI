@@ -32,6 +32,8 @@ Use ""bcdedit /?"" for help.\n"
     IDS_ERR_OPENSTORE "The boot configuration data store could not be opened.\n"
     IDS_ERR_BADPARAM "The parameter is incorrect.\n"
     IDS_ERR_NOSTORE "The requested system device cannot be found.\n"
+    IDS_OK "The operation completed successfully.\n"
+    IDS_ERR_SETFAIL "The store entry or element could not be set.\n"
 
     IDS_HDR_FWBOOTMGR      "Firmware Boot Manager"
     IDS_HDR_BOOTMGR        "Windows Boot Manager"

@@ -491,61 +491,383 @@ EnumStore(
     return TRUE;
 }
 
+/* Resolve an alias ({bootmgr}) to its stored id; any other value (a raw {guid}) is used as is. */
+static
+PCWSTR
+IdForAlias(
+    _In_ PCWSTR Name,
+    _Out_writes_z_(Chars) PWSTR Buffer,
+    _In_ SIZE_T Chars)
+{
+    SIZE_T i;
+
+    for (i = 0; i < ARRAYSIZE(g_WellKnownIds); i++)
+    {
+        if (_wcsicmp(Name, g_WellKnownIds[i].Alias) == 0)
+            return g_WellKnownIds[i].Guid;
+    }
+    StringCchCopyW(Buffer, Chars, Name);
+    return Buffer;
+}
+
+/* Map an element name (timeout), a custom:xxxxxxxx, or a raw 8-hex type to its identifier. */
+static
+BOOL
+TypeForName(
+    _In_ PCWSTR Name,
+    _Out_ PULONG Type)
+{
+    SIZE_T i;
+    PCWSTR Digits = Name;
+    WCHAR *End;
+
+    for (i = 0; i < ARRAYSIZE(g_ElementNames); i++)
+    {
+        if (_wcsicmp(Name, g_ElementNames[i].Name) == 0)
+        {
+            *Type = g_ElementNames[i].Type;
+            return TRUE;
+        }
+    }
+    if (_wcsnicmp(Name, L"custom:", 7) == 0)
+        Digits = Name + 7;
+    *Type = wcstoul(Digits, &End, 16);
+    return (End != Digits && *End == 0);
+}
+
+static
+BOOL
+ParseBoolean(
+    _In_ PCWSTR Value,
+    _Out_ PBYTE Out)
+{
+    if (_wcsicmp(Value, L"yes") == 0 || _wcsicmp(Value, L"on") == 0 ||
+        _wcsicmp(Value, L"true") == 0 || _wcsicmp(Value, L"1") == 0)
+    {
+        *Out = 1;
+        return TRUE;
+    }
+    if (_wcsicmp(Value, L"no") == 0 || _wcsicmp(Value, L"off") == 0 ||
+        _wcsicmp(Value, L"false") == 0 || _wcsicmp(Value, L"0") == 0)
+    {
+        *Out = 0;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+/* Open or create Objects\<id>\Elements\<type> on an existing object and set its Element value. */
+static
+BOOL
+WriteElement(
+    _In_ HKEY Store,
+    _In_ PCWSTR Id,
+    _In_ ULONG Type,
+    _In_ DWORD RegType,
+    _In_reads_bytes_(Length) const void *Data,
+    _In_ DWORD Length)
+{
+    HKEY Objects, Object, Elements, Element;
+    WCHAR Sub[16];
+    BOOL Ok = FALSE;
+
+    if (RegOpenKeyExW(Store, L"Objects", 0, KEY_READ, &Objects) != ERROR_SUCCESS)
+        return FALSE;
+    if (RegOpenKeyExW(Objects, Id, 0, KEY_READ | KEY_WRITE, &Object) != ERROR_SUCCESS)
+    {
+        RegCloseKey(Objects);
+        return FALSE;   /* the object must already exist; /create adds one */
+    }
+    if (RegCreateKeyExW(Object, L"Elements", 0, NULL, 0, KEY_READ | KEY_WRITE, NULL, &Elements, NULL) == ERROR_SUCCESS)
+    {
+        StringCchPrintfW(Sub, ARRAYSIZE(Sub), L"%08lx", Type);
+        if (RegCreateKeyExW(Elements, Sub, 0, NULL, 0, KEY_WRITE, NULL, &Element, NULL) == ERROR_SUCCESS)
+        {
+            Ok = (RegSetValueExW(Element, L"Element", 0, RegType, (const BYTE *)Data, Length) == ERROR_SUCCESS);
+            RegCloseKey(Element);
+        }
+        RegCloseKey(Elements);
+    }
+    RegCloseKey(Object);
+    RegCloseKey(Objects);
+    return Ok;
+}
+
+static
+BOOL
+DeleteElement(
+    _In_ HKEY Store,
+    _In_ PCWSTR Id,
+    _In_ ULONG Type)
+{
+    HKEY Objects, Object, Elements;
+    WCHAR Sub[16];
+    BOOL Ok = FALSE;
+
+    if (RegOpenKeyExW(Store, L"Objects", 0, KEY_READ, &Objects) != ERROR_SUCCESS)
+        return FALSE;
+    if (RegOpenKeyExW(Objects, Id, 0, KEY_READ, &Object) != ERROR_SUCCESS)
+    {
+        RegCloseKey(Objects);
+        return FALSE;
+    }
+    if (RegOpenKeyExW(Object, L"Elements", 0, KEY_READ | KEY_WRITE, &Elements) == ERROR_SUCCESS)
+    {
+        StringCchPrintfW(Sub, ARRAYSIZE(Sub), L"%08lx", Type);
+        Ok = (RegDeleteKeyW(Elements, Sub) == ERROR_SUCCESS);
+        RegCloseKey(Elements);
+    }
+    RegCloseKey(Object);
+    RegCloseKey(Objects);
+    return Ok;
+}
+
+/* Encode one or more argument words for Type and write them. Device values are not set yet. */
+static
+BOOL
+SetValue(
+    _In_ HKEY Store,
+    _In_ PCWSTR Id,
+    _In_ ULONG Type,
+    _In_ int Argc,
+    _In_reads_(Argc) WCHAR **Argv,
+    _In_ int First)
+{
+    switch (BCD_ELEMENT_FORMAT(Type))
+    {
+        case BCD_ELEMENT_FORMAT_STRING:
+            if (First >= Argc)
+                return FALSE;
+            return WriteElement(Store, Id, Type, REG_SZ, Argv[First],
+                                (DWORD)((wcslen(Argv[First]) + 1) * sizeof(WCHAR)));
+
+        case BCD_ELEMENT_FORMAT_OBJECT:
+        {
+            WCHAR Buffer[64];
+            PCWSTR Guid;
+
+            if (First >= Argc)
+                return FALSE;
+            Guid = IdForAlias(Argv[First], Buffer, ARRAYSIZE(Buffer));
+            return WriteElement(Store, Id, Type, REG_SZ, Guid,
+                                (DWORD)((wcslen(Guid) + 1) * sizeof(WCHAR)));
+        }
+
+        case BCD_ELEMENT_FORMAT_OBJECTLIST:
+        {
+            WCHAR Multi[2048], Buffer[64];
+            SIZE_T Off = 0;
+            int i;
+
+            if (First >= Argc)
+                return FALSE;
+            for (i = First; i < Argc; i++)
+            {
+                PCWSTR Guid = IdForAlias(Argv[i], Buffer, ARRAYSIZE(Buffer));
+                SIZE_T Chars = wcslen(Guid);
+
+                if (Off + Chars + 2 > ARRAYSIZE(Multi))
+                    break;
+                memcpy(Multi + Off, Guid, (Chars + 1) * sizeof(WCHAR));
+                Off += Chars + 1;
+            }
+            Multi[Off++] = 0;   /* the trailing NUL of the double-NUL terminator */
+            return WriteElement(Store, Id, Type, REG_MULTI_SZ, Multi, (DWORD)(Off * sizeof(WCHAR)));
+        }
+
+        case BCD_ELEMENT_FORMAT_INTEGER:
+        {
+            BYTE Bytes[8];
+            ULONGLONG Value;
+            WCHAR *End;
+            int i;
+
+            if (First >= Argc)
+                return FALSE;
+            Value = _wcstoui64(Argv[First], &End, 0);
+            if (End == Argv[First] || *End != 0)
+                return FALSE;
+            for (i = 0; i < 8; i++)
+            {
+                Bytes[i] = (BYTE)(Value & 0xFF);
+                Value >>= 8;
+            }
+            return WriteElement(Store, Id, Type, REG_BINARY, Bytes, sizeof(Bytes));
+        }
+
+        case BCD_ELEMENT_FORMAT_BOOLEAN:
+        {
+            BYTE Bool;
+
+            if (First >= Argc || !ParseBoolean(Argv[First], &Bool))
+                return FALSE;
+            return WriteElement(Store, Id, Type, REG_BINARY, &Bool, 1);
+        }
+
+        default:
+            return FALSE;   /* device and integer-list values are set in a later change */
+    }
+}
+
+/* /set, /timeout and /default all edit one element; open the store writable and report. */
+static
+int
+EditElement(
+    _In_opt_ PCWSTR StoreFile,
+    _In_ PCWSTR IdArg,
+    _In_ ULONG Type,
+    _In_ int Argc,
+    _In_reads_(Argc) WCHAR **Argv,
+    _In_ int First)
+{
+    WCHAR Buffer[64];
+    HKEY Store;
+    PCWSTR Id;
+    BOOL Ok;
+
+    if (OpenStore(StoreFile, KEY_READ | KEY_WRITE, &Store) != ERROR_SUCCESS)
+    {
+        PrintResource(IDS_ERR_OPENSTORE);
+        return 1;
+    }
+    Id = IdForAlias(IdArg, Buffer, ARRAYSIZE(Buffer));
+    Ok = SetValue(Store, Id, Type, Argc, Argv, First);
+    RegCloseKey(Store);
+
+    PrintResource(Ok ? IDS_OK : IDS_ERR_SETFAIL);
+    return Ok ? 0 : 1;
+}
+
+static
+int
+DeleteValueCommand(
+    _In_opt_ PCWSTR StoreFile,
+    _In_ PCWSTR IdArg,
+    _In_ PCWSTR ElementName)
+{
+    WCHAR Buffer[64];
+    HKEY Store;
+    PCWSTR Id;
+    ULONG Type;
+    BOOL Ok;
+
+    if (!TypeForName(ElementName, &Type))
+    {
+        PrintResource(IDS_ERR_BADPARAM);
+        return 1;
+    }
+    if (OpenStore(StoreFile, KEY_READ | KEY_WRITE, &Store) != ERROR_SUCCESS)
+    {
+        PrintResource(IDS_ERR_OPENSTORE);
+        return 1;
+    }
+    Id = IdForAlias(IdArg, Buffer, ARRAYSIZE(Buffer));
+    Ok = DeleteElement(Store, Id, Type);
+    RegCloseKey(Store);
+
+    PrintResource(Ok ? IDS_OK : IDS_ERR_SETFAIL);
+    return Ok ? 0 : 1;
+}
+
 int
 wmain(
     _In_ int argc,
     _In_reads_(argc) WCHAR *argv[])
 {
-    PCWSTR StoreFile = NULL;
-    BOOL DoEnum = FALSE;
+    PCWSTR StoreFile = NULL, Command;
     int i;
 
-    if (argc == 1)
-        DoEnum = TRUE;   /* a bare "bcdedit" lists the store */
+    /* Pull out "/store <file>" wherever it appears; it precedes the command in normal use. */
+    for (i = 1; i + 1 < argc; i++)
+    {
+        if (_wcsicmp(argv[i], L"/store") == 0)
+        {
+            StoreFile = argv[i + 1];
+            break;
+        }
+    }
 
+    /* The command is the first argument that is not the /store pair. */
     for (i = 1; i < argc; i++)
     {
-        if (_wcsicmp(argv[i], L"/?") == 0 || _wcsicmp(argv[i], L"-?") == 0 ||
-            _wcsicmp(argv[i], L"/help") == 0)
+        if (_wcsicmp(argv[i], L"/store") == 0)
         {
-            PrintResource(IDS_USAGE);
-            return 0;
+            i++;            /* skip its value too */
+            continue;
         }
-        else if (_wcsicmp(argv[i], L"/enum") == 0)
-        {
-            DoEnum = TRUE;
-            /* The only filter understood so far is "all"; /enum lists every object either way.
-             * A narrower filter (ACTIVE, a type, an id) is a later change, so reject the rest
-             * rather than ignore it. */
-            if (i + 1 < argc && argv[i + 1][0] != L'/')
-            {
-                if (_wcsicmp(argv[i + 1], L"all") != 0)
-                {
-                    PrintResource(IDS_ERR_BADPARAM);
-                    return 1;
-                }
-                i++;
-            }
-        }
-        else if (_wcsicmp(argv[i], L"/store") == 0)
-        {
-            if (i + 1 >= argc)
-            {
-                PrintResource(IDS_ERR_BADPARAM);
-                return 1;
-            }
-            StoreFile = argv[++i];
-        }
-        else
+        break;
+    }
+
+    if (i >= argc)
+        return EnumStore(StoreFile) ? 0 : 1;   /* a bare "bcdedit" (or only /store) lists the store */
+
+    Command = argv[i];
+
+    if (_wcsicmp(Command, L"/?") == 0 || _wcsicmp(Command, L"-?") == 0 ||
+        _wcsicmp(Command, L"/help") == 0)
+    {
+        PrintResource(IDS_USAGE);
+        return 0;
+    }
+
+    if (_wcsicmp(Command, L"/enum") == 0)
+    {
+        /* The only filter understood so far is "all"; /enum lists every object either way.
+         * A narrower filter (ACTIVE, a type, an id) is a later change, so reject the rest. */
+        if (i + 1 < argc && argv[i + 1][0] != L'/' && _wcsicmp(argv[i + 1], L"all") != 0)
         {
             PrintResource(IDS_ERR_BADPARAM);
             return 1;
         }
+        return EnumStore(StoreFile) ? 0 : 1;
     }
 
-    if (DoEnum)
-        return EnumStore(StoreFile) ? 0 : 1;
+    if (_wcsicmp(Command, L"/set") == 0)
+    {
+        ULONG Type;
 
-    PrintResource(IDS_USAGE);
-    return 0;
+        /* /set <id> <element> <value> [value...] */
+        if (i + 3 >= argc || !TypeForName(argv[i + 2], &Type))
+        {
+            PrintResource(IDS_ERR_BADPARAM);
+            return 1;
+        }
+        return EditElement(StoreFile, argv[i + 1], Type, argc, argv, i + 3);
+    }
+
+    if (_wcsicmp(Command, L"/deletevalue") == 0)
+    {
+        /* /deletevalue <id> <element> */
+        if (i + 2 >= argc)
+        {
+            PrintResource(IDS_ERR_BADPARAM);
+            return 1;
+        }
+        return DeleteValueCommand(StoreFile, argv[i + 1], argv[i + 2]);
+    }
+
+    if (_wcsicmp(Command, L"/timeout") == 0)
+    {
+        /* /timeout <seconds> -> {bootmgr} BcdBootMgrInteger_Timeout */
+        if (i + 1 >= argc)
+        {
+            PrintResource(IDS_ERR_BADPARAM);
+            return 1;
+        }
+        return EditElement(StoreFile, L"{bootmgr}", 0x25000004, argc, argv, i + 1);
+    }
+
+    if (_wcsicmp(Command, L"/default") == 0)
+    {
+        /* /default <id> -> {bootmgr} BcdBootMgrObject_DefaultObject */
+        if (i + 1 >= argc)
+        {
+            PrintResource(IDS_ERR_BADPARAM);
+            return 1;
+        }
+        return EditElement(StoreFile, L"{bootmgr}", 0x23000003, argc, argv, i + 1);
+    }
+
+    PrintResource(IDS_ERR_BADPARAM);
+    return 1;
 }
