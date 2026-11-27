@@ -1278,6 +1278,9 @@ LuhRunNotice(
                                  Cx + LuhPx(4), Y, W, H, Window, (HMENU)LUH_ID_NOTICE_CANCEL, NULL, NULL);
     g_Ui.NoticeUp = TRUE;
     g_Ui.NoticeOk = FALSE;
+    /* Right after the SAS nothing on the Winlogon desktop is active yet: without this the keys
+     * go nowhere and only a click reaches the box (lab: Enter did not take the legal notice). */
+    SetForegroundWindow(Window);
     SetFocus(WithCancel && Cancel ? Cancel : Ok);   /* the safe choice first, as the old box did */
     LuhPageChanged(Window);
 
