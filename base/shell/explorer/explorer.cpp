@@ -334,10 +334,6 @@ StartWithDesktop(IN HINSTANCE hInstance)
     HANDLE hShellDesktop = NULL;
     if (Tray != NULL)
         hShellDesktop = DesktopCreateWindow(Tray);
-
-    /* WinXP: Notify msgina to hide the welcome screen */
-    if (!SetShellReadyEvent(L"msgina: ShellReadyEvent"))
-        SetShellReadyEvent(L"Global\\msgina: ShellReadyEvent");
 #endif
 
     TrayMgr.Open();
