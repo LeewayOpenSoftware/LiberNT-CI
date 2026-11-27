@@ -188,10 +188,7 @@ RtlpLfhReleaseEntry(PHEAP Heap, PHEAP_ENTRY Entry)
     RTLP_LFH_ENTRY_HEADER Old, New;
 
     Old.Word = (LONGLONG)RtlpDecodeHeapEntryWord(Heap, (ULONGLONG)ReadNoFence64(Word));
-    if (RtlpHeapEncodingActive(Heap) &&
-        Old.Bytes[RTLP_LFH_HEADER_CHECKSUM] !=
-        (UCHAR)(Old.Bytes[RTLP_LFH_HEADER_SIZE_LOW] ^ Old.Bytes[RTLP_LFH_HEADER_SIZE_HIGH] ^ Old.Bytes[RTLP_LFH_HEADER_FLAGS]))
-        return FALSE;
+    /* RtlpLfhLookup already verified the checksum; only the busy bit, which a double free clears, is re-checked here. */
     if (!(Old.Bytes[RTLP_LFH_HEADER_FLAGS] & HEAP_ENTRY_BUSY))
         return FALSE;
     New = Old;
@@ -460,7 +457,7 @@ PVOID
 RtlpLfhPopSlot(PRTLP_LFH_USER_BLOCK Block, SIZE_T Size, ULONG Flags, PULONG Collisions)
 {
     PHEAP_ENTRY Entry;
-    HEAP_ENTRY Header;
+    ULONG Offset;
     LONGLONG Old, New;
     ULONG Head;
 
@@ -477,10 +474,11 @@ RtlpLfhPopSlot(PRTLP_LFH_USER_BLOCK Block, SIZE_T Size, ULONG Flags, PULONG Coll
     }
 
     Entry = RtlpLfhSlotEntry(Block, Head);
-    RtlpDecodeHeapEntry(Block->Heap, Entry, &Header);
-    Header.Flags = HEAP_ENTRY_BUSY | (UCHAR)((Flags & HEAP_SETTABLE_USER_FLAGS) >> 4);
-    Header.UnusedBytes = (UCHAR)(RtlpLfhUsableSize(Block) - Size);
-    RtlpEncodeHeapEntry(Block->Heap, Entry, &Header);
+    Offset = (ULONG)(((PUCHAR)Entry - (PUCHAR)Block) >> HEAP_ENTRY_SHIFT);
+    RtlpEntryWrite(Block->Heap, Entry, (USHORT)Offset,
+                   (UCHAR)(HEAP_ENTRY_BUSY | ((Flags & HEAP_SETTABLE_USER_FLAGS) >> 4)),
+                   (USHORT)(Offset >> 16), HEAP_LFH_INDEX,
+                   (UCHAR)(RtlpLfhUsableSize(Block) - Size));
     return Entry + 1;
 }
 
