@@ -9131,10 +9131,11 @@ static void test_GetSecurityInfo(void)
 #else
 #ifdef __REACTOS__
         ok(ace->Mask == PROCESS_ALL_ACCESS,
+           "Builtin Admins ACE has unexpected mask (0x%lx != 0x%x)\n", ace->Mask, PROCESS_ALL_ACCESS);
 #else
         ok(ace->Mask == PROCESS_ALL_ACCESS || broken(ace->Mask == 0x1f0fff) /* win2k */,
-#endif
            "Builtin Admins ACE has unexpected mask (0x%lx != 0x%x)\n", ace->Mask, PROCESS_ALL_ACCESS);
+#endif
 #endif
     }
     LocalFree(pSD);
