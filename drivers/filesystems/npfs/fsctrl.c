@@ -278,9 +278,12 @@ NpGetConnectionAttribute(IN PDEVICE_OBJECT DeviceObject,
     {
         if (Ccb->NamedPipeState == FILE_PIPE_DISCONNECTED_STATE) return STATUS_PIPE_DISCONNECTED;
     }
-    else if (Attributes[i].Client &&
-             (Ccb->NamedPipeState == FILE_PIPE_DISCONNECTED_STATE ||
-              Ccb->NamedPipeState == FILE_PIPE_LISTENING_STATE))
+    else if (Ccb->NamedPipeState == FILE_PIPE_LISTENING_STATE)
+    {
+        /* Win11: no connection attributes answer while the server listens */
+        return STATUS_NOT_FOUND;
+    }
+    else if (Attributes[i].Client && Ccb->NamedPipeState == FILE_PIPE_DISCONNECTED_STATE)
     {
         return STATUS_NOT_FOUND;
     }
@@ -920,6 +923,23 @@ NpCommonFileSystemControl(IN PDEVICE_OBJECT DeviceObject,
             NpAcquireSharedVcb();
             Status = NpGetConnectionAttribute(DeviceObject, Irp);
             break;
+
+        case FSCTL_PIPE_FLUSH:
+            NpAcquireSharedVcb();
+            Status = NpCommonFlushBuffers(DeviceObject, Irp);
+            break;
+
+        case FSCTL_PIPE_SILO_ARRIVAL:
+        case FSCTL_PIPE_CREATE_SYMLINK:
+        case FSCTL_PIPE_DELETE_SYMLINK:
+            /* No silo or symlink support: Win11 answers user-mode callers
+               with STATUS_ILLEGAL_FUNCTION; kernel mode keeps the default */
+            if (Irp->RequestorMode != KernelMode)
+            {
+                Status = STATUS_ILLEGAL_FUNCTION;
+                break;
+            }
+            return STATUS_NOT_SUPPORTED;
 
         default:
             return STATUS_NOT_SUPPORTED;
