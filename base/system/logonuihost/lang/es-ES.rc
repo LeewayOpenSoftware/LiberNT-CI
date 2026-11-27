@@ -20,4 +20,11 @@ BEGIN
     IDS_LUH_SIGNIN_FAILED   "No se pudo completar el inicio de sesión. Inténtelo de nuevo."
     IDS_LUH_PLEASE_WAIT     "Espere"
     IDS_LUH_WELCOME         "Te damos la bienvenida"
+    IDS_LUH_LOCK            "Bloquear"
+    IDS_LUH_SIGN_OUT        "Cerrar sesión"
+    IDS_LUH_CHANGE_PASSWORD "Cambiar una contraseña"
+    IDS_LUH_TASK_MANAGER    "Administrador de tareas"
+    IDS_LUH_CANCEL          "Cancelar"
+    IDS_LUH_EMERGENCY_TITLE "Reinicio de emergencia"
+    IDS_LUH_EMERGENCY_TEXT  "Seleccione Aceptar para reiniciar de inmediato. Se perderá todo lo que no haya guardado. Use esto solo como último recurso."
 END

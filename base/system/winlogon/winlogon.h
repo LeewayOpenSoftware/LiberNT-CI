@@ -478,6 +478,10 @@ DWORD
 WlHostLoggedOutSas(
     _In_ PWLSESSION Session);
 
+DWORD
+WlHostLoggedOnSas(
+    _In_ PWLSESSION Session);
+
 VOID
 WlHostLock(
     _In_ PWLSESSION Session);

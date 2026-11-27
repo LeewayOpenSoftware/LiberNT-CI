@@ -1891,8 +1891,8 @@ DispatchSAS(
                 case STATE_LOGGED_ON:
                     Session->LogonState = STATE_LOGGED_ON_SAS;
                     SwitchDesktop(Session->WinlogonDesktop);
-                    /* Host mode: the Ctrl+Alt+Del options page is Phase 4; the SAS is cancelled. */
-                    wlxAction = Session->UseLogonUI ? WLX_SAS_ACTION_NONE :
+                    /* Host mode: the host shows the Ctrl+Alt+Del options and is gone on return. */
+                    wlxAction = Session->UseLogonUI ? WlHostLoggedOnSas(Session) :
                         (DWORD)Session->Gina.Functions.WlxLoggedOnSAS(Session->Gina.Context, dwSasType, NULL);
                     if ((wlxAction == WLX_SAS_ACTION_NONE) ||
                         (wlxAction == WLX_SAS_ACTION_TASKLIST))

@@ -26,7 +26,8 @@ typedef enum _WLUI_COMMAND_TYPE
     WluiCmdDisplayWelcome = 3,          /* User */
     WluiCmdReportResult = 4,            /* Status = NTSTATUS of the last submit, Text = message */
     WluiCmdReadyForDesktopSwitch = 5,   /* fade, then exit after the fade completes */
-    WluiCmdDismiss = 6                  /* close the UI and exit */
+    WluiCmdDismiss = 6,                 /* close the UI and exit */
+    WluiCmdShowOptions = 7              /* the Ctrl+Alt+Del options of a signed-in user; Flags = WLUI_FLAG_NO_*, User */
 } WLUI_COMMAND_TYPE;
 
 const unsigned long WLUI_FLAG_FALLBACK      = 0x00000001;  /* PasswordProvider only (N2) */
@@ -35,6 +36,11 @@ const unsigned long WLUI_FLAG_LEGAL_NOTICE  = 0x00000004;
 const unsigned long WLUI_FLAG_SPINNER       = 0x00000008;
 const unsigned long WLUI_FLAG_FORCED_CHANGE = 0x00000010;  /* password expired: change is mandatory */
 const unsigned long WLUI_FLAG_NO_POWER      = 0x00000020;  /* ShutdownWithoutLogon=0: hide restart/shutdown */
+/* ShowOptions: the options policy leaves out (winlogon checks them again on the action). */
+const unsigned long WLUI_FLAG_NO_LOCK            = 0x00000040;  /* DisableLockWorkstation */
+const unsigned long WLUI_FLAG_NO_LOGOFF          = 0x00000080;  /* NoLogoff */
+const unsigned long WLUI_FLAG_NO_CHANGE_PASSWORD = 0x00000100;  /* DisableChangePassword */
+const unsigned long WLUI_FLAG_NO_TASK_MANAGER    = 0x00000200;  /* DisableTaskMgr */
 
 const unsigned long WLUI_MAX_TEXT = 256;
 const unsigned long WLUI_MAX_SERIALIZATION = 65536;
@@ -69,7 +75,13 @@ typedef enum _WLUI_ACTION
 {
     WluiActionShutdown = 1,
     WluiActionRestart = 2,
-    WluiActionCancel = 3
+    WluiActionCancel = 3,
+    /* From the Ctrl+Alt+Del options of a signed-in user only. */
+    WluiActionLock = 4,
+    WluiActionLogoff = 5,
+    WluiActionChangePassword = 6,
+    WluiActionTaskManager = 7,
+    WluiActionEmergencyRestart = 8
 } WLUI_ACTION;
 
 [
@@ -124,7 +136,7 @@ interface wlui
         [in, range(0, WLUI_MAX_SERIALIZATION)] DWORD cbSerialization,
         [in, size_is(cbSerialization)] const byte *Serialization);
 
-    /* Function 4: shutdown, restart or cancel, as the user chose in the UI. */
+    /* Function 4: an action the user chose in the UI (power, cancel, or a Ctrl+Alt+Del option). */
     DWORD
     __stdcall
     WluiRequestAction(

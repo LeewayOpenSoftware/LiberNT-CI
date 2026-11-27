@@ -54,6 +54,8 @@ static DWORD g_PendingAction;           /* WLUI_ACTION from the host's power fly
 static PWLHOST_LAUNCH g_Launch;         /* the live host, if any (SAS thread owns it) */
 static DWORD g_HostScenario;            /* what the live host was asked to show; 0 = status only */
 static BOOL g_Accepting;                /* the SAS thread is waiting for a logon submit (R2) */
+static BOOL g_OptionsUp;                /* the SAS thread is waiting on the Ctrl+Alt+Del options */
+static DWORD g_OptionsFlags;            /* WLUI_FLAG_NO_* the options page was shown with */
 static BOOL g_SubmitBusy;               /* a submit is between the gate and the slot */
 static DWORD g_ChangeFor;               /* scenario a forced password change resumes; 0 = no change page */
 static BOOL g_LsaBroken;                /* the last logged-out SAS could not reach the LSA */
@@ -717,10 +719,42 @@ WlHlActionHandler(
     UNREFERENCED_PARAMETER(State);
     UNREFERENCED_PARAMETER(Role);
 
-    if (Action != WluiActionShutdown && Action != WluiActionRestart && Action != WluiActionCancel)
+    if (Action < WluiActionShutdown || Action > WluiActionEmergencyRestart)
         return ERROR_INVALID_PARAMETER;
+
+    /* The Ctrl+Alt+Del options: only while that page is up, and only what its policy allowed. */
+    EnterCriticalSection(&g_SubmitLock);
+    if (g_OptionsUp)
+    {
+        DWORD Denied = 0;
+
+        if (Action == WluiActionLock)
+            Denied = g_OptionsFlags & WLUI_FLAG_NO_LOCK;
+        else if (Action == WluiActionLogoff)
+            Denied = g_OptionsFlags & WLUI_FLAG_NO_LOGOFF;
+        else if (Action == WluiActionChangePassword)
+            Denied = g_OptionsFlags & WLUI_FLAG_NO_CHANGE_PASSWORD;
+        else if (Action == WluiActionTaskManager)
+            Denied = g_OptionsFlags & WLUI_FLAG_NO_TASK_MANAGER;
+        else if (Action == WluiActionShutdown || Action == WluiActionRestart || Action == WluiActionEmergencyRestart)
+            Denied = g_OptionsFlags & WLUI_FLAG_NO_POWER;
+        if (Denied)
+        {
+            LeaveCriticalSection(&g_SubmitLock);
+            ERR("WL: option %lu refused by policy\n", Action);
+            return ERROR_ACCESS_DENIED;
+        }
+        g_PendingAction = Action;
+        SetEvent(g_SubmitEvent);
+        LeaveCriticalSection(&g_SubmitLock);
+        return ERROR_SUCCESS;
+    }
+    LeaveCriticalSection(&g_SubmitLock);
+
     if (Action == WluiActionCancel)
         return ERROR_SUCCESS;
+    if (Action != WluiActionShutdown && Action != WluiActionRestart)
+        return ERROR_ACCESS_DENIED;     /* an options action with no options page up */
 
     /* Nobody is signed in on the notice, the sign-in page or the locked station: policy decides. */
     LogonState = g_Session->LogonState;
@@ -1274,6 +1308,184 @@ WlHostLoggedOutSas(
     }
 
     WlHlSetAccepting(FALSE);
+    return Result;
+}
+
+/* ---- the Ctrl+Alt+Del options of a signed-in user --------------------------------- */
+
+#define WLHL_SCENARIO_OPTIONS       0x100   /* g_HostScenario while the options page is up; not a CPUS_* */
+
+/* A DWORD policy under the signed-in user's HKCU (Software\...\Policies), read as that user. */
+static BOOL
+WlHlUserPolicy(
+    _In_ PWLSESSION Session,
+    _In_ PCWSTR SubKey,
+    _In_ PCWSTR Name)
+{
+    HKEY User = NULL;
+    DWORD Value = 0, Size = sizeof(Value);
+    BOOL Set = FALSE;
+
+    if (Session->UserToken == NULL || !ImpersonateLoggedOnUser(Session->UserToken))
+        return FALSE;
+    if (RegOpenCurrentUser(KEY_QUERY_VALUE, &User) != ERROR_SUCCESS)
+        User = NULL;
+    RevertToSelf();
+    if (User == NULL)
+        return FALSE;
+    if (RegGetValueW(User, SubKey, Name, RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS && Value != 0)
+        Set = TRUE;
+    RegCloseKey(User);
+    return Set;
+}
+
+/* Restart and Shut down from the options need the user's SeShutdownPrivilege (held, enabled or not). */
+static BOOL
+WlHlUserMayShutdown(
+    _In_ PWLSESSION Session)
+{
+    BYTE Buffer[2048];
+    PTOKEN_PRIVILEGES Privileges = (PTOKEN_PRIVILEGES)Buffer;
+    DWORD Size = 0, i;
+    LUID Shutdown;
+
+    if (Session->UserToken == NULL || !LookupPrivilegeValueW(NULL, SE_SHUTDOWN_NAME, &Shutdown) ||
+        !GetTokenInformation(Session->UserToken, TokenPrivileges, Buffer, sizeof(Buffer), &Size))
+        return FALSE;
+    for (i = 0; i < Privileges->PrivilegeCount; i++)
+    {
+        if (Privileges->Privileges[i].Luid.LowPart == Shutdown.LowPart &&
+            Privileges->Privileges[i].Luid.HighPart == Shutdown.HighPart)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* What the options page offers, as msgina's LoadOptions decides it (HKLM, then the user's policies). */
+static DWORD
+WlHlOptionsFlags(
+    _In_ PWLSESSION Session)
+{
+    static const PCWSTR System = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System";
+    static const PCWSTR Explorer = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer";
+    DWORD Flags = 0, Value = 0, Size = sizeof(Value);
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"DisableLockWorkstation", RRF_RT_REG_DWORD, NULL,
+                     &Value, &Size) == ERROR_SUCCESS && Value != 0)
+        Flags |= WLUI_FLAG_NO_LOCK;
+    if (WlHlUserPolicy(Session, System, L"DisableLockWorkstation"))
+        Flags |= WLUI_FLAG_NO_LOCK;
+    if (WlHlUserPolicy(Session, System, L"DisableChangePassword"))
+        Flags |= WLUI_FLAG_NO_CHANGE_PASSWORD;
+    if (WlHlUserPolicy(Session, System, L"DisableTaskMgr"))
+        Flags |= WLUI_FLAG_NO_TASK_MANAGER;
+    if (WlHlUserPolicy(Session, Explorer, L"NoLogoff"))
+        Flags |= WLUI_FLAG_NO_LOGOFF;
+    if (!WlHlUserMayShutdown(Session))
+        Flags |= WLUI_FLAG_NO_POWER;
+    /* The change page for a signed-in user is not wired yet: the option stays off. */
+    Flags |= WLUI_FLAG_NO_CHANGE_PASSWORD;
+    return Flags;
+}
+
+/* Restart now, without notifying anyone: the options page's last resort (msgina Page::Emergency). */
+static VOID
+WlHlEmergencyRestart(VOID)
+{
+    BOOLEAN Old;
+
+    ERR("WL: emergency restart requested from the options page\n");
+    RtlAdjustPrivilege(SE_SHUTDOWN_PRIVILEGE, TRUE, FALSE, &Old);
+    NtShutdownSystem(ShutdownReboot);
+    RtlAdjustPrivilege(SE_SHUTDOWN_PRIVILEGE, Old, FALSE, &Old);
+}
+
+/*
+ * The SAS of a signed-in user: the host shows the options and the choice comes back as an
+ * action. Returns the WLX_SAS_ACTION_* for DispatchSAS; the host is gone when this returns.
+ */
+DWORD
+WlHostLoggedOnSas(
+    _In_ PWLSESSION Session)
+{
+    HANDLE Waits[2];
+    DWORD Result = WLX_SAS_ACTION_NONE;
+    DWORD Flags = WlHlOptionsFlags(Session);
+
+    if (g_SubmitEvent == NULL)
+        return WLX_SAS_ACTION_NONE;
+    WlHostOnSas();
+    WlHlStopHost();
+    if (!WlHlEnsureHost(0, 0, WLHL_READY_MS))
+        return WLX_SAS_ACTION_NONE;
+
+    EnterCriticalSection(&g_SubmitLock);
+    g_OptionsFlags = Flags;
+    g_PendingAction = 0;
+    g_OptionsUp = TRUE;
+    LeaveCriticalSection(&g_SubmitLock);
+    EnterCriticalSection(&g_LaunchLock);
+    g_HostScenario = WLHL_SCENARIO_OPTIONS;
+    LeaveCriticalSection(&g_LaunchLock);
+    WlHlPost(WluiCmdShowOptions, WLHL_SCENARIO_OPTIONS, Flags, 0, 0, Session->MprNotifyInfo.pszUserName, NULL);
+    LogonStage("options-shown");
+
+    for (;;)
+    {
+        DWORD Which, Action;
+
+        Waits[0] = g_SubmitEvent;
+        Waits[1] = WlHostEndedEvent(g_Launch);
+        Which = MsgWaitForMultipleObjects(2, Waits, FALSE, INFINITE, QS_ALLINPUT);
+        if (Which == WAIT_OBJECT_0 + 2)
+        {
+            MSG Msg;
+            BOOL Quit = FALSE;
+            while (!Quit && PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
+            {
+                if (Msg.message == WM_QUIT)
+                {
+                    PostQuitMessage((int)Msg.wParam);   /* belongs to winlogon's main loop */
+                    Quit = TRUE;
+                    break;
+                }
+                TranslateMessage(&Msg);
+                DispatchMessageW(&Msg);
+            }
+            /* A logoff or shutdown notification ran nested in here, or the host went away. */
+            if (Quit || Session->LogonState != STATE_LOGGED_ON_SAS || g_Launch == NULL)
+                break;
+            continue;
+        }
+        if (Which == WAIT_OBJECT_0 + 1)
+            break;                      /* the host ended: back to the desktop */
+
+        EnterCriticalSection(&g_SubmitLock);
+        Action = g_PendingAction;
+        g_PendingAction = 0;
+        LeaveCriticalSection(&g_SubmitLock);
+        if (Action == 0)
+            continue;
+        if (Action == WluiActionLock)
+            Result = WLX_SAS_ACTION_LOCK_WKSTA;
+        else if (Action == WluiActionLogoff)
+            Result = WLX_SAS_ACTION_LOGOFF;
+        else if (Action == WluiActionTaskManager)
+            Result = WLX_SAS_ACTION_TASKLIST;
+        else if (Action == WluiActionShutdown)
+            Result = WLX_SAS_ACTION_SHUTDOWN_POWER_OFF;
+        else if (Action == WluiActionRestart)
+            Result = WLX_SAS_ACTION_SHUTDOWN_REBOOT;
+        else if (Action == WluiActionEmergencyRestart)
+            WlHlEmergencyRestart();
+        break;                          /* Cancel and anything else: back to the desktop */
+    }
+
+    EnterCriticalSection(&g_SubmitLock);
+    g_OptionsUp = FALSE;
+    g_PendingAction = 0;
+    LeaveCriticalSection(&g_SubmitLock);
+    WlHlStopHost();
     return Result;
 }
 

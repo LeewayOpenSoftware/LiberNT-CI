@@ -24,6 +24,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_ID_RESTART      1900
 #define LUH_ID_SHUTDOWN     1901
 #define LUH_ID_POWER        1902    /* the power button: a menu of LUH_ID_RESTART and LUH_ID_SHUTDOWN */
+#define LUH_ID_OPTION_BASE  1920    /* + row of the Ctrl+Alt+Del options (LuhOptionRows) */
+#define LUH_ID_OPTION_CANCEL 1930
 #define LUH_POWER_WIDTH     120
 #define LUH_ID_TILE_BASE    2000    /* + tile index, below LUH_ID_TILE_BASE + LUH_MAX_TILES */
 
@@ -60,6 +62,8 @@ typedef struct _LUH_UI
     HWND PolicyButtons[2];
     HWND TileButtons[LUH_MAX_TILES];    /* the other tiles, bottom left, as on the Windows sign-in screen */
     HWND PowerButton;                   /* bottom right; absent when ShutdownWithoutLogon is 0 */
+    BOOL OptionsUp;                     /* the Ctrl+Alt+Del options of a signed-in user are shown */
+    HWND OptionButtons[5];              /* the options shown, then Cancel */
     /* the curtain: clock and date before the tiles, CAD-less logon and unlock only */
     BOOL Curtain;
     PLUH_PAGE CurtainPage;  /* a page that arrived under the curtain; shown when it lifts */
@@ -77,10 +81,10 @@ static PCWSTR
 LuhText(
     _In_ UINT Id)
 {
-    static WCHAR Cache[IDS_LUH_WELCOME - IDS_LUH_POWER + 1][160];
+    static WCHAR Cache[IDS_LUH_LAST - IDS_LUH_POWER + 1][160];
     PWSTR Slot;
 
-    if (Id < IDS_LUH_POWER || Id > IDS_LUH_WELCOME)
+    if (Id < IDS_LUH_POWER || Id > IDS_LUH_LAST)
         return L"";
     Slot = Cache[Id - IDS_LUH_POWER];
     if (Slot[0] == UNICODE_NULL && LoadStringW(GetModuleHandleW(NULL), Id, Slot, ARRAYSIZE(Cache[0])) <= 0)
@@ -166,6 +170,15 @@ LuhDestroyPage(void)
         DestroyWindow(g_Ui.PowerButton);
         g_Ui.PowerButton = NULL;
     }
+    for (i = 0; i < ARRAYSIZE(g_Ui.OptionButtons); i++)
+    {
+        if (g_Ui.OptionButtons[i])
+        {
+            DestroyWindow(g_Ui.OptionButtons[i]);
+            g_Ui.OptionButtons[i] = NULL;
+        }
+    }
+    g_Ui.OptionsUp = FALSE;
     g_Ui.PageBusy = FALSE;
 }
 
@@ -201,6 +214,16 @@ LuhPowerMenu(
 
     if (g_Ui.PowerButton == NULL || g_Ui.PageBusy)
         return;
+    if (g_Ui.OptionsUp && (GetKeyState(VK_CONTROL) & 0x8000))
+    {
+        if (MessageBoxW(Window, LuhText(IDS_LUH_EMERGENCY_TEXT), LuhText(IDS_LUH_EMERGENCY_TITLE),
+                        MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND) == IDOK)
+        {
+            LuhTrace("power", L"emergency");
+            WluiClientRequestAction(&g_Connection, WluiActionEmergencyRestart);
+        }
+        return;
+    }
     Menu = CreatePopupMenu();
     if (Menu == NULL)
         return;
@@ -215,6 +238,86 @@ LuhPowerMenu(
         LuhTrace("power", Choice == LUH_ID_RESTART ? L"restart" : L"shutdown");
         WluiClientRequestAction(&g_Connection, Choice == LUH_ID_RESTART ? WluiActionRestart : WluiActionShutdown);
     }
+}
+
+static void LuhDropCurtain(_In_ HWND Window);
+
+/* The Ctrl+Alt+Del options, in msgina's order; a row policy turned off is not shown. */
+static const struct
+{
+    UINT Text;
+    DWORD Hide;
+    WLUI_ACTION Action;
+} LuhOptionRows[] =
+{
+    { IDS_LUH_LOCK, WLUI_FLAG_NO_LOCK, WluiActionLock },
+    { IDS_LUH_SIGN_OUT, WLUI_FLAG_NO_LOGOFF, WluiActionLogoff },
+    { IDS_LUH_CHANGE_PASSWORD, WLUI_FLAG_NO_CHANGE_PASSWORD, WluiActionChangePassword },
+    { IDS_LUH_TASK_MANAGER, WLUI_FLAG_NO_TASK_MANAGER, WluiActionTaskManager },
+};
+
+static void
+LuhShowOptionsPage(
+    _In_ HWND Window,
+    _In_ DWORD Flags,
+    _In_ PCWSTR User)
+{
+    RECT Client;
+    int X, Y;
+    DWORD i, Shown = 0;
+
+    LuhDropCurtain(Window);
+    LuhDestroyPage();
+    LuhSetSpinner(Window, FALSE);
+    GetClientRect(Window, &Client);
+    StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), User);
+    g_Ui.Detail[0] = UNICODE_NULL;
+    X = (Client.right - LUH_PAGE_WIDTH) / 2;
+    Y = Client.bottom / 2 - 2 * (LUH_ROW_HEIGHT + LUH_ROW_GAP);
+    g_Ui.PageTop = Y;
+    for (i = 0; i < ARRAYSIZE(LuhOptionRows); i++)
+    {
+        if (Flags & LuhOptionRows[i].Hide)
+            continue;
+        g_Ui.OptionButtons[Shown] = CreateWindowExW(0, L"BUTTON", LuhText(LuhOptionRows[i].Text),
+                                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                                    X, Y, LUH_PAGE_WIDTH, LUH_ROW_HEIGHT, Window,
+                                                    (HMENU)(UINT_PTR)(LUH_ID_OPTION_BASE + i), NULL, NULL);
+        if (g_Ui.OptionButtons[Shown])
+            SendMessageW(g_Ui.OptionButtons[Shown++], WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+        Y += LUH_ROW_HEIGHT + LUH_ROW_GAP;
+    }
+    Y += LUH_ROW_HEIGHT;
+    g_Ui.OptionButtons[Shown] = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_CANCEL),
+                                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                                                X + LUH_PAGE_WIDTH / 2, Y, LUH_PAGE_WIDTH / 2, LUH_ROW_HEIGHT, Window,
+                                                (HMENU)LUH_ID_OPTION_CANCEL, NULL, NULL);
+    if (g_Ui.OptionButtons[Shown])
+        SendMessageW(g_Ui.OptionButtons[Shown], WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+    g_Options.NoPower = (Flags & WLUI_FLAG_NO_POWER) != 0;
+    LuhCreatePowerButton(Window);
+    g_Ui.OptionsUp = TRUE;
+    SetFocus(g_Ui.OptionButtons[0] ? g_Ui.OptionButtons[0] : Window);
+    LuhTrace("options", NULL);
+    InvalidateRect(Window, NULL, TRUE);
+}
+
+/* An option picked (or Cancel): winlogon decides and takes the host down; no second pick. */
+static void
+LuhPickOption(
+    _In_ WLUI_ACTION Action)
+{
+    DWORD i;
+    WCHAR Num[16];
+
+    if (!g_Ui.OptionsUp)
+        return;
+    for (i = 0; i < ARRAYSIZE(g_Ui.OptionButtons); i++)
+        if (g_Ui.OptionButtons[i])
+            EnableWindow(g_Ui.OptionButtons[i], FALSE);
+    StringCchPrintfW(Num, ARRAYSIZE(Num), L"%u", (UINT)Action);
+    LuhTrace("option", Num);
+    WluiClientRequestAction(&g_Connection, Action);
 }
 
 /* With more than one tile, every tile is listed bottom left; the selected one is checked. */
@@ -815,6 +918,10 @@ LuhHandleCommand(
             LuhBeginExit(Window, WluiExitDismissed, LUH_EXIT_OK);
             break;
 
+        case WluiCmdShowOptions:
+            LuhShowOptionsPage(Window, Command->Flags, Command->User);
+            break;
+
         default:
             WARN("unknown command %u ignored\n", Command->Type);
             break;
@@ -872,7 +979,7 @@ LuhPaint(
 
     /* With a credential page up, the text sits above its first row (the page grows with its
      * label rows, a fixed offset put the result under the title); otherwise it is centred. */
-    TextTop = g_Ui.Page ? g_Ui.PageTop - LUH_TEXT_ABOVE_PAGE : Client.bottom / 2 - 40;
+    TextTop = (g_Ui.Page || g_Ui.OptionsUp) ? g_Ui.PageTop - LUH_TEXT_ABOVE_PAGE : Client.bottom / 2 - 40;
     Rect = Client;
     Rect.top = TextTop;
     Rect.bottom = Rect.top + 40;
@@ -991,6 +1098,14 @@ LuhWindowProc(
                 else if (Id == LUH_ID_POWER)
                 {
                     LuhPowerMenu(Window);
+                }
+                else if (Id >= LUH_ID_OPTION_BASE && Id < LUH_ID_OPTION_BASE + ARRAYSIZE(LuhOptionRows))
+                {
+                    LuhPickOption(LuhOptionRows[Id - LUH_ID_OPTION_BASE].Action);
+                }
+                else if (Id == LUH_ID_OPTION_CANCEL)
+                {
+                    LuhPickOption(WluiActionCancel);
                 }
                 else if (Id >= LUH_ID_TILE_BASE && Id < LUH_ID_TILE_BASE + LUH_MAX_TILES)
                 {
@@ -1169,7 +1284,12 @@ LuhUiRun(
             LuhSubmit(Window);
             continue;
         }
-        if (g_Ui.Page && IsDialogMessageW(Window, &Msg))
+        if (Msg.message == WM_KEYDOWN && Msg.wParam == VK_ESCAPE && g_Ui.OptionsUp)
+        {
+            LuhPickOption(WluiActionCancel);
+            continue;
+        }
+        if ((g_Ui.Page || g_Ui.OptionsUp) && IsDialogMessageW(Window, &Msg))
             continue;
         TranslateMessage(&Msg);
         DispatchMessageW(&Msg);

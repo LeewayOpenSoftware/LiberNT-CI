@@ -20,4 +20,11 @@ BEGIN
     IDS_LUH_SIGNIN_FAILED   "Sign-in could not be completed. Try again."
     IDS_LUH_PLEASE_WAIT     "Please wait"
     IDS_LUH_WELCOME         "Welcome"
+    IDS_LUH_LOCK            "Lock"
+    IDS_LUH_SIGN_OUT        "Sign out"
+    IDS_LUH_CHANGE_PASSWORD "Change a password"
+    IDS_LUH_TASK_MANAGER    "Task Manager"
+    IDS_LUH_CANCEL          "Cancel"
+    IDS_LUH_EMERGENCY_TITLE "Emergency restart"
+    IDS_LUH_EMERGENCY_TEXT  "Select OK to restart right away. Anything you haven't saved will be lost. Use this only as a last resort."
 END

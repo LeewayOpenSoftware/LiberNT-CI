@@ -18,3 +18,12 @@
 #define IDS_LUH_SIGNIN_FAILED       108
 #define IDS_LUH_PLEASE_WAIT         109
 #define IDS_LUH_WELCOME             110
+#define IDS_LUH_LOCK                111
+#define IDS_LUH_SIGN_OUT            112
+#define IDS_LUH_CHANGE_PASSWORD     113
+#define IDS_LUH_TASK_MANAGER        114
+#define IDS_LUH_CANCEL              115
+#define IDS_LUH_EMERGENCY_TITLE     116
+#define IDS_LUH_EMERGENCY_TEXT      117
+
+#define IDS_LUH_LAST                IDS_LUH_EMERGENCY_TEXT
