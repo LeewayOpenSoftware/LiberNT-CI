@@ -1368,12 +1368,10 @@ WlHlOptionsFlags(
 {
     static const PCWSTR System = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System";
     static const PCWSTR Explorer = L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer";
-    DWORD Flags = 0, Value = 0, Size = sizeof(Value);
+    DWORD Flags = 0;
 
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY, L"DisableLockWorkstation", RRF_RT_REG_DWORD, NULL,
-                     &Value, &Size) == ERROR_SUCCESS && Value != 0)
-        Flags |= WLUI_FLAG_NO_LOCK;
-    if (WlHlUserPolicy(Session, System, L"DisableLockWorkstation"))
+    /* The same rule as every other lock path (WlIsLockOk): HKLM, then the user's policy. */
+    if (!WlHostIsLockOk(Session))
         Flags |= WLUI_FLAG_NO_LOCK;
     if (WlHlUserPolicy(Session, System, L"DisableChangePassword"))
         Flags |= WLUI_FLAG_NO_CHANGE_PASSWORD;
