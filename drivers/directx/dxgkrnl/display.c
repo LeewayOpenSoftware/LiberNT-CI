@@ -3961,6 +3961,7 @@ DxgkDisplayPresentBootScreen(
 {
     ULONG Width = 0;
     ULONG Height = 0;
+    ULONG OffsetX = 0, OffsetY = 0;
     ULONG Pitch;
     SIZE_T Size;
     PVOID Pixels;
@@ -3987,9 +3988,11 @@ DxgkDisplayPresentBootScreen(
     if (InbvQueryBootScreen(NULL, 0, &Width, &Height) == STATUS_BUFFER_TOO_SMALL &&
         Width <= Adapter->CommittedWidth && Height <= Adapter->CommittedHeight)
     {
-        PUCHAR Origin = (PUCHAR)Pixels +
-                        (SIZE_T)((Adapter->CommittedHeight - Height) / 2) * Pitch +
-                        (SIZE_T)((Adapter->CommittedWidth - Width) / 2) * sizeof(ULONG);
+        PUCHAR Origin;
+
+        OffsetX = (Adapter->CommittedWidth - Width) / 2;
+        OffsetY = (Adapter->CommittedHeight - Height) / 2;
+        Origin = (PUCHAR)Pixels + (SIZE_T)OffsetY * Pitch + (SIZE_T)OffsetX * sizeof(ULONG);
 
         (VOID)InbvCopyBootScreen(Origin, (LONG)Pitch, Width, Height);
     }
@@ -3999,8 +4002,8 @@ DxgkDisplayPresentBootScreen(
     Rect.right = (LONG)Adapter->CommittedWidth;
     Rect.bottom = (LONG)Adapter->CommittedHeight;
     Status = DxgkpPresentSourceRects(Adapter, Pixels, Pitch, Size, &Rect, 1, "boot");
-    DXGKRNL_TRACE("DxgkDisplayPresentBootScreen: adapter %p %lux%lu status 0x%08lX\n",
-                  Adapter, Adapter->CommittedWidth, Adapter->CommittedHeight, Status);
+    DXGKRNL_TRACE("DxgkDisplayPresentBootScreen: adapter %p %lux%lu boot %lux%lu at %lu,%lu status 0x%08lX\n",
+                  Adapter, Adapter->CommittedWidth, Adapter->CommittedHeight, Width, Height, OffsetX, OffsetY, Status);
     ExFreePoolWithTag(Pixels, TAG_DXGK_PRESENT);
 }
 
