@@ -2114,7 +2114,9 @@ SASWindowProc(
                 case IDHK_CTRL_ALT_DEL:
                 {
                     TRACE("SAS: CONTROL+ALT+DELETE\n");
-                    if (!Session->Gina.UseCtrlAltDelete)
+                    /* Without a GINA nobody calls WlxSetOption(WLX_OPTION_USE_CTRL_ALT_DEL); in host
+                     * mode Ctrl+Alt+Del is always a SAS, whether or not DisableCAD makes it optional. */
+                    if (!Session->UseLogonUI && !Session->Gina.UseCtrlAltDelete)
                         break;
                     PostMessageW(Session->SASWindow, WLX_WM_SAS, WLX_SAS_TYPE_CTRL_ALT_DEL, 0);
                     return TRUE;
