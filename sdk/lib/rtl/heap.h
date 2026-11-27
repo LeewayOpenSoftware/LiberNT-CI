@@ -521,17 +521,6 @@ RtlpEntryWrite(PHEAP Heap, PVOID Entry, USHORT Size, UCHAR Flags, USHORT Previou
 
 FORCEINLINE
 VOID
-RtlpEntrySetSize(PHEAP Heap, PVOID Entry, USHORT Size)
-{
-    HEAP_ENTRY Clear;
-
-    RtlpDecodeHeapEntry(Heap, Entry, &Clear);
-    Clear.Size = Size;
-    RtlpEncodeHeapEntry(Heap, Entry, &Clear);
-}
-
-FORCEINLINE
-VOID
 RtlpEntrySetFlags(PHEAP Heap, PVOID Entry, UCHAR Flags)
 {
     HEAP_ENTRY Clear;
@@ -550,28 +539,6 @@ RtlpEntrySetPreviousSize(PHEAP Heap, PVOID Entry, USHORT PreviousSize)
     /* Validate before modifying. */
     RtlpCheckHeapEntry(Heap, Entry, &Clear);
     Clear.PreviousSize = PreviousSize;
-    RtlpEncodeHeapEntry(Heap, Entry, &Clear);
-}
-
-FORCEINLINE
-VOID
-RtlpEntrySetSegmentOffset(PHEAP Heap, PVOID Entry, UCHAR SegmentOffset)
-{
-    HEAP_ENTRY Clear;
-
-    RtlpDecodeHeapEntry(Heap, Entry, &Clear);
-    Clear.SegmentOffset = SegmentOffset;
-    RtlpEncodeHeapEntry(Heap, Entry, &Clear);
-}
-
-FORCEINLINE
-VOID
-RtlpEntrySetUnusedBytes(PHEAP Heap, PVOID Entry, UCHAR UnusedBytes)
-{
-    HEAP_ENTRY Clear;
-
-    RtlpDecodeHeapEntry(Heap, Entry, &Clear);
-    Clear.UnusedBytes = UnusedBytes;
     RtlpEncodeHeapEntry(Heap, Entry, &Clear);
 }
 
