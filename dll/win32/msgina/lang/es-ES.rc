@@ -56,7 +56,7 @@ BEGIN
     IDS_LOGONUI_OLD_PASSWORD "Old password"
     IDS_LOGONUI_NEW_PASSWORD "New password"
     IDS_LOGONUI_CONFIRM_PASSWORD "Confirm password"
-    IDS_LOGONUI_MISMATCH "The passwords don't match."
+    IDS_LOGONUI_MISMATCH "Las contraseñas no coinciden."
     IDS_LOGONUI_CHANGE_FAILED "The password couldn't be changed. Check the old password and try again."
     IDS_LOGONUI_PASSWORD_RULES "No se puede actualizar la contraseña. El valor proporcionado para la nueva contraseña no cumple los requisitos de longitud, complejidad o historial del dominio."
     IDS_LOGONUI_OK "OK"
