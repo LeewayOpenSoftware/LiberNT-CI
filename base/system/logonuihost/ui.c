@@ -616,7 +616,7 @@ LuhDrawEye(
     LuhFillCircle(Surface, (LONG)Cx, (LONG)Cy, max(LuhPx(2), 2), RGB(255, 255, 255), 230);
 }
 
-/* Sleep: a crescent, a disc with an offset disc in the flyout's colour taken out of it. */
+/* Sleep: a crescent, cut by coverage so it reads the same on any plate under it. */
 static void
 LuhDrawMoon(
     _Inout_ PLUH_SURFACE Surface,
@@ -625,8 +625,7 @@ LuhDrawMoon(
 {
     LONG R = LuhPx(7);
 
-    LuhFillCircle(Surface, Cx, Cy, R, RGB(255, 255, 255), 255);
-    LuhFillCircle(Surface, Cx + R / 2 + 1, Cy - R / 2, R - 1, LUH_FLYOUT_FILL, 255);
+    LuhFillCrescent(Surface, Cx, Cy, R, Cx + R / 2 + 1, Cy - R / 2, R - 1, RGB(255, 255, 255), 255);
 }
 
 /* Restart: a ring open at the top right with an arrow head at its end. */
@@ -1108,7 +1107,8 @@ LuhCanSleep(VOID)
     ZeroMemory(&Caps, sizeof(Caps));
     if (CallNtPowerInformation(SystemPowerCapabilities, NULL, 0, &Caps, sizeof(Caps)) != 0)
         return FALSE;
-    return Caps.SystemS3 || Caps.AoAc;
+    /* Any sleep state counts: winlogon asks for the lightest one, as Windows does. */
+    return Caps.SystemS1 || Caps.SystemS2 || Caps.SystemS3 || Caps.AoAc;
 }
 
 /*
@@ -1126,7 +1126,7 @@ LuhOpenFlyout(
     LONG Width = LuhPx(LUH_FLYOUT_WIDTH), Row = LuhPx(LUH_FLYOUT_ROW), Pad = LuhPx(4), Top;
     DWORD i, Count = 0;
 
-    /* Sleep only where the machine can sleep (S3 or modern standby), as on Windows 11. */
+    /* Sleep only where the machine can sleep (S1-S3 or modern standby), as on Windows 11. */
     for (i = 0; i < ARRAYSIZE(All); i++)
         if (All[i] != LUH_ID_SLEEP || LuhCanSleep())
             Rows[Count++] = All[i];
@@ -1210,7 +1210,7 @@ LuhRunNotice(
         if (Msg.message == WM_KEYDOWN && (Msg.wParam == VK_RETURN || Msg.wParam == VK_ESCAPE))
         {
             if (Msg.wParam == VK_RETURN)
-                g_Ui.NoticeOk = (GetFocus() != Cancel || Cancel == NULL);
+                g_Ui.NoticeOk = (Cancel == NULL || GetFocus() == Ok);   /* destructive: only OK confirms */
             else if (!WithCancel)
                 continue;                       /* a legal notice is acknowledged, not escaped */
             g_Ui.NoticeUp = FALSE;

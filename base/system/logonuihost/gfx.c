@@ -312,6 +312,45 @@ LuhFillCircle(
     LuhFillRound(Surface, &Rect, Radius, Color, Alpha);
 }
 
+VOID
+LuhFillCrescent(
+    _Inout_ PLUH_SURFACE Surface,
+    _In_ double Cx,
+    _In_ double Cy,
+    _In_ double R,
+    _In_ double CutX,
+    _In_ double CutY,
+    _In_ double CutR,
+    _In_ COLORREF Color,
+    _In_ BYTE Alpha)
+{
+    RECT Bounds, Area;
+    LONG X, Y;
+    PULONG Row;
+    double Px, Py, In, Out, Cover;
+
+    SetRect(&Bounds, (LONG)floor(Cx - R - 1), (LONG)floor(Cy - R - 1), (LONG)ceil(Cx + R + 1), (LONG)ceil(Cy + R + 1));
+    if (Alpha == 0 || !LuhClip(Surface, &Bounds, &Area))
+        return;
+    GdiFlush();
+    for (Y = Area.top; Y < Area.bottom; Y++)
+    {
+        Row = Surface->Bits + (SIZE_T)Y * Surface->Width;
+        for (X = Area.left; X < Area.right; X++)
+        {
+            Px = X + 0.5;
+            Py = Y + 0.5;
+            In = R + 0.5 - sqrt((Px - Cx) * (Px - Cx) + (Py - Cy) * (Py - Cy));
+            Out = CutR + 0.5 - sqrt((Px - CutX) * (Px - CutX) + (Py - CutY) * (Py - CutY));
+            In = In < 0.0 ? 0.0 : (In > 1.0 ? 1.0 : In);
+            Out = Out < 0.0 ? 0.0 : (Out > 1.0 ? 1.0 : Out);
+            Cover = In * (1.0 - Out);
+            if (Cover > 0.0)
+                Row[X] = LuhOver(Row[X], Color, (ULONG)(Cover * Alpha));
+        }
+    }
+}
+
 /* A line with round ends and a one-pixel antialiased edge (glyph strokes). */
 VOID
 LuhStroke(

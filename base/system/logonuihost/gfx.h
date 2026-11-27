@@ -41,6 +41,9 @@ VOID LuhFrameRound(_Inout_ PLUH_SURFACE Surface, _In_ const RECT *Rect, _In_ LON
 VOID LuhFillCircle(_Inout_ PLUH_SURFACE Surface, _In_ LONG CenterX, _In_ LONG CenterY, _In_ LONG Radius,
                    _In_ COLORREF Color, _In_ BYTE Alpha);
 
+/* A disc with a second disc taken out of it (a crescent), by coverage: no colour needed for the cut. */
+VOID LuhFillCrescent(_Inout_ PLUH_SURFACE Surface, _In_ double Cx, _In_ double Cy, _In_ double R,
+                     _In_ double CutX, _In_ double CutY, _In_ double CutR, _In_ COLORREF Color, _In_ BYTE Alpha);
 VOID LuhStroke(_Inout_ PLUH_SURFACE Surface, _In_ double X0, _In_ double Y0, _In_ double X1, _In_ double Y1,
                _In_ double Width, _In_ COLORREF Color, _In_ BYTE Alpha);
 
