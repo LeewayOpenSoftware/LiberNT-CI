@@ -1350,16 +1350,22 @@ WlHostAttach(
 /* ---- the logged-out SAS ------------------------------------------------------- */
 
 /* With CAD disabled the credential page is the notice: enter the logged-out SAS by ourselves.
- * With CAD enabled the screen stays as it is until the user's SAS (the CAD page is Phase 4). */
+ * With CAD enabled the host shows the Ctrl+Alt+Delete notice until the user's SAS. */
 VOID
 WlHostDisplaySasNotice(
     _In_ PWLSESSION Session)
 {
     if (!WlHlDisableCad() && !WlHlAutoLogonWanted())
     {
-        /* A host still up from a logoff keeps showing a notice text instead of a stale status. */
-        if (WlHlHostLive())
-            WlHlPostResource(WluiCmdDisplayStatus, 0, IDS_PRESSCTRLALTDELETE);
+        /* G7: the Ctrl+Alt+Del notice is the host's clock curtain; a page host gives way to a status-only one. */
+        if (WlHlHostLive() && g_HostScenario != 0)
+            WlHlStopHost();
+        if (!WlHlHostLive() && !WlHlEnsureHost(0, 0, WlHlLockReadyMs()))
+        {
+            ERR("WL: no logon UI for the Ctrl+Alt+Delete notice; waiting for a user SAS\n");
+            return;
+        }
+        WlHlPostResource(WluiCmdDisplayStatus, WLUI_FLAG_CURTAIN, IDS_PRESSCTRLALTDELETE);
         return;
     }
     if (WlHostIsTerminal() || g_LsaBroken || WlHlTerminalUp())
@@ -1781,7 +1787,7 @@ WlHostLock(
         ERR("WL: no logon UI for the locked notice; the station stays locked\n");
         return;
     }
-    WlHlPostResource(WluiCmdDisplayStatus, 0, IDS_PRESSCTRLALTDELETEUNLOCK);
+    WlHlPostResource(WluiCmdDisplayStatus, WLUI_FLAG_CURTAIN, IDS_PRESSCTRLALTDELETEUNLOCK);
 }
 
 /* The SAS on the locked station: with CAD required, now the unlock page may come up. */
