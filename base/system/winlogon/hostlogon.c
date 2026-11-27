@@ -1716,9 +1716,33 @@ WlHostLoggedOnSas(
         }
         if (Action == WLHL_ACTION_CHANGED)
         {
-            /* Leave the result on screen for a moment, as the change confirmation. */
-            if (g_Launch != NULL)
-                WaitForSingleObject(WlHostEndedEvent(g_Launch), WLHL_CHANGED_MS);
+            /* Leave the result on screen for a moment, as the change confirmation, still pumping
+             * the SAS window (a logoff or shutdown notification may arrive meanwhile). */
+            ULONGLONG Until = GetTickCount64() + WLHL_CHANGED_MS;
+            while (g_Launch != NULL && Session->LogonState == STATE_LOGGED_ON_SAS)
+            {
+                ULONGLONG Now = GetTickCount64();
+                HANDLE Ended = WlHostEndedEvent(g_Launch);
+                MSG Msg;
+                BOOL Quit = FALSE;
+
+                if (Now >= Until ||
+                    MsgWaitForMultipleObjects(1, &Ended, FALSE, (DWORD)(Until - Now), QS_ALLINPUT) != WAIT_OBJECT_0 + 1)
+                    break;
+                while (PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
+                {
+                    if (Msg.message == WM_QUIT)
+                    {
+                        PostQuitMessage((int)Msg.wParam);
+                        Quit = TRUE;
+                        break;
+                    }
+                    TranslateMessage(&Msg);
+                    DispatchMessageW(&Msg);
+                }
+                if (Quit)
+                    break;
+            }
             break;
         }
         if (Action == WluiActionLock)
