@@ -387,7 +387,7 @@ TdhGetEventInformation(
     ULONG EventTags = 0;
     TLG_DECODE Decode;
     ULONG i, Required, StringOffset;
-    PCSTR MetadataEnd;
+    const UCHAR *MetadataEnd;
 
     if (!Event || !BufferSize || (TdhContextCount && !TdhContext))
         return ERROR_INVALID_PARAMETER;

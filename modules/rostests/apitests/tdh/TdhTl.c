@@ -148,14 +148,14 @@ TestValidEvent(VOID)
     /* a zero size is rejected even for sizing (Win11: ERROR_INVALID_PARAMETER) */
     memset(Buffer, 0xCC, sizeof(Buffer));
     Size = 0;
-    Error = TdhGetEventInformation(&Event, 0, NULL, Buffer, &Size);
+    Error = TdhGetEventInformation(&Event, 0, NULL, (PTRACE_EVENT_INFO)Buffer, &Size);
     ok(Error == ERROR_INVALID_PARAMETER, "zero-size error %lu\n", Error);
 
     /* pass 1: an undersized nonzero buffer reports the exact requirement
        and receives no writes */
     memset(Buffer, 0xCC, sizeof(Buffer));
     Size = 16;
-    Error = TdhGetEventInformation(&Event, 0, NULL, Buffer, &Size);
+    Error = TdhGetEventInformation(&Event, 0, NULL, (PTRACE_EVENT_INFO)Buffer, &Size);
     ok(Error == ERROR_INSUFFICIENT_BUFFER, "pass1 error %lu\n", Error);
     ok(Size >= FIELD_OFFSET(TRACE_EVENT_INFO, EventPropertyInfoArray) + 4 * sizeof(EVENT_PROPERTY_INFO),
        "size %lu too small\n", Size);
@@ -163,7 +163,7 @@ TestValidEvent(VOID)
 
     /* pass 2: the exact size decodes; Win11 rejects this synthetic record
        as ERROR_FILE_CORRUPT, which the size contract above still pins */
-    Error = TdhGetEventInformation(&Event, 0, NULL, Buffer, &Size);
+    Error = TdhGetEventInformation(&Event, 0, NULL, (PTRACE_EVENT_INFO)Buffer, &Size);
     ok(Error == ERROR_SUCCESS || Error == ERROR_FILE_CORRUPT, "pass2 error %lu\n", Error);
     if (Error != ERROR_SUCCESS)
         return;
@@ -249,7 +249,7 @@ TestProviderTraits(VOID)
     Event.ExtendedData = Items;
 
     Size = sizeof(Buffer);
-    Error = TdhGetEventInformation(&Event, 0, NULL, Buffer, &Size);
+    Error = TdhGetEventInformation(&Event, 0, NULL, (PTRACE_EVENT_INFO)Buffer, &Size);
     ok(Error == ERROR_SUCCESS || Error == ERROR_FILE_CORRUPT, "traits error %lu\n", Error);
     if (Error != ERROR_SUCCESS)
         return;
@@ -274,7 +274,7 @@ TestMalformed(VOID)
     SetupEvent(&Event, &Item, Blob, BlobSize);
     Item.ExtType = EVENT_HEADER_EXT_TYPE_EVENT_KEY;
     Size = sizeof(Buffer);
-    Error = TdhGetEventInformation(&Event, 0, NULL, Buffer, &Size);
+    Error = TdhGetEventInformation(&Event, 0, NULL, (PTRACE_EVENT_INFO)Buffer, &Size);
     ok(Error == ERROR_NOT_FOUND, "no-schema error %lu\n", Error);
 
     /* every truncation of the valid blob: no fault, documented statuses */
@@ -283,7 +283,7 @@ TestMalformed(VOID)
     {
         Item.DataSize = (USHORT)i;
         Size = sizeof(Buffer);
-        Error = TdhGetEventInformation(&Event, 0, NULL, Buffer, &Size);
+        Error = TdhGetEventInformation(&Event, 0, NULL, (PTRACE_EVENT_INFO)Buffer, &Size);
         ok(Error == ERROR_SUCCESS || Error == ERROR_INVALID_DATA ||
            Error == ERROR_INSUFFICIENT_BUFFER || Error == ERROR_NOT_FOUND ||
            Error == ERROR_FILE_CORRUPT,
@@ -295,7 +295,7 @@ TestMalformed(VOID)
     Blob[10] = 'X'; /* inside "TestEvent": drop the terminator */
     Item.DataSize = 16; /* cut the item right after the name region */
     Size = sizeof(Buffer);
-    Error = TdhGetEventInformation(&Event, 0, NULL, Buffer, &Size);
+    Error = TdhGetEventInformation(&Event, 0, NULL, (PTRACE_EVENT_INFO)Buffer, &Size);
     ok(Error == ERROR_INVALID_DATA || Error == ERROR_NOT_FOUND, "no-NUL error %lu\n", Error);
 }
 
@@ -332,7 +332,7 @@ TestBoundedFuzz(VOID)
         Item.DataSize = (USHORT)(1 + State % BlobSize);
 
         Size = sizeof(Buffer);
-        Error = TdhGetEventInformation(&Event, 0, NULL, Buffer, &Size);
+        Error = TdhGetEventInformation(&Event, 0, NULL, (PTRACE_EVENT_INFO)Buffer, &Size);
         ok(Error == ERROR_SUCCESS || Error == ERROR_INVALID_DATA ||
            Error == ERROR_INSUFFICIENT_BUFFER || Error == ERROR_NOT_FOUND ||
            Error == ERROR_FILE_CORRUPT,
