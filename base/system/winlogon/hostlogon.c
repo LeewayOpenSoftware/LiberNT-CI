@@ -952,6 +952,23 @@ WlHlChangePrefill(
     LeaveCriticalSection(&g_SubmitLock);
 }
 
+/* The unlock page names the locked session's account, so the host lists only that tile. */
+static VOID
+WlHlUnlockPrefill(
+    _Out_writes_(Chars) PWCHAR Prefill,
+    _In_ ULONG Chars)
+{
+    PCWSTR Domain = g_Session ? g_Session->MprNotifyInfo.pszDomain : NULL;
+    PCWSTR User = g_Session ? g_Session->MprNotifyInfo.pszUserName : NULL;
+
+    if (User == NULL || User[0] == UNICODE_NULL)
+        Prefill[0] = UNICODE_NULL;
+    else if (Domain != NULL && Domain[0] != UNICODE_NULL)
+        StringCchPrintfW(Prefill, Chars, L"%s\\%s", Domain, User);
+    else
+        StringCchCopyW(Prefill, Chars, User);
+}
+
 /* Brings up a host for Scenario (0: status only). A live host is kept when it already shows
  * Scenario, or when it was status-only and the logon page is wanted (the host builds its
  * providers at the first RequestCredentials); any other change means a fresh host. */
@@ -980,6 +997,8 @@ WlHlEnsureHost(
     Prefill[0] = UNICODE_NULL;
     if (Scenario == WLHL_CPUS_CHANGE_PASSWORD)
         WlHlChangePrefill(Prefill, ARRAYSIZE(Prefill));
+    else if (Scenario == WLHL_CPUS_UNLOCK)
+        WlHlUnlockPrefill(Prefill, ARRAYSIZE(Prefill));
 
     if (WlHlHostLive())
     {
