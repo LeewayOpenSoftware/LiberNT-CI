@@ -38,6 +38,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_TEXT_ABOVE_PAGE 100     /* title 40 + gap 8 + result 28 + 24 clearance over the first row */
 #define LUH_DETAIL_WIDTH    560     /* a wrapped result line, e.g. the account restriction text */
 #define LUH_DETAIL_MARGIN   16
+#define LUH_CAPS_GAP        28      /* under the last password box: the Caps Lock line */
 
 typedef struct _LUH_UI
 {
@@ -76,7 +77,8 @@ typedef struct _LUH_UI
     HFONT DateFont;
     WCHAR ClockText[64];
     WCHAR DateText[128];
-    HWND CapsControl;       /* the focused password box while Caps Lock is on; the warning sits beside it */
+    HWND CapsControl;       /* the focused password box while Caps Lock is on */
+    int CapsTop;            /* y of the gap reserved under the page's last password box */
 } LUH_UI;
 
 static LUH_UI g_Ui;
@@ -465,7 +467,7 @@ LuhCreatePage(
 {
     RECT Client;
     int X, Y, Rows = 0;
-    DWORD i;
+    DWORD i, LastPassword = (DWORD)-1;
     HWND Focus = NULL;
     WCHAR Num[16];
 
@@ -476,10 +478,15 @@ LuhCreatePage(
     for (i = 0; i < Page->Count; i++)
         if (LuhFieldVisible(&Page->Fields[i]) && Page->Fields[i].Type != CPFT_TILE_IMAGE)
             Rows += LuhFieldHasLabelRow(&Page->Fields[i]) ? 2 : 1;
+    /* Only a page with a password box makes room for the Caps Lock line, under its last one. */
+    for (i = 0; i < Page->Count; i++)
+        if (LuhFieldVisible(&Page->Fields[i]) && Page->Fields[i].Type == CPFT_PASSWORD_TEXT)
+            LastPassword = i;
 
     X = (Client.right - LUH_PAGE_WIDTH) / 2;
-    Y = Client.bottom / 2 - (Rows * (LUH_ROW_HEIGHT + LUH_ROW_GAP)) / 2;
+    Y = Client.bottom / 2 - (Rows * (LUH_ROW_HEIGHT + LUH_ROW_GAP) + (LastPassword != (DWORD)-1 ? LUH_CAPS_GAP : 0)) / 2;
     g_Ui.PageTop = Y;
+    g_Ui.CapsTop = 0;
 
     for (i = 0; i < Page->Count; i++)
     {
@@ -544,6 +551,11 @@ LuhCreatePage(
             }
         }
         Y += LUH_ROW_HEIGHT + LUH_ROW_GAP;
+        if (i == LastPassword)
+        {
+            g_Ui.CapsTop = Y - LUH_ROW_GAP + 2;
+            Y += LUH_CAPS_GAP;
+        }
     }
 
     if (g_Ui.ChangeCancel && Page->Scenario == CPUS_CHANGE_PASSWORD)
@@ -1145,12 +1157,13 @@ LuhPaint(
         }
     }
 
-    if (g_Ui.CapsControl != NULL && GetWindowRect(g_Ui.CapsControl, &Wrap))
+    if (g_Ui.CapsControl != NULL && g_Ui.CapsTop > 0 && GetWindowRect(g_Ui.CapsControl, &Wrap))
     {
-        /* Beside the box, not under it: the row gap is too narrow for a line of text. */
+        /* Under the box, as on Windows, in the gap the page keeps under its last password box
+         * (on a page with several, that is where the line shows whichever box has the focus). */
         MapWindowPoints(NULL, Window, (LPPOINT)&Wrap, 2);
-        Wrap.left = Wrap.right + 12;
-        Wrap.right = Client.right - LUH_DETAIL_MARGIN;
+        Wrap.top = g_Ui.CapsTop;
+        Wrap.bottom = Wrap.top + LUH_CAPS_GAP;
         SelectObject(Dc, g_Ui.TextFont);
         DrawTextW(Dc, LuhText(IDS_LUH_CAPS_LOCK), -1, &Wrap, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
