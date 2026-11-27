@@ -376,7 +376,7 @@ TdhGetEventInformation(
     _Out_writes_bytes_opt_(*BufferSize) PTRACE_EVENT_INFO Buffer,
     _Inout_ PULONG BufferSize)
 {
-    const UCHAR * Schema, Traits;
+    const UCHAR *Schema, *Traits;
     USHORT SchemaSize, TraitsSize;
     TLG_READER Reader;
     UCHAR BlobType, Channel, Level, Opcode;
