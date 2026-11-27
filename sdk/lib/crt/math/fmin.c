@@ -7,8 +7,11 @@
 
 #include <math.h>
 
+#ifdef _MSC_VER
+#pragma warning(disable: 4164)
 #pragma function(fmin)
 #pragma function(fminf)
+#endif
 
 double fmin(double x, double y)
 {
