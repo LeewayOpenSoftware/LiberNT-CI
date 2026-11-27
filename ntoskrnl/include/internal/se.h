@@ -700,6 +700,12 @@ NTAPI
 SepGetTokenIntegrityRid(
     _In_ PACCESS_TOKEN Token);
 
+BOOLEAN
+NTAPI
+SepIsPrivilegeAllowedAtIntegrity(
+    _In_ PLUID Privilege,
+    _In_ ULONG IntegrityRid);
+
 PSID
 NTAPI
 SepMandatorySidFromRid(
