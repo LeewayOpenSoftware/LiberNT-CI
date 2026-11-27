@@ -45,9 +45,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_PAGE_WIDTH      360
 #define LUH_ROW_HEIGHT      30
 #define LUH_ROW_GAP         10
-#define LUH_TEXT_ABOVE_PAGE 100     /* title 40 + gap 8 + result 28 + 24 clearance over the first row */
 #define LUH_DETAIL_WIDTH    560     /* a wrapped result line, e.g. the account restriction text */
-#define LUH_DETAIL_MARGIN   16
 /* The sign-in page, measured on the Windows 11 shots (1024x768, 96 DPI); y offsets from the centre. */
 #define LUH_AVATAR_RADIUS   96
 #define LUH_AVATAR_DY       (-134)
@@ -64,11 +62,25 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_TILE_BOX_WIDTH  220
 #define LUH_POWER_SIZE      40
 #define LUH_ACCENT          RGB(76, 160, 255)
+/* Ctrl+Alt+Del options (Win11 shot 09): a left-aligned list on black, 44 px pitch, a dark Cancel. */
+#define LUH_OPTION_DX       (-72)   /* the list's left edge from the centre */
+#define LUH_OPTION_TOP_DY   (-177)  /* the first row's top from the centre */
+#define LUH_OPTION_ROW      44
+#define LUH_OPTION_WIDTH    138
+#define LUH_OPTION_CANCEL_DY 83
+#define LUH_OPTION_CANCEL_W 120
+#define LUH_OPTION_CANCEL_H 32
+/* Change a password (shot 10): picture higher, a title, the account in a box, 52 px pitch. */
+#define LUH_CHANGE_AVATAR_DY (-219)
+#define LUH_CHANGE_TITLE_DY (-68)
+#define LUH_CHANGE_FIELDS_DY (-22)
+#define LUH_CHANGE_PITCH    52
+#define LUH_CHANGE_CANCEL_DY 280
 #define LUH_CAPS_GAP        28      /* under the last password box: the Caps Lock line */
 
 typedef struct _LUH_UI
 {
-    HFONT TitleFont;
+    HFONT TitleFont;        /* the change-password title */
     HFONT TextFont;
     WCHAR Title[256];       /* "Welcome" user or status text */
     WCHAR Detail[256];      /* result text, when any */
@@ -86,7 +98,7 @@ typedef struct _LUH_UI
     DWORD PendingScenario;  /* a RequestCredentials that arrived under the box */
     DWORD PendingFlags;
     PLUH_PAGE Page;         /* owned by providers.c; valid until the next WM_LUH_PAGE */
-    int PageTop;            /* y of the first field row; the title and the result sit above it */
+    int PageTop;            /* y of the first field row; a result replaces the rows from here */
     BOOL PageBusy;          /* a submission is with winlogon; controls disabled */
     HWND PolicyButtons[2];
     HWND TileButtons[LUH_MAX_TILES];    /* the other tiles, bottom left, as on the Windows sign-in screen */
@@ -413,7 +425,8 @@ LuhPowerMenu(
 
 static void LuhDropCurtain(_In_ HWND Window);
 
-/* The Ctrl+Alt+Del options, in msgina's order; a row policy turned off is not shown. */
+/* The Ctrl+Alt+Del options, in the Windows order; a row policy turned off is not shown. Switch user
+ * is not offered: winlogon has no action for it yet, and a row that does nothing is not shown. */
 static const struct
 {
     UINT Text;
@@ -434,43 +447,46 @@ LuhShowOptionsPage(
     _In_ PCWSTR User)
 {
     RECT Client;
-    int X, Y;
+    LONG X, Y, Width = LuhPx(LUH_OPTION_WIDTH);
     DWORD i, Shown = 0;
+    SIZE Text;
 
+    UNREFERENCED_PARAMETER(User);   /* Windows 11 does not name the user on this screen */
     LuhDropCurtain(Window);
     LuhDestroyPage();
     LuhSetSpinner(Window, FALSE);
     GetClientRect(Window, &Client);
-    StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), User);
+    g_Ui.Title[0] = UNICODE_NULL;
     g_Ui.Detail[0] = UNICODE_NULL;
-    X = (Client.right - LUH_PAGE_WIDTH) / 2;
-    Y = Client.bottom / 2 - 2 * (LUH_ROW_HEIGHT + LUH_ROW_GAP);
+    for (i = 0; i < ARRAYSIZE(LuhOptionRows); i++)
+    {
+        Text = LuhMeasureText(g_Ui.TextFont, LuhText(LuhOptionRows[i].Text));
+        Width = max(Width, Text.cx + LuhPx(18));
+    }
+    X = Client.right / 2 + LuhPx(LUH_OPTION_DX);
+    Y = Client.bottom / 2 + LuhPx(LUH_OPTION_TOP_DY);
     g_Ui.PageTop = Y;
     for (i = 0; i < ARRAYSIZE(LuhOptionRows); i++)
     {
         if (Flags & LuhOptionRows[i].Hide)
             continue;
-        g_Ui.OptionButtons[Shown] = CreateWindowExW(0, L"BUTTON", LuhText(LuhOptionRows[i].Text),
-                                                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                                    X, Y, LUH_PAGE_WIDTH, LUH_ROW_HEIGHT, Window,
-                                                    (HMENU)(UINT_PTR)(LUH_ID_OPTION_BASE + i), NULL, NULL);
-        if (g_Ui.OptionButtons[Shown])
-            SendMessageW(g_Ui.OptionButtons[Shown++], WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
-        Y += LUH_ROW_HEIGHT + LUH_ROW_GAP;
+        g_Ui.OptionButtons[Shown++] = CreateWindowExW(0, L"BUTTON", LuhText(LuhOptionRows[i].Text),
+                                                      WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                                                      X, Y, Width, LuhPx(LUH_OPTION_ROW), Window,
+                                                      (HMENU)(UINT_PTR)(LUH_ID_OPTION_BASE + i), NULL, NULL);
+        Y += LuhPx(LUH_OPTION_ROW);
     }
-    Y += LUH_ROW_HEIGHT;
     g_Ui.OptionButtons[Shown] = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_CANCEL),
-                                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                                                X + LUH_PAGE_WIDTH / 2, Y, LUH_PAGE_WIDTH / 2, LUH_ROW_HEIGHT, Window,
+                                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                                                X + LuhPx(9), Client.bottom / 2 + LuhPx(LUH_OPTION_CANCEL_DY),
+                                                LuhPx(LUH_OPTION_CANCEL_W), LuhPx(LUH_OPTION_CANCEL_H), Window,
                                                 (HMENU)LUH_ID_OPTION_CANCEL, NULL, NULL);
-    if (g_Ui.OptionButtons[Shown])
-        SendMessageW(g_Ui.OptionButtons[Shown], WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
     g_Options.NoPower = (Flags & WLUI_FLAG_NO_POWER) != 0;
     LuhCreatePowerButton(Window);
     g_Ui.OptionsUp = TRUE;
     SetFocus(g_Ui.OptionButtons[0] ? g_Ui.OptionButtons[0] : Window);
     LuhTrace("options", NULL);
-    InvalidateRect(Window, NULL, TRUE);
+    LuhPageChanged(Window);
 }
 
 /* An option picked (or Cancel): winlogon decides and takes the host down; no second pick. */
@@ -678,6 +694,21 @@ LuhDrawItem(
             LuhFillRound(Surface, &Rect, LuhPx(4), White, 40);
         LuhDrawPower(Surface, Cx, Cy);
     }
+    else if (g_Ui.OptionsUp && Item->CtlID >= LUH_ID_OPTION_BASE &&
+             Item->CtlID < LUH_ID_OPTION_BASE + ARRAYSIZE(LuhOptionRows))
+    {
+        /* A plain text row; the keyboard focus is a white frame around it. */
+        Local = Rect;
+        Local.left += LuhPx(9);
+        LuhDrawText(Surface, g_Ui.TextFont, Text, &Local, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+                    RGB(225, 225, 225), Down ? 170 : 255);
+    }
+    else if (g_Ui.OptionsUp && Item->CtlID == LUH_ID_OPTION_CANCEL)
+    {
+        LuhFillRound(Surface, &Rect, LuhPx(4), Down ? RGB(40, 40, 40) : RGB(51, 51, 51), 255);
+        LuhDrawText(Surface, g_Ui.TextFont, Text, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+                    White, 255);
+    }
     else if (Field && Field->Type == CPFT_COMMAND_LINK)
     {
         LuhDrawText(Surface, g_Ui.TextFont, Text, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
@@ -769,8 +800,17 @@ LuhComposeSignIn(
     RECT Rect;
     DWORD i;
 
+    PLUH_PAGE Page = g_Ui.Page;
+
     LuhFillCircle(Surface, Cx, g_Ui.AvatarY, LuhPx(LUH_AVATAR_RADIUS), White, 38);
     LuhDrawPerson(Surface, Cx, g_Ui.AvatarY, LuhPx(2 * LUH_AVATAR_RADIUS), RGB(232, 234, 245));
+    if (Page->Scenario == CPUS_CHANGE_PASSWORD)
+    {
+        SetRect(&Rect, 0, Client->bottom / 2 + LuhPx(LUH_CHANGE_TITLE_DY) - LuhPx(22), Client->right,
+                Client->bottom / 2 + LuhPx(LUH_CHANGE_TITLE_DY) + LuhPx(22));
+        LuhDrawText(Surface, g_Ui.TitleFont, LuhText(IDS_LUH_CHANGE_PASSWORD), &Rect,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, White, 255);
+    }
 
     for (i = 0; i < g_Ui.Page->Count; i++)
     {
@@ -778,7 +818,22 @@ LuhComposeSignIn(
 
         if (!LuhFieldVisible(Field))
             continue;
-        if (Field->Type == CPFT_LARGE_TEXT || Field->Type == CPFT_SMALL_TEXT)
+        if (IsRectEmpty(&Field->Box))
+            continue;
+        if (Page->Scenario == CPUS_CHANGE_PASSWORD && i == g_Ui.NameField)
+        {
+            /* The account, read only, in the first box. */
+            if (!g_Ui.SignInBusy && !g_Ui.ResultUp)
+            {
+                Rect = Field->Box;
+                LuhFillRound(Surface, &Rect, LuhPx(4), g_Ui.BoxFill, 255);
+                LuhFrameRound(Surface, &Rect, LuhPx(4), 1, White, 70);
+                Rect.left += LuhPx(10);
+                LuhDrawText(Surface, g_Ui.TextFont, Field->Value[0] ? Field->Value : Field->Label, &Rect,
+                            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, White, 255);
+            }
+        }
+        else if (Field->Type == CPFT_LARGE_TEXT || Field->Type == CPFT_SMALL_TEXT)
         {
             LuhDrawText(Surface, i == g_Ui.NameField ? g_Ui.NameFont : g_Ui.TextFont,
                         Field->Value[0] ? Field->Value : Field->Label, &Field->Box,
@@ -967,6 +1022,8 @@ LuhCreatePage(
     HDC Dc;
     HGDIOBJ Old;
     ULONG Pixel;
+    BOOL Change;
+    LONG Pitch;
 
     LuhDestroyPage();
     g_Ui.Page = Page;
@@ -1015,14 +1072,33 @@ LuhCreatePage(
     ReleaseDC(Window, Dc);
     Height = Metrics.tmHeight + 2;
 
-    g_Ui.AvatarY = Cy + LuhPx(LUH_AVATAR_DY);
+    Change = (Page->Scenario == CPUS_CHANGE_PASSWORD);
+    Pitch = LuhPx(Change ? LUH_CHANGE_PITCH : LUH_BOX_PITCH);
+    g_Ui.AvatarY = Cy + LuhPx(Change ? LUH_CHANGE_AVATAR_DY : LUH_AVATAR_DY);
     Y = Cy + LuhPx(LUH_NAME_DY) - LuhPx(18);
+    if (Change)
+    {
+        /* Windows 11 puts the account in the first box, under the page title. */
+        Y = Cy + LuhPx(LUH_CHANGE_FIELDS_DY);
+        if (g_Ui.NameField != (DWORD)-1)
+        {
+            SetRect(&Page->Fields[g_Ui.NameField].Box, Cx - LuhPx(LUH_BOX_WIDTH) / 2, Y,
+                    Cx + LuhPx(LUH_BOX_WIDTH) / 2, Y + LuhPx(LUH_BOX_HEIGHT));
+            Y += Pitch;
+        }
+    }
     for (i = 0; i < Page->Count; i++)
     {
         PLUH_FIELD Field = &Page->Fields[i];
 
         if (!LuhFieldVisible(Field) || (Field->Type != CPFT_LARGE_TEXT && Field->Type != CPFT_SMALL_TEXT))
             continue;
+        if (Change && (i == g_Ui.NameField || Field->Type == CPFT_SMALL_TEXT))
+        {
+            if (i != g_Ui.NameField)
+                SetRectEmpty(&Field->Box);  /* the provider label: Windows 11 shows none here */
+            continue;
+        }
         if (i == g_Ui.NameField)
         {
             SetRect(&Field->Box, 0, Y, Client.right, Y + LuhPx(36));
@@ -1034,8 +1110,9 @@ LuhCreatePage(
             Y += LuhPx(24);
         }
     }
-    Y = max(Y + LuhPx(8), Cy + LuhPx(LUH_BOX_DY));
-    g_Ui.PageTop = Y;
+    if (!Change)
+        Y = max(Y + LuhPx(8), Cy + LuhPx(LUH_BOX_DY));
+    g_Ui.PageTop = Change && g_Ui.NameField != (DWORD)-1 ? Page->Fields[g_Ui.NameField].Box.top : Y;
     g_Ui.CapsTop = 0;
 
     for (i = 0; i < Page->Count; i++)
@@ -1078,7 +1155,7 @@ LuhCreatePage(
                     else if (Focus == NULL || Field->Interactive == CPFIS_FOCUSED)
                         Focus = Field->Control;
                 }
-                Y += LuhPx(LUH_BOX_PITCH);
+                Y += Pitch;
                 if (i == LastPassword)
                 {
                     /* The Caps Lock line sits right under the last password box. */
@@ -1125,12 +1202,13 @@ LuhCreatePage(
     {
         g_Ui.CancelButton = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_CANCEL),
                                             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                                            Cx - LuhPx(LUH_PILL_WIDTH) / 2, g_Ui.DetailTop + LuhPx(56),
+                                            Cx - LuhPx(LUH_PILL_WIDTH) / 2, Cy + LuhPx(LUH_CHANGE_CANCEL_DY) - LuhPx(16),
                                             LuhPx(LUH_PILL_WIDTH), LuhPx(LUH_PILL_HEIGHT), Window,
                                             (HMENU)LUH_ID_OPTION_CANCEL, NULL, NULL);
     }
     LuhCreateTileList(Window, Page);
-    LuhCreatePowerButton(Window);
+    if (!Change)
+        LuhCreatePowerButton(Window);   /* Windows 11 has no power button on the change page */
     if (Focus)
         SetFocus(Focus);
     LuhUpdateCapsLock(Window);
@@ -1674,7 +1752,11 @@ LuhArmClock(
     SetTimer(Window, LUH_TIMER_CLOCK, (60 - Now.wSecond) * 1000 - Now.wMilliseconds + 50, NULL);
 }
 
-/* Lock: the curtain picture comes up from black over LUH_FADE_IN_MS, one constant-alpha blend a frame. */
+/*
+ * Lock: the curtain picture comes up from black over LUH_FADE_IN_MS, one constant-alpha blend a frame.
+ * Keys and clicks during these 600 ms are dropped on purpose, as on Windows 11: the curtain is not
+ * yet there to lift.
+ */
 static void
 LuhFadeInCurtain(
     _In_ HWND Window)
@@ -1958,6 +2040,13 @@ LuhHandleCommand(
             break;
 
         case WluiCmdDisplayWelcome:
+            if (g_Options.Scenario == CPUS_UNLOCK_WORKSTATION && g_Ui.Page && g_Ui.SignInBusy)
+            {
+                /* Unlock: no profile to load, so Welcome stays where the box was on the sign-in
+                 * picture; winlogon captures this frame for its crossfade to the desktop. */
+                LuhTrace("welcome", Command->User);
+                break;
+            }
             LuhDropCurtain(Window);
             LuhDestroyPage();
             StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), LuhText(IDS_LUH_WELCOME));
@@ -2076,80 +2165,24 @@ LuhHandleCommand(
 
 /* ---- painting --------------------------------------------------------------------- */
 
-/* The page's still picture: the soft backdrop and its text, drawn only when the text changes. */
+/* The still picture of whatever is up, drawn only when it changes. */
 static void
 LuhComposeStill(
-    _In_ const RECT *Client,
-    _In_ int TextTop,
-    _In_ const RECT *Caps)
+    _In_ const RECT *Client)
 {
     PLUH_SURFACE Back = &g_Ui.Still;
-    const COLORREF White = RGB(255, 255, 255);
-    RECT Rect, Wrap;
-    HGDIOBJ OldFont;
-    int Width, Extra;
 
+    if (g_Ui.OptionsUp)
+    {
+        /* Ctrl+Alt+Del: plain black under the list, as on Windows 11. */
+        LuhFillRect(Back, Client, RGB(0, 0, 0), 255);
+        return;
+    }
     BitBlt(Back->Dc, 0, 0, Back->Width, Back->Height, g_Ui.Soft.Dc, 0, 0, SRCCOPY);
-    if (g_Ui.Page && !g_Ui.OptionsUp)
-    {
+    if (g_Ui.Page)
         LuhComposeSignIn(Back, Client);
-        return;
-    }
-    if (!g_Ui.OptionsUp)
-    {
+    else
         LuhComposeStatus(Back, Client);
-        return;
-    }
-
-    /* A long account message wraps. Measure it first: it keeps its bottom edge (so the page
-     * below never moves) and grows upwards, and the title moves up by the extra lines. */
-    Width = min(Client->right - 2 * LUH_DETAIL_MARGIN, LUH_DETAIL_WIDTH);
-    Width = max(Width, 1);
-    Extra = 0;
-    if (g_Ui.Detail[0] != UNICODE_NULL)
-    {
-        OldFont = SelectObject(Back->Dc, g_Ui.TextFont);
-        SetRect(&Wrap, 0, 0, Width, 0);
-        DrawTextW(Back->Dc, g_Ui.Detail, -1, &Wrap, DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
-        SelectObject(Back->Dc, OldFont);
-        if (Wrap.bottom - Wrap.top > 28)
-            Extra = (Wrap.bottom - Wrap.top) - 28;
-    }
-
-    Rect = *Client;
-    Rect.top = TextTop - Extra;
-    Rect.bottom = Rect.top + 40;
-    LuhDrawText(Back, g_Ui.TitleFont, g_Ui.Title, &Rect,
-                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, White, 255);
-
-    if (g_Ui.Detail[0] != UNICODE_NULL)
-    {
-        Rect.top = Rect.bottom + 8;
-        Rect.bottom = TextTop + 40 + 8 + 28;
-        if (Extra == 0)
-        {
-            LuhDrawText(Back, g_Ui.TextFont, g_Ui.Detail, &Rect,
-                        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, White, 255);
-        }
-        else
-        {
-            Rect.left = (Client->right - Width) / 2;
-            Rect.right = Rect.left + Width;
-            LuhDrawText(Back, g_Ui.TextFont, g_Ui.Detail, &Rect, DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS, White, 255);
-            Rect.left = Client->left;
-            Rect.right = Client->right;
-        }
-    }
-
-    g_Ui.SpinnerY = Rect.bottom + 48;
-
-    if (Caps->right > Caps->left)
-    {
-        /* Under the box, as on Windows, in the gap the page keeps under its last password box
-         * (on a page with several, that is where the line shows whichever box has the focus). */
-        LuhDrawText(Back, g_Ui.TextFont, LuhText(IDS_LUH_CAPS_LOCK), Caps,
-                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, White, 255);
-    }
 }
 
 /*
@@ -2162,20 +2195,11 @@ LuhCompose(
     _In_ const RECT *Paint,
     _In_ BOOL Rebuild)
 {
-    RECT Caps = { 0, 0, 0, 0 };
-    int TextTop, i;
+    int i;
 
     if (Rebuild || !g_Ui.StillValid)
     {
-        /* With a credential page up, the text sits above its first row; otherwise it is centred. */
-        TextTop = (g_Ui.Page || g_Ui.OptionsUp) ? g_Ui.PageTop - LUH_TEXT_ABOVE_PAGE : Client->bottom / 2 - 40;
-        if (g_Ui.CapsControl != NULL && g_Ui.CapsTop > 0 && GetWindowRect(g_Ui.CapsControl, &Caps))
-        {
-            MapWindowPoints(NULL, GetParent(g_Ui.CapsControl), (LPPOINT)&Caps, 2);
-            Caps.top = g_Ui.CapsTop;
-            Caps.bottom = Caps.top + LUH_CAPS_GAP;
-        }
-        LuhComposeStill(Client, TextTop, &Caps);
+        LuhComposeStill(Client);
         g_Ui.StillValid = TRUE;
     }
 
@@ -2606,7 +2630,7 @@ LuhUiCreate(
 
     ZeroMemory(&g_Ui, sizeof(g_Ui));
     LuhGfxInit();
-    g_Ui.TitleFont = LuhFontCreate(32, FW_LIGHT);
+    g_Ui.TitleFont = LuhFontCreate(28, FW_SEMIBOLD);
     g_Ui.TextFont = LuhFontCreate(15, FW_NORMAL);
     g_Ui.NameFont = LuhFontCreate(26, FW_SEMIBOLD);
     g_Ui.StrongFont = LuhFontCreate(15, FW_SEMIBOLD);
