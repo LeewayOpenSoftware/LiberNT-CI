@@ -83,7 +83,9 @@ RunBcd(PCWSTR Args)
 
     if (CreateProcessW(NULL, CmdLine, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi))
     {
-        WaitForSingleObject(pi.hProcess, 20000);
+        /* Kill a hung child so it releases the fixture hive and the file can be deleted. */
+        if (WaitForSingleObject(pi.hProcess, 20000) != WAIT_OBJECT_0)
+            TerminateProcess(pi.hProcess, 1);
         GetExitCodeProcess(pi.hProcess, &Code);
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
@@ -103,6 +105,8 @@ ReadElement(PCWSTR File, PCWSTR Id, ULONG Type, BYTE *Buffer, DWORD *Length)
     DWORD RegType = 0, Size = *Length;
     LONG Error;
 
+    /* Clear the buffer so an absent element leaves an empty string, not the previous read. */
+    memset(Buffer, 0, *Length);
     *Length = (DWORD)-1;
     if (RegLoadAppKeyW(File, &Root, KEY_READ, 0, 0) != ERROR_SUCCESS)
         return 0;
@@ -133,7 +137,7 @@ START_TEST(BcdEdit)
 
     if (!SeedStore(File))
     {
-        skip("Could not create the fixture store (RegLoadAppKeyW needs the right privilege)\n");
+        skip("Could not create the fixture store (RegLoadAppKeyW failed)\n");
         DeleteFileW(File);
         return;
     }
@@ -171,7 +175,9 @@ START_TEST(BcdEdit)
     ok(Code == 0, "/set inherit exit %lu\n", Code);
     Length = sizeof(Buffer);
     RegType = ReadElement(File, Loader, EL_INHERIT, B, &Length);
-    ok(RegType == REG_MULTI_SZ && wcscmp(Buffer, Other) == 0, "inherit type %lu\n", RegType);
+    ok(RegType == REG_MULTI_SZ && wcscmp(Buffer, Other) == 0 &&
+       Length == (DWORD)((wcslen(Other) + 2) * sizeof(WCHAR)),
+       "inherit type %lu len %lu\n", RegType, Length);
 
     /* /timeout and /default target {bootmgr} by its well-known id. */
     StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /timeout 15", File);
@@ -201,6 +207,8 @@ START_TEST(BcdEdit)
 
     /* Rejections, each exit 1: an unresolved {default} id, an unknown element, a non-numeric
      * integer, a non-boolean, and a value that is not a valid guid for a list. */
+    /* {default}/{current} are rejected until their resolution lands; then this becomes a success
+     * case, so a later failure here is the change, not a regression. */
     StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /set {default} description X", File);
     ok(RunBcd(Args) == 1, "{default} id should be rejected\n");
     StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /set %s notanelement X", File, Loader);

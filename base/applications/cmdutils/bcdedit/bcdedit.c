@@ -390,6 +390,26 @@ CompareUlong(
     return 0;
 }
 
+/* A valid element subkey name is exactly eight hex digits; anything else is not an element. */
+static
+BOOL
+IsHexName8(
+    _In_ PCWSTR Name,
+    _In_ DWORD Chars)
+{
+    DWORD k;
+
+    if (Chars != 8)
+        return FALSE;
+    for (k = 0; k < 8; k++)
+    {
+        WCHAR c = Name[k];
+        if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F')))
+            return FALSE;
+    }
+    return TRUE;
+}
+
 static
 VOID
 PrintObject(
@@ -437,9 +457,10 @@ PrintObject(
             Error = RegEnumKeyExW(Elements, Index, Name, &Chars, NULL, NULL, NULL, NULL);
             if (Error == ERROR_NO_MORE_ITEMS)
                 break;
-            /* A name too long for the buffer (ERROR_MORE_DATA) is not a valid 8-hex element;
-             * skip it and keep going rather than stop the whole listing. */
-            if (Error != ERROR_SUCCESS)
+            /* Skip anything that is not an element and keep going rather than stop the whole
+             * listing: an enumeration error (a name too long for the buffer is ERROR_MORE_DATA)
+             * or a subkey name that is not exactly eight hex digits. */
+            if (Error != ERROR_SUCCESS || !IsHexName8(Name, Chars))
                 continue;
             if (Count == ARRAYSIZE(Types))
             {
