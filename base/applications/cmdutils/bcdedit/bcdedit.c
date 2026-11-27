@@ -45,37 +45,309 @@ static const struct { PCWSTR Guid; PCWSTR Alias; } g_WellKnownIds[] =
     { L"{7ea2e1ac-2e61-4728-aaa3-896d9d0a9f0e}", L"{globalsettings}" },
 };
 
-/* The canonical names bcdedit prints for each element; they are not localised, matching
- * Windows, so a capture compares byte for byte. Unknown elements print as custom:<type>. */
-static const struct { ULONG Type; PCWSTR Name; } g_ElementNames[] =
+/* Element value formats and object classes come from the Windows 11 BCD element reference
+ * (names and ids are interoperability identifiers). The scope disambiguates the handful of ids
+ * and names that mean different things in different object classes, for example 0x21000001 is
+ * osdevice on a loader but filedevice on a resume object. Unknown ids print as custom:<type>. */
+typedef enum _BCD_SCOPE
 {
-    { 0x11000001, L"device" },
-    { 0x12000002, L"path" },
-    { 0x12000004, L"description" },
-    { 0x12000005, L"locale" },
-    { 0x14000006, L"inherit" },
-    { 0x16000010, L"bootdebug" },
-    { 0x12000030, L"loadoptions" },
-    { 0x21000001, L"osdevice" },
-    { 0x22000002, L"systemroot" },
-    { 0x23000003, L"default" },
-    { 0x23000006, L"resumeobject" },
-    { 0x24000001, L"displayorder" },
-    { 0x24000010, L"toolsdisplayorder" },
-    { 0x25000004, L"timeout" },
-    { 0x25000020, L"nx" },
-    { 0x25000061, L"numproc" },
-    { 0x25000080, L"safeboot" },
-    { 0x26000010, L"detecthal" },
-    { 0x260000a0, L"debug" },
-    { 0x22000011, L"kernel" },
-    { 0x22000012, L"hal" },
-    { 0x26000022, L"winpe" },
-    { 0x26000020, L"displaybootmenu" },
-    { 0x26000040, L"vga" },
-    { 0x26000041, L"quietboot" },
-    { 0x26000091, L"sos" },
-    { 0x26000090, L"bootlog" },
+    S_ANY = 0,      /* a library/global element, or an id used by only one class */
+    S_BOOTMGR,
+    S_OSLOADER,
+    S_RESUME,
+    S_MEMTEST,
+    S_STARTUP,
+    S_DEVICE,
+    S_MOBILE,
+    S_OTHER
+} BCD_SCOPE;
+
+static const struct { ULONG Type; BCD_SCOPE Scope; PCWSTR Name; } g_ElementNames[] =
+{
+    { 0x11000001, S_ANY, L"device" },
+    { 0x11000043, S_ANY, L"bootstatdevice" },
+    { 0x11000084, S_ANY, L"windowssyspart" },
+    { 0x12000002, S_ANY, L"path" },
+    { 0x12000004, S_ANY, L"description" },
+    { 0x12000005, S_ANY, L"locale" },
+    { 0x12000016, S_ANY, L"targetname" },
+    { 0x12000019, S_ANY, L"busparams" },
+    { 0x1200001d, S_ANY, L"key" },
+    { 0x1200001f, S_ANY, L"hostipv6" },
+    { 0x12000030, S_ANY, L"loadoptions" },
+    { 0x12000044, S_ANY, L"bootstatfilepath" },
+    { 0x1200004a, S_ANY, L"fontpath" },
+    { 0x12000088, S_ANY, L"additionalcipolicy" },
+    { 0x14000006, S_ANY, L"inherit" },
+    { 0x14000008, S_ANY, L"recoverysequence" },
+    { 0x15000007, S_ANY, L"truncatememory" },
+    { 0x1500000c, S_ANY, L"firstmegabytepolicy" },
+    { 0x1500000d, S_ANY, L"relocatephysical" },
+    { 0x1500000e, S_ANY, L"avoidlowmemory" },
+    { 0x15000011, S_ANY, L"debugtype" },
+    { 0x15000012, S_ANY, L"debugaddress" },
+    { 0x15000013, S_ANY, L"debugport" },
+    { 0x15000014, S_ANY, L"baudrate" },
+    { 0x15000015, S_ANY, L"channel" },
+    { 0x15000018, S_ANY, L"debugstart" },
+    { 0x1500001a, S_ANY, L"hostip" },
+    { 0x1500001b, S_ANY, L"port" },
+    { 0x15000021, S_ANY, L"targetip" },
+    { 0x15000022, S_ANY, L"emsport" },
+    { 0x15000023, S_ANY, L"emsbaudrate" },
+    { 0x15000024, S_ANY, L"gatewayip" },
+    { 0x15000042, S_ANY, L"keyringaddress" },
+    { 0x15000047, S_ANY, L"configaccesspolicy" },
+    { 0x1500004b, S_ANY, L"integrityservices" },
+    { 0x1500004c, S_ANY, L"volumebandid" },
+    { 0x15000051, S_ANY, L"initialconsoleinput" },
+    { 0x15000052, S_ANY, L"graphicsresolution" },
+    { 0x15000065, S_ANY, L"displaymessage" },
+    { 0x15000066, S_ANY, L"displaymessageoverride" },
+    { 0x15000079, S_ANY, L"bootuxtransitiontime" },
+    { 0x1500007d, S_ANY, L"booterrorux" },
+    { 0x1500007f, S_ANY, L"measuredbootlogformat" },
+    { 0x15000080, S_ANY, L"displayrotation" },
+    { 0x15000081, S_ANY, L"logcontrol" },
+    { 0x15000088, S_ANY, L"linearaddress57" },
+    { 0x1500008e, S_ANY, L"heapvalidatecount" },
+    { 0x16000009, S_ANY, L"recoveryenabled" },
+    { 0x1600000b, S_ANY, L"badmemoryaccess" },
+    { 0x1600000f, S_ANY, L"traditionalkseg" },
+    { 0x16000010, S_ANY, L"bootdebug" },
+    { 0x16000017, S_ANY, L"noumex" },
+    { 0x1600001c, S_ANY, L"dhcp" },
+    { 0x1600001e, S_ANY, L"vm" },
+    { 0x16000020, S_ANY, L"bootems" },
+    { 0x16000025, S_ANY, L"enablejtagbreak" },
+    { 0x16000040, S_ANY, L"advancedoptions" },
+    { 0x16000041, S_ANY, L"optionsedit" },
+    { 0x16000045, S_ANY, L"preservebootstat" },
+    { 0x16000046, S_ANY, L"graphicsmodedisabled" },
+    { 0x16000048, S_ANY, L"nointegritychecks" },
+    { 0x16000049, S_ANY, L"testsigning" },
+    { 0x16000050, S_ANY, L"extendedinput" },
+    { 0x16000053, S_ANY, L"restartonfailure" },
+    { 0x16000054, S_ANY, L"highestmode" },
+    { 0x16000060, S_ANY, L"isolatedcontext" },
+    { 0x16000068, S_ANY, L"nobootuxtext" },
+    { 0x16000069, S_ANY, L"nobootuxprogress" },
+    { 0x1600006a, S_ANY, L"nobootuxfade" },
+    { 0x1600006c, S_ANY, L"bootuxdisabled" },
+    { 0x16000072, S_ANY, L"nokeyboard" },
+    { 0x16000074, S_ANY, L"bootshutdowndisabled" },
+    { 0x1600007a, S_ANY, L"mobilegraphics" },
+    { 0x1600007b, S_ANY, L"forcefipscrypto" },
+    { 0x1600007e, S_ANY, L"flightsigning" },
+    { 0x16000082, S_ANY, L"nofirmwaresync" },
+    { 0x16000087, S_ANY, L"numlock" },
+    { 0x1700000a, S_ANY, L"badmemorylist" },
+    { 0x17000077, S_ANY, L"allowedinmemorysettings" },
+    { 0x21000001, S_OSLOADER, L"osdevice" },
+    { 0x21000001, S_RESUME, L"filedevice" },
+    { 0x21000005, S_ANY, L"associatedosdevice" },
+    { 0x21000022, S_ANY, L"bcddevice" },
+    { 0x2100002b, S_ANY, L"alternatebootdevice" },
+    { 0x21000138, S_ANY, L"imcdevice" },
+    { 0x21000150, S_ANY, L"systemdatadevice" },
+    { 0x21000151, S_ANY, L"osarcdevice" },
+    { 0x21000153, S_ANY, L"osdatadevice" },
+    { 0x21000154, S_ANY, L"bspdevice" },
+    { 0x22000001, S_ANY, L"bpbstring" },
+    { 0x22000002, S_OSLOADER, L"systemroot" },
+    { 0x22000002, S_RESUME, L"filepath" },
+    { 0x22000002, S_STARTUP, L"applicationname" },
+    { 0x22000011, S_ANY, L"kernel" },
+    { 0x22000012, S_ANY, L"hal" },
+    { 0x22000013, S_ANY, L"dbgtransport" },
+    { 0x22000023, S_ANY, L"bcdfilepath" },
+    { 0x22000040, S_ANY, L"fverecoveryurl" },
+    { 0x22000041, S_ANY, L"fverecoverymessage" },
+    { 0x22000053, S_ANY, L"evstore" },
+    { 0x220000f9, S_ANY, L"hypervisorbusparams" },
+    { 0x22000110, S_ANY, L"hypervisorusekey" },
+    { 0x22000117, S_ANY, L"hypervisorloadoptions" },
+    { 0x2200011b, S_ANY, L"hypervisorrootprocnumanodes" },
+    { 0x2200011e, S_ANY, L"hypervisorrootprocnumanodelps" },
+    { 0x2200012d, S_ANY, L"kernelbusparams" },
+    { 0x22000132, S_ANY, L"kerneltargetname" },
+    { 0x22000136, S_ANY, L"kernelkey" },
+    { 0x22000137, S_ANY, L"imchivename" },
+    { 0x22000140, S_ANY, L"mfgmode" },
+    { 0x22000155, S_ANY, L"bspfilepath" },
+    { 0x22000156, S_ANY, L"kernelhostipv6" },
+    { 0x22000161, S_ANY, L"hypervisorhostipv6" },
+    { 0x23000003, S_BOOTMGR, L"default" },
+    { 0x23000003, S_OSLOADER, L"resumeobject" },
+    { 0x23000006, S_ANY, L"resumeobject" },
+    { 0x24000001, S_ANY, L"displayorder" },
+    { 0x24000002, S_ANY, L"bootsequence" },
+    { 0x24000007, S_ANY, L"startupsequence" },
+    { 0x24000010, S_ANY, L"toolsdisplayorder" },
+    { 0x25000001, S_ANY, L"passcount" },
+    { 0x25000002, S_ANY, L"testmix" },
+    { 0x25000004, S_ANY, L"timeout" },
+    { 0x25000005, S_ANY, L"stridefailcount" },
+    { 0x25000006, S_ANY, L"invcfailcount" },
+    { 0x25000007, S_MEMTEST, L"matsfailcount" },
+    { 0x25000007, S_RESUME, L"bootux" },
+    { 0x25000008, S_MEMTEST, L"randfailcount" },
+    { 0x25000008, S_RESUME, L"bootmenupolicy" },
+    { 0x25000009, S_ANY, L"chckrfailcount" },
+    { 0x25000020, S_ANY, L"nx" },
+    { 0x25000021, S_ANY, L"pae" },
+    { 0x25000031, S_ANY, L"removememory" },
+    { 0x25000032, S_ANY, L"increaseuserva" },
+    { 0x25000033, S_ANY, L"perfmem" },
+    { 0x25000050, S_ANY, L"clustermodeaddressing" },
+    { 0x25000052, S_ANY, L"restrictapiccluster" },
+    { 0x25000055, S_ANY, L"x2apicpolicy" },
+    { 0x25000061, S_ANY, L"numproc" },
+    { 0x25000063, S_ANY, L"configflags" },
+    { 0x25000066, S_ANY, L"groupsize" },
+    { 0x25000071, S_ANY, L"msi" },
+    { 0x25000072, S_ANY, L"pciexpress" },
+    { 0x25000080, S_ANY, L"safeboot" },
+    { 0x250000a6, S_ANY, L"tscsyncpolicy" },
+    { 0x250000c1, S_ANY, L"driverloadfailurepolicy" },
+    { 0x250000c2, S_ANY, L"bootmenupolicy" },
+    { 0x250000e0, S_ANY, L"bootstatuspolicy" },
+    { 0x250000f0, S_ANY, L"hypervisorlaunchtype" },
+    { 0x250000f3, S_ANY, L"hypervisordebugtype" },
+    { 0x250000f4, S_ANY, L"hypervisordebugport" },
+    { 0x250000f5, S_ANY, L"hypervisorbaudrate" },
+    { 0x250000f6, S_ANY, L"hypervisorchannel" },
+    { 0x250000f7, S_ANY, L"bootux" },
+    { 0x250000fa, S_ANY, L"hypervisornumproc" },
+    { 0x250000fb, S_ANY, L"hypervisorrootprocpernode" },
+    { 0x250000fd, S_ANY, L"hypervisorhostip" },
+    { 0x250000fe, S_ANY, L"hypervisorhostport" },
+    { 0x250000ff, S_ANY, L"hypervisordebugpages" },
+    { 0x25000100, S_ANY, L"tpmbootentropy" },
+    { 0x25000113, S_ANY, L"hypervisorrootproc" },
+    { 0x25000115, S_ANY, L"hypervisoriommupolicy" },
+    { 0x25000118, S_ANY, L"hypervisormsrfilterpolicy" },
+    { 0x25000119, S_ANY, L"hypervisormmionxpolicy" },
+    { 0x2500011a, S_ANY, L"hypervisorschedulertype" },
+    { 0x2500011c, S_ANY, L"hypervisorperfmon" },
+    { 0x2500011d, S_ANY, L"hypervisorrootprocpercore" },
+    { 0x25000120, S_ANY, L"xsavepolicy" },
+    { 0x25000121, S_ANY, L"xsaveaddfeature0" },
+    { 0x25000122, S_ANY, L"xsaveaddfeature1" },
+    { 0x25000123, S_ANY, L"xsaveaddfeature2" },
+    { 0x25000124, S_ANY, L"xsaveaddfeature3" },
+    { 0x25000125, S_ANY, L"xsaveaddfeature4" },
+    { 0x25000126, S_ANY, L"xsaveaddfeature5" },
+    { 0x25000127, S_ANY, L"xsaveaddfeature6" },
+    { 0x25000128, S_ANY, L"xsaveaddfeature7" },
+    { 0x25000129, S_ANY, L"xsaveremovefeature" },
+    { 0x2500012a, S_ANY, L"xsaveprocessorsmask" },
+    { 0x2500012b, S_ANY, L"xsavedisable" },
+    { 0x2500012c, S_ANY, L"kerneldebugtype" },
+    { 0x2500012e, S_ANY, L"kerneldebugaddress" },
+    { 0x2500012f, S_ANY, L"kerneldebugport" },
+    { 0x25000130, S_ANY, L"claimedtpmcounter" },
+    { 0x25000131, S_ANY, L"kernelchannel" },
+    { 0x25000133, S_ANY, L"kernelhostip" },
+    { 0x25000134, S_ANY, L"kernelport" },
+    { 0x25000139, S_ANY, L"kernelbaudrate" },
+    { 0x25000142, S_ANY, L"vsmlaunchtype" },
+    { 0x25000144, S_ANY, L"hypervisorenforcedcodeintegrity" },
+    { 0x25000158, S_ANY, L"kerneltargetip" },
+    { 0x25000159, S_ANY, L"kernelgatewayip" },
+    { 0x25000162, S_ANY, L"hypervisortargetip" },
+    { 0x25000163, S_ANY, L"hypervisorgatewayip" },
+    { 0x25000510, S_ANY, L"chargethreshold" },
+    { 0x25000aaa, S_ANY, L"bootflow" },
+    { 0x26000001, S_ANY, L"pxesoftreboot" },
+    { 0x26000003, S_MEMTEST, L"cacheenable" },
+    { 0x26000003, S_RESUME, L"customsettings" },
+    { 0x26000004, S_MEMTEST, L"failuresenabled" },
+    { 0x26000004, S_RESUME, L"pae" },
+    { 0x26000005, S_ANY, L"resume" },
+    { 0x26000006, S_ANY, L"debugoptionenabled" },
+    { 0x26000010, S_ANY, L"detecthal" },
+    { 0x26000020, S_ANY, L"displaybootmenu" },
+    { 0x26000021, S_ANY, L"noerrordisplay" },
+    { 0x26000022, S_ANY, L"winpe" },
+    { 0x26000024, S_ANY, L"nocrashautoreboot" },
+    { 0x26000025, S_BOOTMGR, L"hiberboot" },
+    { 0x26000025, S_OSLOADER, L"lastknowngood" },
+    { 0x26000028, S_ANY, L"processcustomactionsfirst" },
+    { 0x2600002c, S_ANY, L"cachebootbcd" },
+    { 0x26000030, S_ANY, L"nolowmem" },
+    { 0x26000031, S_ANY, L"persistbootsequence" },
+    { 0x26000032, S_ANY, L"skipstartupsequence" },
+    { 0x26000033, S_ANY, L"nextentryonfailure" },
+    { 0x26000040, S_ANY, L"vga" },
+    { 0x26000041, S_ANY, L"quietboot" },
+    { 0x26000042, S_BOOTMGR, L"flightedbootmgr" },
+    { 0x26000042, S_OSLOADER, L"novesa" },
+    { 0x26000043, S_ANY, L"novga" },
+    { 0x26000051, S_ANY, L"usephysicaldestination" },
+    { 0x26000054, S_ANY, L"uselegacyapicmode" },
+    { 0x26000060, S_ANY, L"onecpu" },
+    { 0x26000062, S_ANY, L"maxproc" },
+    { 0x26000064, S_ANY, L"maxgroup" },
+    { 0x26000065, S_ANY, L"groupaware" },
+    { 0x26000070, S_ANY, L"usefirmwarepcisettings" },
+    { 0x26000081, S_ANY, L"safebootalternateshell" },
+    { 0x26000090, S_ANY, L"bootlog" },
+    { 0x26000091, S_ANY, L"sos" },
+    { 0x260000a0, S_ANY, L"debug" },
+    { 0x260000a1, S_ANY, L"halbreakpoint" },
+    { 0x260000a2, S_ANY, L"useplatformclock" },
+    { 0x260000a3, S_ANY, L"forcelegacyplatform" },
+    { 0x260000a4, S_ANY, L"useplatformtick" },
+    { 0x260000a5, S_ANY, L"disabledynamictick" },
+    { 0x260000b0, S_ANY, L"ems" },
+    { 0x260000c3, S_ANY, L"onetimeadvancedoptions" },
+    { 0x260000c4, S_ANY, L"onetimeoptionsedit" },
+    { 0x260000e1, S_ANY, L"disableelamdrivers" },
+    { 0x260000f2, S_ANY, L"hypervisordebug" },
+    { 0x260000f8, S_ANY, L"hypervisordisableslat" },
+    { 0x260000fc, S_ANY, L"hypervisoruselargevtlb" },
+    { 0x26000114, S_ANY, L"hypervisordhcp" },
+    { 0x26000116, S_ANY, L"hypervisorusevapic" },
+    { 0x26000135, S_ANY, L"kerneldhcp" },
+    { 0x26000141, S_ANY, L"event" },
+    { 0x26000145, S_MOBILE, L"enablebootdebugpolicy" },
+    { 0x26000145, S_OSLOADER, L"dtrace" },
+    { 0x26000146, S_ANY, L"enablebootorderclean" },
+    { 0x26000147, S_ANY, L"enabledeviceid" },
+    { 0x26000148, S_ANY, L"enableffuloader" },
+    { 0x26000149, S_ANY, L"enableiuloader" },
+    { 0x2600014a, S_ANY, L"enablemassstorage" },
+    { 0x2600014b, S_ANY, L"enablerpmbprovisioning" },
+    { 0x2600014c, S_ANY, L"enablesecurebootpolicy" },
+    { 0x2600014d, S_ANY, L"enablestartcharge" },
+    { 0x2600014e, S_ANY, L"enableresettpm" },
+    { 0x2600015b, S_ANY, L"nokdnic" },
+    { 0x26000202, S_ANY, L"skipffumode" },
+    { 0x26000203, S_ANY, L"forceffumode" },
+    { 0x26000512, S_ANY, L"offmodecharging" },
+    { 0x27000030, S_ANY, L"customactions" },
+    { 0x31000003, S_ANY, L"ramdisksdidevice" },
+    { 0x3100000e, S_ANY, L"primarydevice" },
+    { 0x3100000f, S_ANY, L"secondarydevice" },
+    { 0x31000010, S_ANY, L"spacesdiskdevice" },
+    { 0x31000012, S_ANY, L"cimfsparentdevice" },
+    { 0x32000004, S_ANY, L"ramdisksdipath" },
+    { 0x32000011, S_ANY, L"cimfsrootdirectory" },
+    { 0x35000001, S_ANY, L"ramdiskimageoffset" },
+    { 0x35000002, S_ANY, L"ramdisktftpclientport" },
+    { 0x35000005, S_ANY, L"ramdiskimagelength" },
+    { 0x35000007, S_ANY, L"ramdisktftpblocksize" },
+    { 0x35000008, S_ANY, L"ramdisktftpwindowsize" },
+    { 0x3500000d, S_ANY, L"vhdramdiskexpansion" },
+    { 0x35000020, S_ANY, L"memdisksize" },
+    { 0x36000006, S_ANY, L"exportascd" },
+    { 0x36000009, S_ANY, L"ramdiskmcenabled" },
+    { 0x3600000a, S_ANY, L"ramdiskmctftpfallback" },
+    { 0x3600000b, S_ANY, L"ramdisktftpvarwindow" },
+    { 0x3600000c, S_ANY, L"vhdramdiskboot" },
+    { 0x46000007, S_ANY, L"migrateallelements" },
+    { 0x47000006, S_ANY, L"elementstomigrate" },
 };
 
 /* Object Type value -> heading resource id. */
@@ -128,16 +400,24 @@ static
 PCWSTR
 NameForElement(
     _In_ ULONG Type,
+    _In_ BCD_SCOPE Scope,
     _Out_writes_z_(Chars) PWSTR Custom,
     _In_ SIZE_T Chars)
 {
+    PCWSTR Fallback = NULL;
     SIZE_T i;
 
     for (i = 0; i < ARRAYSIZE(g_ElementNames); i++)
     {
-        if (g_ElementNames[i].Type == Type)
+        if (g_ElementNames[i].Type != Type)
+            continue;
+        if (g_ElementNames[i].Scope == Scope)
             return g_ElementNames[i].Name;
+        if (g_ElementNames[i].Scope == S_ANY)
+            Fallback = g_ElementNames[i].Name;
     }
+    if (Fallback != NULL)
+        return Fallback;
     StringCchPrintfW(Custom, Chars, L"custom:%08lx", Type);
     return Custom;
 }
@@ -155,6 +435,27 @@ HeadingForType(
             return g_ObjectHeadings[i].Heading;
     }
     return IDS_HDR_UNKNOWN;
+}
+
+/* The object class picks which name a shared element id prints under. An application object's
+ * class is the low 20 bits of its Type; settings and device objects carry only library elements. */
+static
+BCD_SCOPE
+ScopeForObjectType(
+    _In_ ULONG Type)
+{
+    if ((Type & 0xF0000000) != 0x10000000)
+        return S_ANY;
+
+    switch (Type & 0x000FFFFF)
+    {
+        case 0x00002: return S_BOOTMGR;
+        case 0x00003: return S_OSLOADER;
+        case 0x00004: return S_RESUME;
+        case 0x00005: return S_MEMTEST;
+        case 0x00006: return S_STARTUP;
+        default:      return S_ANY;
+    }
 }
 
 static
@@ -283,7 +584,8 @@ static
 BOOL
 PrintElement(
     _In_ HKEY Elements,
-    _In_ ULONG Type)
+    _In_ ULONG Type,
+    _In_ BCD_SCOPE Scope)
 {
     WCHAR Sub[16], Custom[32];
     HKEY Key;
@@ -306,7 +608,7 @@ PrintElement(
     if (Length == 0)
     {
         RegCloseKey(Key);
-        PrintFieldName(NameForElement(Type, Custom, ARRAYSIZE(Custom)));
+        PrintFieldName(NameForElement(Type, Scope, Custom, ARRAYSIZE(Custom)));
         fputwc(L'\n', stdout);
         return TRUE;
     }
@@ -331,7 +633,7 @@ PrintElement(
     Data[Length + 2] = 0;
     Data[Length + 3] = 0;
 
-    PrintFieldName(NameForElement(Type, Custom, ARRAYSIZE(Custom)));
+    PrintFieldName(NameForElement(Type, Scope, Custom, ARRAYSIZE(Custom)));
 
     switch (Format)
     {
@@ -420,6 +722,7 @@ PrintObject(
     WCHAR Heading[128];
     DWORD Type = 0, Length = sizeof(Type), RegType = 0, Index;
     ULONG Types[BCD_MAX_ELEMENTS], Count = 0;
+    BCD_SCOPE Scope;
     LONG Error;
     SIZE_T i;
 
@@ -431,6 +734,7 @@ PrintObject(
         RegQueryValueExW(Description, L"Type", NULL, &RegType, (BYTE *)&Type, &Length);
         RegCloseKey(Description);
     }
+    Scope = ScopeForObjectType(Type);
 
     if (LoadStringW(GetModuleHandleW(NULL), HeadingForType(Type), Heading, ARRAYSIZE(Heading)) > 0)
     {
@@ -471,7 +775,7 @@ PrintObject(
         }
         qsort(Types, Count, sizeof(ULONG), CompareUlong);
         for (i = 0; i < Count; i++)
-            PrintElement(Elements, Types[i]);
+            PrintElement(Elements, Types[i], Scope);
         RegCloseKey(Elements);
     }
 
@@ -608,24 +912,40 @@ ParseInteger(
     return (End != String && *End == 0);
 }
 
-/* Map an element name (timeout), a custom:xxxxxxxx, or a raw 8-hex type to its identifier. */
+/* Map an element name (timeout), a custom:xxxxxxxx, or a raw 8-hex type to its identifier. A name
+ * shared by more than one class (bootmenupolicy, resumeobject) resolves by the object's scope. */
 static
 BOOL
 TypeForName(
     _In_ PCWSTR Name,
+    _In_ BCD_SCOPE Scope,
     _Out_ PULONG Type)
 {
+    BOOL HaveFallback = FALSE;
+    ULONG Fallback = 0;
     SIZE_T i;
     PCWSTR Digits = Name;
     WCHAR *End;
 
     for (i = 0; i < ARRAYSIZE(g_ElementNames); i++)
     {
-        if (_wcsicmp(Name, g_ElementNames[i].Name) == 0)
+        if (_wcsicmp(Name, g_ElementNames[i].Name) != 0)
+            continue;
+        if (g_ElementNames[i].Scope == Scope)
         {
             *Type = g_ElementNames[i].Type;
             return TRUE;
         }
+        if (g_ElementNames[i].Scope == S_ANY)
+        {
+            Fallback = g_ElementNames[i].Type;
+            HaveFallback = TRUE;
+        }
+    }
+    if (HaveFallback)
+    {
+        *Type = Fallback;
+        return TRUE;
     }
     if (_wcsnicmp(Name, L"custom:", 7) == 0)
         Digits = Name + 7;
@@ -814,12 +1134,40 @@ SetValue(
     }
 }
 
-/* /set, /timeout and /default all edit one element; open the store writable and report. */
+/* The scope of an existing object, so an element name is resolved against the right class. */
+static
+BCD_SCOPE
+ScopeForStoreObject(
+    _In_ HKEY Store,
+    _In_ PCWSTR Id)
+{
+    HKEY Objects, Object, Description;
+    DWORD Type = 0, Length = sizeof(Type), RegType = 0;
+
+    if (RegOpenKeyExW(Store, L"Objects", 0, KEY_READ, &Objects) == ERROR_SUCCESS)
+    {
+        if (RegOpenKeyExW(Objects, Id, 0, KEY_READ, &Object) == ERROR_SUCCESS)
+        {
+            if (RegOpenKeyExW(Object, L"Description", 0, KEY_READ, &Description) == ERROR_SUCCESS)
+            {
+                RegQueryValueExW(Description, L"Type", NULL, &RegType, (BYTE *)&Type, &Length);
+                RegCloseKey(Description);
+            }
+            RegCloseKey(Object);
+        }
+        RegCloseKey(Objects);
+    }
+    return ScopeForObjectType(Type);
+}
+
+/* /set, /timeout and /default all edit one element; open the store writable and report. For /set
+ * the element name is given and resolved against the object's class; the others pass a fixed type. */
 static
 int
 EditElement(
     _In_opt_ PCWSTR StoreFile,
     _In_ PCWSTR IdArg,
+    _In_opt_ PCWSTR ElementName,
     _In_ ULONG Type,
     _In_ int Argc,
     _In_reads_(Argc) WCHAR **Argv,
@@ -842,6 +1190,12 @@ EditElement(
         PrintResource(IDS_ERR_BADID);
         return 1;
     }
+    if (ElementName != NULL && !TypeForName(ElementName, ScopeForStoreObject(Store, Id), &Type))
+    {
+        RegCloseKey(Store);
+        PrintResource(IDS_ERR_BADPARAM);
+        return 1;
+    }
     Ok = SetValue(Store, Id, Type, Argc, Argv, First);
     RegCloseKey(Store);
 
@@ -862,11 +1216,6 @@ DeleteValueCommand(
     ULONG Type;
     BOOL Ok;
 
-    if (!TypeForName(ElementName, &Type))
-    {
-        PrintResource(IDS_ERR_BADPARAM);
-        return 1;
-    }
     if (OpenStore(StoreFile, KEY_READ | KEY_WRITE, &Store) != ERROR_SUCCESS)
     {
         PrintResource(IDS_ERR_OPENSTORE);
@@ -877,6 +1226,12 @@ DeleteValueCommand(
     {
         RegCloseKey(Store);
         PrintResource(IDS_ERR_BADID);
+        return 1;
+    }
+    if (!TypeForName(ElementName, ScopeForStoreObject(Store, Id), &Type))
+    {
+        RegCloseKey(Store);
+        PrintResource(IDS_ERR_BADPARAM);
         return 1;
     }
     Ok = DeleteElement(Store, Id, Type);
@@ -941,15 +1296,14 @@ wmain(
 
     if (_wcsicmp(Command, L"/set") == 0)
     {
-        ULONG Type;
-
-        /* /set <id> <element> <value> [value...] */
-        if (i + 3 >= argc || !TypeForName(argv[i + 2], &Type))
+        /* /set <id> <element> <value> [value...]; the element name is resolved against the
+         * object's class inside EditElement, since one name can belong to several classes. */
+        if (i + 3 >= argc)
         {
             PrintResource(IDS_ERR_BADPARAM);
             return 1;
         }
-        return EditElement(StoreFile, argv[i + 1], Type, argc, argv, i + 3);
+        return EditElement(StoreFile, argv[i + 1], argv[i + 2], 0, argc, argv, i + 3);
     }
 
     if (_wcsicmp(Command, L"/deletevalue") == 0)
@@ -971,7 +1325,7 @@ wmain(
             PrintResource(IDS_ERR_BADPARAM);
             return 1;
         }
-        return EditElement(StoreFile, L"{bootmgr}", 0x25000004, argc, argv, i + 1);
+        return EditElement(StoreFile, L"{bootmgr}", NULL, 0x25000004, argc, argv, i + 1);
     }
 
     if (_wcsicmp(Command, L"/default") == 0)
@@ -982,7 +1336,7 @@ wmain(
             PrintResource(IDS_ERR_BADPARAM);
             return 1;
         }
-        return EditElement(StoreFile, L"{bootmgr}", 0x23000003, argc, argv, i + 1);
+        return EditElement(StoreFile, L"{bootmgr}", NULL, 0x23000003, argc, argv, i + 1);
     }
 
     PrintResource(IDS_ERR_BADPARAM);
