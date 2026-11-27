@@ -1274,6 +1274,29 @@ BuildIdList(
     return TRUE;
 }
 
+/* Append Id to the list unless it is already present (case-insensitive); FALSE if the list is
+ * full, so a too-long order fails the command instead of being silently truncated. */
+static
+BOOL
+AppendId(
+    _Inout_updates_(Cap) PCWSTR *List,
+    _Inout_ int *Count,
+    _In_ int Cap,
+    _In_ PCWSTR Id)
+{
+    int k;
+
+    for (k = 0; k < *Count; k++)
+    {
+        if (_wcsicmp(List[k], Id) == 0)
+            return TRUE;
+    }
+    if (*Count >= Cap)
+        return FALSE;
+    List[(*Count)++] = Id;
+    return TRUE;
+}
+
 /* /displayorder <id> [<id>...] [/addfirst | /addlast | /remove]: edit {bootmgr} DisplayOrder.
  * With no flag the list is set to exactly the given ids; the flags add to or remove from it. */
 static
@@ -1333,20 +1356,46 @@ DisplayOrderCommand(
     }
     BootMgr = IdForAlias(L"{bootmgr}", BmBuf, ARRAYSIZE(BmBuf));
 
-    if (Mode == SET)
+    /* SET uses only the given ids; ADDFIRST puts them ahead of the carried-over order. Either way
+     * the given ids lead and duplicates among them collapse. */
+    if (Mode == SET || Mode == ADDFIRST)
     {
         for (i = 0; i < NumGiven; i++)
-            Final[NumFinal++] = Given[i];
+        {
+            if (!AppendId(Final, &NumFinal, ARRAYSIZE(Final), Given[i]))
+            {
+                RegCloseKey(Store);
+                PrintResource(IDS_ERR_SETFAIL);
+                return 1;
+            }
+        }
     }
-    else
+
+    if (Mode != SET)
     {
-        /* Carry over the current order, dropping any id that is being re-added or removed. */
+        /* Carry over the current order, dropping any id being re-added or removed. A read that
+         * fails for anything other than "no such value" must not be treated as an empty list,
+         * or an /addlast or /remove would wipe a menu it simply could not read. */
+        LONG Read;
+
         StringCchPrintfW(Sub, ARRAYSIZE(Sub), L"Objects\\%s\\Elements\\24000001", BootMgr);
         Len = sizeof(Existing) - 2 * sizeof(WCHAR);
-        if (RegGetValueW(Store, Sub, L"Element", RRF_RT_REG_MULTI_SZ, &RegType, Existing, &Len) == ERROR_SUCCESS)
+        Read = RegGetValueW(Store, Sub, L"Element", RRF_RT_REG_MULTI_SZ, &RegType, Existing, &Len);
+        if (Read != ERROR_SUCCESS && Read != ERROR_FILE_NOT_FOUND)
+        {
+            RegCloseKey(Store);
+            PrintResource(IDS_ERR_SETFAIL);
+            return 1;
+        }
+        if (Read == ERROR_SUCCESS)
         {
             PCWSTR p = Existing;
-            while (*p && NumFinal < ARRAYSIZE(Final))
+
+            /* A /store hive may hold a list without the final empty string; terminate what we
+             * read (the two reserved WCHARs) so the walk cannot run past the data. */
+            Existing[Len / sizeof(WCHAR)] = 0;
+            Existing[Len / sizeof(WCHAR) + 1] = 0;
+            while (*p)
             {
                 BOOL Skip = FALSE;
                 for (j = 0; j < NumGiven; j++)
@@ -1357,27 +1406,26 @@ DisplayOrderCommand(
                         break;
                     }
                 }
-                if (!Skip)
-                    Final[NumFinal++] = p;
+                if (!Skip && !AppendId(Final, &NumFinal, ARRAYSIZE(Final), p))
+                {
+                    RegCloseKey(Store);
+                    PrintResource(IDS_ERR_SETFAIL);
+                    return 1;
+                }
                 p += wcslen(p) + 1;
             }
         }
         if (Mode == ADDLAST)
         {
-            for (i = 0; i < NumGiven && NumFinal < ARRAYSIZE(Final); i++)
-                Final[NumFinal++] = Given[i];
-        }
-        else if (Mode == ADDFIRST)
-        {
-            PCWSTR Reordered[128];
-            int n = 0;
-            for (i = 0; i < NumGiven && n < ARRAYSIZE(Reordered); i++)
-                Reordered[n++] = Given[i];
-            for (i = 0; i < NumFinal && n < ARRAYSIZE(Reordered); i++)
-                Reordered[n++] = Final[i];
-            for (i = 0; i < n; i++)
-                Final[i] = Reordered[i];
-            NumFinal = n;
+            for (i = 0; i < NumGiven; i++)
+            {
+                if (!AppendId(Final, &NumFinal, ARRAYSIZE(Final), Given[i]))
+                {
+                    RegCloseKey(Store);
+                    PrintResource(IDS_ERR_SETFAIL);
+                    return 1;
+                }
+            }
         }
     }
 

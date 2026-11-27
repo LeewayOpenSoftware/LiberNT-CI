@@ -225,6 +225,19 @@ START_TEST(BcdEdit)
        Length == (DWORD)((wcslen(Other) + 2) * sizeof(WCHAR)),
        "/displayorder remove: type %lu len %lu\n", RegType, Length);
 
+    /* /addfirst prepends: the list becomes loader then other. */
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /displayorder %s /addfirst", File, Loader);
+    Code = RunBcd(Args);
+    ok(Code == 0, "/displayorder addfirst exit %lu\n", Code);
+    Length = sizeof(Buffer);
+    RegType = ReadElement(File, BootMgr, EL_DISPLAYORDER, B, &Length);
+    ok(RegType == REG_MULTI_SZ && wcscmp(Buffer, Loader) == 0 &&
+       wcscmp(Buffer + wcslen(Loader) + 1, Other) == 0, "/displayorder addfirst order wrong\n");
+
+    /* A non-guid id is rejected. */
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /displayorder notaguid", File);
+    ok(RunBcd(Args) == 1, "/displayorder with a non-guid id should be rejected\n");
+
     /* /deletevalue removes the element; deleting it again, now absent, fails with exit 1. */
     StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /deletevalue %s description", File, Loader);
     Code = RunBcd(Args);
