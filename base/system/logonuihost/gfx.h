@@ -80,6 +80,12 @@ BOOL LuhSoften(_Inout_ PLUH_SURFACE Target, _In_ const LUH_SURFACE *Sharp);
 /* Source over Target at (X, Y) with an extra constant opacity. */
 VOID LuhBlend(_Inout_ PLUH_SURFACE Target, _In_ LONG X, _In_ LONG Y, _In_ const LUH_SURFACE *Source,
               _In_ BYTE Alpha);
+/*
+ * Target = From crossed to To by Alpha (255 = all To), pixel for pixel, From NULL = black.
+ * All three opaque and Target's size: one pass, where a fill and a blend take two.
+ */
+VOID LuhMix(_Inout_ PLUH_SURFACE Target, _In_opt_ const LUH_SURFACE *From, _In_ const LUH_SURFACE *To,
+            _In_ BYTE Alpha);
 /* Clip a circle out of Source (avatar): the largest circle centred in Source, over Target. */
 VOID LuhBlendCircle(_Inout_ PLUH_SURFACE Target, _In_ LONG X, _In_ LONG Y, _In_ const LUH_SURFACE *Source);
 
@@ -98,19 +104,32 @@ typedef struct _LUH_ANIM
     LONGLONG Last;
     LONGLONG Next;
     LONGLONG Target;            /* one frame at the display rate, in counter ticks */
+    LONGLONG Composed;          /* when this frame's picture was ready, 0 before */
     BOOL FineTimer;             /* timeBeginPeriod(1) is held for this run */
     DWORD DurationMs;
     DWORD Frames;
     DWORD Late;
     LONGLONG Longest;
+    LONGLONG LongestCompose;
+    LONGLONG LongestPresent;
 } LUH_ANIM, *PLUH_ANIM;
 
 VOID LuhAnimStart(_Out_ PLUH_ANIM Anim, _In_ PCSTR Name, _In_ DWORD DurationMs);
 /* Records a frame and returns the linear progress 0..1 at this instant. */
 double LuhAnimFrame(_Inout_ PLUH_ANIM Anim);
+/* The frame's picture is composed / on screen: the line reports the longest of each part. */
+VOID LuhAnimComposed(_Inout_ PLUH_ANIM Anim);
+VOID LuhAnimPresented(_Inout_ PLUH_ANIM Anim);
 BOOL LuhAnimDone(_In_ const LUH_ANIM *Anim);
 double LuhAnimElapsedMs(_In_ const LUH_ANIM *Anim);
-/* Sleeps to the next frame deadline of the fixed schedule. */
+/*
+ * Moves the deadline to the next slot of the fixed schedule still ahead. The run then holds 1 ms
+ * timer ticks until LuhAnimEnd; an untimed run that never schedules takes none.
+ */
+VOID LuhAnimSchedule(_Inout_ PLUH_ANIM Anim);
+/* Whole milliseconds, rounded up, until the deadline; 0 once it is due. */
+DWORD LuhAnimDueMs(_In_ const LUH_ANIM *Anim);
+/* Schedules and sleeps to the next frame deadline. */
 VOID LuhAnimWait(_Inout_ PLUH_ANIM Anim);
 VOID LuhAnimEnd(_Inout_ PLUH_ANIM Anim);
 

@@ -694,6 +694,31 @@ LuhBlend(
 }
 
 VOID
+LuhMix(
+    _Inout_ PLUH_SURFACE Target,
+    _In_opt_ const LUH_SURFACE *From,
+    _In_ const LUH_SURFACE *To,
+    _In_ BYTE Alpha)
+{
+    /* 0..256, so 255 gives To exactly; red and blue share one multiply, as their lanes never carry. */
+    ULONG A = Alpha + (Alpha >> 7), B = 256 - A, F, T;
+    SIZE_T i, Count = (SIZE_T)Target->Width * Target->Height;
+
+    if (To->Width != Target->Width || To->Height != Target->Height ||
+        (From && (From->Width != Target->Width || From->Height != Target->Height)))
+        return;
+    GdiFlush();
+    for (i = 0; i < Count; i++)
+    {
+        T = To->Bits[i];
+        F = From ? From->Bits[i] : 0;
+        Target->Bits[i] = 0xFF000000 |
+                          ((((F & 0x00FF00FF) * B + (T & 0x00FF00FF) * A) >> 8) & 0x00FF00FF) |
+                          ((((F & 0x0000FF00) * B + (T & 0x0000FF00) * A) >> 8) & 0x0000FF00);
+    }
+}
+
+VOID
 LuhBlendCircle(
     _Inout_ PLUH_SURFACE Target,
     _In_ LONG X,
@@ -764,9 +789,6 @@ LuhAnimStart(
     Anim->Frequency = Frequency.QuadPart;
     Anim->Target = Frequency.QuadPart / LuhRefreshHz();
     Anim->DurationMs = DurationMs;
-    /* A timed run sleeps between frames: hold 1 ms timer ticks, not the default 15.6 ms. */
-    if (DurationMs != 0)
-        Anim->FineTimer = (timeBeginPeriod(1) == TIMERR_NOERROR);
     Anim->Start = LuhNow();
     Anim->Last = Anim->Start;
     Anim->Next = Anim->Start;
@@ -788,11 +810,31 @@ LuhAnimFrame(
     }
     Anim->Frames++;
     Anim->Last = Now;
+    Anim->Composed = 0;
 
     if (Anim->DurationMs == 0)
         return 1.0;
     T = (double)(Now - Anim->Start) * 1000.0 / ((double)Anim->Frequency * Anim->DurationMs);
     return T >= 1.0 ? 1.0 : T;
+}
+
+VOID
+LuhAnimComposed(
+    _Inout_ PLUH_ANIM Anim)
+{
+    Anim->Composed = LuhNow();
+    if (Anim->Composed - Anim->Last > Anim->LongestCompose)
+        Anim->LongestCompose = Anim->Composed - Anim->Last;
+}
+
+VOID
+LuhAnimPresented(
+    _Inout_ PLUH_ANIM Anim)
+{
+    LONGLONG Now = LuhNow(), From = Anim->Composed ? Anim->Composed : Anim->Last;
+
+    if (Now - From > Anim->LongestPresent)
+        Anim->LongestPresent = Now - From;
 }
 
 double
@@ -811,10 +853,15 @@ LuhAnimDone(
 }
 
 VOID
-LuhAnimWait(
+LuhAnimSchedule(
     _Inout_ PLUH_ANIM Anim)
 {
-    LONGLONG Now = LuhNow(), Left;
+    LONGLONG Now;
+
+    /* A run that waits for deadlines holds 1 ms timer ticks, not the default 15.6 ms, until LuhAnimEnd. */
+    if (!Anim->FineTimer)
+        Anim->FineTimer = (timeBeginPeriod(1) == TIMERR_NOERROR);
+    Now = LuhNow();
 
     /*
      * Deadlines sit on a fixed schedule from the start: after a late frame the next deadline
@@ -823,6 +870,26 @@ LuhAnimWait(
     Anim->Next += Anim->Target;
     if (Anim->Next <= Now)
         Anim->Next += ((Now - Anim->Next) / Anim->Target + 1) * Anim->Target;
+}
+
+DWORD
+LuhAnimDueMs(
+    _In_ const LUH_ANIM *Anim)
+{
+    LONGLONG Left = Anim->Next - LuhNow();
+
+    if (Left <= 0)
+        return 0;
+    return (DWORD)((Left * 1000 + Anim->Frequency - 1) / Anim->Frequency);
+}
+
+VOID
+LuhAnimWait(
+    _Inout_ PLUH_ANIM Anim)
+{
+    LONGLONG Now, Left;
+
+    LuhAnimSchedule(Anim);
 
     /* Sleep whole milliseconds while more than one is left, then yield up to the deadline. */
     for (;;)
@@ -842,7 +909,7 @@ VOID
 LuhAnimEnd(
     _Inout_ PLUH_ANIM Anim)
 {
-    CHAR Line[128];
+    CHAR Line[192];
 
     if (Anim->FineTimer)
     {
@@ -851,10 +918,13 @@ LuhAnimEnd(
     }
 
     /* Pam's harness reads this line: a late frame is an interval over twice the target. */
-    StringCchPrintfA(Line, ARRAYSIZE(Line), "anim %s frames=%lu longest-ms=%lu late=%lu target-ms=%lu",
+    StringCchPrintfA(Line, ARRAYSIZE(Line),
+                     "anim %s frames=%lu longest-ms=%lu late=%lu target-ms=%lu compose-ms=%lu present-ms=%lu",
                      Anim->Name ? Anim->Name : "?", Anim->Frames,
                      (ULONG)((Anim->Longest * 1000) / Anim->Frequency), Anim->Late,
-                     (ULONG)((Anim->Target * 1000) / Anim->Frequency));
+                     (ULONG)((Anim->Target * 1000) / Anim->Frequency),
+                     (ULONG)((Anim->LongestCompose * 1000) / Anim->Frequency),
+                     (ULONG)((Anim->LongestPresent * 1000) / Anim->Frequency));
     LuhStage(Line);
 }
 

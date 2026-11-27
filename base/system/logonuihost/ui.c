@@ -16,11 +16,9 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 
 #define LUH_CLASS           L"LiberNT_LogonUIHost"
 #define LUH_TIMER_HEARTBEAT 1
-#define LUH_TIMER_SPINNER   2
 #define LUH_TIMER_FADE      3
 #define LUH_TIMER_STARTUP   4   /* a page must arrive within the provider call bound */
 #define LUH_TIMER_CLOCK     5   /* the curtain's clock, only while the curtain is up */
-#define LUH_SPINNER_MS      16      /* a frame at 60 Hz; the phase comes from the clock */
 #define LUH_SPINNER_PERIOD  2000    /* ms per cycle of the chasing dots */
 #define LUH_SPINNER_DOTS    6
 #define LUH_SPINNER_RING    28      /* ring radius at 96 DPI */
@@ -291,14 +289,56 @@ LuhSetSpinner(
     if (On && !g_Ui.Spinner)
     {
         LuhAnimStart(&g_Ui.SpinnerAnim, "spinner", 0);
-        SetTimer(Window, LUH_TIMER_SPINNER, LUH_SPINNER_MS, NULL);
+        LuhAnimSchedule(&g_Ui.SpinnerAnim);
     }
     else if (!On && g_Ui.Spinner)
     {
-        KillTimer(Window, LUH_TIMER_SPINNER);
         LuhAnimEnd(&g_Ui.SpinnerAnim);
     }
     g_Ui.Spinner = On;
+}
+
+/* One frame of the dots: their square only; the still page under it comes from the cache. */
+static void
+LuhSpinnerTick(
+    _In_ HWND Window)
+{
+    RECT Square;
+
+    GetClientRect(Window, &Square);
+    SetRect(&Square, Square.right / 2 - LuhPx(LUH_SPINNER_RING + 6), g_Ui.SpinnerY - LuhPx(LUH_SPINNER_RING + 6),
+            Square.right / 2 + LuhPx(LUH_SPINNER_RING + 6), g_Ui.SpinnerY + LuhPx(LUH_SPINNER_RING + 6));
+    InvalidateRect(Window, &Square, FALSE);
+    UpdateWindow(Window);
+}
+
+/*
+ * The next message; while the dots turn, their frames come between messages on the clock's
+ * deadlines. A WM_TIMER fires on the 15.6 ms system tick: a 16 ms timer gave one frame in 31 ms.
+ */
+static BOOL
+LuhNextMessage(
+    _In_ HWND Window,
+    _Out_ PMSG Msg)
+{
+    DWORD Due;
+
+    while (g_Ui.Spinner)
+    {
+        if (PeekMessageW(Msg, NULL, 0, 0, PM_REMOVE))
+            return Msg->message != WM_QUIT;
+        Due = LuhAnimDueMs(&g_Ui.SpinnerAnim);
+        if (Due == 0)
+        {
+            LuhSpinnerTick(Window);
+            LuhAnimSchedule(&g_Ui.SpinnerAnim);
+        }
+        else
+        {
+            MsgWaitForMultipleObjectsEx(0, NULL, Due, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
+    }
+    return GetMessageW(Msg, NULL, 0, 0) > 0;
 }
 
 /* ---- credential page ----------------------------------------------------------- */
@@ -2152,6 +2192,7 @@ LuhFadeInCurtain(
     LUH_ANIM Anim;
     double T, Ms;
     HDC Dc;
+    BOOL Dot = FALSE;
 
     if (!g_Ui.Curtain || !g_Ui.CurtainFadeIn)
         return;
@@ -2160,18 +2201,27 @@ LuhFadeInCurtain(
     {
         T = LuhAnimFrame(&Anim);
         Ms = T * (LUH_FADE_HOLD_MS + LUH_FADE_IN_MS);
-        BitBlt(g_Ui.Back.Dc, 0, 0, g_Ui.Back.Width, g_Ui.Back.Height, NULL, 0, 0, BLACKNESS);
         if (Ms < LUH_FADE_HOLD_MS)
-            LuhFillCircle(&g_Ui.Back, g_Ui.Back.Width / 2 - LuhPx(26), g_Ui.Back.Height / 2 - LuhPx(3),
-                          max(LuhPx(3), 2), RGB(255, 255, 255), 255);
+        {
+            if (!Dot)
+            {
+                BitBlt(g_Ui.Back.Dc, 0, 0, g_Ui.Back.Width, g_Ui.Back.Height, NULL, 0, 0, BLACKNESS);
+                LuhFillCircle(&g_Ui.Back, g_Ui.Back.Width / 2 - LuhPx(26), g_Ui.Back.Height / 2 - LuhPx(3),
+                              max(LuhPx(3), 2), RGB(255, 255, 255), 255);
+                Dot = TRUE;
+            }
+        }
         else
-            LuhBlend(&g_Ui.Back, 0, 0, &g_Ui.Face, (BYTE)(255.0 * LuhEaseOut((Ms - LUH_FADE_HOLD_MS) / LUH_FADE_IN_MS)));
+            LuhMix(&g_Ui.Back, NULL, &g_Ui.Face, (BYTE)(255.0 * LuhEaseOut((Ms - LUH_FADE_HOLD_MS) / LUH_FADE_IN_MS)));
+        LuhAnimComposed(&Anim);
         Dc = GetDC(Window);
         if (Dc)
         {
             BitBlt(Dc, 0, 0, g_Ui.Back.Width, g_Ui.Back.Height, g_Ui.Back.Dc, 0, 0, SRCCOPY);
+            GdiFlush();
             ReleaseDC(Window, Dc);
         }
+        LuhAnimPresented(&Anim);
         if (T >= 1.0)
             break;
         LuhAnimWait(&Anim);
@@ -2240,6 +2290,7 @@ LuhSlideCurtain(
     {
         T = LuhAnimFrame(&Anim);
         LuhPresentLift(Window, LuhLerp(From, To, LuhEaseOut(T)));
+        LuhAnimPresented(&Anim);
         if (T >= 1.0)
             break;
         LuhAnimWait(&Anim);
@@ -2266,12 +2317,12 @@ LuhDissolveCurtain(
     {
         T = LuhAnimFrame(&Anim);
         Ms = T * (LUH_DISSOLVE_CLOCK_MS + LUH_DISSOLVE_SOFT_MS);
-        BitBlt(g_Ui.Back.Dc, 0, 0, Width, Height, g_Ui.Sharp.Dc, 0, 0, SRCCOPY);
         if (Ms < LUH_DISSOLVE_CLOCK_MS)
-            LuhBlend(&g_Ui.Back, 0, 0, &g_Ui.Face, (BYTE)(255.0 * (1.0 - LuhEaseOut(Ms / LUH_DISSOLVE_CLOCK_MS))));
+            LuhMix(&g_Ui.Back, &g_Ui.Sharp, &g_Ui.Face, (BYTE)(255.0 * (1.0 - LuhEaseOut(Ms / LUH_DISSOLVE_CLOCK_MS))));
         else
-            LuhBlend(&g_Ui.Back, 0, 0, &g_Ui.Soft,
-                     (BYTE)(255.0 * LuhEaseOut((Ms - LUH_DISSOLVE_CLOCK_MS) / LUH_DISSOLVE_SOFT_MS)));
+            LuhMix(&g_Ui.Back, &g_Ui.Sharp, &g_Ui.Soft,
+                   (BYTE)(255.0 * LuhEaseOut((Ms - LUH_DISSOLVE_CLOCK_MS) / LUH_DISSOLVE_SOFT_MS)));
+        LuhAnimComposed(&Anim);
         Dc = GetDC(Window);
         if (Dc)
         {
@@ -2279,6 +2330,7 @@ LuhDissolveCurtain(
             GdiFlush();
             ReleaseDC(Window, Dc);
         }
+        LuhAnimPresented(&Anim);
         if (T >= 1.0)
             break;
         LuhAnimWait(&Anim);
@@ -2418,6 +2470,7 @@ LuhDragMove(
     }
     LuhAnimFrame(&g_Ui.DragAnim);
     LuhPresentLift(Window, g_Ui.DragStartY - Y);
+    LuhAnimPresented(&g_Ui.DragAnim);
 }
 
 /* Released: a third of the way, a flick upwards or a plain click lifts it; otherwise it drops back. */
@@ -2736,6 +2789,7 @@ LuhCompose(
                           g_Ui.SpinnerY + (LONG)(LuhPx(LUH_SPINNER_RING) * sin(A)), max(LuhPx(3), 2),
                           RGB(255, 255, 255), 255);
         }
+        LuhAnimComposed(&g_Ui.SpinnerAnim);
     }
 }
 
@@ -2799,6 +2853,11 @@ LuhPaint(
         LuhCompose(&Client, &Ps.rcPaint, Rebuild);
         BitBlt(Dc, Ps.rcPaint.left, Ps.rcPaint.top, Ps.rcPaint.right - Ps.rcPaint.left,
                Ps.rcPaint.bottom - Ps.rcPaint.top, g_Ui.Back.Dc, Ps.rcPaint.left, Ps.rcPaint.top, SRCCOPY);
+        if (g_Ui.Spinner)
+        {
+            GdiFlush();
+            LuhAnimPresented(&g_Ui.SpinnerAnim);
+        }
         if (Rebuild)
             EnumChildWindows(Window, LuhRedrawOwnerDrawn, 0);
     }
@@ -2867,16 +2926,6 @@ LuhWindowProc(
             if (wParam == LUH_TIMER_HEARTBEAT)
             {
                 LuhIpcHeartbeat();
-            }
-            else if (wParam == LUH_TIMER_SPINNER)
-            {
-                RECT Square;
-
-                /* The dots' square only; the still page under it comes from the cache. */
-                GetClientRect(Window, &Square);
-                SetRect(&Square, Square.right / 2 - LuhPx(LUH_SPINNER_RING + 6), g_Ui.SpinnerY - LuhPx(LUH_SPINNER_RING + 6),
-                        Square.right / 2 + LuhPx(LUH_SPINNER_RING + 6), g_Ui.SpinnerY + LuhPx(LUH_SPINNER_RING + 6));
-                InvalidateRect(Window, &Square, FALSE);
             }
             else if (wParam == LUH_TIMER_STARTUP)
             {
@@ -3184,7 +3233,6 @@ LuhWindowProc(
         case WM_DESTROY:
             LuhDestroyPage();
             KillTimer(Window, LUH_TIMER_HEARTBEAT);
-            KillTimer(Window, LUH_TIMER_SPINNER);
             KillTimer(Window, LUH_TIMER_FADE);
             KillTimer(Window, LUH_TIMER_STARTUP);
             KillTimer(Window, LUH_TIMER_CLOCK);
@@ -3245,7 +3293,7 @@ LuhUiRun(
 {
     MSG Msg;
 
-    while (GetMessageW(&Msg, NULL, 0, 0) > 0)
+    while (LuhNextMessage(Window, &Msg))
     {
         /* Enter in an edit field submits; Tab moves between the page's controls. */
         if (Msg.message == WM_KEYDOWN && Msg.wParam == VK_ESCAPE && (g_Ui.FlyoutUp || g_Ui.CardUp))
