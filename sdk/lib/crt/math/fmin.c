@@ -7,6 +7,9 @@
 
 #include <math.h>
 
+#pragma function(fmin)
+#pragma function(fminf)
+
 double fmin(double x, double y)
 {
     if (isnan(x))

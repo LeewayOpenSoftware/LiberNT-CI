@@ -7,6 +7,9 @@
 
 #include <math.h>
 
+#pragma function(fmax)
+#pragma function(fmaxf)
+
 double fmax(double x, double y)
 {
     if (isnan(x))
