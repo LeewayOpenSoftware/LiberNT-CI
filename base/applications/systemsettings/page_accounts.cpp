@@ -8,7 +8,10 @@
 #include "settings.h"
 #include <lm.h>
 #include <winternl.h>
+/* winternl.h already declared STRING and UNICODE_STRING: let ntsecapi.h alias them, not redefine them. */
+#define _NTDEF_
 #include <ntsecapi.h>
+#undef _NTDEF_
 #include <ntsam.h>
 #include <algorithm>
 
