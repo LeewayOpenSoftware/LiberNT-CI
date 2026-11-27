@@ -8,6 +8,7 @@ add_message_headers(ANSI FormatMessage.mc)
 list(APPEND SOURCE
     ConsoleAlias.c
     ApiSetCoreSynch.c
+    AppModelRuntime.c
     BaseSetLastNTError.c
     BaseThreadInitThunk.c
     CallbackCallingConventions.c
