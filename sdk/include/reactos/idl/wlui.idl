@@ -44,7 +44,8 @@ const unsigned long WLUI_FLAG_NO_TASK_MANAGER    = 0x00000200;  /* DisableTaskMg
 /* DisplayStatus: the Ctrl+Alt+Del notice over the clock; no key or click lifts it, only winlogon's next command. */
 const unsigned long WLUI_FLAG_CURTAIN            = 0x00000400;
 /* RequestCredentials: a signed-in session, including the locked one, could lose unsaved work, so restart
- * and shut down ask first ("Restart anyway" / "Shut down anyway"), as Windows 11 does. */
+ * and shut down ask first ("Restart anyway" / "Shut down anyway"), as Windows 11 does.
+ * DisplayStatus with WLUI_FLAG_CURTAIN: the notice is the lock curtain, which comes up from black. */
 const unsigned long WLUI_FLAG_USERS_SIGNED_IN    = 0x00000800;
 
 const unsigned long WLUI_MAX_TEXT = 256;

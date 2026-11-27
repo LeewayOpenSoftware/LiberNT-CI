@@ -1446,11 +1446,21 @@ HandleLogoff(
 
     if (Session->UseLogonUI)
     {
-        /* "Signing out" stands on the host before any user process is closed (plan, commit 7);
-         * the desktop fades into it instead of cutting. */
+        /* "Signing out" stands on the host before any user process is closed (plan, commit 7).
+         * From the user's desktop that desktop fades into it; from the Ctrl+Alt+Del list or a
+         * locked station the screen already shows the Winlogon desktop, so it is a plain cut,
+         * as on Windows 11 (no cover of a desktop that is not on screen). */
         DisplayStatusMessage(Session, Session->WinlogonDesktop, IDS_LOGGINGOFF);
         WlHostWaitStatusShown();
-        WlCoverRelease(WlSwitchDesktopCovered(Session->ApplicationDesktop, Session->WinlogonDesktop));
+        if (Session->LogonState == STATE_LOGGED_ON)
+        {
+            WlCoverRelease(WlSwitchDesktopCovered(Session->ApplicationDesktop, Session->WinlogonDesktop));
+        }
+        else
+        {
+            SwitchDesktop(Session->WinlogonDesktop);
+            LogonStage("desktop-switch-plain-secure");
+        }
     }
 
     Status = CreateLogoffSecurityAttributes(&psa);

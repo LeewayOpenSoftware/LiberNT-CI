@@ -1871,7 +1871,9 @@ WlHostLock(
         ERR("WL: no logon UI for the locked notice; the station stays locked\n");
         return;
     }
-    WlHlPostResource(WluiCmdDisplayStatus, WLUI_FLAG_CURTAIN, IDS_PRESSCTRLALTDELETEUNLOCK);
+    /* The signed-in flag marks the lock curtain, which comes up from black as on Windows 11. */
+    WlHlPostResource(WluiCmdDisplayStatus, WLUI_FLAG_CURTAIN | WLUI_FLAG_USERS_SIGNED_IN,
+                     IDS_PRESSCTRLALTDELETEUNLOCK);
 }
 
 /* The SAS on the locked station: with CAD required, now the unlock page may come up. */
