@@ -1811,7 +1811,9 @@ static VOID
 WlHlRequestUnlock(
     _In_ DWORD Flags)
 {
-    if (!WlHlEnsureHost(WLHL_CPUS_UNLOCK, (WlHlPolicyFlags() & WLUI_FLAG_NO_POWER) | Flags, WlHlLockReadyMs()))
+    /* The station is locked: its user is signed in and could lose work if the power flyout is used. */
+    if (!WlHlEnsureHost(WLHL_CPUS_UNLOCK, (WlHlPolicyFlags() & WLUI_FLAG_NO_POWER) | WLUI_FLAG_OTHER_SESSIONS | Flags,
+                        WlHlLockReadyMs()))
         ERR("WL: no logon UI for the locked station; it stays locked without a page\n");
 }
 
@@ -1870,7 +1872,8 @@ WlHostMustChange(
     EnterCriticalSection(&g_SubmitLock);
     g_ChangeFor = WLHL_CPUS_UNLOCK;
     LeaveCriticalSection(&g_SubmitLock);
-    WlHlEnsureHost(WLHL_CPUS_CHANGE_PASSWORD, WLUI_FLAG_FORCED_CHANGE | (WlHlPolicyFlags() & WLUI_FLAG_NO_POWER),
+    WlHlEnsureHost(WLHL_CPUS_CHANGE_PASSWORD, WLUI_FLAG_FORCED_CHANGE | WLUI_FLAG_OTHER_SESSIONS |
+                   (WlHlPolicyFlags() & WLUI_FLAG_NO_POWER),
                    WlHlLockReadyMs());
 }
 
