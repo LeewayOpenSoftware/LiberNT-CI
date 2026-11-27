@@ -17,7 +17,7 @@
 
 #include "precomp.h"
 
-#include <winwlx.h>  /* WLX_SHUTDOWN_STATE_* */
+#include "shutdown.h"  /* WLX_SHUTDOWN_STATE_* */
 #include <powrprof.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);

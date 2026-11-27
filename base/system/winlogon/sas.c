@@ -1700,7 +1700,6 @@ DispatchSAS(
     IN DWORD dwSasType)
 {
     DWORD wlxAction = WLX_SAS_ACTION_NONE;
-    PSID LogonSid = NULL; /* FIXME */
     BOOL bSecure = TRUE;
 
     switch (dwSasType)

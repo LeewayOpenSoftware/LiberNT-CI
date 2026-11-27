@@ -10,10 +10,15 @@
 #pragma once
 
 /*
- * Shutdown option / selection codes. These match the WLX_SHUTDOWN_STATE_*
- * bits (winwlx.h) and the 0x01/0x02/0x04/0x10/0x40 result values that
- * ExitWindowsDialog() already acts on, so no caller mapping changes.
+ * Shutdown option / selection codes: shell32's own result values (formerly
+ * msgina's WLX_SHUTDOWN_STATE_* bits). ExitWindowsDialog() acts on the same
+ * 0x01/0x02/0x04/0x10/0x40 codes, so no caller mapping changes.
  */
+#define WLX_SHUTDOWN_STATE_LOGOFF       0x01
+#define WLX_SHUTDOWN_STATE_POWER_OFF    0x02
+#define WLX_SHUTDOWN_STATE_REBOOT       0x04
+#define WLX_SHUTDOWN_STATE_SLEEP        0x10
+#define WLX_SHUTDOWN_STATE_HIBERNATE    0x40
 
 /* Which shutdown choices are allowed, per policy and power capabilities.
    shell32 runs in the user's context, so HKCU is the user's own hive. */
