@@ -10,6 +10,7 @@
 
 #include <ntoskrnl.h>
 #include <xmmintrin.h>
+#include <immintrin.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -38,6 +39,89 @@ ULONG KeLargestCacheLine = 0x40;
 ULONG KeDcacheFlushCount = 0;
 ULONG KeIcacheFlushCount = 0;
 ULONG KiDmaIoCoherency = 0;
+
+/* F1: boot entropy for pool keys and ASLR. Hardware RNG (RDSEED, then RDRAND)
+ * folded with the freeldr-provided loader seed. A fully absent source leaves it
+ * zero, i.e. a no-op XOR at the consumers (silent fallback, never a bugcheck). */
+ULONG64 KiBootEntropy;
+ULONG64 KiAslrEntropy;
+
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((target("rdseed,rdrnd")))
+#endif
+static
+ULONG64
+KiReadHardwareRandom64(VOID)
+{
+    unsigned int Lo = 0, Hi = 0;
+    ULONG i;
+    BOOLEAN GotLo = FALSE, GotHi = FALSE;
+
+    if (KeFeatureBits & KF_RDSEED)
+    {
+        for (i = 0; i < 64 && !GotLo; i++) GotLo = (BOOLEAN)_rdseed32_step(&Lo);
+        for (i = 0; i < 64 && !GotHi; i++) GotHi = (BOOLEAN)_rdseed32_step(&Hi);
+    }
+    if (KeFeatureBits & KF_RDRAND)
+    {
+        for (i = 0; i < 64 && !GotLo; i++) GotLo = (BOOLEAN)_rdrand32_step(&Lo);
+        for (i = 0; i < 64 && !GotHi; i++) GotHi = (BOOLEAN)_rdrand32_step(&Hi);
+    }
+    if (!GotLo && !GotHi)
+        return 0;
+    return ((ULONG64)Hi << 32) | Lo;
+}
+
+CODE_SEG("INIT")
+VOID
+KiInitializeBootEntropy(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
+{
+    ULONG64 Acc = KiReadHardwareRandom64();
+    ULONG64 AslrAcc = KiReadHardwareRandom64() ^ 0xA0761D6478BD642FULL;
+
+    if (LoaderBlock != NULL && LoaderBlock->Extension != NULL)
+    {
+        PBOOT_ENTROPY_LDR_RESULT Result = &LoaderBlock->Extension->BootEntropyResult;
+        ULONG Max = Result->maxEntropySources;
+        ULONG Source, Index;
+
+        if (Max > BootMaxEntropySources)
+            Max = BootMaxEntropySources;
+
+        for (Source = 0; Source < Max; Source++)
+        {
+            PBOOT_ENTROPY_SOURCE_LDR_RESULT Src = &Result->EntropySourceResult[Source];
+            ULONG Length = Src->EntropyLength;
+
+            if (Src->ResultCode != BootEntropySourceSuccess)
+                continue;
+            if (Length > sizeof(Src->EntropyData))
+                Length = sizeof(Src->EntropyData);
+
+            for (Index = 0; Index < Length; Index++)
+            {
+                UCHAR Byte = Src->EntropyData[Index];
+                Acc = (Acc ^ Byte) * 0x100000001B3ULL;
+                AslrAcc = (AslrAcc ^ Byte) * 0x9E3779B97F4A7C15ULL;
+            }
+        }
+    }
+
+    Acc ^= Acc >> 30;
+    Acc *= 0xBF58476D1CE4E5B9ULL;
+    Acc ^= Acc >> 27;
+    Acc *= 0x94D049BB133111EBULL;
+    Acc ^= Acc >> 31;
+    KiBootEntropy = Acc;
+
+    AslrAcc ^= AslrAcc >> 30;
+    AslrAcc *= 0xBF58476D1CE4E5B9ULL;
+    AslrAcc ^= AslrAcc >> 27;
+    AslrAcc *= 0x94D049BB133111EBULL;
+    AslrAcc ^= AslrAcc >> 31;
+    KiAslrEntropy = AslrAcc;
+}
 ULONG KePrefetchNTAGranularity = 32;
 BOOLEAN KiI386PentiumLockErrataPresent;
 BOOLEAN KiSMTProcessorsPresent;
@@ -381,6 +465,7 @@ KiGetFeatureBits(VOID)
         {
             __cpuidex(Leaf7, 7, 0);
             if (Leaf7[1] & (1 << 7)) FeatureBits |= KF_SMEP;
+            if (Leaf7[1] & (1 << 18)) FeatureBits |= KF_RDSEED;
         }
     }
 

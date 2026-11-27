@@ -26,6 +26,13 @@ extern POOL_KM_LAYOUT MiPoolLayout;
     fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #e); } } while (0)
 
 ULONG64 KeQueryInterruptTime(VOID) { return 1; }
+ULONG64 KiBootEntropy;
+PVOID MmSystemRangeStart;
+BOOLEAN MmIsAddressValid(PVOID Address) { return TRUE; }
+LARGE_INTEGER KeQueryPerformanceCounter(PLARGE_INTEGER Frequency)
+{ LARGE_INTEGER Result; if (Frequency != NULL) Frequency->QuadPart = 1; Result.QuadPart = 1; return Result; }
+ULONG RtlRandomEx(PULONG Seed)
+{ *Seed = (*Seed * 1103515245u) + 12345u; return (ULONG)((*Seed >> 1) & 0x7FFFFFFF); }
 KIRQL KeGetCurrentIrql(VOID) { return 0; }
 _Noreturn VOID KeBugCheckEx(ULONG Code, ULONG_PTR A, ULONG_PTR B, ULONG_PTR C, ULONG_PTR D)
 { fprintf(stderr, "bugcheck %x %zx %zx %zx %zx\n", Code, (size_t)A, (size_t)B, (size_t)C, (size_t)D); abort(); }
@@ -96,6 +103,8 @@ static VOID CheckAllocation(PVOID Block, SIZE_T Size, BOOLEAN Execute, BOOLEAN Z
 
 int main(void)
 {
+    SystemProcess.Pcb.Header.Type = ProcessObject;
+    TestProcess.Pcb.Header.Type = ProcessObject;
     const SIZE_T Sizes[] = { 32, 160, PAGE_SIZE, PAGE_SIZE * 17, POOL_UNIT_SIZE * 2 };
     POOL_TAG_USAGE Usage;
     CHECK(posix_memalign((void **)&Arena, POOL_UNIT_SIZE, ARENA_BYTES) == 0);
@@ -152,7 +161,9 @@ int main(void)
             ExFreePoolWithTag(Block, TAG_TEST);
             continue;
         }
-        CHECK((Info.Flags & EX_POOL_BLOCK_QUOTA) != 0 && Info.Trailer == (ULONG_PTR)&TestProcess);
+        CHECK((Info.Flags & EX_POOL_BLOCK_QUOTA) != 0 && ExpPoolQuotaProcess(Block, Info.Trailer) == &TestProcess);
+        /* The trailer is stored encoded, so the raw word must differ from the plain process pointer. */
+        CHECK(Info.Trailer != (ULONG_PTR)&TestProcess);
         CHECK(TestProcess.References == 1 && TestProcess.Quota[0] == Info.Size);
         ExReturnPoolQuota(Block);
         CHECK(TestProcess.References == 0 && TestProcess.Quota[0] == 0);

@@ -265,6 +265,26 @@ PoolVaReserveLocked(
     return (PVOID)(Region->Base + (First << POOL_UNIT_SHIFT));
 }
 
+/* TRUE when the region holds UnitCount units in one contiguous free run. */
+BOOLEAN
+PoolVaHasFreeRun(
+    _In_ PPOOL_VA_REGION Region,
+    _In_ SIZE_T UnitCount)
+{
+    BOOLEAN Found;
+    KIRQL OldIrql;
+
+    if (UnitCount == 0)
+        return FALSE;
+
+    POOL_LOCK_ACQUIRE(&Region->Lock, &OldIrql);
+    Found = (BOOLEAN)(UnitCount <= Region->UnitCount - Region->UnitsInUse &&
+                      PoolVaFindRun(Region, 0, Region->UnitCount, UnitCount) != (SIZE_T)-1);
+    POOL_LOCK_RELEASE(&Region->Lock, OldIrql);
+
+    return Found;
+}
+
 PVOID
 PoolVaReserve(
     _Inout_ PPOOL_VA_REGION Region,

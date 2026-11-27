@@ -630,6 +630,9 @@ KiInitializeKernel(IN PKPROCESS InitProcess,
     Prcb->NextThread = NULL;
     Prcb->IdleThread = InitThread;
 
+    /* F1: seed the boot entropy (hardware RNG + loader seed) for pool keys and ASLR. */
+    KiInitializeBootEntropy(LoaderBlock);
+
     /* Initialize the Kernel Executive */
     ExpInitializeExecutive(Number, LoaderBlock);
 

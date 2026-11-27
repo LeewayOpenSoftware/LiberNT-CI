@@ -42,6 +42,11 @@ typedef KIRQL *PKIRQL;
 #define STATUS_NO_MEMORY                 ((NTSTATUS)0xC0000017)
 #define NT_SUCCESS(s)                    ((s) >= 0)
 
+#ifndef BAD_POOL_HEADER
+#define BAD_POOL_HEADER 0x19
+#endif
+_Noreturn VOID KeBugCheckEx(ULONG Code, ULONG_PTR A, ULONG_PTR B, ULONG_PTR C, ULONG_PTR D);
+
 #ifndef POOL_HOST_PAGE_SHIFT
 #define POOL_HOST_PAGE_SHIFT 12
 #endif
