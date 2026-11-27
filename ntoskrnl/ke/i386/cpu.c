@@ -44,6 +44,7 @@ ULONG KiDmaIoCoherency = 0;
  * folded with the freeldr-provided loader seed. A fully absent source leaves it
  * zero, i.e. a no-op XOR at the consumers (silent fallback, never a bugcheck). */
 ULONG64 KiBootEntropy;
+ULONG64 KiAslrEntropy;
 
 #if defined(__GNUC__) || defined(__clang__)
 __attribute__((target("rdseed,rdrnd")))
@@ -77,6 +78,7 @@ KiInitializeBootEntropy(
     _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     ULONG64 Acc = KiReadHardwareRandom64();
+    ULONG64 AslrAcc = KiReadHardwareRandom64() ^ 0xA0761D6478BD642FULL;
 
     if (LoaderBlock != NULL && LoaderBlock->Extension != NULL)
     {
@@ -98,7 +100,11 @@ KiInitializeBootEntropy(
                 Length = sizeof(Src->EntropyData);
 
             for (Index = 0; Index < Length; Index++)
-                Acc = (Acc ^ Src->EntropyData[Index]) * 0x100000001B3ULL;
+            {
+                UCHAR Byte = Src->EntropyData[Index];
+                Acc = (Acc ^ Byte) * 0x100000001B3ULL;
+                AslrAcc = (AslrAcc ^ Byte) * 0x9E3779B97F4A7C15ULL;
+            }
         }
     }
 
@@ -108,6 +114,13 @@ KiInitializeBootEntropy(
     Acc *= 0x94D049BB133111EBULL;
     Acc ^= Acc >> 31;
     KiBootEntropy = Acc;
+
+    AslrAcc ^= AslrAcc >> 30;
+    AslrAcc *= 0xBF58476D1CE4E5B9ULL;
+    AslrAcc ^= AslrAcc >> 27;
+    AslrAcc *= 0x94D049BB133111EBULL;
+    AslrAcc ^= AslrAcc >> 31;
+    KiAslrEntropy = AslrAcc;
 }
 ULONG KePrefetchNTAGranularity = 32;
 BOOLEAN KiI386PentiumLockErrataPresent;
