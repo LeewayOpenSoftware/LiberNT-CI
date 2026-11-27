@@ -501,8 +501,6 @@ WinMain(
     LogonStage("host-mode");
     WlHostThemeWatch();     /* msgina's WlxInitialize did this; winlogon hosts the theme hooks */
 
-    LogonStage("gina-loaded");
-
     SetupType = GetSetupType();
     DisplayStatusMessage(WLSession,
                          SetupType ? WLSession->ApplicationDesktop
