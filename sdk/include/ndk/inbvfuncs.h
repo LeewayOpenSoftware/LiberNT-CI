@@ -104,7 +104,7 @@ InbvDiscardBootScreen(
 NTSTATUS
 NTAPI
 InbvCopyBootScreen(
-    _Out_writes_bytes_(Height * Stride) PVOID Bits,
+    _Out_writes_bytes_((Height - 1) * Stride + Width * sizeof(ULONG)) PVOID Bits,
     _In_ LONG Stride,
     _In_ ULONG Width,
     _In_ ULONG Height

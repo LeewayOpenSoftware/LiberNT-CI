@@ -357,7 +357,7 @@ InbvGopSpinSweep(
     return (ULONG)(((LONGLONG)Degrees256 * INBV_SPIN_TURN) / (360 * 256));
 }
 
-/* Draws the spinner as it stands T (100 ns) after it started */
+/* Draws the spinner as it stands at interrupt time T (100 ns since boot) */
 static VOID
 InbvGopLogoRender(
     _In_ ULONGLONG T)
@@ -391,14 +391,16 @@ static VOID NTAPI
 InbvGopLogoThread(PVOID Context)
 {
     LARGE_INTEGER Delay;
-    ULONGLONG Start, Now, Next;
+    ULONGLONG Now, Next;
 
     UNREFERENCED_PARAMETER(Context);
-    Start = Next = KeQueryInterruptTime();
+    Next = KeQueryInterruptTime();
 
+    /* The phase follows the boot clock, so whoever draws the spinner after the hand-over
+     * (winlogon) continues it from the same clock without a jump. */
     for (;;)
     {
-        InbvGopLogoRender(KeQueryInterruptTime() - Start);
+        InbvGopLogoRender(KeQueryInterruptTime());
         if (!InbvGopLogoBlit())
             break;
 
@@ -417,8 +419,8 @@ InbvGopLogoThread(PVOID Context)
         }
     }
 
-    /* The display is handed over showing the spinner at rest */
-    InbvGopLogoRender(0);
+    /* The display is handed over showing the spinner where it is now */
+    InbvGopLogoRender(KeQueryInterruptTime());
     InbvGopLogoBlit();
 
     InbvGopLogoResetState();
@@ -1076,7 +1078,7 @@ InbvDiscardBootScreen(VOID)
 NTSTATUS
 NTAPI
 InbvCopyBootScreen(
-    _Out_writes_bytes_(Height * Stride) PVOID Bits,
+    _Out_writes_bytes_((Height - 1) * Stride + Width * sizeof(ULONG)) PVOID Bits,
     _In_ LONG Stride,
     _In_ ULONG Width,
     _In_ ULONG Height)
