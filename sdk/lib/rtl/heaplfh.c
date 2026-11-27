@@ -182,21 +182,19 @@ RtlpLfhHasFreeSlot(PRTLP_LFH_USER_BLOCK Block)
 
 static
 BOOLEAN
-RtlpLfhReleaseEntry(PHEAP Heap, PHEAP_ENTRY Entry)
+RtlpLfhReleaseEntry(PHEAP Heap, PRTLP_LFH_USER_BLOCK Block, PHEAP_ENTRY Entry)
 {
     LONGLONG volatile *Word = (LONGLONG volatile *)&Entry->Size;
-    RTLP_LFH_ENTRY_HEADER Old, New;
+    RTLP_LFH_ENTRY_HEADER Old;
+    ULONG Offset;
 
     Old.Word = (LONGLONG)RtlpDecodeHeapEntryWord(Heap, (ULONGLONG)ReadNoFence64(Word));
-    /* RtlpLfhLookup already verified the checksum; only the busy bit, which a double free clears, is re-checked here. */
     if (!(Old.Bytes[RTLP_LFH_HEADER_FLAGS] & HEAP_ENTRY_BUSY))
         return FALSE;
-    New = Old;
-    New.Bytes[RTLP_LFH_HEADER_FLAGS] = 0;
-    New.Bytes[RTLP_LFH_HEADER_UNUSED] = 0;
-    New.Bytes[RTLP_LFH_HEADER_CHECKSUM] = (UCHAR)(New.Bytes[RTLP_LFH_HEADER_SIZE_LOW] ^ New.Bytes[RTLP_LFH_HEADER_SIZE_HIGH]);
+    /* Rebuild the free header from slot geometry. */
+    Offset = (ULONG)(((PUCHAR)Entry - (PUCHAR)Block) >> HEAP_ENTRY_SHIFT);
     /* FIXME: two threads freeing the same block at once both pass this check; only a double free from one thread is rejected */
-    WriteNoFence64(Word, (LONGLONG)(New.Word ^ Heap->Encoding.AgregateCode));
+    RtlpEntryWrite(Heap, Entry, (USHORT)Offset, 0, (USHORT)(Offset >> 16), HEAP_LFH_INDEX, 0);
     return TRUE;
 }
 
@@ -695,7 +693,7 @@ RtlpLfhFree(PHEAP Heap, PVOID Ptr, PRTLP_LFH_SLOT Slot)
     ULONG Index = Slot->Index;
     LONGLONG Old, New;
 
-    if (Block->Heap != Heap || !RtlpLfhReleaseEntry(Heap, Entry))
+    if (Block->Heap != Heap || !RtlpLfhReleaseEntry(Heap, Block, Entry))
     {
         RtlSetLastWin32ErrorAndNtStatusFromNtStatus(STATUS_INVALID_PARAMETER);
         return FALSE;
