@@ -235,12 +235,10 @@ test_contract(const CONTRACT_HOST *Entry)
     winetest_push_context("%S", Entry->Contract);
 
     Host = LoadLibraryW(Entry->Host);
-    ok(Host != NULL, "LoadLibrary(%S) failed: %lu
-", Entry->Host, GetLastError());
+    ok(Host != NULL, "LoadLibrary(%S) failed: %lu\n", Entry->Host, GetLastError());
 
     Contract = LoadLibraryW(Entry->Contract);
-    ok(Contract != NULL, "LoadLibrary failed: %lu
-", GetLastError());
+    ok(Contract != NULL, "LoadLibrary failed: %lu\n", GetLastError());
     if (Contract == NULL)
     {
         winetest_pop_context();
@@ -249,20 +247,17 @@ test_contract(const CONTRACT_HOST *Entry)
         return;
     }
 
-    ok(Contract == Host, "resolved to %p, expected %S at %p
-", Contract, Entry->Host, Host);
+    ok(Contract == Host, "resolved to %p, expected %S at %p\n", Contract, Entry->Host, Host);
 
     for (Index = 0; Index < Entry->Count; Index++)
     {
         if (GetProcAddress(Contract, Entry->Functions[Index]) == NULL)
         {
-            ok(0, "%s is not exported
-", Entry->Functions[Index]);
+            ok(0, "%s is not exported\n", Entry->Functions[Index]);
             Missing++;
         }
     }
-    ok(Missing == 0, "%lu of %lu functions are not exported
-", Missing, Entry->Count);
+    ok(Missing == 0, "%lu of %lu functions are not exported\n", Missing, Entry->Count);
 
     FreeLibrary(Contract);
     if (Host)
@@ -287,13 +282,11 @@ test_calls(void)
     if (pCharLowerA)
     {
         pCharLowerA(Text);
-        ok(lstrcmpA(Text, "orosi") == 0, "CharLowerA gave %s
-", Text);
+        ok(lstrcmpA(Text, "orosi") == 0, "CharLowerA gave %s\n", Text);
     }
     else
     {
-        skip("CharLowerA is not available
-");
+        skip("CharLowerA is not available\n");
     }
     if (Module)
         FreeLibrary(Module);
@@ -302,15 +295,12 @@ test_calls(void)
     pSHAnsiToUnicode = Module ? (PSHANSITOUNICODE)GetProcAddress(Module, "SHAnsiToUnicode") : NULL;
     if (pSHAnsiToUnicode)
     {
-        ok(pSHAnsiToUnicode("Orosi", Wide, RTL_NUMBER_OF(Wide)) == 6, "SHAnsiToUnicode returned the wrong length
-");
-        ok(lstrcmpW(Wide, L"Orosi") == 0, "SHAnsiToUnicode gave %S
-", Wide);
+        ok(pSHAnsiToUnicode("Orosi", Wide, RTL_NUMBER_OF(Wide)) == 6, "SHAnsiToUnicode returned the wrong length\n");
+        ok(lstrcmpW(Wide, L"Orosi") == 0, "SHAnsiToUnicode gave %S\n", Wide);
     }
     else
     {
-        skip("SHAnsiToUnicode is not available
-");
+        skip("SHAnsiToUnicode is not available\n");
     }
     if (Module)
         FreeLibrary(Module);

@@ -462,8 +462,7 @@ void WINAPI CStdAsyncStubBuffer_Disconnect(LPRPCSTUBBUFFER iface)
 HRESULT WINAPI CStdAsyncStubBuffer_Invoke(LPRPCSTUBBUFFER iface, PRPCOLEMESSAGE pMsg,
                                           LPRPCCHANNELBUFFER pChannel)
 {
-    FIXME("(%p)->Invoke(%p,%p): async calls are not supported
-", iface, pMsg, pChannel);
+    FIXME("(%p)->Invoke(%p,%p): async calls are not supported\n", iface, pMsg, pChannel);
     return E_NOTIMPL;
 }
 
