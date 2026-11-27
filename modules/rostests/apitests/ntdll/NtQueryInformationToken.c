@@ -1068,7 +1068,7 @@ static
 BOOL
 RangeInBuffer(
     _In_opt_ PVOID Ptr,
-    _In_ ULONG Size,
+    _In_ SIZE_T Size,
     _In_ PVOID Buffer,
     _In_ ULONG Length)
 {
@@ -1097,7 +1097,12 @@ CheckAccessInfoSidHash(
         ok(Hash->SidAttr == NULL, "empty hash SidAttr %p not NULL\n", Hash->SidAttr);
         return;
     }
-    if (!RangeInBuffer(Hash->SidAttr, (ULONG)(Hash->SidCount * sizeof(SID_AND_ATTRIBUTES)), Buffer, Length))
+    if (Hash->SidCount > Length / sizeof(SID_AND_ATTRIBUTES))
+    {
+        ok(FALSE, "SidCount %lu too large for buffer\n", Hash->SidCount);
+        return;
+    }
+    if (!RangeInBuffer(Hash->SidAttr, Hash->SidCount * sizeof(SID_AND_ATTRIBUTES), Buffer, Length))
     {
         ok(FALSE, "SidAttr %p[%lu] outside buffer\n", Hash->SidAttr, Hash->SidCount);
         return;
@@ -1287,8 +1292,8 @@ QueryTokenAccessInformationTests(
        "CapabilitiesHash %p outside buffer\n", Info->CapabilitiesHash);
     if (RangeInBuffer(Info->Privileges, FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges), Buffer, Required))
         ok(RangeInBuffer(Info->Privileges,
-                         (ULONG)(FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges) +
-                                 Info->Privileges->PrivilegeCount * sizeof(LUID_AND_ATTRIBUTES)),
+                         FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges) +
+                             (SIZE_T)Info->Privileges->PrivilegeCount * sizeof(LUID_AND_ATTRIBUTES),
                          Buffer, Required),
            "Privileges %p[%lu] outside buffer\n", Info->Privileges, Info->Privileges->PrivilegeCount);
     else
