@@ -483,6 +483,10 @@ WlHostLock(
     _In_ PWLSESSION Session);
 
 VOID
+WlHostLockedSas(
+    _In_ PWLSESSION Session);
+
+VOID
 WlHostMustChange(
     _In_ PWLSESSION Session);
 

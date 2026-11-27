@@ -1281,13 +1281,49 @@ WlHostLoggedOutSas(
 
 /* P2: the unlock page is requested and waited for within a bound; the caller switches to the
  * Winlogon desktop whether or not the host made it, so the lock never depends on the host. */
+static VOID
+WlHlRequestUnlock(
+    _In_ DWORD Flags)
+{
+    if (!WlHlEnsureHost(WLHL_CPUS_UNLOCK, (WlHlPolicyFlags() & WLUI_FLAG_NO_POWER) | Flags, WlHlLockReadyMs()))
+        ERR("WL: no logon UI for the locked station; it stays locked without a page\n");
+}
+
+/*
+ * As on the sign-in screen: with CAD optional the unlock page comes up at once (behind the
+ * host's curtain); with CAD required the station shows only the Ctrl+Alt+Delete notice, and
+ * the unlock page waits for the user's SAS (WlHostLockedSas).
+ */
 VOID
 WlHostLock(
     _In_ PWLSESSION Session)
 {
     UNREFERENCED_PARAMETER(Session);
-    if (!WlHlEnsureHost(WLHL_CPUS_UNLOCK, WlHlPolicyFlags() & WLUI_FLAG_NO_POWER, WlHlLockReadyMs()))
-        ERR("WL: no logon UI for the locked station; it stays locked without a page\n");
+    if (WlHlDisableCad())
+    {
+        WlHlRequestUnlock(WLUI_FLAG_DISABLE_CAD);
+        return;
+    }
+    /* A host showing a page (sign-in or unlock) gives way to the notice; a status-only host is kept. */
+    if (WlHlHostLive() && g_HostScenario != 0)
+        WlHlStopHost();
+    if (!WlHlHostLive() && !WlHlEnsureHost(0, 0, WlHlLockReadyMs()))
+    {
+        ERR("WL: no logon UI for the locked notice; the station stays locked\n");
+        return;
+    }
+    WlHlPostResource(WluiCmdDisplayStatus, 0, IDS_PRESSCTRLALTDELETEUNLOCK);
+}
+
+/* The SAS on the locked station: with CAD required, now the unlock page may come up. */
+VOID
+WlHostLockedSas(
+    _In_ PWLSESSION Session)
+{
+    UNREFERENCED_PARAMETER(Session);
+    WlHostOnSas();                      /* a user SAS resets the levels, as on the sign-in screen */
+    /* A live unlock page is kept as it is; a lost one comes back. */
+    WlHlRequestUnlock(WlHlDisableCad() ? WLUI_FLAG_DISABLE_CAD : 0);
 }
 
 /* A logoff that could not start: the user is still signed in, so the status must go. */

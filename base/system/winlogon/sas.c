@@ -1923,8 +1923,15 @@ DispatchSAS(
 
                     CloseAllDialogWindows();
 
-                    wlxAction = Session->UseLogonUI ? WLX_SAS_ACTION_NONE :
-                        (DWORD)Session->Gina.Functions.WlxWkstaLockedSAS(Session->Gina.Context, dwSasType);
+                    if (Session->UseLogonUI)
+                    {
+                        /* Host mode: the SAS brings up the unlock page; the station stays locked
+                         * until the host's unlock comes back as WLHOST_EVENT_UNLOCK. */
+                        WlHostLockedSas(Session);
+                        wlxAction = WLX_SAS_ACTION_NONE;
+                        break;
+                    }
+                    wlxAction = (DWORD)Session->Gina.Functions.WlxWkstaLockedSAS(Session->Gina.Context, dwSasType);
                     break;
 
                 case STATE_LOCKED_SAS:
