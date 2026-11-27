@@ -8,6 +8,14 @@
 #pragma once
 
 /*
+ * The lock-screen picture both programs draw: the machine policy's image first, else the
+ * system default; without a readable picture, one fill in the default picture's mean colour.
+ */
+#define LUH_LOCK_POLICY_KEY L"SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization"
+#define LUH_LOCK_DEFAULT    L"%SystemRoot%\\Web\\Screen\\Midnight Glass Waves.png"
+#define LUH_LOCK_FILL       RGB(18, 58, 112)
+
+/*
  * Every screen is drawn once into a 32 bpp top-down DIB whose pixels hold
  * premultiplied BGRA. Animation never redraws a page: it moves or blends the
  * finished surfaces and hands the result to UpdateLayeredWindow.

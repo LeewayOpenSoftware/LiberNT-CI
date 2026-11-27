@@ -1862,12 +1862,8 @@ LuhApplyFieldUpdate(
 /*
  * The host runs as SYSTEM on the secure desktop, so the picture it decodes must be one only
  * the system and administrators can change: the machine's lock-screen image (policy), else
- * the system default. The user's own wallpaper is never read here.
+ * the system default (LUH_LOCK_*, gfx.h). The user's own wallpaper is never read here.
  */
-#define LUH_LOCK_POLICY_KEY L"SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization"
-#define LUH_LOCK_DEFAULT    L"%SystemRoot%\\Web\\Screen\\Midnight Glass Waves.png"
-/* Without a readable picture: the default picture's mean colour, so the screen keeps its tone. */
-#define LUH_LOCK_FILL       RGB(18, 58, 112)
 #define LUH_FILE_WRITE      (FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | WRITE_DAC | WRITE_OWNER | \
                              GENERIC_WRITE | GENERIC_ALL)
 #define LUH_DIR_WRITE       (FILE_ADD_FILE | FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | \

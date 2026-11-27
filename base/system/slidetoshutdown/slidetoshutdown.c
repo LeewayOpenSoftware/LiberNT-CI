@@ -23,8 +23,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(slidetoshutdown);
 #define STS_MIN_MS          100
 #define STS_FLICK           0.6     /* pixels per millisecond at release that decide by themselves */
 #define WM_STS_START        (WM_APP + 1)
-#define STS_LOCK_POLICY_KEY L"SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization"
-#define STS_LOCK_DEFAULT    L"%SystemRoot%\\Web\\Screen\\Midnight Glass Waves.png"
 
 typedef struct _STS
 {
@@ -82,11 +80,11 @@ StsLoadPicture(
     HANDLE File;
     BOOL Ok;
 
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, STS_LOCK_POLICY_KEY, L"LockScreenImage",
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, LUH_LOCK_POLICY_KEY, L"LockScreenImage",
                      RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, NULL, Path, &Size) != ERROR_SUCCESS ||
         Path[0] == UNICODE_NULL)
     {
-        Size = ExpandEnvironmentStringsW(STS_LOCK_DEFAULT, Path, ARRAYSIZE(Path));
+        Size = ExpandEnvironmentStringsW(LUH_LOCK_DEFAULT, Path, ARRAYSIZE(Path));
         if (Size == 0 || Size > ARRAYSIZE(Path))
             return FALSE;
     }
@@ -129,7 +127,7 @@ StsBuild(VOID)
     }
     else
     {
-        LuhFillRect(&g_Sts.Curtain, &All, RGB(18, 58, 112), 255);
+        LuhFillRect(&g_Sts.Curtain, &All, LUH_LOCK_FILL, 255);
     }
 
     /* Measured at 1024x768 against the curtain's bottom edge at rest (y 400): warning y 293,
