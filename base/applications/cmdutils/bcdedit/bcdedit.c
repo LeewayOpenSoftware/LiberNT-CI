@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include <windef.h>
 #include <winbase.h>
@@ -296,10 +297,18 @@ PrintElement(
         return FALSE;
 
     Error = RegQueryValueExW(Key, L"Element", NULL, &RegType, NULL, &Length);
-    if (Error != ERROR_SUCCESS || Length == 0)
+    if (Error != ERROR_SUCCESS)
     {
         RegCloseKey(Key);
         return FALSE;
+    }
+    /* The value is present but empty; show the field with no value rather than hide it. */
+    if (Length == 0)
+    {
+        RegCloseKey(Key);
+        PrintFieldName(NameForElement(Type, Custom, ARRAYSIZE(Custom)));
+        fputwc(L'\n', stdout);
+        return TRUE;
     }
 
     Data = HeapAlloc(GetProcessHeap(), 0, Length + 2 * sizeof(WCHAR));
@@ -391,6 +400,7 @@ PrintObject(
     WCHAR Heading[128];
     DWORD Type = 0, Length = sizeof(Type), RegType = 0, Index;
     ULONG Types[BCD_MAX_ELEMENTS], Count = 0;
+    LONG Error;
     SIZE_T i;
 
     if (RegOpenKeyExW(Objects, Id, 0, KEY_READ, &Object) != ERROR_SUCCESS)
@@ -419,13 +429,23 @@ PrintObject(
     if (RegOpenKeyExW(Object, L"Elements", 0, KEY_READ, &Elements) == ERROR_SUCCESS)
     {
         /* Enumerate every element present, not only the named ones, so nothing is hidden. */
-        for (Index = 0; Count < ARRAYSIZE(Types); Index++)
+        for (Index = 0; ; Index++)
         {
             WCHAR Name[16];
             DWORD Chars = ARRAYSIZE(Name);
 
-            if (RegEnumKeyExW(Elements, Index, Name, &Chars, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+            Error = RegEnumKeyExW(Elements, Index, Name, &Chars, NULL, NULL, NULL, NULL);
+            if (Error == ERROR_NO_MORE_ITEMS)
                 break;
+            /* A name too long for the buffer (ERROR_MORE_DATA) is not a valid 8-hex element;
+             * skip it and keep going rather than stop the whole listing. */
+            if (Error != ERROR_SUCCESS)
+                continue;
+            if (Count == ARRAYSIZE(Types))
+            {
+                fwprintf(stderr, L"bcdedit: too many elements, the listing is truncated\n");
+                break;
+            }
             Types[Count++] = wcstoul(Name, NULL, 16);
         }
         qsort(Types, Count, sizeof(ULONG), CompareUlong);
@@ -554,11 +574,16 @@ ParseInteger(
     WCHAR *End;
     int Base = 10;
 
-    if (String[0] == L'-' || String[0] == L'+' || String[0] == 0)
+    /* A digit must lead. This rejects a sign, empty input, and the leading whitespace that
+     * _wcstoui64 would otherwise skip over. */
+    if (String[0] < L'0' || String[0] > L'9')
         return FALSE;
     if (String[0] == L'0' && (String[1] == L'x' || String[1] == L'X'))
         Base = 16;
+    errno = 0;
     *Value = _wcstoui64(String, &End, Base);
+    if (errno == ERANGE)
+        return FALSE;
     return (End != String && *End == 0);
 }
 

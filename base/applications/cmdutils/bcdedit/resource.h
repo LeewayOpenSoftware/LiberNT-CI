@@ -11,6 +11,9 @@
 #define IDS_ERR_OPENSTORE      101
 #define IDS_ERR_BADPARAM       102
 #define IDS_ERR_NOSTORE        103
+#define IDS_OK                 104
+#define IDS_ERR_SETFAIL        105
+#define IDS_ERR_BADID          106
 
 /* Object-class headings, keyed by the object Type value. */
 #define IDS_HDR_FWBOOTMGR      200
