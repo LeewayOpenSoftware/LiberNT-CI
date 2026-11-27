@@ -31,5 +31,6 @@
 #define IDS_LUH_WORKSTATION         121
 #define IDS_LUH_ACCOUNT_RESTRICTED  122
 #define IDS_LUH_LOCKED_OUT          123
+#define IDS_LUH_CAPS_LOCK           124
 
-#define IDS_LUH_LAST                IDS_LUH_LOCKED_OUT
+#define IDS_LUH_LAST                IDS_LUH_CAPS_LOCK

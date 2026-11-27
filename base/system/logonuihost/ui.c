@@ -76,6 +76,7 @@ typedef struct _LUH_UI
     HFONT DateFont;
     WCHAR ClockText[64];
     WCHAR DateText[128];
+    HWND CapsControl;       /* the focused password box while Caps Lock is on; the warning sits beside it */
 } LUH_UI;
 
 static LUH_UI g_Ui;
@@ -167,11 +168,38 @@ LuhSetSpinner(
 
 /* ---- credential page ----------------------------------------------------------- */
 
+/* Caps Lock warning, as on the Windows sign-in screen: only while a password box has the focus. */
+static void
+LuhUpdateCapsLock(
+    _In_ HWND Window)
+{
+    HWND Focus = GetFocus(), Show = NULL;
+    DWORD i;
+
+    if (g_Ui.Page && !g_Ui.Curtain && Focus != NULL && (GetKeyState(VK_CAPITAL) & 1))
+    {
+        for (i = 0; i < g_Ui.Page->Count; i++)
+        {
+            if (g_Ui.Page->Fields[i].Control == Focus && g_Ui.Page->Fields[i].Type == CPFT_PASSWORD_TEXT)
+            {
+                Show = Focus;
+                break;
+            }
+        }
+    }
+    if (Show != g_Ui.CapsControl)
+    {
+        g_Ui.CapsControl = Show;
+        InvalidateRect(Window, NULL, TRUE);
+    }
+}
+
 static void
 LuhDestroyPage(void)
 {
     DWORD i;
 
+    g_Ui.CapsControl = NULL;    /* its box goes away with the page */
     if (g_Ui.Page)
     {
         for (i = 0; i < g_Ui.Page->Count; i++)
@@ -1117,6 +1145,16 @@ LuhPaint(
         }
     }
 
+    if (g_Ui.CapsControl != NULL && GetWindowRect(g_Ui.CapsControl, &Wrap))
+    {
+        /* Beside the box, not under it: the row gap is too narrow for a line of text. */
+        MapWindowPoints(NULL, Window, (LPPOINT)&Wrap, 2);
+        Wrap.left = Wrap.right + 12;
+        Wrap.right = Client.right - LUH_DETAIL_MARGIN;
+        SelectObject(Dc, g_Ui.TextFont);
+        DrawTextW(Dc, LuhText(IDS_LUH_CAPS_LOCK), -1, &Wrap, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+
     SelectObject(Dc, OldFont);
     EndPaint(Window, &Ps);
 
@@ -1399,10 +1437,15 @@ LuhUiRun(
             LuhPickOption(WluiActionCancel);
             continue;
         }
-        if ((g_Ui.Page || g_Ui.OptionsUp) && IsDialogMessageW(Window, &Msg))
-            continue;
-        TranslateMessage(&Msg);
-        DispatchMessageW(&Msg);
+        if (!((g_Ui.Page || g_Ui.OptionsUp) && IsDialogMessageW(Window, &Msg)))
+        {
+            TranslateMessage(&Msg);
+            DispatchMessageW(&Msg);
+        }
+        /* Caps Lock toggles and focus moves come in as key and mouse input. */
+        if ((Msg.message >= WM_KEYFIRST && Msg.message <= WM_KEYLAST) ||
+            Msg.message == WM_LBUTTONDOWN || Msg.message == WM_LUH_PAGE)
+            LuhUpdateCapsLock(Window);
     }
 
     if (g_Ui.ProvidersStarted)
