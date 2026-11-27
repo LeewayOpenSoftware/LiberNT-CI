@@ -92,6 +92,10 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_NOTICE_TEXT_WIDTH 720
 #define LUH_NOTICE_BUTTON_W 118
 #define LUH_NOTICE_BUTTON_H 30
+/* The notice's own OK (legal-notice pair): larger, and further below the text. */
+#define LUH_NOTICE_OK_W     126
+#define LUH_NOTICE_OK_H     38
+#define LUH_NOTICE_OK_DY    40
 /* Lock from Ctrl+Alt+Del (lock-cad frames): one white dot on black, then the curtain fades in. */
 #define LUH_FADE_HOLD_MS    250
 #define LUH_CAPS_GAP        28      /* under the last password box: the Caps Lock line */
@@ -113,6 +117,7 @@ typedef struct _LUH_UI
     /* credential page */
     BOOL ProvidersStarted;
     BOOL InLegalNotice;     /* the notice box is up; its modal loop dispatches our commands */
+    BOOL NoticeAfterLift;   /* no Ctrl+Alt+Del: the legal notice waits for the curtain to lift */
     DWORD PendingScenario;  /* a RequestCredentials that arrived under the box */
     DWORD PendingFlags;
     PLUH_PAGE Page;         /* owned by providers.c; valid until the next WM_LUH_PAGE */
@@ -1291,7 +1296,7 @@ LuhRunNotice(
     _In_ BOOL WithCancel)
 {
     RECT Client, Measure;
-    LONG Cx, Width, W = LuhPx(LUH_NOTICE_BUTTON_W), H = LuhPx(LUH_NOTICE_BUTTON_H), Y;
+    LONG Cx, Width, W = LuhPx(LUH_NOTICE_OK_W), H = LuhPx(LUH_NOTICE_OK_H), Y;
     HWND Ok, Cancel = NULL;
     HGDIOBJ Old;
     HDC Dc;
@@ -1312,7 +1317,7 @@ LuhRunNotice(
     g_Ui.NoticeText = Text;
     SetRect(&g_Ui.NoticeTextRect, Cx - Width / 2, Client.bottom / 2 - LuhPx(4), Cx + Width / 2,
             Client.bottom / 2 - LuhPx(4) + (Measure.bottom - Measure.top));
-    Y = g_Ui.NoticeTextRect.bottom + LuhPx(24);
+    Y = g_Ui.NoticeTextRect.bottom + LuhPx(LUH_NOTICE_OK_DY);
     Ok = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_OK), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                          WithCancel ? Cx - W - LuhPx(4) : Cx - W / 2, Y, W, H, Window, (HMENU)LUH_ID_NOTICE_OK,
                          NULL, NULL);
@@ -2456,6 +2461,22 @@ LuhLiftCurtain(
     g_Ui.CurtainPage = NULL;
     LuhDropCurtain(Window);
     LuhTrace("curtain-lifted", NULL);
+    if (g_Ui.NoticeAfterLift)
+    {
+        /* Windows 11 without Ctrl+Alt+Del: lock screen, lift, legal notice, sign-in. The notice
+         * paints only once the curtain is gone; a page that arrives under it waits as before. */
+        g_Ui.NoticeAfterLift = FALSE;
+        g_Ui.CurtainPage = Page;
+        LuhLegalNotice(Window);
+        Page = g_Ui.CurtainPage;
+        g_Ui.CurtainPage = NULL;
+        if (g_Ui.Exiting)
+        {
+            g_Ui.CurtainPage = Page;
+            LuhFreeCurtainPage();
+            return;
+        }
+    }
     if (Page)
     {
         LuhSetSpinner(Window, FALSE);
@@ -2644,7 +2665,14 @@ LuhHandleCommand(
             g_Ui.UsersSignedIn = (Command->Flags & WLUI_FLAG_USERS_SIGNED_IN) != 0;
             /* A change the signed-in user asked for comes without WLUI_FLAG_FORCED_CHANGE. */
             g_Ui.ChangeCancel = g_Options.Scenario == CPUS_CHANGE_PASSWORD && !(Command->Flags & WLUI_FLAG_FORCED_CHANGE);
-            if ((Command->Flags & WLUI_FLAG_LEGAL_NOTICE) && !g_Ui.ProvidersStarted)
+            if ((Command->Flags & WLUI_FLAG_LEGAL_NOTICE) && !g_Ui.ProvidersStarted &&
+                (Command->Flags & WLUI_FLAG_DISABLE_CAD) && !(Command->Flags & WLUI_FLAG_FORCED_CHANGE) &&
+                g_Options.Scenario == CPUS_LOGON)
+            {
+                /* The curtain comes up below; under it the notice would not show. */
+                g_Ui.NoticeAfterLift = TRUE;
+            }
+            else if ((Command->Flags & WLUI_FLAG_LEGAL_NOTICE) && !g_Ui.ProvidersStarted)
             {
                 g_Ui.InLegalNotice = TRUE;
                 LuhLegalNotice(Window);
@@ -3127,7 +3155,7 @@ LuhWindowProc(
                 return 0;
             }
             KillTimer(Window, LUH_TIMER_STARTUP);
-            if (wParam == LUH_PAGE_READY && lParam && g_Ui.Curtain)
+            if (wParam == LUH_PAGE_READY && lParam && (g_Ui.Curtain || g_Ui.NoticeUp))
             {
                 LuhFreeCurtainPage();
                 g_Ui.CurtainPage = (PLUH_PAGE)lParam;
