@@ -7,6 +7,7 @@ NtAccessCheckByTypeResultList 11
 NtAccessCheckByTypeResultListAndAuditAlarm 16
 NtAccessCheckByTypeResultListAndAuditAlarmByHandle 17
 NtAddAtom 3
+NtAddAtomEx 4
 NtAddBootEntry 2
 NtAddDriverEntry 2
 NtAdjustGroupsToken 6

@@ -32,14 +32,64 @@ extern PUSHORT NlsUnicodeToMbOemTable;
 
 /* FUNCTIONS *****************************************************************/
 
+/*
+ * @implemented
+ *
+ * Appends the addends to StringBuffer->String, growing the byte buffer to
+ * exactly the needed size when the current one is too small, and keeps the
+ * result NUL-terminated with MaximumLength = Length + sizeof(WCHAR), as
+ * Windows 11 26100 does. A result longer than a UNICODE_STRING can hold gives
+ * STATUS_NAME_TOO_LONG and leaves the buffer unchanged.
+ */
 NTSTATUS
 NTAPI
-RtlMultiAppendUnicodeStringBuffer(OUT PRTL_UNICODE_STRING_BUFFER StringBuffer,
-                                  IN ULONG NumberOfAddends,
-                                  IN PCUNICODE_STRING Addends)
+RtlMultiAppendUnicodeStringBuffer(
+    _Inout_ PRTL_UNICODE_STRING_BUFFER StringBuffer,
+    _In_ ULONG NumberOfAddends,
+    _In_reads_(NumberOfAddends) PCUNICODE_STRING Addends)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    SIZE_T Total = StringBuffer->String.Length;
+    PUCHAR Target, Source, OldBase;
+    SIZE_T OldSize;
+    NTSTATUS Status;
+    ULONG Index;
+
+    for (Index = 0; Index < NumberOfAddends; Index++)
+    {
+        Total += Addends[Index].Length;
+        if (Total + sizeof(WCHAR) > MAXUSHORT)
+            return STATUS_NAME_TOO_LONG;
+    }
+    if (Total + sizeof(WCHAR) > MAXUSHORT)
+        return STATUS_NAME_TOO_LONG;
+
+    OldBase = StringBuffer->ByteBuffer.Buffer;
+    OldSize = StringBuffer->ByteBuffer.Size;
+    Status = RtlpEnsureBufferSize(0, &StringBuffer->ByteBuffer, Total + sizeof(WCHAR));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    StringBuffer->String.Buffer = (PWSTR)StringBuffer->ByteBuffer.Buffer;
+    Target = StringBuffer->ByteBuffer.Buffer + StringBuffer->String.Length;
+    for (Index = 0; Index < NumberOfAddends; Index++)
+    {
+        /* The old storage may be freed: read an aliasing addend from the copy */
+        Source = (PUCHAR)Addends[Index].Buffer;
+        if (StringBuffer->ByteBuffer.Buffer != OldBase &&
+            Source >= OldBase &&
+            Addends[Index].Length <= OldSize &&
+            Source - OldBase <= (SSIZE_T)(OldSize - Addends[Index].Length))
+        {
+            Source = StringBuffer->ByteBuffer.Buffer + (Source - OldBase);
+        }
+        RtlMoveMemory(Target, Source, Addends[Index].Length);
+        Target += Addends[Index].Length;
+    }
+    *(PWCHAR)Target = UNICODE_NULL;
+
+    StringBuffer->String.Length = (USHORT)Total;
+    StringBuffer->String.MaximumLength = (USHORT)(Total + sizeof(WCHAR));
+    return STATUS_SUCCESS;
 }
 
 /*

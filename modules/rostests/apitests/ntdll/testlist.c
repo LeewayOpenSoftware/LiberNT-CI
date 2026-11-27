@@ -51,6 +51,7 @@ extern void func_NtAcceptConnectPort(void);
 extern void func_NtAccessCheck(void);
 extern void func_NtAccessCheckByType(void);
 extern void func_NtAccessCheckByTypeResultList(void);
+extern void func_NtAddAtomEx(void);
 extern void func_NtAdjustGroupsToken(void);
 extern void func_NtAdjustPrivilegesToken(void);
 extern void func_NtAllocateVirtualMemory(void);
@@ -147,6 +148,12 @@ extern void func_RtlCaptureContext(void);
 extern void func_RtlComputePrivatizedDllName_U(void);
 extern void func_RtlConditionVariable(void);
 extern void func_RtlCopyMappedMemory(void);
+extern void func_RtlConvertLCIDToString(void);
+extern void func_RtlConvertUiListToApiList(void);
+extern void func_RtlCreateAndSetSD(void);
+extern void func_RtlMultiAppendUnicodeStringBuffer(void);
+extern void func_RtlSetEnvironmentStrings(void);
+extern void func_RtlSetEnvironmentVar(void);
 extern void func_RtlCreateServiceSid(void);
 extern void func_RtlCriticalSection(void);
 extern void func_RtlCurrentTransaction(void);
@@ -184,6 +191,7 @@ extern void func_RtlIsNameInExpression(void);
 extern void func_RtlIsNameLegalDOS8Dot3(void);
 extern void func_RtlLocale(void);
 extern void func_RtlMemoryStream(void);
+extern void func_RtlMapSecurityErrorToNtStatus(void);
 extern void func_PfxPrefixTable(void);
 extern void func_RtlAddressInSectionTable(void);
 extern void func_RtlCompareAltitudes(void);
@@ -291,6 +299,7 @@ const struct test winetest_testlist[] =
     { "NtAccessCheck",                  func_NtAccessCheck },
     { "NtAccessCheckByType",            func_NtAccessCheckByType },
     { "NtAccessCheckByTypeResultList",  func_NtAccessCheckByTypeResultList },
+    { "NtAddAtomEx",                    func_NtAddAtomEx },
     { "NtAdjustGroupsToken",            func_NtAdjustGroupsToken },
     { "NtAdjustPrivilegesToken",        func_NtAdjustPrivilegesToken },
     { "NtAllocateVirtualMemory",        func_NtAllocateVirtualMemory },
@@ -386,6 +395,12 @@ const struct test winetest_testlist[] =
     { "RtlComputePrivatizedDllName_U",  func_RtlComputePrivatizedDllName_U },
     { "RtlConditionVariable",           func_RtlConditionVariable },
     { "RtlCopyMappedMemory",            func_RtlCopyMappedMemory },
+    { "RtlConvertLCIDToString",         func_RtlConvertLCIDToString },
+    { "RtlConvertUiListToApiList",      func_RtlConvertUiListToApiList },
+    { "RtlCreateAndSetSD",              func_RtlCreateAndSetSD },
+    { "RtlMultiAppendUnicodeStringBuffer", func_RtlMultiAppendUnicodeStringBuffer },
+    { "RtlSetEnvironmentStrings",       func_RtlSetEnvironmentStrings },
+    { "RtlSetEnvironmentVar",           func_RtlSetEnvironmentVar },
     { "RtlCreateServiceSid",            func_RtlCreateServiceSid },
     { "RtlCriticalSection",             func_RtlCriticalSection },
     { "RtlCurrentTransaction",          func_RtlCurrentTransaction },
@@ -425,6 +440,7 @@ const struct test winetest_testlist[] =
     { "RtlIsNameLegalDOS8Dot3",         func_RtlIsNameLegalDOS8Dot3 },
     { "RtlLocale",                      func_RtlLocale },
     { "RtlMemoryStream",                func_RtlMemoryStream },
+    { "RtlMapSecurityErrorToNtStatus",  func_RtlMapSecurityErrorToNtStatus },
     { "PfxPrefixTable", func_PfxPrefixTable },
     { "RtlAddressInSectionTable", func_RtlAddressInSectionTable },
     { "RtlCompareAltitudes", func_RtlCompareAltitudes },

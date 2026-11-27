@@ -82,6 +82,7 @@ list(APPEND SOURCE
     NtAccessCheck.c
     NtAccessCheckByType.c
     NtAccessCheckByTypeResultList.c
+    NtAddAtomEx.c
     NtAdjustGroupsToken.c
     NtAdjustPrivilegesToken.c
     NtAllocateVirtualMemory.c
@@ -165,6 +166,12 @@ list(APPEND SOURCE
     RtlComputePrivatizedDllName_U.c
     RtlConditionVariable.c
     RtlCopyMappedMemory.c
+    RtlConvertLCIDToString.c
+    RtlConvertUiListToApiList.c
+    RtlCreateAndSetSD.c
+    RtlMultiAppendUnicodeStringBuffer.c
+    RtlSetEnvironmentStrings.c
+    RtlSetEnvironmentVar.c
     RtlCreateServiceSid.c
     RtlCriticalSection.c
     RtlCurrentTransaction.c
@@ -208,6 +215,7 @@ list(APPEND SOURCE
     RtlIsNameLegalDOS8Dot3.c
     RtlLocale.c
     RtlMemoryStream.c
+    RtlMapSecurityErrorToNtStatus.c
     PfxPrefixTable.c
     RtlAddressInSectionTable.c
     RtlCompareAltitudes.c

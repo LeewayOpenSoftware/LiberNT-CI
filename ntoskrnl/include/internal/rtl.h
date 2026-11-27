@@ -16,6 +16,15 @@ RtlQueryAtomListInAtomTable(
     OUT RTL_ATOM *AtomList
 );
 
+NTSTATUS
+NTAPI
+RtlAddAtomToAtomTableEx(
+    _In_ PRTL_ATOM_TABLE AtomTable,
+    _In_ PWSTR AtomName,
+    _Out_opt_ PRTL_ATOM Atom,
+    _In_ ULONG Flags
+);
+
 VOID
 NTAPI
 RtlInitializeRangeListPackage(

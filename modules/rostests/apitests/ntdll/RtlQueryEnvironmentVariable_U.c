@@ -3,9 +3,61 @@
  * LICENSE:     MIT (https://spdx.org/licenses/MIT)
  * PURPOSE:     Tests for RtlQueryEnvironmentVariable_U
  * COPYRIGHT:   Copyright 2026 Timo Kreuzer <timo.kreuzer@reactos.org>
+ *              Copyright 2026 Leeway Open Software
  */
 
 #include "precomp.h"
+
+/* Rows measured on Windows 11 26100: a value of UNICODE_STRING_MAX_CHARS or more gives STATUS_NO_MEMORY */
+static
+VOID
+TestLongValue(ULONG Chars, NTSTATUS ExpectedTooSmall)
+{
+    UNICODE_STRING NameString, ValueString;
+    PWSTR Environment, Value;
+    NTSTATUS Status;
+    ULONG Index;
+
+    Environment = RtlAllocateHeap(RtlGetProcessHeap(), 0, (Chars + 4) * sizeof(WCHAR));
+    Value = RtlAllocateHeap(RtlGetProcessHeap(), 0, MAXUSHORT + 1);
+    if (!Environment || !Value)
+    {
+        skip("no memory\n");
+        goto Cleanup;
+    }
+    Environment[0] = L'L';
+    Environment[1] = L'=';
+    for (Index = 0; Index < Chars; Index++)
+        Environment[2 + Index] = L'y';
+    Environment[2 + Chars] = Environment[3 + Chars] = UNICODE_NULL;
+    RtlInitUnicodeString(&NameString, L"L");
+
+    RtlInitEmptyUnicodeString(&ValueString, NULL, 0);
+    ValueString.Length = 0x5555;
+    Status = RtlQueryEnvironmentVariable_U(Environment, &NameString, &ValueString);
+    ok(Status == ExpectedTooSmall, "%lu chars, empty buffer: 0x%lx\n", Chars, Status);
+    ok(ValueString.Length == (Status == STATUS_NO_MEMORY ? 0x5555 : Chars * sizeof(WCHAR)),
+       "%lu chars: Length %u\n", Chars, ValueString.Length);
+
+    Value[0] = Value[1] = 0x2323;
+    RtlInitEmptyUnicodeString(&ValueString, Value, sizeof(WCHAR));
+    Status = RtlQueryEnvironmentVariable_U(Environment, &NameString, &ValueString);
+    ok(Status == ExpectedTooSmall, "%lu chars, 1-char buffer: 0x%lx\n", Chars, Status);
+    ok(Value[0] == UNICODE_NULL, "%lu chars: Value[0] 0x%x\n", Chars, Value[0]);
+    ok(Value[1] == 0x2323, "%lu chars: Value[1] 0x%x\n", Chars, Value[1]);
+
+    RtlInitEmptyUnicodeString(&ValueString, Value, MAXUSHORT - 1);
+    ValueString.Length = 0x5555;
+    Status = RtlQueryEnvironmentVariable_U(Environment, &NameString, &ValueString);
+    ok(Status == (ExpectedTooSmall == STATUS_NO_MEMORY ? STATUS_NO_MEMORY : STATUS_SUCCESS),
+       "%lu chars, full buffer: 0x%lx\n", Chars, Status);
+    ok(ValueString.Length == (Status == STATUS_NO_MEMORY ? 0x5555 : Chars * sizeof(WCHAR)),
+       "%lu chars: Length %u\n", Chars, ValueString.Length);
+
+Cleanup:
+    if (Environment) RtlFreeHeap(RtlGetProcessHeap(), 0, Environment);
+    if (Value) RtlFreeHeap(RtlGetProcessHeap(), 0, Value);
+}
 
 START_TEST(RtlQueryEnvironmentVariable_U)
 {
@@ -139,4 +191,8 @@ START_TEST(RtlQueryEnvironmentVariable_U)
     ok_ntstatus(Status, STATUS_VARIABLE_NOT_FOUND);
     ok_eq_ulong(ValueString.Length, 0);
     ok_eq_wchar(Buffer[0], 0xABAB);
+
+    TestLongValue(32766, STATUS_BUFFER_TOO_SMALL);
+    TestLongValue(32767, STATUS_NO_MEMORY);
+    TestLongValue(40000, STATUS_NO_MEMORY);
 }

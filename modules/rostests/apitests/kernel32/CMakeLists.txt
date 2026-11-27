@@ -155,6 +155,7 @@ list(APPEND SOURCE
     MuiResources.c
     MultiByteToWideChar.c
     NamedPipeClientComputerName.c
+    NamedPipeFsctl.c
     NpfsControl.c
     NlsStringApis.c
     NoBufferingCoherency.c

@@ -693,7 +693,7 @@ RtlpCreateAtomHandle(PRTL_ATOM_TABLE AtomTable, PRTL_ATOM_TABLE_ENTRY Entry)
 {
    HANDLE_TABLE_ENTRY ExEntry;
    HANDLE Handle;
-   USHORT HandleIndex;
+   ULONG_PTR HandleIndex;
 
    /* Initialize ex handle table entry */
    ExEntry.Object = Entry;
@@ -705,10 +705,12 @@ RtlpCreateAtomHandle(PRTL_ATOM_TABLE AtomTable, PRTL_ATOM_TABLE_ENTRY Entry)
    if (!Handle) return FALSE;
 
    /* Calculate HandleIndex (by getting rid of the first two bits) */
-   HandleIndex = (USHORT)((ULONG_PTR)Handle >> 2);
+   HandleIndex = (ULONG_PTR)Handle >> 2;
 
-   /* Index must be less than 0xC000 */
-   if (HandleIndex >= 0xC000)
+   /* Larger indices wrap the 16-bit atom into the integer-atom range; test the
+      full-width index before narrowing, or the USHORT cast would wrap an
+      out-of-range index back into range and alias an existing atom */
+   if (HandleIndex >= 0x4000)
    {
        /* Destroy ex handle */
        ExDestroyHandle(AtomTable->ExHandleTable,
@@ -720,8 +722,8 @@ RtlpCreateAtomHandle(PRTL_ATOM_TABLE AtomTable, PRTL_ATOM_TABLE_ENTRY Entry)
    }
 
    /* Initialize atom table entry */
-   Entry->HandleIndex = HandleIndex;
-   Entry->Atom = 0xC000 + HandleIndex;
+   Entry->HandleIndex = (USHORT)HandleIndex;
+   Entry->Atom = 0xC000 + (USHORT)HandleIndex;
 
    /* Return success */
    return TRUE;

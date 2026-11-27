@@ -233,6 +233,7 @@
 @ stdcall NtAccessCheckByTypeResultListAndAuditAlarmByHandle(ptr ptr ptr ptr ptr ptr ptr long long long ptr long ptr long ptr ptr ptr)
 @ stdcall -stub -version=0x600+ NtAcquireCMFViewOwnership(ptr ptr long) ; doesn't exist on Win11
 @ stdcall NtAddAtom(ptr long ptr)
+@ stdcall -version=0x602+ NtAddAtomEx(ptr long ptr long)
 @ stdcall NtAddBootEntry(ptr long)
 @ stdcall NtAddDriverEntry(ptr long) ; 5.2 and higher
 @ stdcall NtAdjustGroupsToken(long long ptr long ptr ptr)
@@ -1205,7 +1206,7 @@
 @ stdcall RtlQueryDepthSList(ptr)
 @ stdcall -version=0x600+ RtlQueryDynamicTimeZoneInformation(ptr)
 @ stdcall -stub -version=0x600+ RtlQueryElevationFlags(ptr)
-@ stdcall -version=0x600+ RtlQueryEnvironmentVariable(ptr ptr long ptr long ptr)
+@ stdcall -version=0x600+ RtlQueryEnvironmentVariable(ptr ptr ptr ptr ptr ptr)
 @ stdcall RtlQueryEnvironmentVariable_U(ptr ptr ptr)
 @ stdcall RtlQueryHeapInformation(long long ptr long ptr)
 @ stdcall RtlQueryInformationAcl(ptr ptr long long)
@@ -1284,7 +1285,7 @@
 @ stdcall RtlSetDaclSecurityDescriptor(ptr long ptr long)
 @ stdcall -stub -version=0x600+ RtlSetDynamicTimeZoneInformation(long)
 @ stdcall RtlSetEnvironmentStrings(wstr long)
-@ stdcall -stub -version=0x600+ RtlSetEnvironmentVar(ptr ptr long ptr long)
+@ stdcall -version=0x600+ RtlSetEnvironmentVar(ptr ptr ptr ptr ptr)
 @ stdcall RtlSetEnvironmentVariable(ptr ptr ptr)
 @ stdcall -version=0x600+ RtlSetExtendedFeaturesMask(ptr int64)
 @ stdcall RtlSetGroupSecurityDescriptor(ptr ptr long)
@@ -1551,6 +1552,7 @@
 @ stdcall ZwAccessCheckByTypeResultListAndAuditAlarmByHandle(ptr ptr ptr ptr ptr ptr ptr long long long ptr long ptr long ptr ptr ptr)
 @ stub -version=0x600+ ZwAcquireCMFViewOwnership
 @ stdcall ZwAddAtom(ptr long ptr)
+@ stdcall -version=0x602+ ZwAddAtomEx(ptr long ptr long)
 @ stdcall ZwAddBootEntry(ptr long)
 @ stdcall ZwAddDriverEntry(ptr long)
 @ stdcall ZwAdjustGroupsToken(long long long long long long)

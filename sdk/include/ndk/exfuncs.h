@@ -155,6 +155,16 @@ NtAddAtom(
 NTSYSCALLAPI
 NTSTATUS
 NTAPI
+NtAddAtomEx(
+    _In_reads_bytes_opt_(AtomNameLength) PCWSTR AtomName,
+    _In_ ULONG AtomNameLength,
+    _Out_opt_ PRTL_ATOM Atom,
+    _In_ ULONG Flags
+);
+
+NTSYSCALLAPI
+NTSTATUS
+NTAPI
 NtAllocateReserveObject(
     _Out_ PHANDLE ReserveHandle,
     _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
@@ -711,6 +721,16 @@ ZwAddAtom(
     _In_ PWSTR AtomName,
     _In_ ULONG AtomNameLength,
     _Inout_ PRTL_ATOM Atom
+);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwAddAtomEx(
+    _In_reads_bytes_opt_(AtomNameLength) PCWSTR AtomName,
+    _In_ ULONG AtomNameLength,
+    _Out_opt_ PRTL_ATOM Atom,
+    _In_ ULONG Flags
 );
 
 #ifdef NTOS_MODE_USER

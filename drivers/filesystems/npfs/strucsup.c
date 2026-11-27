@@ -76,6 +76,7 @@ NpDeleteFcb(IN PNP_FCB Fcb,
         ObDereferenceSecurityDescriptor(Fcb->SecurityDescriptor, 1);
     }
 
+    NpFreeAttributes(&Fcb->PipeAttributes);
     if (Fcb->FullName.Buffer) ExFreePool(Fcb->FullName.Buffer);
     ExFreePool(Fcb);
     NpCheckForNotify(Dcb, TRUE, ListEntry);
@@ -121,6 +122,9 @@ NpDeleteCcb(IN PNP_CCB Ccb,
         NpCheckForNotify(Ccb->Fcb->ParentDcb, FALSE, ListEntry);
         ExDeleteResourceLite(&Ccb->NonPagedCcb->Lock);
         NpUninitializeSecurity(Ccb);
+        NpFreeAttributes(&Ccb->ConnectionAttributes);
+        NpFreeAttributes(&Ccb->HandleAttributes[FILE_PIPE_CLIENT_END]);
+        NpFreeAttributes(&Ccb->HandleAttributes[FILE_PIPE_SERVER_END]);
         if (Ccb->ClientSession)
         {
             ExFreePool(Ccb->ClientSession);
@@ -197,6 +201,7 @@ NpCreateRootDcb(VOID)
     InitializeListHead(&Dcb->NotifyList);
     InitializeListHead(&Dcb->NotifyList2);
     InitializeListHead(&Dcb->FcbList);
+    InitializeListHead(&Dcb->PipeAttributes);
 
     Dcb->FullName.Buffer = NpRootDCBName;
     Dcb->FullName.Length = sizeof(NpRootDCBName) - sizeof(UNICODE_NULL);
@@ -247,6 +252,7 @@ NpCreateFcb(IN PNP_DCB Dcb,
         Fcb->ParentDcb = Dcb;
         InitializeListHead(&Fcb->CcbList);
         InitializeListHead(&Fcb->DcbEntry);
+        InitializeListHead(&Fcb->PipeAttributes);
         Fcb->NamedPipeConfiguration = NamedPipeConfiguration;
         Fcb->NamedPipeType = NamedPipeType;
         *NewFcb = Fcb;
@@ -279,6 +285,7 @@ NpCreateFcb(IN PNP_DCB Dcb,
     Fcb->NodeType = NPFS_NTC_FCB;
     Fcb->ParentDcb = Dcb;
     InitializeListHead(&Fcb->CcbList);
+    InitializeListHead(&Fcb->PipeAttributes);
 
     NameBuffer = ExAllocatePoolWithTag(PagedPool,
                                        MaximumLength,
@@ -390,6 +397,9 @@ NpCreateCcb(IN PNP_FCB Fcb,
     Fcb->CurrentInstances++;
     Fcb->ServerOpenCount++;
     InitializeListHead(&Ccb->IrpList);
+    InitializeListHead(&Ccb->ConnectionAttributes);
+    InitializeListHead(&Ccb->HandleAttributes[FILE_PIPE_CLIENT_END]);
+    InitializeListHead(&Ccb->HandleAttributes[FILE_PIPE_SERVER_END]);
     ExInitializeResourceLite(&Ccb->NonPagedCcb->Lock);
     *NewCcb = Ccb;
     return STATUS_SUCCESS;

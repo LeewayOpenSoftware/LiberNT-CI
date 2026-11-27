@@ -1,5 +1,6 @@
 
 list(APPEND SOURCE
+    attrsup.c
     cleanup.c
     close.c
     create.c

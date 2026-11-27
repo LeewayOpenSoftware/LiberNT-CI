@@ -921,6 +921,9 @@ typedef struct _MUTANT_OWNER_INFORMATION
 //
 // Information Structures for NtQueryAtom
 //
+#define ATOM_FLAG_NONE                          0x00000000
+#define ATOM_FLAG_GLOBAL                        0x00000002
+
 typedef struct _ATOM_BASIC_INFORMATION
 {
     USHORT UsageCount;

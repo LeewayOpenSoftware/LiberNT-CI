@@ -144,42 +144,33 @@ GetEnvironmentVariableW(IN LPCWSTR lpName,
                         IN LPWSTR lpBuffer,
                         IN DWORD nSize)
 {
-    UNICODE_STRING VarName, VarValue;
     NTSTATUS Status;
-    USHORT UniSize;
+    SIZE_T ReturnLength;
 
     if (lpBuffer == NULL)
     {
         nSize = 0;
     }
 
-    /* Set maximum size for unicode string (in chars, including UNICODE_NULL) */
-    UniSize = (USHORT)min(nSize, UNICODE_STRING_MAX_CHARS);
-
-    Status = RtlInitUnicodeStringEx(&VarName, lpName);
-    if (!NT_SUCCESS(Status))
+    Status = RtlQueryEnvironmentVariable(NULL,
+                                         (PWSTR)lpName,
+                                         lpName ? wcslen(lpName) : 0,
+                                         lpBuffer,
+                                         nSize,
+                                         &ReturnLength);
+    if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_TOO_SMALL)
     {
         BaseSetLastNTError(Status);
         return 0;
     }
 
-    RtlInitEmptyUnicodeString(&VarValue, lpBuffer, UniSize * sizeof(WCHAR));
-
-    Status = RtlQueryEnvironmentVariable_U(NULL, &VarName, &VarValue);
-    if (!NT_SUCCESS(Status))
+    if (ReturnLength > MAXDWORD)
     {
-        if (Status == STATUS_BUFFER_TOO_SMALL)
-        {
-            return (VarValue.Length / sizeof(WCHAR)) + sizeof(ANSI_NULL);
-        }
-        BaseSetLastNTError (Status);
+        BaseSetLastNTError(STATUS_BUFFER_OVERFLOW);
         return 0;
     }
 
-    if (lpBuffer)
-        lpBuffer[VarValue.Length / sizeof(WCHAR)] = UNICODE_NULL;
-
-    return (VarValue.Length / sizeof(WCHAR));
+    return (DWORD)ReturnLength;
 }
 
 /*
@@ -232,27 +223,14 @@ DECLSPEC_HOTPATCH
 SetEnvironmentVariableW(IN LPCWSTR lpName,
                         IN LPCWSTR lpValue)
 {
-    UNICODE_STRING VarName, VarValue;
     NTSTATUS Status;
 
-    Status = RtlInitUnicodeStringEx(&VarName, lpName);
-    if (NT_SUCCESS(Status))
-    {
-        if (lpValue)
-        {
-            Status = RtlInitUnicodeStringEx(&VarValue, lpValue);
-            if (NT_SUCCESS(Status))
-            {
-                Status = RtlSetEnvironmentVariable(NULL, &VarName, &VarValue);
-            }
-        }
-        else
-        {
-            Status = RtlSetEnvironmentVariable(NULL, &VarName, NULL);
-        }
-
-        if (NT_SUCCESS(Status)) return TRUE;
-    }
+    Status = RtlSetEnvironmentVar(NULL,
+                                  lpName,
+                                  lpName ? wcslen(lpName) : 0,
+                                  lpValue,
+                                  lpValue ? wcslen(lpValue) : 0);
+    if (NT_SUCCESS(Status)) return TRUE;
 
     BaseSetLastNTError(Status);
     return FALSE;
