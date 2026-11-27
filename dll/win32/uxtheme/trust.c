@@ -32,7 +32,6 @@
 #define UXT_GUARD_USER      L"Software\\Leeway\\UxTheme\\Guard"
 #define UXT_GUARD_MACHINE   L"SOFTWARE\\Leeway\\UxTheme\\Guard"
 #define UXT_GATE_SDDL       L"O:BAG:SYD:PAI(A;CI;KA;;;SY)(A;CI;KA;;;BA)(A;CI;KR;;;BU)"
-#define UXT_DEFAULT_STYLE   L"Aero"
 #define UXT_NAME_MAX        32
 #define UXT_GUARD_MAX       64
 #define UXT_MAX_STYLE_SIZE  (32u * 1024u * 1024u)
@@ -650,9 +649,6 @@ UXTHEME_TrustMachineDefault(LPWSTR name, DWORD cchName)
 {
     WCHAR v[UXT_NAME_MAX + 1];
 
-    LPCWSTR sel;
-    WCHAR path[MAX_PATH];
-
     ZeroMemory(v, sizeof(v));
     if (TrustReadMachineValue(NULL, L"MachineDefault", REG_SZ, v, sizeof(v) - sizeof(WCHAR)) &&
         TrustNameValid(v, TrustWcsnlen(v, ARRAY_SIZE(v))))
@@ -666,14 +662,8 @@ UXTHEME_TrustMachineDefault(LPWSTR name, DWORD cchName)
      * probe the compositor: dwmapi / LoadLibrary is forbidden under the loader lock. Choose by registry policy
      * only -- the Aero default (LiberNTAero) unless an administrator disabled Mica, otherwise the Basic one. The
      * Aero style renders plain until the compositor is up and switches to Mica on WM_DWMCOMPOSITIONCHANGED, so a
-     * process that attaches before dwm is not downgraded for its lifetime. Fall back to the shipped v3 default
-     * (UXT_DEFAULT_STYLE) when the chosen style is not installed, so nothing drops to Classic before P1 ships. */
-    sel = UXTHEME_MicaDisabledByPolicy() ? L"LiberNT" : L"LiberNTAero";
-    if (UXTHEME_TrustBuildV3Path(sel, path, ARRAY_SIZE(path)) &&
-        GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
-        StringCchCopyW(name, cchName, sel);
-    else
-        StringCchCopyW(name, cchName, UXT_DEFAULT_STYLE);
+     * process that attaches before dwm is not downgraded for its lifetime. Both styles ship in the store. */
+    StringCchCopyW(name, cchName, UXTHEME_MicaDisabledByPolicy() ? L"LiberNT" : L"LiberNTAero");
 }
 
 static BOOL

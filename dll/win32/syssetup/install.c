@@ -1137,9 +1137,9 @@ PreprocessUnattend(VOID)
 
     if (!bDefaultThemesOff)
     {
-        /* Retrieve an optional .theme (or .msstyles) override, defaulting to Aero */
+        /* Retrieve an optional .theme (or .msstyles) override, defaulting to the LiberNT version-4 style */
         if (!GetPrivateProfileStringW(L"Shell", L"CustomDefaultThemeFile",
-                                      L"%WINDIR%\\Resources\\Themes\\Aero\\aero.msstyles",
+                                      L"%WINDIR%\\Resources\\Themes\\LiberNTAero\\LiberNTAero.msstyles",
                                       szValue, _countof(szValue), szPath) || !*szValue)
             bDefaultThemesOff = TRUE; // Invalid override: fall back to the classic theme.
     }

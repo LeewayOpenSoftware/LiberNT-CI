@@ -6,7 +6,9 @@ find_program(LIBERNT_V4_PYTHON NAMES python3 python REQUIRED NO_CMAKE_FIND_ROOT_
 set(_v4_src ${CMAKE_CURRENT_SOURCE_DIR}/../Win8/win8.msstyles)
 file(GLOB _v4_bitmaps ${_v4_src}/bitmaps/*.bmp)
 
-function(add_liberntv4_style _name _display _description)
+# Installed into the trusted store as %SystemRoot%\Resources\Themes\<store>\<store>.msstyles, the names uxtheme
+# chooses by default (LiberNTAero, or LiberNT when an administrator disabled Mica).
+function(add_liberntv4_style _name _store _display _description)
     set(_out ${CMAKE_CURRENT_BINARY_DIR}/${_name})
     add_custom_command(
         OUTPUT ${_out}/${_name}.rc
@@ -27,7 +29,8 @@ function(add_liberntv4_style _name _display _description)
     set_module_type(${_name}.msstyles module)
     add_dependencies(${_name}.msstyles xdk)
     set_target_properties(${_name}.msstyles PROPERTIES SUFFIX "")
+    add_cd_file(TARGET ${_name}.msstyles DESTINATION reactos/Resources/Themes/${_store} NAME_ON_CD ${_store}.msstyles FOR all)
 endfunction()
 
-add_liberntv4_style(liberntv4 LiberNT "LiberNT v4 default theme")
-add_liberntv4_style(liberntbasicv4 "LiberNT Basic" "LiberNT v4 Basic theme" --basic)
+add_liberntv4_style(liberntv4 LiberNTAero LiberNT "LiberNT v4 default theme")
+add_liberntv4_style(liberntbasicv4 LiberNT "LiberNT Basic" "LiberNT v4 Basic theme" --basic)
