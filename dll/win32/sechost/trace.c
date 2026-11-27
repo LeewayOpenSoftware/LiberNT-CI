@@ -58,20 +58,6 @@ ULONG WINAPI ControlTraceW( TRACEHANDLE handle, const WCHAR *session,
 
 #endif
 
-/******************************************************************************
- *     EnableTraceEx2   (sechost.@)
- */
-ULONG WINAPI EnableTraceEx2( TRACEHANDLE handle, const GUID *provider, ULONG control, UCHAR level,
-                             ULONGLONG match_any, ULONGLONG match_all, ULONG timeout,
-                             ENABLE_TRACE_PARAMETERS *params )
-{
-    FIXME("(%s, %s, %lu, %u, %s, %s, %lu, %p): stub\n", wine_dbgstr_longlong(handle),
-          debugstr_guid(provider), control, level, wine_dbgstr_longlong(match_any),
-          wine_dbgstr_longlong(match_all), timeout, params);
-
-    return ERROR_SUCCESS;
-}
-
 #ifndef __REACTOS__
 /******************************************************************************
  *     QueryAllTracesA   (sechost.@)
@@ -126,45 +112,6 @@ ULONG WINAPI StopTraceW( TRACEHANDLE handle, const WCHAR *session, EVENT_TRACE_P
 
 #endif
 
-/******************************************************************************
- *     OpenTraceW   (sechost.@)
- */
-TRACEHANDLE WINAPI OpenTraceW( EVENT_TRACE_LOGFILEW *logfile )
-{
-    static int once;
-
-    if (!once++) FIXME("%p: stub\n", logfile);
-    SetLastError(ERROR_ACCESS_DENIED);
-    return INVALID_PROCESSTRACE_HANDLE;
-}
-
-/******************************************************************************
- *     ProcessTrace   (sechost.@)
- */
-ULONG WINAPI ProcessTrace( TRACEHANDLE *handles, ULONG count, FILETIME *start_time, FILETIME *end_time )
-{
-    FIXME("%p %lu %p %p: stub\n", handles, count, start_time, end_time);
-    return ERROR_CALL_NOT_IMPLEMENTED;
-}
-
-/******************************************************************************
- *     CloseTrace   (sechost.@)
- */
-ULONG WINAPI CloseTrace( TRACEHANDLE handle )
-{
-    FIXME("%s: stub\n", wine_dbgstr_longlong(handle));
-    return ERROR_INVALID_HANDLE;
-}
-
-/******************************************************************************
- *     TraceSetInformation   (sechost.@)
- */
-ULONG WINAPI TraceSetInformation( TRACEHANDLE handle, TRACE_INFO_CLASS class, void *info, ULONG len )
-{
-    FIXME("%s %d %p %ld: stub\n", wine_dbgstr_longlong(handle), class, info, len);
-    return ERROR_CALL_NOT_IMPLEMENTED;
-}
-
 #ifdef __REACTOS__
 /******************************************************************************
  *     EnumerateTraceGuidsEx   (sechost.@)
@@ -206,3 +153,13 @@ ULONG WINAPI EnumerateTraceGuidsEx( TRACE_QUERY_INFO_CLASS class, void *in, ULON
     return RtlNtStatusToDosError( status );
 }
 #endif
+
+ULONG WINAPI SetTraceCallback( LPCGUID Guid, PEVENT_CALLBACK EventCallback )
+{
+    return ERROR_NOT_SUPPORTED;
+}
+
+ULONG WINAPI RemoveTraceCallback( LPCGUID Guid )
+{
+    return ERROR_NOT_SUPPORTED;
+}

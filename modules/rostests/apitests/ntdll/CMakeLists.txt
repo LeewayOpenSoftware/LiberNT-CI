@@ -206,6 +206,7 @@ list(APPEND SOURCE
     RtlGetThreadErrorMode.c
     RtlGetUnloadEventTrace.c
     RtlTryAcquirePebLock.c
+    Unwind.c
     RtlHandle.c
     RtlHeapDecommit.c
     RtlHeapFreeCoalesce.c
