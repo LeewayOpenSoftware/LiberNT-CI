@@ -723,7 +723,9 @@ ProviderThread(
                                         g_Options.Fallback ? CPH_FLAG_FALLBACK : 0, &T->Set);
     StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu", T->Set ? T->Set->Count : 0);
     LuhTrace("providers", Num);
-    if (SUCCEEDED(hr) && T->Set != NULL && g_Options.PrefillUser[0] != UNICODE_NULL)
+    /* On unlock the name only picks the account for the user array; Other user stays empty. */
+    if (SUCCEEDED(hr) && T->Set != NULL && g_Options.PrefillUser[0] != UNICODE_NULL &&
+        g_Options.Scenario != CPUS_UNLOCK_WORKSTATION)
         PrefillProviders(T->Set, g_Options.PrefillUser);
     if (SUCCEEDED(hr) && T->Set != NULL)
         SetUserArrays(T->Set);
