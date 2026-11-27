@@ -36,6 +36,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_ROW_HEIGHT      30
 #define LUH_ROW_GAP         10
 #define LUH_TEXT_ABOVE_PAGE 100     /* title 40 + gap 8 + result 28 + 24 clearance over the first row */
+#define LUH_DETAIL_WIDTH    560     /* a wrapped result line, e.g. the account restriction text */
+#define LUH_DETAIL_MARGIN   16
 
 typedef struct _LUH_UI
 {
@@ -84,7 +86,7 @@ static PCWSTR
 LuhText(
     _In_ UINT Id)
 {
-    static WCHAR Cache[IDS_LUH_LAST - IDS_LUH_POWER + 1][160];
+    static WCHAR Cache[IDS_LUH_LAST - IDS_LUH_POWER + 1][256];
     PWSTR Slot;
 
     if (Id < IDS_LUH_POWER || Id > IDS_LUH_LAST)
@@ -110,6 +112,33 @@ LuhBeginExit(
         LuhProviderDeselect();
     LuhIpcExiting(Reason);
     DestroyWindow(Window);
+}
+
+/* Account restrictions the provider leaves unworded: LogonUI says them itself, as on Windows. */
+#define LUH_STATUS_ACCOUNT_RESTRICTION  ((LONG)0xC000006EL)
+#define LUH_STATUS_INVALID_LOGON_HOURS  ((LONG)0xC000006FL)
+#define LUH_STATUS_INVALID_WORKSTATION  ((LONG)0xC0000070L)
+#define LUH_STATUS_ACCOUNT_DISABLED     ((LONG)0xC0000072L)
+#define LUH_STATUS_ACCOUNT_EXPIRED      ((LONG)0xC0000193L)
+#define LUH_STATUS_ACCOUNT_LOCKED_OUT   ((LONG)0xC0000234L)
+
+static UINT
+LuhAccountStatusText(
+    _In_ LONG Status,
+    _In_ LONG SubStatus)
+{
+    LONG Code = (Status == LUH_STATUS_ACCOUNT_RESTRICTION && SubStatus < 0) ? SubStatus : Status;
+
+    switch (Code)
+    {
+        case LUH_STATUS_ACCOUNT_DISABLED:   return IDS_LUH_ACCOUNT_DISABLED;
+        case LUH_STATUS_ACCOUNT_EXPIRED:    return IDS_LUH_ACCOUNT_EXPIRED;
+        case LUH_STATUS_INVALID_LOGON_HOURS: return IDS_LUH_LOGON_HOURS;
+        case LUH_STATUS_INVALID_WORKSTATION: return IDS_LUH_WORKSTATION;
+        case LUH_STATUS_ACCOUNT_LOCKED_OUT: return IDS_LUH_LOCKED_OUT;
+        case LUH_STATUS_ACCOUNT_RESTRICTION: return IDS_LUH_ACCOUNT_RESTRICTED;
+    }
+    return 0;
 }
 
 static void
@@ -874,6 +903,9 @@ LuhHandleCommand(
             Status[0] = UNICODE_NULL;
             if (g_Ui.ProvidersStarted && LuhProviderReportResult(Command->Status, Command->SubStatus, Status, ARRAYSIZE(Status)) && Status[0])
                 StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Status);
+            else if (Command->Text[0] == UNICODE_NULL && LuhAccountStatusText(Command->Status, Command->SubStatus))
+                StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail),
+                               LuhText(LuhAccountStatusText(Command->Status, Command->SubStatus)));
             else
                 StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Command->Text);
             LuhSetSpinner(Window, FALSE);
@@ -1026,10 +1058,27 @@ LuhPaint(
 
     if (g_Ui.Detail[0] != UNICODE_NULL)
     {
+        RECT Wrap;
+        int Width = min(Client.right - 2 * LUH_DETAIL_MARGIN, LUH_DETAIL_WIDTH);
+
         Rect.top = Rect.bottom + 8;
         Rect.bottom = Rect.top + 28;
         SelectObject(Dc, g_Ui.TextFont);
-        DrawTextW(Dc, g_Ui.Detail, -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        /* A long account message wraps; it grows upwards so the page below never moves. */
+        SetRect(&Wrap, 0, 0, max(Width, 1), 0);
+        DrawTextW(Dc, g_Ui.Detail, -1, &Wrap, DT_CENTER | DT_WORDBREAK | DT_CALCRECT);
+        if (Wrap.bottom <= 28)
+        {
+            DrawTextW(Dc, g_Ui.Detail, -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+        else
+        {
+            Wrap.left = (Client.right - Width) / 2;
+            Wrap.right = Wrap.left + Width;
+            Wrap.top = max(Rect.bottom - (Wrap.bottom - Wrap.top), Client.top);
+            Wrap.bottom = Rect.bottom;
+            DrawTextW(Dc, g_Ui.Detail, -1, &Wrap, DT_CENTER | DT_WORDBREAK | DT_END_ELLIPSIS);
+        }
     }
 
     if (g_Ui.Spinner)

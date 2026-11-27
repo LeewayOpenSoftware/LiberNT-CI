@@ -27,4 +27,10 @@ BEGIN
     IDS_LUH_CANCEL          "Cancelar"
     IDS_LUH_EMERGENCY_TITLE "Reinicio de emergencia"
     IDS_LUH_EMERGENCY_TEXT  "Seleccione Aceptar para reiniciar de inmediato. Se perderá todo lo que no haya guardado. Use esto solo como último recurso."
+    IDS_LUH_ACCOUNT_DISABLED "Su cuenta se ha deshabilitado. Póngase en contacto con el administrador del sistema."
+    IDS_LUH_ACCOUNT_EXPIRED "La cuenta del usuario ha expirado."
+    IDS_LUH_LOGON_HOURS     "Su cuenta tiene restricciones de horario que le impiden iniciar sesión en este momento.\nInténtelo de nuevo más tarde."
+    IDS_LUH_WORKSTATION     "Su cuenta está configurada para impedir que use este equipo. Pruebe con otro equipo."
+    IDS_LUH_ACCOUNT_RESTRICTED "Las restricciones de la cuenta impiden que este usuario inicie sesión. Por ejemplo: no se permiten contraseñas en blanco, el horario de inicio de sesión está limitado o se aplica una restricción de directiva."
+    IDS_LUH_LOCKED_OUT      "La cuenta a la que se hace referencia está bloqueada y no se puede usar para iniciar sesión."
 END

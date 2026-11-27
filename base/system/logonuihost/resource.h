@@ -25,5 +25,11 @@
 #define IDS_LUH_CANCEL              115
 #define IDS_LUH_EMERGENCY_TITLE     116
 #define IDS_LUH_EMERGENCY_TEXT      117
+#define IDS_LUH_ACCOUNT_DISABLED    118
+#define IDS_LUH_ACCOUNT_EXPIRED     119
+#define IDS_LUH_LOGON_HOURS         120
+#define IDS_LUH_WORKSTATION         121
+#define IDS_LUH_ACCOUNT_RESTRICTED  122
+#define IDS_LUH_LOCKED_OUT          123
 
-#define IDS_LUH_LAST                IDS_LUH_EMERGENCY_TEXT
+#define IDS_LUH_LAST                IDS_LUH_LOCKED_OUT
