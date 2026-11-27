@@ -833,8 +833,6 @@ BEGIN
     IDS_SHUTDOWN_REBOOT "Restart"
     IDS_SHUTDOWN_SLEEP "Sleep"
     IDS_SHUTDOWN_HIBERNATE "Hibernate"
-    IDS_LOGOFF_TITLE "Log Off Orosi"
-    IDS_LOGOFF_PROMPT "Are you sure you want to log off?"
 
     /* Format Dialog Strings */
     IDS_FORMAT_TITLE "Format Local Disk"

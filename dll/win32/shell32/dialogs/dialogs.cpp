@@ -1057,10 +1057,9 @@ int WINAPI RestartDialogEx(HWND hWndOwner, LPCWSTR lpwstrReason, DWORD uFlags, D
 
 EXTERN_C int WINAPI LogoffWindowsDialog(HWND hWndOwner)
 {
-    /* Vista+: a Yes/No confirm of its own, not the Shut Down dialog; NoLogoff still suppresses it. */
-    if (!(ShellGetAllowedShutdownOptions() & 0x01))
-        return 0;
-    if (ConfirmDialog(hWndOwner, IDS_LOGOFF_PROMPT, IDS_LOGOFF_TITLE))
+    /* Windows 11 signs out at once; only NoLogoff stops it. */
+    UNREFERENCED_PARAMETER(hWndOwner);
+    if (ShellGetAllowedShutdownOptions() & 0x01)
         ExitWindowsEx(EWX_LOGOFF, 0);
 
     return 0;

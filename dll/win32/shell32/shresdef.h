@@ -86,8 +86,6 @@
 #define IDS_SHUTDOWN_REBOOT    80
 #define IDS_SHUTDOWN_SLEEP     81
 #define IDS_SHUTDOWN_HIBERNATE 82
-#define IDS_LOGOFF_TITLE       83
-#define IDS_LOGOFF_PROMPT      84
 
 #define IDS_PROGRAMS             45
 #define IDS_FAVORITES            47
