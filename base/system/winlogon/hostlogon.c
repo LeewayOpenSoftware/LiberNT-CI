@@ -1596,7 +1596,7 @@ WlHlUserMayShutdown(
     DWORD Size = 0, i;
     LUID Shutdown;
 
-    if (Session->UserToken == NULL || !LookupPrivilegeValueW(NULL, SE_SHUTDOWN_NAME, &Shutdown) ||
+    if (Session->UserToken == NULL || !LookupPrivilegeValueW(NULL, L"SeShutdownPrivilege", &Shutdown) ||
         !GetTokenInformation(Session->UserToken, TokenPrivileges, Buffer, sizeof(Buffer), &Size))
         return FALSE;
     for (i = 0; i < Privileges->PrivilegeCount; i++)
