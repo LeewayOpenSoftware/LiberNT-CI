@@ -58,7 +58,8 @@ ExpIsRestrictedCaller(VOID)
     SeCaptureSubjectContext(&SubjectContext);
     SeLockSubjectContext(&SubjectContext);
     Token = SeQuerySubjectContextToken(&SubjectContext);
-    Restricted = SepGetTokenIntegrityRid(Token) < SECURITY_MANDATORY_MEDIUM_RID ||
+    Restricted = (SubjectContext.ClientToken && SubjectContext.ImpersonationLevel < SecurityImpersonation) ||
+                 SepGetTokenIntegrityRid(Token) < SECURITY_MANDATORY_MEDIUM_RID ||
                  (((PTOKEN)Token)->TokenFlags & TOKEN_LOWBOX) != 0;
     SeUnlockSubjectContext(&SubjectContext);
     SeReleaseSubjectContext(&SubjectContext);
@@ -82,6 +83,33 @@ ExpIsRestrictedClass(IN SYSTEM_INFORMATION_CLASS SystemInformationClass)
         default:
             return FALSE;
     }
+}
+
+static
+BOOLEAN
+ExpCallerCanQueryProcess(IN PEPROCESS Process,
+                         IN PSECURITY_SUBJECT_CONTEXT SubjectContext)
+{
+    PSECURITY_DESCRIPTOR SecurityDescriptor;
+    BOOLEAN MemoryAllocated, Granted;
+    ACCESS_MASK GrantedAccess;
+    NTSTATUS Status;
+
+    if (!NT_SUCCESS(ObGetObjectSecurity(Process, &SecurityDescriptor, &MemoryAllocated)))
+        return FALSE;
+
+    Granted = SeAccessCheck(SecurityDescriptor,
+                            SubjectContext,
+                            FALSE,
+                            PROCESS_QUERY_INFORMATION,
+                            0,
+                            NULL,
+                            &PsProcessType->TypeInfo.GenericMapping,
+                            UserMode,
+                            &GrantedAccess,
+                            &Status);
+    ObReleaseObjectSecurity(SecurityDescriptor, MemoryAllocated);
+    return Granted;
 }
 
 FORCEINLINE
@@ -1380,6 +1408,11 @@ ExpQuerySystemProcessInformation(
     UNICODE_STRING RecordName;
     ULONG RecordSize;
     BOOLEAN ShowAddresses = ExpCallerSeesKernelAddresses();
+    BOOLEAN Restricted = ExpIsRestrictedCaller();
+    SECURITY_SUBJECT_CONTEXT SubjectContext;
+
+    if (Restricted)
+        SeCaptureSubjectContext(&SubjectContext);
 
     _SEH2_TRY
     {
@@ -1413,6 +1446,14 @@ ExpQuerySystemProcessInformation(
         do
         {
             SpiCurrent = (PSYSTEM_PROCESS_INFORMATION) Current;
+
+            /* A restricted caller is shown only the processes it could open for query, as on Windows 11 */
+            if (Restricted && Process != PsIdleProcess && !ExpCallerCanQueryProcess(Process, &SubjectContext))
+            {
+                CurrentSize = 0;
+                ImageNameMaximumLength = 0;
+                goto Skip;
+            }
 
             /* Lock the Process */
             KeEnterCriticalRegion();
@@ -1664,6 +1705,8 @@ Skip:
        idle process, which the walk starts from without referencing it */
     if (!NT_SUCCESS(Status) && Process != NULL && Process != PsIdleProcess)
         ObDereferenceObject(Process);
+    if (Restricted)
+        SeReleaseSubjectContext(&SubjectContext);
 
     if (Overflow)
         Status = STATUS_INFO_LENGTH_MISMATCH;
