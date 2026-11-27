@@ -3196,8 +3196,8 @@
 @ stub -arch=win64 RtlSetThreadPlaceholderCompatibilityMode
 @ stub -arch=win64 RtlShiftLeftBitMap
 @ stub -arch=win64 RtlShiftLeftBitMapEx
-@ stdcall -arch=win64 RtlSidHashInitialize(ptr long ptr)
-@ stdcall -arch=win64 RtlSidHashLookup(ptr ptr)
+@ stdcall RtlSidHashInitialize(ptr long ptr)
+@ stdcall RtlSidHashLookup(ptr ptr)
 @ stdcall RtlStringFromGUIDEx(ptr ptr long)
 @ stdcall -arch=win64 RtlStronglyEnumerateEntryHashTable(ptr ptr)
 @ stdcall RtlSuffixUnicodeString(ptr ptr long)
