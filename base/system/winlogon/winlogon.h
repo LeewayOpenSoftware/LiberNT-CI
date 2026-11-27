@@ -760,4 +760,12 @@ VOID
 LogonStage(
     _In_ PCSTR Stage);
 
+/* bootspinner.c */
+VOID
+WlBootSpinnerShow(
+    _Inout_ PWLSESSION Session);
+
+VOID
+WlBootSpinnerStop(VOID);
+
 #endif /* __WINLOGON_MAIN_H__ */
