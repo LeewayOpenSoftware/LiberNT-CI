@@ -118,7 +118,8 @@ typedef struct _LUH_UI
     RECT Eye;
     BOOL HasText;           /* the arrow box is not empty: the eye shows */
     BOOL Revealing;         /* the eye is held down */
-    WCHAR PasswordChar;     /* the edit's mask character, put back after a reveal */
+    WCHAR PasswordChar;     /* the revealed edit's own mask character, put back after the reveal */
+    BOOL NoReveal;          /* policy: "Do not display the password reveal button" */
     LONG SpinnerY;          /* the spinner's centre under the text in Still */
     HBRUSH SoftBrush;       /* Soft as a pattern, behind static controls */
     LONG Lift;              /* how far the curtain is pulled up, in pixels */
@@ -731,7 +732,7 @@ LuhDrawBox(
     if (Index == g_Ui.ArrowField)
     {
         LuhDrawArrow(Surface, &g_Ui.Arrow);
-        if (Field->Type == CPFT_PASSWORD_TEXT && Field->Control && GetWindowTextLengthW(Field->Control) > 0)
+        if (!IsRectEmpty(&g_Ui.Eye) && Field->Control && GetWindowTextLengthW(Field->Control) > 0)
             LuhDrawEye(Surface, &g_Ui.Eye);
     }
 }
@@ -801,8 +802,10 @@ LuhReveal(
     if (g_Ui.ArrowField == (DWORD)-1 || g_Ui.Page == NULL)
         return;
     Field = &g_Ui.Page->Fields[g_Ui.ArrowField];
-    if (Field->Control == NULL || Field->Type != CPFT_PASSWORD_TEXT || On == g_Ui.Revealing)
+    if (Field->Control == NULL || Field->Type != CPFT_PASSWORD_TEXT || On == g_Ui.Revealing || (On && g_Ui.NoReveal))
         return;
+    if (On)
+        g_Ui.PasswordChar = (WCHAR)SendMessageW(Field->Control, EM_GETPASSWORDCHAR, 0, 0);
     g_Ui.Revealing = On;
     SendMessageW(Field->Control, EM_SETPASSWORDCHAR, On ? 0 : g_Ui.PasswordChar, 0);
     InvalidateRect(Field->Control, NULL, TRUE);
@@ -839,6 +842,15 @@ LuhCreatePage(
     g_Ui.ArrowField = (DWORD)-1;
     SetRectEmpty(&g_Ui.Arrow);
     SetRectEmpty(&g_Ui.Eye);
+    {
+        /* The machine policy that removes the reveal button; on the logon desktop it is HKLM's. */
+        DWORD Value = 0, Size = sizeof(Value);
+
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Policies\\Microsoft\\Windows\\CredUI",
+                         L"DisablePasswordReveal", RRF_RT_REG_DWORD, NULL, &Value, &Size) != ERROR_SUCCESS)
+            Value = 0;
+        g_Ui.NoReveal = (Value != 0);
+    }
     for (i = 0; i < Page->Count; i++)
     {
         if (!LuhFieldVisible(&Page->Fields[i]))
@@ -909,7 +921,7 @@ LuhCreatePage(
                 {
                     SetRect(&g_Ui.Arrow, Right - LuhPx(LUH_BOX_BUTTON), Y, Right, Field->Box.bottom);
                     Inner = g_Ui.Arrow.left;
-                    if (Field->Type == CPFT_PASSWORD_TEXT)
+                    if (Field->Type == CPFT_PASSWORD_TEXT && !g_Ui.NoReveal)
                     {
                         SetRect(&g_Ui.Eye, Inner - LuhPx(LUH_BOX_BUTTON), Y, Inner, Field->Box.bottom);
                         Inner = g_Ui.Eye.left;
@@ -925,8 +937,6 @@ LuhCreatePage(
                     SendMessageW(Field->Control, WM_SETFONT, (WPARAM)g_Ui.TextFont, FALSE);
                     SendMessageW(Field->Control, EM_SETLIMITTEXT, LUH_FIELD_TEXT - 1, 0);
                     g_Ui.EditProc = (WNDPROC)SetWindowLongPtrW(Field->Control, GWLP_WNDPROC, (LONG_PTR)LuhEditProc);
-                    if (Field->Type == CPFT_PASSWORD_TEXT)
-                        g_Ui.PasswordChar = (WCHAR)SendMessageW(Field->Control, EM_GETPASSWORDCHAR, 0, 0);
                     if (Field->Interactive == CPFIS_DISABLED)
                         EnableWindow(Field->Control, FALSE);
                     else if (Focus == NULL || Field->Interactive == CPFIS_FOCUSED)
@@ -1136,6 +1146,8 @@ LuhSubmit(
 
     if (g_Ui.Page == NULL || g_Ui.PageBusy)
         return;
+    /* Enter while the eye is held: mask again before anything else happens. */
+    LuhReveal(Window, FALSE);
 
     for (i = 0; i < g_Ui.Page->Count; i++)
     {
@@ -2158,8 +2170,12 @@ LuhWindowProc(
         case WM_COMMAND:
             if ((HIWORD(wParam) == EN_SETFOCUS || HIWORD(wParam) == EN_KILLFOCUS) && LuhFieldOfControl((HWND)lParam))
             {
-                /* The focused box carries the accent line. */
-                LuhPageChanged(Window);
+                /* The focused box carries the accent line: repaint that box only. */
+                RECT Box = LuhFieldOfControl((HWND)lParam)->Box;
+
+                InflateRect(&Box, LuhPx(2), LuhPx(2));
+                g_Ui.StillValid = FALSE;
+                InvalidateRect(Window, &Box, FALSE);
                 return 0;
             }
             if (HIWORD(wParam) == EN_CHANGE && g_Ui.ArrowField != (DWORD)-1 && g_Ui.Page &&
