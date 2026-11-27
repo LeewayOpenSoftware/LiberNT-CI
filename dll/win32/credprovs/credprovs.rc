@@ -31,6 +31,9 @@ BEGIN
     IDS_PASSWORD_CHANGE_FAILED  "The password could not be changed. Try again."
 END
 
+/* UTF-8 */
+#pragma code_page(65001)
+
 #ifdef LANGUAGE_ES_ES
     #include "lang/es-ES.rc"
 #endif

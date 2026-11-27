@@ -20,7 +20,7 @@ BEGIN
     IDS_BAD_USER_OR_PASSWORD    "El nombre de usuario o la contraseña no son correctos. Inténtelo de nuevo."
     IDS_BAD_PASSWORD            "La contraseña no es correcta. Inténtelo de nuevo."
     IDS_PASSWORD_EXPIRED        "La contraseña ha expirado y debe cambiarse."
-    IDS_PASSWORD_MISMATCH       "Las contraseñas escritas no coinciden."
+    IDS_PASSWORD_MISMATCH       "Las contraseñas no coinciden."
     IDS_PASSWORD_CHANGED        "Se ha cambiado la contraseña."
     IDS_PASSWORD_RESTRICTION    "La nueva contraseña no cumple los requisitos de longitud, complejidad o historial. Pruebe con otra."
     IDS_PASSWORD_CHANGE_FAILED  "No se pudo cambiar la contraseña. Inténtelo de nuevo."
