@@ -191,11 +191,6 @@ ShutdownDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 case IDCANCEL:
                     EndDialog(hDlg, IDCANCEL);
                     return TRUE;
-                case IDHELP:
-                    /* Win11 opens a help topic; the exact target is unverified,
-                       so use the legacy Win32 help entry point for now */
-                    WinHelpW(hDlg, NULL, HELP_FINDER, 0);
-                    return TRUE;
                 case IDC_SHUTDOWN_ACTION:
                     if (HIWORD(wParam) == CBN_SELCHANGE)
                         ShutdownShowDescription(hDlg);
