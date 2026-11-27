@@ -57,7 +57,7 @@ BEGIN
     IDS_LOADINGYOURPERSONALSETTINGS "Cargando su configuración personal"
     IDS_CLOSINGNETWORKCONNECTIONS "Cerrando las conexiones de red"
     IDS_REACTOSISRESTARTING "Reiniciando"
-    IDS_REACTOSISSHUTTINGDOWN "Apagando el equipo"
+    IDS_REACTOSISSHUTTINGDOWN "Apagando"
     IDS_PREPARETOSTANDBY "Entrando en modo de espera (Standby)"
     IDS_PREPARETOHIBERNATE "Hibernando"
     IDS_SAVEYOURSETTINGS "Guardando su configuración personal"
@@ -75,6 +75,11 @@ BEGIN
     IDS_REMINDER_TITLE "You're about to be signed out"
     IDS_REMINDER_SHUTDOWN "Orosi will shut down in %s."
     IDS_REMINDER_RESTART "Orosi will restart in %s."
+END
+
+STRINGTABLE
+BEGIN
+    IDS_SIGNINGOUT "Cerrando sesión"
 END
 
 STRINGTABLE

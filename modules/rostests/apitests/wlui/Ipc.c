@@ -21,7 +21,7 @@ extern RPC_IF_HANDLE Testwlui_v1_0_s_ifspec;   /* widl prefixes the server ifspe
 
 static LONG g_Calls;
 static GUID g_LastLaunchId;
-static DWORD g_LastScenario, g_LastCb, g_LastAction, g_LastFaultReason, g_LastExitReason;
+static DWORD g_LastScenario, g_LastCb, g_LastAction, g_LastFaultReason, g_LastExitReason, g_LastShown;
 static GUID g_LastClsid;
 static BYTE g_LastBytes[32];
 
@@ -74,6 +74,11 @@ DWORD __stdcall TestWluiReportProviderFault(handle_t h, GUID LaunchId, GUID Prov
 DWORD __stdcall TestWluiExiting(handle_t h, GUID LaunchId, WLUI_EXIT_REASON Reason)
 {
     InterlockedIncrement(&g_Calls); g_LastLaunchId = LaunchId; g_LastExitReason = Reason; return ERROR_SUCCESS;
+}
+
+DWORD __stdcall TestWluiCommandShown(handle_t h, GUID LaunchId, DWORD Sequence)
+{
+    InterlockedIncrement(&g_Calls); g_LastLaunchId = LaunchId; g_LastShown = Sequence; return ERROR_SUCCESS;
 }
 
 /* ---- helpers --------------------------------------------------------------- */
@@ -266,11 +271,13 @@ Test_ServerCheckAndWire(void)
     ok(g_LastAction == WluiActionRestart, "action %lu\n", g_LastAction);
     ok(WluiClientReportProviderFault(&C, &Clsid, 3) == ERROR_SUCCESS, "ReportProviderFault\n");
     ok(g_LastFaultReason == 3, "fault reason %lu\n", g_LastFaultReason);
+    ok(WluiClientCommandShown(&C, 7) == ERROR_SUCCESS, "CommandShown\n");
+    ok(g_LastShown == 7, "shown %lu\n", g_LastShown);
     ok(WluiClientExiting(&C, WluiExitDismissed) == ERROR_SUCCESS, "Exiting\n");
     ok(g_LastExitReason == WluiExitDismissed, "exit reason %lu\n", g_LastExitReason);
     /* Ready, Heartbeat, WaitForCommand, three submits that pass the client checks
-     * (the package-0 one is refused by the server, after it counted), action, fault, exiting. */
-    ok(g_Calls == 9, "calls %ld\n", g_Calls);
+     * (the package-0 one is refused by the server, after it counted), action, fault, shown, exiting. */
+    ok(g_Calls == 10, "calls %ld\n", g_Calls);
 
     WluiDisconnect(&C);
     StopTestServer();

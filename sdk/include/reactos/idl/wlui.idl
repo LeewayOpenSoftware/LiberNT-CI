@@ -43,6 +43,9 @@ const unsigned long WLUI_FLAG_NO_CHANGE_PASSWORD = 0x00000100;  /* DisableChange
 const unsigned long WLUI_FLAG_NO_TASK_MANAGER    = 0x00000200;  /* DisableTaskMgr */
 /* DisplayStatus: the Ctrl+Alt+Del notice over the clock; no key or click lifts it, only winlogon's next command. */
 const unsigned long WLUI_FLAG_CURTAIN            = 0x00000400;
+/* RequestCredentials: a signed-in session, including the locked one, could lose unsaved work, so restart
+ * and shut down ask first ("Restart anyway" / "Shut down anyway"), as Windows 11 does. */
+const unsigned long WLUI_FLAG_USERS_SIGNED_IN    = 0x00000800;
 
 const unsigned long WLUI_MAX_TEXT = 256;
 const unsigned long WLUI_MAX_SERIALIZATION = 65536;
@@ -83,7 +86,9 @@ typedef enum _WLUI_ACTION
     WluiActionLogoff = 5,
     WluiActionChangePassword = 6,
     WluiActionTaskManager = 7,
-    WluiActionEmergencyRestart = 8
+    WluiActionEmergencyRestart = 8,
+    /* The power flyout and the options' power button; the host offers it only when the machine can sleep. */
+    WluiActionSleep = 9
 } WLUI_ACTION;
 
 [
@@ -162,4 +167,12 @@ interface wlui
         [in] handle_t hBinding,
         [in] GUID LaunchId,
         [in] WLUI_EXIT_REASON Reason);
+
+    /* Function 7: the screen for command Sequence is painted (the host's first WM_PAINT after it). */
+    DWORD
+    __stdcall
+    WluiCommandShown(
+        [in] handle_t hBinding,
+        [in] GUID LaunchId,
+        [in] DWORD Sequence);
 }
