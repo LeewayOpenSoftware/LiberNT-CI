@@ -37,4 +37,6 @@ BEGIN
     IDS_LUH_OK              "Aceptar"
     IDS_LUH_TIP_SHUTDOWN    "Cierra todas las aplicaciones y apaga el equipo."
     IDS_LUH_TIP_RESTART     "Cierra todas las aplicaciones, apaga el equipo y vuelve a encenderlo."
+    IDS_LUH_SLEEP           "Suspender"
+    IDS_LUH_TIP_SLEEP       "El equipo sigue encendido con poco consumo. Las aplicaciones siguen abiertas y, al reactivarlo, vuelves al instante a donde lo dejaste."
 END

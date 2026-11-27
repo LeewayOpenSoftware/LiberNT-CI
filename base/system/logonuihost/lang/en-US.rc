@@ -37,4 +37,6 @@ BEGIN
     IDS_LUH_OK              "OK"
     IDS_LUH_TIP_SHUTDOWN    "Closes all apps and turns off the PC."
     IDS_LUH_TIP_RESTART     "Closes all apps, turns off the PC, and then turns it on again."
+    IDS_LUH_SLEEP           "Sleep"
+    IDS_LUH_TIP_SLEEP       "The PC stays on but uses low power. Apps stay open so when the PC wakes up, you're instantly back to where you left off."
 END

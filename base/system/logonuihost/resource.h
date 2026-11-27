@@ -35,5 +35,7 @@
 #define IDS_LUH_OK                  125
 #define IDS_LUH_TIP_SHUTDOWN        126
 #define IDS_LUH_TIP_RESTART         127
+#define IDS_LUH_SLEEP               128
+#define IDS_LUH_TIP_SLEEP           129
 
-#define IDS_LUH_LAST                IDS_LUH_TIP_RESTART
+#define IDS_LUH_LAST                IDS_LUH_TIP_SLEEP

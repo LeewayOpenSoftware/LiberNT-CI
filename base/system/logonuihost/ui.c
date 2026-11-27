@@ -9,6 +9,7 @@
 #include "resource.h"
 #include "gfx.h"
 #include <aclapi.h>
+#include <powrprof.h>
 #include <math.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
@@ -32,7 +33,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_ID_FIELD_BASE   1000
 #define LUH_ID_RESTART      1900
 #define LUH_ID_SHUTDOWN     1901
-#define LUH_ID_POWER        1902    /* the power button: a flyout of LUH_ID_SHUTDOWN and LUH_ID_RESTART */
+#define LUH_ID_POWER        1902    /* the power button: a flyout of LUH_ID_SLEEP, LUH_ID_SHUTDOWN, LUH_ID_RESTART */
+#define LUH_ID_SLEEP        1903
 #define LUH_ID_OPTION_BASE  1920    /* + row of the Ctrl+Alt+Del options (LuhOptionRows) */
 #define LUH_ID_OPTION_CANCEL 1930
 #define LUH_ID_RESULT_OK    1931    /* the OK under a result shown in place of the fields */
@@ -81,6 +83,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 /* Power flyout (shot 20) and the sign-in page while Shutting down / Restarting (shots 19, 21). */
 #define LUH_FLYOUT_WIDTH    132
 #define LUH_FLYOUT_ROW      40
+#define LUH_FLYOUT_FILL     RGB(43, 43, 48)
 #define LUH_POWER_DOTS_DY   68
 #define LUH_POWER_TEXT_DY   130
 /* Full-screen notice (legal notice shot): caption above the centre, text from it, OK under it. */
@@ -613,6 +616,19 @@ LuhDrawEye(
     LuhFillCircle(Surface, (LONG)Cx, (LONG)Cy, max(LuhPx(2), 2), RGB(255, 255, 255), 230);
 }
 
+/* Sleep: a crescent, a disc with an offset disc in the flyout's colour taken out of it. */
+static void
+LuhDrawMoon(
+    _Inout_ PLUH_SURFACE Surface,
+    _In_ LONG Cx,
+    _In_ LONG Cy)
+{
+    LONG R = LuhPx(7);
+
+    LuhFillCircle(Surface, Cx, Cy, R, RGB(255, 255, 255), 255);
+    LuhFillCircle(Surface, Cx + R / 2 + 1, Cy - R / 2, R - 1, LUH_FLYOUT_FILL, 255);
+}
+
 /* Restart: a ring open at the top right with an arrow head at its end. */
 static void
 LuhDrawRestart(
@@ -702,6 +718,8 @@ LuhDrawItem(
         Cx = Rect.left + LuhPx(18);
         if (Item->CtlID == LUH_ID_RESTART)
             LuhDrawRestart(Surface, Cx, Cy);
+        else if (Item->CtlID == LUH_ID_SLEEP)
+            LuhDrawMoon(Surface, Cx, Cy);
         else
             LuhDrawPower(Surface, Cx, Cy);
         Local = Rect;
@@ -1082,6 +1100,17 @@ LuhIsFlyoutRow(
     return FALSE;
 }
 
+static BOOL
+LuhCanSleep(VOID)
+{
+    SYSTEM_POWER_CAPABILITIES Caps;
+
+    ZeroMemory(&Caps, sizeof(Caps));
+    if (CallNtPowerInformation(SystemPowerCapabilities, NULL, 0, &Caps, sizeof(Caps)) != 0)
+        return FALSE;
+    return Caps.SystemS3 || Caps.AoAc;
+}
+
 /*
  * Windows 11's power flyout: a small dark card above the power button, one row per action with
  * its symbol, the focused row outlined, and what it does in a tooltip above the card. The choice
@@ -1091,21 +1120,28 @@ static void
 LuhOpenFlyout(
     _In_ HWND Window)
 {
-    static const UINT Rows[] = { LUH_ID_SHUTDOWN, LUH_ID_RESTART };
+    static const UINT All[] = { LUH_ID_SLEEP, LUH_ID_SHUTDOWN, LUH_ID_RESTART };
+    UINT Rows[ARRAYSIZE(All)];
     RECT Client, Button;
     LONG Width = LuhPx(LUH_FLYOUT_WIDTH), Row = LuhPx(LUH_FLYOUT_ROW), Pad = LuhPx(4), Top;
-    DWORD i;
+    DWORD i, Count = 0;
+
+    /* Sleep only where the machine can sleep (S3 or modern standby), as on Windows 11. */
+    for (i = 0; i < ARRAYSIZE(All); i++)
+        if (All[i] != LUH_ID_SLEEP || LuhCanSleep())
+            Rows[Count++] = All[i];
 
     GetClientRect(Window, &Client);
     GetWindowRect(g_Ui.PowerButton, &Button);
     MapWindowPoints(NULL, Window, (LPPOINT)&Button, 2);
-    Top = Button.top - LuhPx(8) - (LONG)ARRAYSIZE(Rows) * Row - 2 * Pad;
+    Top = Button.top - LuhPx(8) - (LONG)Count * Row - 2 * Pad;
     SetRect(&g_Ui.FlyoutCard, Client.right - LuhPx(4) - Width, Top, Client.right - LuhPx(4),
             Button.top - LuhPx(8));
-    for (i = 0; i < ARRAYSIZE(Rows); i++)
+    for (i = 0; i < Count; i++)
     {
         g_Ui.FlyoutButtons[i] = CreateWindowExW(0, L"BUTTON",
-                                                LuhText(Rows[i] == LUH_ID_RESTART ? IDS_LUH_RESTART : IDS_LUH_SHUTDOWN),
+                                                LuhText(Rows[i] == LUH_ID_RESTART ? IDS_LUH_RESTART :
+                                                        Rows[i] == LUH_ID_SLEEP ? IDS_LUH_SLEEP : IDS_LUH_SHUTDOWN),
                                                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY,
                                                 g_Ui.FlyoutCard.left + Pad, Top + Pad + (LONG)i * Row,
                                                 Width - 2 * Pad, Row, Window, (HMENU)(UINT_PTR)Rows[i], NULL, NULL);
@@ -2448,10 +2484,11 @@ LuhComposeFlyout(
     SIZE Size;
     RECT Rect;
 
-    LuhFillRound(Surface, &g_Ui.FlyoutCard, LuhPx(6), RGB(43, 43, 48), 255);
+    LuhFillRound(Surface, &g_Ui.FlyoutCard, LuhPx(6), LUH_FLYOUT_FILL, 255);
     LuhFrameRound(Surface, &g_Ui.FlyoutCard, LuhPx(6), 1, RGB(255, 255, 255), 30);
     if (LuhIsFlyoutRow(Focus))
-        Tip = LuhText(GetDlgCtrlID(Focus) == LUH_ID_RESTART ? IDS_LUH_TIP_RESTART : IDS_LUH_TIP_SHUTDOWN);
+        Tip = LuhText(GetDlgCtrlID(Focus) == LUH_ID_RESTART ? IDS_LUH_TIP_RESTART :
+                      GetDlgCtrlID(Focus) == LUH_ID_SLEEP ? IDS_LUH_TIP_SLEEP : IDS_LUH_TIP_SHUTDOWN);
     if (Tip == NULL || Tip[0] == UNICODE_NULL)
         return;
     Size = LuhMeasureText(g_Ui.SmallFont, Tip);
@@ -2749,6 +2786,12 @@ LuhWindowProc(
                 {
                     g_Ui.NoticeOk = (Id == LUH_ID_NOTICE_OK);
                     g_Ui.NoticeUp = FALSE;
+                }
+                else if (Id == LUH_ID_SLEEP)
+                {
+                    LuhCloseFlyout(Window, FALSE);
+                    LuhTrace("power", L"sleep");
+                    WluiClientRequestAction(&g_Connection, WluiActionSleep);
                 }
                 else if (Id == LUH_ID_RESTART || Id == LUH_ID_SHUTDOWN)
                 {
