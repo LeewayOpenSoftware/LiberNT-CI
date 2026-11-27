@@ -147,6 +147,7 @@ extern void func_MappedReadAfterWrite(void);
 extern void func_MuiResources(void);
 extern void func_MultiByteToWideChar(void);
 extern void func_NamedPipeClientComputerName(void);
+extern void func_NpfsControl(void);
 extern void func_NlsStringApis(void);
 extern void func_NoBufferingCoherency(void);
 extern void func_NumaApis(void);
@@ -385,6 +386,7 @@ const struct test winetest_testlist[] =
     { "MuiResources",                func_MuiResources },
     { "MultiByteToWideChar",         func_MultiByteToWideChar },
     { "NamedPipeClientComputerName", func_NamedPipeClientComputerName },
+    { "NpfsControl", func_NpfsControl },
     { "NlsStringApis",               func_NlsStringApis },
     { "NoBufferingCoherency",        func_NoBufferingCoherency },
     { "NumaApis",                    func_NumaApis },
