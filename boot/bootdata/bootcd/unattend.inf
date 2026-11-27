@@ -88,7 +88,7 @@ InstallationType = 0
 ;[Env]
 ;WINETEST_PLATFORM=reactos
 
-; Override the default LiberNT visual style or select Classic with DefaultThemesOff = yes.
+; Override the default Orosi visual style or select Classic with DefaultThemesOff = yes.
 ;[Shell]
 ;DefaultThemesOff = no
-;CustomDefaultThemeFile = "%WINDIR%\Resources\Themes\LiberNTAero\LiberNTAero.msstyles"
+;CustomDefaultThemeFile = "%WINDIR%\Resources\Themes\OrosiAero\OrosiAero.msstyles"

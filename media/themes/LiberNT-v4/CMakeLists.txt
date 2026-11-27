@@ -7,7 +7,7 @@ set(_v4_src ${CMAKE_CURRENT_SOURCE_DIR}/../Win8/win8.msstyles)
 file(GLOB _v4_bitmaps ${_v4_src}/bitmaps/*.bmp)
 
 # Installed into the trusted store as %SystemRoot%\Resources\Themes\<store>\<store>.msstyles, the names uxtheme
-# chooses by default (LiberNTAero, or LiberNT when an administrator disabled Mica).
+# chooses by default (OrosiAero, or Orosi when an administrator disabled Mica).
 function(add_liberntv4_style _name _store _display _description)
     set(_out ${CMAKE_CURRENT_BINARY_DIR}/${_name})
     add_custom_command(
@@ -32,5 +32,5 @@ function(add_liberntv4_style _name _store _display _description)
     add_cd_file(TARGET ${_name}.msstyles DESTINATION reactos/Resources/Themes/${_store} NAME_ON_CD ${_store}.msstyles FOR all)
 endfunction()
 
-add_liberntv4_style(liberntv4 LiberNTAero LiberNT "LiberNT v4 default theme")
-add_liberntv4_style(liberntbasicv4 LiberNT "LiberNT Basic" "LiberNT v4 Basic theme" --basic)
+add_liberntv4_style(liberntv4 OrosiAero Orosi "Orosi default theme")
+add_liberntv4_style(liberntbasicv4 Orosi "Orosi Basic" "Orosi Basic theme" --basic)

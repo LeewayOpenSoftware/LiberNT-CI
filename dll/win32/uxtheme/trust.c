@@ -660,10 +660,10 @@ UXTHEME_TrustMachineDefault(LPWSTR name, DWORD cchName)
 
     /* No explicit default. This runs at process attach (DllMain) for every privileged process, so it must not
      * probe the compositor: dwmapi / LoadLibrary is forbidden under the loader lock. Choose by registry policy
-     * only -- the Aero default (LiberNTAero) unless an administrator disabled Mica, otherwise the Basic one. The
+     * only -- the Aero default (OrosiAero) unless an administrator disabled Mica, otherwise the Basic one. The
      * Aero style renders plain until the compositor is up and switches to Mica on WM_DWMCOMPOSITIONCHANGED, so a
      * process that attaches before dwm is not downgraded for its lifetime. Both styles ship in the store. */
-    StringCchCopyW(name, cchName, UXTHEME_MicaDisabledByPolicy() ? L"LiberNT" : L"LiberNTAero");
+    StringCchCopyW(name, cchName, UXTHEME_MicaDisabledByPolicy() ? L"Orosi" : L"OrosiAero");
 }
 
 static BOOL
