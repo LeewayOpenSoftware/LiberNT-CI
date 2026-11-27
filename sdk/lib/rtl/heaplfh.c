@@ -185,16 +185,17 @@ BOOLEAN
 RtlpLfhReleaseEntry(PHEAP Heap, PRTLP_LFH_USER_BLOCK Block, PHEAP_ENTRY Entry)
 {
     LONGLONG volatile *Word = (LONGLONG volatile *)&Entry->Size;
+    ULONGLONG Key = RtlpHeapEncodingKey(Heap);
     RTLP_LFH_ENTRY_HEADER Old;
     ULONG Offset;
 
-    Old.Word = (LONGLONG)RtlpDecodeHeapEntryWord(Heap, (ULONGLONG)ReadNoFence64(Word));
+    Old.Word = (LONGLONG)((ULONGLONG)ReadNoFence64(Word) ^ Key);
     if (!(Old.Bytes[RTLP_LFH_HEADER_FLAGS] & HEAP_ENTRY_BUSY))
         return FALSE;
     /* Rebuild the free header from slot geometry. */
     Offset = (ULONG)(((PUCHAR)Entry - (PUCHAR)Block) >> HEAP_ENTRY_SHIFT);
     /* FIXME: two threads freeing the same block at once both pass this check; only a double free from one thread is rejected */
-    RtlpEntryWrite(Heap, Entry, (USHORT)Offset, 0, (USHORT)(Offset >> 16), HEAP_LFH_INDEX, 0);
+    RtlpEntryWriteKeyed(Entry, (USHORT)Offset, 0, (USHORT)(Offset >> 16), HEAP_LFH_INDEX, 0, Key);
     return TRUE;
 }
 
@@ -207,8 +208,9 @@ RtlpLfhBlockFromEntryIndex(PHEAP Heap, PHEAP_ENTRY Entry, PVOID Low, PVOID High,
     SIZE_T Distance;
     ULONG Slot;
     HEAP_ENTRY Decoded;
+    ULONGLONG Key = RtlpHeapEncodingKey(Heap);
 
-    RtlpDecodeHeapEntry(Heap, Entry, &Decoded);
+    RtlpDecodeHeapEntryKeyed(Entry, &Decoded, Key);
     if (Decoded.SegmentOffset != HEAP_LFH_INDEX || !RtlpHeapEntryValid(Heap, &Decoded))
         return NULL;
 
@@ -473,10 +475,11 @@ RtlpLfhPopSlot(PRTLP_LFH_USER_BLOCK Block, SIZE_T Size, ULONG Flags, PULONG Coll
 
     Entry = RtlpLfhSlotEntry(Block, Head);
     Offset = (ULONG)(((PUCHAR)Entry - (PUCHAR)Block) >> HEAP_ENTRY_SHIFT);
-    RtlpEntryWrite(Block->Heap, Entry, (USHORT)Offset,
-                   (UCHAR)(HEAP_ENTRY_BUSY | ((Flags & HEAP_SETTABLE_USER_FLAGS) >> 4)),
-                   (USHORT)(Offset >> 16), HEAP_LFH_INDEX,
-                   (UCHAR)(RtlpLfhUsableSize(Block) - Size));
+    RtlpEntryWriteKeyed(Entry, (USHORT)Offset,
+                        (UCHAR)(HEAP_ENTRY_BUSY | ((Flags & HEAP_SETTABLE_USER_FLAGS) >> 4)),
+                        (USHORT)(Offset >> 16), HEAP_LFH_INDEX,
+                        (UCHAR)(RtlpLfhUsableSize(Block) - Size),
+                        RtlpHeapEncodingKey(Block->Heap));
     return Entry + 1;
 }
 

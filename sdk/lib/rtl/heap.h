@@ -358,6 +358,50 @@ RtlpHeapEncodingActive(PHEAP Heap)
 }
 
 /*
+ * Keyed variants: the caller reads Heap->Encoding once into a local and threads
+ * it through every header touch of the call. The code word and the key are both
+ * HEAP_ENTRY, so a header store would otherwise force the key to be reloaded on
+ * the next touch; a local key stays in a register across the store. Same crypto
+ * and checksum as the non-keyed forms.
+ */
+FORCEINLINE
+ULONGLONG
+RtlpHeapEncodingKey(PHEAP Heap)
+{
+    return Heap->Encoding.AgregateCode;
+}
+
+FORCEINLINE
+VOID
+RtlpDecodeHeapEntryKeyed(PVOID Entry, PHEAP_ENTRY Decoded, ULONGLONG Key)
+{
+    Decoded->AgregateCode = ((PHEAP_ENTRY)Entry)->AgregateCode ^ Key;
+}
+
+FORCEINLINE
+VOID
+RtlpEncodeHeapEntryKeyed(PVOID Entry, PHEAP_ENTRY Clear, ULONGLONG Key)
+{
+    Clear->SmallTagIndex = RtlpHeapEntryChecksum(Clear);
+    ((PHEAP_ENTRY)Entry)->AgregateCode = Clear->AgregateCode ^ Key;
+}
+
+FORCEINLINE
+VOID
+RtlpEntryWriteKeyed(PVOID Entry, USHORT Size, UCHAR Flags, USHORT PreviousSize, UCHAR SegmentOffset, UCHAR UnusedBytes, ULONGLONG Key)
+{
+    HEAP_ENTRY Clear;
+
+    Clear.AgregateCode = 0;
+    Clear.Size = Size;
+    Clear.Flags = Flags;
+    Clear.PreviousSize = PreviousSize;
+    Clear.SegmentOffset = SegmentOffset;
+    Clear.UnusedBytes = UnusedBytes;
+    RtlpEncodeHeapEntryKeyed(Entry, &Clear, Key);
+}
+
+/*
  * A decoded header is accepted when the heap is not yet encoding (the accessor
  * funnel is in place but the key is zero and the checksum is not enforced) or
  * when its checksum matches. Enforcement therefore turns on with the key.
