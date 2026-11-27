@@ -21,6 +21,29 @@
 
 static const GUID TestProvider = { 0x2f9b6c11, 0x8d3e, 0x4a75, { 0xb1, 0x40, 0x6e, 0x27, 0x93, 0x5c, 0x0a, 0xd8 } };
 
+/* the enable notification the session sends, recorded for the diagnosis */
+static ULONG CallbackSeen;
+static ULONG CallbackIsEnabled;
+static UCHAR CallbackLevel;
+static ULONGLONG CallbackMatchAny;
+
+static VOID WINAPI
+TestEnableCallback(
+    _In_ LPCGUID SourceId,
+    _In_ ULONG IsEnabled,
+    _In_ UCHAR Level,
+    _In_ ULONGLONG MatchAnyKeyword,
+    _In_ ULONGLONG MatchAllKeyword,
+    _In_opt_ PEVENT_FILTER_DESCRIPTOR FilterData,
+    _In_opt_ PVOID CallbackContext)
+{
+    (void)SourceId; (void)MatchAllKeyword; (void)FilterData; (void)CallbackContext;
+    CallbackSeen++;
+    CallbackIsEnabled = IsEnabled;
+    CallbackLevel = Level;
+    CallbackMatchAny = MatchAnyKeyword;
+}
+
 static void
 ResetProperties(
     _Out_ PEVENT_TRACE_PROPERTIES Properties,
@@ -149,6 +172,7 @@ START_TEST(EventTrace)
     EVENT_DESCRIPTOR Descriptor;
     EVENT_DATA_DESCRIPTOR Data[2];
     ULONG Size, Status, Value;
+    ULONG StartStatus, EnableStatus, RegStatus;
     BOOL Visible;
     USHORT Id;
 
@@ -165,37 +189,39 @@ START_TEST(EventTrace)
     ResetProperties(Properties, Size, Path);
     ControlTraceW(0, SESSION_NAME, Properties, EVENT_TRACE_CONTROL_STOP);
     ResetProperties(Properties, Size, Path);
-    Status = StartTraceW(&Session, SESSION_NAME, Properties);
-    if (Status == ERROR_ACCESS_DENIED)
+    StartStatus = StartTraceW(&Session, SESSION_NAME, Properties);
+    if (StartStatus == ERROR_ACCESS_DENIED)
     {
         skip("Starting a trace session needs administrator rights\n");
         HeapFree(GetProcessHeap(), 0, Properties);
         return;
     }
-    ok_long(Status, ERROR_SUCCESS);
-    if (Status != ERROR_SUCCESS)
+    ok_long(StartStatus, ERROR_SUCCESS);
+    if (StartStatus != ERROR_SUCCESS)
     {
         HeapFree(GetProcessHeap(), 0, Properties);
         return;
     }
 
-    Status = EventRegister(&TestProvider, NULL, NULL, &Reg);
-    ok_long(Status, ERROR_SUCCESS);
+    RegStatus = EventRegister(&TestProvider, TestEnableCallback, NULL, &Reg);
+    ok_long(RegStatus, ERROR_SUCCESS);
 
     /* Nothing is enabled yet */
     Describe(&Descriptor, 20, TRACE_LEVEL_INFORMATION, 0x2);
     ok(!EventEnabled(Reg, &Descriptor), "EventEnabled before the enable\n");
 
-    Status = EnableTraceEx2(Session, &TestProvider, EVENT_CONTROL_CODE_ENABLE_PROVIDER, TRACE_LEVEL_INFORMATION,
-                            0x2, 0, 0, NULL);
-    ok_long(Status, ERROR_SUCCESS);
+    EnableStatus = EnableTraceEx2(Session, &TestProvider, EVENT_CONTROL_CODE_ENABLE_PROVIDER, TRACE_LEVEL_INFORMATION,
+                                  0x2, 0, 0, NULL);
+    ok_long(EnableStatus, ERROR_SUCCESS);
 
-    /* the enable becomes visible asynchronously; on Win11 26100 the call
-       succeeds while EventEnabled stays FALSE for seconds. Everything below
-       depends on the enable, so settle first and skip when it never lands */
+    /* the enable is synchronous on Orosi and logman enables providers on the
+       same Win11 VM, so an invisible enable here is a failure to diagnose,
+       not a state to skip: report every status and the callback values */
     Visible = WaitProviderEnabled(Reg);
-    /* the enable is synchronous on Orosi; tolerate an invisible one on Windows only */
-    ok(Visible || broken(!Visible), "enable never became visible\n");
+    ok(Visible, "enable never became visible: StartTrace=%lu EnableTraceEx2=%lu register=%lu callback(seen=%lu isenabled=%lu level=%u matchany=%I64x)\n",
+       StartStatus, EnableStatus, RegStatus, CallbackSeen, CallbackIsEnabled, CallbackLevel, CallbackMatchAny);
+    if (!Visible)
+        skip("session enable did not become visible; see the failed row above\n");
     if (Visible)
     {
         Describe(&Descriptor, 20, TRACE_LEVEL_INFORMATION, 0x2);
