@@ -2502,7 +2502,11 @@ LuhLiftCurtain(
     /* Windows 11 without Ctrl+Alt+Del: lock screen, lift, legal notice, sign-in. */
     Page = LuhDeferredNotice(Window, Page);
     if (g_Ui.Exiting)
+    {
+        g_Ui.CurtainPage = Page;    /* zeroed and released with the rest of the curtain state */
+        LuhFreeCurtainPage();
         return;
+    }
     if (Page)
     {
         LuhSetSpinner(Window, FALSE);
