@@ -163,72 +163,76 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     /* TokenSandBoxInert */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenAuditPolicy */
-    IQS_SAME(TOKEN_AUDIT_POLICY_INFORMATION, ULONG, ICIF_SET | ICIF_SET_SIZE_VARIABLE),
+    IQS_SAME(TOKEN_AUDIT_POLICY_INFORMATION, ULONG,
+             ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET | ICIF_SET_SIZE_VARIABLE),
     /* TokenOrigin */
     IQS_SAME(TOKEN_ORIGIN, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET),
     /* TokenElevationType */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenLinkedToken */
-    IQS_SAME(TOKEN_LINKED_TOKEN, ULONG, ICIF_QUERY | ICIF_SET),
+    IQS_SAME(TOKEN_LINKED_TOKEN, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET),
     /* TokenElevation */
-    IQS_SAME(TOKEN_ELEVATION, ULONG, ICIF_QUERY),
+    IQS_SAME(TOKEN_ELEVATION, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenHasRestrictions */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenAccessInformation */
-    IQS_NONE,
+    IQS_SAME(TOKEN_ACCESS_INFORMATION, PVOID, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenVirtualizationAllowed */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenVirtualizationEnabled */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenIntegrityLevel */
     IQS_SAME(TOKEN_MANDATORY_LABEL, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET | ICIF_SET_SIZE_VARIABLE),
     /* TokenUIAccess */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenMandatoryPolicy */
-    IQS_SAME(TOKEN_MANDATORY_POLICY, ULONG, ICIF_QUERY | ICIF_SET),
+    IQS_SAME(TOKEN_MANDATORY_POLICY, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE | ICIF_SET),
     /* TokenLogonSid */
     IQS_SAME(TOKEN_GROUPS, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenIsAppContainer */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenCapabilities */
     IQS_SAME(TOKEN_GROUPS, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenAppContainerSid */
     IQS_SAME(SEP_TOKEN_APPCONTAINER_INFORMATION, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenAppContainerNumber */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenUserClaimAttributes */
-    IQS_NONE,
+    IQS_SAME(CLAIM_SECURITY_ATTRIBUTES_INFORMATION, ULONG,
+             ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenDeviceClaimAttributes */
-    IQS_NONE,
+    IQS_SAME(CLAIM_SECURITY_ATTRIBUTES_INFORMATION, ULONG,
+             ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenRestrictedUserClaimAttributes */
     IQS_NONE,
     /* TokenRestrictedDeviceClaimAttributes */
     IQS_NONE,
     /* TokenDeviceGroups */
-    IQS_NONE,
+    IQS_SAME(TOKEN_GROUPS, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenRestrictedDeviceGroups */
     IQS_NONE,
     /* TokenSecurityAttributes */
     IQS_SAME(SEP_TOKEN_SECURITY_ATTRIBUTES_INFORMATION, ULONG,
              ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenIsRestricted */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenProcessTrustLevel */
-    IQS_NONE,
+    IQS_SAME(PVOID, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenPrivateNameSpace */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenSingletonAttributes */
-    IQS_NONE,
+    IQS_SAME(CLAIM_SECURITY_ATTRIBUTES_INFORMATION, ULONG,
+             ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenBnoIsolation */
     IQS_SAME(TOKEN_BNO_ISOLATION_INFORMATION, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
     /* TokenChildProcessFlags */
-    IQS_SAME(ULONG, ULONG, ICIF_QUERY),
+    IQS_NONE,
     /* TokenIsLessPrivilegedAppContainer */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY),
     /* TokenIsSandboxed */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY),
-    /* TokenOriginatingProcessTrustLevel */
-    IQS_NONE,
+    /* TokenIsAppSilo */
+    IQS_SAME(ULONG, ULONG, ICIF_QUERY | ICIF_QUERY_SIZE_VARIABLE),
 };
 
 /* PRIVATE FUNCTIONS **********************************************************/
@@ -769,6 +773,64 @@ SeQueryInformationToken(
  * STATUS_ACCESS_VIOLATION is returned if ReturnLength is NULL. A failure NTSTATUS
  * code is returned otherwise.
  */
+static ULONG
+SepAccessInfoSidHashLength(
+    _In_ ULONG Count,
+    _In_reads_opt_(Count) PSID_AND_ATTRIBUTES Sids)
+{
+    ULONG Length = sizeof(SID_AND_ATTRIBUTES_HASH) + Count * sizeof(SID_AND_ATTRIBUTES);
+    ULONG i;
+
+    for (i = 0; i < Count; i++)
+        Length += ALIGN_UP_BY(RtlLengthSid(Sids[i].Sid), sizeof(PVOID));
+
+    return ALIGN_UP_BY(Length, sizeof(PVOID));
+}
+
+static VOID
+SepAccessInfoBuildSidHash(
+    _In_ PUCHAR Scratch,
+    _In_ ULONG HashOffset,
+    _In_ ULONG_PTR UserBase,
+    _In_ ULONG Count,
+    _In_reads_opt_(Count) PSID_AND_ATTRIBUTES Sids)
+{
+    PSID_AND_ATTRIBUTES_HASH Hash = (PSID_AND_ATTRIBUTES_HASH)(Scratch + HashOffset);
+    ULONG ArrayOffset = HashOffset + sizeof(SID_AND_ATTRIBUTES_HASH);
+    PSID_AND_ATTRIBUTES Array = (PSID_AND_ATTRIBUTES)(Scratch + ArrayOffset);
+    ULONG SidOffset = ArrayOffset + Count * sizeof(SID_AND_ATTRIBUTES);
+    ULONG i;
+
+    if (Count == 0)
+    {
+        Hash->SidCount = 0;
+        Hash->SidAttr = NULL;
+        return;
+    }
+
+    for (i = 0; i < Count; i++)
+    {
+        ULONG SidLength = RtlLengthSid(Sids[i].Sid);
+        RtlCopySid(SidLength, Scratch + SidOffset, Sids[i].Sid);
+        Array[i].Sid = (PSID)(Scratch + SidOffset);
+        Array[i].Attributes = Sids[i].Attributes;
+        SidOffset += ALIGN_UP_BY(SidLength, sizeof(PVOID));
+    }
+
+    /* Hash over the kernel-resident SID copies, then relocate every pointer to
+     * the caller's buffer. Hash[] holds SidAttr indices, so it stays valid. */
+    RtlSidHashInitialize(Array, Count, Hash);
+
+    SidOffset = ArrayOffset + Count * sizeof(SID_AND_ATTRIBUTES);
+    for (i = 0; i < Count; i++)
+    {
+        ULONG SidLength = RtlLengthSid(Array[i].Sid);
+        Array[i].Sid = (PSID)(UserBase + SidOffset);
+        SidOffset += ALIGN_UP_BY(SidLength, sizeof(PVOID));
+    }
+    Hash->SidAttr = (PSID_AND_ATTRIBUTES)(UserBase + ArrayOffset);
+}
+
 _Must_inspect_result_
 __kernel_entry
 NTSTATUS
@@ -1622,9 +1684,9 @@ NtQueryInformationToken(
             case TokenAppContainerNumber:
             case TokenIsRestricted:
             case TokenPrivateNameSpace:
-            case TokenChildProcessFlags:
             case TokenIsLessPrivilegedAppContainer:
             case TokenIsSandboxed:
+            case TokenIsAppSilo:
             {
                 ULONG Value;
 
@@ -1632,7 +1694,7 @@ NtQueryInformationToken(
                 RequiredLength = sizeof(ULONG);
                 if (TokenInformationClass == TokenIsLessPrivilegedAppContainer && !Token->LowBoxInfo)
                 {
-                    Status = STATUS_INVALID_PARAMETER;
+                    Status = STATUS_INVALID_INFO_CLASS;
                     break;
                 }
 
@@ -1676,6 +1738,11 @@ NtQueryInformationToken(
                     case TokenIsSandboxed:
                         Value = !!(Token->TokenFlags & TOKEN_SANDBOX_INERT);
                         break;
+                    case TokenIsAppSilo:
+                        /* FIXME: app-silo membership is not tracked yet; Win11
+                         * returns 0 on a token that is not in a silo. */
+                        Value = 0;
+                        break;
                     default:
                         Value = 0;
                         break;
@@ -1683,7 +1750,14 @@ NtQueryInformationToken(
 
                 _SEH2_TRY
                 {
-                    if (TokenInformationLength >= RequiredLength)
+                    /* TokenElevation is fixed-size: a non-exact buffer yields
+                     * STATUS_INFO_LENGTH_MISMATCH with ReturnLength set, per Win11. */
+                    if (TokenInformationClass == TokenElevation &&
+                        TokenInformationLength != RequiredLength)
+                    {
+                        Status = STATUS_INFO_LENGTH_MISMATCH;
+                    }
+                    else if (TokenInformationLength >= RequiredLength)
                     {
                         *(PULONG)TokenInformation = Value;
                     }
@@ -1712,7 +1786,7 @@ NtQueryInformationToken(
                 DPRINT("NtQueryInformationToken(TokenLinkedToken)\n");
 
                 RequiredLength = sizeof(TOKEN_LINKED_TOKEN);
-                if (TokenInformationLength < RequiredLength)
+                if (TokenInformationLength != RequiredLength)
                 {
                     _SEH2_TRY
                     {
@@ -1722,7 +1796,7 @@ NtQueryInformationToken(
                     {
                     }
                     _SEH2_END;
-                    Status = STATUS_BUFFER_TOO_SMALL;
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
                     break;
                 }
 
@@ -1765,6 +1839,200 @@ NtQueryInformationToken(
                     ObCloseHandle(Handle, PreviousMode);
                 }
                 _SEH2_END;
+                break;
+            }
+
+            case TokenAuditPolicy:
+            {
+                DPRINT("NtQueryInformationToken(TokenAuditPolicy)\n");
+
+                /* Win11 gates the query on SeSecurityPrivilege being enabled and
+                 * returns a fixed 30-byte per-user audit policy structure (Pam
+                 * Win11 pin win11-token-probes.md); the privilege is checked
+                 * before the length. */
+                RequiredLength = 30;
+
+                if (!SeSinglePrivilegeCheck(SeSecurityPrivilege, PreviousMode))
+                {
+                    Status = STATUS_PRIVILEGE_NOT_HELD;
+                    break;
+                }
+
+                _SEH2_TRY
+                {
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        /* FIXME: no per-user audit policy source exists yet; Win11
+                         * returns zeros when none is configured. Map the token's
+                         * audit policy here once the 30-byte per-category layout
+                         * is defined. */
+                        RtlZeroMemory(TokenInformation, RequiredLength);
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                break;
+            }
+
+            case TokenUserClaimAttributes:
+            case TokenDeviceClaimAttributes:
+            case TokenSingletonAttributes:
+            case TokenDeviceGroups:
+            case TokenProcessTrustLevel:
+            {
+                DPRINT("NtQueryInformationToken(%d)\n", TokenInformationClass);
+
+                /* FIXME: these are reported as an empty fixed-size structure
+                 * regardless of the token's real claim attributes, device groups
+                 * or trust level, which are not stored yet. Win11 returns an empty
+                 * result when none is present; sizes verified on 26100.9974 (Pam,
+                 * native-parity-03/win11-token-query-themes67.md). */
+                switch (TokenInformationClass)
+                {
+                    case TokenDeviceGroups:
+                        RequiredLength = sizeof(TOKEN_GROUPS);
+                        break;
+                    case TokenProcessTrustLevel:
+                        RequiredLength = sizeof(PVOID);
+                        break;
+                    default:
+                        RequiredLength = sizeof(CLAIM_SECURITY_ATTRIBUTES_INFORMATION);
+                        break;
+                }
+
+                _SEH2_TRY
+                {
+                    if (TokenInformationLength >= RequiredLength)
+                    {
+                        RtlZeroMemory(TokenInformation, RequiredLength);
+                        if (TokenInformationClass != TokenDeviceGroups &&
+                            TokenInformationClass != TokenProcessTrustLevel)
+                        {
+                            ((PCLAIM_SECURITY_ATTRIBUTES_INFORMATION)TokenInformation)->Version =
+                                CLAIM_SECURITY_ATTRIBUTES_INFORMATION_VERSION_V1;
+                        }
+                    }
+                    else
+                    {
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    }
+
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+                break;
+            }
+
+            case TokenAccessInformation:
+            {
+                PUCHAR Scratch;
+                PTOKEN_ACCESS_INFORMATION Info;
+                PTOKEN_PRIVILEGES Priv;
+                ULONG_PTR UserBase = (ULONG_PTR)TokenInformation;
+                ULONG HeaderLength, SidHashLength, RestrictedLength, PrivLength, CapLength;
+                ULONG Offset, p;
+
+                DPRINT("NtQueryInformationToken(TokenAccessInformation)\n");
+
+                HeaderLength = ALIGN_UP_BY(sizeof(TOKEN_ACCESS_INFORMATION), sizeof(PVOID));
+                SidHashLength = SepAccessInfoSidHashLength(Token->UserAndGroupCount,
+                                                           Token->UserAndGroups);
+                RestrictedLength = SepAccessInfoSidHashLength(Token->RestrictedSidCount,
+                                                             Token->RestrictedSids);
+                PrivLength = ALIGN_UP_BY(FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges) +
+                                         Token->PrivilegeCount * sizeof(LUID_AND_ATTRIBUTES),
+                                         sizeof(PVOID));
+                CapLength = ALIGN_UP_BY(sizeof(SID_AND_ATTRIBUTES_HASH), sizeof(PVOID));
+
+                RequiredLength = HeaderLength + SidHashLength + RestrictedLength +
+                                 PrivLength + CapLength;
+
+                if (TokenInformationLength < RequiredLength)
+                {
+                    _SEH2_TRY
+                    {
+                        *ReturnLength = RequiredLength;
+                    }
+                    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                    {
+                        Status = _SEH2_GetExceptionCode();
+                    }
+                    _SEH2_END;
+                    if (NT_SUCCESS(Status))
+                        Status = STATUS_BUFFER_TOO_SMALL;
+                    break;
+                }
+
+                Scratch = ExAllocatePoolWithTag(PagedPool, RequiredLength, TAG_SE);
+                if (Scratch == NULL)
+                {
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    break;
+                }
+                RtlZeroMemory(Scratch, RequiredLength);
+
+                Info = (PTOKEN_ACCESS_INFORMATION)Scratch;
+                Offset = HeaderLength;
+
+                /* Every embedded pointer is written as the caller's buffer address
+                 * (UserBase + offset) into the scratch, then copied out once; the
+                 * kernel never reads back the user buffer. */
+                Info->SidHash = (PSID_AND_ATTRIBUTES_HASH)(UserBase + Offset);
+                SepAccessInfoBuildSidHash(Scratch, Offset, UserBase,
+                                          Token->UserAndGroupCount, Token->UserAndGroups);
+                Offset += SidHashLength;
+
+                Info->RestrictedSidHash = (PSID_AND_ATTRIBUTES_HASH)(UserBase + Offset);
+                SepAccessInfoBuildSidHash(Scratch, Offset, UserBase,
+                                          Token->RestrictedSidCount, Token->RestrictedSids);
+                Offset += RestrictedLength;
+
+                Info->Privileges = (PTOKEN_PRIVILEGES)(UserBase + Offset);
+                Priv = (PTOKEN_PRIVILEGES)(Scratch + Offset);
+                Priv->PrivilegeCount = Token->PrivilegeCount;
+                for (p = 0; p < Token->PrivilegeCount; p++)
+                    Priv->Privileges[p] = Token->Privileges[p];
+                Offset += PrivLength;
+
+                /* Capabilities hash is present but empty on a non-AppContainer token. */
+                Info->CapabilitiesHash = (PSID_AND_ATTRIBUTES_HASH)(UserBase + Offset);
+                Offset += CapLength;
+
+                Info->AuthenticationId = Token->AuthenticationId;
+                Info->TokenType = Token->TokenType;
+                Info->ImpersonationLevel = Token->ImpersonationLevel;
+                Info->MandatoryPolicy.Policy = Token->MandatoryPolicy;
+                Info->Flags = Token->TokenFlags;
+                Info->AppContainerNumber =
+                    Token->LowBoxInfo ? ((PSEP_LOWBOX_INFO)Token->LowBoxInfo)->LowBoxNumber : 0;
+                /* FIXME: PackageSid, TrustLevelSid and SecurityAttributes stay NULL
+                 * until the token tracks an AppContainer/trust SID and claims. */
+
+                _SEH2_TRY
+                {
+                    RtlCopyMemory(TokenInformation, Scratch, RequiredLength);
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                }
+                _SEH2_END;
+
+                ExFreePoolWithTag(Scratch, TAG_SE);
                 break;
             }
 
