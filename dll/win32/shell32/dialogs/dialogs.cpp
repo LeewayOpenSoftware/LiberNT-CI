@@ -1057,8 +1057,10 @@ int WINAPI RestartDialogEx(HWND hWndOwner, LPCWSTR lpwstrReason, DWORD uFlags, D
 
 EXTERN_C int WINAPI LogoffWindowsDialog(HWND hWndOwner)
 {
-    /* Show only the Log off choice (Vista+ dialog in shell32). */
-    if (ShellShutdownWindowsDialog(hWndOwner, ~(DWORD)0x01) == 0x01)
+    /* Vista+: a Yes/No confirm of its own, not the Shut Down dialog; NoLogoff still suppresses it. */
+    if (!(ShellGetAllowedShutdownOptions() & 0x01))
+        return 0;
+    if (ConfirmDialog(hWndOwner, IDS_LOGOFF_PROMPT, IDS_LOGOFF_TITLE))
         ExitWindowsEx(EWX_LOGOFF, 0);
 
     return 0;
