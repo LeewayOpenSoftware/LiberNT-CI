@@ -289,6 +289,18 @@ AddUser(
     Array->Users[Array->Count++] = User;
 }
 
+/* Winlogon\\SpecialAccounts\\UserList: a DWORD 0 under the account name keeps it off the tiles, as on Windows. */
+static BOOL
+IsHiddenAccount(
+    _In_ PCWSTR Name)
+{
+    DWORD Value = 1, Size = sizeof(Value);
+
+    return RegGetValueW(HKEY_LOCAL_MACHINE,
+                        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\SpecialAccounts\\UserList",
+                        Name, RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS && Value == 0;
+}
+
 static DWORD
 ReadPolicyDword(
     _In_ PCWSTR Name,
@@ -370,6 +382,8 @@ LuhUsersCreate(
             if (Info[i].usri1_flags & UF_ACCOUNTDISABLE)
                 continue;
             if (Unlock && _wcsicmp(Info[i].usri1_name, OnlyName) != 0)
+                continue;
+            if (!Unlock && IsHiddenAccount(Info[i].usri1_name))
                 continue;
             AddUser(Array, Computer, Info[i].usri1_name);
         }
