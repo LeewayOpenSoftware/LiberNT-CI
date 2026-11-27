@@ -218,7 +218,7 @@
 @ stdcall DuplicateHandle(long long long ptr long long long) kernel32.DuplicateHandle
 @ stdcall DuplicateToken(long long ptr)
 @ stdcall DuplicateTokenEx(long long ptr long long ptr)
-@ stdcall -version=0x601+ EmptyWorkingSet(long) kernel32.K32EmptyWorkingSet
+@ stdcall -version=0x601+ EmptyWorkingSet(long)
 @ stdcall EncodePointer(ptr) ntdll.RtlEncodePointer
 @ stdcall EncodeSystemPointer(ptr) ntdll.RtlEncodeSystemPointer
 @ stdcall EnterCriticalSection(ptr) ntdll.RtlEnterCriticalSection
@@ -692,7 +692,7 @@
 @ stdcall InitializeCriticalSectionAndSpinCount(ptr long) kernel32.InitializeCriticalSectionAndSpinCount
 @ stdcall -version=0x600+ InitializeCriticalSectionEx(ptr long long) kernel32.InitializeCriticalSectionEx
 @ stdcall -version=0x600+ InitializeProcThreadAttributeList(ptr long long ptr) kernel32.InitializeProcThreadAttributeList
-@ stdcall -version=0x601+ InitializeProcessForWsWatch(long) kernel32.K32InitializeProcessForWsWatch
+@ stdcall -version=0x601+ InitializeProcessForWsWatch(long)
 @ stdcall InitializeSListHead(ptr) ntdll.RtlInitializeSListHead
 @ stdcall -version=0x600+ InitializeSRWLock(ptr) ntdll.RtlInitializeSRWLock
 @ stdcall InitializeSynchronizationBarrier(ptr long long) kernel32.InitializeSynchronizationBarrier
@@ -758,7 +758,7 @@
 @ stdcall -version=0xA00+ IsWow64GuestMachineSupported(long ptr) kernel32.IsWow64GuestMachineSupported
 @ stdcall IsWow64Process(ptr ptr) kernel32.IsWow64Process
 @ stdcall -version=0xA00+ IsWow64Process2(ptr ptr ptr) kernel32.IsWow64Process2
-@ stdcall -version=0x601+ K32EmptyWorkingSet(long) kernel32.K32EmptyWorkingSet
+@ stdcall -version=0x601+ K32EmptyWorkingSet(long) EmptyWorkingSet
 @ stdcall -version=0x601+ K32EnumDeviceDrivers(ptr long ptr) kernel32.K32EnumDeviceDrivers
 @ stdcall -version=0x601+ K32EnumPageFilesA(ptr ptr) kernel32.K32EnumPageFilesA
 @ stdcall -version=0x601+ K32EnumPageFilesW(ptr ptr) kernel32.K32EnumPageFilesW
@@ -782,7 +782,7 @@
 @ stdcall -version=0x601+ K32GetProcessMemoryInfo(long ptr long) kernel32.K32GetProcessMemoryInfo
 @ stdcall -version=0x601+ K32GetWsChanges(long ptr long) kernel32.K32GetWsChanges
 @ stdcall -version=0x601+ K32GetWsChangesEx(long ptr ptr) kernel32.K32GetWsChangesEx
-@ stdcall -version=0x601+ K32InitializeProcessForWsWatch(long) kernel32.K32InitializeProcessForWsWatch
+@ stdcall -version=0x601+ K32InitializeProcessForWsWatch(long) InitializeProcessForWsWatch
 @ stdcall -version=0x601+ K32QueryWorkingSet(long ptr long) kernel32.K32QueryWorkingSet
 @ stdcall -version=0x601+ K32QueryWorkingSetEx(long ptr long) kernel32.K32QueryWorkingSetEx
 @ stub KernelBaseGetGlobalData

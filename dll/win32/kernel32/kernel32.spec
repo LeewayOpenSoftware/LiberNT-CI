@@ -859,7 +859,7 @@
 @ stdcall IsWow64Process(ptr ptr)
 @ stdcall -version=0xA00+ IsWow64Process2(ptr ptr ptr)
 @ stdcall -version=0xA00+ IsWow64GuestMachineSupported(long ptr)
-@ stdcall -version=0x601+ K32EmptyWorkingSet(long) EmptyWorkingSet
+@ stdcall -version=0x601+ K32EmptyWorkingSet(long) kernelbase.EmptyWorkingSet
 @ stdcall -version=0x601+ K32EnumDeviceDrivers(ptr long ptr) EnumDeviceDrivers
 @ stdcall -version=0x601+ K32EnumPageFilesA(ptr ptr) EnumPageFilesA
 @ stdcall -version=0x601+ K32EnumPageFilesW(ptr ptr) EnumPageFilesW
@@ -883,7 +883,7 @@
 @ stdcall -version=0x601+ K32GetProcessMemoryInfo(long ptr long) GetProcessMemoryInfo
 @ stdcall -version=0x601+ K32GetWsChanges(long ptr long) GetWsChanges
 @ stdcall -version=0x601+ K32GetWsChangesEx(long ptr ptr) GetWsChangesEx
-@ stdcall -version=0x601+ K32InitializeProcessForWsWatch(long) InitializeProcessForWsWatch
+@ stdcall -version=0x601+ K32InitializeProcessForWsWatch(long) kernelbase.InitializeProcessForWsWatch
 @ stdcall -version=0x601+ K32QueryWorkingSet(long ptr long) QueryWorkingSet
 @ stdcall -version=0x601+ K32QueryWorkingSetEx(long ptr long) QueryWorkingSetEx
 @ stdcall -version=0x600+ LCIDToLocaleName(long wstr long long) kernelbase.LCIDToLocaleName
