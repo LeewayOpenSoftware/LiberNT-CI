@@ -105,6 +105,7 @@ typedef struct _LUH_UI
     BOOL Spinner;
     LUH_ANIM SpinnerAnim;   /* its clock and frame line while it turns */
     BOOL FirstPaintDone;
+    BOOL BootFade;          /* winlogon's boot spinner is up: come in over it before reporting ready */
     BOOL Fading;
     int FadeStep;
     WLUI_EXIT_REASON ExitReason;
@@ -1902,6 +1903,10 @@ LuhApplyFieldUpdate(
 #define LUH_FADE_IN_MS      400     /* lock: the curtain comes up from black (Win11 lock-cad frames) */
 #define WM_LUH_FADE_IN      (WM_APP + 16)
 #define WM_LUH_FLYOUT_FOCUS (WM_APP + 17)
+#define WM_LUH_BOOT_FADE    (WM_APP + 18)
+#define LUH_BOOT_FADE_MS    300     /* boot: the first page comes up over winlogon's spinner */
+/* The window class of winlogon's boot spinner (base/system/winlogon/bootspinner.c). */
+#define LUH_BOOT_SPINNER_CLASS L"WinlogonBootSpinner"
 #define LUH_LIFT_VELOCITY   0.6     /* pixels per millisecond upwards at release: a flick lifts */
 #define LUH_DISSOLVE_CLOCK_MS 200   /* key dismiss: the clock and date leave the sharp picture */
 #define LUH_DISSOLVE_SOFT_MS  450   /* then the picture darkens and blurs into the credentials backdrop */
@@ -2865,11 +2870,38 @@ LuhPaint(
 
     if (!g_Ui.FirstPaintDone)
     {
-        /* Ready goes out only after the first frame is on screen (§6.3). */
+        /* Ready goes out only after the first frame is on screen (§6.3); at boot, after it faded in. */
         g_Ui.FirstPaintDone = TRUE;
         GdiFlush();
-        LuhIpcReady();
+        if (g_Ui.BootFade)
+            PostMessageW(Window, WM_LUH_BOOT_FADE, 0, 0);
+        else
+            LuhIpcReady();
     }
+}
+
+/* Boot: the first frame comes in over winlogon's boot spinner, which winlogon stops on ready. */
+static void
+LuhBootFadeIn(
+    _In_ HWND Window)
+{
+    LUH_ANIM Anim;
+    double T;
+
+    LuhAnimStart(&Anim, "boot-fade-in", LUH_BOOT_FADE_MS);
+    for (;;)
+    {
+        T = LuhAnimFrame(&Anim);
+        SetLayeredWindowAttributes(Window, 0, (BYTE)(255.0 * LuhEaseOut(T)), LWA_ALPHA);
+        GdiFlush();
+        LuhAnimPresented(&Anim);
+        if (T >= 1.0)
+            break;
+        LuhAnimWait(&Anim);
+    }
+    LuhAnimEnd(&Anim);
+    g_Ui.BootFade = FALSE;
+    LuhIpcReady();
 }
 
 static LRESULT CALLBACK
@@ -3149,6 +3181,10 @@ LuhWindowProc(
             LuhFadeInCurtain(Window);
             return 0;
 
+        case WM_LUH_BOOT_FADE:
+            LuhBootFadeIn(Window);
+            return 0;
+
         case WM_LUH_IPC_LOST:
             /* 995 means winlogon ended this launch; anything else is a dead channel. */
             if (!g_Ui.Exiting)
@@ -3282,7 +3318,8 @@ LuhUiCreate(
     if (Window == NULL)
         return NULL;
     g_Ui.Window = Window;
-    SetLayeredWindowAttributes(Window, 0, 255, LWA_ALPHA);
+    g_Ui.BootFade = (FindWindowW(LUH_BOOT_SPINNER_CLASS, NULL) != NULL);
+    SetLayeredWindowAttributes(Window, 0, g_Ui.BootFade ? 0 : 255, LWA_ALPHA);
     UpdateWindow(Window);
     return Window;
 }
