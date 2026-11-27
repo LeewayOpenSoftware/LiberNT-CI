@@ -267,7 +267,7 @@ typedef struct _WLSESSION
     WLX_MPR_NOTIFY_INFO MprNotifyInfo;
     PWLX_PROFILE_V2_0 Profile;
 
-    /* Experimental LogonUI-mode selector (Winlogon\UseLogonUI), read once at start */
+    /* Always TRUE: the LogonUI host is the logon UI; the GINA paths go away next */
     BOOL UseLogonUI;
     BOOL HostAutoSas;           /* the pending SAS came from hostlogon.c, not from the user */
 } WLSESSION, *PWLSESSION;
