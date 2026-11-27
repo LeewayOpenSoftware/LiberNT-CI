@@ -1618,6 +1618,34 @@ WlHostScreenSaverSecure(
     return Secure;
 }
 
+/* msgina WlxIsLockOk: DisableLockWorkstation in HKLM, or in the session user's own hive under impersonation. */
+BOOL
+WlHostIsLockOk(
+    _In_ PWLSESSION Session)
+{
+    DWORD Value = 0, Size = sizeof(Value);
+    HKEY hUser;
+    BOOL Ok = TRUE;
+
+    if (WlHlPolicyDword(L"DisableLockWorkstation", 0) != 0)
+        Ok = FALSE;
+    else if (Session->UserToken != NULL && ImpersonateLoggedOnUser(Session->UserToken))
+    {
+        if (RegOpenCurrentUser(KEY_READ, &hUser) == ERROR_SUCCESS)
+        {
+            if (RegGetValueW(hUser, L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                             L"DisableLockWorkstation", RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS &&
+                Value != 0)
+                Ok = FALSE;
+            RegCloseKey(hUser);
+        }
+        RevertToSelf();
+    }
+    if (!Ok)
+        ERR("WL: lock refused: DisableLockWorkstation is set\n");
+    return Ok;
+}
+
 /* ---- status and hand-offs used by HandleLogon, HandleLogoff and HandleShutdown ------- */
 
 /* A status page needs a host; logoff and shutdown start one when none is up (bounded, P2). */
