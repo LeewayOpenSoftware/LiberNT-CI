@@ -39,4 +39,8 @@ BEGIN
     IDS_LUH_TIP_RESTART     "Cierra todas las aplicaciones, apaga el equipo y vuelve a encenderlo."
     IDS_LUH_SLEEP           "Suspender"
     IDS_LUH_TIP_SLEEP       "El equipo sigue encendido con poco consumo. Las aplicaciones siguen abiertas y, al reactivarlo, vuelves al instante a donde lo dejaste."
+    IDS_LUH_WARN_RESTART    "Si reinicia ahora, usted y cualquier otra persona que use este equipo podrían perder el trabajo no guardado."
+    IDS_LUH_WARN_SHUTDOWN   "Si apaga ahora, usted y cualquier otra persona que use este equipo podrían perder el trabajo no guardado."
+    IDS_LUH_RESTART_ANYWAY  "Reiniciar de todos modos"
+    IDS_LUH_SHUTDOWN_ANYWAY "Apagar de todos modos"
 END

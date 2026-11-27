@@ -218,6 +218,25 @@ StsSlide(
     LuhAnimEnd(&Anim);
 }
 
+/* One line above the warning, in the curtain picture itself, so it moves with the curtain. */
+static VOID
+StsShowFailure(VOID)
+{
+    WCHAR Text[256];
+    HFONT Font;
+    RECT Rect;
+
+    if (!LoadStringW(GetModuleHandleW(NULL), IDS_STS_FAILED, Text, ARRAYSIZE(Text)))
+        return;
+    Font = LuhFontCreate(14, FW_SEMIBOLD);
+    SetRect(&Rect, 0, g_Sts.Height - LuhPx(145) - LuhPx(12), g_Sts.Width, g_Sts.Height - LuhPx(145) + LuhPx(12));
+    LuhDrawText(&g_Sts.Curtain, Font, Text, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+                RGB(255, 255, 255), 255);
+    if (Font)
+        DeleteObject(Font);
+    LuhStage("sts-shutdown-refused");
+}
+
 static VOID
 StsShutDown(VOID)
 {
@@ -234,12 +253,18 @@ StsShutDown(VOID)
             AdjustTokenPrivileges(Token, FALSE, &Privileges, 0, NULL, NULL);
         CloseHandle(Token);
     }
-    if (!ExitWindowsEx(EWX_SHUTDOWN | EWX_POWEROFF,
-                       SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER | SHTDN_REASON_FLAG_PLANNED))
+    if (ExitWindowsEx(EWX_SHUTDOWN | EWX_POWEROFF,
+                      SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER | SHTDN_REASON_FLAG_PLANNED))
     {
-        ERR("ExitWindowsEx failed (%lu)\n", GetLastError());
+        /* The curtain stays down while the session ends. */
+        return;
     }
-    DestroyWindow(g_Sts.Window);
+
+    /* Refused (no privilege, a policy): say so on the curtain and bring it back to rest. */
+    ERR("ExitWindowsEx failed (%lu)\n", GetLastError());
+    StsShowFailure();
+    g_Sts.Leaving = FALSE;
+    StsSlide(g_Sts.Rest, STS_MOVE_MS, 0.0, "sts-return");
 }
 
 /* Back up and away: Esc, a click on the desktop, the window losing the focus, a flick up. */

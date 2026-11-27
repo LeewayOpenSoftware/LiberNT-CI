@@ -40,6 +40,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_ID_RESULT_OK    1931    /* the OK under a result shown in place of the fields */
 #define LUH_ID_NOTICE_OK    1932    /* a full-screen notice */
 #define LUH_ID_NOTICE_CANCEL 1933
+#define LUH_ID_CARD_GO      1934    /* Restart anyway / Shut down anyway */
 #define LUH_POWER_WIDTH     120
 #define LUH_ID_TILE_BASE    2000    /* + tile index, below LUH_ID_TILE_BASE + LUH_MAX_TILES */
 
@@ -84,6 +85,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_FLYOUT_WIDTH    132
 #define LUH_FLYOUT_ROW      40
 #define LUH_FLYOUT_FILL     RGB(43, 43, 48)
+/* The signed-in warning card (shot 18): bottom right above the power button, 345 px wide. */
+#define LUH_CARD_WIDTH      345
 #define LUH_POWER_DOTS_DY   68
 #define LUH_POWER_TEXT_DY   130
 /* Full-screen notice (legal notice shot): caption above the centre, text from it, OK under it. */
@@ -164,6 +167,12 @@ typedef struct _LUH_UI
     BOOL StatusOnPage;      /* Shutting down / Restarting over the sign-in picture */
     HFONT SmallFont;        /* the flyout tooltip */
     BOOL FlyoutUp;
+    BOOL UsersSignedIn;     /* winlogon: a signed-in session could lose work, so Restart / Shut down ask first */
+    BOOL CardUp;
+    UINT CardAction;        /* LUH_ID_RESTART or LUH_ID_SHUTDOWN, waiting for "anyway" */
+    HWND CardButton;
+    RECT CardRect;
+    RECT CardText;
     HWND FlyoutButtons[3];
     RECT FlyoutCard;
     BOOL NoticeUp;          /* a full-screen notice is up (its own modal loop) */
@@ -188,6 +197,7 @@ static LUH_UI g_Ui;
 
 static void LuhCloseFlyout(_In_ HWND Window, _In_ BOOL FocusPower);
 static BOOL LuhIsFlyoutRow(_In_opt_ HWND Control);
+static void LuhCloseCard(_In_ HWND Window);
 
 /* Whatever the page shows changed: the still picture is rebuilt on the next paint. */
 static void
@@ -333,6 +343,8 @@ LuhDestroyPage(void)
     g_Ui.StatusOnPage = FALSE;
     if (g_Ui.FlyoutUp && g_Ui.Window)
         LuhCloseFlyout(g_Ui.Window, FALSE);
+    if (g_Ui.CardUp && g_Ui.Window)
+        LuhCloseCard(g_Ui.Window);
     if (g_Ui.OkButton)
     {
         DestroyWindow(g_Ui.OkButton);
@@ -726,7 +738,7 @@ LuhDrawItem(
         LuhDrawText(Surface, g_Ui.TextFont, Text, &Local, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
                     White, Down ? 170 : 255);
     }
-    else if (Item->CtlID == LUH_ID_NOTICE_OK || Item->CtlID == LUH_ID_NOTICE_CANCEL ||
+    else if (Item->CtlID == LUH_ID_NOTICE_OK || Item->CtlID == LUH_ID_NOTICE_CANCEL || Item->CtlID == LUH_ID_CARD_GO ||
              Item->CtlID == LUH_ID_RESTART || Item->CtlID == LUH_ID_SHUTDOWN)
     {
         /* Buttons on black: the dark grey pill of the notice and Ctrl+Alt+Del screens. */
@@ -1154,6 +1166,74 @@ LuhOpenFlyout(
 }
 
 /*
+ * Restart or Shut down while someone is signed in (winlogon's WLUI_FLAG_USERS_SIGNED_IN): Windows 11
+ * shows a dark card above the power button with the warning and one "anyway" button (shot 18).
+ */
+static void
+LuhCloseCard(
+    _In_ HWND Window)
+{
+    if (!g_Ui.CardUp)
+        return;
+    g_Ui.CardUp = FALSE;
+    if (g_Ui.CardButton)
+    {
+        DestroyWindow(g_Ui.CardButton);
+        g_Ui.CardButton = NULL;
+    }
+    LuhPageChanged(Window);
+}
+
+static void
+LuhOpenCard(
+    _In_ HWND Window,
+    _In_ UINT Action)
+{
+    RECT Client, Button, Measure;
+    LONG Width = LuhPx(LUH_CARD_WIDTH), Pad = LuhPx(12), ButtonW, ButtonH = LuhPx(35), Bottom;
+    PCWSTR Go = LuhText(Action == LUH_ID_RESTART ? IDS_LUH_RESTART_ANYWAY : IDS_LUH_SHUTDOWN_ANYWAY);
+    SIZE Text;
+    HGDIOBJ Old;
+    HDC Dc;
+
+    GetClientRect(Window, &Client);
+    /* Above the power button; on the no-sign-in page (no power button) at the bottom right. */
+    SetRect(&Button, 0, Client.bottom - LuhPx(10), 0, Client.bottom);
+    if (g_Ui.PowerButton)
+    {
+        GetWindowRect(g_Ui.PowerButton, &Button);
+        MapWindowPoints(NULL, Window, (LPPOINT)&Button, 2);
+    }
+    Width = min(Width, Client.right - LuhPx(8));
+
+    SetRect(&Measure, 0, 0, Width - 2 * Pad, 0);
+    Dc = GetDC(Window);
+    Old = SelectObject(Dc, g_Ui.TextFont);
+    DrawTextW(Dc, LuhText(Action == LUH_ID_RESTART ? IDS_LUH_WARN_RESTART : IDS_LUH_WARN_SHUTDOWN), -1, &Measure,
+              DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+    SelectObject(Dc, Old);
+    ReleaseDC(Window, Dc);
+    Text = LuhMeasureText(g_Ui.TextFont, Go);
+    ButtonW = max(LuhPx(118), Text.cx + LuhPx(24));
+
+    Bottom = Button.top - LuhPx(6);
+    SetRect(&g_Ui.CardRect, Client.right - LuhPx(2) - Width,
+            Bottom - (Pad + (Measure.bottom - Measure.top) + LuhPx(14) + ButtonH + LuhPx(11)),
+            Client.right - LuhPx(2), Bottom);
+    SetRect(&g_Ui.CardText, g_Ui.CardRect.left + Pad, g_Ui.CardRect.top + Pad, g_Ui.CardRect.right - Pad,
+            g_Ui.CardRect.top + Pad + (Measure.bottom - Measure.top));
+    g_Ui.CardAction = Action;
+    g_Ui.CardButton = CreateWindowExW(0, L"BUTTON", Go, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY,
+                                      g_Ui.CardRect.right - LuhPx(11) - ButtonW, Bottom - LuhPx(11) - ButtonH,
+                                      ButtonW, ButtonH, Window, (HMENU)LUH_ID_CARD_GO, NULL, NULL);
+    g_Ui.CardUp = TRUE;
+    if (g_Ui.CardButton)
+        SetFocus(g_Ui.CardButton);
+    LuhTrace("power", Action == LUH_ID_RESTART ? L"restart-warn" : L"shutdown-warn");
+    LuhPageChanged(Window);
+}
+
+/*
  * A full-screen notice on black (legal notice, emergency restart): caption, wrapped text and OK
  * (and Cancel), as Windows 11 shows the legal notice. Modal on the UI thread; winlogon's commands
  * are still dispatched under it, and a Dismiss or the desktop switch ends it.
@@ -1243,9 +1323,10 @@ LuhPowerMenu(
 
     if (g_Ui.PowerButton == NULL || g_Ui.PageBusy)
         return;
-    if (g_Ui.FlyoutUp)
+    if (g_Ui.FlyoutUp || g_Ui.CardUp)
     {
         LuhCloseFlyout(Window, TRUE);
+        LuhCloseCard(Window);
         return;
     }
     if (g_Ui.OptionsUp && (GetKeyState(VK_CONTROL) & 0x8000))
@@ -1288,6 +1369,7 @@ LuhHidePageChrome(
     DWORD i;
 
     LuhCloseFlyout(Window, FALSE);
+    LuhCloseCard(Window);
     LuhShowFields(FALSE);
     for (i = 0; i < LUH_MAX_TILES; i++)
         if (g_Ui.TileButtons[i])
@@ -2406,6 +2488,7 @@ LuhHandleCommand(
             if (Command->Flags & WLUI_FLAG_FALLBACK)
                 g_Options.Fallback = TRUE;
             g_Options.NoPower = (Command->Flags & WLUI_FLAG_NO_POWER) != 0;
+            g_Ui.UsersSignedIn = (Command->Flags & WLUI_FLAG_USERS_SIGNED_IN) != 0;
             /* A change the signed-in user asked for comes without WLUI_FLAG_FORCED_CHANGE. */
             g_Ui.ChangeCancel = g_Options.Scenario == CPUS_CHANGE_PASSWORD && !(Command->Flags & WLUI_FLAG_FORCED_CHANGE);
             if ((Command->Flags & WLUI_FLAG_LEGAL_NOTICE) && !g_Ui.ProvidersStarted)
@@ -2421,6 +2504,7 @@ LuhHandleCommand(
                     if (g_Ui.PendingFlags & WLUI_FLAG_FALLBACK)
                         g_Options.Fallback = TRUE;
                     g_Options.NoPower = (g_Ui.PendingFlags & WLUI_FLAG_NO_POWER) != 0;
+                    g_Ui.UsersSignedIn = (g_Ui.PendingFlags & WLUI_FLAG_USERS_SIGNED_IN) != 0;
                     g_Ui.PendingScenario = 0;
                 }
             }
@@ -2534,6 +2618,13 @@ LuhComposeStill(
     }
     if (g_Ui.FlyoutUp)
         LuhComposeFlyout(Back);
+    if (g_Ui.CardUp)
+    {
+        LuhFillRound(Back, &g_Ui.CardRect, LuhPx(8), LUH_FLYOUT_FILL, 255);
+        LuhFrameRound(Back, &g_Ui.CardRect, LuhPx(8), 1, RGB(255, 255, 255), 30);
+        LuhDrawText(Back, g_Ui.TextFont, LuhText(g_Ui.CardAction == LUH_ID_RESTART ? IDS_LUH_WARN_RESTART : IDS_LUH_WARN_SHUTDOWN),
+                    &g_Ui.CardText, DT_LEFT | DT_TOP | DT_WORDBREAK, RGB(255, 255, 255), 255);
+    }
 }
 
 /*
@@ -2771,6 +2862,11 @@ LuhWindowProc(
                 }
                 return 0;
             }
+            if (HIWORD(wParam) == BN_KILLFOCUS && g_Ui.CardUp && (HWND)lParam == g_Ui.CardButton)
+            {
+                PostMessageW(Window, WM_LUH_FLYOUT_FOCUS, 0, 0);
+                return 0;
+            }
             if ((HIWORD(wParam) == BN_SETFOCUS || HIWORD(wParam) == BN_KILLFOCUS) && LuhIsFlyoutRow((HWND)lParam))
             {
                 /* The tooltip follows the focus; focus leaving the rows closes the flyout. */
@@ -2792,6 +2888,20 @@ LuhWindowProc(
                     LuhCloseFlyout(Window, FALSE);
                     LuhTrace("power", L"sleep");
                     WluiClientRequestAction(&g_Connection, WluiActionSleep);
+                }
+                else if (Id == LUH_ID_CARD_GO)
+                {
+                    UINT Action = g_Ui.CardAction;
+
+                    LuhCloseCard(Window);
+                    LuhTrace("power", Action == LUH_ID_RESTART ? L"restart-anyway" : L"shutdown-anyway");
+                    WluiClientRequestAction(&g_Connection, Action == LUH_ID_RESTART ? WluiActionRestart : WluiActionShutdown);
+                }
+                else if ((Id == LUH_ID_RESTART || Id == LUH_ID_SHUTDOWN) && g_Ui.UsersSignedIn)
+                {
+                    /* Someone is signed in: Windows 11 warns before Restart and Shut down (not Sleep). */
+                    LuhCloseFlyout(Window, FALSE);
+                    LuhOpenCard(Window, Id);
                 }
                 else if (Id == LUH_ID_RESTART || Id == LUH_ID_SHUTDOWN)
                 {
@@ -2905,6 +3015,8 @@ LuhWindowProc(
         case WM_LUH_FLYOUT_FOCUS:
             if (g_Ui.FlyoutUp && !LuhIsFlyoutRow(GetFocus()) && GetFocus() != g_Ui.PowerButton)
                 LuhCloseFlyout(Window, FALSE);
+            if (g_Ui.CardUp && GetFocus() != g_Ui.CardButton)
+                LuhCloseCard(Window);
             return 0;
 
         case WM_LUH_FADE_IN:
@@ -2942,9 +3054,10 @@ LuhWindowProc(
                     LuhDragBegin(Window, (SHORT)HIWORD(lParam));
                 return 0;
             }
-            if (g_Ui.FlyoutUp)
+            if (g_Ui.FlyoutUp || g_Ui.CardUp)
             {
                 LuhCloseFlyout(Window, FALSE);
+                LuhCloseCard(Window);
                 return 0;
             }
             if (g_Ui.Page && !g_Ui.PageBusy)
@@ -3058,9 +3171,15 @@ LuhUiRun(
     while (GetMessageW(&Msg, NULL, 0, 0) > 0)
     {
         /* Enter in an edit field submits; Tab moves between the page's controls. */
-        if (Msg.message == WM_KEYDOWN && Msg.wParam == VK_ESCAPE && g_Ui.FlyoutUp)
+        if (Msg.message == WM_KEYDOWN && Msg.wParam == VK_ESCAPE && (g_Ui.FlyoutUp || g_Ui.CardUp))
         {
             LuhCloseFlyout(Window, TRUE);
+            if (g_Ui.CardUp)
+            {
+                LuhCloseCard(Window);
+                if (g_Ui.PowerButton)
+                    SetFocus(g_Ui.PowerButton);
+            }
             continue;
         }
         /* Enter or Esc on a result dismisses it, as its OK does. */

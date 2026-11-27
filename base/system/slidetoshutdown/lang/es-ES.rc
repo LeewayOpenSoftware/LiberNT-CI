@@ -11,4 +11,5 @@ STRINGTABLE
 BEGIN
     IDS_STS_WARNING "Cualquier otra persona que use este equipo perderá el trabajo no guardado."
     IDS_STS_SLIDE   "Deslice para apagar el equipo"
+    IDS_STS_FAILED  "No se pudo apagar el equipo. Puede que no tenga permiso para apagarlo."
 END
