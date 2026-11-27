@@ -59,10 +59,10 @@ EtwpFilterTypeKnown(IN ULONG Type)
 /* EVENT_ENABLE_PROPERTY_SID/TS_ID/STACK_TRACE/PSM_KEY/IGNORE_KEYWORD_0 are
    defined by the SDK, but none can be honoured yet; a set bit is refused
    rather than silently accepted */
-#define ETWP_KNOWN_ENABLE_PROPERTIES (EVENT_ENABLE_PROPERTY_SID              | \r
-                                      EVENT_ENABLE_PROPERTY_TS_ID          | \r
-                                      EVENT_ENABLE_PROPERTY_STACK_TRACE  | \r
-                                      EVENT_ENABLE_PROPERTY_PSM_KEY      | \r
+#define ETWP_KNOWN_ENABLE_PROPERTIES (EVENT_ENABLE_PROPERTY_SID              | \
+                                      EVENT_ENABLE_PROPERTY_TS_ID          | \
+                                      EVENT_ENABLE_PROPERTY_STACK_TRACE  | \
+                                      EVENT_ENABLE_PROPERTY_PSM_KEY      | \
                                       EVENT_ENABLE_PROPERTY_IGNORE_KEYWORD_0)
 
 typedef struct _ETWP_ENABLE_FILTERS
