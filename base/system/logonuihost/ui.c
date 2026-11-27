@@ -68,6 +68,7 @@ typedef struct _LUH_UI
     HWND CancelButton;                  /* that Cancel, under the change page */
     /* the curtain: clock and date before the tiles, CAD-less logon and unlock only */
     BOOL Curtain;
+    BOOL CadCurtain;        /* the Ctrl+Alt+Del notice: Title is its text and only winlogon replaces it */
     PLUH_PAGE CurtainPage;  /* a page that arrived under the curtain; shown when it lifts */
     HFONT ClockFont;
     HFONT DateFont;
@@ -792,6 +793,7 @@ LuhDropCurtain(
     if (!g_Ui.Curtain)
         return;
     g_Ui.Curtain = FALSE;
+    g_Ui.CadCurtain = FALSE;
     KillTimer(Window, LUH_TIMER_CLOCK);
     LuhFreeCurtainPage();
 }
@@ -803,7 +805,7 @@ LuhLiftCurtain(
 {
     PLUH_PAGE Page = g_Ui.CurtainPage;
 
-    if (!g_Ui.Curtain)
+    if (!g_Ui.Curtain || g_Ui.CadCurtain)
         return;
     g_Ui.CurtainPage = NULL;
     LuhDropCurtain(Window);
@@ -839,6 +841,19 @@ LuhHandleCommand(
         case WluiCmdDisplayStatus:
             StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), Command->Text);
             g_Ui.Detail[0] = UNICODE_NULL;
+            if (Command->Flags & WLUI_FLAG_CURTAIN)
+            {
+                LuhDestroyPage();
+                LuhSetSpinner(Window, FALSE);
+                if (!g_Ui.Curtain)
+                    LuhShowCurtain(Window);
+                g_Ui.CadCurtain = TRUE;
+                LuhTrace("cad-curtain", g_Ui.Title);
+                InvalidateRect(Window, NULL, TRUE);
+                break;
+            }
+            if (g_Ui.CadCurtain)
+                LuhDropCurtain(Window);
             LuhSetSpinner(Window, (Command->Flags & WLUI_FLAG_SPINNER) != 0);
             LuhTrace("status", g_Ui.Title);
             InvalidateRect(Window, NULL, TRUE);
@@ -870,6 +885,8 @@ LuhHandleCommand(
             break;
 
         case WluiCmdRequestCredentials:
+            if (g_Ui.CadCurtain)
+                LuhDropCurtain(Window);     /* the user's SAS came first: the notice gives way to the page */
             StringCchCopyW(g_Options.PrefillUser, ARRAYSIZE(g_Options.PrefillUser), Command->User);
             if (g_Ui.InLegalNotice)
             {
@@ -984,8 +1001,9 @@ LuhPaint(
         Rect.top = Client.bottom - 72;
         Rect.bottom = Client.bottom - 32;
         SelectObject(Dc, g_Ui.TextFont);
-        DrawTextW(Dc, LuhText(g_Options.Scenario == CPUS_UNLOCK_WORKSTATION ? IDS_LUH_HINT_UNLOCK : IDS_LUH_HINT_SIGNIN),
-                  -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DrawTextW(Dc, g_Ui.CadCurtain ? g_Ui.Title :
+                      LuhText(g_Options.Scenario == CPUS_UNLOCK_WORKSTATION ? IDS_LUH_HINT_UNLOCK : IDS_LUH_HINT_SIGNIN),
+                  -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         SelectObject(Dc, OldFont);
         EndPaint(Window, &Ps);
         if (!g_Ui.FirstPaintDone)
@@ -1225,7 +1243,9 @@ LuhWindowProc(
         case WM_RBUTTONDOWN:
             if (g_Ui.Curtain)
             {
-                LuhLiftCurtain(Window);
+                /* The Ctrl+Alt+Del notice has no lift path; only winlogon moves it on after the SAS. */
+                if (!g_Ui.CadCurtain)
+                    LuhLiftCurtain(Window);
                 return 0;
             }
             break;

@@ -565,6 +565,33 @@ Test_Tiles(PCWSTR Exe, PCWSTR Endpoint, PSID Own, PCWSTR Trace)
         EndTilesRun(Process, "cad");
     }
 
+    /* Ctrl+Alt+Del notice: clock and text; neither a key nor a click lifts it, only the next RequestCredentials. */
+    ResetRun();
+    DeleteFileW(Trace);
+    Process = LaunchHost(Exe, Endpoint, Own, Trace, L"/fallback");
+    ok(Process != NULL, "launch (CAD notice)\n");
+    if (Process)
+    {
+        ok(WaitForSingleObject(g_ReadyEvent, 5000) == WAIT_OBJECT_0, "no Ready (CAD notice)\n");
+        PostCmd(WluiCmdDisplayStatus, WLUI_FLAG_CURTAIN, L"Press Ctrl+Alt+Delete to sign in.", NULL);
+        Sleep(1000);
+        ok(TraceHas(Trace, "cad-curtain"), "CAD notice: no curtain\n");
+        Window = HostWindow();
+        if (Window)
+        {
+            PostMessageW(Window, WM_KEYDOWN, VK_SPACE, 0);
+            PostMessageW(Window, WM_KEYDOWN, VK_RETURN, 0);
+            PostMessageW(Window, WM_LBUTTONDOWN, 0, 0);
+        }
+        Sleep(1000);
+        ok(!TraceHas(Trace, "curtain-lifted"), "CAD notice: a key or a click lifted it\n");
+        ok(!TraceHas(Trace, "page "), "CAD notice: a page came up without the SAS\n");
+        PostScenario(1, WLUI_FLAG_FALLBACK, NULL);
+        Sleep(3000);
+        ok(TraceHas(Trace, "page "), "CAD notice: no page after RequestCredentials\n");
+        EndTilesRun(Process, "CAD notice");
+    }
+
     /* Unlock: only the named account; without a name, none. */
     if (GetUserNameW(Me, &MeChars))
     {

@@ -22,7 +22,7 @@ typedef enum _WLUI_COMMAND_TYPE
 {
     WluiCmdNone = 0,                    /* the wait timed out; call again */
     WluiCmdRequestCredentials = 1,      /* Scenario = CPUS_*, Flags = WLUI_FLAG_* */
-    WluiCmdDisplayStatus = 2,           /* Text, Flags bit WLUI_FLAG_SPINNER */
+    WluiCmdDisplayStatus = 2,           /* Text, Flags bit WLUI_FLAG_SPINNER or WLUI_FLAG_CURTAIN */
     WluiCmdDisplayWelcome = 3,          /* User */
     WluiCmdReportResult = 4,            /* Status = NTSTATUS of the last submit, Text = message */
     WluiCmdReadyForDesktopSwitch = 5,   /* fade, then exit after the fade completes */
@@ -41,6 +41,8 @@ const unsigned long WLUI_FLAG_NO_LOCK            = 0x00000040;  /* DisableLockWo
 const unsigned long WLUI_FLAG_NO_LOGOFF          = 0x00000080;  /* NoLogoff */
 const unsigned long WLUI_FLAG_NO_CHANGE_PASSWORD = 0x00000100;  /* DisableChangePassword */
 const unsigned long WLUI_FLAG_NO_TASK_MANAGER    = 0x00000200;  /* DisableTaskMgr */
+/* DisplayStatus: the Ctrl+Alt+Del notice over the clock; no key or click lifts it, only winlogon's next command. */
+const unsigned long WLUI_FLAG_CURTAIN            = 0x00000400;
 
 const unsigned long WLUI_MAX_TEXT = 256;
 const unsigned long WLUI_MAX_SERIALIZATION = 65536;
