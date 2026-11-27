@@ -340,4 +340,5 @@ END
 STRINGTABLE
 BEGIN
     IDS_SERVICE_LOGON_GRANTED "The account %s has been granted the Log On As A Service right."
+    IDS_SERVICE_LOGON_NOT_GRANTED "The account %s could not be granted the Log On As A Service right (error %lu). The service may fail to start."
 END

@@ -131,6 +131,25 @@ SetServiceAccount(
 }
 
 
+static
+VOID
+ShowServiceLogonRightResult(
+    HWND hwndDlg,
+    UINT uMessageId,
+    LPCWSTR lpAccountName,
+    DWORD dwError)
+{
+    WCHAR szFormat[256], szMessage[512], szTitle[256];
+
+    if (!LoadStringW(GetModuleHandle(NULL), uMessageId, szFormat, ARRAYSIZE(szFormat)) ||
+        !LoadStringW(GetModuleHandle(NULL), IDS_APPNAME, szTitle, ARRAYSIZE(szTitle)))
+        return;
+
+    StringCchPrintfW(szMessage, ARRAYSIZE(szMessage), szFormat, lpAccountName, dwError);
+    MessageBoxW(hwndDlg, szMessage, szTitle,
+                MB_OK | (dwError == ERROR_SUCCESS ? MB_ICONINFORMATION : MB_ICONWARNING));
+}
+
 /* As the Windows Services snap-in: an account set here gets SeServiceLogonRight if it lacks it. */
 static
 VOID
@@ -143,14 +162,29 @@ GrantServiceLogonRight(
     LSA_HANDLE PolicyHandle;
     LSA_UNICODE_STRING Right, *Rights = NULL;
     BYTE SidBuffer[SECURITY_MAX_SID_SIZE];
-    WCHAR szDomain[256], szFormat[256], szMessage[512], szTitle[256];
-    DWORD cbSid = sizeof(SidBuffer), cchDomain = ARRAYSIZE(szDomain);
+    WCHAR szDomain[256], szName[256 + MAX_COMPUTERNAME_LENGTH + 2];
+    DWORD cbSid = sizeof(SidBuffer), cchDomain = ARRAYSIZE(szDomain), cchComputer = MAX_COMPUTERNAME_LENGTH + 1;
     ULONG i, Count = 0, Rid;
     SID_NAME_USE Use;
+    NTSTATUS Status;
     BOOL bHeld = FALSE;
 
-    if (!LookupAccountNameW(NULL, lpAccountName, SidBuffer, &cbSid, szDomain, &cchDomain, &Use))
+    /* ".\user" names a local account, as the snap-in's browse dialog fills it in. */
+    if (lpAccountName[0] == L'.' && lpAccountName[1] == L'\\' &&
+        GetComputerNameW(szName, &cchComputer))
+    {
+        StringCchCatW(szName, ARRAYSIZE(szName), lpAccountName + 1);
+    }
+    else
+    {
+        StringCchCopyW(szName, ARRAYSIZE(szName), lpAccountName);
+    }
+
+    if (!LookupAccountNameW(NULL, szName, SidBuffer, &cbSid, szDomain, &cchDomain, &Use))
+    {
+        ShowServiceLogonRightResult(hwndDlg, IDS_SERVICE_LOGON_NOT_GRANTED, lpAccountName, GetLastError());
         return;
+    }
 
     /* LocalSystem, LocalService and NetworkService need no right. */
     if (*GetSidSubAuthorityCount(SidBuffer) == 1 &&
@@ -162,8 +196,12 @@ GrantServiceLogonRight(
     }
 
     ZeroMemory(&ObjectAttributes, sizeof(ObjectAttributes));
-    if (LsaOpenPolicy(NULL, &ObjectAttributes, POLICY_LOOKUP_NAMES | POLICY_CREATE_ACCOUNT, &PolicyHandle) != 0)
+    Status = LsaOpenPolicy(NULL, &ObjectAttributes, POLICY_LOOKUP_NAMES | POLICY_CREATE_ACCOUNT, &PolicyHandle);
+    if (Status != 0)
+    {
+        ShowServiceLogonRightResult(hwndDlg, IDS_SERVICE_LOGON_NOT_GRANTED, lpAccountName, LsaNtStatusToWinError(Status));
         return;
+    }
 
     if (LsaEnumerateAccountRights(PolicyHandle, SidBuffer, &Rights, &Count) == 0)
     {
@@ -181,13 +219,11 @@ GrantServiceLogonRight(
         Right.Buffer = (PWSTR)SE_SERVICE_LOGON_NAME;
         Right.Length = sizeof(SE_SERVICE_LOGON_NAME) - sizeof(WCHAR);
         Right.MaximumLength = sizeof(SE_SERVICE_LOGON_NAME);
-        if (LsaAddAccountRights(PolicyHandle, SidBuffer, &Right, 1) == 0 &&
-            LoadStringW(GetModuleHandle(NULL), IDS_SERVICE_LOGON_GRANTED, szFormat, ARRAYSIZE(szFormat)) &&
-            LoadStringW(GetModuleHandle(NULL), IDS_APPNAME, szTitle, ARRAYSIZE(szTitle)))
-        {
-            StringCchPrintfW(szMessage, ARRAYSIZE(szMessage), szFormat, lpAccountName);
-            MessageBoxW(hwndDlg, szMessage, szTitle, MB_OK | MB_ICONINFORMATION);
-        }
+        Status = LsaAddAccountRights(PolicyHandle, SidBuffer, &Right, 1);
+        if (Status == 0)
+            ShowServiceLogonRightResult(hwndDlg, IDS_SERVICE_LOGON_GRANTED, lpAccountName, ERROR_SUCCESS);
+        else
+            ShowServiceLogonRightResult(hwndDlg, IDS_SERVICE_LOGON_NOT_GRANTED, lpAccountName, LsaNtStatusToWinError(Status));
     }
 
     LsaClose(PolicyHandle);

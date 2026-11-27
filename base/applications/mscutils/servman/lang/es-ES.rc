@@ -343,4 +343,5 @@ END
 STRINGTABLE
 BEGIN
     IDS_SERVICE_LOGON_GRANTED "Se ha concedido a la cuenta %s el derecho Iniciar sesión como servicio."
+    IDS_SERVICE_LOGON_NOT_GRANTED "No se pudo conceder a la cuenta %s el derecho Iniciar sesión como servicio (error %lu). Es posible que el servicio no se inicie."
 END
