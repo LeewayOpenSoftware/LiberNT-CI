@@ -20,6 +20,10 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_ID_FIELD_BASE   1000
 #define LUH_ID_RESTART      1900
 #define LUH_ID_SHUTDOWN     1901
+#define LUH_ID_TILE_BASE    2000    /* + tile index, below LUH_ID_TILE_BASE + LUH_MAX_TILES */
+
+#define LUH_TILE_WIDTH      260
+#define LUH_TILE_MARGIN     24
 
 #define LUH_PAGE_WIDTH      360
 #define LUH_ROW_HEIGHT      30
@@ -49,6 +53,7 @@ typedef struct _LUH_UI
     int PageTop;            /* y of the first field row; the title and the result sit above it */
     BOOL PageBusy;          /* a submission is with winlogon; controls disabled */
     HWND PolicyButtons[2];
+    HWND TileButtons[LUH_MAX_TILES];    /* the other tiles, bottom left, as on the Windows sign-in screen */
 } LUH_UI;
 
 static LUH_UI g_Ui;
@@ -118,7 +123,45 @@ LuhDestroyPage(void)
             g_Ui.PolicyButtons[i] = NULL;
         }
     }
+    for (i = 0; i < LUH_MAX_TILES; i++)
+    {
+        if (g_Ui.TileButtons[i])
+        {
+            DestroyWindow(g_Ui.TileButtons[i]);
+            g_Ui.TileButtons[i] = NULL;
+        }
+    }
     g_Ui.PageBusy = FALSE;
+}
+
+/* With more than one tile, every tile is listed bottom left; the selected one is checked. */
+static void
+LuhCreateTileList(
+    _In_ HWND Window,
+    _In_ PLUH_PAGE Page)
+{
+    RECT Client;
+    DWORD i, Count = min(Page->TileCount, (DWORD)LUH_MAX_TILES);
+    int Y;
+
+    if (Count < 2)
+        return;
+    GetClientRect(Window, &Client);
+    Y = Client.bottom - LUH_TILE_MARGIN - (int)Count * (LUH_ROW_HEIGHT + LUH_ROW_GAP);
+    for (i = 0; i < Count; i++)
+    {
+        g_Ui.TileButtons[i] = CreateWindowExW(0, L"BUTTON", Page->TileNames[i],
+                                              WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON | BS_PUSHLIKE | BS_LEFT,
+                                              LUH_TILE_MARGIN, Y, LUH_TILE_WIDTH, LUH_ROW_HEIGHT, Window,
+                                              (HMENU)(UINT_PTR)(LUH_ID_TILE_BASE + i), NULL, NULL);
+        if (g_Ui.TileButtons[i])
+        {
+            SendMessageW(g_Ui.TileButtons[i], WM_SETFONT, (WPARAM)g_Ui.TextFont, TRUE);
+            if (i == Page->TileSelected)
+                SendMessageW(g_Ui.TileButtons[i], BM_SETCHECK, BST_CHECKED, 0);
+        }
+        Y += LUH_ROW_HEIGHT + LUH_ROW_GAP;
+    }
 }
 
 static PLUH_FIELD
@@ -238,10 +281,16 @@ LuhCreatePage(
         Y += LUH_ROW_HEIGHT + LUH_ROW_GAP;
     }
 
+    LuhCreateTileList(Window, Page);
     if (Focus)
         SetFocus(Focus);
     StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu", Page->Count);
     LuhTrace("page", Num);
+    if (Page->TileCount > 1)
+    {
+        StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu/%lu", Page->TileSelected, Page->TileCount);
+        LuhTrace("tiles", Num);
+    }
     InvalidateRect(Window, NULL, TRUE);
 }
 
@@ -255,6 +304,10 @@ LuhEnablePage(
     for (i = 0; i < g_Ui.Page->Count; i++)
         if (g_Ui.Page->Fields[i].Control && g_Ui.Page->Fields[i].Interactive != CPFIS_DISABLED)
             EnableWindow(g_Ui.Page->Fields[i].Control, Enable);
+    /* No switching tiles while a submission is with winlogon. */
+    for (i = 0; i < LUH_MAX_TILES; i++)
+        if (g_Ui.TileButtons[i])
+            EnableWindow(g_Ui.TileButtons[i], Enable);
     g_Ui.PageBusy = !Enable;
 }
 
@@ -421,6 +474,26 @@ ProviderGone:
     g_Ui.Detail[0] = UNICODE_NULL;
     LuhSetSpinner(Window, TRUE);
     SetTimer(Window, LUH_TIMER_STARTUP, LUH_PROVIDER_CALL_MS, NULL);
+    InvalidateRect(Window, NULL, TRUE);
+}
+
+/* Another tile picked: the provider thread switches and posts the new page (WM_LUH_PAGE). */
+static void
+LuhSelectTile(
+    _In_ HWND Window,
+    _In_ DWORD Index)
+{
+    if (g_Ui.Page == NULL || g_Ui.PageBusy || Index >= g_Ui.Page->TileCount || Index == g_Ui.Page->TileSelected)
+        return;
+    g_Ui.Detail[0] = UNICODE_NULL;
+    if (!LuhProviderSelectTile(Index))
+    {
+        /* Refused: keep the page, put the check back on the selected tile. */
+        if (g_Ui.TileButtons[Index])
+            SendMessageW(g_Ui.TileButtons[Index], BM_SETCHECK, BST_UNCHECKED, 0);
+        if (g_Ui.Page && g_Ui.Page->TileSelected < LUH_MAX_TILES && g_Ui.TileButtons[g_Ui.Page->TileSelected])
+            SendMessageW(g_Ui.TileButtons[g_Ui.Page->TileSelected], BM_SETCHECK, BST_CHECKED, 0);
+    }
     InvalidateRect(Window, NULL, TRUE);
 }
 
@@ -704,7 +777,12 @@ LuhWindowProc(
                     WluiClientRequestAction(&g_Connection,
                                             Id == LUH_ID_RESTART ? WluiActionRestart : WluiActionShutdown);
                 }
-                else if (Id >= LUH_ID_FIELD_BASE && g_Ui.Page && Id - LUH_ID_FIELD_BASE < g_Ui.Page->Count)
+                else if (Id >= LUH_ID_TILE_BASE && Id < LUH_ID_TILE_BASE + LUH_MAX_TILES)
+                {
+                    LuhSelectTile(Window, Id - LUH_ID_TILE_BASE);
+                }
+                else if (Id >= LUH_ID_FIELD_BASE && Id < LUH_ID_RESTART && g_Ui.Page &&
+                         Id - LUH_ID_FIELD_BASE < g_Ui.Page->Count)
                 {
                     PLUH_FIELD Field = &g_Ui.Page->Fields[Id - LUH_ID_FIELD_BASE];
                     if (Field->Type == CPFT_SUBMIT_BUTTON || Field->Type == CPFT_COMMAND_LINK)
