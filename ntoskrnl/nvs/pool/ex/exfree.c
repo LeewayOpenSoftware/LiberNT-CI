@@ -14,6 +14,65 @@
 #include <debug.h>
 #endif
 
+#if !defined(POOL_HOST_TEST)
+static
+BOOLEAN
+ExpPoolTagCheckEnabled(VOID)
+{
+    return (BOOLEAN)(VfPoolTrackingEnabled || (ExpPoolFlags & EX_POOL_FLAG_CHECK_TAGS) != 0);
+}
+
+static
+VOID
+ExpPoolLogTagMismatchOnce(
+    _In_ PVOID P,
+    _In_ ULONG TagToFree,
+    _In_ ULONG ActualTag)
+{
+    static LONG ExpPoolTagMismatchLogged;
+
+    if (InterlockedCompareExchange(&ExpPoolTagMismatchLogged, 1, 0) == 0)
+    {
+        DbgPrint("ExFreePoolWithTag: pool tag mismatch at %p, freed as 0x%08lx, allocated as 0x%08lx\n",
+                 P, TagToFree, ActualTag);
+    }
+}
+
+static
+VOID
+ExpPoolCheckTag(
+    _In_ PVOID P,
+    _In_ ULONG TagToFree)
+{
+    ULONG ActualTag = 0;
+    BOOLEAN HaveTag = FALSE;
+
+    if ((ExpPoolFlags & EX_POOL_FLAG_SPECIAL_POOL) && MmIsSpecialPoolAddress(P))
+    {
+        HaveTag = MmQuerySpecialPoolTag(P, &ActualTag);
+    }
+    else
+    {
+        PPOOL_HEAP CheckHeap;
+        ULONG CheckHeapIndex;
+        POOL_BLOCK_INFO CheckInfo;
+
+        CheckHeap = ExpPoolHeapFromAddress(P, &CheckHeapIndex);
+        if (CheckHeap != NULL && PoolHeapQuery(CheckHeap, P, &CheckInfo))
+        {
+            ActualTag = CheckInfo.Tag;
+            HaveTag = TRUE;
+        }
+    }
+
+    if (HaveTag &&
+        (TagToFree & ~(ULONG)PROTECTED_POOL) != (ActualTag & ~(ULONG)PROTECTED_POOL))
+    {
+        ExpPoolLogTagMismatchOnce(P, TagToFree, ActualTag);
+    }
+}
+#endif
+
 VOID
 NTAPI
 ExFreePoolWithTag(
@@ -24,10 +83,17 @@ ExFreePoolWithTag(
     PPOOL_HEAP Heap;
     ULONG HeapIndex;
 
+#if defined(POOL_HOST_TEST)
     UNREFERENCED_PARAMETER(TagToFree);
+#endif
 
     if (P == NULL)
         return;
+
+#if !defined(POOL_HOST_TEST)
+    if (TagToFree != 0 && ExpPoolTagCheckEnabled())
+        ExpPoolCheckTag(P, TagToFree);
+#endif
 
 #if !defined(POOL_HOST_TEST)
     if (VfPoolTrackingEnabled)
@@ -54,7 +120,7 @@ ExFreePoolWithTag(
 
     if (Info.Flags & EX_POOL_BLOCK_QUOTA)
     {
-        PEPROCESS Process = (PEPROCESS)Info.Trailer;
+        PEPROCESS Process = ExpPoolQuotaProcess(P, Info.Trailer);
 
         POOL_ASSERT(Info.Size >= sizeof(PEPROCESS) && Process != NULL);
         if (Process != NULL)

@@ -42,6 +42,13 @@ extern POOL_KM_LAYOUT MiPoolLayout;
     fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #e); } } while (0)
 
 ULONG64 KeQueryInterruptTime(VOID) { return 1; }
+ULONG64 KiBootEntropy;
+PVOID MmSystemRangeStart;
+BOOLEAN MmIsAddressValid(PVOID Address) { return TRUE; }
+LARGE_INTEGER KeQueryPerformanceCounter(PLARGE_INTEGER Frequency)
+{ LARGE_INTEGER Result; if (Frequency != NULL) Frequency->QuadPart = 1; Result.QuadPart = 1; return Result; }
+ULONG RtlRandomEx(PULONG Seed)
+{ *Seed = (*Seed * 1103515245u) + 12345u; return (ULONG)((*Seed >> 1) & 0x7FFFFFFF); }
 KIRQL KeGetCurrentIrql(VOID) { return 0; }
 _Noreturn VOID KeBugCheckEx(ULONG Code, ULONG_PTR A, ULONG_PTR B, ULONG_PTR C, ULONG_PTR D)
 { fprintf(stderr, "bugcheck %x %zx %zx %zx %zx\n", Code, (size_t)A, (size_t)B, (size_t)C, (size_t)D); abort(); }

@@ -372,6 +372,27 @@ MmQuerySpecialPoolBlockSize(
     return Record->Size;
 }
 
+BOOLEAN
+NTAPI
+MmQuerySpecialPoolTag(
+    _In_ PVOID P,
+    _Out_ PULONG Tag)
+{
+    PPOOL_SPECIAL_RECORD Record;
+    PVOID Context;
+    ULONG64 Page;
+
+    if (MiGuardQuery(MiSpecialPoolRegion, (ULONG64)(ULONG_PTR)P, &Page, &Context) != MiGuardLive ||
+        !PoolSpecialOwns(Context, (PVOID)(ULONG_PTR)Page, P))
+    {
+        return FALSE;
+    }
+
+    Record = Context;
+    *Tag = Record->Tag;
+    return TRUE;
+}
+
 VOID
 NTAPI
 MiCheckSpecialPoolFault(

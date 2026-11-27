@@ -9,6 +9,13 @@ cmake_minimum_required(VERSION 3.16)
 project(pool_host_tests LANGUAGES C)
 include(CTest)
 
+# Allow a standalone configure (cmake -S submodules/host-tests/mmcc/pool ...), used by the
+# mmcc-host-tests CI step, as well as the add_subdirectory() build driven by mmcc/CMakeLists.txt.
+if(NOT DEFINED MMCC_KERNEL_ROOT)
+    get_filename_component(MMCC_KERNEL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../ntoskrnl" ABSOLUTE)
+    include_directories(${MMCC_KERNEL_ROOT} ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+endif()
+
 set(CMAKE_C_STANDARD 11)
 set(POOL_ROOT ${MMCC_KERNEL_ROOT}/nvs/pool)
 

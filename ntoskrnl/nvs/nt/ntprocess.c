@@ -274,7 +274,17 @@ MiSelectBottomUpBase(
     if (Floor == MI_NT_HIGH_ENTROPY_FLOOR)
         Process->MitigationFlagsValues.HighEntropyASLREnabled = 1;
 
-    Seed = KeQueryPerformanceCounter(NULL).LowPart ^ (ULONG)KeQueryInterruptTime() ^ (ULONG)(ULONG_PTR)Process;
+    extern ULONG64 KiBootEntropy;
+    /* Derive the ASLR seed from KiBootEntropy through an independent mix, keeping
+     * the ASLR base and the pool key on separate values. */
+    ULONG64 AslrEntropy = KiBootEntropy ^ 0x41534C52BAADF00DULL;
+    AslrEntropy ^= AslrEntropy >> 30;
+    AslrEntropy *= 0xBF58476D1CE4E5B9ULL;
+    AslrEntropy ^= AslrEntropy >> 27;
+    AslrEntropy *= 0x94D049BB133111EBULL;
+    AslrEntropy ^= AslrEntropy >> 31;
+    Seed = KeQueryPerformanceCounter(NULL).LowPart ^ (ULONG)KeQueryInterruptTime() ^ (ULONG)(ULONG_PTR)Process ^
+           (ULONG)AslrEntropy ^ (ULONG)(AslrEntropy >> 32);
     Space->BottomUpVa = Floor + (RtlRandomEx(&Seed) % Slots) * MI_ALLOCATION_GRANULARITY;
 
     if (TopDownCeiling != 0)
