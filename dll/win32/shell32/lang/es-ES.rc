@@ -721,7 +721,7 @@ CAPTION "Apagar Orosi"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON IDI_SHELL_SHUTDOWN, -1, 10, 12, 20, 20
-    LTEXT "¿&Qué desea que haga el equipo?", -1, 40, 12, 170, 10
+    LTEXT "¿&Qué quieres que haga el equipo?", -1, 40, 12, 170, 10
     COMBOBOX IDC_SHUTDOWN_ACTION, 40, 24, 170, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     LTEXT "", IDC_SHUTDOWN_DESC, 40, 42, 170, 40
     DEFPUSHBUTTON "Aceptar", IDOK, 55, 90, 50, 15
