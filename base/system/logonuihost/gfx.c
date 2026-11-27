@@ -632,7 +632,8 @@ LuhBoxLine(
     }
 }
 
-VOID
+/* Three box passes approximate a Gaussian. */
+static VOID
 LuhBlur(
     _Inout_ PLUH_SURFACE Surface,
     _In_ LONG Radius)
@@ -654,6 +655,25 @@ LuhBlur(
             LuhBoxLine(Surface->Bits + X, Surface->Height, Surface->Width, Radius, Line);
     }
     HeapFree(GetProcessHeap(), 0, Line);
+}
+
+#define LUH_SOFT_SCALE      8       /* the blur runs on an eighth of the picture, then scales up */
+#define LUH_SOFT_RADIUS     3
+
+BOOL
+LuhSoften(
+    _Inout_ PLUH_SURFACE Target,
+    _In_ const LUH_SURFACE *Sharp)
+{
+    LUH_SURFACE Small;
+
+    if (!LuhSurfaceCreate(&Small, max(Target->Width / LUH_SOFT_SCALE, 1), max(Target->Height / LUH_SOFT_SCALE, 1)))
+        return FALSE;
+    LuhSurfaceScaleFrom(&Small, Sharp);
+    LuhBlur(&Small, LUH_SOFT_RADIUS);
+    LuhSurfaceScaleFrom(Target, &Small);
+    LuhSurfaceDestroy(&Small);
+    return TRUE;
 }
 
 VOID

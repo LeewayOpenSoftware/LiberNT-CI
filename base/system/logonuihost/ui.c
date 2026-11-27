@@ -159,6 +159,8 @@ typedef struct _LUH_UI
     BOOL HasText;           /* the arrow box is not empty: the eye shows */
     BOOL Revealing;         /* the eye is held down */
     BOOL CurtainFadeIn;     /* the lock curtain still has to come up from black */
+    BOOL CurtainFirst;      /* the curtain was asked for and its first frame is not out yet */
+    LUH_ANIM CurtainAnim;   /* from that request to the first frame on screen (frame log) */
     BOOL FadeInPosted;
     BOOL SignInBusy;        /* submitted: dots and Welcome stand where the fields were */
     BOOL ResultUp;          /* a refused sign-in: its message and OK stand where the fields were */
@@ -1849,8 +1851,6 @@ LuhApplyFieldUpdate(
 
 /* ---- backdrop and lock screen ----------------------------------------------------- */
 
-#define LUH_SOFT_SCALE      8       /* the blur runs on an eighth of the screen, then scales up */
-#define LUH_SOFT_RADIUS     3
 #define LUH_SOFT_DARKEN     96      /* about 38 % black over the blurred wallpaper (Win11 shots) */
 #define LUH_LIFT_MS         350     /* a whole-screen lift; a partial one takes its share */
 #define LUH_LIFT_MIN_MS     120
@@ -1865,7 +1865,9 @@ LuhApplyFieldUpdate(
  * the system default. The user's own wallpaper is never read here.
  */
 #define LUH_LOCK_POLICY_KEY L"SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization"
-#define LUH_LOCK_DEFAULT    L"%SystemRoot%\\Web\\Wallpaper\\Layered Glass 16x9.png"
+#define LUH_LOCK_DEFAULT    L"%SystemRoot%\\Web\\Screen\\Midnight Glass Waves.png"
+/* Without a readable picture: the default picture's mean colour, so the screen keeps its tone. */
+#define LUH_LOCK_FILL       RGB(18, 58, 112)
 #define LUH_FILE_WRITE      (FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | WRITE_DAC | WRITE_OWNER | \
                              GENERIC_WRITE | GENERIC_ALL)
 #define LUH_DIR_WRITE       (FILE_ADD_FILE | FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | \
@@ -2043,15 +2045,14 @@ LuhBuildBackdrop(
     _In_ LONG Width,
     _In_ LONG Height)
 {
-    LUH_SURFACE Image, Small;
+    LUH_SURFACE Image;
     RECT All = { 0, 0, Width, Height };
     HANDLE File;
     BOOL Loaded = FALSE;
 
     if (!LuhSurfaceCreate(&g_Ui.Back, Width, Height) || !LuhSurfaceCreate(&g_Ui.Sharp, Width, Height) ||
         !LuhSurfaceCreate(&g_Ui.Still, Width, Height) ||
-        !LuhSurfaceCreate(&g_Ui.Soft, Width, Height) || !LuhSurfaceCreate(&g_Ui.Face, Width, Height) ||
-        !LuhSurfaceCreate(&Small, max(Width / LUH_SOFT_SCALE, 1), max(Height / LUH_SOFT_SCALE, 1)))
+        !LuhSurfaceCreate(&g_Ui.Soft, Width, Height) || !LuhSurfaceCreate(&g_Ui.Face, Width, Height))
     {
         LuhFreeBackdrop();
         return FALSE;
@@ -2071,14 +2072,14 @@ LuhBuildBackdrop(
     }
     else
     {
-        /* The picture was removed or cannot be read: a plain deep blue is still a lock screen. */
-        LuhFillRect(&g_Ui.Sharp, &All, RGB(0, 40, 120), 255);
+        /* The picture was removed or cannot be decoded: one plain colour, and the logon goes on. */
+        LuhTrace("backdrop-fill", NULL);
+        LuhFillRect(&g_Ui.Sharp, &All, LUH_LOCK_FILL, 255);
     }
 
-    LuhSurfaceScaleFrom(&Small, &g_Ui.Sharp);
-    LuhBlur(&Small, LUH_SOFT_RADIUS);
-    LuhSurfaceScaleFrom(&g_Ui.Soft, &Small);
-    LuhSurfaceDestroy(&Small);
+    /* The credentials see the same picture, softened and darkened. */
+    if (!LuhSoften(&g_Ui.Soft, &g_Ui.Sharp))
+        BitBlt(g_Ui.Soft.Dc, 0, 0, Width, Height, g_Ui.Sharp.Dc, 0, 0, SRCCOPY);
     LuhFillRect(&g_Ui.Soft, &All, RGB(0, 0, 0), LUH_SOFT_DARKEN);
 
     g_Ui.SoftBrush = CreatePatternBrush(g_Ui.Soft.Bitmap);
@@ -2276,6 +2277,13 @@ LuhShowCurtain(
     g_Ui.Lift = 0;
     /* On a lock Windows 11 shows black first, then fades the lock screen in. */
     g_Ui.CurtainFadeIn = (g_Options.Scenario == CPUS_UNLOCK_WORKSTATION);
+    if (!g_Ui.CurtainFadeIn)
+    {
+        /* The picture is decoded before the window exists; this line shows it costs no frame. */
+        LuhAnimStart(&g_Ui.CurtainAnim, "curtain-first", 0);
+        LuhAnimFrame(&g_Ui.CurtainAnim);
+        g_Ui.CurtainFirst = TRUE;
+    }
     g_Ui.FadeInPosted = FALSE;
     LuhUpdateClock();
     LuhBuildFace();
@@ -2298,6 +2306,7 @@ LuhDropCurtain(
     }
     g_Ui.Curtain = FALSE;
     g_Ui.CadCurtain = FALSE;
+    g_Ui.CurtainFirst = FALSE;
     g_Ui.Lift = 0;
     KillTimer(Window, LUH_TIMER_CLOCK);
     LuhFreeCurtainPage();
@@ -2711,6 +2720,13 @@ LuhPaint(
         {
             /* The curtain is one cached picture; mid-drag a repaint shows the same position. */
             LuhBlitLift(Dc, g_Ui.Lift);
+            if (g_Ui.CurtainFirst)
+            {
+                g_Ui.CurtainFirst = FALSE;
+                GdiFlush();
+                LuhAnimFrame(&g_Ui.CurtainAnim);
+                LuhAnimEnd(&g_Ui.CurtainAnim);
+            }
         }
     }
     else

@@ -24,7 +24,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(slidetoshutdown);
 #define STS_FLICK           0.6     /* pixels per millisecond at release that decide by themselves */
 #define WM_STS_START        (WM_APP + 1)
 #define STS_LOCK_POLICY_KEY L"SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization"
-#define STS_LOCK_DEFAULT    L"%SystemRoot%\\Web\\Wallpaper\\Layered Glass 16x9.png"
+#define STS_LOCK_DEFAULT    L"%SystemRoot%\\Web\\Screen\\Midnight Glass Waves.png"
 
 typedef struct _STS
 {
@@ -129,7 +129,7 @@ StsBuild(VOID)
     }
     else
     {
-        LuhFillRect(&g_Sts.Curtain, &All, RGB(0, 40, 120), 255);
+        LuhFillRect(&g_Sts.Curtain, &All, RGB(18, 58, 112), 255);
     }
 
     /* Measured at 1024x768 against the curtain's bottom edge at rest (y 400): warning y 293,

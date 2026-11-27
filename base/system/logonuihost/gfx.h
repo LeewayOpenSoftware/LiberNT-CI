@@ -63,8 +63,12 @@ BOOL LuhSurfaceLoad(_Out_ PLUH_SURFACE Surface, _In_ HANDLE File, _In_ LONG MaxW
  * For opaque pictures only (wallpaper, backdrop): every target pixel ends with alpha 0xFF.
  */
 BOOL LuhSurfaceScaleFrom(_Inout_ PLUH_SURFACE Target, _In_ const LUH_SURFACE *Source);
-/* Three box passes approximate a Gaussian; run once per backdrop, never per frame. */
-VOID LuhBlur(_Inout_ PLUH_SURFACE Surface, _In_ LONG Radius);
+/*
+ * The soft backdrop behind the credentials: Target becomes Sharp, softly blurred. Run once per
+ * show, never per frame. The blur lives here alone, so a better one replaces only this body.
+ * FALSE when it could not run; the caller then shows Sharp as it is.
+ */
+BOOL LuhSoften(_Inout_ PLUH_SURFACE Target, _In_ const LUH_SURFACE *Sharp);
 /* Source over Target at (X, Y) with an extra constant opacity. */
 VOID LuhBlend(_Inout_ PLUH_SURFACE Target, _In_ LONG X, _In_ LONG Y, _In_ const LUH_SURFACE *Source,
               _In_ BYTE Alpha);
