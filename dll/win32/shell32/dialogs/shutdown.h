@@ -10,10 +10,14 @@
 #pragma once
 
 /*
- * Shutdown option / selection codes. These match the WLX_SHUTDOWN_STATE_*
- * bits (winwlx.h) and the 0x01/0x02/0x04/0x10/0x40 result values that
- * ExitWindowsDialog() already acts on, so no caller mapping changes.
+ * Shutdown option / selection codes: the 0x01/0x02/0x04/0x10/0x40 result values
+ * ExitWindowsDialog() acts on (the GINA shutdown-state bits, which no public header defines).
  */
+#define SHELL_SHUTDOWN_LOGOFF       0x01
+#define SHELL_SHUTDOWN_POWER_OFF    0x02
+#define SHELL_SHUTDOWN_REBOOT       0x04
+#define SHELL_SHUTDOWN_SLEEP        0x10
+#define SHELL_SHUTDOWN_HIBERNATE    0x40
 
 /* Which shutdown choices are allowed, per policy and power capabilities.
    shell32 runs in the user's context, so HKCU is the user's own hive. */
@@ -23,7 +27,7 @@ DWORD ShellGetAllowedShutdownOptions(VOID);
 LONG  ShellGetPolicyDWORD(PCWSTR pPolicyKey, PCWSTR ValueName, PDWORD pValue);
 
 /* The classic "Shut Down Windows" dialog. Returns the chosen
-   WLX_SHUTDOWN_STATE_* code (0x01/0x02/0x04/0x10/0x40), or 0 if cancelled or
+   SHELL_SHUTDOWN_* code, or 0 if cancelled or
    nothing is allowed. dwExcludeOptions masks choices out
-   (e.g. ~(DWORD)WLX_SHUTDOWN_STATE_LOGOFF for a logoff-only prompt). */
+   (e.g. ~(DWORD)SHELL_SHUTDOWN_LOGOFF for a logoff-only prompt). */
 DWORD ShellShutdownWindowsDialog(HWND hWndOwner, DWORD dwExcludeOptions);
