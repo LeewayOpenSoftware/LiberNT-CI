@@ -582,8 +582,9 @@ WinMain(
         ExitProcess(1);
     }
 
-    /* The Winlogon desktop is on screen: the boot spinner goes on turning until the logon UI is up. */
-    if (WLSession->UseLogonUI)
+    /* The Winlogon desktop is on screen: the boot spinner goes on turning until the logon UI is up.
+     * Setup runs on the application desktop without a logon UI, so it gets no spinner. */
+    if (WLSession->UseLogonUI && GetSetupType() == 0)
         WlBootSpinnerShow(WLSession);
 
     LockWorkstation(WLSession);

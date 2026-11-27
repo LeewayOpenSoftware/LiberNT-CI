@@ -16,6 +16,7 @@
 #include <mmsystem.h>  /* timeBeginPeriod */
 
 #define WL_SPIN_CLASS   L"WinlogonBootSpinner"
+#define WL_SPIN_MAX_MS  30000   /* a boot path that never stops it: the pump ends by itself */
 
 typedef struct _WL_SPINNER
 {
@@ -267,6 +268,11 @@ WlSpinThread(
         for (;;)
         {
             Now = WlSpinNowMs();
+            if (Now - Start >= WL_SPIN_MAX_MS)
+            {
+                LogonStage("boot-spinner-expired");
+                break;
+            }
             Interval = (DWORD)(Now - Last);
             if (Frames > 0)
             {

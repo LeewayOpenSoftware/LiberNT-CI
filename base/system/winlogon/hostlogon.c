@@ -2196,6 +2196,7 @@ WlHostWaitDesktopSwitch(
 VOID
 WlHostBeforeDesktopSwitch(VOID)
 {
+    WlBootSpinnerStop();
     if (!WlHlHostLive())
         return;
     WlHlPost(WluiCmdReadyForDesktopSwitch, g_HostScenario, 0, 0, 0, NULL, NULL);
