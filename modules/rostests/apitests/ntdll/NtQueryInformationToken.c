@@ -1064,6 +1064,231 @@ QueryTokenLinkedTokenTests(
         NtClose(Linked.LinkedToken);
 }
 
+static
+BOOL
+PtrInBuffer(
+    _In_opt_ PVOID Ptr,
+    _In_ PVOID Buffer,
+    _In_ ULONG Length)
+{
+    return Ptr != NULL &&
+           (ULONG_PTR)Ptr >= (ULONG_PTR)Buffer &&
+           (ULONG_PTR)Ptr < (ULONG_PTR)Buffer + Length;
+}
+
+static
+VOID
+QueryTokenReturnLengthTests(
+    _In_ HANDLE Token)
+{
+    NTSTATUS Status;
+    ULONGLONG Aligned = 0;
+    ULONG Length;
+
+    Length = 0;
+    Status = NtQueryInformationToken(Token, TokenElevation, &Aligned, 1, &Length);
+    ok_ntstatus(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok(Length == sizeof(TOKEN_ELEVATION), "TokenElevation length %lu\n", Length);
+
+    Length = 0;
+    Status = NtQueryInformationToken(Token, TokenElevation, &Aligned, sizeof(TOKEN_ELEVATION), &Length);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    ok(Length == sizeof(TOKEN_ELEVATION), "TokenElevation length %lu\n", Length);
+
+    Length = 0;
+    Status = NtQueryInformationToken(Token, TokenLinkedToken, &Aligned, 1, &Length);
+    ok_ntstatus(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok(Length == sizeof(TOKEN_LINKED_TOKEN), "TokenLinkedToken length %lu\n", Length);
+}
+
+static
+VOID
+QueryTokenOversizeBufferTests(
+    _In_ HANDLE Token)
+{
+    NTSTATUS Status;
+    ULONGLONG Big[2] = { 0, 0 };
+    ULONG Length;
+
+    Length = 0;
+    Status = NtQueryInformationToken(Token, TokenElevationType, Big, sizeof(Big), &Length);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    ok(Length == sizeof(TOKEN_ELEVATION_TYPE), "TokenElevationType length %lu\n", Length);
+
+    Length = 0;
+    Status = NtQueryInformationToken(Token, TokenElevationType, Big, 2, &Length);
+    ok_ntstatus(Status, STATUS_BUFFER_TOO_SMALL);
+    ok(Length == sizeof(TOKEN_ELEVATION_TYPE), "TokenElevationType length %lu\n", Length);
+}
+
+static
+VOID
+QueryTokenAuditPolicyTests(
+    _In_ HANDLE Token)
+{
+    NTSTATUS Status;
+    ULONG Length = 0;
+
+    Status = NtQueryInformationToken(Token, TokenAuditPolicy, NULL, 0, &Length);
+    if (Status == STATUS_PRIVILEGE_NOT_HELD)
+    {
+        ok_ntstatus(Status, STATUS_PRIVILEGE_NOT_HELD);
+    }
+    else
+    {
+        ok_ntstatus(Status, STATUS_BUFFER_TOO_SMALL);
+        ok(Length == 30, "TokenAuditPolicy length %lu\n", Length);
+    }
+}
+
+static
+VOID
+QueryTokenAppSiloTests(
+    _In_ HANDLE Token)
+{
+    NTSTATUS Status;
+    ULONGLONG Buf = 0x1337;
+    ULONG Length = 0;
+
+    Status = NtQueryInformationToken(Token, TokenIsAppSilo, &Buf, sizeof(ULONG), &Length);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    ok(Length == sizeof(ULONG), "TokenIsAppSilo length %lu\n", Length);
+    ok((ULONG)Buf == 0, "TokenIsAppSilo value %lu\n", (ULONG)Buf);
+}
+
+static
+VOID
+TestEmptyTokenClass(
+    _In_ HANDLE Token,
+    _In_ TOKEN_INFORMATION_CLASS Class,
+    _In_ ULONG Expected)
+{
+    NTSTATUS Status;
+    ULONG Length = 0;
+    PVOID Buffer;
+
+    Status = NtQueryInformationToken(Token, Class, NULL, 0, &Length);
+    ok_ntstatus(Status, STATUS_BUFFER_TOO_SMALL);
+    ok(Length == Expected, "class %d length %lu, expected %lu\n", Class, Length, Expected);
+    if (Length != Expected || Length == 0)
+        return;
+
+    Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length);
+    if (!Buffer)
+        return;
+    Status = NtQueryInformationToken(Token, Class, Buffer, Length, &Length);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    ok(Length == Expected, "class %d length %lu, expected %lu\n", Class, Length, Expected);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+}
+
+static
+VOID
+QueryTokenEmptyClassesTests(
+    _In_ HANDLE Token)
+{
+    NTSTATUS Status;
+    ULONG Length = 0;
+    CLAIM_SECURITY_ATTRIBUTES_INFORMATION Claims;
+
+    TestEmptyTokenClass(Token, TokenUserClaimAttributes, sizeof(CLAIM_SECURITY_ATTRIBUTES_INFORMATION));
+    TestEmptyTokenClass(Token, TokenDeviceClaimAttributes, sizeof(CLAIM_SECURITY_ATTRIBUTES_INFORMATION));
+    TestEmptyTokenClass(Token, TokenSingletonAttributes, sizeof(CLAIM_SECURITY_ATTRIBUTES_INFORMATION));
+    TestEmptyTokenClass(Token, TokenDeviceGroups, sizeof(TOKEN_GROUPS));
+    TestEmptyTokenClass(Token, TokenProcessTrustLevel, sizeof(PVOID));
+
+    RtlZeroMemory(&Claims, sizeof(Claims));
+    Status = NtQueryInformationToken(Token, TokenUserClaimAttributes, &Claims, sizeof(Claims), &Length);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    ok(Claims.Version == 1, "claim version %u\n", Claims.Version);
+    ok(Claims.AttributeCount == 0, "claim count %lu\n", Claims.AttributeCount);
+}
+
+static
+VOID
+QueryTokenAccessInformationTests(
+    _In_ HANDLE Token)
+{
+    NTSTATUS Status;
+    ULONG Length = 0, Required, i, GroupCount = 0;
+    PTOKEN_ACCESS_INFORMATION Info;
+    PSID_AND_ATTRIBUTES_HASH SidHash;
+    PTOKEN_GROUPS Groups;
+    PVOID Buffer;
+
+    Status = NtQueryInformationToken(Token, TokenAccessInformation, NULL, 0, &Length);
+    ok_ntstatus(Status, STATUS_BUFFER_TOO_SMALL);
+    ok(Length > sizeof(TOKEN_ACCESS_INFORMATION), "length %lu\n", Length);
+    if (Length <= sizeof(TOKEN_ACCESS_INFORMATION))
+        return;
+    Required = Length;
+
+    Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Required);
+    if (!Buffer)
+        return;
+
+    Length = 0;
+    Status = NtQueryInformationToken(Token, TokenAccessInformation, Buffer, Required - 1, &Length);
+    ok_ntstatus(Status, STATUS_BUFFER_TOO_SMALL);
+    ok(Length == Required, "short length %lu, expected %lu\n", Length, Required);
+
+    Length = 0;
+    Status = NtQueryInformationToken(Token, TokenAccessInformation,
+                                     (PVOID)((PUCHAR)Buffer + 1), Required, &Length);
+    ok_ntstatus(Status, STATUS_DATATYPE_MISALIGNMENT);
+
+    Length = 0;
+    Status = NtQueryInformationToken(Token, TokenAccessInformation, Buffer, Required, &Length);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+    ok(Length == Required, "full length %lu, expected %lu\n", Length, Required);
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+        return;
+    }
+
+    Info = (PTOKEN_ACCESS_INFORMATION)Buffer;
+    ok(PtrInBuffer(Info->SidHash, Buffer, Required), "SidHash %p outside buffer\n", Info->SidHash);
+    ok(PtrInBuffer(Info->RestrictedSidHash, Buffer, Required), "RestrictedSidHash %p outside buffer\n", Info->RestrictedSidHash);
+    ok(PtrInBuffer(Info->Privileges, Buffer, Required), "Privileges %p outside buffer\n", Info->Privileges);
+    ok(PtrInBuffer(Info->CapabilitiesHash, Buffer, Required), "CapabilitiesHash %p outside buffer\n", Info->CapabilitiesHash);
+    if (Info->PackageSid)
+        ok(PtrInBuffer(Info->PackageSid, Buffer, Required), "PackageSid %p outside buffer\n", Info->PackageSid);
+    if (Info->TrustLevelSid)
+        ok(PtrInBuffer(Info->TrustLevelSid, Buffer, Required), "TrustLevelSid %p outside buffer\n", Info->TrustLevelSid);
+    if (Info->SecurityAttributes)
+        ok(PtrInBuffer(Info->SecurityAttributes, Buffer, Required), "SecurityAttributes %p outside buffer\n", Info->SecurityAttributes);
+
+    SidHash = Info->SidHash;
+    if (PtrInBuffer(SidHash, Buffer, Required))
+    {
+        ok(SidHash->SidCount >= 1, "SidCount %lu\n", SidHash->SidCount);
+        ok(SidHash->SidCount == 0 || PtrInBuffer(SidHash->SidAttr, Buffer, Required),
+           "SidAttr %p outside buffer\n", SidHash->SidAttr);
+        for (i = 0; i < SidHash->SidCount && PtrInBuffer(SidHash->SidAttr, Buffer, Required); i++)
+            ok(TokenSidInBuffer(SidHash->SidAttr[i].Sid, Buffer, Required),
+               "SidAttr[%lu].Sid %p not an in-buffer SID\n", i, SidHash->SidAttr[i].Sid);
+    }
+
+    Length = 0;
+    NtQueryInformationToken(Token, TokenGroups, NULL, 0, &Length);
+    if (Length)
+    {
+        Groups = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length);
+        if (Groups)
+        {
+            Status = NtQueryInformationToken(Token, TokenGroups, Groups, Length, &Length);
+            if (NT_SUCCESS(Status))
+                GroupCount = Groups->GroupCount;
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Groups);
+        }
+    }
+    ok(SidHash->SidCount == GroupCount + 1,
+       "SidCount %lu, expected groups %lu + 1\n", SidHash->SidCount, GroupCount);
+
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+}
+
 START_TEST(NtQueryInformationToken)
 {
     NTSTATUS Status;
@@ -1124,6 +1349,12 @@ START_TEST(NtQueryInformationToken)
     QueryTokenIsSandboxInert(Token);
     QueryTokenOriginTests(Token);
     QueryTokenLinkedTokenTests(Token);
+    QueryTokenReturnLengthTests(Token);
+    QueryTokenOversizeBufferTests(Token);
+    QueryTokenAuditPolicyTests(Token);
+    QueryTokenAppSiloTests(Token);
+    QueryTokenEmptyClassesTests(Token);
+    QueryTokenAccessInformationTests(Token);
 
     NtClose(Token);
 }
