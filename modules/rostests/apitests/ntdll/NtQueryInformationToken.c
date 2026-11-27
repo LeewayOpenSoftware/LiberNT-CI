@@ -1066,14 +1066,45 @@ QueryTokenLinkedTokenTests(
 
 static
 BOOL
-PtrInBuffer(
+RangeInBuffer(
     _In_opt_ PVOID Ptr,
+    _In_ ULONG Size,
     _In_ PVOID Buffer,
     _In_ ULONG Length)
 {
     return Ptr != NULL &&
            (ULONG_PTR)Ptr >= (ULONG_PTR)Buffer &&
-           (ULONG_PTR)Ptr < (ULONG_PTR)Buffer + Length;
+           (ULONG_PTR)Ptr <= (ULONG_PTR)Buffer + Length &&
+           (ULONG_PTR)Buffer + Length - (ULONG_PTR)Ptr >= Size;
+}
+
+static
+VOID
+CheckAccessInfoSidHash(
+    _In_opt_ PSID_AND_ATTRIBUTES_HASH Hash,
+    _In_ PVOID Buffer,
+    _In_ ULONG Length)
+{
+    ULONG i;
+
+    if (!RangeInBuffer(Hash, sizeof(SID_AND_ATTRIBUTES_HASH), Buffer, Length))
+    {
+        ok(FALSE, "hash %p outside buffer\n", Hash);
+        return;
+    }
+    if (Hash->SidCount == 0)
+    {
+        ok(Hash->SidAttr == NULL, "empty hash SidAttr %p not NULL\n", Hash->SidAttr);
+        return;
+    }
+    if (!RangeInBuffer(Hash->SidAttr, (ULONG)(Hash->SidCount * sizeof(SID_AND_ATTRIBUTES)), Buffer, Length))
+    {
+        ok(FALSE, "SidAttr %p[%lu] outside buffer\n", Hash->SidAttr, Hash->SidCount);
+        return;
+    }
+    for (i = 0; i < Hash->SidCount; i++)
+        ok(TokenSidInBuffer(Hash->SidAttr[i].Sid, Buffer, Length),
+           "SidAttr[%lu].Sid %p not an in-buffer SID\n", i, Hash->SidAttr[i].Sid);
 }
 
 static
@@ -1210,7 +1241,7 @@ QueryTokenAccessInformationTests(
     _In_ HANDLE Token)
 {
     NTSTATUS Status;
-    ULONG Length = 0, Required, i, GroupCount = 0;
+    ULONG Length = 0, Required, GroupCount = 0;
     PTOKEN_ACCESS_INFORMATION Info;
     PSID_AND_ATTRIBUTES_HASH SidHash;
     PTOKEN_GROUPS Groups;
@@ -1248,27 +1279,26 @@ QueryTokenAccessInformationTests(
     }
 
     Info = (PTOKEN_ACCESS_INFORMATION)Buffer;
-    ok(PtrInBuffer(Info->SidHash, Buffer, Required), "SidHash %p outside buffer\n", Info->SidHash);
-    ok(PtrInBuffer(Info->RestrictedSidHash, Buffer, Required), "RestrictedSidHash %p outside buffer\n", Info->RestrictedSidHash);
-    ok(PtrInBuffer(Info->Privileges, Buffer, Required), "Privileges %p outside buffer\n", Info->Privileges);
-    ok(PtrInBuffer(Info->CapabilitiesHash, Buffer, Required), "CapabilitiesHash %p outside buffer\n", Info->CapabilitiesHash);
+    ok(RangeInBuffer(Info->SidHash, sizeof(SID_AND_ATTRIBUTES_HASH), Buffer, Required),
+       "SidHash %p outside buffer\n", Info->SidHash);
+    ok(RangeInBuffer(Info->RestrictedSidHash, sizeof(SID_AND_ATTRIBUTES_HASH), Buffer, Required),
+       "RestrictedSidHash %p outside buffer\n", Info->RestrictedSidHash);
+    ok(RangeInBuffer(Info->CapabilitiesHash, sizeof(SID_AND_ATTRIBUTES_HASH), Buffer, Required),
+       "CapabilitiesHash %p outside buffer\n", Info->CapabilitiesHash);
+    if (RangeInBuffer(Info->Privileges, FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges), Buffer, Required))
+        ok(RangeInBuffer(Info->Privileges,
+                         (ULONG)(FIELD_OFFSET(TOKEN_PRIVILEGES, Privileges) +
+                                 Info->Privileges->PrivilegeCount * sizeof(LUID_AND_ATTRIBUTES)),
+                         Buffer, Required),
+           "Privileges %p[%lu] outside buffer\n", Info->Privileges, Info->Privileges->PrivilegeCount);
+    else
+        ok(FALSE, "Privileges %p outside buffer\n", Info->Privileges);
     if (Info->PackageSid)
-        ok(PtrInBuffer(Info->PackageSid, Buffer, Required), "PackageSid %p outside buffer\n", Info->PackageSid);
+        ok(TokenSidInBuffer(Info->PackageSid, Buffer, Required), "PackageSid %p not an in-buffer SID\n", Info->PackageSid);
     if (Info->TrustLevelSid)
-        ok(PtrInBuffer(Info->TrustLevelSid, Buffer, Required), "TrustLevelSid %p outside buffer\n", Info->TrustLevelSid);
+        ok(TokenSidInBuffer(Info->TrustLevelSid, Buffer, Required), "TrustLevelSid %p not an in-buffer SID\n", Info->TrustLevelSid);
     if (Info->SecurityAttributes)
-        ok(PtrInBuffer(Info->SecurityAttributes, Buffer, Required), "SecurityAttributes %p outside buffer\n", Info->SecurityAttributes);
-
-    SidHash = Info->SidHash;
-    if (PtrInBuffer(SidHash, Buffer, Required))
-    {
-        ok(SidHash->SidCount >= 1, "SidCount %lu\n", SidHash->SidCount);
-        ok(SidHash->SidCount == 0 || PtrInBuffer(SidHash->SidAttr, Buffer, Required),
-           "SidAttr %p outside buffer\n", SidHash->SidAttr);
-        for (i = 0; i < SidHash->SidCount && PtrInBuffer(SidHash->SidAttr, Buffer, Required); i++)
-            ok(TokenSidInBuffer(SidHash->SidAttr[i].Sid, Buffer, Required),
-               "SidAttr[%lu].Sid %p not an in-buffer SID\n", i, SidHash->SidAttr[i].Sid);
-    }
+        ok(RangeInBuffer(Info->SecurityAttributes, 1, Buffer, Required), "SecurityAttributes %p outside buffer\n", Info->SecurityAttributes);
 
     Length = 0;
     NtQueryInformationToken(Token, TokenGroups, NULL, 0, &Length);
@@ -1283,8 +1313,18 @@ QueryTokenAccessInformationTests(
             RtlFreeHeap(RtlGetProcessHeap(), 0, Groups);
         }
     }
-    ok(SidHash->SidCount == GroupCount + 1,
-       "SidCount %lu, expected groups %lu + 1\n", SidHash->SidCount, GroupCount);
+
+    SidHash = Info->SidHash;
+    if (RangeInBuffer(SidHash, sizeof(SID_AND_ATTRIBUTES_HASH), Buffer, Required))
+    {
+        ok(SidHash->SidCount >= 1, "SidCount %lu\n", SidHash->SidCount);
+        ok(SidHash->SidCount == GroupCount + 1,
+           "SidCount %lu, expected groups %lu + 1\n", SidHash->SidCount, GroupCount);
+    }
+
+    CheckAccessInfoSidHash(Info->SidHash, Buffer, Required);
+    CheckAccessInfoSidHash(Info->RestrictedSidHash, Buffer, Required);
+    CheckAccessInfoSidHash(Info->CapabilitiesHash, Buffer, Required);
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
 }
