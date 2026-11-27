@@ -99,6 +99,6 @@ START_TEST(KeContextSegments)
 
     CloseHandle(Thread);
 #else
-    skip("this test needs the GNU assembler syntax to read the segment selectors\n");
+    skip(FALSE, "this test needs the GNU assembler syntax to read the segment selectors\n");
 #endif
 }

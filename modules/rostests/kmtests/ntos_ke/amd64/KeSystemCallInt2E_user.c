@@ -83,6 +83,6 @@ START_TEST(KeSystemCallInt2E)
     ok_eq_pointer(Int2eFault.ExceptionAddress, Int2eFault.Address);
 #else
     RtlRemoveVectoredExceptionHandler(Handler);
-    skip("this test needs the GNU assembler syntax to raise int 0x2e\n");
+    skip(FALSE, "this test needs the GNU assembler syntax to raise int 0x2e\n");
 #endif
 }
