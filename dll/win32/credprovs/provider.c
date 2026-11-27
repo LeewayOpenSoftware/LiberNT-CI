@@ -113,6 +113,8 @@ BuildTiles(_Inout_ PWPROVIDER *This)
     ReleaseTiles(This);
     if (This->Users && This->Scenario != CPUS_CREDUI)
     {
+        CREDENTIAL_PROVIDER_ACCOUNT_OPTIONS Options = CPAO_NONE;
+
         hr = ICredentialProviderUserArray_GetCount(This->Users, &Count);
         if (FAILED(hr))
             return hr;
@@ -125,7 +127,10 @@ BuildTiles(_Inout_ PWPROVIDER *This)
             if (SUCCEEDED(hr))
                 This->Tiles[This->TileCount++] = Credential;
         }
-        if (This->TileCount)
+        /* With accounts listed, the empty "Other user" tile comes only when the host asks for it. */
+        if (This->TileCount &&
+            (FAILED(ICredentialProviderUserArray_GetAccountOptions(This->Users, &Options)) ||
+             !(Options & CPAO_EMPTY_LOCAL) || This->TileCount >= PWPROVIDER_MAX_TILES))
             return S_OK;
     }
 
