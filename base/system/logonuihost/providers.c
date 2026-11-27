@@ -386,6 +386,40 @@ PrefillProviders(
     SecureZeroMemory(Buffer, sizeof(Buffer));
 }
 
+/* Windows order: SetUsageScenario (done by the enumeration), then SetUserArray, then the
+ * first GetCredentialCount. Logon and unlock only; the other scenarios keep one empty tile. */
+static VOID
+SetUserArrays(
+    _In_ PCPH_PROVIDER_SET Set)
+{
+    ICredentialProviderUserArray *Users = NULL;
+    WCHAR Num[16];
+    DWORD Count = 0;
+    ULONG i;
+
+    if (g_Options.Scenario != CPUS_LOGON && g_Options.Scenario != CPUS_UNLOCK_WORKSTATION)
+        return;
+    if (FAILED(LuhUsersCreate(g_Options.Scenario == CPUS_UNLOCK_WORKSTATION ? g_Options.PrefillUser : NULL, &Users)))
+        return;
+    ICredentialProviderUserArray_GetCount(Users, &Count);
+    StringCchPrintfW(Num, ARRAYSIZE(Num), L"%lu", Count);
+    LuhTrace("users", Num);
+    for (i = 0; i < Set->Count; i++)
+    {
+        ICredentialProviderSetUserArray *Sink = NULL;
+
+        if (IsFaulted(&Set->Providers[i].Clsid))
+            continue;
+        if (SUCCEEDED(ICredentialProvider_QueryInterface(Set->Providers[i].Provider, &IID_ICredentialProviderSetUserArray,
+                                                         (void **)&Sink)) && Sink != NULL)
+        {
+            ICredentialProviderSetUserArray_SetUserArray(Sink, Users);
+            ICredentialProviderSetUserArray_Release(Sink);
+        }
+    }
+    ICredentialProviderUserArray_Release(Users);
+}
+
 static DWORD WINAPI
 ProviderThread(
     _In_ LPVOID Parameter)
@@ -422,6 +456,8 @@ ProviderThread(
     LuhTrace("providers", Num);
     if (SUCCEEDED(hr) && T->Set != NULL && g_Options.PrefillUser[0] != UNICODE_NULL)
         PrefillProviders(T->Set, g_Options.PrefillUser);
+    if (SUCCEEDED(hr) && T->Set != NULL)
+        SetUserArrays(T->Set);
 
     if (FAILED(hr) || T->Set == NULL || !SelectCredential(T, Events))
     {
