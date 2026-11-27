@@ -12,45 +12,7 @@
 
 #include "winlogon.h"
 
-typedef struct _DIALOG_LIST_ENTRY
-{
-    LIST_ENTRY Entry;
-    HWND hWnd;
-    DLGPROC DlgProc;
-    LPARAM lParam;
-} DIALOG_LIST_ENTRY, *PDIALOG_LIST_ENTRY;
-
-/* GLOBALS ******************************************************************/
-
-//static UINT_PTR IdTimer;
-static LIST_ENTRY DialogListHead;
-
 /* FUNCTIONS ****************************************************************/
-
-VOID
-InitDialogListHead(VOID)
-{
-    InitializeListHead(&DialogListHead);
-}
-
-VOID
-CloseAllDialogWindows(VOID)
-{
-    PDIALOG_LIST_ENTRY Current;
-    PLIST_ENTRY ListEntry;
-
-    ListEntry = DialogListHead.Flink;
-    while (ListEntry != &DialogListHead)
-    {
-        Current = CONTAINING_RECORD(ListEntry,
-                                    DIALOG_LIST_ENTRY,
-                                    Entry);
-
-        PostMessage(Current->hWnd, WLX_WM_SAS, WLX_SAS_TYPE_TIMEOUT, 0);
-
-        ListEntry = ListEntry->Flink;
-    }
-}
 
 BOOL
 CreateWindowStationAndDesktops(

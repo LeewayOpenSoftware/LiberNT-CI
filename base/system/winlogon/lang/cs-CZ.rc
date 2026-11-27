@@ -29,16 +29,6 @@ BEGIN
     DEFPUSHBUTTON "&Restartovat", IDC_BTNSHTDOWNCOMPUTER, 58, 32, 48, 14
 END
 
-IDD_GINALOADFAILED DIALOGEX 58, 83, 231, 119
-STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Chyba uživatelského rozhraní"
-FONT 8, "MS Shell Dlg"
-BEGIN
-    LTEXT "Dynamická knihovna %s selhala při nahrávání.", IDC_GINALOADFAILED, 39, 16, 156, 24
-    LTEXT "Kontaktujte správce počítače pro nahrazení dynamickě knihovny nebo obnovte původní dynamickou knihovnu.", IDC_GINALOADFAILEDCONTACT, 39, 53, 151, 25
-    DEFPUSHBUTTON "&Restartovat", IDOK, 80, 91, 68, 14
-END
-
 IDD_SYSSHUTDOWN DIALOGEX 50, 50, 180, 140
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_VISIBLE | WS_CAPTION | WS_POPUP
 CAPTION "Vypínání systému"

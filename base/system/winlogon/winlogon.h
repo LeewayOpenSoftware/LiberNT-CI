@@ -607,12 +607,6 @@ BOOL
 RemoveStatusMessage(IN PWLSESSION Session);
 
 /* wlx.c */
-VOID
-InitDialogListHead(VOID);
-
-VOID
-CloseAllDialogWindows(VOID);
-
 BOOL
 CreateWindowStationAndDesktops(
     _Inout_ PWLSESSION Session);

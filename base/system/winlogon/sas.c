@@ -64,12 +64,6 @@ WlDisplaySasNotice(IN PWLSESSION Session)
     WlHostDisplaySasNotice(Session);
 }
 
-static VOID
-WlDisplayLockedNotice(IN PWLSESSION Session)
-{
-    /* Host mode: the unlock page WlHostLock requested is the locked notice; nothing to do. */
-    UNREFERENCED_PARAMETER(Session);
-}
 
 /* A secure screen saver locks whatever DisableLockWorkstation says, as on Windows. */
 static BOOL g_SecureSaverLock;
@@ -78,28 +72,6 @@ static BOOL
 WlIsLockOk(IN PWLSESSION Session)
 {
     return WlHostIsLockOk(Session);
-}
-
-static BOOL
-WlIsLogoffOk(IN PWLSESSION Session)
-{
-    UNREFERENCED_PARAMETER(Session);
-    return TRUE;
-}
-
-static VOID
-WlGinaLogoff(IN PWLSESSION Session)
-{
-    /* Host mode has no GINA to receive WlxLogoff. */
-    UNREFERENCED_PARAMETER(Session);
-}
-
-static VOID
-WlGinaShutdown(IN PWLSESSION Session, IN DWORD wlxAction)
-{
-    /* Host mode has no GINA to receive WlxShutdown; the host drives shutdown via RPC. */
-    UNREFERENCED_PARAMETER(Session);
-    UNREFERENCED_PARAMETER(wlxAction);
 }
 
 static BOOL
@@ -215,35 +187,6 @@ CreateUserDesktopReadyEvent(
 
     ResetEvent(ReadyEvent);
     return ReadyEvent;
-}
-
-static VOID
-WaitForUserDesktopReady(
-    _In_ HANDLE ReadyEvent)
-{
-    DWORD Start = GetTickCount();
-    DWORD Elapsed;
-    DWORD Result;
-    MSG Msg;
-
-    for (;;)
-    {
-        PeekMessageW(&Msg, NULL, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
-        Elapsed = GetTickCount() - Start;
-        Result = MsgWaitForMultipleObjects(1,
-                                           &ReadyEvent,
-                                           FALSE,
-                                           Elapsed < REACTOS_USER_DESKTOP_READY_TIMEOUT_MS ?
-                                               REACTOS_USER_DESKTOP_READY_TIMEOUT_MS - Elapsed : 0,
-                                           QS_SENDMESSAGE);
-        if (Result != WAIT_OBJECT_0 + 1)
-            break;
-    }
-
-    if (Result == WAIT_TIMEOUT)
-        WARN("WL: The user desktop was not ready after %lu ms\n", (DWORD)REACTOS_USER_DESKTOP_READY_TIMEOUT_MS);
-    else if (Result != WAIT_OBJECT_0)
-        ERR("WL: Waiting for the user desktop failed (result %lu, error %lu)\n", Result, GetLastError());
 }
 
 static BOOL
@@ -1589,7 +1532,6 @@ HandleShutdown(
     {
         /* The interactive user has already agreed to log off. */
         CallNotificationDlls(Session, ShutdownHandler);
-        WlGinaShutdown(Session, wlxAction);
     }
 
     /* Setup and LiveCD shells also need a chance to save work or cancel. */
@@ -1604,7 +1546,6 @@ HandleShutdown(
     {
         /* A setup shell has no separate user-logoff phase. */
         CallNotificationDlls(Session, ShutdownHandler);
-        WlGinaShutdown(Session, wlxAction);
     }
 
     /* Show again the shutdown message */
@@ -1700,7 +1641,6 @@ DoGenericAction(
             else if (Session->LogonState == STATE_LOCKED_SAS)
             {
                 Session->LogonState = STATE_LOCKED;
-                WlDisplayLockedNotice(Session);
             }
             break;
         case WLX_SAS_ACTION_LOCK_WKSTA: /* 0x03 */
@@ -1715,9 +1655,7 @@ DoGenericAction(
                     ReplyMessage(TRUE);
                     /* We may be on the Logged-On SAS dialog, in which case
                      * we need to close it if the lock action came via Win-L */
-                    CloseAllDialogWindows();
                     CallNotificationDlls(Session, LockHandler);
-                    WlDisplayLockedNotice(Session);
                 }
             }
             break;
@@ -1736,14 +1674,11 @@ DoGenericAction(
                        (Session->LogonState == STATE_LOCKED) ||
                        (Session->LogonState == STATE_LOCKED_SAS));
 
-                if (!WlIsLogoffOk(Session))
-                    break;
                 if (!NT_SUCCESS(HandleLogoff(Session, wlxAction)))
                 {
                     RemoveStatusMessage(Session);
                     break;
                 }
-                WlGinaLogoff(Session);
             }
             if (WLX_SHUTTINGDOWN(wlxAction))
             {
@@ -1824,7 +1759,6 @@ DispatchSAS(
                     Session->LogonState = STATE_LOGGED_OFF_SAS;
                     LogonStage("logged-out-sas");
 
-                    CloseAllDialogWindows();
 
                     Session->Options = 0;
 
@@ -1867,7 +1801,6 @@ DispatchSAS(
                 case STATE_LOCKED:
                     Session->LogonState = STATE_LOCKED_SAS;
 
-                    CloseAllDialogWindows();
 
                     /* Host mode: the SAS brings up the unlock page; the station stays locked
                      * until the host's unlock comes back as WLHOST_EVENT_UNLOCK. */
@@ -1917,7 +1850,6 @@ DispatchSAS(
     else if (Session->LogonState == STATE_LOCKED_SAS)
     {
         Session->LogonState = STATE_LOCKED;
-        WlDisplayLockedNotice(Session);
     }
 }
 

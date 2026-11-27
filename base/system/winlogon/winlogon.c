@@ -57,39 +57,6 @@ LogonStage(
     OutputDebugStringA(Line);
 }
 
-/*
- * The logon UI is always the supervised LogonUI host: there is no GINA mode to fall back to.
- * The old selector and a GinaDLL replacement are ignored, as on Vista and later; a trace says so.
- */
-static
-VOID
-NoteIgnoredLogonSettings(VOID)
-{
-    WCHAR Gina[MAX_PATH];
-    DWORD Value = 0, Size = sizeof(Value);
-
-    if (RegGetValueW(HKEY_LOCAL_MACHINE,
-                     L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
-                     L"UseLogonUI",
-                     RRF_RT_REG_DWORD,
-                     NULL,
-                     &Value,
-                     &Size) == ERROR_SUCCESS)
-    {
-        WARN("WL: Winlogon\\UseLogonUI=%lu is ignored; the LogonUI host is always used\n", Value);
-    }
-    Size = sizeof(Gina);
-    if (RegGetValueW(HKEY_LOCAL_MACHINE,
-                     L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
-                     L"GinaDLL",
-                     RRF_RT_REG_SZ,
-                     NULL,
-                     Gina,
-                     &Size) == ERROR_SUCCESS)
-    {
-        WARN("WL: Winlogon\\GinaDLL=%ls is ignored; GINAs are not loaded\n", Gina);
-    }
-}
 
 /**
  * @brief
@@ -505,12 +472,8 @@ WinMain(
 
     ZeroMemory(WLSession, sizeof(WLSESSION));
     WLSession->DialogTimeout = 120; /* 2 minutes */
-    NoteIgnoredLogonSettings();
     WlHostInit();
     WlHostLogonInit(WLSession);     /* before the first status message, which starts a host */
-
-    /* Initialize the dialog tracking list */
-    InitDialogListHead();
 
     if (!CreateWindowStationAndDesktops(WLSession))
     {

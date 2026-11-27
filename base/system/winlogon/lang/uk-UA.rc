@@ -20,16 +20,6 @@ BEGIN
     DEFPUSHBUTTON "&Перезавантаження", IDC_BTNSHTDOWNCOMPUTER, 52, 32, 60, 14
 END
 
-IDD_GINALOADFAILED DIALOGEX 58, 83, 231, 119
-STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Помилка інтерфейсу користувача"
-FONT 8, "MS Shell Dlg"
-BEGIN
-    LTEXT "Не вдалося завантажити бібліотеку інтерфейсу входу користувача %s.", IDC_GINALOADFAILED, 39, 16, 156, 24
-    LTEXT "Зверніться до системного адміністратора щоб замінити наявну, або відновіть початкову бібліотеку.", IDC_GINALOADFAILEDCONTACT, 39, 53, 151, 25
-    DEFPUSHBUTTON "&Перезавантаження", IDOK, 80, 91, 68, 14
-END
-
 IDD_SYSSHUTDOWN DIALOGEX 50, 50, 180, 140
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_VISIBLE | WS_CAPTION | WS_POPUP
 CAPTION "System Shutdown"

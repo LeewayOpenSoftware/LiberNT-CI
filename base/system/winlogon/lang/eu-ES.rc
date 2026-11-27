@@ -27,16 +27,6 @@ BEGIN
     DEFPUSHBUTTON "&Berrabiarazi", IDC_BTNSHTDOWNCOMPUTER, 62, 32, 40, 14
 END
 
-IDD_GINALOADFAILED DIALOGEX 58, 83, 231, 119
-STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Error del Interfaz de Usuario"
-FONT 8, "MS Shell Dlg"
-BEGIN
-    LTEXT "La DLL %s del interfaz de Logon dió un error al cargar.", IDC_GINALOADFAILED, 39, 16, 156, 24
-    LTEXT "Contacte con el administrador de su sistema para sustituir la DLL, ó reinstale la DLL original.", IDC_GINALOADFAILEDCONTACT, 39, 53, 151, 25
-    DEFPUSHBUTTON "&Berrabiarazi", IDOK, 80, 91, 68, 14
-END
-
 IDD_SYSSHUTDOWN DIALOGEX 50, 50, 180, 140
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_VISIBLE | WS_CAPTION | WS_POPUP
 CAPTION "Itzali Sistema"
