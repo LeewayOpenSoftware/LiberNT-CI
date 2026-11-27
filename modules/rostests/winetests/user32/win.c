@@ -31,7 +31,12 @@
 #include "wingdi.h"
 #include "winuser.h"
 #include "winreg.h"
+/* MSVC has no -iquote, so "winternl.h" would find the minimal psdk copy; take the full wine one. */
+#ifdef _MSC_VER
+#include <wine/winternl.h>
+#else
 #include "winternl.h"
+#endif
 
 #include "wine/test.h"
 

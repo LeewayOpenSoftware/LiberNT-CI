@@ -22,6 +22,7 @@ typedef struct _SEGMENT_STATE
 static SEGMENT_STATE Original;
 static SEGMENT_STATE Resumed;
 
+#ifdef __GNUC__
 static
 VOID
 ReadSegments(
@@ -65,9 +66,11 @@ SegmentContinueThread(
     NtContinue(&Context, FALSE);
     return 0;
 }
+#endif
 
 START_TEST(KeContextSegments)
 {
+#ifdef __GNUC__
     HANDLE Thread;
     DWORD Wait, ExitCode = 0;
 
@@ -95,4 +98,7 @@ START_TEST(KeContextSegments)
     ok_eq_uint(Resumed.Gs, Original.Gs);
 
     CloseHandle(Thread);
+#else
+    skip(FALSE, "this test needs the GNU assembler syntax to read the segment selectors\n");
+#endif
 }

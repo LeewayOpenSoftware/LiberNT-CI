@@ -6574,7 +6574,7 @@ static void test_draw_text_layout(BOOL d3d11)
 
 static void create_target_dibsection(HDC hdc, UINT32 width, UINT32 height)
 {
-    char bmibuf[FIELD_OFFSET(BITMAPINFO, bmiColors[256])];
+    char bmibuf[(FIELD_OFFSET(BITMAPINFO, bmiColors) + 256 * sizeof(((BITMAPINFO *)0)->bmiColors[0]))];
     BITMAPINFO *bmi = (BITMAPINFO*)bmibuf;
     HBITMAP hbm;
 

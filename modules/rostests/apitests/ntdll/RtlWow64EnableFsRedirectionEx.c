@@ -31,7 +31,7 @@ START_TEST(RtlWow64EnableFsRedirectionEx)
 
     if (!Wow64)
     {
-        Current = (PVOID)0xdeadbeef;
+        Current = (PVOID)(ULONG_PTR)0xdeadbeef;
         Status = pRtlWow64EnableFsRedirectionEx((PVOID)FALSE, &Current);
         ok_ntstatus(Status, STATUS_NOT_IMPLEMENTED);
         Status = pRtlWow64EnableFsRedirectionEx((PVOID)TRUE, &Current);
@@ -62,7 +62,7 @@ START_TEST(RtlWow64EnableFsRedirectionEx)
     ok_ntstatus(Status, STATUS_SUCCESS);
     ok(Current == (PVOID)TRUE, "Previous level %p\n", Current);
 
-    Status = pRtlWow64EnableFsRedirectionEx((PVOID)0xdeadbeef, &Current);
+    Status = pRtlWow64EnableFsRedirectionEx((PVOID)(ULONG_PTR)0xdeadbeef, &Current);
     ok_ntstatus(Status, STATUS_SUCCESS);
     ok(Current == (PVOID)123, "Previous level %p\n", Current);
 

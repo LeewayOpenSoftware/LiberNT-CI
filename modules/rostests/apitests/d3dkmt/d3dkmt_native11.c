@@ -81,7 +81,7 @@ static void TestImmediateContext(ID3D11Device *device, ID3D11DeviceContext **con
     ok(owner == device, "Context did not preserve its device\n");
     /* GetDevice restores the caller's device reference. */
 
-    commands = (ID3D11CommandList *)0xdeadbeef;
+    commands = (ID3D11CommandList *)(ULONG_PTR)0xdeadbeef;
     hr = ID3D11DeviceContext_FinishCommandList(*context, FALSE, &commands);
     ok(hr == DXGI_ERROR_INVALID_CALL && !commands,
             "Immediate FinishCommandList returned %#lx, %p\n", hr, commands);
@@ -447,7 +447,7 @@ static void TestContextState(ID3D11Device *device, ID3D11DeviceContext *context,
             &IID_ID3D11Device1, &chosen, NULL);
     ok(hr == S_FALSE && chosen == level, "Validate state returned %#lx, level %#x\n", hr, chosen);
     chosen = level;
-    state = (ID3DDeviceContextState *)0xdeadbeef;
+    state = (ID3DDeviceContextState *)(ULONG_PTR)0xdeadbeef;
     hr = ID3D11Device1_CreateDeviceContextState(device1, 0, &level, 0, D3D11_SDK_VERSION,
             &IID_ID3D11Device1, &chosen, &state);
     ok(hr == E_INVALIDARG && !chosen && !state,
@@ -464,17 +464,17 @@ static void TestContextState(ID3D11Device *device, ID3D11DeviceContext *context,
     hr = ID3DDeviceContextState_SetPrivateData(state, &IID_ID3DDeviceContextState, sizeof(marker), &marker);
     ok(hr == S_OK, "Set state private data returned %#lx\n", hr);
 
-    previous = (ID3DDeviceContextState *)0xdeadbeef;
+    previous = (ID3DDeviceContextState *)(ULONG_PTR)0xdeadbeef;
     ID3D11DeviceContext1_SwapDeviceContextState(context1, NULL, &previous);
     ok(!previous, "NULL swap returned state %p\n", previous);
     previous = NULL;
     ID3D11DeviceContext1_SwapDeviceContextState(context1, state, &previous);
     ok(previous != NULL, "Swap did not expose the initial pipeline state\n");
     if (!previous) goto done;
-    bound = (ID3D11VertexShader *)0xdeadbeef;
+    bound = (ID3D11VertexShader *)(ULONG_PTR)0xdeadbeef;
     ID3D11DeviceContext_VSGetShader(context, &bound, NULL, NULL);
     ok(!bound, "New state kept old shader %p\n", bound);
-    if (bound && bound != (ID3D11VertexShader *)0xdeadbeef) ID3D11VertexShader_Release(bound);
+    if (bound && bound != (ID3D11VertexShader *)(ULONG_PTR)0xdeadbeef) ID3D11VertexShader_Release(bound);
     /* Modify the new state, then reactivate it. A same-object swap must not
      * restore an obsolete snapshot or drop the current pipeline bindings. */
     ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_POINTLIST);
@@ -507,7 +507,7 @@ static void TestContextState(ID3D11Device *device, ID3D11DeviceContext *context,
     ok(!count, "Restored state has %lu public references left\n", count);
 done:
     if (returned) ID3DDeviceContextState_Release(returned);
-    if (previous && previous != (ID3DDeviceContextState *)0xdeadbeef) ID3DDeviceContextState_Release(previous);
+    if (previous && previous != (ID3DDeviceContextState *)(ULONG_PTR)0xdeadbeef) ID3DDeviceContextState_Release(previous);
     if (state) ID3DDeviceContextState_Release(state);
     if (context1) ID3D11DeviceContext1_Release(context1);
     if (device1) ID3D11Device1_Release(device1);
@@ -613,7 +613,7 @@ static void TestBufferViews(ID3D11Device *device, ID3D11DeviceContext *context,
         srv_desc.Buffer.FirstElement = ~0u;
         srv_desc.Buffer.NumElements = phase == 2 ? 32 : 8;
         if (phase == 2) srv_desc.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
-        invalid = (ID3D11ShaderResourceView *)0xdeadbeef;
+        invalid = (ID3D11ShaderResourceView *)(ULONG_PTR)0xdeadbeef;
         hr = ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource *)buffer, &srv_desc, &invalid);
         ok(hr == E_INVALIDARG && !invalid, "Overflowing buffer view phase %u returned %#lx, %p\n", phase, hr, invalid);
         if (SUCCEEDED(hr) && invalid) ID3D11ShaderResourceView_Release(invalid);

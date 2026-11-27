@@ -448,19 +448,19 @@ START_TEST(TokenLua)
         skip("The test process is not High: the Medium child checks need an elevated runner\n");
 
     /* No pair yet, unless the runner's own logon already is one (a limited console session) */
-    Linked.LinkedToken = (HANDLE)0xdeadbeef;
+    Linked.LinkedToken = (HANDLE)(ULONG_PTR)0xdeadbeef;
     Ret = GetTokenInformation(Lua, TokenLinkedToken, &Linked, sizeof(Linked), &Size);
     Error = GetLastError();
     if (GetTokenDword(Process, TokenElevationType, &Value) && Value == TokenElevationTypeLimited)
     {
         ok(Ret, "Query in a split logon: ret %d, error %lu\n", Ret, Error);
-        if (Ret && Linked.LinkedToken != (HANDLE)0xdeadbeef)
+        if (Ret && Linked.LinkedToken != (HANDLE)(ULONG_PTR)0xdeadbeef)
             CloseHandle(Linked.LinkedToken);
     }
     else
     {
         ok(!Ret && Error == ERROR_NO_SUCH_LOGON_SESSION, "Unpaired query: ret %d, error %lu\n", Ret, Error);
-        ok(Linked.LinkedToken == (HANDLE)0xdeadbeef, "Unpaired query wrote %p\n", Linked.LinkedToken);
+        ok(Linked.LinkedToken == (HANDLE)(ULONG_PTR)0xdeadbeef, "Unpaired query wrote %p\n", Linked.LinkedToken);
     }
 
     /* Linking needs SeTcbPrivilege */

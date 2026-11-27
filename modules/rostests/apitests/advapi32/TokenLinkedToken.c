@@ -30,7 +30,7 @@ START_TEST(TokenLinkedToken)
         return;
     }
 
-    Linked.LinkedToken = (HANDLE)0xdeadbeef;
+    Linked.LinkedToken = (HANDLE)(ULONG_PTR)0xdeadbeef;
     SetLastError(0xdeadbeef);
     Size = 0xdeadbeef;
     Ret = GetTokenInformation(Token, TokenLinkedToken, &Linked, sizeof(Linked), &Size);
@@ -38,7 +38,7 @@ START_TEST(TokenLinkedToken)
     ok(!Ret, "An unsplit token has a linked token %p\n", Linked.LinkedToken);
     ok(Error == ERROR_NO_SUCH_LOGON_SESSION, "The query failed with %lu\n", Error);
     ok(Size == sizeof(Linked), "The query returned length %lu\n", Size);
-    ok(Linked.LinkedToken == (HANDLE)0xdeadbeef, "The query wrote %p\n", Linked.LinkedToken);
+    ok(Linked.LinkedToken == (HANDLE)(ULONG_PTR)0xdeadbeef, "The query wrote %p\n", Linked.LinkedToken);
     if (Ret)
         CloseHandle(Linked.LinkedToken);
 

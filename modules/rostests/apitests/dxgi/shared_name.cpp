@@ -60,7 +60,7 @@ START_TEST(shared_name)
     IDXGIResource1 *Resource = NULL;
     ID3D11Fence *Fence = NULL;
     D3D11_TEXTURE2D_DESC Desc = {}, OpenedDesc = {};
-    HANDLE Handle = NULL, Again = (HANDLE)0xdeadbeef, FenceHandle = NULL;
+    HANDLE Handle = NULL, Again = (HANDLE)(ULONG_PTR)0xdeadbeef, FenceHandle = NULL;
     WCHAR Name[64], FenceName[64];
     HRESULT Hr;
 
@@ -96,7 +96,7 @@ START_TEST(shared_name)
         Hr = Resource->CreateSharedHandle(NULL, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, Name, &Again);
         ok(Hr == DXGI_ERROR_NAME_ALREADY_EXISTS, "CreateSharedHandle(same texture name): %#lx\n", Hr);
         ok(Again == NULL, "CreateSharedHandle(same texture name) left handle %p\n", Again);
-        if (SUCCEEDED(Hr) && Again && Again != (HANDLE)0xdeadbeef) CloseHandle(Again);
+        if (SUCCEEDED(Hr) && Again && Again != (HANDLE)(ULONG_PTR)0xdeadbeef) CloseHandle(Again);
     }
     if (Handle)
     {
@@ -127,13 +127,13 @@ START_TEST(shared_name)
             ok(Hr == S_OK, "CreateSharedHandle(named fence): %#lx\n", Hr);
             if (FenceHandle)
             {
-                HANDLE FenceAgain = (HANDLE)0xdeadbeef;
+                HANDLE FenceAgain = (HANDLE)(ULONG_PTR)0xdeadbeef;
 
                 CheckObjectName("named fence", FenceHandle, FenceName);
                 Hr = Fence->CreateSharedHandle(NULL, GENERIC_ALL, FenceName, &FenceAgain);
                 ok(Hr == DXGI_ERROR_NAME_ALREADY_EXISTS, "CreateSharedHandle(same fence name): %#lx\n", Hr);
-                ok(FenceAgain == (HANDLE)0xdeadbeef, "CreateSharedHandle(same fence name) wrote handle %p\n", FenceAgain);
-                if (SUCCEEDED(Hr) && FenceAgain && FenceAgain != (HANDLE)0xdeadbeef) CloseHandle(FenceAgain);
+                ok(FenceAgain == (HANDLE)(ULONG_PTR)0xdeadbeef, "CreateSharedHandle(same fence name) wrote handle %p\n", FenceAgain);
+                if (SUCCEEDED(Hr) && FenceAgain && FenceAgain != (HANDLE)(ULONG_PTR)0xdeadbeef) CloseHandle(FenceAgain);
                 CloseHandle(FenceHandle);
             }
             Fence->Release();

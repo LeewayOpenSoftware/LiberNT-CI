@@ -14,6 +14,15 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     add_compile_options("-Wno-misleading-indentation") # Cause by todo_wine, etc.
 endif()
 
+# These rostests targets do not yet build with MSVC and are excluded from the
+# MSVC build only (GCC still builds them). Owner of the fixes: Phyllis. Remove
+# each name from this list as its MSVC build is fixed; this is an explicit list,
+# not a global skip.
+set(ROSTESTS_MSVC_EXCLUDED "")
+if(MSVC)
+    list(APPEND ROSTESTS_MSVC_EXCLUDED acpi rosautotest lntdrv uxtheme)
+endif()
+
 add_subdirectory(apitests)
 add_subdirectory(aerowizard)
 #add_subdirectory(dibtests)
@@ -21,7 +30,9 @@ add_subdirectory(drivers)
 #add_subdirectory(dxtest)
 add_subdirectory(kmtests)
 #add_subdirectory(regtests)
-add_subdirectory(rosautotest)
+if(NOT "rosautotest" IN_LIST ROSTESTS_MSVC_EXCLUDED)
+    add_subdirectory(rosautotest)
+endif()
 add_subdirectory(tests)
 add_subdirectory(unittests)
 add_subdirectory(win32)

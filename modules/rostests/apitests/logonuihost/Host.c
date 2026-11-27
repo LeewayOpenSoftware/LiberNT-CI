@@ -12,7 +12,7 @@
 #include <wluiclient.h>
 #include <wluiauth.h>
 
-extern RPC_IF_HANDLE wlui_v1_0_s_ifspec;
+extern RPC_IF_HANDLE Testwlui_v1_0_s_ifspec;
 
 /* ---- the test server ------------------------------------------------------ */
 
@@ -27,17 +27,17 @@ static LONG g_WrongId;
 
 static void CheckId(const GUID *Id) { if (!IsEqualGUID(Id, &g_ExpectedId)) InterlockedIncrement(&g_WrongId); }
 
-DWORD __stdcall WluiReady(handle_t h, GUID LaunchId)
+DWORD __stdcall TestWluiReady(handle_t h, GUID LaunchId)
 {
     CheckId(&LaunchId); SetEvent(g_ReadyEvent); return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiHeartbeat(handle_t h, GUID LaunchId)
+DWORD __stdcall TestWluiHeartbeat(handle_t h, GUID LaunchId)
 {
     CheckId(&LaunchId); InterlockedIncrement(&g_Heartbeats); return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiWaitForCommand(handle_t h, GUID LaunchId, WLUI_COMMAND *Command)
+DWORD __stdcall TestWluiWaitForCommand(handle_t h, GUID LaunchId, WLUI_COMMAND *Command)
 {
     BOOL Got;
     DWORD Error;
@@ -49,16 +49,16 @@ DWORD __stdcall WluiWaitForCommand(handle_t h, GUID LaunchId, WLUI_COMMAND *Comm
     return Error;
 }
 
-DWORD __stdcall WluiSubmitSerialization(handle_t h, GUID LaunchId, DWORD Scenario, GUID ProviderClsid,
+DWORD __stdcall TestWluiSubmitSerialization(handle_t h, GUID LaunchId, DWORD Scenario, GUID ProviderClsid,
                                         DWORD AuthenticationPackage, DWORD cbSerialization,
                                         const byte *Serialization)
 {
     return ERROR_NOT_READY;
 }
 
-DWORD __stdcall WluiRequestAction(handle_t h, GUID LaunchId, WLUI_ACTION Action) { return ERROR_NOT_READY; }
+DWORD __stdcall TestWluiRequestAction(handle_t h, GUID LaunchId, WLUI_ACTION Action) { return ERROR_NOT_READY; }
 
-DWORD __stdcall WluiReportProviderFault(handle_t h, GUID LaunchId, GUID ProviderClsid, DWORD Reason)
+DWORD __stdcall TestWluiReportProviderFault(handle_t h, GUID LaunchId, GUID ProviderClsid, DWORD Reason)
 {
     CheckId(&LaunchId);
     g_FaultClsid = ProviderClsid;
@@ -66,7 +66,7 @@ DWORD __stdcall WluiReportProviderFault(handle_t h, GUID LaunchId, GUID Provider
     return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiExiting(handle_t h, GUID LaunchId, WLUI_EXIT_REASON Reason)
+DWORD __stdcall TestWluiExiting(handle_t h, GUID LaunchId, WLUI_EXIT_REASON Reason)
 {
     CheckId(&LaunchId); g_ExitReason = Reason; SetEvent(g_ExitEvent); return ERROR_SUCCESS;
 }
@@ -108,7 +108,7 @@ StartServer(PCWSTR Endpoint, PSID Own)
     LocalFree(Sd);
     if (Status != RPC_S_OK)
         return FALSE;
-    if (RpcServerRegisterIfEx(wlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
+    if (RpcServerRegisterIfEx(Testwlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
                               RPC_C_LISTEN_MAX_CALLS_DEFAULT, WluiServerIfCallback) != RPC_S_OK)
         return FALSE;
     Status = RpcServerListen(1, 4, TRUE);
@@ -743,7 +743,7 @@ START_TEST(Host)
     Test_Tiles(Exe, Endpoint, Own, Trace);
 
     RpcMgmtStopServerListening(NULL);
-    RpcServerUnregisterIf(wlui_v1_0_s_ifspec, NULL, TRUE);
+    RpcServerUnregisterIf(Testwlui_v1_0_s_ifspec, NULL, TRUE);
     WluiStateRelease(g_State);
     CloseHandle(g_ReadyEvent);
     CloseHandle(g_ExitEvent);
