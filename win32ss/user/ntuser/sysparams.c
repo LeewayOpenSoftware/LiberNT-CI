@@ -529,7 +529,7 @@ SpiAdoptBootScreenWallpaper(
     gspv.hbmWallpaper = Bitmap;
     gspv.cxWallpaper = Width;
     gspv.cyWallpaper = Height;
-    gspv.WallpaperMode = wmFill;
+    gspv.WallpaperMode = wmCenter;     /* where the boot screen was seen; dxgkrnl centres it too */
     gspv.bBootScreenWallpaper = TRUE;
     gspv.awcWallpaper[0] = UNICODE_NULL;
     gspv.ustrWallpaper.Buffer = gspv.awcWallpaper;
