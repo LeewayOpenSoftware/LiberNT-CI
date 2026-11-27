@@ -1858,6 +1858,8 @@ LuhApplyFieldUpdate(
 #define WM_LUH_FADE_IN      (WM_APP + 16)
 #define WM_LUH_FLYOUT_FOCUS (WM_APP + 17)
 #define LUH_LIFT_VELOCITY   0.6     /* pixels per millisecond upwards at release: a flick lifts */
+#define LUH_DISSOLVE_CLOCK_MS 200   /* key dismiss: the clock and date leave the sharp picture */
+#define LUH_DISSOLVE_SOFT_MS  450   /* then the picture darkens and blurs into the credentials backdrop */
 
 /*
  * The host runs as SYSTEM on the secure desktop, so the picture it decodes must be one only
@@ -2045,6 +2047,8 @@ LuhBuildBackdrop(
     RECT All = { 0, 0, Width, Height };
     HANDLE File;
     BOOL Loaded = FALSE;
+    LUH_ANIM Cost;
+    CHAR Line[64];
 
     if (!LuhSurfaceCreate(&g_Ui.Back, Width, Height) || !LuhSurfaceCreate(&g_Ui.Sharp, Width, Height) ||
         !LuhSurfaceCreate(&g_Ui.Still, Width, Height) ||
@@ -2073,10 +2077,14 @@ LuhBuildBackdrop(
         LuhFillRect(&g_Ui.Sharp, &All, LUH_LOCK_FILL, 255);
     }
 
-    /* The credentials see the same picture, softened and darkened. */
+    /* The credentials see the same picture, softened and darkened; the frame log gets its cost. */
+    LuhAnimStart(&Cost, "soften", 0);
     if (!LuhSoften(&g_Ui.Soft, &g_Ui.Sharp))
         BitBlt(g_Ui.Soft.Dc, 0, 0, Width, Height, g_Ui.Sharp.Dc, 0, 0, SRCCOPY);
     LuhFillRect(&g_Ui.Soft, &All, RGB(0, 0, 0), LUH_SOFT_DARKEN);
+    StringCchPrintfA(Line, ARRAYSIZE(Line), "backdrop-soften %ldx%ld us=%lu",
+                     Width, Height, (ULONG)(LuhAnimElapsedMs(&Cost) * 1000.0));
+    LuhStage(Line);
 
     g_Ui.SoftBrush = CreatePatternBrush(g_Ui.Soft.Bitmap);
     if (g_Ui.SoftBrush == NULL)
@@ -2234,6 +2242,46 @@ LuhSlideCurtain(
     LuhAnimEnd(&Anim);
 }
 
+/*
+ * A key or a plain click (Windows 11 dismiss frames): the clock and date fade off the sharp
+ * picture, then the picture crosses into the dimmed, blurred credentials backdrop, so the
+ * page that comes up next is painted on what is already on screen.
+ */
+static void
+LuhDissolveCurtain(
+    _In_ HWND Window)
+{
+    LONG Width = g_Ui.Back.Width, Height = g_Ui.Back.Height;
+    LUH_ANIM Anim;
+    double T, Ms;
+    HDC Dc;
+
+    LuhAnimStart(&Anim, "curtain-dissolve", LUH_DISSOLVE_CLOCK_MS + LUH_DISSOLVE_SOFT_MS);
+    for (;;)
+    {
+        T = LuhAnimFrame(&Anim);
+        Ms = T * (LUH_DISSOLVE_CLOCK_MS + LUH_DISSOLVE_SOFT_MS);
+        BitBlt(g_Ui.Back.Dc, 0, 0, Width, Height, g_Ui.Sharp.Dc, 0, 0, SRCCOPY);
+        if (Ms < LUH_DISSOLVE_CLOCK_MS)
+            LuhBlend(&g_Ui.Back, 0, 0, &g_Ui.Face, (BYTE)(255.0 * (1.0 - LuhEaseOut(Ms / LUH_DISSOLVE_CLOCK_MS))));
+        else
+            LuhBlend(&g_Ui.Back, 0, 0, &g_Ui.Soft,
+                     (BYTE)(255.0 * LuhEaseOut((Ms - LUH_DISSOLVE_CLOCK_MS) / LUH_DISSOLVE_SOFT_MS)));
+        Dc = GetDC(Window);
+        if (Dc)
+        {
+            BitBlt(Dc, 0, 0, Width, Height, g_Ui.Back.Dc, 0, 0, SRCCOPY);
+            GdiFlush();
+            ReleaseDC(Window, Dc);
+        }
+        if (T >= 1.0)
+            break;
+        LuhAnimWait(&Anim);
+    }
+    LuhAnimEnd(&Anim);
+    g_Ui.Lift = g_Ui.Face.Height;
+}
+
 static BOOL
 LuhUpdateClock(void)
 {
@@ -2379,7 +2427,12 @@ LuhDragEnd(
     if (GetMessageTime() - g_Ui.DragLastTime > 100)
         Velocity = 0.0;
 
-    if (g_Ui.Lift > g_Ui.Face.Height / 3 || Velocity > LUH_LIFT_VELOCITY || g_Ui.Lift < LuhPx(4))
+    if (g_Ui.Lift < LuhPx(4) && Velocity <= LUH_LIFT_VELOCITY)
+    {
+        LuhDissolveCurtain(Window);
+        LuhLiftCurtain(Window);
+    }
+    else if (g_Ui.Lift > g_Ui.Face.Height / 3 || Velocity > LUH_LIFT_VELOCITY)
     {
         LuhSlideCurtain(Window, g_Ui.Face.Height, Velocity, "curtain-lift");
         LuhLiftCurtain(Window);
@@ -3052,7 +3105,7 @@ LuhWindowProc(
                 /* The Ctrl+Alt+Del notice has no lift path; only winlogon moves it on after the SAS. */
                 if (!g_Ui.CadCurtain && !g_Ui.Dragging && !g_Ui.CurtainFadeIn)
                 {
-                    LuhSlideCurtain(Window, g_Ui.Face.Height, 0.0, "curtain-lift");
+                    LuhDissolveCurtain(Window);
                     LuhLiftCurtain(Window);
                 }
                 return 0;
