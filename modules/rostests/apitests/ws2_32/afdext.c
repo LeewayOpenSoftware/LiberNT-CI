@@ -268,6 +268,32 @@ START_TEST(afdext)
     closesocket(accepted);
     closesocket(connector);
 
+    /* --- Overlapped DisconnectEx on a socket opened without WSA_FLAG_OVERLAPPED --- */
+    connector = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, 0);
+    ok(connector != INVALID_SOCKET, "WSASocketW(no overlapped flag) failed %d\n", WSAGetLastError());
+    ok(connect(connector, (const struct sockaddr *)&addr, sizeof(addr)) == 0,
+       "connect failed %d\n", WSAGetLastError());
+    accepted = accept(listener, NULL, NULL);
+    ok(accepted != INVALID_SOCKET, "accept failed %d\n", WSAGetLastError());
+    timeout = 10000;
+    setsockopt(accepted, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+    memset(&overlapped, 0, sizeof(overlapped));
+    overlapped.hEvent = WSACreateEvent();
+    overlapped.Internal = 0x12345678;
+    WSASetLastError(0);
+    bret = pDisconnectEx(connector, &overlapped, 0, 0);
+    ok(bret, "DisconnectEx(no overlapped flag) got %d err %d\n", bret, WSAGetLastError());
+    ok(overlapped.Internal == 0, "expected a completed request, got %08lx\n", (ULONG)overlapped.Internal);
+    ok(WaitForSingleObject(overlapped.hEvent, 0) == WAIT_OBJECT_0, "event not signaled\n");
+    ret = recv(accepted, data, sizeof(data), 0);
+    ok(ret == 0, "peer recv after DisconnectEx(no overlapped flag) got %d err %d\n", ret, WSAGetLastError());
+    ret = connect(connector, (const struct sockaddr *)&addr, sizeof(addr));
+    ok(ret == SOCKET_ERROR && WSAGetLastError() == WSAEISCONN,
+       "reconnect after DisconnectEx(no overlapped flag) got %d err %d\n", ret, WSAGetLastError());
+    WSACloseEvent(overlapped.hEvent);
+    closesocket(accepted);
+    closesocket(connector);
+
     /* --- WSASendMsg validation --- */
     memset(&msg, 0, sizeof(msg));
     buffer.buf = data;

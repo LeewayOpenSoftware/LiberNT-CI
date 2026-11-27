@@ -127,6 +127,7 @@ WSPDisconnectEx(
     HANDLE                  Event = NULL;
     HANDLE                  SockEvent;
     BOOLEAN                 SockEventShared, SockEventStale = FALSE;
+    LPOVERLAPPED            SyncOverlapped = NULL;
 
     /* Get the Socket Structure associate to this Socket */
     Socket = GetSocketStructure(hSocket);
@@ -169,6 +170,13 @@ WSPDisconnectEx(
     DisconnectInfo.Timeout.QuadPart = -1000000LL;
     Socket->SharedData->SendShutdown = TRUE;
 
+    /* A socket opened without WSA_FLAG_OVERLAPPED disconnects synchronously, as Win11 */
+    if (lpOverlapped && !(Socket->SharedData->CreateFlags & WSA_FLAG_OVERLAPPED))
+    {
+        SyncOverlapped = lpOverlapped;
+        lpOverlapped = NULL;
+    }
+
     if (!lpOverlapped)
     {
         /* Synchronous: block on our own event */
@@ -178,14 +186,6 @@ WSPDisconnectEx(
     }
     else
     {
-        /* Overlapped request for non overlapped opened socket */
-        if ((Socket->SharedData->CreateFlags & SO_SYNCHRONOUS_NONALERT) != 0)
-        {
-            TRACE("Opened without flag WSA_FLAG_OVERLAPPED. Do nothing.\n");
-            MsafdReleaseEvent(SockEvent, SockEventShared, FALSE);
-            return TRUE;
-        }
-
         IOSB = (PIO_STATUS_BLOCK)lpOverlapped;
         Event = lpOverlapped->hEvent;
         APCContext = Event ? NULL : (PVOID)lpOverlapped;
@@ -215,6 +215,14 @@ WSPDisconnectEx(
     }
 
     MsafdReleaseEvent(SockEvent, SockEventShared, SockEventStale);
+
+    if (SyncOverlapped)
+    {
+        SyncOverlapped->Internal = Status;
+        SyncOverlapped->InternalHigh = 0;
+        if (SyncOverlapped->hEvent)
+            SetEvent(SyncOverlapped->hEvent);
+    }
 
     if (lpOverlapped && Status == STATUS_PENDING)
     {
