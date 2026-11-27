@@ -579,26 +579,6 @@ LogonStage(
 }
 
 static VOID
-SignalUserDesktopReady(VOID)
-{
-    HANDLE ReadyEvent;
-
-    ReadyEvent = OpenEventW(EVENT_MODIFY_STATE, FALSE, REACTOS_USER_DESKTOP_READY_EVENT);
-    if (!ReadyEvent)
-    {
-        DWORD Error = GetLastError();
-
-        if (Error != ERROR_FILE_NOT_FOUND)
-            ERR("Could not open the desktop ready event (error %lu)\n", Error);
-        return;
-    }
-
-    if (!SetEvent(ReadyEvent))
-        ERR("Could not signal that the desktop is ready (error %lu)\n", GetLastError());
-    CloseHandle(ReadyEvent);
-}
-
-static VOID
 ApplyUserPowerScheme(VOID)
 {
     GUID *Scheme = NULL;
@@ -847,7 +827,6 @@ wWinMain(IN HINSTANCE hInst,
     LogonStage(Success ? "shell-started" : "shell-failed");
     if (pEnvironment)
         DestroyEnvironmentBlock(pEnvironment);
-    SignalUserDesktopReady();
     LogonStage("desktop-ready");
     if (Success)
         NotifyLogon();

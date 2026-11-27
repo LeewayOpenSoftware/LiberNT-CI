@@ -20,7 +20,6 @@
 #include <userenv.h>
 #include <ndk/setypes.h>
 #include <ndk/sefuncs.h>
-#include <reactos/desktopready.h>
 
 /* GLOBALS ******************************************************************/
 
@@ -162,39 +161,11 @@ StartSystemShell(VOID)
     return ret;
 }
 
-static HANDLE
-CreateUserDesktopReadyEvent(
-    _In_ PWLSESSION Session)
-{
-    HANDLE ReadyEvent;
-    BOOL Impersonated = FALSE;
-
-    if (Session->UserToken)
-    {
-        Impersonated = ImpersonateLoggedOnUser(Session->UserToken);
-        if (!Impersonated)
-            ERR("WL: Could not impersonate the user for the desktop ready event (error %lu)\n", GetLastError());
-    }
-
-    ReadyEvent = CreateEventW(NULL, TRUE, FALSE, REACTOS_USER_DESKTOP_READY_EVENT);
-    if (Impersonated && !RevertToSelf())
-        ERR("WL: RevertToSelf failed (error %lu)\n", GetLastError());
-    if (!ReadyEvent)
-    {
-        ERR("WL: Could not create the desktop ready event (error %lu)\n", GetLastError());
-        return NULL;
-    }
-
-    ResetEvent(ReadyEvent);
-    return ReadyEvent;
-}
-
 static BOOL
 StartUserShell(
     IN OUT PWLSESSION Session)
 {
     LPVOID lpEnvironment = NULL;
-    HANDLE ReadyEvent;
     BOOLEAN Old;
     BOOL ret;
 
@@ -217,12 +188,9 @@ StartUserShell(
     /* FIXME: reverting to lower privileges after creating user shell? */
     RtlAdjustPrivilege(SE_ASSIGNPRIMARYTOKEN_PRIVILEGE, TRUE, FALSE, &Old);
 
-    ReadyEvent = CreateUserDesktopReadyEvent(Session);
-    /* The switch waits for ShellDesktopSwitchEvent (§6.3.1); the ready event stays for compatibility. */
+    /* The switch waits for ShellDesktopSwitchEvent (§6.3.1). */
     WlHostCreateDesktopSwitchEvent(Session);
     ret = WlHostActivateUserShell(Session, lpEnvironment);
-    if (ReadyEvent)
-        CloseHandle(ReadyEvent);
 
     DestroyEnvironmentBlock(lpEnvironment);
     return ret;
