@@ -89,7 +89,7 @@
 @ stdcall CharUpperBuffW(wstr long)
 @ stdcall CharUpperW(wstr)
 @ stub CheckGroupPolicyEnabled
-@ stdcall CheckRemoteDebuggerPresent(long ptr)
+@ stdcall CheckRemoteDebuggerPresent(long ptr) kernel32.CheckRemoteDebuggerPresent
 @ stdcall CheckTokenCapability(ptr ptr ptr)
 @ stdcall CheckTokenMembership(long ptr ptr)
 @ stdcall CheckTokenMembershipEx(ptr ptr long ptr)
@@ -111,7 +111,7 @@
 @ stdcall -version=0xA00+ CompareObjectHandles(ptr ptr) kernel32.CompareObjectHandles
 @ stdcall CompareStringA(long long str long str long)
 @ stdcall CompareStringEx(wstr long wstr long wstr long ptr ptr long)
-@ stdcall CompareStringOrdinal(wstr long wstr long long)
+@ stdcall CompareStringOrdinal(wstr long wstr long long) kernel32.CompareStringOrdinal
 @ stdcall CompareStringW(long long wstr long wstr long)
 @ stdcall ConnectNamedPipe(long ptr) kernel32.ConnectNamedPipe
 @ stdcall ContinueDebugEvent(long long long) kernel32.ContinueDebugEvent
@@ -358,8 +358,8 @@
 @ stdcall GetCommandLineW() kernel32.GetCommandLineW
 @ stdcall GetCompressedFileSizeA(long ptr) kernel32.GetCompressedFileSizeA
 @ stdcall GetCompressedFileSizeW(long ptr) kernel32.GetCompressedFileSizeW
-@ stdcall GetComputerNameExA(long ptr ptr)
-@ stdcall GetComputerNameExW(long ptr ptr)
+@ stdcall GetComputerNameExA(long ptr ptr) kernel32.GetComputerNameExA
+@ stdcall GetComputerNameExW(long ptr ptr) kernel32.GetComputerNameExW
 @ stdcall GetConsoleAliasA(str str long str)
 @ stdcall GetConsoleAliasExesLengthA()
 @ stdcall GetConsoleAliasExesLengthW()
@@ -680,9 +680,9 @@
 @ stdcall ImpersonateLoggedOnUser(long)
 @ stdcall ImpersonateNamedPipeClient(long)
 @ stdcall ImpersonateSelf(long)
-@ stdcall InitOnceBeginInitialize(ptr long ptr ptr)
-@ stdcall InitOnceComplete(ptr long ptr)
-@ stdcall InitOnceExecuteOnce(ptr ptr ptr ptr)
+@ stdcall InitOnceBeginInitialize(ptr long ptr ptr) kernel32.InitOnceBeginInitialize
+@ stdcall InitOnceComplete(ptr long ptr) kernel32.InitOnceComplete
+@ stdcall InitOnceExecuteOnce(ptr ptr ptr ptr) kernel32.InitOnceExecuteOnce
 @ stdcall -version=0x600+ InitOnceInitialize(ptr) ntdll.RtlRunOnceInitialize
 @ stdcall InitializeAcl(ptr long long)
 @ stdcall InitializeConditionVariable(ptr) ntdll.RtlInitializeConditionVariable
@@ -736,7 +736,7 @@
 @ stdcall IsCharXDigitW(long)
 @ stdcall IsDBCSLeadByte(long) kernel32.IsDBCSLeadByte
 @ stdcall IsDBCSLeadByteEx(long long) kernel32.IsDBCSLeadByteEx
-@ stdcall IsDebuggerPresent()
+@ stdcall IsDebuggerPresent() kernel32.IsDebuggerPresent
 @ stdcall IsInternetESCEnabled()
 @ stdcall IsNLSDefinedString(long long ptr wstr long)
 @ stdcall IsNormalizedString(long wstr long)
@@ -781,7 +781,7 @@
 @ stdcall -version=0x601+ K32GetProcessImageFileNameW(long ptr long) kernel32.K32GetProcessImageFileNameW
 @ stdcall -version=0x601+ K32GetProcessMemoryInfo(long ptr long) kernel32.K32GetProcessMemoryInfo
 @ stdcall -version=0x601+ K32GetWsChanges(long ptr long) kernel32.K32GetWsChanges
-@ stdcall -version=0x601+ K32GetWsChangesEx(long ptr ptr) GetWsChangesEx
+@ stdcall -version=0x601+ K32GetWsChangesEx(long ptr ptr) kernel32.K32GetWsChangesEx
 @ stdcall -version=0x601+ K32InitializeProcessForWsWatch(long) kernel32.K32InitializeProcessForWsWatch
 @ stdcall -version=0x601+ K32QueryWorkingSet(long ptr long) kernel32.K32QueryWorkingSet
 @ stdcall -version=0x601+ K32QueryWorkingSetEx(long ptr long) kernel32.K32QueryWorkingSetEx
@@ -1029,7 +1029,7 @@
 @ stdcall QuirkIsEnabled3(ptr ptr)
 @ stdcall RaiseException(long long long ptr) kernel32.RaiseException
 @ stdcall RaiseFailFastException(ptr ptr long)
-@ stdcall RegDisablePredefinedCacheEx() advapi32.RegDisablePredefinedCacheEx
+@ stdcall -version=0x600+ RegDisablePredefinedCacheEx() advapi32.RegDisablePredefinedCacheEx
 @ stdcall -version=0x600+ RegisterApplicationRestart(wstr long) kernel32.RegisterApplicationRestart
 @ stdcall ReOpenFile(ptr long long long) kernel32.ReOpenFile
 @ stdcall ReadConsoleA(long ptr long ptr ptr)
@@ -1162,10 +1162,10 @@
 @ stdcall SetCommMask(long ptr) kernel32.SetCommMask
 @ stdcall SetCommState(long ptr) kernel32.SetCommState
 @ stdcall SetCommTimeouts(long ptr) kernel32.SetCommTimeouts
-@ stdcall SetComputerNameA(str)
-@ stdcall SetComputerNameExA(long str)
-@ stdcall SetComputerNameExW(long wstr)
-@ stdcall SetComputerNameW(wstr)
+@ stdcall SetComputerNameA(str) kernel32.SetComputerNameA
+@ stdcall SetComputerNameExA(long str) kernel32.SetComputerNameExA
+@ stdcall SetComputerNameExW(long wstr) kernel32.SetComputerNameExW
+@ stdcall SetComputerNameW(wstr) kernel32.SetComputerNameW
 @ stdcall SetConsoleActiveScreenBuffer(long)
 @ stdcall SetConsoleCP(long)
 @ stdcall SetConsoleCtrlHandler(ptr long)
@@ -1270,10 +1270,10 @@
 @ stdcall SetupComm(long long long) kernel32.SetupComm
 @ stdcall SignalObjectAndWait(long long long long) kernel32.SignalObjectAndWait
 @ stdcall SizeofResource(long long) kernel32.SizeofResource
-@ stdcall Sleep(long)
+@ stdcall Sleep(long) kernel32.Sleep
 @ stdcall SleepConditionVariableCS(ptr ptr long)
 @ stdcall SleepConditionVariableSRW(ptr ptr long long)
-@ stdcall SleepEx(long long)
+@ stdcall SleepEx(long long) kernel32.SleepEx
 @ stub SpecialMBToWC
 @ stdcall StartThreadpoolIo(ptr) ntdll.TpStartAsyncIoOperation
 @ stdcall StrCSpnA(str str)
