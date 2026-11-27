@@ -8,6 +8,7 @@ add_rpc_files(server
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/wlui.idl)
 
 list(APPEND SOURCE
+    bootspinner.c
     environment.c
     hostlaunch.c
     hostlogon.c
