@@ -409,16 +409,24 @@ LuhDrawText(
     }
 }
 
+/* Larger pictures are refused before decoding: the decoder would hold them whole. */
+#define LUH_IMAGE_LIMIT     8192
+
 BOOL
 LuhSurfaceLoad(
     _Out_ PLUH_SURFACE Surface,
-    _In_ PCWSTR Path)
+    _In_ HANDLE File,
+    _In_ LONG MaxWidth,
+    _In_ LONG MaxHeight)
 {
     IWICImagingFactory *Factory = NULL;
     IWICBitmapDecoder *Decoder = NULL;
     IWICBitmapFrameDecode *Frame = NULL;
     IWICFormatConverter *Converter = NULL;
+    IWICBitmapScaler *Scaler = NULL;
+    IWICBitmapSource *Source = NULL;
     UINT Width = 0, Height = 0;
+    double Scale;
     HRESULT Hr, Init;
     BOOL Ok = FALSE;
 
@@ -427,29 +435,46 @@ LuhSurfaceLoad(
     Hr = CoCreateInstance(&CLSID_WICImagingFactory, NULL, CLSCTX_INPROC_SERVER,
                           &IID_IWICImagingFactory, (void **)&Factory);
     if (SUCCEEDED(Hr))
-        Hr = IWICImagingFactory_CreateDecoderFromFilename(Factory, Path, NULL, GENERIC_READ,
-                                                          WICDecodeMetadataCacheOnDemand, &Decoder);
+        Hr = IWICImagingFactory_CreateDecoderFromFileHandle(Factory, (ULONG_PTR)File, NULL,
+                                                            WICDecodeMetadataCacheOnDemand, &Decoder);
     if (SUCCEEDED(Hr))
         Hr = IWICBitmapDecoder_GetFrame(Decoder, 0, &Frame);
+    if (SUCCEEDED(Hr))
+        Hr = IWICBitmapFrameDecode_GetSize(Frame, &Width, &Height);
+    if (SUCCEEDED(Hr) && (Width == 0 || Height == 0 || Width > LUH_IMAGE_LIMIT || Height > LUH_IMAGE_LIMIT))
+        Hr = E_INVALIDARG;
     if (SUCCEEDED(Hr))
         Hr = IWICImagingFactory_CreateFormatConverter(Factory, &Converter);
     if (SUCCEEDED(Hr))
         Hr = IWICFormatConverter_Initialize(Converter, (IWICBitmapSource *)Frame, &GUID_WICPixelFormat32bppPBGRA,
                                             WICBitmapDitherTypeNone, NULL, 0.0, WICBitmapPaletteTypeCustom);
     if (SUCCEEDED(Hr))
-        Hr = IWICFormatConverter_GetSize(Converter, &Width, &Height);
-    if (SUCCEEDED(Hr) && Width > 0 && Height > 0 && Width <= 16384 && Height <= 16384 &&
-        LuhSurfaceCreate(Surface, (LONG)Width, (LONG)Height))
     {
-        Hr = IWICFormatConverter_CopyPixels(Converter, NULL, Width * sizeof(ULONG),
-                                            Width * Height * sizeof(ULONG), (BYTE *)Surface->Bits);
+        Source = (IWICBitmapSource *)Converter;
+        /* Never keep more than the caller can show: scale down to fit Max, keeping the aspect. */
+        Scale = min((double)MaxWidth / Width, (double)MaxHeight / Height);
+        if (Scale < 1.0)
+        {
+            Width = max((UINT)(Width * Scale), 1);
+            Height = max((UINT)(Height * Scale), 1);
+            Hr = IWICImagingFactory_CreateBitmapScaler(Factory, &Scaler);
+            if (SUCCEEDED(Hr))
+                Hr = IWICBitmapScaler_Initialize(Scaler, Source, Width, Height, WICBitmapInterpolationModeFant);
+            Source = (IWICBitmapSource *)Scaler;
+        }
+    }
+    if (SUCCEEDED(Hr) && LuhSurfaceCreate(Surface, (LONG)Width, (LONG)Height))
+    {
+        Hr = IWICBitmapSource_CopyPixels(Source, NULL, Width * sizeof(ULONG),
+                                         Width * Height * sizeof(ULONG), (BYTE *)Surface->Bits);
         Ok = SUCCEEDED(Hr);
         if (!Ok)
             LuhSurfaceDestroy(Surface);
     }
     if (!Ok)
-        WARN("cannot load %ls (0x%08lx)\n", Path, Hr);
+        WARN("cannot decode the backdrop (0x%08lx)\n", Hr);
 
+    if (Scaler) IWICBitmapScaler_Release(Scaler);
     if (Converter) IWICFormatConverter_Release(Converter);
     if (Frame) IWICBitmapFrameDecode_Release(Frame);
     if (Decoder) IWICBitmapDecoder_Release(Decoder);
@@ -662,6 +687,13 @@ LuhAnimFrame(
         return 1.0;
     T = (double)(Now - Anim->Start) * 1000.0 / ((double)Anim->Frequency * Anim->DurationMs);
     return T >= 1.0 ? 1.0 : T;
+}
+
+double
+LuhAnimElapsedMs(
+    _In_ const LUH_ANIM *Anim)
+{
+    return (double)(LuhNow() - Anim->Start) * 1000.0 / (double)Anim->Frequency;
 }
 
 BOOL

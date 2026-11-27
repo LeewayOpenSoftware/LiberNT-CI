@@ -47,8 +47,8 @@ VOID LuhDrawText(_Inout_ PLUH_SURFACE Surface, _In_ HFONT Font, _In_ PCWSTR Text
              _In_ UINT Format, _In_ COLORREF Color, _In_ BYTE Alpha);
 SIZE LuhMeasureText(_In_ HFONT Font, _In_ PCWSTR Text);
 
-/* Decode an image file (WIC) into a new surface of its own size. */
-BOOL LuhSurfaceLoad(_Out_ PLUH_SURFACE Surface, _In_ PCWSTR Path);
+/* Decode an open image file (WIC) into a new surface, scaled down to fit MaxWidth x MaxHeight. */
+BOOL LuhSurfaceLoad(_Out_ PLUH_SURFACE Surface, _In_ HANDLE File, _In_ LONG MaxWidth, _In_ LONG MaxHeight);
 /*
  * Fill the whole of Target with Source (halftone), cropping Source to Target's aspect.
  * For opaque pictures only (wallpaper, backdrop): every target pixel ends with alpha 0xFF.
@@ -88,6 +88,7 @@ VOID LuhAnimStart(_Out_ PLUH_ANIM Anim, _In_ PCSTR Name, _In_ DWORD DurationMs);
 /* Records a frame and returns the linear progress 0..1 at this instant. */
 double LuhAnimFrame(_Inout_ PLUH_ANIM Anim);
 BOOL LuhAnimDone(_In_ const LUH_ANIM *Anim);
+double LuhAnimElapsedMs(_In_ const LUH_ANIM *Anim);
 /* Sleeps to the next frame deadline of the fixed schedule. */
 VOID LuhAnimWait(_Inout_ PLUH_ANIM Anim);
 VOID LuhAnimEnd(_Inout_ PLUH_ANIM Anim);

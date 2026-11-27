@@ -8,6 +8,7 @@
 #include "logonuihost.h"
 #include "resource.h"
 #include "gfx.h"
+#include <aclapi.h>
 #include <math.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
@@ -18,7 +19,8 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_TIMER_FADE      3
 #define LUH_TIMER_STARTUP   4   /* a page must arrive within the provider call bound */
 #define LUH_TIMER_CLOCK     5   /* the curtain's clock, only while the curtain is up */
-#define LUH_SPINNER_MS      50
+#define LUH_SPINNER_MS      16      /* a frame at 60 Hz; the phase comes from the clock */
+#define LUH_SPINNER_PERIOD  1200    /* ms per turn */
 
 #define LUH_ID_FIELD_BASE   1000
 #define LUH_ID_RESTART      1900
@@ -47,7 +49,7 @@ typedef struct _LUH_UI
     WCHAR Title[256];       /* "Welcome" user or status text */
     WCHAR Detail[256];      /* result text, when any */
     BOOL Spinner;
-    int SpinnerAngle;
+    LUH_ANIM SpinnerAnim;   /* its clock and frame line while it turns */
     BOOL FirstPaintDone;
     BOOL Fading;
     int FadeStep;
@@ -178,9 +180,15 @@ LuhSetSpinner(
     _In_ BOOL On)
 {
     if (On && !g_Ui.Spinner)
+    {
+        LuhAnimStart(&g_Ui.SpinnerAnim, "spinner", 0);
         SetTimer(Window, LUH_TIMER_SPINNER, LUH_SPINNER_MS, NULL);
+    }
     else if (!On && g_Ui.Spinner)
+    {
         KillTimer(Window, LUH_TIMER_SPINNER);
+        LuhAnimEnd(&g_Ui.SpinnerAnim);
+    }
     g_Ui.Spinner = On;
 }
 
@@ -852,7 +860,182 @@ LuhApplyFieldUpdate(
 #define LUH_LIFT_VELOCITY   0.6     /* pixels per millisecond upwards at release: a flick lifts */
 
 /*
- * Built once per launch: the wallpaper of the logon session filled to the screen (the
+ * The host runs as SYSTEM on the secure desktop, so the picture it decodes must be one only
+ * the system and administrators can change: the machine's lock-screen image (policy), else
+ * the system default. The user's own wallpaper is never read here.
+ */
+#define LUH_LOCK_POLICY_KEY L"SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization"
+#define LUH_LOCK_DEFAULT    L"%SystemRoot%\\Web\\Wallpaper\\Layered Glass 16x9.png"
+#define LUH_FILE_WRITE      (FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | WRITE_DAC | WRITE_OWNER | \
+                             GENERIC_WRITE | GENERIC_ALL)
+#define LUH_DIR_WRITE       (FILE_ADD_FILE | FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | \
+                             GENERIC_WRITE | GENERIC_ALL)
+
+/* SYSTEM, Administrators or TrustedInstaller. */
+static BOOL
+LuhSidIsAdmin(
+    _In_ PSID Sid)
+{
+    SID_IDENTIFIER_AUTHORITY Nt = SECURITY_NT_AUTHORITY;
+    PSID Installer = NULL;
+    BOOL Match;
+
+    if (IsWellKnownSid(Sid, WinLocalSystemSid) || IsWellKnownSid(Sid, WinBuiltinAdministratorsSid))
+        return TRUE;
+    if (!AllocateAndInitializeSid(&Nt, 6, SECURITY_SERVICE_ID_BASE_RID, 956008885, 3418522649,
+                                  1831038044, 1853292631, 2271478464, 0, 0, &Installer))
+        return FALSE;
+    Match = EqualSid(Sid, Installer);
+    FreeSid(Installer);
+    return Match;
+}
+
+/* Owned by an administrator, and no one else is granted any of WriteMask. */
+static BOOL
+LuhOnlyAdminsWrite(
+    _In_opt_ PSID Owner,
+    _In_opt_ PACL Dacl,
+    _In_ ACCESS_MASK WriteMask)
+{
+    ACL_SIZE_INFORMATION Size;
+    PACE_HEADER Ace;
+    DWORD i;
+
+    /* A NULL DACL grants everyone everything; the owner can always rewrite the DACL. */
+    if (Owner == NULL || Dacl == NULL || !LuhSidIsAdmin(Owner) ||
+        !GetAclInformation(Dacl, &Size, sizeof(Size), AclSizeInformation))
+        return FALSE;
+    for (i = 0; i < Size.AceCount; i++)
+    {
+        if (!GetAce(Dacl, i, (PVOID *)&Ace))
+            return FALSE;
+        if (Ace->AceFlags & INHERIT_ONLY_ACE)
+            continue;
+        if (Ace->AceType == ACCESS_DENIED_ACE_TYPE)
+            continue;
+        if (Ace->AceType != ACCESS_ALLOWED_ACE_TYPE)
+            return FALSE;   /* object or callback grants: not judged, so not trusted */
+        if ((((PACCESS_ALLOWED_ACE)Ace)->Mask & WriteMask) &&
+            !LuhSidIsAdmin((PSID)&((PACCESS_ALLOWED_ACE)Ace)->SidStart))
+            return FALSE;
+    }
+    return TRUE;
+}
+
+/* Every directory above the file: a writable one would let a user swap the file or a folder. */
+static BOOL
+LuhParentsAdminOnly(
+    _In_ PCWSTR Path)
+{
+    WCHAR Dir[MAX_PATH];
+    PWSTR Slash;
+    PSID Owner;
+    PACL Dacl;
+    PSECURITY_DESCRIPTOR Sd;
+    DWORD Attributes, Error;
+    BOOL Ok;
+
+    if (FAILED(StringCchCopyW(Dir, ARRAYSIZE(Dir), Path)))
+        return FALSE;
+    for (;;)
+    {
+        Slash = wcsrchr(Dir, L'\\');
+        if (Slash == NULL || Slash == Dir)
+            return FALSE;
+        /* "C:\" keeps its backslash and is the last one checked. */
+        if (Slash == Dir + 2 && Dir[1] == L':')
+            Slash[1] = UNICODE_NULL;
+        else
+            Slash[0] = UNICODE_NULL;
+
+        Attributes = GetFileAttributesW(Dir);
+        if (Attributes == INVALID_FILE_ATTRIBUTES || !(Attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            (Attributes & FILE_ATTRIBUTE_REPARSE_POINT))
+            return FALSE;
+        Error = GetNamedSecurityInfoW(Dir, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                                      &Owner, NULL, &Dacl, NULL, &Sd);
+        if (Error != ERROR_SUCCESS)
+            return FALSE;
+        Ok = LuhOnlyAdminsWrite(Owner, Dacl, LUH_DIR_WRITE);
+        LocalFree(Sd);
+        if (!Ok)
+            return FALSE;
+        if (Dir[1] == L':' && Dir[2] == L'\\' && Dir[3] == UNICODE_NULL)
+            return TRUE;
+    }
+}
+
+/*
+ * Opens the backdrop picture for reading, or returns INVALID_HANDLE_VALUE. The checks run on
+ * the open handle (write and delete sharing denied), so the file cannot change after them.
+ */
+static HANDLE
+LuhOpenBackdrop(VOID)
+{
+    WCHAR Path[MAX_PATH], Full[MAX_PATH];
+    DWORD Size = sizeof(Path), Error;
+    BY_HANDLE_FILE_INFORMATION Info;
+    PSID Owner;
+    PACL Dacl;
+    PSECURITY_DESCRIPTOR Sd;
+    HANDLE File;
+    BOOL Ok;
+
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, LUH_LOCK_POLICY_KEY, L"LockScreenImage",
+                     RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, NULL, Path, &Size) != ERROR_SUCCESS ||
+        Path[0] == UNICODE_NULL)
+    {
+        Size = ExpandEnvironmentStringsW(LUH_LOCK_DEFAULT, Path, ARRAYSIZE(Path));
+        if (Size == 0 || Size > ARRAYSIZE(Path))
+            return INVALID_HANDLE_VALUE;
+    }
+    /* Local absolute paths only: no UNC share, no device path, no relative name. */
+    if (!GetFullPathNameW(Path, ARRAYSIZE(Full), Full, NULL) || Full[1] != L':' || Full[2] != L'\\')
+        return INVALID_HANDLE_VALUE;
+
+    File = CreateFileW(Full, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                       FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+    if (File == INVALID_HANDLE_VALUE)
+        return INVALID_HANDLE_VALUE;
+
+    /* One link only: a hard link elsewhere could carry a different, writable parent. */
+    Ok = GetFileInformationByHandle(File, &Info) &&
+         !(Info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) &&
+         Info.nNumberOfLinks == 1;
+    if (Ok)
+    {
+        Error = GetSecurityInfo(File, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                                &Owner, NULL, &Dacl, NULL, &Sd);
+        Ok = (Error == ERROR_SUCCESS) && LuhOnlyAdminsWrite(Owner, Dacl, LUH_FILE_WRITE);
+        if (Error == ERROR_SUCCESS)
+            LocalFree(Sd);
+    }
+    if (Ok)
+        Ok = LuhParentsAdminOnly(Full);
+    if (!Ok)
+    {
+        LuhTrace("backdrop-refused", Full);
+        CloseHandle(File);
+        return INVALID_HANDLE_VALUE;
+    }
+    return File;
+}
+
+static VOID
+LuhFreeBackdrop(VOID)
+{
+    if (g_Ui.SoftBrush)
+        DeleteObject(g_Ui.SoftBrush);
+    g_Ui.SoftBrush = NULL;
+    LuhSurfaceDestroy(&g_Ui.Back);
+    LuhSurfaceDestroy(&g_Ui.Sharp);
+    LuhSurfaceDestroy(&g_Ui.Still);
+    LuhSurfaceDestroy(&g_Ui.Soft);
+    LuhSurfaceDestroy(&g_Ui.Face);
+}
+
+/*
+ * Built once per launch: the machine's lock-screen picture filled to the screen (the
  * curtain), and the same picture blurred and darkened (behind every other page).
  */
 static BOOL
@@ -860,21 +1043,28 @@ LuhBuildBackdrop(
     _In_ LONG Width,
     _In_ LONG Height)
 {
-    WCHAR Path[MAX_PATH];
     LUH_SURFACE Image, Small;
     RECT All = { 0, 0, Width, Height };
+    HANDLE File;
+    BOOL Loaded = FALSE;
 
     if (!LuhSurfaceCreate(&g_Ui.Back, Width, Height) || !LuhSurfaceCreate(&g_Ui.Sharp, Width, Height) ||
         !LuhSurfaceCreate(&g_Ui.Still, Width, Height) ||
         !LuhSurfaceCreate(&g_Ui.Soft, Width, Height) || !LuhSurfaceCreate(&g_Ui.Face, Width, Height) ||
         !LuhSurfaceCreate(&Small, max(Width / LUH_SOFT_SCALE, 1), max(Height / LUH_SOFT_SCALE, 1)))
     {
+        LuhFreeBackdrop();
         return FALSE;
     }
 
-    Path[0] = UNICODE_NULL;
-    if (SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(Path), Path, 0) && Path[0] != UNICODE_NULL &&
-        LuhSurfaceLoad(&Image, Path))
+    File = LuhOpenBackdrop();
+    if (File != INVALID_HANDLE_VALUE)
+    {
+        /* Decoded at most at twice the screen: enough for a sharp downscale, never more. */
+        Loaded = LuhSurfaceLoad(&Image, File, 2 * Width, 2 * Height);
+        CloseHandle(File);
+    }
+    if (Loaded)
     {
         LuhSurfaceScaleFrom(&g_Ui.Sharp, &Image);
         LuhSurfaceDestroy(&Image);
@@ -892,7 +1082,12 @@ LuhBuildBackdrop(
     LuhFillRect(&g_Ui.Soft, &All, RGB(0, 0, 0), LUH_SOFT_DARKEN);
 
     g_Ui.SoftBrush = CreatePatternBrush(g_Ui.Soft.Bitmap);
-    return g_Ui.SoftBrush != NULL;
+    if (g_Ui.SoftBrush == NULL)
+    {
+        LuhFreeBackdrop();
+        return FALSE;
+    }
+    return TRUE;
 }
 
 /* The curtain picture: sharp wallpaper, clock and date centred near the top, as on Windows 11. */
@@ -967,6 +1162,8 @@ LuhPresentLift(
 /*
  * Move the curtain to To (0 down, the screen height gone) on the clock with an ease-out.
  * A release velocity shortens the run so the motion carries on at the finger's speed.
+ * The run blocks the UI thread for at most LUH_LIFT_MS; commands winlogon posts meanwhile
+ * (a SAS, a cancel) wait in the queue and are handled as soon as it returns.
  */
 static void
 LuhSlideCurtain(
@@ -1364,7 +1561,8 @@ LuhComposeStill(
  */
 static void
 LuhCompose(
-    _In_ const RECT *Client)
+    _In_ const RECT *Client,
+    _In_ const RECT *Paint)
 {
     WCHAR Key[ARRAYSIZE(g_Ui.StillKey)];
     RECT Caps = { 0, 0, 0, 0 };
@@ -1388,13 +1586,19 @@ LuhCompose(
         StringCchCopyW(g_Ui.StillKey, ARRAYSIZE(g_Ui.StillKey), Key);
     }
 
-    BitBlt(g_Ui.Back.Dc, 0, 0, g_Ui.Back.Width, g_Ui.Back.Height, g_Ui.Still.Dc, 0, 0, SRCCOPY);
+    /* Only the damaged part: a spinner tick repaints its own square and nothing else. */
+    BitBlt(g_Ui.Back.Dc, Paint->left, Paint->top, Paint->right - Paint->left, Paint->bottom - Paint->top,
+           g_Ui.Still.Dc, Paint->left, Paint->top, SRCCOPY);
     if (g_Ui.Spinner)
     {
         int Cx = Client->right / 2, Cy = g_Ui.SpinnerY;
+        /* The phase follows the clock, so a late tick shows the right position, not a step behind. */
+        double Phase = fmod(LuhAnimElapsedMs(&g_Ui.SpinnerAnim), LUH_SPINNER_PERIOD) * 360.0 / LUH_SPINNER_PERIOD;
+
+        LuhAnimFrame(&g_Ui.SpinnerAnim);
         for (i = 0; i < 8; i++)
         {
-            double A = (g_Ui.SpinnerAngle + i * 45) * 3.14159265 / 180.0;
+            double A = (Phase + i * 45) * 3.14159265 / 180.0;
             LuhFillCircle(&g_Ui.Back, Cx + (LONG)(18.0 * cos(A)), Cy + (LONG)(18.0 * sin(A)), 3,
                           RGB(255, 255, 255), (BYTE)(60 + i * 24));
         }
@@ -1419,7 +1623,7 @@ LuhPaint(
     }
     else
     {
-        LuhCompose(&Client);
+        LuhCompose(&Client, &Ps.rcPaint);
         BitBlt(Dc, Ps.rcPaint.left, Ps.rcPaint.top, Ps.rcPaint.right - Ps.rcPaint.left,
                Ps.rcPaint.bottom - Ps.rcPaint.top, g_Ui.Back.Dc, Ps.rcPaint.left, Ps.rcPaint.top, SRCCOPY);
     }
@@ -1473,8 +1677,13 @@ LuhWindowProc(
             }
             else if (wParam == LUH_TIMER_SPINNER)
             {
-                g_Ui.SpinnerAngle = (g_Ui.SpinnerAngle + 45) % 360;
-                InvalidateRect(Window, NULL, FALSE);
+                RECT Square;
+
+                /* The dots' square only; the still page under it comes from the cache. */
+                GetClientRect(Window, &Square);
+                SetRect(&Square, Square.right / 2 - LuhPx(26), g_Ui.SpinnerY - LuhPx(26),
+                        Square.right / 2 + LuhPx(26), g_Ui.SpinnerY + LuhPx(26));
+                InvalidateRect(Window, &Square, FALSE);
             }
             else if (wParam == LUH_TIMER_STARTUP)
             {
@@ -1759,12 +1968,7 @@ LuhUiRun(
     if (g_Ui.TextFont) DeleteObject(g_Ui.TextFont);
     if (g_Ui.ClockFont) DeleteObject(g_Ui.ClockFont);
     if (g_Ui.DateFont) DeleteObject(g_Ui.DateFont);
-    if (g_Ui.SoftBrush) DeleteObject(g_Ui.SoftBrush);
-    LuhSurfaceDestroy(&g_Ui.Back);
-    LuhSurfaceDestroy(&g_Ui.Sharp);
-    LuhSurfaceDestroy(&g_Ui.Soft);
-    LuhSurfaceDestroy(&g_Ui.Face);
-    LuhSurfaceDestroy(&g_Ui.Still);
+    LuhFreeBackdrop();
     LuhGfxShutdown();
     return (int)Msg.wParam;
 }
