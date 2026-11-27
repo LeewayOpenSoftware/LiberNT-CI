@@ -321,7 +321,8 @@ ReadPolicyText(
 /*
  * Every credential of every provider becomes a tile. The default one: the empty tile when
  * DontDisplayLastUserName is set, else the first default a provider names, else the
- * DefaultUserName account the msgina page preselects, else the first tile.
+ * DefaultUserName account the msgina page preselects among the first provider's tiles,
+ * else the first tile.
  */
 static VOID
 CollectTiles(
@@ -392,6 +393,10 @@ CollectTiles(
     {
         for (i = 0; i < T->TileCount; i++)
         {
+            /* Only among the first provider's tiles: without a provider default, the first
+             * provider keeps the selection as before, and DefaultUserName picks its account. */
+            if (!IsEqualGUID(&T->Tiles[i].Clsid, &T->Tiles[0].Clsid))
+                break;
             if (!TileIsEmpty(T->Tiles[i].Credential) && !_wcsicmp(T->Tiles[i].Name, LastUser))
             {
                 T->Selected = i;
