@@ -218,9 +218,9 @@ WSPDisconnectEx(
 
     if (lpOverlapped && Status == STATUS_PENDING)
     {
-        /* The operation is queued; the caller receives exactly one completion,
-           through the overlapped event or the socket IOCP port */
-        return TRUE;
+        /* Queued: FALSE + WSA_IO_PENDING as Win11; exactly one completion follows */
+        WSASetLastError(WSA_IO_PENDING);
+        return FALSE;
     }
 
     if (!NT_SUCCESS(Status))
