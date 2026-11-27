@@ -85,6 +85,7 @@ typedef struct _LUH_PAGE
     LUH_FIELD Fields[LUH_MAX_FIELDS];
     DWORD TileCount;            /* every credential of every provider; one means no tile list */
     DWORD TileSelected;         /* the tile whose fields are above */
+    BOOL AutoSubmit;            /* the provider asked for its default to be submitted at once */
     WCHAR TileNames[LUH_MAX_TILES][LUH_TILE_TEXT];
 } LUH_PAGE, *PLUH_PAGE;
 

@@ -72,6 +72,7 @@ typedef struct _LUH_PROVIDER_THREAD
     LUH_TILE Tiles[LUH_MAX_TILES];
     DWORD TileCount;
     DWORD Selected;
+    BOOL AutoSubmit;                /* the first page only: submit the default without waiting for input */
 } LUH_PROVIDER_THREAD, *PLUH_PROVIDER_THREAD;
 
 static PLUH_PROVIDER_THREAD g_Current;
@@ -328,9 +329,10 @@ CollectTiles(
 {
     WCHAR LastUser[LUH_TILE_TEXT];
     DWORD ProviderDefault = MAXDWORD, i, j;
-    BOOL HideLast;
+    BOOL HideLast, ProviderAutoLogon = FALSE;
 
     T->TileCount = 0;
+    T->AutoSubmit = FALSE;
     for (i = 0; i < T->Set->Count && T->TileCount < LUH_MAX_TILES; i++)
     {
         ICredentialProvider *Provider = T->Set->Providers[i].Provider;
@@ -341,6 +343,8 @@ CollectTiles(
             continue;
         if (FAILED(ICredentialProvider_GetCredentialCount(Provider, &Count, &Default, &AutoLogon)) || Count == 0)
             continue;
+        if (Default >= Count)
+            AutoLogon = FALSE;      /* CREDENTIAL_PROVIDER_NO_DEFAULT: nothing to submit */
         for (j = 0; j < Count && T->TileCount < LUH_MAX_TILES; j++)
         {
             LUH_TILE *Tile = &T->Tiles[T->TileCount];
@@ -352,7 +356,10 @@ CollectTiles(
             Tile->Clsid = T->Set->Providers[i].Clsid;
             TileName(Provider, Tile->Credential, Tile->Name, ARRAYSIZE(Tile->Name));
             if (j == Default && ProviderDefault == MAXDWORD)
+            {
                 ProviderDefault = T->TileCount;
+                ProviderAutoLogon = AutoLogon;
+            }
             T->TileCount++;
         }
     }
@@ -375,7 +382,9 @@ CollectTiles(
     }
     if (ProviderDefault != MAXDWORD)
     {
+        /* Windows submits the provider's default at once when it asks (pbAutoLogonWithDefault). */
         T->Selected = ProviderDefault;
+        T->AutoSubmit = ProviderAutoLogon;
         return;
     }
     if (!HideLast &&
@@ -468,6 +477,8 @@ BuildPage(
         StringCchCopyW(Page->TileNames[i], ARRAYSIZE(Page->TileNames[i]), T->Tiles[i].Name);
     Page->TileCount = T->TileCount;
     Page->TileSelected = T->Selected;
+    Page->AutoSubmit = T->AutoSubmit;
+    T->AutoSubmit = FALSE;
     if (FAILED(ICredentialProvider_GetFieldDescriptorCount(T->Provider, &Count)))
         return;
 

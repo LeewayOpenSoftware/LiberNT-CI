@@ -823,6 +823,11 @@ LuhWindowProc(
             {
                 LuhSetSpinner(Window, FALSE);
                 LuhCreatePage(Window, (PLUH_PAGE)lParam);
+                if (g_Ui.Page && g_Ui.Page->AutoSubmit)
+                {
+                    LuhTrace("auto-submit", NULL);
+                    LuhSubmit(Window);
+                }
             }
             else if (wParam == LUH_PAGE_POLICY)
             {
