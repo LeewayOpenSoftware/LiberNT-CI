@@ -565,9 +565,9 @@ WlHlIsSessionAccount(
     PCWSTR SessionDomain;
     BOOL TypedLocal, SessionLocal;
 
-    if (g_Session == NULL || g_Session->MprNotifyInfo.pszUserName == NULL)
+    if (g_Session == NULL || g_Session->UserName == NULL)
         return FALSE;
-    RtlInitUnicodeString(&Want, g_Session->MprNotifyInfo.pszUserName);
+    RtlInitUnicodeString(&Want, g_Session->UserName);
     if (!RtlEqualUnicodeString(Account, &Want, TRUE))
         return FALSE;
 
@@ -578,7 +578,7 @@ WlHlIsSessionAccount(
     TypedLocal = Domain->Length == 0 ||
                  (Domain->Length == sizeof(WCHAR) && Domain->Buffer[0] == L'.') ||
                  (Here.Length != 0 && RtlEqualUnicodeString(Domain, &Here, TRUE));
-    SessionDomain = g_Session->MprNotifyInfo.pszDomain ? g_Session->MprNotifyInfo.pszDomain : L"";
+    SessionDomain = g_Session->Domain ? g_Session->Domain : L"";
     RtlInitUnicodeString(&Want, SessionDomain);
     SessionLocal = Want.Length == 0 || !wcscmp(SessionDomain, L".") ||
                    (Here.Length != 0 && RtlEqualUnicodeString(&Want, &Here, TRUE));
@@ -1224,8 +1224,8 @@ WlHlChangePrefill(
     }
     else if (g_Session != NULL)
     {
-        Domain = g_Session->MprNotifyInfo.pszDomain;
-        User = g_Session->MprNotifyInfo.pszUserName;
+        Domain = g_Session->Domain;
+        User = g_Session->UserName;
     }
     if (User == NULL || User[0] == UNICODE_NULL)
         Prefill[0] = UNICODE_NULL;
@@ -1242,8 +1242,8 @@ WlHlUnlockPrefill(
     _Out_writes_(Chars) PWCHAR Prefill,
     _In_ ULONG Chars)
 {
-    PCWSTR Domain = g_Session ? g_Session->MprNotifyInfo.pszDomain : NULL;
-    PCWSTR User = g_Session ? g_Session->MprNotifyInfo.pszUserName : NULL;
+    PCWSTR Domain = g_Session ? g_Session->Domain : NULL;
+    PCWSTR User = g_Session ? g_Session->UserName : NULL;
 
     if (User == NULL || User[0] == UNICODE_NULL)
         Prefill[0] = UNICODE_NULL;
@@ -1695,7 +1695,7 @@ WlHostLoggedOnSas(
     EnterCriticalSection(&g_LaunchLock);
     g_HostScenario = WLHL_SCENARIO_OPTIONS;
     LeaveCriticalSection(&g_LaunchLock);
-    WlHlPost(WluiCmdShowOptions, WLHL_SCENARIO_OPTIONS, Flags, 0, 0, Session->MprNotifyInfo.pszUserName, NULL);
+    WlHlPost(WluiCmdShowOptions, WLHL_SCENARIO_OPTIONS, Flags, 0, 0, Session->UserName, NULL);
     LogonStage("options-shown");
 
     for (;;)
@@ -2280,7 +2280,7 @@ static VOID
 WlHlStoreLogonUserName(
     _In_ PWLSESSION Session)
 {
-    PCWSTR Name = Session->MprNotifyInfo.pszUserName;
+    PCWSTR Name = Session->UserName;
     HKEY User = NULL, Key;
 
     if (Name == NULL || Name[0] == UNICODE_NULL || Session->UserToken == NULL ||
