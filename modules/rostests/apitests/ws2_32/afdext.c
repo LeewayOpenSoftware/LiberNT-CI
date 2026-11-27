@@ -45,6 +45,8 @@ TcpConnect(const struct sockaddr_in *addr)
 }
 
 /* Every failed DisconnectEx must fail explicitly and leave the socket usable */
+static char big[65536];
+
 static void
 CheckSocketStillConnected(SOCKET s)
 {
@@ -71,7 +73,9 @@ START_TEST(afdext)
     SOCKET listener, connector, accepted, fresh;
     WSAPOLLFD pollfd;
     BOOL bret;
-    INT ret;
+    INT ret, i;
+    u_long nonblock;
+    DWORD sent, received, timeout;
 
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
     {
@@ -222,6 +226,45 @@ START_TEST(afdext)
     ok(ret == SOCKET_ERROR && WSAGetLastError() == WSAEISCONN,
        "reconnect after sync got %d err %d\n", ret, WSAGetLastError());
 
+    closesocket(accepted);
+    closesocket(connector);
+
+    /* --- DisconnectEx overlapped behind a full send window pends --- */
+    connector = TcpConnect(&addr);
+    accepted = accept(listener, NULL, NULL);
+    ok(accepted != INVALID_SOCKET, "accept failed %d\n", WSAGetLastError());
+    timeout = 10000;
+    setsockopt(accepted, SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(timeout));
+    nonblock = 1;
+    ok(ioctlsocket(connector, FIONBIO, &nonblock) == 0, "FIONBIO failed %d\n", WSAGetLastError());
+    sent = 0;
+    ret = 0;
+    for (i = 0; i < 1024; i++)
+    {
+        ret = send(connector, big, sizeof(big), 0);
+        if (ret == SOCKET_ERROR)
+            break;
+        sent += ret;
+    }
+    ok(ret == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK,
+       "filling the send window got %d err %d after %lu bytes\n", ret, WSAGetLastError(), sent);
+
+    memset(&overlapped, 0, sizeof(overlapped));
+    overlapped.hEvent = WSACreateEvent();
+    WSASetLastError(0);
+    bret = pDisconnectEx(connector, &overlapped, 0, 0);
+    ok(!bret && WSAGetLastError() == WSA_IO_PENDING,
+       "DisconnectEx(full window) got %d err %d\n", bret, WSAGetLastError());
+    received = 0;
+    while ((ret = recv(accepted, big, sizeof(big), 0)) > 0)
+        received += ret;
+    ok(ret == 0 && received == sent, "peer drained %lu of %lu bytes, last %d err %d\n",
+       received, sent, ret, WSAGetLastError());
+    ok(WaitForSingleObject(overlapped.hEvent, 10000) == WAIT_OBJECT_0,
+       "DisconnectEx(full window) did not complete\n");
+    ok(WSAGetOverlappedResult(connector, &overlapped, &bytes, FALSE, &flags),
+       "DisconnectEx(full window) completion %d\n", WSAGetLastError());
+    WSACloseEvent(overlapped.hEvent);
     closesocket(accepted);
     closesocket(connector);
 
