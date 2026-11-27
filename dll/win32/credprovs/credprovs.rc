@@ -30,3 +30,7 @@ BEGIN
     IDS_PASSWORD_RESTRICTION    "The new password does not meet the length, complexity, or history requirements. Try another."
     IDS_PASSWORD_CHANGE_FAILED  "The password could not be changed. Try again."
 END
+
+#ifdef LANGUAGE_ES_ES
+    #include "lang/es-ES.rc"
+#endif
