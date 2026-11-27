@@ -112,6 +112,30 @@ InbvSpinScaleForDpi(unsigned long Value, unsigned long Dpi)
 
 /* ---- Where the spinner sits ----------------------------------------------------------- */
 
+/* Height of the 51 x 45 area the previous mark used: the spinner takes its centre and the kernel's
+ * status line goes below it. */
+INBV_SPIN_FORCEINLINE unsigned long
+InbvSpinMarkHeight(unsigned long Dpi)
+{
+    unsigned long MarkWidth = InbvSpinScaleForDpi(INBV_SPIN_LOGO_WIDTH, Dpi);
+
+    return (INBV_SPIN_LOGO_UNITS_HIGH * MarkWidth + INBV_SPIN_LOGO_UNITS / 2) / INBV_SPIN_LOGO_UNITS;
+}
+
+/* Top of that area on a surface ScreenH high. */
+INBV_SPIN_FORCEINLINE unsigned long
+InbvSpinMarkTop(unsigned long ScreenH, unsigned long Dpi)
+{
+    unsigned long MarkHeight = InbvSpinMarkHeight(Dpi);
+    unsigned long HalfHeight = ScreenH / 2;
+    unsigned long CenterY = HalfHeight + (ScreenH - HalfHeight) * INBV_SPIN_CENTERMARK_NUM / INBV_SPIN_CENTERMARK_DEN;
+    unsigned long TopHalf = (unsigned long)(((unsigned long long)MarkHeight * INBV_SPIN_LOGO_TOP_WIDTH) /
+                                            (2 * INBV_SPIN_LOGO_WIDTH));
+    unsigned long Lift = InbvSpinScaleForDpi(INBV_SPIN_LOGO_LIFT, Dpi);
+
+    return (CenterY > TopHalf + Lift) ? (CenterY - TopHalf - Lift) : 0;
+}
+
 /* The spinner rectangle for a ScreenW x ScreenH surface at the given DPI. Both the kernel
  * (boot framebuffer) and winlogon (desktop, which is the boot mode on an equal-size first
  * commit) compute it here, so the winlogon window lands on the kernel's pixels. */
@@ -120,22 +144,14 @@ InbvSpinComputeRect(unsigned long ScreenW, unsigned long ScreenH, unsigned long 
 {
     INBV_SPIN_RECT Rect;
     unsigned long Size = InbvSpinScaleForDpi(INBV_SPIN_SIZE, Dpi);
-    unsigned long MarkWidth = InbvSpinScaleForDpi(INBV_SPIN_LOGO_WIDTH, Dpi);
-    unsigned long MarkHeight = (INBV_SPIN_LOGO_UNITS_HIGH * MarkWidth + INBV_SPIN_LOGO_UNITS / 2) /
-                               INBV_SPIN_LOGO_UNITS;
-    unsigned long HalfHeight, CenterY, TopHalf, Lift, MarkTop, Floor;
+    unsigned long MarkHeight = InbvSpinMarkHeight(Dpi);
+    unsigned long MarkTop, Floor;
 
     Rect.Left = Rect.Top = Rect.Width = Rect.Height = 0;
     if (Size == 0 || Size > ScreenW || Size > ScreenH || MarkHeight > ScreenH)
         return Rect;
 
-    HalfHeight = ScreenH / 2;
-    CenterY = HalfHeight + (ScreenH - HalfHeight) * INBV_SPIN_CENTERMARK_NUM / INBV_SPIN_CENTERMARK_DEN;
-    TopHalf = (unsigned long)(((unsigned long long)MarkHeight * INBV_SPIN_LOGO_TOP_WIDTH) /
-                              (2 * INBV_SPIN_LOGO_WIDTH));
-    Lift = InbvSpinScaleForDpi(INBV_SPIN_LOGO_LIFT, Dpi);
-    MarkTop = (CenterY > TopHalf + Lift) ? (CenterY - TopHalf - Lift) : 0;
-
+    MarkTop = InbvSpinMarkTop(ScreenH, Dpi);
     Floor = (MarkHeight + 1 < Size) ? (MarkHeight + 1) : Size;
     Rect.Left = (ScreenW - Size) / 2;
     Rect.Top = MarkTop + (MarkHeight + 1 - Floor) / 2;
