@@ -1,0 +1,23 @@
+/*
+ * PROJECT:     LiberNT LogonUI host
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Spanish (Spain) resource file
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_SPANISH, SUBLANG_NEUTRAL
+
+STRINGTABLE
+BEGIN
+    IDS_LUH_POWER           "Energía"
+    IDS_LUH_RESTART         "Reiniciar"
+    IDS_LUH_SHUTDOWN        "Apagar"
+    IDS_LUH_HINT_SIGNIN     "Presione una tecla o haga clic para iniciar sesión"
+    IDS_LUH_HINT_UNLOCK     "Presione una tecla o haga clic para desbloquear"
+    IDS_LUH_NOTICE          "Aviso"
+    IDS_LUH_NO_SIGNIN       "El inicio de sesión no está disponible en este equipo."
+    IDS_LUH_CONTACT_ADMIN   "Póngase en contacto con el administrador."
+    IDS_LUH_SIGNIN_FAILED   "No se pudo completar el inicio de sesión. Inténtelo de nuevo."
+    IDS_LUH_PLEASE_WAIT     "Espere"
+    IDS_LUH_WELCOME         "Bienvenido"
+END

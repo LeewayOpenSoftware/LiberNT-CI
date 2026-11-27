@@ -1,0 +1,23 @@
+/*
+ * PROJECT:     LiberNT LogonUI host
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     English (United States) resource file
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+STRINGTABLE
+BEGIN
+    IDS_LUH_POWER           "Power"
+    IDS_LUH_RESTART         "Restart"
+    IDS_LUH_SHUTDOWN        "Shut down"
+    IDS_LUH_HINT_SIGNIN     "Press any key or click to sign in"
+    IDS_LUH_HINT_UNLOCK     "Press any key or click to unlock"
+    IDS_LUH_NOTICE          "Notice"
+    IDS_LUH_NO_SIGNIN       "Sign-in is not available on this computer."
+    IDS_LUH_CONTACT_ADMIN   "Contact your administrator."
+    IDS_LUH_SIGNIN_FAILED   "Sign-in could not be completed. Try again."
+    IDS_LUH_PLEASE_WAIT     "Please wait"
+    IDS_LUH_WELCOME         "Welcome"
+END

@@ -6,6 +6,7 @@
  */
 
 #include "logonuihost.h"
+#include "resource.h"
 #include <math.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
@@ -69,6 +70,23 @@ typedef struct _LUH_UI
 } LUH_UI;
 
 static LUH_UI g_Ui;
+
+/* The UI text, from the string table in the user's language (en-US, es-ES in the tree);
+ * loaded once per string on the UI thread. */
+static PCWSTR
+LuhText(
+    _In_ UINT Id)
+{
+    static WCHAR Cache[IDS_LUH_WELCOME - IDS_LUH_POWER + 1][160];
+    PWSTR Slot;
+
+    if (Id < IDS_LUH_POWER || Id > IDS_LUH_WELCOME)
+        return L"";
+    Slot = Cache[Id - IDS_LUH_POWER];
+    if (Slot[0] == UNICODE_NULL && LoadStringW(GetModuleHandleW(NULL), Id, Slot, ARRAYSIZE(Cache[0])) <= 0)
+        Slot[0] = UNICODE_NULL;
+    return Slot;
+}
 
 static void
 LuhBeginExit(
@@ -164,7 +182,7 @@ LuhCreatePowerButton(
     if (g_Options.NoPower)
         return;
     GetClientRect(Window, &Client);
-    g_Ui.PowerButton = CreateWindowExW(0, L"BUTTON", L"Power", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+    g_Ui.PowerButton = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_POWER), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                        Client.right - LUH_TILE_MARGIN - LUH_POWER_WIDTH,
                                        Client.bottom - LUH_TILE_MARGIN - LUH_ROW_HEIGHT,
                                        LUH_POWER_WIDTH, LUH_ROW_HEIGHT, Window, (HMENU)LUH_ID_POWER, NULL, NULL);
@@ -186,8 +204,8 @@ LuhPowerMenu(
     Menu = CreatePopupMenu();
     if (Menu == NULL)
         return;
-    AppendMenuW(Menu, MF_STRING, LUH_ID_RESTART, L"Restart");
-    AppendMenuW(Menu, MF_STRING, LUH_ID_SHUTDOWN, L"Shut down");
+    AppendMenuW(Menu, MF_STRING, LUH_ID_RESTART, LuhText(IDS_LUH_RESTART));
+    AppendMenuW(Menu, MF_STRING, LUH_ID_SHUTDOWN, LuhText(IDS_LUH_SHUTDOWN));
     GetWindowRect(g_Ui.PowerButton, &Button);
     Choice = (UINT)TrackPopupMenu(Menu, TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_BOTTOMALIGN | TPM_NONOTIFY,
                                   Button.right, Button.top, 0, Window, NULL);
@@ -455,7 +473,7 @@ LuhLegalNotice(
         return;
     LuhTrace("legal-notice", NULL);
     /* Modal on the UI thread: the heartbeat timer is still dispatched by the message box loop. */
-    MessageBoxW(Window, Text, Caption[0] ? Caption : L"Notice", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+    MessageBoxW(Window, Text, Caption[0] ? Caption : LuhText(IDS_LUH_NOTICE), MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
     HeapFree(GetProcessHeap(), 0, Text);
 }
 
@@ -468,17 +486,17 @@ LuhShowPolicyPage(
 
     LuhDestroyPage();
     GetClientRect(Window, &Client);
-    StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"Sign-in is not available on this computer.");
-    StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), L"Contact your administrator.");
+    StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), LuhText(IDS_LUH_NO_SIGNIN));
+    StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), LuhText(IDS_LUH_CONTACT_ADMIN));
     LuhSetSpinner(Window, FALSE);
     X = (Client.right - LUH_PAGE_WIDTH) / 2;
     /* ShutdownWithoutLogon=0: no power buttons; winlogon refuses the action anyway. */
     if (!g_Options.NoPower)
     {
-        g_Ui.PolicyButtons[0] = CreateWindowExW(0, L"BUTTON", L"Restart", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        g_Ui.PolicyButtons[0] = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_RESTART), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                                 X, Client.bottom / 2 + 60, LUH_PAGE_WIDTH / 2 - 5, LUH_ROW_HEIGHT,
                                                 Window, (HMENU)LUH_ID_RESTART, NULL, NULL);
-        g_Ui.PolicyButtons[1] = CreateWindowExW(0, L"BUTTON", L"Shut down", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+        g_Ui.PolicyButtons[1] = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_SHUTDOWN), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                                                 X + LUH_PAGE_WIDTH / 2 + 5, Client.bottom / 2 + 60, LUH_PAGE_WIDTH / 2 - 5, LUH_ROW_HEIGHT,
                                                 Window, (HMENU)LUH_ID_SHUTDOWN, NULL, NULL);
     }
@@ -525,7 +543,7 @@ LuhSubmit(
         case LuhSubmitFailed:
         case LuhSubmitRefused:
             StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail),
-                           Status[0] ? Status : L"Sign-in could not be completed. Try again.");
+                           Status[0] ? Status : LuhText(IDS_LUH_SIGNIN_FAILED));
             LuhClearSecrets();
             LuhEnablePage(TRUE);
             break;
@@ -538,7 +556,7 @@ LuhSubmit(
 ProviderGone:
     /* providers.c already reported the fault and is re-enumerating; a new page will arrive. */
     LuhDestroyPage();
-    StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"Please wait");
+    StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), LuhText(IDS_LUH_PLEASE_WAIT));
     g_Ui.Detail[0] = UNICODE_NULL;
     LuhSetSpinner(Window, TRUE);
     SetTimer(Window, LUH_TIMER_STARTUP, LUH_PROVIDER_CALL_MS, NULL);
@@ -708,7 +726,7 @@ LuhHandleCommand(
         case WluiCmdDisplayWelcome:
             LuhDropCurtain(Window);
             LuhDestroyPage();
-            StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), L"Welcome");
+            StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), LuhText(IDS_LUH_WELCOME));
             StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Command->User);
             LuhSetSpinner(Window, TRUE);
             LuhTrace("welcome", g_Ui.Detail);
@@ -839,8 +857,7 @@ LuhPaint(
         Rect.top = Client.bottom - 72;
         Rect.bottom = Client.bottom - 32;
         SelectObject(Dc, g_Ui.TextFont);
-        DrawTextW(Dc, g_Options.Scenario == CPUS_UNLOCK_WORKSTATION ? L"Press any key or click to unlock"
-                                                                     : L"Press any key or click to sign in",
+        DrawTextW(Dc, LuhText(g_Options.Scenario == CPUS_UNLOCK_WORKSTATION ? IDS_LUH_HINT_UNLOCK : IDS_LUH_HINT_SIGNIN),
                   -1, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(Dc, OldFont);
         EndPaint(Window, &Ps);
@@ -1111,12 +1128,13 @@ LuhUiCreate(
     g_Ui.TextFont = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                 DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_Ui.ClockFont = CreateFontW(-128, 0, 0, 0, FW_LIGHT, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+    /* The curtain uses the faces and sizes of the msgina clock page, so both modes match. */
+    g_Ui.ClockFont = CreateFontW(-132, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                 DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_Ui.DateFont = CreateFontW(-40, 0, 0, 0, FW_LIGHT, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                                 DEFAULT_PITCH | FF_DONTCARE, L"Selawik Light");
+    g_Ui.DateFont = CreateFontW(-32, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                 OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+                                DEFAULT_PITCH | FF_DONTCARE, L"Selawik Semilight");
 
     ZeroMemory(&Class, sizeof(Class));
     Class.cbSize = sizeof(Class);

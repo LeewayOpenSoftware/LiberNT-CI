@@ -460,6 +460,9 @@ PostScenario(DWORD Scenario, DWORD Flags, PCWSTR User)
     ok(WluiStatePost(g_State, &Cmd, sizeof(Cmd)), "post RequestCredentials\n");
 }
 
+/* The host's power button control id (LUH_ID_POWER in ui.c); its text is localized. */
+#define LUH_TEST_ID_POWER 1902
+
 static HWND
 HostWindow(void)
 {
@@ -524,7 +527,7 @@ Test_Tiles(PCWSTR Exe, PCWSTR Endpoint, PSID Own, PCWSTR Trace)
             ok(TraceHas(Trace, "tiles ") && TraceHas(Trace, Needle), "logon: expected %lu tiles\n", Users + 1);
         }
         Window = HostWindow();
-        ok(Window != NULL && FindWindowExW(Window, NULL, L"BUTTON", L"Power") != NULL, "logon: no power button\n");
+        ok(Window != NULL && GetDlgItem(Window, LUH_TEST_ID_POWER) != NULL, "logon: no power button\n");
         EndTilesRun(Process, "logon");
     }
 
@@ -534,7 +537,7 @@ Test_Tiles(PCWSTR Exe, PCWSTR Endpoint, PSID Own, PCWSTR Trace)
     {
         Window = HostWindow();
         ok(Window != NULL, "no-power: host window not found\n");
-        ok(Window == NULL || FindWindowExW(Window, NULL, L"BUTTON", L"Power") == NULL, "no-power: power button shown\n");
+        ok(Window == NULL || GetDlgItem(Window, LUH_TEST_ID_POWER) == NULL, "no-power: power button shown\n");
         EndTilesRun(Process, "no-power");
     }
 
