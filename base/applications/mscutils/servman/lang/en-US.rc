@@ -336,3 +336,8 @@ BEGIN
     IDS_NOT_SAME_PASSWORD "The Passwords are not the same!"
     IDS_INVALID_PASSWORD "Enter a valid Password!"
 END
+
+STRINGTABLE
+BEGIN
+    IDS_SERVICE_LOGON_GRANTED "The account %s has been granted the Log On As A Service right."
+END

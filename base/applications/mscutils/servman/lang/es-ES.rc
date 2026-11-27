@@ -339,3 +339,8 @@ BEGIN
     IDS_NOT_SAME_PASSWORD "¡Las contraseñas introducidas no coinciden!"
     IDS_INVALID_PASSWORD "Introduzca una contraseña válida."
 END
+
+STRINGTABLE
+BEGIN
+    IDS_SERVICE_LOGON_GRANTED "Se ha concedido a la cuenta %s el derecho Iniciar sesión como servicio."
+END

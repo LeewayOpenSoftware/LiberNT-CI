@@ -8,6 +8,8 @@
 
 #include "precomp.h"
 
+#include <ntsecapi.h>
+
 #define NDEBUG
 #include <debug.h>
 
@@ -129,6 +131,69 @@ SetServiceAccount(
 }
 
 
+/* As the Windows Services snap-in: an account set here gets SeServiceLogonRight if it lacks it. */
+static
+VOID
+GrantServiceLogonRight(
+    HWND hwndDlg,
+    LPCWSTR lpAccountName)
+{
+    static SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
+    LSA_OBJECT_ATTRIBUTES ObjectAttributes;
+    LSA_HANDLE PolicyHandle;
+    LSA_UNICODE_STRING Right, *Rights = NULL;
+    BYTE SidBuffer[SECURITY_MAX_SID_SIZE];
+    WCHAR szDomain[256], szFormat[256], szMessage[512], szTitle[256];
+    DWORD cbSid = sizeof(SidBuffer), cchDomain = ARRAYSIZE(szDomain);
+    ULONG i, Count = 0, Rid;
+    SID_NAME_USE Use;
+    BOOL bHeld = FALSE;
+
+    if (!LookupAccountNameW(NULL, lpAccountName, SidBuffer, &cbSid, szDomain, &cchDomain, &Use))
+        return;
+
+    /* LocalSystem, LocalService and NetworkService need no right. */
+    if (*GetSidSubAuthorityCount(SidBuffer) == 1 &&
+        memcmp(GetSidIdentifierAuthority(SidBuffer), &NtAuthority, sizeof(NtAuthority)) == 0)
+    {
+        Rid = *GetSidSubAuthority(SidBuffer, 0);
+        if (Rid == SECURITY_LOCAL_SYSTEM_RID || Rid == SECURITY_LOCAL_SERVICE_RID || Rid == SECURITY_NETWORK_SERVICE_RID)
+            return;
+    }
+
+    ZeroMemory(&ObjectAttributes, sizeof(ObjectAttributes));
+    if (LsaOpenPolicy(NULL, &ObjectAttributes, POLICY_LOOKUP_NAMES | POLICY_CREATE_ACCOUNT, &PolicyHandle) != 0)
+        return;
+
+    if (LsaEnumerateAccountRights(PolicyHandle, SidBuffer, &Rights, &Count) == 0)
+    {
+        for (i = 0; i < Count; i++)
+        {
+            if (Rights[i].Length == sizeof(SE_SERVICE_LOGON_NAME) - sizeof(WCHAR) &&
+                _wcsnicmp(Rights[i].Buffer, SE_SERVICE_LOGON_NAME, Rights[i].Length / sizeof(WCHAR)) == 0)
+                bHeld = TRUE;
+        }
+        LsaFreeMemory(Rights);
+    }
+
+    if (!bHeld)
+    {
+        Right.Buffer = (PWSTR)SE_SERVICE_LOGON_NAME;
+        Right.Length = sizeof(SE_SERVICE_LOGON_NAME) - sizeof(WCHAR);
+        Right.MaximumLength = sizeof(SE_SERVICE_LOGON_NAME);
+        if (LsaAddAccountRights(PolicyHandle, SidBuffer, &Right, 1) == 0 &&
+            LoadStringW(GetModuleHandle(NULL), IDS_SERVICE_LOGON_GRANTED, szFormat, ARRAYSIZE(szFormat)) &&
+            LoadStringW(GetModuleHandle(NULL), IDS_APPNAME, szTitle, ARRAYSIZE(szTitle)))
+        {
+            StringCchPrintfW(szMessage, ARRAYSIZE(szMessage), szFormat, lpAccountName);
+            MessageBoxW(hwndDlg, szMessage, szTitle, MB_OK | MB_ICONINFORMATION);
+        }
+    }
+
+    LsaClose(PolicyHandle);
+}
+
+
 static
 BOOL
 OnQueryInitialFocus(
@@ -205,6 +270,8 @@ OnApply(
     if (bRet == TRUE)
     {
         pLogonData->bAccountChanged = FALSE;
+        if (dwServiceType == SERVICE_NO_CHANGE)
+            GrantServiceLogonRight(hwndDlg, szAccountName);
 
     }
 
