@@ -410,6 +410,78 @@ const IRpcStubBufferVtbl CStdStubBuffer_Delegating_Vtbl =
     CStdStubBuffer_DebugServerRelease
 };
 
+/* The MIDL proxy/stub contract (api-ms-win-core-com-midlproxystub) names the
+ * delegating stub methods CStdStubBuffer2_*. */
+HRESULT WINAPI CStdStubBuffer2_QueryInterface(LPRPCSTUBBUFFER iface, REFIID riid, LPVOID *obj)
+{
+    return CStdStubBuffer_QueryInterface(iface, riid, obj);
+}
+
+HRESULT WINAPI CStdStubBuffer2_Connect(LPRPCSTUBBUFFER iface, LPUNKNOWN lpUnkServer)
+{
+    return CStdStubBuffer_Delegating_Connect(iface, lpUnkServer);
+}
+
+void WINAPI CStdStubBuffer2_Disconnect(LPRPCSTUBBUFFER iface)
+{
+    CStdStubBuffer_Delegating_Disconnect(iface);
+}
+
+ULONG WINAPI CStdStubBuffer2_CountRefs(LPRPCSTUBBUFFER iface)
+{
+    return CStdStubBuffer_Delegating_CountRefs(iface);
+}
+
+/* Async stub buffers share the synchronous object layout. COM does not create
+ * async stubs yet (no ICallFactory), so only the lifetime methods are real. */
+HRESULT WINAPI CStdAsyncStubBuffer_QueryInterface(LPRPCSTUBBUFFER iface, REFIID riid, LPVOID *obj)
+{
+    return CStdStubBuffer_QueryInterface(iface, riid, obj);
+}
+
+ULONG WINAPI CStdAsyncStubBuffer_AddRef(LPRPCSTUBBUFFER iface)
+{
+    return CStdStubBuffer_AddRef(iface);
+}
+
+ULONG WINAPI CStdAsyncStubBuffer_Release(LPRPCSTUBBUFFER iface)
+{
+    return NdrCStdStubBuffer_Release(iface, impl_from_IRpcStubBuffer(iface)->pPSFactory);
+}
+
+HRESULT WINAPI CStdAsyncStubBuffer_Connect(LPRPCSTUBBUFFER iface, LPUNKNOWN lpUnkServer)
+{
+    return CStdStubBuffer_Connect(iface, lpUnkServer);
+}
+
+void WINAPI CStdAsyncStubBuffer_Disconnect(LPRPCSTUBBUFFER iface)
+{
+    CStdStubBuffer_Disconnect(iface);
+}
+
+HRESULT WINAPI CStdAsyncStubBuffer_Invoke(LPRPCSTUBBUFFER iface, PRPCOLEMESSAGE pMsg,
+                                          LPRPCCHANNELBUFFER pChannel)
+{
+    FIXME("(%p)->Invoke(%p,%p): async calls are not supported
+", iface, pMsg, pChannel);
+    return E_NOTIMPL;
+}
+
+ULONG WINAPI CStdAsyncStubBuffer2_Release(LPRPCSTUBBUFFER iface)
+{
+    return NdrCStdStubBuffer2_Release(iface, impl_from_IRpcStubBuffer(iface)->pPSFactory);
+}
+
+HRESULT WINAPI CStdAsyncStubBuffer2_Connect(LPRPCSTUBBUFFER iface, LPUNKNOWN lpUnkServer)
+{
+    return CStdStubBuffer_Delegating_Connect(iface, lpUnkServer);
+}
+
+void WINAPI CStdAsyncStubBuffer2_Disconnect(LPRPCSTUBBUFFER iface)
+{
+    CStdStubBuffer_Delegating_Disconnect(iface);
+}
+
 const MIDL_SERVER_INFO *CStdStubBuffer_GetServerInfo(IRpcStubBuffer *iface)
 {
     CStdStubBuffer *stub = impl_from_IRpcStubBuffer(iface);
