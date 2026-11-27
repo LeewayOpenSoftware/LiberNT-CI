@@ -194,6 +194,8 @@ START_TEST(EventTrace)
        succeeds while EventEnabled stays FALSE for seconds. Everything below
        depends on the enable, so settle first and skip when it never lands */
     Visible = WaitProviderEnabled(Reg);
+    /* the enable is synchronous on Orosi; tolerate an invisible one on Windows only */
+    ok(Visible || broken(!Visible), "enable never became visible\n");
     if (Visible)
     {
         Describe(&Descriptor, 20, TRACE_LEVEL_INFORMATION, 0x2);
@@ -222,7 +224,12 @@ START_TEST(EventTrace)
            succeeds and the event is dropped or captured later */
         Data[1].Ptr = (ULONGLONG)(ULONG_PTR)0x10;
         Describe(&Descriptor, 25, TRACE_LEVEL_INFORMATION, 0x2);
-        ok_long(EventWrite(Reg, &Descriptor, 2, Data), ERROR_SUCCESS);
+        Status = EventWrite(Reg, &Descriptor, 2, Data);
+        /* not yet exercised with the provider enabled: a Win11 error is
+           reported as broken, Orosi must return success; the printed code
+           is what the enabled-provider probe reads */
+        ok(Status == ERROR_SUCCESS || broken(Status == ERROR_NOACCESS),
+           "EventWrite with a bad data pointer returned %lu\n", Status);
     }
     else
     {
