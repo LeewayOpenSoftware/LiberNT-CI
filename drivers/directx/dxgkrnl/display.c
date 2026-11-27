@@ -3378,21 +3378,28 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
      * display over right after the first successful mode set and before any
      * present.  The check keeps the later ownership notifications (adapter
      * start, POSTDISPLAY reassert) idempotent.
+     *
+     * A commit of the POST size keeps the boot display: inbv keeps drawing
+     * the spinner until win32k shows its first window.  This relies on the
+     * BasicDisplay platform (softgpu root) offering one mode per size, the
+     * current one at the POST pitch, so that commit sets no mode and clears
+     * nothing.  A platform with several pitches for one size must release.
      */
     if (!TopologyEmpty &&
         Adapter->IsBasicDisplayFallback &&
-        InbvCheckDisplayOwnership() &&
-        (NewCommittedWidth != Adapter->PostDisplayWidth || NewCommittedHeight != Adapter->PostDisplayHeight))
+        InbvCheckDisplayOwnership())
     {
-        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: adapter %p mode %lux%lu committed, releasing the boot display\n",
-                     Adapter, NewCommittedWidth, NewCommittedHeight);
-        InbvNotifyDisplayOwnershipLost(NULL);
-    }
-    else if (!TopologyEmpty && Adapter->IsBasicDisplayFallback && InbvCheckDisplayOwnership())
-    {
-        /* The boot mode itself: inbv keeps drawing the spinner until win32k shows its first window. */
-        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: adapter %p keeps the boot display at %lux%lu\n",
-                      Adapter, NewCommittedWidth, NewCommittedHeight);
+        if (NewCommittedWidth != Adapter->PostDisplayWidth || NewCommittedHeight != Adapter->PostDisplayHeight)
+        {
+            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: adapter %p mode %lux%lu committed, releasing the boot display\n",
+                          Adapter, NewCommittedWidth, NewCommittedHeight);
+            InbvNotifyDisplayOwnershipLost(NULL);
+        }
+        else
+        {
+            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: adapter %p keeps the boot display at %lux%lu\n",
+                          Adapter, NewCommittedWidth, NewCommittedHeight);
+        }
     }
 
     /* The monitor on each committed target may be a different one. */
