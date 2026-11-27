@@ -162,6 +162,8 @@ int main(void)
             continue;
         }
         CHECK((Info.Flags & EX_POOL_BLOCK_QUOTA) != 0 && ExpPoolQuotaProcess(Block, Info.Trailer) == &TestProcess);
+        /* The trailer is stored encoded, so the raw word must differ from the plain process pointer. */
+        CHECK(Info.Trailer != (ULONG_PTR)&TestProcess);
         CHECK(TestProcess.References == 1 && TestProcess.Quota[0] == Info.Size);
         ExReturnPoolQuota(Block);
         CHECK(TestProcess.References == 0 && TestProcess.Quota[0] == 0);

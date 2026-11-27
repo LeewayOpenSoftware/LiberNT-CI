@@ -375,6 +375,9 @@ int main(int argc, char **argv)
     const char *Area = (argc > 1) ? argv[1] : "";
     int Status = 1;
 
+    SystemProcess.Pcb.Header.Type = ProcessObject;
+    TestProcess.Pcb.Header.Type = ProcessObject;
+
     if (!Setup(strcmp(Area, "smp") == 0 ? SMP_THREADS : 1,
                strcmp(Area, "contend") == 0 ? CONTEND_SHARED : SHARED_BYTES))
         return 1;
