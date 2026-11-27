@@ -22,10 +22,10 @@
 static const GUID TestProvider = { 0x2f9b6c11, 0x8d3e, 0x4a75, { 0xb1, 0x40, 0x6e, 0x27, 0x93, 0x5c, 0x0a, 0xd8 } };
 
 /* the enable notification the session sends, recorded for the diagnosis */
-static ULONG CallbackSeen;
-static ULONG CallbackIsEnabled;
-static UCHAR CallbackLevel;
-static ULONGLONG CallbackMatchAny;
+static volatile ULONG CallbackSeen;
+static volatile ULONG CallbackIsEnabled;
+static volatile UCHAR CallbackLevel;
+static volatile ULONGLONG CallbackMatchAny;
 
 static VOID WINAPI
 TestEnableCallback(
@@ -256,10 +256,6 @@ START_TEST(EventTrace)
            is what the enabled-provider probe reads */
         ok(Status == ERROR_SUCCESS || broken(Status == ERROR_NOACCESS),
            "EventWrite with a bad data pointer returned %lu\n", Status);
-    }
-    else
-    {
-        skip("session enable did not become visible in this environment\n");
     }
 
     ResetProperties(Properties, Size, Path);
