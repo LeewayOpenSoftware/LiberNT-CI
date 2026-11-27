@@ -2147,6 +2147,9 @@ IntPaintDesktopContent(HDC hDC)
         DesktopBrush = (HBRUSH)WndDesktop->pcls->hbrBackground;
         if (DesktopBrush && DesktopBrush <= (HBRUSH)(COLOR_MENUBAR + 1))
             DesktopBrush = IntGetSysColorBrush(HandleToUlong(DesktopBrush) - 1);
+        /* Around the boot screen the margin stays black, as dxgkrnl presented it. */
+        if (gspv.hbmWallpaper != NULL && gspv.bBootScreenWallpaper)
+            DesktopBrush = StockObjects[BLACK_BRUSH];
 
         if ((gspv.hbmWallpaper == NULL ||
              (gspv.WallpaperMode != wmStretch &&

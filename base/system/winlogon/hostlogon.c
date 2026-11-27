@@ -1331,6 +1331,7 @@ WlHlEnsureHost(
     Launch = WlHostStart(Scenario ? Scenario : WLHL_CPUS_LOGON, &Terminal, &Reason);
     if (Launch == NULL)
     {
+        WlBootSpinnerStop();
         if (Terminal)
             WlHlShowTerminal(Reason);
         return FALSE;
@@ -1351,6 +1352,8 @@ WlHlEnsureHost(
         LogonStage("host-not-ready");
         WARN("WL: logon UI not ready after %lu ms, continuing anyway\n", ReadyMs);
     }
+    /* The first host reports ready once it has faded in over the boot spinner. */
+    WlBootSpinnerStop();
     if (Scenario != 0)
         WlHlPost(WluiCmdRequestCredentials, Scenario, Flags, 0, 0, Prefill[0] ? Prefill : NULL, NULL);
     return TRUE;
@@ -2238,6 +2241,7 @@ WlHostWaitDesktopSwitch(
 VOID
 WlHostBeforeDesktopSwitch(VOID)
 {
+    WlBootSpinnerStop();
     if (!WlHlHostLive())
         return;
     WlHlPost(WluiCmdReadyForDesktopSwitch, g_HostScenario, 0, 0, 0, NULL, NULL);
