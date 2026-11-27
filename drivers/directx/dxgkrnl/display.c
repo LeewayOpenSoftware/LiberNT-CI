@@ -3381,11 +3381,18 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
      */
     if (!TopologyEmpty &&
         Adapter->IsBasicDisplayFallback &&
-        InbvCheckDisplayOwnership())
+        InbvCheckDisplayOwnership() &&
+        (NewCommittedWidth != Adapter->PostDisplayWidth || NewCommittedHeight != Adapter->PostDisplayHeight))
     {
         DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: adapter %p mode %lux%lu committed, releasing the boot display\n",
                      Adapter, NewCommittedWidth, NewCommittedHeight);
         InbvNotifyDisplayOwnershipLost(NULL);
+    }
+    else if (!TopologyEmpty && Adapter->IsBasicDisplayFallback && InbvCheckDisplayOwnership())
+    {
+        /* The boot mode itself: inbv keeps drawing the spinner until win32k shows its first window. */
+        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: adapter %p keeps the boot display at %lux%lu\n",
+                      Adapter, NewCommittedWidth, NewCommittedHeight);
     }
 
     /* The monitor on each committed target may be a different one. */
