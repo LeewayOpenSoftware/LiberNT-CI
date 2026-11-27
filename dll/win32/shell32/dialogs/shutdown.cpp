@@ -125,3 +125,93 @@ ShellSaveShutdownSelState(_In_ DWORD State)
                    (const BYTE *)&State, sizeof(State));
     RegCloseKey(hKey);
 }
+
+/* --- The classic "Shut Down Windows" dialog (on Vista+ it lives in shell32). --- */
+
+struct SHUTDOWN_DLG_CTX
+{
+    DWORD Options;
+    DWORD Selected;
+};
+
+static VOID
+ShutdownAddChoice(HWND hCombo, UINT StringId, DWORD Code, const SHUTDOWN_DLG_CTX *Ctx)
+{
+    WCHAR szText[128];
+    int iIndex;
+
+    if (!(Ctx->Options & Code))
+        return;
+    if (!LoadStringW(shell32_hInstance, StringId, szText, _countof(szText)))
+        return;
+
+    iIndex = (int)SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)szText);
+    if (iIndex < 0)
+        return;
+    SendMessageW(hCombo, CB_SETITEMDATA, iIndex, (LPARAM)Code);
+    if (Code == Ctx->Selected)
+        SendMessageW(hCombo, CB_SETCURSEL, iIndex, 0);
+}
+
+static INT_PTR CALLBACK
+ShutdownDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    SHUTDOWN_DLG_CTX *Ctx;
+    HWND hCombo;
+
+    switch (uMsg)
+    {
+        case WM_INITDIALOG:
+            Ctx = (SHUTDOWN_DLG_CTX *)lParam;
+            SetWindowLongPtrW(hDlg, DWLP_USER, (LONG_PTR)Ctx);
+            hCombo = GetDlgItem(hDlg, IDC_SHUTDOWN_ACTION);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_LOGOFF, WLX_SHUTDOWN_STATE_LOGOFF, Ctx);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_POWEROFF, WLX_SHUTDOWN_STATE_POWER_OFF, Ctx);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_REBOOT, WLX_SHUTDOWN_STATE_REBOOT, Ctx);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_SLEEP, WLX_SHUTDOWN_STATE_SLEEP, Ctx);
+            ShutdownAddChoice(hCombo, IDS_SHUTDOWN_HIBERNATE, WLX_SHUTDOWN_STATE_HIBERNATE, Ctx);
+            if (SendMessageW(hCombo, CB_GETCURSEL, 0, 0) == CB_ERR)
+                SendMessageW(hCombo, CB_SETCURSEL, 0, 0);
+            return TRUE;
+
+        case WM_COMMAND:
+            switch (LOWORD(wParam))
+            {
+                case IDOK:
+                {
+                    int iSel;
+                    Ctx = (SHUTDOWN_DLG_CTX *)GetWindowLongPtrW(hDlg, DWLP_USER);
+                    hCombo = GetDlgItem(hDlg, IDC_SHUTDOWN_ACTION);
+                    iSel = (int)SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
+                    Ctx->Selected = (iSel == CB_ERR) ? 0 :
+                        (DWORD)SendMessageW(hCombo, CB_GETITEMDATA, iSel, 0);
+                    EndDialog(hDlg, IDOK);
+                    return TRUE;
+                }
+                case IDCANCEL:
+                    EndDialog(hDlg, IDCANCEL);
+                    return TRUE;
+            }
+            break;
+    }
+    return FALSE;
+}
+
+DWORD
+ShellShutdownWindowsDialog(HWND hWndOwner, DWORD dwExcludeOptions)
+{
+    SHUTDOWN_DLG_CTX Ctx;
+
+    Ctx.Options = ShellGetAllowedShutdownOptions() & ~dwExcludeOptions;
+    Ctx.Selected = ShellLoadShutdownSelState();
+    if (Ctx.Options == 0)
+        return 0;
+
+    if (DialogBoxParamW(shell32_hInstance, MAKEINTRESOURCEW(IDD_SHUTDOWN),
+                        hWndOwner, ShutdownDlgProc, (LPARAM)&Ctx) != IDOK)
+        return 0;
+
+    if (Ctx.Selected != 0)
+        ShellSaveShutdownSelState(Ctx.Selected);
+    return Ctx.Selected;
+}

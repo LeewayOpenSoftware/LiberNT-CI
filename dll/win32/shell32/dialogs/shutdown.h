@@ -25,3 +25,9 @@ VOID  ShellSaveShutdownSelState(DWORD State);
 
 /* HKLM policy value trumps HKCU, under the same sub-key. */
 LONG  ShellGetPolicyDWORD(PCWSTR pPolicyKey, PCWSTR ValueName, PDWORD pValue);
+
+/* The classic "Shut Down Windows" dialog. Returns the chosen
+   WLX_SHUTDOWN_STATE_* code (0x01/0x02/0x04/0x10/0x40), or 0 if cancelled or
+   nothing is allowed. dwExcludeOptions masks choices out
+   (e.g. ~(DWORD)WLX_SHUTDOWN_STATE_LOGOFF for a logoff-only prompt). */
+DWORD ShellShutdownWindowsDialog(HWND hWndOwner, DWORD dwExcludeOptions);

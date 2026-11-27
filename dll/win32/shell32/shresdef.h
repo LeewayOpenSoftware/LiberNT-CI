@@ -81,6 +81,11 @@
 #define IDS_RESTART_PROMPT  41
 #define IDS_SHUTDOWN_TITLE  42
 #define IDS_SHUTDOWN_PROMPT 43
+#define IDS_SHUTDOWN_LOGOFF    78
+#define IDS_SHUTDOWN_POWEROFF  79
+#define IDS_SHUTDOWN_REBOOT    80
+#define IDS_SHUTDOWN_SLEEP     81
+#define IDS_SHUTDOWN_HIBERNATE 82
 
 #define IDS_PROGRAMS             45
 #define IDS_FAVORITES            47
@@ -615,6 +620,7 @@
 #define IDC_SHORTCUT_FIND                   14020
 #define IDC_SHORTCUT_CHANGE_ICON            14021
 #define IDC_SHORTCUT_ADVANCED               14022
+#define IDC_SHUTDOWN_ACTION                 14100
 
 /* Control IDs for IDD_SHORTCUT_EXTENDED_PROPERTIES dialog */
 #define IDC_SHORTEX_RUN_DIFFERENT           14000
@@ -656,6 +662,7 @@
 #define IDD_ACTION       37
 #define IDD_FOLDER_CUSTOMIZE    38
 #define IDD_LINK_PROBLEM 39
+#define IDD_SHUTDOWN     40
 
 /* Control IDs for IDD_FOLDER_CUSTOMIZE dialog */
 #define IDC_FOLDERCUST_COMBOBOX             14001
