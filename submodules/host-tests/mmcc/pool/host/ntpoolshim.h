@@ -44,7 +44,7 @@ typedef struct _EPROCESS { SHIM_KPROCESS Pcb; SIZE_T Quota[2]; LONG References; 
 typedef union _SHIM_LARGE_INTEGER { struct { ULONG LowPart; LONG HighPart; }; long long QuadPart; } LARGE_INTEGER, *PLARGE_INTEGER;
 #define KOBJECT_TYPE_MASK 0x7F
 #define ProcessObject 3
-#define BAD_POOL_HEADER 0x19
+/* BAD_POOL_HEADER is provided by poolhost.h (single definition). */
 #ifndef MEMORY_ALLOCATION_ALIGNMENT
 #define MEMORY_ALLOCATION_ALIGNMENT 16
 #endif
