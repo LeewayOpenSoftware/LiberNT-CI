@@ -675,6 +675,7 @@ PsGetSiloContainerId(
 
 /* INITIALIZATION ************************************************************/
 
+CODE_SEG("INIT")
 VOID
 NTAPI
 PsSiloInitialize(VOID)
