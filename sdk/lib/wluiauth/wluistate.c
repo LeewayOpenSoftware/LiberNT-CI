@@ -178,17 +178,20 @@ WluiStateSetReady(
     SetEvent(State->ReadyEvent);
 }
 
-VOID
+BOOL
 NTAPI
 WluiStateSetShown(
     _In_ PWLUI_LAUNCH_STATE State,
     _In_ DWORD Sequence)
 {
+    if (Sequence == 0 || Sequence > (DWORD)InterlockedCompareExchange(&State->SequenceCounter, 0, 0))
+        return FALSE;
     EnterCriticalSection(&State->Lock);
     if (Sequence > State->ShownSequence)
         State->ShownSequence = Sequence;
     LeaveCriticalSection(&State->Lock);
     SetEvent(State->ShownEvent);
+    return TRUE;
 }
 
 BOOL

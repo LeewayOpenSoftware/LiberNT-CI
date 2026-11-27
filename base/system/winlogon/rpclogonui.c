@@ -414,8 +414,7 @@ WluiCommandShown(
         return Error;
 
     /* Only a sequence that was actually handed out counts (the caller is untrusted input). */
-    if (Sequence != 0 && Sequence <= (DWORD)State->SequenceCounter)
-        WluiStateSetShown(State, Sequence);
+    Error = WluiStateSetShown(State, Sequence) ? ERROR_SUCCESS : ERROR_INVALID_PARAMETER;
     WluiStateRelease(State);
-    return ERROR_SUCCESS;
+    return Error;
 }
