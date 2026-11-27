@@ -8,7 +8,7 @@
 
 /*
  * NOTE:
- * ThemeWaitForServiceReady and ThemeWatchForStart are called from msgina
+ * ThemeWaitForServiceReady and ThemeWatchForStart are called from winlogon
  * so all the functions in this file run in the context of winlogon
  */
 
