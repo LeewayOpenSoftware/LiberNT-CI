@@ -19,5 +19,5 @@ BEGIN
     IDS_LUH_CONTACT_ADMIN   "Póngase en contacto con el administrador."
     IDS_LUH_SIGNIN_FAILED   "No se pudo completar el inicio de sesión. Inténtelo de nuevo."
     IDS_LUH_PLEASE_WAIT     "Espere"
-    IDS_LUH_WELCOME         "Bienvenido"
+    IDS_LUH_WELCOME         "Te damos la bienvenida"
 END
