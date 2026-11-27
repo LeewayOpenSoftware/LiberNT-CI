@@ -103,6 +103,8 @@ static VOID CheckAllocation(PVOID Block, SIZE_T Size, BOOLEAN Execute, BOOLEAN Z
 
 int main(void)
 {
+    SystemProcess.Pcb.Header.Type = ProcessObject;
+    TestProcess.Pcb.Header.Type = ProcessObject;
     const SIZE_T Sizes[] = { 32, 160, PAGE_SIZE, PAGE_SIZE * 17, POOL_UNIT_SIZE * 2 };
     POOL_TAG_USAGE Usage;
     CHECK(posix_memalign((void **)&Arena, POOL_UNIT_SIZE, ARENA_BYTES) == 0);
@@ -159,7 +161,7 @@ int main(void)
             ExFreePoolWithTag(Block, TAG_TEST);
             continue;
         }
-        CHECK((Info.Flags & EX_POOL_BLOCK_QUOTA) != 0 && Info.Trailer == (ULONG_PTR)&TestProcess);
+        CHECK((Info.Flags & EX_POOL_BLOCK_QUOTA) != 0 && ExpPoolQuotaProcess(Block, Info.Trailer) == &TestProcess);
         CHECK(TestProcess.References == 1 && TestProcess.Quota[0] == Info.Size);
         ExReturnPoolQuota(Block);
         CHECK(TestProcess.References == 0 && TestProcess.Quota[0] == 0);

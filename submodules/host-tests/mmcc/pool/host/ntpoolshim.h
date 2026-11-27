@@ -40,7 +40,10 @@ typedef struct _POOL_EXTENDED_PARAMETER
 typedef const POOL_EXTENDED_PARAMETER *PCPOOL_EXTENDED_PARAMETER;
 typedef struct _SHIM_DISPATCHER_HEADER { UCHAR Type; } SHIM_DISPATCHER_HEADER;
 typedef struct _SHIM_KPROCESS { SHIM_DISPATCHER_HEADER Header; } SHIM_KPROCESS;
-typedef struct _EPROCESS { SHIM_KPROCESS Pcb; SIZE_T Quota[2]; LONG References; } EPROCESS, *PEPROCESS, *PKPROCESS;
+/* 16 == MEMORY_ALLOCATION_ALIGNMENT: a pooled EPROCESS is unit-aligned; the
+   quota decode validates that alignment on the recovered process pointer. */
+typedef struct _EPROCESS { SHIM_KPROCESS Pcb; SIZE_T Quota[2]; LONG References; }
+    __attribute__((aligned(16))) EPROCESS, *PEPROCESS, *PKPROCESS;
 typedef union _SHIM_LARGE_INTEGER { struct { ULONG LowPart; LONG HighPart; }; long long QuadPart; } LARGE_INTEGER, *PLARGE_INTEGER;
 #define KOBJECT_TYPE_MASK 0x7F
 #define ProcessObject 3
