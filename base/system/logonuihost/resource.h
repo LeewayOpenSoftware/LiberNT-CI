@@ -32,5 +32,6 @@
 #define IDS_LUH_ACCOUNT_RESTRICTED  122
 #define IDS_LUH_LOCKED_OUT          123
 #define IDS_LUH_CAPS_LOCK           124
+#define IDS_LUH_OK                  125
 
-#define IDS_LUH_LAST                IDS_LUH_CAPS_LOCK
+#define IDS_LUH_LAST                IDS_LUH_OK

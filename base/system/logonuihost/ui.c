@@ -20,7 +20,14 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_TIMER_STARTUP   4   /* a page must arrive within the provider call bound */
 #define LUH_TIMER_CLOCK     5   /* the curtain's clock, only while the curtain is up */
 #define LUH_SPINNER_MS      16      /* a frame at 60 Hz; the phase comes from the clock */
-#define LUH_SPINNER_PERIOD  1200    /* ms per turn */
+#define LUH_SPINNER_PERIOD  2000    /* ms per cycle of the chasing dots */
+#define LUH_SPINNER_DOTS    6
+#define LUH_SPINNER_RING    28      /* ring radius at 96 DPI */
+#define LUH_STATUS_DOTS_DY  (-34)   /* black status page: dots and text, from the centre (Win11 shots) */
+#define LUH_STATUS_TEXT_DY  53
+#define LUH_RESULT_TEXT_DY  35      /* result in place of the fields: from the first box top */
+#define LUH_RESULT_OK_DY    82
+#define LUH_WELCOME_TEXT_DY 52      /* in-place Welcome: text under the dots */
 
 #define LUH_ID_FIELD_BASE   1000
 #define LUH_ID_RESTART      1900
@@ -28,6 +35,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(logonuihost);
 #define LUH_ID_POWER        1902    /* the power button: a menu of LUH_ID_RESTART and LUH_ID_SHUTDOWN */
 #define LUH_ID_OPTION_BASE  1920    /* + row of the Ctrl+Alt+Del options (LuhOptionRows) */
 #define LUH_ID_OPTION_CANCEL 1930
+#define LUH_ID_RESULT_OK    1931    /* the OK under a result shown in place of the fields */
 #define LUH_POWER_WIDTH     120
 #define LUH_ID_TILE_BASE    2000    /* + tile index, below LUH_ID_TILE_BASE + LUH_MAX_TILES */
 
@@ -118,6 +126,12 @@ typedef struct _LUH_UI
     RECT Eye;
     BOOL HasText;           /* the arrow box is not empty: the eye shows */
     BOOL Revealing;         /* the eye is held down */
+    BOOL CurtainFadeIn;     /* the lock curtain still has to come up from black */
+    BOOL FadeInPosted;
+    BOOL SignInBusy;        /* submitted: dots and Welcome stand where the fields were */
+    BOOL ResultUp;          /* a refused sign-in: its message and OK stand where the fields were */
+    HWND OkButton;
+    HFONT StatusFont;       /* Welcome, Signing out on the black status page */
     WCHAR PasswordChar;     /* the revealed edit's own mask character, put back after the reveal */
     BOOL NoReveal;          /* policy: "Do not display the password reveal button" */
     LONG SpinnerY;          /* the spinner's centre under the text in Still */
@@ -272,6 +286,13 @@ LuhDestroyPage(void)
         ReleaseCapture();
     g_Ui.Revealing = FALSE;
     g_Ui.HasText = FALSE;
+    g_Ui.SignInBusy = FALSE;
+    g_Ui.ResultUp = FALSE;
+    if (g_Ui.OkButton)
+    {
+        DestroyWindow(g_Ui.OkButton);
+        g_Ui.OkButton = NULL;
+    }
     g_Ui.ArrowField = (DWORD)-1;
     g_Ui.NameField = (DWORD)-1;
     if (g_Ui.BoxBrush)
@@ -763,10 +784,32 @@ LuhComposeSignIn(
                         Field->Value[0] ? Field->Value : Field->Label, &Field->Box,
                         DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, White, 255);
         }
-        else if ((Field->Type == CPFT_EDIT_TEXT || Field->Type == CPFT_PASSWORD_TEXT) && Field->Control)
+        else if ((Field->Type == CPFT_EDIT_TEXT || Field->Type == CPFT_PASSWORD_TEXT) && Field->Control &&
+                 !g_Ui.SignInBusy && !g_Ui.ResultUp)
         {
             LuhDrawBox(Surface, i);
         }
+    }
+
+    if (g_Ui.SignInBusy || g_Ui.ResultUp)
+    {
+        /* In place of the fields: the dots and Welcome, or the result above its OK. */
+        if (g_Ui.SignInBusy)
+        {
+            g_Ui.SpinnerY = g_Ui.PageTop + LuhPx(LUH_BOX_HEIGHT) / 2;
+            SetRect(&Rect, 0, g_Ui.SpinnerY + LuhPx(LUH_WELCOME_TEXT_DY) - LuhPx(16), Client->right,
+                    g_Ui.SpinnerY + LuhPx(LUH_WELCOME_TEXT_DY) + LuhPx(16));
+            LuhDrawText(Surface, g_Ui.TextFont, LuhText(IDS_LUH_WELCOME), &Rect,
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, White, 255);
+        }
+        else
+        {
+            SetRect(&Rect, Cx - LuhPx(LUH_DETAIL_WIDTH) / 2, g_Ui.PageTop + LuhPx(LUH_RESULT_TEXT_DY) - LuhPx(24),
+                    Cx + LuhPx(LUH_DETAIL_WIDTH) / 2, g_Ui.PageTop + LuhPx(LUH_RESULT_OK_DY) - LuhPx(8));
+            LuhDrawText(Surface, g_Ui.TextFont, g_Ui.Detail, &Rect, DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_END_ELLIPSIS,
+                        White, 255);
+        }
+        return;
     }
 
     if (g_Ui.Detail[0] != UNICODE_NULL)
@@ -813,6 +856,99 @@ LuhReveal(
         SetCapture(Window);
     else if (GetCapture() == Window)
         ReleaseCapture();
+}
+
+static void LuhFocusForRetry(void);
+
+/* The page's input controls (boxes, Sign in, links, check boxes), shown or hidden together. */
+static void
+LuhShowFields(
+    _In_ BOOL Show)
+{
+    DWORD i;
+
+    if (g_Ui.Page == NULL)
+        return;
+    for (i = 0; i < g_Ui.Page->Count; i++)
+        if (g_Ui.Page->Fields[i].Control)
+            ShowWindow(g_Ui.Page->Fields[i].Control, Show ? SW_SHOW : SW_HIDE);
+    if (g_Ui.CancelButton)
+        ShowWindow(g_Ui.CancelButton, Show ? SW_SHOW : SW_HIDE);
+}
+
+/* A refused sign-in, as Windows 11 shows it: the message where the fields were, and OK under it. */
+static void
+LuhShowResult(
+    _In_ HWND Window,
+    _In_ PCWSTR Text)
+{
+    RECT Client;
+
+    LuhReveal(Window, FALSE);
+    if (Text != g_Ui.Detail)
+        StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Text);
+    g_Ui.SignInBusy = FALSE;
+    g_Ui.ResultUp = TRUE;
+    LuhShowFields(FALSE);
+    if (g_Ui.OkButton == NULL)
+    {
+        GetClientRect(Window, &Client);
+        g_Ui.OkButton = CreateWindowExW(0, L"BUTTON", LuhText(IDS_LUH_OK),
+                                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                                        Client.right / 2 - LuhPx(LUH_PILL_WIDTH) / 2,
+                                        g_Ui.PageTop + LuhPx(LUH_RESULT_OK_DY), LuhPx(LUH_PILL_WIDTH),
+                                        LuhPx(LUH_PILL_HEIGHT), Window, (HMENU)LUH_ID_RESULT_OK, NULL, NULL);
+    }
+    if (g_Ui.OkButton)
+        SetFocus(g_Ui.OkButton);
+    LuhUpdateCapsLock(Window);
+    LuhPageChanged(Window);
+}
+
+/* OK, Enter or Esc: the fields come back, the keyboard goes to the cleared password. */
+static void
+LuhDismissResult(
+    _In_ HWND Window)
+{
+    if (!g_Ui.ResultUp)
+        return;
+    g_Ui.ResultUp = FALSE;
+    g_Ui.Detail[0] = UNICODE_NULL;
+    if (g_Ui.OkButton)
+    {
+        DestroyWindow(g_Ui.OkButton);
+        g_Ui.OkButton = NULL;
+    }
+    LuhShowFields(TRUE);
+    LuhFocusForRetry();
+    LuhUpdateCapsLock(Window);
+    LuhPageChanged(Window);
+}
+
+/*
+ * Status without a page (Welcome after the hand-over, Signing out, Please wait): black, the
+ * dots above the centre and the text under them, as on the Windows 11 shots.
+ */
+static void
+LuhComposeStatus(
+    _Inout_ PLUH_SURFACE Surface,
+    _In_ const RECT *Client)
+{
+    LONG Cy = Client->bottom / 2;
+    RECT Rect;
+
+    LuhFillRect(Surface, Client, RGB(0, 0, 0), 255);
+    g_Ui.SpinnerY = Cy + LuhPx(LUH_STATUS_DOTS_DY);
+    SetRect(&Rect, 0, Cy + LuhPx(LUH_STATUS_TEXT_DY) - LuhPx(20), Client->right, Cy + LuhPx(LUH_STATUS_TEXT_DY) + LuhPx(20));
+    LuhDrawText(Surface, g_Ui.StatusFont, g_Ui.Title, &Rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
+                RGB(255, 255, 255), 255);
+    if (g_Ui.Detail[0] != UNICODE_NULL)
+    {
+        SetRect(&Rect, Client->right / 2 - LuhPx(LUH_DETAIL_WIDTH) / 2, Rect.bottom + LuhPx(8),
+                Client->right / 2 + LuhPx(LUH_DETAIL_WIDTH) / 2, Rect.bottom + LuhPx(64));
+        LuhDrawText(Surface, g_Ui.TextFont, g_Ui.Detail, &Rect, DT_CENTER | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS,
+                    RGB(255, 255, 255), 255);
+    }
 }
 
 /* Lays the page out as on Windows 11: avatar and name, then the fields in drawn boxes. */
@@ -1168,16 +1304,19 @@ LuhSubmit(
     switch (Result)
     {
         case LuhSubmitSent:
-            StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Status);
+            /* Windows 11: the fields give way to the dots and Welcome, on the same picture. */
+            LuhTrace("submit-status", Status);
+            g_Ui.Detail[0] = UNICODE_NULL;
+            LuhShowFields(FALSE);
+            g_Ui.SignInBusy = TRUE;
             LuhSetSpinner(Window, TRUE);
             break;                          /* ReportResult will re-enable the page */
         case LuhSubmitNotFinished:
         case LuhSubmitFailed:
         case LuhSubmitRefused:
-            StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail),
-                           Status[0] ? Status : LuhText(IDS_LUH_SIGNIN_FAILED));
             LuhClearSecrets();
             LuhEnablePage(TRUE);
+            LuhShowResult(Window, Status[0] ? Status : LuhText(IDS_LUH_SIGNIN_FAILED));
             break;
         case LuhSubmitProviderGone:
             goto ProviderGone;
@@ -1261,6 +1400,8 @@ LuhApplyFieldUpdate(
 #define LUH_SOFT_DARKEN     96      /* about 38 % black over the blurred wallpaper (Win11 shots) */
 #define LUH_LIFT_MS         350     /* a whole-screen lift; a partial one takes its share */
 #define LUH_LIFT_MIN_MS     120
+#define LUH_FADE_IN_MS      600     /* lock: the curtain comes up from black (Win11 lock-in frames) */
+#define WM_LUH_FADE_IN      (WM_APP + 16)
 #define LUH_LIFT_VELOCITY   0.6     /* pixels per millisecond upwards at release: a flick lifts */
 
 /*
@@ -1533,6 +1674,38 @@ LuhArmClock(
     SetTimer(Window, LUH_TIMER_CLOCK, (60 - Now.wSecond) * 1000 - Now.wMilliseconds + 50, NULL);
 }
 
+/* Lock: the curtain picture comes up from black over LUH_FADE_IN_MS, one constant-alpha blend a frame. */
+static void
+LuhFadeInCurtain(
+    _In_ HWND Window)
+{
+    LUH_ANIM Anim;
+    double T;
+    HDC Dc;
+
+    if (!g_Ui.Curtain || !g_Ui.CurtainFadeIn)
+        return;
+    LuhAnimStart(&Anim, "curtain-fade-in", LUH_FADE_IN_MS);
+    for (;;)
+    {
+        T = LuhAnimFrame(&Anim);
+        BitBlt(g_Ui.Back.Dc, 0, 0, g_Ui.Back.Width, g_Ui.Back.Height, NULL, 0, 0, BLACKNESS);
+        LuhBlend(&g_Ui.Back, 0, 0, &g_Ui.Face, (BYTE)(255.0 * LuhEaseOut(T)));
+        Dc = GetDC(Window);
+        if (Dc)
+        {
+            BitBlt(Dc, 0, 0, g_Ui.Back.Width, g_Ui.Back.Height, g_Ui.Back.Dc, 0, 0, SRCCOPY);
+            ReleaseDC(Window, Dc);
+        }
+        if (T >= 1.0)
+            break;
+        LuhAnimWait(&Anim);
+    }
+    LuhAnimEnd(&Anim);
+    g_Ui.CurtainFadeIn = FALSE;
+    InvalidateRect(Window, NULL, FALSE);
+}
+
 /* The curtain pulled up by Lift: its lower part at the top, the soft backdrop showing below it. */
 static void
 LuhBlitLift(
@@ -1636,6 +1809,9 @@ LuhShowCurtain(
 {
     g_Ui.Curtain = TRUE;
     g_Ui.Lift = 0;
+    /* On a lock Windows 11 shows black first, then fades the lock screen in. */
+    g_Ui.CurtainFadeIn = (g_Options.Scenario == CPUS_UNLOCK_WORKSTATION);
+    g_Ui.FadeInPosted = FALSE;
     LuhUpdateClock();
     LuhBuildFace();
     LuhArmClock(Window);
@@ -1785,9 +1961,9 @@ LuhHandleCommand(
             LuhDropCurtain(Window);
             LuhDestroyPage();
             StringCchCopyW(g_Ui.Title, ARRAYSIZE(g_Ui.Title), LuhText(IDS_LUH_WELCOME));
-            StringCchCopyW(g_Ui.Detail, ARRAYSIZE(g_Ui.Detail), Command->User);
+            g_Ui.Detail[0] = UNICODE_NULL;  /* Windows 11 shows Welcome alone */
             LuhSetSpinner(Window, TRUE);
-            LuhTrace("welcome", g_Ui.Detail);
+            LuhTrace("welcome", Command->User);
             InvalidateRect(Window, NULL, TRUE);
             break;
 
@@ -1804,10 +1980,17 @@ LuhHandleCommand(
             LuhSetSpinner(Window, FALSE);
             LuhClearSecrets();
             LuhEnablePage(TRUE);
-            LuhFocusForRetry();
-            LuhUpdateCapsLock(Window);  /* the focus moved without key input */
+            g_Ui.SignInBusy = FALSE;
             LuhTrace("result", g_Ui.Detail);
-            InvalidateRect(Window, NULL, TRUE);
+            if (g_Ui.Page)
+            {
+                LuhShowResult(Window, g_Ui.Detail);
+            }
+            else
+            {
+                LuhFocusForRetry();
+                LuhPageChanged(Window);
+            }
             break;
 
         case WluiCmdRequestCredentials:
@@ -1912,6 +2095,11 @@ LuhComposeStill(
         LuhComposeSignIn(Back, Client);
         return;
     }
+    if (!g_Ui.OptionsUp)
+    {
+        LuhComposeStatus(Back, Client);
+        return;
+    }
 
     /* A long account message wraps. Measure it first: it keeps its bottom edge (so the page
      * below never moves) and grows upwards, and the title moves up by the extra lines. */
@@ -1996,16 +2184,21 @@ LuhCompose(
            g_Ui.Still.Dc, Paint->left, Paint->top, SRCCOPY);
     if (g_Ui.Spinner)
     {
-        int Cx = Client->right / 2, Cy = g_Ui.SpinnerY;
         /* The phase follows the clock, so a late tick shows the right position, not a step behind. */
-        double Phase = fmod(LuhAnimElapsedMs(&g_Ui.SpinnerAnim), LUH_SPINNER_PERIOD) * 360.0 / LUH_SPINNER_PERIOD;
+        double Cycle = fmod(LuhAnimElapsedMs(&g_Ui.SpinnerAnim), LUH_SPINNER_PERIOD) / LUH_SPINNER_PERIOD;
 
         LuhAnimFrame(&g_Ui.SpinnerAnim);
-        for (i = 0; i < 8; i++)
+        /* Windows 11's ring of dots: each dot runs one eased lap a little behind the one before,
+         * so they bunch at the top and spread out on the way round. */
+        for (i = 0; i < LUH_SPINNER_DOTS; i++)
         {
-            double A = (Phase + i * 45) * 3.14159265 / 180.0;
-            LuhFillCircle(&g_Ui.Back, Cx + (LONG)(LuhPx(18) * cos(A)), Cy + (LONG)(LuhPx(18) * sin(A)), LuhPx(3),
-                          RGB(255, 255, 255), (BYTE)(60 + i * 24));
+            double U = Cycle - i * 0.07, A;
+
+            U -= floor(U);
+            A = (LuhEaseInOut(U) * 360.0 - 90.0) * 3.14159265358979 / 180.0;
+            LuhFillCircle(&g_Ui.Back, Client->right / 2 + (LONG)(LuhPx(LUH_SPINNER_RING) * cos(A)),
+                          g_Ui.SpinnerY + (LONG)(LuhPx(LUH_SPINNER_RING) * sin(A)), max(LuhPx(3), 2),
+                          RGB(255, 255, 255), 255);
         }
     }
 }
@@ -2038,8 +2231,21 @@ LuhPaint(
 
     if (g_Ui.Curtain)
     {
-        /* The curtain is one cached picture; mid-drag a repaint shows the same position. */
-        LuhBlitLift(Dc, g_Ui.Lift);
+        if (g_Ui.CurtainFadeIn)
+        {
+            /* The first frame is black; the fade runs once that frame is out. */
+            FillRect(Dc, &Ps.rcPaint, (HBRUSH)GetStockObject(BLACK_BRUSH));
+            if (!g_Ui.FadeInPosted)
+            {
+                g_Ui.FadeInPosted = TRUE;
+                PostMessageW(Window, WM_LUH_FADE_IN, 0, 0);
+            }
+        }
+        else
+        {
+            /* The curtain is one cached picture; mid-drag a repaint shows the same position. */
+            LuhBlitLift(Dc, g_Ui.Lift);
+        }
     }
     else
     {
@@ -2125,8 +2331,8 @@ LuhWindowProc(
 
                 /* The dots' square only; the still page under it comes from the cache. */
                 GetClientRect(Window, &Square);
-                SetRect(&Square, Square.right / 2 - LuhPx(26), g_Ui.SpinnerY - LuhPx(26),
-                        Square.right / 2 + LuhPx(26), g_Ui.SpinnerY + LuhPx(26));
+                SetRect(&Square, Square.right / 2 - LuhPx(LUH_SPINNER_RING + 6), g_Ui.SpinnerY - LuhPx(LUH_SPINNER_RING + 6),
+                        Square.right / 2 + LuhPx(LUH_SPINNER_RING + 6), g_Ui.SpinnerY + LuhPx(LUH_SPINNER_RING + 6));
                 InvalidateRect(Window, &Square, FALSE);
             }
             else if (wParam == LUH_TIMER_STARTUP)
@@ -2205,6 +2411,10 @@ LuhWindowProc(
                 else if (Id >= LUH_ID_OPTION_BASE && Id < LUH_ID_OPTION_BASE + ARRAYSIZE(LuhOptionRows))
                 {
                     LuhPickOption(LuhOptionRows[Id - LUH_ID_OPTION_BASE].Action);
+                }
+                else if (Id == LUH_ID_RESULT_OK)
+                {
+                    LuhDismissResult(Window);
                 }
                 else if (Id == LUH_ID_OPTION_CANCEL)
                 {
@@ -2293,6 +2503,10 @@ LuhWindowProc(
             return 0;
         }
 
+        case WM_LUH_FADE_IN:
+            LuhFadeInCurtain(Window);
+            return 0;
+
         case WM_LUH_IPC_LOST:
             /* 995 means winlogon ended this launch; anything else is a dead channel. */
             if (!g_Ui.Exiting)
@@ -2308,7 +2522,7 @@ LuhWindowProc(
             if (g_Ui.Curtain)
             {
                 /* The Ctrl+Alt+Del notice has no lift path; only winlogon moves it on after the SAS. */
-                if (!g_Ui.CadCurtain && !g_Ui.Dragging)
+                if (!g_Ui.CadCurtain && !g_Ui.Dragging && !g_Ui.CurtainFadeIn)
                 {
                     LuhSlideCurtain(Window, g_Ui.Face.Height, 0.0, "curtain-lift");
                     LuhLiftCurtain(Window);
@@ -2320,7 +2534,7 @@ LuhWindowProc(
         case WM_LBUTTONDOWN:
             if (g_Ui.Curtain)
             {
-                if (!g_Ui.CadCurtain)
+                if (!g_Ui.CadCurtain && !g_Ui.CurtainFadeIn)
                     LuhDragBegin(Window, (SHORT)HIWORD(lParam));
                 return 0;
             }
@@ -2396,6 +2610,7 @@ LuhUiCreate(
     g_Ui.TextFont = LuhFontCreate(15, FW_NORMAL);
     g_Ui.NameFont = LuhFontCreate(26, FW_SEMIBOLD);
     g_Ui.StrongFont = LuhFontCreate(15, FW_SEMIBOLD);
+    g_Ui.StatusFont = LuhFontCreate(22, FW_SEMIBOLD);
     g_Ui.NameField = (DWORD)-1;
     g_Ui.ArrowField = (DWORD)-1;
     /* The lock screen as Windows 11 draws it: a large semibold clock, the date under it. */
@@ -2433,7 +2648,13 @@ LuhUiRun(
     while (GetMessageW(&Msg, NULL, 0, 0) > 0)
     {
         /* Enter in an edit field submits; Tab moves between the page's controls. */
-        if (Msg.message == WM_KEYDOWN && Msg.wParam == VK_RETURN && g_Ui.Page && !g_Ui.PageBusy)
+        /* Enter or Esc on a result dismisses it, as its OK does. */
+        if (Msg.message == WM_KEYDOWN && (Msg.wParam == VK_RETURN || Msg.wParam == VK_ESCAPE) && g_Ui.ResultUp)
+        {
+            LuhDismissResult(Window);
+            continue;
+        }
+        if (Msg.message == WM_KEYDOWN && Msg.wParam == VK_RETURN && g_Ui.Page && !g_Ui.PageBusy && !g_Ui.SignInBusy)
         {
             LuhSubmit(Window);
             continue;
@@ -2462,6 +2683,7 @@ LuhUiRun(
     if (g_Ui.DateFont) DeleteObject(g_Ui.DateFont);
     if (g_Ui.NameFont) DeleteObject(g_Ui.NameFont);
     if (g_Ui.StrongFont) DeleteObject(g_Ui.StrongFont);
+    if (g_Ui.StatusFont) DeleteObject(g_Ui.StatusFont);
     LuhFreeBackdrop();
     LuhGfxShutdown();
     return (int)Msg.wParam;

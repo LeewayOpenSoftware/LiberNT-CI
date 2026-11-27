@@ -34,4 +34,5 @@ BEGIN
     IDS_LUH_ACCOUNT_RESTRICTED "Account restrictions are preventing this user from signing in. For example: blank passwords aren't allowed, sign-in times are limited, or a policy restriction has been enforced."
     IDS_LUH_LOCKED_OUT      "The referenced account is currently locked out and may not be logged on to."
     IDS_LUH_CAPS_LOCK       "Caps Lock is on"
+    IDS_LUH_OK              "OK"
 END

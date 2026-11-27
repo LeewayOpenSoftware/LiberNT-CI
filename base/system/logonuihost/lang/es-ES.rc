@@ -34,4 +34,5 @@ BEGIN
     IDS_LUH_ACCOUNT_RESTRICTED "Las restricciones de la cuenta impiden que este usuario inicie sesión. Por ejemplo: no se permiten contraseñas en blanco, el horario de inicio de sesión está limitado o se aplica una restricción de directiva."
     IDS_LUH_LOCKED_OUT      "La cuenta a la que se hace referencia está bloqueada y no se puede usar para iniciar sesión."
     IDS_LUH_CAPS_LOCK       "Bloq Mayús está activado"
+    IDS_LUH_OK              "Aceptar"
 END
