@@ -8,7 +8,7 @@
 
 #include <windef.h>
 #include <winbase.h>
-#include <evntcons.h>
+#include <tdh.h>
 #include <stringapiset.h>
 
 /*
