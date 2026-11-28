@@ -2166,9 +2166,14 @@ IntPaintDesktopContent(HDC hDC)
         }
 
         /*
-         * Paint desktop background
+         * Paint desktop background. The scaling below divides by the wallpaper and desktop sizes:
+         * an empty bitmap, or a desktop that has no size yet (dwm can paint one while it is being
+         * set up), leaves the brush alone to fill the desktop.
          */
-        if (gspv.hbmWallpaper != NULL)
+        if (gspv.hbmWallpaper != NULL &&
+            gspv.cxWallpaper != 0 && gspv.cyWallpaper != 0 &&
+            WndDesktop->rcWindow.right > WndDesktop->rcWindow.left &&
+            WndDesktop->rcWindow.bottom > WndDesktop->rcWindow.top)
         {
             SIZE sz;
             int x, y;
