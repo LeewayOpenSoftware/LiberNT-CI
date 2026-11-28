@@ -305,14 +305,60 @@ static
 BOOLEAN
 DkMatchBcdPartition(
     _In_ PBCD_DEVICE BcdDevice,
+    _In_ BOOLEAN AnyDisk,
     _In_ ULONG Index,
     _Inout_ PDK_DEVICE Disk,
     _Out_ PDK_DEVICE Device)
 {
     Disk->DiskIndex = Index;
     return BcdDevice->Type == BcdDeviceGptPartition ?
-           GptFindPartition(Disk, BcdDevice->Disk, BcdDevice->Partition, Device) :
+           GptFindPartition(Disk, AnyDisk ? NULL : BcdDevice->Disk, BcdDevice->Partition, Device) :
            DkFindMbrPartition(Disk, BcdDevice->Signature, BcdDevice->PartitionOffset, Device);
+}
+
+/*
+ * The boot disk first: the firmware started us from it, so a match there is the partition. Otherwise every
+ * disk, connecting all controllers once if nothing matched; a partition that more than one disk matches (a
+ * clone) is ambiguous, and nothing is picked (*Ambiguous, fail closed).
+ */
+static
+BOOLEAN
+DkFindBcdPartition(
+    _In_ PBCD_DEVICE BcdDevice,
+    _In_ BOOLEAN AnyDisk,
+    _Out_ PDK_DEVICE Device,
+    _Out_ PBOOLEAN Ambiguous)
+{
+    DK_DEVICE Disk, Candidate;
+    ULONG Index, Matches;
+
+    *Ambiguous = FALSE;
+    if (FwGetBootDiskIndex(&Index) &&
+        FwGetDisk(Index, &Disk) &&
+        DkMatchBcdPartition(BcdDevice, AnyDisk, Index, &Disk, Device))
+    {
+        return TRUE;
+    }
+
+    do
+    {
+        Matches = 0;
+        for (Index = 0; FwGetDisk(Index, &Disk); Index++)
+        {
+            if (DkMatchBcdPartition(BcdDevice, AnyDisk, Index, &Disk, &Candidate) && Matches++ == 0)
+                *Device = Candidate;
+        }
+
+        if (Matches == 1)
+            return TRUE;
+        if (Matches > 1)
+        {
+            *Ambiguous = TRUE;
+            return FALSE;
+        }
+    } while (FwRescanDisks());
+
+    return FALSE;
 }
 
 BOOLEAN
@@ -320,8 +366,7 @@ DkOpenBcdDevice(
     _In_ PBCD_DEVICE BcdDevice,
     _Out_ PDK_DEVICE Device)
 {
-    DK_DEVICE Disk;
-    ULONG Index;
+    BOOLEAN Ambiguous;
 
     switch (BcdDevice->Type)
     {
@@ -329,23 +374,15 @@ DkOpenBcdDevice(
             return DkLocateBootPartition(Device) || FwGetBootDevice(Device);
 
         case BcdDeviceGptPartition:
-        case BcdDeviceMbrPartition:
-            if (FwGetBootDiskIndex(&Index) &&
-                FwGetDisk(Index, &Disk) &&
-                DkMatchBcdPartition(BcdDevice, Index, &Disk, Device))
-            {
+            /* A partition GUID is unique on its own. When no disk carries both GUIDs (the disk was cloned or its
+             * table rewritten with a new disk GUID), take the partition by its GUID on any disk; never when the
+             * exact search was already ambiguous. */
+            if (DkFindBcdPartition(BcdDevice, FALSE, Device, &Ambiguous))
                 return TRUE;
-            }
+            return !Ambiguous && DkFindBcdPartition(BcdDevice, TRUE, Device, &Ambiguous);
 
-            do
-            {
-                for (Index = 0; FwGetDisk(Index, &Disk); Index++)
-                {
-                    if (DkMatchBcdPartition(BcdDevice, Index, &Disk, Device))
-                        return TRUE;
-                }
-            } while (FwRescanDisks());
-            break;
+        case BcdDeviceMbrPartition:
+            return DkFindBcdPartition(BcdDevice, FALSE, Device, &Ambiguous);
     }
 
     return FALSE;

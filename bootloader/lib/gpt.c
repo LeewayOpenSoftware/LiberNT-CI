@@ -101,7 +101,8 @@ GptFindPartition(
         DkRead(Disk, EntryLba * Disk->BlockSize, ArraySize, Entries) &&
         RtlComputeCrc32(0, Entries, ArraySize) == EntryCrc)
     {
-        for (Index = 0; Index < Count && !Found; Index++)
+        /* The whole table is read: a partition GUID that two entries carry names no partition (fail closed). */
+        for (Index = 0; Index < Count; Index++)
         {
             Entry = Entries + Index * EntrySize;
             if (RtlEqualMemory(Entry, Unused, sizeof(Unused)))
@@ -110,6 +111,12 @@ GptFindPartition(
             Number++;
             if (!RtlEqualMemory(Entry + GPT_ENTRY_ID_OFFSET, PartitionId, 16))
                 continue;
+
+            if (Found)
+            {
+                Found = FALSE;
+                break;
+            }
 
             First = LeUlonglong(Entry + GPT_ENTRY_FIRST_LBA_OFFSET);
             Last = LeUlonglong(Entry + GPT_ENTRY_LAST_LBA_OFFSET);
