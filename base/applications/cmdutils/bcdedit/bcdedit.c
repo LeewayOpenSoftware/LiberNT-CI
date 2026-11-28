@@ -1769,7 +1769,7 @@ CopyElements(
 /* Remove an object and everything under it, to undo a create or copy that did not complete. */
 static
 VOID
-DeleteObject(
+DeleteBcdObject(
     _In_ HKEY Store,
     _In_ PCWSTR Id)
 {
@@ -1893,7 +1893,7 @@ CreateCommand(
         !WriteElement(Store, Id, 0x12000004, REG_SZ, Description,
                       (DWORD)((wcslen(Description) + 1) * sizeof(WCHAR))))
     {
-        DeleteObject(Store, Id);
+        DeleteBcdObject(Store, Id);
         RegCloseKey(Store);
         PrintResource(IDS_ERR_SETFAIL);
         return 1;
@@ -1978,7 +1978,7 @@ CopyCommand(
     }
     if (!CopyElements(Store, Src, Generated))
     {
-        DeleteObject(Store, Generated);
+        DeleteBcdObject(Store, Generated);
         RegCloseKey(Store);
         PrintResource(IDS_ERR_SETFAIL);
         return 1;
@@ -1987,7 +1987,7 @@ CopyCommand(
         !WriteElement(Store, Generated, 0x12000004, REG_SZ, Description,
                       (DWORD)((wcslen(Description) + 1) * sizeof(WCHAR))))
     {
-        DeleteObject(Store, Generated);
+        DeleteBcdObject(Store, Generated);
         RegCloseKey(Store);
         PrintResource(IDS_ERR_SETFAIL);
         return 1;
