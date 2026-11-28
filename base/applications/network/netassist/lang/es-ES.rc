@@ -1,0 +1,33 @@
+/*
+ * PROJECT:     LiberNT Network Assistance
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Spanish resources
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_SPANISH, SUBLANG_SPANISH_MODERN
+
+IDD_ASSIST DIALOGEX 0, 0, 264, 204
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+CAPTION "Asistencia de red"
+FONT 9, "MS Shell Dlg"
+BEGIN
+    ICON IDI_ASSIST, -1, 12, 12, 20, 20
+    LTEXT "", IDC_STATE, 40, 16, 212, 12
+    LTEXT "", IDC_DETAIL, 12, 40, 240, 82
+    EDITTEXT IDC_KEY, 12, 126, 240, 14, ES_CENTER | ES_READONLY | ES_AUTOHSCROLL
+    PUSHBUTTON "&Copiar clave", IDC_COPY, 12, 146, 64, 14
+    CONTROL "Contacte antes con el equipo: <a href=""https://discord.gg/BpcKg7FZ2"">Discord</a> o <a href=""https://matrix.to/#/#libernt:matrix.org"">Matrix</a>.", IDC_LINKS, "SysLink", WS_TABSTOP, 12, 168, 240, 10
+    DEFPUSHBUTTON "Cerrar", IDCANCEL, 188, 182, 64, 14
+END
+
+STRINGTABLE
+BEGIN
+    IDS_ON "La asistencia de red está activada"
+    IDS_ON_DETAIL "Este arranque se inició con asistencia de red. Un desarrollador de Orosi que tenga la clave de abajo puede conectarse al depurador del kernel de este equipo y examinarlo.\n\nEnvíe la clave en un mensaje privado al desarrollador que le está ayudando. Es válida hasta el próximo reinicio."
+    IDS_OFF "La asistencia de red está desactivada"
+    IDS_OFF_DETAIL "Un desarrollador de Orosi puede examinar un error de este equipo a través de la red si se inicia con asistencia de red:\n\n1. Reinicie el equipo.\n2. En el menú de arranque, pulse F8.\n3. Elija ""Boot with network assistance"".\n4. Vuelva a abrir este programa y envíe la clave al desarrollador."
+    IDS_DENIED_DETAIL "Este arranque se inició con asistencia de red, pero esta cuenta no tiene permiso para leer la clave. La clave también se muestra en una esquina del escritorio."
+    IDS_COPIED "Copiada"
+    IDS_LINK_FAILED "No se pudo abrir esta dirección aquí. Ábrala en otro dispositivo:\n\n%s"
+END

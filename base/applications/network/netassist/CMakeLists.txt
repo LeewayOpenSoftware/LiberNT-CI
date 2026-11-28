@@ -4,6 +4,7 @@
 add_rc_deps(netassist.rc
     ${CMAKE_CURRENT_SOURCE_DIR}/resource.h
     ${CMAKE_CURRENT_SOURCE_DIR}/lang/en-US.rc
+    ${CMAKE_CURRENT_SOURCE_DIR}/lang/es-ES.rc
     ${CMAKE_CURRENT_SOURCE_DIR}/res/cat_network.ico)
 add_executable(netassist
     netassist.c
