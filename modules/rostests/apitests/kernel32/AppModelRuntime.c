@@ -202,6 +202,8 @@ TestUnpackagedAndPolicy(VOID)
         ok(Result == APPMODEL_ERROR_NO_PACKAGE, "GetCurrentPackageInfo2 returned %ld\n", Result);
         Result = GetCurrentPackageInfo2(~0u, (PackagePathType)99, &Length, NULL, &Count);
         ok(Result == APPMODEL_ERROR_NO_PACKAGE, "GetCurrentPackageInfo2 bad type returned %ld\n", Result);
+        Result = GetCurrentPackageInfo2(0, PackagePathType_Install, &Length, NULL, NULL);
+        ok(Result == APPMODEL_ERROR_NO_PACKAGE, "GetCurrentPackageInfo2 null count returned %ld\n", Result);
     }
     if (GetCurrentPackagePath2)
     {

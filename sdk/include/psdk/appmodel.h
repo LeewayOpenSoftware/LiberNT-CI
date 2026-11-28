@@ -115,6 +115,8 @@ typedef struct _PACKAGE_INFO_REFERENCE
     PVOID reserved;
 } *PACKAGE_INFO_REFERENCE;
 
+#include <pshpack4.h>
+
 typedef struct PACKAGE_INFO
 {
     UINT32 reserved;
@@ -124,6 +126,8 @@ typedef struct PACKAGE_INFO
     PWSTR packageFamilyName;
     PACKAGE_ID packageId;
 } PACKAGE_INFO;
+
+#include <poppack.h>
 
 typedef enum CreatePackageDependencyOptions
 {

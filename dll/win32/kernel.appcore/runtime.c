@@ -669,7 +669,7 @@ GetCurrentPackageInfo2(
     UNREFERENCED_PARAMETER(Type);
     UNREFERENCED_PARAMETER(Buffer);
 
-    if (!Length || !Count)
+    if (!Length)
         return ERROR_INVALID_PARAMETER;
     return APPMODEL_ERROR_NO_PACKAGE;
 }
