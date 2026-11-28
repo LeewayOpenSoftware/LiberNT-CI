@@ -1411,14 +1411,19 @@ IntGetFocusMessageQueue(VOID)
     return (PUSER_MESSAGE_QUEUE)pdo->ActiveMessageQueue;
 }
 
+/*
+ * Each desktop keeps its own foreground queue (ActiveMessageQueue); only the
+ * input desktop's one is the global foreground. Callers name the desktop whose
+ * foreground changes, so a window going away on another desktop (the LogonUI
+ * window after unlock) does not clear the input desktop's foreground.
+ */
 VOID FASTCALL
-IntSetFocusMessageQueue(PUSER_MESSAGE_QUEUE NewQueue)
+IntSetFocusMessageQueue(PDESKTOP pdo, PUSER_MESSAGE_QUEUE NewQueue)
 {
     PUSER_MESSAGE_QUEUE Old;
-    PDESKTOP pdo = IntGetActiveDesktop();
     if (!pdo)
     {
-        TRACE("No active desktop\n");
+        TRACE("No desktop\n");
         return;
     }
     if (NewQueue != NULL)
@@ -1432,12 +1437,14 @@ IntSetFocusMessageQueue(PUSER_MESSAGE_QUEUE NewQueue)
         (void)InterlockedExchangePointer((PVOID*)&NewQueue->Desktop, pdo);
     }
     Old = (PUSER_MESSAGE_QUEUE)InterlockedExchangePointer((PVOID*)&pdo->ActiveMessageQueue, NewQueue);
-    gpqForegroundPrev = Old;
     if (Old != NULL)
     {
         (void)InterlockedExchangePointer((PVOID*)&Old->Desktop, 0);
         IntDereferenceMessageQueue(Old);
     }
+    if (pdo != gpdeskInputDesktop)
+        return;
+    gpqForegroundPrev = Old;
     // Only one Q can have active foreground even when there are more than one desktop.
     if (NewQueue)
     {
@@ -3468,6 +3475,12 @@ NtUserSwitchDesktop(HDESK hdesk)
     gpdeskInputDesktop = pdesk;
     IntGetSysCursorInfo()->bClipped = FALSE;
 
+    /* The new input desktop's foreground queue becomes the global foreground,
+     * so focus returns to the window that was active there (after unlock). */
+    gpqForeground = pdesk->ActiveMessageQueue;
+    IntSetForegroundThread((gpqForeground && gpqForeground->spwndActive) ?
+                           gpqForeground->spwndActive->head.pti : NULL);
+
     /* Show the new desktop window */
     co_IntShowDesktop(pdesk, UserGetSystemMetrics(SM_CXSCREEN), UserGetSystemMetrics(SM_CYSCREEN), bRedrawDesktop);
 
@@ -3782,7 +3795,7 @@ IntSetThreadDesktop(IN HDESK hDesktop,
     if (pti->rpdesk != pdesk && pti->MessageQueue == gpqForeground)
     {
         // Like above, there shouldn't be any windows, hooks or anything active on this threads desktop!
-        IntSetFocusMessageQueue(NULL);
+        IntSetFocusMessageQueue(pti->MessageQueue->Desktop, NULL);
     }
 
     /* Before doing the switch, map the new desktop heap and allocate the new pcti */

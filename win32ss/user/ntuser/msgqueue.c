@@ -2759,9 +2759,10 @@ MsqCleanupMessageQueue(PTHREADINFO pti)
        UserDereferenceObject(pCursor);
    }
 
-   if (gpqForeground == MessageQueue)
+   /* A dying queue leaves the foreground of whichever desktop holds it. */
+   if (MessageQueue->Desktop != NULL)
    {
-      IntSetFocusMessageQueue(NULL);
+      IntSetFocusMessageQueue(MessageQueue->Desktop, NULL);
    }
    if (gpqForegroundPrev == MessageQueue)
    {
