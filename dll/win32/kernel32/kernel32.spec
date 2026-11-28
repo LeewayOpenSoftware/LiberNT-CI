@@ -278,7 +278,7 @@
 @ stdcall EnumResourceTypesW(long ptr long)
 @ stdcall EnumSystemCodePagesA(ptr long)
 @ stdcall EnumSystemCodePagesW(ptr long)
-@ stdcall EnumSystemFirmwareTables(long ptr long)
+@ stdcall EnumSystemFirmwareTables(long ptr long) kernelbase.EnumSystemFirmwareTables
 @ stdcall EnumSystemGeoID(long long ptr) kernelbase.EnumSystemGeoID
 @ stdcall EnumSystemLanguageGroupsA(ptr long ptr)
 @ stdcall EnumSystemLanguageGroupsW(ptr long ptr)
@@ -595,7 +595,7 @@
 @ stdcall GetNamedPipeInfo(long ptr ptr ptr ptr)
 @ stdcall -version=0x600+ GetNamedPipeServerProcessId(ptr ptr)
 @ stdcall -version=0x600+ GetNamedPipeServerSessionId(ptr ptr)
-@ stdcall GetNativeSystemInfo(ptr)
+@ stdcall GetNativeSystemInfo(ptr) kernelbase.GetNativeSystemInfo
 @ stdcall GetNextVDMCommand(long)
 @ stdcall -version=0x500-0x502 GetNlsSectionName(long long long str str long)
 @ stdcall GetNumaAvailableMemoryNode(long ptr)
@@ -625,7 +625,7 @@
 @ stdcall -version=0x602+ GetApplicationUserModelIdFromToken(ptr ptr ptr) kernelbase.GetApplicationUserModelIdFromToken
 @ stdcall -version=0x602+ GetPackagePathByFullName(wstr ptr wstr) kernelbase.GetPackagePathByFullName
 @ stdcall -version=0x602+ GetPackagesByPackageFamily(wstr ptr ptr ptr ptr) kernelbase.GetPackagesByPackageFamily
-@ stdcall -version=0x600+ GetPhysicallyInstalledSystemMemory(ptr)
+@ stdcall -version=0x600+ GetPhysicallyInstalledSystemMemory(ptr) kernelbase.GetPhysicallyInstalledSystemMemory
 @ stdcall GetPriorityClass(long)
 @ stdcall GetPrivateProfileIntA(str str long str)
 @ stdcall GetPrivateProfileIntW(wstr wstr long wstr)
@@ -686,8 +686,8 @@
 @ stdcall GetSystemDirectoryA(ptr long)
 @ stdcall GetSystemDirectoryW(ptr long)
 @ stdcall GetSystemFileCacheSize(ptr ptr ptr) kernelbase.GetSystemFileCacheSize
-@ stdcall GetSystemFirmwareTable(long long ptr long)
-@ stdcall GetSystemInfo(ptr)
+@ stdcall GetSystemFirmwareTable(long long ptr long) kernelbase.GetSystemFirmwareTable
+@ stdcall GetSystemInfo(ptr) kernelbase.GetSystemInfo
 @ stdcall GetSystemPowerStatus(ptr)
 @ stdcall -version=0x600+ GetSystemPreferredUILanguages(long ptr wstr ptr) kernelbase.GetSystemPreferredUILanguages
 @ stdcall GetSystemRegistryQuota(ptr ptr)

@@ -245,7 +245,7 @@
 @ stdcall EnumResourceTypesExA(long ptr long long long) kernel32.EnumResourceTypesExA
 @ stdcall EnumResourceTypesExW(long ptr long long long) kernel32.EnumResourceTypesExW
 @ stdcall EnumSystemCodePagesW(ptr long) kernel32.EnumSystemCodePagesW
-@ stdcall EnumSystemFirmwareTables(long ptr long) kernel32.EnumSystemFirmwareTables
+@ stdcall EnumSystemFirmwareTables(long ptr long)
 @ stdcall EnumSystemGeoID(long long ptr)
 @ stdcall EnumSystemLanguageGroupsW(ptr long ptr) kernel32.EnumSystemLanguageGroupsW
 @ stdcall EnumSystemLocalesA(ptr long)
@@ -500,7 +500,7 @@
 @ stdcall -version=0x600+ GetNamedPipeClientComputerNameW(ptr ptr long) kernel32.GetNamedPipeClientComputerNameW
 @ stdcall GetNamedPipeHandleStateW(long ptr ptr ptr ptr wstr long) kernel32.GetNamedPipeHandleStateW
 @ stdcall GetNamedPipeInfo(long ptr ptr ptr ptr) kernel32.GetNamedPipeInfo
-@ stdcall GetNativeSystemInfo(ptr) kernel32.GetNativeSystemInfo
+@ stdcall GetNativeSystemInfo(ptr)
 @ stdcall GetNumaHighestNodeNumber(ptr) kernel32.GetNumaHighestNodeNumber
 @ stdcall -version=0xA00+ GetNumaNodeProcessorMask2(long ptr long ptr) kernel32.GetNumaNodeProcessorMask2
 @ stdcall -version=0x601+ GetNumaNodeProcessorMaskEx(long ptr) kernel32.GetNumaNodeProcessorMaskEx
@@ -521,7 +521,7 @@
 @ stdcall -version=0x602+ GetPackagePathByFullName(wstr ptr wstr)
 @ stdcall -version=0x602+ GetPackagesByPackageFamily(wstr ptr ptr ptr ptr)
 @ stdcall -version=0x601+ GetPerformanceInfo(ptr long) kernel32.K32GetPerformanceInfo
-@ stdcall -version=0x600+ GetPhysicallyInstalledSystemMemory(ptr) kernel32.GetPhysicallyInstalledSystemMemory
+@ stdcall -version=0x600+ GetPhysicallyInstalledSystemMemory(ptr)
 @ stdcall GetPriorityClass(long) kernel32.GetPriorityClass
 @ stdcall GetPrivateObjectSecurity(ptr long ptr long ptr)
 @ stdcall GetProcAddress(long str) kernel32.GetProcAddress
@@ -576,8 +576,8 @@
 @ stdcall GetSystemDirectoryA(ptr long) kernel32.GetSystemDirectoryA
 @ stdcall GetSystemDirectoryW(ptr long) kernel32.GetSystemDirectoryW
 @ stdcall GetSystemFileCacheSize(ptr ptr ptr)
-@ stdcall GetSystemFirmwareTable(long long ptr long) kernel32.GetSystemFirmwareTable
-@ stdcall GetSystemInfo(ptr) kernel32.GetSystemInfo
+@ stdcall GetSystemFirmwareTable(long long ptr long)
+@ stdcall GetSystemInfo(ptr)
 @ stdcall GetSystemPreferredUILanguages(long ptr ptr ptr)
 @ stdcall GetProcessorSystemCycleTime(long ptr ptr) kernel32.GetProcessorSystemCycleTime
 @ stdcall GetSystemTime(ptr) kernel32.GetSystemTime

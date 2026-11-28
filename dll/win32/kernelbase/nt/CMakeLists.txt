@@ -4,6 +4,7 @@ add_definitions(-D_KERNELBASE_)
 
 list(APPEND SOURCE
     FileMapping.c
+    SystemInfo.c
     VirtualMemory.c)
 
 add_library(kernelbase_nt ${SOURCE})
