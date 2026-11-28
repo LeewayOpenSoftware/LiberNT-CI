@@ -19,6 +19,18 @@ IsSecretField(_In_ DWORD Field)
     return Field == PWFIELD_PASSWORD || Field == PWFIELD_NEW_PASSWORD || Field == PWFIELD_CONFIRM_PASSWORD;
 }
 
+/* Windows 11 offers a blank-password account a lone Sign in button instead of a password box,
+ * on the sign-in and unlock pages. Asked of SAM each time the page is built; on any doubt the
+ * box stays. */
+static BOOL
+AccountHasBlankPassword(_In_ const PWCREDENTIAL *This)
+{
+    if (!This->KnownUser || !This->Sid ||
+        (This->Scenario != CPUS_LOGON && This->Scenario != CPUS_UNLOCK_WORKSTATION))
+        return FALSE;
+    return PasswordProvider_SidHasBlankPassword(This->Sid);
+}
+
 static VOID
 ClearSecrets(_Inout_ PWCREDENTIAL *This, _In_ BOOL Notify)
 {
@@ -152,6 +164,8 @@ Credential_GetFieldState(ICredentialProviderCredential2 *iface, DWORD dwFieldID,
         return E_POINTER;
     if (!PasswordProvider_IsKnownFieldId(dwFieldID))
         return E_INVALIDARG;
+    if (dwFieldID == PWFIELD_PASSWORD || dwFieldID == PWFIELD_SUBMIT)
+        This->BlankPassword = AccountHasBlankPassword(This);
 
     *pcpfis = CPFIS_NONE;
     switch (dwFieldID)
@@ -165,8 +179,8 @@ Credential_GetFieldState(ICredentialProviderCredential2 *iface, DWORD dwFieldID,
                 *pcpfis = CPFIS_FOCUSED;
             break;
         case PWFIELD_PASSWORD:
-            *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
-            if (This->KnownUser)
+            *pcpfs = This->BlankPassword ? CPFS_HIDDEN : CPFS_DISPLAY_IN_SELECTED_TILE;
+            if (This->KnownUser && !This->BlankPassword)
                 *pcpfis = CPFIS_FOCUSED;
             break;
         case PWFIELD_NEW_PASSWORD:
@@ -175,6 +189,8 @@ Credential_GetFieldState(ICredentialProviderCredential2 *iface, DWORD dwFieldID,
             break;
         case PWFIELD_SUBMIT:
             *pcpfs = CPFS_DISPLAY_IN_SELECTED_TILE;
+            if (This->BlankPassword)
+                *pcpfis = CPFIS_FOCUSED;
             break;
         default:
             *pcpfs = CPFS_HIDDEN;

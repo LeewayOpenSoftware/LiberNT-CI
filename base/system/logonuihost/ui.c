@@ -1594,7 +1594,13 @@ LuhCreatePage(
             case CPFT_SUBMIT_BUTTON:
                 if (g_Ui.ArrowField != (DWORD)-1)
                     break;
-                Field->Control = CreateWindowExW(0, L"BUTTON", Field->Label, Style | BS_OWNERDRAW,
+                /* No box to put the arrow in (a blank-password account): Windows 11 shows a
+                 * "Sign in" button on the sign-in and unlock pages, whatever the provider calls it. */
+                Field->Control = CreateWindowExW(0, L"BUTTON",
+                                                 (Page->Scenario == CPUS_LOGON ||
+                                                  Page->Scenario == CPUS_UNLOCK_WORKSTATION) ?
+                                                     LuhText(IDS_LUH_SIGN_IN) : Field->Label,
+                                                 Style | BS_OWNERDRAW,
                                                  Cx - LuhPx(LUH_PILL_WIDTH) / 2, Y, LuhPx(LUH_PILL_WIDTH),
                                                  LuhPx(LUH_PILL_HEIGHT), Window,
                                                  (HMENU)(UINT_PTR)(LUH_ID_FIELD_BASE + i), NULL, NULL);

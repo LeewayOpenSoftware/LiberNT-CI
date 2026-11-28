@@ -43,4 +43,5 @@ BEGIN
     IDS_LUH_WARN_SHUTDOWN   "Si apaga ahora, usted y cualquier otra persona que use este equipo podrían perder el trabajo no guardado."
     IDS_LUH_RESTART_ANYWAY  "Reiniciar de todos modos"
     IDS_LUH_SHUTDOWN_ANYWAY "Apagar de todos modos"
+    IDS_LUH_SIGN_IN         "Iniciar sesión"
 END
