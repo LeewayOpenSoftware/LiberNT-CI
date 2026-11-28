@@ -26,6 +26,7 @@ LsapDeregisterLogonProcess(PLSA_API_MSG RequestMsg,
     if (LogonContext == NULL)
         return STATUS_SUCCESS;
 
+    ERR("LSA-DIAG: deregister logon context %p (connection %p)\n", LogonContext, LogonContext->ConnectionHandle);
     RemoveEntryList(&LogonContext->Entry);
 
     NtClose(LogonContext->ClientProcessHandle);
@@ -261,7 +262,7 @@ AuthPortThreadRoutine(PVOID Param)
                                            NULL);
         if (!NT_SUCCESS(Status))
         {
-            TRACE("NtAlpcSendWaitReceivePort() failed (Status %lx)\n", Status);
+            ERR("LSA-DIAG: NtAlpcSendWaitReceivePort() failed (Status %lx, reply %p)\n", Status, ReplyMsg);
             if (ReplyMsg == NULL)
                 break;
             ReplyMsg = NULL;
@@ -283,12 +284,12 @@ AuthPortThreadRoutine(PVOID Param)
                 break;
 
             case LPC_PORT_CLOSED:
-                TRACE("Port closed\n");
+                ERR("LSA-DIAG: port closed (context %p)\n", LogonContext);
                 ReplyMsg = NULL;
                 break;
 
             case LPC_CLIENT_DIED:
-                TRACE("Client died\n");
+                ERR("LSA-DIAG: client died (context %p)\n", LogonContext);
                 ReplyMsg = NULL;
                 break;
 

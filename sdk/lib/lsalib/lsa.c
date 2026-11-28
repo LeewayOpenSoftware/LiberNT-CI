@@ -159,15 +159,14 @@ LsaDeregisterLogonProcess(IN HANDLE LsaHandle)
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("LsapClientCall() failed (Status 0x%08lx)\n", Status);
-        return Status;
     }
-
-    if (!NT_SUCCESS(ApiMessage.Status))
+    else if (!NT_SUCCESS(ApiMessage.Status))
     {
         DPRINT1("LsapClientCall() failed (ApiMessage.Status 0x%08lx)\n", ApiMessage.Status);
-        return ApiMessage.Status;
+        Status = ApiMessage.Status;
     }
 
+    /* The handle is gone after this call whatever LSA answered, a dead port included */
     ZwClose(LsaHandle);
 
     DPRINT("LsaDeregisterLogonProcess() done (Status 0x%08lx)\n", Status);
