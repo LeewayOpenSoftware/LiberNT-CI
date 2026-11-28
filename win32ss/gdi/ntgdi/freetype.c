@@ -9147,22 +9147,12 @@ IntExtTextOutW(
              */
             if (lprc && (fuOptions & ETO_CLIPPED))
             {
-                /* The LCD (ClearType) filter padding added by ft_lcd_padding()
-                 * widens a subpixel glyph bitmap by 43/64 of a pixel on each
-                 * side, so a glyph whose ink reaches its advance edge spills one
-                 * device pixel past an advance-based clip rectangle.  Windows
-                 * keeps ClearType ink within the advance and does not cut it, so
-                 * let that one-pixel filter edge through for subpixel glyphs to
-                 * match it (fixes the clipped last glyph, e.g. "Restar|t").
-                 */
-                LONG RightClip = lprc->right + (bSubpixel ? 1 : 0);
-
                 // We do the check '>=' instead of '>' to possibly save an iteration
                 // through this loop, since it's breaking after the drawing is done,
                 // and x is always incremented.
-                if (DestRect.right >= RightClip)
+                if (DestRect.right >= lprc->right)
                 {
-                    DestRect.right = RightClip;
+                    DestRect.right = lprc->right;
                     DoBreak = TRUE;
                 }
 
