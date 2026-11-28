@@ -139,18 +139,6 @@ GetNamedPipeClientComputerNameW(
     return FALSE;
 }
 
-/* Working-set watching is not provided by the kernel: report it */
-BOOL
-WINAPI
-GetWsChangesEx(
-    _In_ HANDLE Process,
-    _Out_writes_bytes_to_(*Size, *Size) PVOID Info,
-    _Inout_ PDWORD Size)
-{
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
-
 HANDLE
 WINAPI
 CreateFileMappingNumaW(
