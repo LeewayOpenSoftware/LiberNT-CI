@@ -1013,10 +1013,14 @@ cleanup:
     }
     else // if (ret)
     {
-        /* Wait for the painted desktop, then the host fades across the switch (§6.3.1). */
+        /* Host mode: wait for the painted desktop, then the host fades across the switch (§6.3.1). */
+        PWL_COVER Cover;
+
         WlHostWaitDesktopSwitch(Session);
+        /* The last host frame covers the painted desktop, then fades out over it. */
+        Cover = WlSwitchDesktopCovered(Session->WinlogonDesktop, Session->ApplicationDesktop);
         WlHostBeforeDesktopSwitch();
-        SwitchDesktop(Session->ApplicationDesktop);
+        WlCoverRelease(Cover);
         WlHostAfterDesktopSwitch();
         Session->LogonState = STATE_LOGGED_ON;
         LogonStage("logged-on");
@@ -1317,9 +1321,21 @@ HandleLogoff(
 
     LogonStage("logoff-start");
 
-    /* "Signing out" stands on the host before any user process is closed (plan, commit 7). */
+    /* "Signing out" stands on the host before any user process is closed (plan, commit 7).
+     * From the user's desktop that desktop fades into it; from the Ctrl+Alt+Del list or a
+     * locked station the screen already shows the Winlogon desktop, so it is a plain cut,
+     * as on Windows 11 (no cover of a desktop that is not on screen). */
     DisplayStatusMessage(Session, Session->WinlogonDesktop, IDS_LOGGINGOFF);
-    SwitchDesktop(Session->WinlogonDesktop);
+    WlHostWaitStatusShown();
+    if (Session->LogonState == STATE_LOGGED_ON)
+    {
+        WlCoverRelease(WlSwitchDesktopCovered(Session->ApplicationDesktop, Session->WinlogonDesktop));
+    }
+    else
+    {
+        SwitchDesktop(Session->WinlogonDesktop);
+        LogonStage("desktop-switch-plain-secure");
+    }
 
     Status = CreateLogoffSecurityAttributes(&psa);
     if (!NT_SUCCESS(Status))
@@ -1674,6 +1690,16 @@ DoGenericAction(
         case WLX_SAS_ACTION_SHUTDOWN_SLEEP: /* 0x0c */
         case WLX_SAS_ACTION_SHUTDOWN_SLEEP2: /* 0x0d */
         case WLX_SAS_ACTION_SHUTDOWN_HIBERNATE: /* 0x0e */
+            /* Waking asks for the password, as on Windows: a signed-in session is locked before it sleeps. */
+            if ((Session->LogonState == STATE_LOGGED_ON) ||
+                (Session->LogonState == STATE_LOGGED_ON_SAS))
+            {
+                BOOL OldSecureSaverLock = g_SecureSaverLock;
+
+                g_SecureSaverLock = TRUE;   /* the wake password is not DisableLockWorkstation's to waive */
+                DoGenericAction(Session, WLX_SAS_ACTION_LOCK_WKSTA);
+                g_SecureSaverLock = OldSecureSaverLock;
+            }
             HandleSuspend(wlxAction);
             DoGenericAction(Session, WLX_SAS_ACTION_NONE);
             break;
@@ -1681,9 +1707,22 @@ DoGenericAction(
             if ((Session->LogonState == STATE_LOCKED) ||
                 (Session->LogonState == STATE_LOCKED_SAS))
             {
+                PWL_COVER Cover = NULL;
+
                 CallNotificationDlls(Session, UnlockHandler);
+                if (WlHostShowUnlockWelcome(Session))
+                {
+                    Cover = WlSwitchDesktopCovered(Session->WinlogonDesktop, Session->ApplicationDesktop);
+                }
+                else
+                {
+                    /* A cut is acceptable; the credential page on the user's desktop is not. */
+                    SwitchDesktop(Session->ApplicationDesktop);
+                    LogonStage("desktop-switch-plain-unshown");
+                }
+
                 WlHostBeforeDesktopSwitch();
-                SwitchDesktop(Session->ApplicationDesktop);
+                WlCoverRelease(Cover);
                 WlHostAfterDesktopSwitch();
                 Session->LogonState = STATE_LOGGED_ON;
             }
@@ -1832,6 +1871,9 @@ HostEvent(
             break;
         case WLHOST_EVENT_RESTART:
             DoGenericAction(Session, WLX_SAS_ACTION_SHUTDOWN_REBOOT);
+            break;
+        case WLHOST_EVENT_SLEEP:
+            DoGenericAction(Session, WLX_SAS_ACTION_SHUTDOWN_SLEEP);
             break;
         default:
             WARN("Unknown host event %lu\n", Event);

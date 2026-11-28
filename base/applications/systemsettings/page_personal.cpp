@@ -20,6 +20,8 @@ extern "C"
 #define EXPLORER_KEY L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer"
 #define ADVANCED_KEY L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced"
 #define DESKTOP_KEY L"Control Panel\\Desktop"
+/* The logon curtain's clock position; the same key and value logonuihost reads (gfx.h LUH_LOCK_KEY). */
+#define LOCK_SCREEN_KEY L"SOFTWARE\\Orosi\\LockScreen"
 
 static void
 NotifyCompositor()
@@ -503,6 +505,36 @@ SetScreenSaver(const std::wstring &path)
     SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, !path.empty(), NULL, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
 }
 
+/*
+ * Where the logon curtain puts its clock: one machine-wide value, so only an administrator
+ * changes it. Others see the current choice greyed, with the reason in its description.
+ */
+static void
+LockClockChoice(PageBuilder &page)
+{
+    SettingsHost *host = page.Host;
+    std::vector<std::wstring> positions;
+    bool admin = false;
+    int position = 0;
+
+    if (!page.Indexing)
+    {
+        admin = IsAdmin();
+        position = ReadDword(HKEY_LOCAL_MACHINE, LOCK_SCREEN_KEY, L"ClockPosition", 0) == 1 ? 1 : 0;
+    }
+    positions.push_back(Str(IDS_LOCK_CLOCK_TOP));
+    positions.push_back(Str(IDS_LOCK_CLOCK_BOTTOM_LEFT));
+
+    page.Group(Str(IDS_PAGE_LOCKSCREEN));
+    page.Choice(Str(IDS_LOCK_CLOCK), Str(admin || page.Indexing ? IDS_LOCK_CLOCK_DESC : IDS_LOCK_CLOCK_ADMIN_DESC),
+                L"clock_20_regular", positions, position,
+                [host](int index)
+                {
+                    if (!WriteDword(HKEY_LOCAL_MACHINE, LOCK_SCREEN_KEY, L"ClockPosition", index == 1 ? 1 : 0))
+                        ShowError(host->Window(), ERROR_ACCESS_DENIED);
+                }).Enabled = admin;
+}
+
 void
 BuildLockScreen(PageBuilder &page)
 {
@@ -534,6 +566,8 @@ BuildLockScreen(PageBuilder &page)
         if (ScreenSaverMinutes[i] * 60 <= timeout)
             wait = (int)i;
     }
+
+    LockClockChoice(page);
 
     page.Group(Str(IDS_SCREEN_SAVER));
     page.Choice(Str(IDS_SCREEN_SAVER), Str(IDS_SCREEN_SAVER_DESC), L"desktop_20_regular", names, selected,
