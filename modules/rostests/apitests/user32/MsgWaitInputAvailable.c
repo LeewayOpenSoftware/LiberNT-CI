@@ -77,6 +77,31 @@ START_TEST(MsgWaitInputAvailable)
     ok(DrainQueue() == 1, "expected one queued message\n");
     Result = MsgWaitForMultipleObjectsEx(1, &Event, 0, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     ok(Result == WAIT_OBJECT_0, "signalled object, empty queue: Result = %lu, expected WAIT_OBJECT_0\n", Result);
+    ResetEvent(Event);
+
+    /* Without the flag the order is the same for new input: it comes ahead of a signalled object */
+    ok(PostThreadMessageW(GetCurrentThreadId(), TEST_MESSAGE, 0, 0), "PostThreadMessageW failed, error %lu\n", GetLastError());
+    SetEvent(Event);
+    Result = MsgWaitForMultipleObjects(1, &Event, FALSE, 0, QS_ALLINPUT);
+    ok(Result == WAIT_OBJECT_0 + 1, "signalled object and new input, plain wait: Result = %lu, expected %lu\n",
+       Result, (DWORD)(WAIT_OBJECT_0 + 1));
+
+    /* Input already seen does not count for a plain wait, so the signalled object is reported */
+    ok(PeekMessageW(&Msg, NULL, 0, 0, PM_NOREMOVE), "the posted message is gone\n");
+    Result = MsgWaitForMultipleObjects(1, &Event, FALSE, 0, QS_ALLINPUT);
+    ok(Result == WAIT_OBJECT_0, "signalled object and seen input, plain wait: Result = %lu, expected WAIT_OBJECT_0\n", Result);
+    DrainQueue();
+    ResetEvent(Event);
+
+    /* Input outside the wake mask does not count either, with or without the flag */
+    ok(PostThreadMessageW(GetCurrentThreadId(), TEST_MESSAGE, 0, 0), "PostThreadMessageW failed, error %lu\n", GetLastError());
+    SetEvent(Event);
+    Result = MsgWaitForMultipleObjects(1, &Event, FALSE, 0, QS_KEY);
+    ok(Result == WAIT_OBJECT_0, "signalled object and input outside the mask, plain wait: Result = %lu, expected WAIT_OBJECT_0\n", Result);
+    Result = MsgWaitForMultipleObjectsEx(1, &Event, 0, QS_KEY, MWMO_INPUTAVAILABLE);
+    ok(Result == WAIT_OBJECT_0, "signalled object and input outside the mask, MWMO_INPUTAVAILABLE: Result = %lu, expected WAIT_OBJECT_0\n", Result);
+    DrainQueue();
+    ResetEvent(Event);
 
     CloseHandle(Event);
 }
