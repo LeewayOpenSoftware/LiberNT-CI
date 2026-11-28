@@ -73,7 +73,7 @@ typedef enum PackagePathType
     PackagePathType_EffectiveExternal = 5,
 } PackagePathType;
 
-#include <pshpack4.h>
+#pragma pack(push, 4)
 
 typedef struct PACKAGE_VERSION
 {
@@ -101,7 +101,7 @@ typedef struct PACKAGE_ID
     PWSTR publisherId;
 } PACKAGE_ID;
 
-#include <poppack.h>
+#pragma pack(pop)
 
 typedef enum PackageOrigin
 {
@@ -119,7 +119,7 @@ typedef struct _PACKAGE_INFO_REFERENCE
     PVOID reserved;
 } *PACKAGE_INFO_REFERENCE;
 
-#include <pshpack4.h>
+#pragma pack(push, 4)
 
 typedef struct PACKAGE_INFO
 {
@@ -131,7 +131,7 @@ typedef struct PACKAGE_INFO
     PACKAGE_ID packageId;
 } PACKAGE_INFO;
 
-#include <poppack.h>
+#pragma pack(pop)
 
 typedef enum CreatePackageDependencyOptions
 {
