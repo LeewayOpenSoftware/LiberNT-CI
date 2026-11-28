@@ -528,8 +528,8 @@
 @ stdcall GetProcessDefaultCpuSets(ptr ptr long ptr)
 @ stdcall -version=0x601+ GetProcessGroupAffinity(long ptr ptr) kernel32.GetProcessGroupAffinity
 @ stdcall GetProcessHandleCount(long ptr) kernel32.GetProcessHandleCount
-@ stdcall GetProcessHeap() kernel32.GetProcessHeap
-@ stdcall GetProcessHeaps(long ptr) kernel32.GetProcessHeaps
+@ stdcall GetProcessHeap()
+@ stdcall GetProcessHeaps(long ptr)
 @ stdcall GetProcessId(long) kernel32.GetProcessId
 @ stdcall GetProcessIdOfThread(ptr)
 @ stdcall -version=0x601+ GetProcessImageFileNameA(long ptr long) kernel32.K32GetProcessImageFileNameA
@@ -649,30 +649,30 @@
 @ stdcall -version=0x601+ GetWsChanges(long ptr long) kernel32.K32GetWsChanges
 @ stdcall -version=0x601+ GetWsChangesEx(long ptr ptr)
 @ stdcall -arch=i386,x86_64,arm64ec GetXStateFeaturesMask(ptr ptr)
-@ stdcall GlobalAlloc(long long) kernel32.GlobalAlloc
-@ stdcall GlobalFlags(long) kernel32.GlobalFlags
-@ stdcall GlobalFree(long) kernel32.GlobalFree
-@ stdcall GlobalHandle(ptr) kernel32.GlobalHandle
-@ stdcall GlobalLock(long) kernel32.GlobalLock
-@ stdcall GlobalMemoryStatusEx(ptr) kernel32.GlobalMemoryStatusEx
-@ stdcall GlobalReAlloc(long long long) kernel32.GlobalReAlloc
-@ stdcall GlobalSize(long) kernel32.GlobalSize
-@ stdcall GlobalUnlock(long) kernel32.GlobalUnlock
+@ stdcall GlobalAlloc(long long)
+@ stdcall GlobalFlags(long)
+@ stdcall GlobalFree(long)
+@ stdcall GlobalHandle(ptr)
+@ stdcall GlobalLock(long)
+@ stdcall GlobalMemoryStatusEx(ptr)
+@ stdcall GlobalReAlloc(long long long)
+@ stdcall GlobalSize(long)
+@ stdcall GlobalUnlock(long)
 @ stdcall HashData(ptr long ptr long)
 @ stdcall HeapAlloc(long long long) ntdll.RtlAllocateHeap
-@ stdcall HeapCompact(long long) kernel32.HeapCompact
-@ stdcall HeapCreate(long long long) kernel32.HeapCreate
-@ stdcall HeapDestroy(long) kernel32.HeapDestroy
+@ stdcall HeapCompact(long long)
+@ stdcall HeapCreate(long long long)
+@ stdcall HeapDestroy(long)
 @ stdcall HeapFree(long long long) ntdll.RtlFreeHeap
-@ stdcall HeapLock(long) kernel32.HeapLock
-@ stdcall HeapQueryInformation(long long ptr long ptr) kernel32.HeapQueryInformation
+@ stdcall HeapLock(long)
+@ stdcall HeapQueryInformation(long long ptr long ptr)
 @ stdcall HeapReAlloc(long long ptr long) ntdll.RtlReAllocateHeap
-@ stdcall HeapSetInformation(ptr long ptr long) kernel32.HeapSetInformation
+@ stdcall HeapSetInformation(ptr long ptr long)
 @ stdcall HeapSize(long long ptr) ntdll.RtlSizeHeap
-@ stdcall HeapSummary(long long ptr) kernel32.HeapSummary
-@ stdcall HeapUnlock(long) kernel32.HeapUnlock
-@ stdcall HeapValidate(long long ptr) kernel32.HeapValidate
-@ stdcall HeapWalk(long ptr) kernel32.HeapWalk
+@ stdcall HeapSummary(long long ptr)
+@ stdcall HeapUnlock(long)
+@ stdcall HeapValidate(long long ptr)
+@ stdcall HeapWalk(long ptr)
 @ stdcall IdnToAscii(long wstr long ptr long)
 @ stdcall IdnToNameprepUnicode(long wstr long ptr long)
 @ stdcall IdnToUnicode(long wstr long ptr long)
@@ -803,14 +803,14 @@
 @ stub -version=0x600+ LoadStringBaseExW
 @ stub LoadStringByReference
 @ stdcall LoadStringW(long long ptr long)
-@ stdcall LocalAlloc(long long) kernel32.LocalAlloc
+@ stdcall LocalAlloc(long long)
 @ stdcall LocalFileTimeToFileTime(ptr ptr) kernel32.LocalFileTimeToFileTime
-@ stdcall LocalFlags(long) kernel32.LocalFlags
-@ stdcall LocalFree(long) kernel32.LocalFree
-@ stdcall LocalLock(long) kernel32.LocalLock
-@ stdcall LocalReAlloc(long long long) kernel32.LocalReAlloc
-@ stdcall LocalSize(long) kernel32.LocalSize
-@ stdcall LocalUnlock(long) kernel32.LocalUnlock
+@ stdcall LocalFlags(long)
+@ stdcall LocalFree(long)
+@ stdcall LocalLock(long)
+@ stdcall LocalReAlloc(long long long)
+@ stdcall LocalSize(long)
+@ stdcall LocalUnlock(long)
 @ stdcall LocaleNameToLCID(wstr long)
 @ stdcall -arch=i386,x86_64,arm64ec LocateXStateFeature(ptr long ptr)
 @ stdcall LockFile(long long long long long) kernel32.LockFile

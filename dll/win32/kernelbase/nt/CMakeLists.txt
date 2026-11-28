@@ -5,6 +5,7 @@ add_definitions(-D_KERNELBASE_)
 list(APPEND SOURCE
     ComputerName.c
     FileMapping.c
+    Heap.c
     SystemInfo.c
     VirtualMemory.c)
 

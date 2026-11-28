@@ -643,8 +643,8 @@
 @ stdcall -version=0x600+ GetProcessDEPPolicy(ptr ptr ptr)
 @ stdcall -version=0xA00+ GetProcessDefaultCpuSets(ptr ptr long ptr) kernelbase.GetProcessDefaultCpuSets
 @ stdcall GetProcessHandleCount(long ptr)
-@ stdcall -norelay GetProcessHeap()
-@ stdcall GetProcessHeaps(long ptr)
+@ stdcall -norelay GetProcessHeap() kernelbase.GetProcessHeap
+@ stdcall GetProcessHeaps(long ptr) kernelbase.GetProcessHeaps
 @ stdcall GetProcessId(long)
 @ stdcall GetProcessIdOfThread(ptr) kernelbase.GetProcessIdOfThread
 @ stdcall GetProcessIoCounters(long ptr)
@@ -757,48 +757,48 @@
 @ stdcall -version=0x601+ -arch=i386,x86_64,arm64ec GetXStateFeaturesMask(ptr ptr) kernelbase.GetXStateFeaturesMask
 @ stdcall GlobalAddAtomA(str)
 @ stdcall GlobalAddAtomW(wstr)
-@ stdcall GlobalAlloc(long long)
-@ stdcall GlobalCompact(long)
+@ stdcall GlobalAlloc(long long) kernelbase.GlobalAlloc
+@ stdcall GlobalCompact(long) kernelbase.GlobalCompact
 @ stdcall GlobalDeleteAtom(long)
 @ stdcall GlobalFindAtomA(str)
 @ stdcall GlobalFindAtomW(wstr)
-@ stdcall GlobalFix(long)
-@ stdcall GlobalFlags(long)
-@ stdcall GlobalFree(long)
+@ stdcall GlobalFix(long) kernelbase.GlobalFix
+@ stdcall GlobalFlags(long) kernelbase.GlobalFlags
+@ stdcall GlobalFree(long) kernelbase.GlobalFree
 @ stdcall GlobalGetAtomNameA(long ptr long)
 @ stdcall GlobalGetAtomNameW(long ptr long)
-@ stdcall GlobalHandle(ptr)
-@ stdcall GlobalLock(long)
-@ stdcall GlobalMemoryStatus(ptr)
-@ stdcall GlobalMemoryStatusEx(ptr)
-@ stdcall GlobalReAlloc(long long long)
-@ stdcall GlobalSize(long)
-@ stdcall GlobalUnWire(long)
-@ stdcall GlobalUnfix(long)
-@ stdcall GlobalUnlock(long)
-@ stdcall GlobalWire(long)
+@ stdcall GlobalHandle(ptr) kernelbase.GlobalHandle
+@ stdcall GlobalLock(long) kernelbase.GlobalLock
+@ stdcall GlobalMemoryStatus(ptr) kernelbase.GlobalMemoryStatus
+@ stdcall GlobalMemoryStatusEx(ptr) kernelbase.GlobalMemoryStatusEx
+@ stdcall GlobalReAlloc(long long long) kernelbase.GlobalReAlloc
+@ stdcall GlobalSize(long) kernelbase.GlobalSize
+@ stdcall GlobalUnWire(long) kernelbase.GlobalUnWire
+@ stdcall GlobalUnfix(long) kernelbase.GlobalUnfix
+@ stdcall GlobalUnlock(long) kernelbase.GlobalUnlock
+@ stdcall GlobalWire(long) kernelbase.GlobalWire
 @ stdcall Heap32First(ptr long long)
 @ stdcall Heap32ListFirst(long ptr)
 @ stdcall Heap32ListNext(long ptr)
 @ stdcall Heap32Next(ptr)
 @ stdcall HeapAlloc(long long long) ntdll.RtlAllocateHeap
-@ stdcall HeapCompact(long long)
-@ stdcall HeapCreate(long long long)
-@ stdcall -version=0x351-0x502 HeapCreateTagsW(ptr long wstr wstr)
-@ stdcall HeapDestroy(long)
-@ stdcall -version=0x351-0x502 HeapExtend(long long ptr long)
+@ stdcall HeapCompact(long long) kernelbase.HeapCompact
+@ stdcall HeapCreate(long long long) kernelbase.HeapCreate
+@ stdcall -version=0x351-0x502 HeapCreateTagsW(ptr long wstr wstr) kernelbase.HeapCreateTagsW
+@ stdcall HeapDestroy(long) kernelbase.HeapDestroy
+@ stdcall -version=0x351-0x502 HeapExtend(long long ptr long) kernelbase.HeapExtend
 @ stdcall HeapFree(long long long) ntdll.RtlFreeHeap
-@ stdcall HeapLock(long)
-@ stdcall HeapQueryInformation(long long ptr long ptr)
-@ stdcall -version=0x351-0x502 HeapQueryTagW(long long long long ptr)
+@ stdcall HeapLock(long) kernelbase.HeapLock
+@ stdcall HeapQueryInformation(long long ptr long ptr) kernelbase.HeapQueryInformation
+@ stdcall -version=0x351-0x502 HeapQueryTagW(long long long long ptr) kernelbase.HeapQueryTagW
 @ stdcall HeapReAlloc(long long ptr long) ntdll.RtlReAllocateHeap
-@ stdcall HeapSetInformation(ptr long ptr long)
+@ stdcall HeapSetInformation(ptr long ptr long) kernelbase.HeapSetInformation
 @ stdcall HeapSize(long long ptr) ntdll.RtlSizeHeap
-@ stdcall HeapSummary(long long ptr)
-@ stdcall HeapUnlock(long)
-@ stdcall -version=0x351-0x502 HeapUsage(long long long long ptr)
-@ stdcall HeapValidate(long long ptr)
-@ stdcall HeapWalk(long ptr)
+@ stdcall HeapSummary(long long ptr) kernelbase.HeapSummary
+@ stdcall HeapUnlock(long) kernelbase.HeapUnlock
+@ stdcall -version=0x351-0x502 HeapUsage(long long long long ptr) kernelbase.HeapUsage
+@ stdcall HeapValidate(long long ptr) kernelbase.HeapValidate
+@ stdcall HeapWalk(long ptr) kernelbase.HeapWalk
 @ stdcall -version=0x600+ IdnToAscii(long wstr long ptr long) kernelbase.IdnToAscii
 @ stdcall -version=0x600+ IdnToNameprepUnicode(long wstr long ptr long) kernelbase.IdnToNameprepUnicode
 @ stdcall -version=0x600+ IdnToUnicode(long wstr long ptr long) kernelbase.IdnToUnicode
@@ -913,17 +913,17 @@
 @ stdcall LoadResource(long long)
 @ stub -version=0x600+ LoadStringBaseExW
 @ stub -version=0x600+ LoadStringBaseW
-@ stdcall LocalAlloc(long long)
-@ stdcall LocalCompact(long)
+@ stdcall LocalAlloc(long long) kernelbase.LocalAlloc
+@ stdcall LocalCompact(long) kernelbase.LocalCompact
 @ stdcall LocalFileTimeToFileTime(ptr ptr)
-@ stdcall LocalFlags(long)
-@ stdcall LocalFree(long)
-@ stdcall LocalHandle(ptr)
-@ stdcall LocalLock(long)
-@ stdcall LocalReAlloc(long long long)
-@ stdcall LocalShrink(long long)
-@ stdcall LocalSize(long)
-@ stdcall LocalUnlock(long)
+@ stdcall LocalFlags(long) kernelbase.LocalFlags
+@ stdcall LocalFree(long) kernelbase.LocalFree
+@ stdcall LocalHandle(ptr) kernelbase.LocalHandle
+@ stdcall LocalLock(long) kernelbase.LocalLock
+@ stdcall LocalReAlloc(long long long) kernelbase.LocalReAlloc
+@ stdcall LocalShrink(long long) kernelbase.LocalShrink
+@ stdcall LocalSize(long) kernelbase.LocalSize
+@ stdcall LocalUnlock(long) kernelbase.LocalUnlock
 @ stdcall -version=0x600+ LocaleNameToLCID(wstr long) kernelbase.LocaleNameToLCID
 @ stdcall -version=0x601+ -arch=i386,x86_64,arm64ec LocateXStateFeature(ptr long ptr) kernelbase.LocateXStateFeature
 @ stdcall LockFile(long long long long long)
