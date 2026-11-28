@@ -224,6 +224,9 @@ BEGIN
     IDS_TRAYCLOCK_NEWNOTIFICATION "%u new notification"
     IDS_TRAYCLOCK_NEWNOTIFICATIONS "%u new notifications"
     IDS_TRAYQUICKSETTINGS_TOOLTIP "Quick settings"
+    IDS_TASKBARPROP_GROUP_ALWAYS "Always combine, hide labels"
+    IDS_TASKBARPROP_GROUP_FULL "Combine when taskbar is full"
+    IDS_TASKBARPROP_GROUP_NEVER "Never combine"
 END
 
 STRINGTABLE

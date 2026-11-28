@@ -110,9 +110,14 @@ public:
         CheckDlgButton(IDC_TASKBARPROP_LOCK, g_TaskbarSettings.bLock ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(IDC_TASKBARPROP_HIDE, g_TaskbarSettings.sr.AutoHide ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(IDC_TASKBARPROP_ONTOP, g_TaskbarSettings.sr.AlwaysOnTop ? BST_CHECKED : BST_UNCHECKED);
-        SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)L"Always combine, hide labels");
-        SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)L"Combine when taskbar is full");
-        SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)L"Never combine");
+        static const UINT GroupStrings[] = {
+            IDS_TASKBARPROP_GROUP_ALWAYS, IDS_TASKBARPROP_GROUP_FULL, IDS_TASKBARPROP_GROUP_NEVER };
+        for (UINT iGroup = 0; iGroup < _countof(GroupStrings); ++iGroup)
+        {
+            WCHAR szGroup[128];
+            if (LoadStringW(hExplorerInstance, GroupStrings[iGroup], szGroup, _countof(szGroup)) > 0)
+                SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)szGroup);
+        }
         SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_SETCURSEL, g_TaskbarSettings.dwTaskbarGlomLevel);
         //CheckDlgButton(IDC_TASKBARPROP_SHOWQL, g_TaskbarSettings.bShowQuickLaunch ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(IDC_TASKBARPROP_SMALLICONS, g_TaskbarSettings.bSmallIcons ? BST_CHECKED : BST_UNCHECKED);
