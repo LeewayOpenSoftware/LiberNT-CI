@@ -1013,8 +1013,8 @@
 @ stdcall -version=0x601+ QueryIdleProcessorCycleTimeEx(long ptr ptr) kernel32.QueryIdleProcessorCycleTimeEx
 @ stdcall QueryIoRingCapabilities(ptr)
 @ stdcall QueryMemoryResourceNotification(ptr ptr) kernel32.QueryMemoryResourceNotification
-@ stdcall QueryPerformanceCounter(ptr)
-@ stdcall QueryPerformanceFrequency(ptr)
+@ stdcall QueryPerformanceCounter(ptr) ntdll.RtlQueryPerformanceCounter
+@ stdcall QueryPerformanceFrequency(ptr) ntdll.RtlQueryPerformanceFrequency
 @ stdcall QueryProcessAffinityUpdateMode(ptr ptr)
 @ stdcall -version=0x600+ QueryProcessCycleTime(ptr ptr) kernel32.QueryProcessCycleTime
 @ stdcall QuerySecurityAccessMask(long ptr)
