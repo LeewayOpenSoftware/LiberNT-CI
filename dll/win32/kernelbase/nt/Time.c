@@ -549,4 +549,68 @@ GetSystemTimes(OUT LPFILETIME lpIdleTime OPTIONAL,
     return TRUE;
 }
 
+/*
+ * @unimplemented
+ */
+BOOL
+WINAPI
+SetClientTimeZoneInformation(IN CONST TIME_ZONE_INFORMATION *lpTimeZoneInformation)
+{
+    /* kernel32's STUB macro */
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    DPRINT1("%s() is UNIMPLEMENTED!\n", __FUNCTION__);
+    return 0;
+}
+
+static
+ULONGLONG
+BasepQueryInterruptTimePrecise(BOOLEAN Unbiased)
+{
+    LARGE_INTEGER Counter;
+    ULONGLONG Time, Baseline, Increment, Bias;
+    ULONG Sequence;
+    UCHAR Shift;
+
+    for (;;)
+    {
+        Sequence = ReadULongAcquire((volatile ULONG *)&SharedUserData->TimeUpdateLock);
+        if (Sequence & 1)
+        {
+            YieldProcessor();
+            continue;
+        }
+        Time = KiReadSystemTime(&SharedUserData->InterruptTime).QuadPart;
+        Baseline = ReadULong64NoFence(&SharedUserData->BaselineInterruptTimeQpc);
+        Increment = ReadULong64NoFence(&SharedUserData->QpcInterruptTimeIncrement);
+        Shift = ReadUCharNoFence(&SharedUserData->QpcInterruptTimeIncrementShift);
+        Bias = Unbiased ? ReadULong64NoFence(&SharedUserData->InterruptTimeBias) : 0;
+        RtlQueryPerformanceCounter(&Counter);
+        MemoryBarrier();
+        if (Sequence == ReadULongAcquire((volatile ULONG *)&SharedUserData->TimeUpdateLock)) break;
+    }
+    return Time +
+        RtlpScaleTimeDelta(Counter.QuadPart - Baseline, Increment, Shift, NULL) - Bias;
+}
+
+VOID
+WINAPI
+QueryInterruptTime(_Out_ PULONGLONG lpInterruptTime)
+{
+    *lpInterruptTime = KiReadSystemTime(&SharedUserData->InterruptTime).QuadPart;
+}
+
+VOID
+WINAPI
+QueryInterruptTimePrecise(_Out_ PULONGLONG lpInterruptTimePrecise)
+{
+    *lpInterruptTimePrecise = BasepQueryInterruptTimePrecise(FALSE);
+}
+
+VOID
+WINAPI
+QueryUnbiasedInterruptTimePrecise(_Out_ PULONGLONG lpUnbiasedInterruptTimePrecise)
+{
+    *lpUnbiasedInterruptTimePrecise = BasepQueryInterruptTimePrecise(TRUE);
+}
+
 /* EOF */

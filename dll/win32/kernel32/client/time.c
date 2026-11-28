@@ -12,7 +12,6 @@
 /* INCLUDES *******************************************************************/
 
 #include <k32.h>
-#include <reactos/precisetime.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -86,88 +85,6 @@ DosDateTimeToFileTime(IN WORD wFatDate,
 
     BaseSetLastNTError(STATUS_INVALID_PARAMETER);
     return FALSE;
-}
-
-/*
- * @unimplemented
- */
-BOOL
-WINAPI
-SetClientTimeZoneInformation(IN CONST TIME_ZONE_INFORMATION *lpTimeZoneInformation)
-{
-    STUB;
-    return 0;
-}
-
-/*
- * @implemented
- */
-BOOL
-WINAPI
-QueryUnbiasedInterruptTime(OUT PULONGLONG UnbiasedTime)
-{
-    LARGE_INTEGER InterruptTime;
-
-    if (UnbiasedTime == NULL)
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-
-    InterruptTime = KiReadSystemTime(&SharedUserData->InterruptTime);
-    *UnbiasedTime = (ULONGLONG)InterruptTime.QuadPart - SharedUserData->InterruptTimeBias;
-    return TRUE;
-}
-
-static
-ULONGLONG
-BasepQueryInterruptTimePrecise(BOOLEAN Unbiased)
-{
-    LARGE_INTEGER Counter;
-    ULONGLONG Time, Baseline, Increment, Bias;
-    ULONG Sequence;
-    UCHAR Shift;
-
-    for (;;)
-    {
-        Sequence = ReadULongAcquire((volatile ULONG *)&SharedUserData->TimeUpdateLock);
-        if (Sequence & 1)
-        {
-            YieldProcessor();
-            continue;
-        }
-        Time = KiReadSystemTime(&SharedUserData->InterruptTime).QuadPart;
-        Baseline = ReadULong64NoFence(&SharedUserData->BaselineInterruptTimeQpc);
-        Increment = ReadULong64NoFence(&SharedUserData->QpcInterruptTimeIncrement);
-        Shift = ReadUCharNoFence(&SharedUserData->QpcInterruptTimeIncrementShift);
-        Bias = Unbiased ? ReadULong64NoFence(&SharedUserData->InterruptTimeBias) : 0;
-        RtlQueryPerformanceCounter(&Counter);
-        MemoryBarrier();
-        if (Sequence == ReadULongAcquire((volatile ULONG *)&SharedUserData->TimeUpdateLock)) break;
-    }
-    return Time +
-        RtlpScaleTimeDelta(Counter.QuadPart - Baseline, Increment, Shift, NULL) - Bias;
-}
-
-VOID
-WINAPI
-QueryInterruptTime(_Out_ PULONGLONG lpInterruptTime)
-{
-    *lpInterruptTime = KiReadSystemTime(&SharedUserData->InterruptTime).QuadPart;
-}
-
-VOID
-WINAPI
-QueryInterruptTimePrecise(_Out_ PULONGLONG lpInterruptTimePrecise)
-{
-    *lpInterruptTimePrecise = BasepQueryInterruptTimePrecise(FALSE);
-}
-
-VOID
-WINAPI
-QueryUnbiasedInterruptTimePrecise(_Out_ PULONGLONG lpUnbiasedInterruptTimePrecise)
-{
-    *lpUnbiasedInterruptTimePrecise = BasepQueryInterruptTimePrecise(TRUE);
 }
 
 /* EOF */

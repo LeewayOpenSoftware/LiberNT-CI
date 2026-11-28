@@ -1118,6 +1118,7 @@
 @ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
 @ stdcall ResumeThread(long)
 @ stdcall RevertToSelf()
+@ stdcall SetClientTimeZoneInformation(ptr)
 @ stdcall -version=0x600+ SetDynamicTimeZoneInformation(ptr)
 @ stdcall SetProcessWorkingSetSize(long long long) kernel32.SetProcessWorkingSetSize
 @ stdcall -version=0x602+ SetThreadpoolTimerEx(ptr ptr long long) ntdll.TpSetTimerEx
@@ -1530,7 +1531,7 @@
 @ stdcall WriteConsoleInputVDMA(long long long long)
 @ stdcall WriteConsoleInputVDMW(long long long long)
 @ stdcall ConDllInitialize(long wstr)
-@ stdcall QueryInterruptTime(ptr) kernel32.QueryInterruptTime
-@ stdcall QueryInterruptTimePrecise(ptr) kernel32.QueryInterruptTimePrecise
-@ stdcall QueryUnbiasedInterruptTime(ptr) kernel32.QueryUnbiasedInterruptTime
-@ stdcall QueryUnbiasedInterruptTimePrecise(ptr) kernel32.QueryUnbiasedInterruptTimePrecise
+@ stdcall QueryInterruptTime(ptr)
+@ stdcall QueryInterruptTimePrecise(ptr)
+@ stdcall QueryUnbiasedInterruptTime(ptr) ntdll.RtlQueryUnbiasedInterruptTime
+@ stdcall QueryUnbiasedInterruptTimePrecise(ptr)
