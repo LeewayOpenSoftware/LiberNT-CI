@@ -133,16 +133,6 @@ BaseQuerySystemFirmware(
 /*
  * @implemented
  */
-SIZE_T
-WINAPI
-GetLargePageMinimum(VOID)
-{
-    return SharedUserData->LargePageMinimum;
-}
-
-/*
- * @implemented
- */
 VOID
 WINAPI
 GetSystemInfo(IN LPSYSTEM_INFO lpSystemInfo)
@@ -936,72 +926,6 @@ Exit:
     if (!Result)
         SetLastError(Error);
     return Result;
-}
-
-/*
- * @implemented
- */
-BOOL
-WINAPI
-GetSystemFileCacheSize(OUT PSIZE_T lpMinimumFileCacheSize,
-                       OUT PSIZE_T lpMaximumFileCacheSize,
-                       OUT PDWORD lpFlags)
-{
-    SYSTEM_FILECACHE_INFORMATION CacheInfo;
-    NTSTATUS Status;
-
-    Status = NtQuerySystemInformation(SystemFileCacheInformationEx,
-                                      &CacheInfo,
-                                      sizeof(CacheInfo),
-                                      NULL);
-    if (!NT_SUCCESS(Status))
-    {
-        BaseSetLastNTError(Status);
-        return FALSE;
-    }
-
-    *lpMinimumFileCacheSize = CacheInfo.MinimumWorkingSet;
-    *lpMaximumFileCacheSize = CacheInfo.MaximumWorkingSet;
-    *lpFlags = CacheInfo.Flags;
-    return TRUE;
-}
-
-/*
- * @implemented
- */
-BOOL
-WINAPI
-SetSystemFileCacheSize(IN SIZE_T MinimumFileCacheSize,
-                       IN SIZE_T MaximumFileCacheSize,
-                       IN DWORD Flags)
-{
-    SYSTEM_FILECACHE_INFORMATION CacheInfo;
-    NTSTATUS Status;
-
-    if ((Flags & ~(FILE_CACHE_MAX_HARD_ENABLE | FILE_CACHE_MAX_HARD_DISABLE |
-                   FILE_CACHE_MIN_HARD_ENABLE | FILE_CACHE_MIN_HARD_DISABLE)) ||
-        ((Flags & FILE_CACHE_MAX_HARD_ENABLE) && (Flags & FILE_CACHE_MAX_HARD_DISABLE)) ||
-        ((Flags & FILE_CACHE_MIN_HARD_ENABLE) && (Flags & FILE_CACHE_MIN_HARD_DISABLE)))
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-
-    RtlZeroMemory(&CacheInfo, sizeof(CacheInfo));
-    CacheInfo.MinimumWorkingSet = MinimumFileCacheSize;
-    CacheInfo.MaximumWorkingSet = MaximumFileCacheSize;
-    CacheInfo.Flags = Flags;
-
-    Status = NtSetSystemInformation(SystemFileCacheInformationEx,
-                                    &CacheInfo,
-                                    sizeof(CacheInfo));
-    if (!NT_SUCCESS(Status))
-    {
-        BaseSetLastNTError(Status);
-        return FALSE;
-    }
-
-    return TRUE;
 }
 
 /*

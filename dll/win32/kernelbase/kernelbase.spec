@@ -35,8 +35,8 @@
 @ stdcall AllocConsole()
 @ stdcall AllocateAndInitializeSid(ptr long long long long long long long long long ptr)
 @ stdcall AllocateLocallyUniqueId(ptr)
-@ stdcall AllocateUserPhysicalPages(long ptr ptr) kernel32.AllocateUserPhysicalPages
-@ stdcall -version=0x600+ AllocateUserPhysicalPagesNuma(long ptr ptr long) kernel32.AllocateUserPhysicalPagesNuma
+@ stdcall AllocateUserPhysicalPages(long ptr ptr)
+@ stdcall -version=0x600+ AllocateUserPhysicalPagesNuma(long ptr ptr long)
 @ stdcall AppContainerFreeMemory(ptr)
 @ stdcall AppContainerLookupMoniker(ptr ptr)
 @ stdcall AppContainerRegisterSid(ptr wstr wstr)
@@ -329,7 +329,7 @@
 @ stdcall -version=0x600+ FreeLibraryWhenCallbackReturns(ptr ptr) ntdll.TpCallbackUnloadDllOnCompletion
 @ stdcall FreeResource(long) kernel32.FreeResource
 @ stdcall FreeSid(ptr)
-@ stdcall FreeUserPhysicalPages(long long long) kernel32.FreeUserPhysicalPages
+@ stdcall FreeUserPhysicalPages(long long long)
 @ stdcall GenerateConsoleCtrlEvent(long long)
 @ stdcall GetACP() kernel32.GetACP
 @ stdcall GetAcceptLanguagesA(ptr ptr)
@@ -465,7 +465,7 @@
 @ stdcall GetHandleInformation(long ptr) kernel32.GetHandleInformation
 @ stdcall GetIntegratedDisplaySize(ptr)
 @ stdcall GetKernelObjectSecurity(long long ptr long ptr)
-@ stdcall GetLargePageMinimum() kernel32.GetLargePageMinimum
+@ stdcall GetLargePageMinimum()
 @ stdcall GetLargestConsoleWindowSize(long)
 @ stdcall GetLastError() ntdll.RtlGetLastWin32Error
 @ stdcall GetLengthSid(ptr)
@@ -575,7 +575,7 @@
 @ stdcall GetSystemDefaultUILanguage() kernel32.GetSystemDefaultUILanguage
 @ stdcall GetSystemDirectoryA(ptr long) kernel32.GetSystemDirectoryA
 @ stdcall GetSystemDirectoryW(ptr long) kernel32.GetSystemDirectoryW
-@ stdcall GetSystemFileCacheSize(ptr ptr ptr) kernel32.GetSystemFileCacheSize
+@ stdcall GetSystemFileCacheSize(ptr ptr ptr)
 @ stdcall GetSystemFirmwareTable(long long ptr long) kernel32.GetSystemFirmwareTable
 @ stdcall GetSystemInfo(ptr) kernel32.GetSystemInfo
 @ stdcall GetSystemPreferredUILanguages(long ptr ptr ptr)
@@ -645,7 +645,7 @@
 @ stdcall GetWindowsAccountDomainSid(ptr ptr ptr)
 @ stdcall GetWindowsDirectoryA(ptr long) kernel32.GetWindowsDirectoryA
 @ stdcall GetWindowsDirectoryW(ptr long) kernel32.GetWindowsDirectoryW
-@ stdcall GetWriteWatch(long ptr long ptr ptr ptr) kernel32.GetWriteWatch
+@ stdcall GetWriteWatch(long ptr long ptr ptr ptr)
 @ stdcall -version=0x601+ GetWsChanges(long ptr long) kernel32.K32GetWsChanges
 @ stdcall -version=0x601+ GetWsChangesEx(long ptr ptr)
 @ stdcall -arch=i386,x86_64,arm64ec GetXStateFeaturesMask(ptr ptr)
@@ -1109,7 +1109,7 @@
 @ stdcall RemoveVectoredExceptionHandler(ptr) ntdll.RtlRemoveVectoredExceptionHandler
 @ stdcall ReplaceFileW(wstr wstr wstr long ptr ptr) kernel32.ReplaceFileW
 @ stdcall ResetEvent(long) kernel32.ResetEvent
-@ stdcall ResetWriteWatch(ptr long) kernel32.ResetWriteWatch
+@ stdcall ResetWriteWatch(ptr long)
 @ stdcall ResizePseudoConsole(ptr long)
 @ stdcall -version=0x602+ ResolveDelayLoadedAPI(ptr ptr ptr ptr ptr long) ntdll.LdrResolveDelayLoadedAPI
 @ stdcall -version=0x602+ ResolveDelayLoadsFromDll(ptr str long) ntdll.LdrResolveDelayLoadsFromDll
@@ -1236,7 +1236,7 @@
 @ stdcall SetSecurityDescriptorSacl(ptr long ptr long)
 @ stdcall SetStdHandle(long long)
 @ stdcall -version=0x600+ SetStdHandleEx(long long ptr)
-@ stdcall SetSystemFileCacheSize(long long long) kernel32.SetSystemFileCacheSize
+@ stdcall SetSystemFileCacheSize(long long long)
 @ stdcall SetSystemTime(ptr) kernel32.SetSystemTime
 @ stdcall SetSystemTimeAdjustment(long long) kernel32.SetSystemTimeAdjustment
 @ stdcall SetThreadContext(long ptr)
@@ -1405,20 +1405,20 @@
 @ stdcall VerifyScripts(long wstr long wstr long)
 @ stdcall PrefetchVirtualMemory(ptr ptr ptr long) kernel32.PrefetchVirtualMemory
 @ stdcall VerSetConditionMask(long long long long) ntdll.VerSetConditionMask
-@ stdcall VirtualAlloc(ptr long long long) kernel32.VirtualAlloc
+@ stdcall VirtualAlloc(ptr long long long)
 @ stdcall VirtualAlloc2(long ptr long long long ptr long)
 @ stdcall VirtualAlloc2FromApp(long ptr long long long ptr long)
-@ stdcall VirtualAllocEx(long ptr long long long) kernel32.VirtualAllocEx
+@ stdcall VirtualAllocEx(long ptr long long long)
 @ stdcall -version=0x600+ VirtualAllocExNuma(long ptr long long long long)
 @ stdcall VirtualAllocFromApp(ptr long long long)
-@ stdcall VirtualFree(ptr long long) kernel32.VirtualFree
-@ stdcall VirtualFreeEx(long ptr long long) kernel32.VirtualFreeEx
-@ stdcall VirtualLock(ptr long) kernel32.VirtualLock
-@ stdcall VirtualProtect(ptr long long ptr) kernel32.VirtualProtect
-@ stdcall VirtualProtectEx(long ptr long long ptr) kernel32.VirtualProtectEx
-@ stdcall VirtualQuery(ptr ptr long) kernel32.VirtualQuery
-@ stdcall VirtualQueryEx(long ptr ptr long) kernel32.VirtualQueryEx
-@ stdcall VirtualUnlock(ptr long) kernel32.VirtualUnlock
+@ stdcall VirtualFree(ptr long long)
+@ stdcall VirtualFreeEx(long ptr long long)
+@ stdcall VirtualLock(ptr long)
+@ stdcall VirtualProtect(ptr long long ptr)
+@ stdcall VirtualProtectEx(long ptr long long ptr)
+@ stdcall VirtualQuery(ptr ptr long)
+@ stdcall VirtualQueryEx(long ptr ptr long)
+@ stdcall VirtualUnlock(ptr long)
 @ stdcall WaitCommEvent(long ptr ptr) kernel32.WaitCommEvent
 @ stdcall WaitForDebugEvent(ptr long)
 @ stdcall -version=0xA00+ WaitForDebugEventEx(ptr long)

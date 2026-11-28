@@ -18,8 +18,8 @@
 @ stdcall AddVectoredExceptionHandler(long ptr) ntdll.RtlAddVectoredExceptionHandler
 @ stdcall -version=0x600+ AdjustCalendarDate(ptr long long)
 @ stdcall AllocConsole() kernelbase.AllocConsole
-@ stdcall AllocateUserPhysicalPages(long ptr ptr)
-@ stdcall -version=0x600+ AllocateUserPhysicalPagesNuma(ptr ptr ptr long)
+@ stdcall AllocateUserPhysicalPages(long ptr ptr) kernelbase.AllocateUserPhysicalPages
+@ stdcall -version=0x600+ AllocateUserPhysicalPagesNuma(ptr ptr ptr long) kernelbase.AllocateUserPhysicalPagesNuma
 @ stdcall -version=0x602+ AppXFreeMemory(ptr) kernelbase.AppXFreeMemory
 @ stdcall -version=0x602+ AppXGetPackageSid(wstr ptr) kernelbase.AppXGetPackageSid
 @ stdcall -version=0x600+ ApplicationRecoveryFinished(long)
@@ -384,7 +384,7 @@
 @ stdcall FreeLibraryAndExitThread(long long)
 @ stdcall -version=0x600+ FreeLibraryWhenCallbackReturns(ptr ptr) ntdll.TpCallbackUnloadDllOnCompletion
 @ stdcall FreeResource(long)
-@ stdcall FreeUserPhysicalPages(long long long)
+@ stdcall FreeUserPhysicalPages(long long long) kernelbase.FreeUserPhysicalPages
 @ stdcall GenerateConsoleCtrlEvent(long long) kernelbase.GenerateConsoleCtrlEvent
 @ stdcall GetACP()
 @ stdcall -version=0x601+ GetActiveProcessorCount(long)
@@ -550,7 +550,7 @@
 @ stdcall GetGeoInfoW(long long ptr long long) kernelbase.GetGeoInfoW
 @ stdcall -i386 GetHandleContext(long) ; missing on x64
 @ stdcall GetHandleInformation(long ptr)
-@ stdcall GetLargePageMinimum()
+@ stdcall GetLargePageMinimum() kernelbase.GetLargePageMinimum
 @ stdcall GetLargestConsoleWindowSize(long) kernelbase.GetLargestConsoleWindowSize
 @ stdcall GetLastError() ntdll.RtlGetLastWin32Error
 @ stdcall -version=0x500-0x502 GetLinguistLangSize(ptr)
@@ -685,7 +685,7 @@
 @ stdcall GetSystemDefaultUILanguage()
 @ stdcall GetSystemDirectoryA(ptr long)
 @ stdcall GetSystemDirectoryW(ptr long)
-@ stdcall GetSystemFileCacheSize(ptr ptr ptr)
+@ stdcall GetSystemFileCacheSize(ptr ptr ptr) kernelbase.GetSystemFileCacheSize
 @ stdcall GetSystemFirmwareTable(long long ptr long)
 @ stdcall GetSystemInfo(ptr)
 @ stdcall GetSystemPowerStatus(ptr)
@@ -753,7 +753,7 @@
 @ stdcall GetVolumePathNamesForVolumeNameW(wstr wstr long ptr)
 @ stdcall GetWindowsDirectoryA(ptr long)
 @ stdcall GetWindowsDirectoryW(ptr long)
-@ stdcall GetWriteWatch(long ptr long ptr ptr ptr)
+@ stdcall GetWriteWatch(long ptr long ptr ptr ptr) kernelbase.GetWriteWatch
 @ stdcall -version=0x601+ -arch=i386,x86_64,arm64ec GetXStateFeaturesMask(ptr ptr) kernelbase.GetXStateFeaturesMask
 @ stdcall GlobalAddAtomA(str)
 @ stdcall GlobalAddAtomW(wstr)
@@ -1129,7 +1129,7 @@
 @ stdcall -version=0x602+ ResolveDelayLoadedAPI(ptr ptr ptr ptr ptr long) ntdll.LdrResolveDelayLoadedAPI
 @ stdcall -version=0x602+ ResolveDelayLoadsFromDll(ptr str long) ntdll.LdrResolveDelayLoadsFromDll
 @ stdcall ResetEvent(long)
-@ stdcall ResetWriteWatch(ptr long)
+@ stdcall ResetWriteWatch(ptr long) kernelbase.ResetWriteWatch
 @ stdcall -version=0xA00+ ResizePseudoConsole(ptr long) kernelbase.ResizePseudoConsole
 @ stdcall -version=0x601+ ResolveLocaleName(wstr ptr long) kernelbase.ResolveLocaleName
 @ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
@@ -1271,7 +1271,7 @@
 @ stdcall SetProcessWorkingSetSizeEx(long long long long)
 @ stdcall SetStdHandle(long long) kernelbase.SetStdHandle
 @ stdcall -version=0x600+ SetStdHandleEx(long long ptr) kernelbase.SetStdHandleEx
-@ stdcall SetSystemFileCacheSize(long long long)
+@ stdcall SetSystemFileCacheSize(long long long) kernelbase.SetSystemFileCacheSize
 @ stdcall SetSystemPowerState(long long)
 @ stdcall SetSystemTime(ptr)
 @ stdcall SetSystemTimeAdjustment(long long)
@@ -1379,17 +1379,17 @@
 @ stdcall -version=0x600+ VerifyScripts(long wstr long wstr long) kernelbase.VerifyScripts
 @ stdcall VerifyVersionInfoA(long long double)
 @ stdcall VerifyVersionInfoW(long long double)
-@ stdcall VirtualAlloc(ptr long long long)
-@ stdcall VirtualAllocEx(long ptr long long long)
+@ stdcall VirtualAlloc(ptr long long long) kernelbase.VirtualAlloc
+@ stdcall VirtualAllocEx(long ptr long long long) kernelbase.VirtualAllocEx
 @ stdcall -version=0x600+ VirtualAllocExNuma(long ptr long long long long) kernelbase.VirtualAllocExNuma
-@ stdcall VirtualFree(ptr long long)
-@ stdcall VirtualFreeEx(long ptr long long)
-@ stdcall VirtualLock(ptr long)
-@ stdcall VirtualProtect(ptr long long ptr)
-@ stdcall VirtualProtectEx(long ptr long long ptr)
-@ stdcall VirtualQuery(ptr ptr long)
-@ stdcall VirtualQueryEx(long ptr ptr long)
-@ stdcall VirtualUnlock(ptr long)
+@ stdcall VirtualFree(ptr long long) kernelbase.VirtualFree
+@ stdcall VirtualFreeEx(long ptr long long) kernelbase.VirtualFreeEx
+@ stdcall VirtualLock(ptr long) kernelbase.VirtualLock
+@ stdcall VirtualProtect(ptr long long ptr) kernelbase.VirtualProtect
+@ stdcall VirtualProtectEx(long ptr long long ptr) kernelbase.VirtualProtectEx
+@ stdcall VirtualQuery(ptr ptr long) kernelbase.VirtualQuery
+@ stdcall VirtualQueryEx(long ptr ptr long) kernelbase.VirtualQueryEx
+@ stdcall VirtualUnlock(ptr long) kernelbase.VirtualUnlock
 @ stdcall WTSGetActiveConsoleSessionId()
 @ stdcall WaitCommEvent(long ptr ptr)
 @ stdcall WaitForDebugEvent(ptr long) kernelbase.WaitForDebugEvent
