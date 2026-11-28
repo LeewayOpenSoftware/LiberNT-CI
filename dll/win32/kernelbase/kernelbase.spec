@@ -834,14 +834,12 @@
 @ stdcall NeedCurrentDirectoryForExePathW(wstr) kernel32.NeedCurrentDirectoryForExePathW
 @ stub -version=0x600+ NlsCheckPolicy
 @ stub NlsDispatchAnsiEnumProc
-@ stub -version=0x600+ NlsEventDataDescCreate
 @ stub NlsGetACPFromLocale
 @ stdcall NlsGetCacheUpdateCount() kernel32.NlsGetCacheUpdateCount
 @ stub NlsIsUserDefaultLocale
 @ stub -version=0x600+ NlsUpdateLocale
 @ stub -version=0x600+ NlsUpdateSystemLocale
 @ stdcall NlsValidateLocale(ptr long)
-@ stub -version=0x600+ NlsWriteEtwEvent
 @ stdcall NormalizeString(long wstr long ptr long)
 @ stub NotifyMountMgr
 @ stub NotifyRedirectedStringChange

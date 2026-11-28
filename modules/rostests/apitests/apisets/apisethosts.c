@@ -741,11 +741,9 @@ static const PCSTR Kb_CoreLocalizationL11Functions[] =
     "LCMapStringW",
     "LocaleNameToLCID",
     "NlsCheckPolicy",
-    "NlsEventDataDescCreate",
     "NlsGetCacheUpdateCount",
     "NlsUpdateLocale",
     "NlsUpdateSystemLocale",
-    "NlsWriteEtwEvent",
     "ResolveLocaleName",
     "SetCalendarInfoW",
     "SetLocaleInfoW",
@@ -886,11 +884,9 @@ static const PCSTR Kb_CoreLocalizationPrivateL11Functions[] =
     "GetCPFileNameFromRegistry",
     "LoadStringByReference",
     "NlsCheckPolicy",
-    "NlsEventDataDescCreate",
     "NlsGetCacheUpdateCount",
     "NlsUpdateLocale",
     "NlsUpdateSystemLocale",
-    "NlsWriteEtwEvent",
 };
 
 static const PCSTR Kb_CoreMemoryL11Functions[] =
