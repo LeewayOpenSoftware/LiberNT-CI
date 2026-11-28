@@ -21,6 +21,7 @@ list(APPEND SOURCE
     TermsrvAppInstallMode.c
     ConsoleAlias.c
     ApiSetCoreSynch.c
+    AppModelRuntime.c
     ApplicationRecovery.c
     ApplicationRestart.c
     LocalAtomExhaustion.c
