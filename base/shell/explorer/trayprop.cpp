@@ -46,6 +46,43 @@ static void SetBitmap(HWND hwnd, HBITMAP* hbmp, UINT uImageId)
 
 }
 
+/* Widen a combo box's drop-down list to its longest item, so a localized string that is wider
+   than the control (the Spanish taskbar strings are much longer than the English ones) is not
+   clipped when the list drops down. */
+static void AdjustComboDroppedWidth(HWND hCombo)
+{
+    if (!hCombo)
+        return;
+
+    HDC hdc = GetDC(hCombo);
+    if (!hdc)
+        return;
+
+    HFONT hFont = (HFONT)SendMessageW(hCombo, WM_GETFONT, 0, 0);
+    HGDIOBJ hOld = hFont ? SelectObject(hdc, hFont) : NULL;
+
+    LONG maxWidth = 0;
+    LRESULT count = SendMessageW(hCombo, CB_GETCOUNT, 0, 0);
+    for (LRESULT i = 0; i < count; ++i)
+    {
+        WCHAR szItem[256];
+        LRESULT len = SendMessageW(hCombo, CB_GETLBTEXT, i, (LPARAM)szItem);
+        SIZE sz;
+        if (len > 0 && len < _countof(szItem) &&
+            GetTextExtentPoint32W(hdc, szItem, (int)len, &sz) && sz.cx > maxWidth)
+        {
+            maxWidth = sz.cx;
+        }
+    }
+
+    if (hOld)
+        SelectObject(hdc, hOld);
+    ReleaseDC(hCombo, hdc);
+
+    if (maxWidth > 0)
+        SendMessageW(hCombo, CB_SETDROPPEDWIDTH, maxWidth + GetSystemMetrics(SM_CXVSCROLL) + ShellScaleForDpi(8), 0);
+}
+
 class CTaskBarSettingsPage : public CPropertyPageImpl<CTaskBarSettingsPage>
 {
 private:
@@ -110,9 +147,18 @@ public:
         CheckDlgButton(IDC_TASKBARPROP_LOCK, g_TaskbarSettings.bLock ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(IDC_TASKBARPROP_HIDE, g_TaskbarSettings.sr.AutoHide ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(IDC_TASKBARPROP_ONTOP, g_TaskbarSettings.sr.AlwaysOnTop ? BST_CHECKED : BST_UNCHECKED);
-        SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)L"Always combine, hide labels");
-        SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)L"Combine when taskbar is full");
-        SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)L"Never combine");
+        static const UINT GroupStrings[] = {
+            IDS_TASKBARPROP_GROUP_ALWAYS, IDS_TASKBARPROP_GROUP_FULL, IDS_TASKBARPROP_GROUP_NEVER };
+        for (UINT iGroup = 0; iGroup < _countof(GroupStrings); ++iGroup)
+        {
+            WCHAR szGroup[128];
+            /* Add an item even if the string is missing, so the combo index keeps matching the
+               stored dwTaskbarGlomLevel; dropping one would shift every later selection. */
+            if (LoadStringW(hExplorerInstance, GroupStrings[iGroup], szGroup, _countof(szGroup)) <= 0)
+                szGroup[0] = L'\0';
+            SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)szGroup);
+        }
+        AdjustComboDroppedWidth(GetDlgItem(IDC_TASKBARPROP_GROUP));
         SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_SETCURSEL, g_TaskbarSettings.dwTaskbarGlomLevel);
         //CheckDlgButton(IDC_TASKBARPROP_SHOWQL, g_TaskbarSettings.bShowQuickLaunch ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(IDC_TASKBARPROP_SMALLICONS, g_TaskbarSettings.bSmallIcons ? BST_CHECKED : BST_UNCHECKED);
@@ -130,9 +176,18 @@ public:
                the registry as MMTaskbarMode, which Windows defines as
                0 = all taskbars, 1 = main + where open, 2 = where open. */
             SendMessageW(hMMButtons, CB_RESETCONTENT, 0, 0);
-            SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"All taskbars");
-            SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"Main taskbar and taskbar where window is open");
-            SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"Taskbar where window is open");
+            static const UINT MMStrings[] = {
+                IDS_TASKBARPROP_MMBUTTONS_ALL, IDS_TASKBARPROP_MMBUTTONS_MAIN, IDS_TASKBARPROP_MMBUTTONS_OPEN };
+            for (UINT iMM = 0; iMM < _countof(MMStrings); ++iMM)
+            {
+                WCHAR szMM[256];
+                /* Add an item even on a missing string, so the index keeps matching the stored
+                   MMTaskbarMode. */
+                if (LoadStringW(hExplorerInstance, MMStrings[iMM], szMM, _countof(szMM)) <= 0)
+                    szMM[0] = L'\0';
+                SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)szMM);
+            }
+            AdjustComboDroppedWidth(hMMButtons);
             UINT uMode = g_TaskbarSettings.uMMTaskbarMode;
             if (uMode > 2)
                 uMode = 0;

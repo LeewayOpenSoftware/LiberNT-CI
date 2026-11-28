@@ -239,6 +239,19 @@
 #define IDS_SM2_REMOVE                     852
 #define IDS_SM2_SEARCH                     853
 
+/* Taskbar grouping combo box. These sit in their own 16-id string-table block (864-879), which no
+ * locale but en-US and es-ES defines, so every other language falls back to en-US for the whole
+ * block instead of getting a partial block with blank strings. */
+#define IDS_TASKBARPROP_GROUP_ALWAYS       864
+#define IDS_TASKBARPROP_GROUP_FULL         865
+#define IDS_TASKBARPROP_GROUP_NEVER        866
+
+/* Multiple-displays taskbar buttons combo box; its own 16-id block (880-895), defined only by
+ * en-US and es-ES for the same whole-block fallback reason as the grouping strings above. */
+#define IDS_TASKBARPROP_MMBUTTONS_ALL      880
+#define IDS_TASKBARPROP_MMBUTTONS_MAIN     881
+#define IDS_TASKBARPROP_MMBUTTONS_OPEN     882
+
 /* These values must be synchronized with shell32 */
 #define IDS_ADVANCED_DISPLAY_FAVORITES              30466
 #define IDS_ADVANCED_DISPLAY_LOG_OFF                30467
