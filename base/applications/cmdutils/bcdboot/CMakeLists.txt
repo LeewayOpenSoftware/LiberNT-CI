@@ -5,7 +5,8 @@
 # COPYRIGHT:   Copyright 2026 Ahmed Arif
 #
 
+include_directories(${REACTOS_SOURCE_DIR}/base/setup/lib)
 add_executable(bcdboot bcdboot.c bcdboot.rc)
 set_module_type(bcdboot win32cui UNICODE)
-add_importlibs(bcdboot msvcrt kernel32)
+add_importlibs(bcdboot setuplib msvcrt kernel32 ntdll)
 add_cd_file(TARGET bcdboot DESTINATION reactos/system32 FOR all)

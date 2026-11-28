@@ -180,6 +180,8 @@ if(ARCH STREQUAL "ppc")
     bootloader_ofw_application(bootmgfw 0x00100000)
 else()
     bootloader_efi_application(bootmgfw EfiEntry)
+    # The system's own copy, the source bcdboot installs to a system partition from.
+    add_cd_file(TARGET bootmgfw DESTINATION reactos/Boot/EFI NAME_ON_CD bootmgfw.efi FOR all)
 endif()
 target_link_libraries(bootmgfw bootgui bootwim)
 if(MSVC)
