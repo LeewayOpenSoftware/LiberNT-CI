@@ -24,7 +24,6 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
                 is_wow64 = Wow64 != 0;
             init_locale(hinstDLL);
             BaseDllInitializeMemoryManager();
-            BaseDllInitializeMemoryManager();
             break;
         }
 

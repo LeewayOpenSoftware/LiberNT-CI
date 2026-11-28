@@ -37,6 +37,7 @@ BaseSetLastNTError(IN NTSTATUS Status);
 RTL_HANDLE_TABLE BaseHeapHandleTable;
 HANDLE BaseHeap;
 ULONG_PTR SystemRangeStart;
+static SYSTEM_BASIC_INFORMATION BasepSysInfo;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
@@ -52,18 +53,18 @@ BaseDllInitializeMemoryManager(VOID)
                              &SystemRangeStart,
                              sizeof(SystemRangeStart),
                              NULL);
+    /* kernel32 reads this from the base server's static data; kernelbase asks the kernel once. */
+    NtQuerySystemInformation(SystemBasicInformation,
+                             &BasepSysInfo,
+                             sizeof(BasepSysInfo),
+                             NULL);
 }
 
-/* kernel32 reads this from the base server's static data; kernelbase asks the kernel once. */
 static
 PSYSTEM_BASIC_INFORMATION
 BasepSystemInfo(VOID)
 {
-    static SYSTEM_BASIC_INFORMATION BasicInfo;
-
-    if (BasicInfo.PageSize == 0)
-        NtQuerySystemInformation(SystemBasicInformation, &BasicInfo, sizeof(BasicInfo), NULL);
-    return &BasicInfo;
+    return &BasepSysInfo;
 }
 
 static
