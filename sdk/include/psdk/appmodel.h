@@ -73,6 +73,8 @@ typedef enum PackagePathType
     PackagePathType_EffectiveExternal = 5,
 } PackagePathType;
 
+#include <pshpack4.h>
+
 typedef struct PACKAGE_VERSION
 {
     union
@@ -98,6 +100,8 @@ typedef struct PACKAGE_ID
     PWSTR resourceId;
     PWSTR publisherId;
 } PACKAGE_ID;
+
+#include <poppack.h>
 
 typedef enum PackageOrigin
 {
