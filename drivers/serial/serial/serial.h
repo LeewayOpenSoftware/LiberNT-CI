@@ -23,6 +23,7 @@ typedef enum
   dsStarted,
   dsPaused,
   dsRemoved,
+  dsStopPending,
   dsSurpriseRemoved
 } SERIAL_DEVICE_STATE;
 
@@ -88,6 +89,7 @@ typedef struct _SERIAL_DEVICE_EXTENSION
 	KDPC WriteTimeoutDpc;
 	ULONGLONG WriteDeadline;
 
+	SERIAL_DEVICE_STATE OldPnpState;
 	UNICODE_STRING SerialInterfaceName;
 
 	/* Current values */
