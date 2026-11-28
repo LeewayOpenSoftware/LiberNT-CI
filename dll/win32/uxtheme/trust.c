@@ -32,7 +32,6 @@
 #define UXT_GUARD_USER      L"Software\\Leeway\\UxTheme\\Guard"
 #define UXT_GUARD_MACHINE   L"SOFTWARE\\Leeway\\UxTheme\\Guard"
 #define UXT_GATE_SDDL       L"O:BAG:SYD:PAI(A;CI;KA;;;SY)(A;CI;KA;;;BA)(A;CI;KR;;;BU)"
-#define UXT_DEFAULT_STYLE   L"Aero"
 #define UXT_NAME_MAX        32
 #define UXT_GUARD_MAX       64
 #define UXT_MAX_STYLE_SIZE  (32u * 1024u * 1024u)
@@ -650,9 +649,6 @@ UXTHEME_TrustMachineDefault(LPWSTR name, DWORD cchName)
 {
     WCHAR v[UXT_NAME_MAX + 1];
 
-    LPCWSTR sel;
-    WCHAR path[MAX_PATH];
-
     ZeroMemory(v, sizeof(v));
     if (TrustReadMachineValue(NULL, L"MachineDefault", REG_SZ, v, sizeof(v) - sizeof(WCHAR)) &&
         TrustNameValid(v, TrustWcsnlen(v, ARRAY_SIZE(v))))
@@ -664,16 +660,10 @@ UXTHEME_TrustMachineDefault(LPWSTR name, DWORD cchName)
 
     /* No explicit default. This runs at process attach (DllMain) for every privileged process, so it must not
      * probe the compositor: dwmapi / LoadLibrary is forbidden under the loader lock. Choose by registry policy
-     * only -- the Aero default (LiberNTAero) unless an administrator disabled Mica, otherwise the Basic one. The
+     * only -- the Aero default (OrosiAero) unless an administrator disabled Mica, otherwise the Basic one. The
      * Aero style renders plain until the compositor is up and switches to Mica on WM_DWMCOMPOSITIONCHANGED, so a
-     * process that attaches before dwm is not downgraded for its lifetime. Fall back to the shipped v3 default
-     * (UXT_DEFAULT_STYLE) when the chosen style is not installed, so nothing drops to Classic before P1 ships. */
-    sel = UXTHEME_MicaDisabledByPolicy() ? L"LiberNT" : L"LiberNTAero";
-    if (UXTHEME_TrustBuildV3Path(sel, path, ARRAY_SIZE(path)) &&
-        GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
-        StringCchCopyW(name, cchName, sel);
-    else
-        StringCchCopyW(name, cchName, UXT_DEFAULT_STYLE);
+     * process that attaches before dwm is not downgraded for its lifetime. Both styles ship in the store. */
+    StringCchCopyW(name, cchName, UXTHEME_MicaDisabledByPolicy() ? L"Orosi" : L"OrosiAero");
 }
 
 static BOOL
@@ -1063,42 +1053,6 @@ TrustPeekVersion(const UXT_VIEW *v, WORD *version)
 }
 
 #ifdef UXTHEME_V4
-static BOOL
-TrustV4Enabled(void)
-{
-    DWORD v, t, n;
-    HKEY gate;
-    BOOL allowed;
-
-    /* Never trust the "privileged" safe default while classification is still in flight: a concurrent first caller
-     * sees g_classState != 2 and would otherwise be handed version 4 against the ordinary gate. Fail closed until
-     * the class is settled. */
-    TrustEnsureClassified();
-    if (g_classState != 2)
-        return FALSE;
-
-    if (!UXTHEME_TrustIsPrivileged())
-        return TrustGateDword(L"EnableV4Ordinary");
-
-    /* Owner 2026-11-18: every process uses version 4; a privileged process may use it too, but only from the
-     * trusted system store, which the caller (UXTHEME_TrustOpenThemeFile) already enforces by the store path and
-     * the SY/BA-owned non-user-writable descriptor. Read the gate key once: if it is not protected (tampered or
-     * unreadable) fail closed, so an admin EnableV4Privileged = 0 is never silently ignored; a protected key with
-     * the value absent is the owner default (allowed), an explicit 0 forces it off. */
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ | KEY_WOW64_64KEY, &gate) != ERROR_SUCCESS)
-        return FALSE;
-    allowed = TrustKeyProtected(gate);
-    if (allowed)
-    {
-        n = sizeof(v);
-        if (RegQueryValueExW(gate, L"EnableV4Privileged", NULL, &t, (BYTE *)&v, &n) == ERROR_SUCCESS &&
-            t == REG_DWORD && n == sizeof(v))
-            allowed = (v == 1);
-    }
-    RegCloseKey(gate);
-    return allowed;
-}
-
 /* the language module beside the style: <store>\<name>\<locale>\<name>.msstyles.mui, opened with the same checks;
  * a privileged process uses the system UI language, never the user's (T-LOAD), then en-US */
 static HRESULT
@@ -1357,8 +1311,10 @@ UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeNa
     if (SUCCEEDED(hr))
         hr = TrustPeekVersion(&style, &version);
 #ifdef UXTHEME_V4
-    /* I1b: a version-4 style goes to the TL4 core on the checked views, which it keeps on success */
-    if (SUCCEEDED(hr) && version == 4 && TrustV4Enabled())
+    /* A version-4 style goes to the TL4 core on the checked views, which it keeps on success. Every process takes
+     * it; a privileged one gets here only for a store file that passed the store checks above (owner: v4
+     * everywhere, privileged from the trusted store only). */
+    if (SUCCEEDED(hr) && version == 4)
     {
         hr = TrustOpenMui(name, storeRoot, &mui);
         /* No module in the store is the core's case, not a refusal: it resolves a reference inside the style

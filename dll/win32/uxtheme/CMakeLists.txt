@@ -35,9 +35,8 @@ if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
         pngsup.cpp)
 endif()
 
-# I1b: version-4 styles through the TL4 core. The code is built wherever the PNG support exists (NT 6.0+ exports);
-# whether a process loads a version-4 style is decided at run time by the trust gate values EnableV4Ordinary /
-# EnableV4Privileged, which are off until they are set.
+# Version-4 styles through the TL4 core, built wherever the PNG support exists (NT 6.0+ exports). Every process
+# loads them; a privileged process only from the trusted store (trust.c).
 if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     set(_uxtheme_v4_default ON)
 else()
