@@ -1762,6 +1762,7 @@ DispatchSAS(
 
                 case STATE_LOGGED_OFF_SAS:
                     /* Ignore SAS if we are already in an SAS state */
+                    LogonStage("logged-out-sas-ignored");     /* the lab counts the extra SAS a sign-out queues */
                     return;
 
                 case STATE_LOGGED_ON:
