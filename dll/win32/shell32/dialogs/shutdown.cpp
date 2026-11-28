@@ -151,6 +151,29 @@ ShutdownAddChoice(HWND hCombo, UINT StringId, DWORD Code, const SHUTDOWN_DLG_CTX
         SendMessageW(hCombo, CB_SETCURSEL, iIndex, 0);
 }
 
+/* Windows 11 centres the dialog horizontally in the work area and puts it a
+ * third of the way down (Pam G9: 535x205 at y 170 on a 720 px work area). */
+static VOID
+ShutdownPlaceDialog(HWND hDlg)
+{
+    MONITORINFO mi = { sizeof(mi) };
+    RECT rcDlg;
+    LONG cx, cy;
+
+    if (!GetWindowRect(hDlg, &rcDlg) ||
+        !GetMonitorInfoW(MonitorFromWindow(hDlg, MONITOR_DEFAULTTONEAREST), &mi))
+    {
+        return;
+    }
+
+    cx = rcDlg.right - rcDlg.left;
+    cy = rcDlg.bottom - rcDlg.top;
+    SetWindowPos(hDlg, NULL,
+                 mi.rcWork.left + (mi.rcWork.right - mi.rcWork.left - cx) / 2,
+                 mi.rcWork.top + (mi.rcWork.bottom - mi.rcWork.top - cy) / 3,
+                 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 static INT_PTR CALLBACK
 ShutdownDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -172,6 +195,7 @@ ShutdownDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
             if (SendMessageW(hCombo, CB_GETCURSEL, 0, 0) == CB_ERR)
                 SendMessageW(hCombo, CB_SETCURSEL, 0, 0);
             ShutdownShowDescription(hDlg);
+            ShutdownPlaceDialog(hDlg);
             return TRUE;
 
         case WM_COMMAND:
