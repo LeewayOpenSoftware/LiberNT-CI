@@ -175,6 +175,24 @@ ReadObjectType(PCWSTR File, PCWSTR Id)
     return Type;
 }
 
+/* Write a present-but-empty element directly into the hive, which the tool cannot create itself. */
+static void
+WriteEmptyElement(PCWSTR File, PCWSTR Id, ULONG Type)
+{
+    HKEY Root, Key;
+    WCHAR Path[160];
+
+    if (RegLoadAppKeyW(File, &Root, KEY_ALL_ACCESS, 0, 0) != ERROR_SUCCESS)
+        return;
+    StringCchPrintfW(Path, ARRAYSIZE(Path), L"Objects\\%s\\Elements\\%08lx", Id, Type);
+    if (RegCreateKeyExW(Root, Path, 0, NULL, 0, KEY_WRITE, NULL, &Key, NULL) == ERROR_SUCCESS)
+    {
+        RegSetValueExW(Key, L"Element", 0, REG_SZ, (const BYTE *)L"", 0);
+        RegCloseKey(Key);
+    }
+    RegCloseKey(Root);
+}
+
 START_TEST(BcdEdit)
 {
     WCHAR File[MAX_PATH], Dir[MAX_PATH], Args[512];
@@ -345,6 +363,7 @@ START_TEST(BcdEdit)
     ok(RunBcd(Args) == 0, "/copy source create failed\n");
     StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /set %s timeout 0x2a", File, Src);
     ok(RunBcd(Args) == 0, "/copy source /set failed\n");
+    WriteEmptyElement(File, Src, 0x12000005);   /* an empty locale element, to copy verbatim */
     StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /copy %s /d \"Copied\"", File, Src);
     Out[0] = 0;
     Code = RunBcdCapture(Args, Out, sizeof(Out));
@@ -364,6 +383,9 @@ START_TEST(BcdEdit)
             Length = sizeof(Buffer);
             RegType = ReadElement(File, NewId, EL_DESCRIPTION, B, &Length);
             ok(RegType == REG_SZ && wcscmp(Buffer, L"Copied") == 0, "/copy did not set the new description\n");
+            Length = sizeof(Buffer);
+            ReadElement(File, NewId, 0x12000005, B, &Length);
+            ok(Length == 0, "/copy should carry a present-but-empty element, len %lu\n", Length);
         }
         else
         {

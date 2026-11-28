@@ -1513,6 +1513,9 @@ NewObject(
             RegCloseKey(Description);
         }
         RegCloseKey(Object);
+        /* Do not leave a half-built object behind, which a later /create would see as existing. */
+        if (!Ok && Disposition != REG_OPENED_EXISTING_KEY)
+            RegDeleteTreeW(Objects, Id);
     }
     RegCloseKey(Objects);
     return Ok;
@@ -1552,17 +1555,31 @@ CopyElements(
                 continue;
             if (RegOpenKeyExW(SrcElements, Name, 0, KEY_READ, &One) != ERROR_SUCCESS)
                 continue;
-            if (RegQueryValueExW(One, L"Element", NULL, &RegType, NULL, &Length) == ERROR_SUCCESS && Length > 0)
+            if (RegQueryValueExW(One, L"Element", NULL, &RegType, NULL, &Length) == ERROR_SUCCESS)
             {
-                Data = HeapAlloc(GetProcessHeap(), 0, Length);
-                if (Data != NULL)
+                /* Copy present-but-empty elements too, since /enum shows them; a zero-length
+                 * value needs no buffer. */
+                if (Length == 0)
                 {
-                    if (RegQueryValueExW(One, L"Element", NULL, &RegType, Data, &Length) == ERROR_SUCCESS)
+                    if (!WriteElement(Store, DstId, wcstoul(Name, NULL, 16), RegType, L"", 0))
+                        Ok = FALSE;
+                }
+                else
+                {
+                    Data = HeapAlloc(GetProcessHeap(), 0, Length);
+                    if (Data != NULL)
                     {
-                        if (!WriteElement(Store, DstId, wcstoul(Name, NULL, 16), RegType, Data, Length))
-                            Ok = FALSE;
+                        if (RegQueryValueExW(One, L"Element", NULL, &RegType, Data, &Length) == ERROR_SUCCESS)
+                        {
+                            if (!WriteElement(Store, DstId, wcstoul(Name, NULL, 16), RegType, Data, Length))
+                                Ok = FALSE;
+                        }
+                        HeapFree(GetProcessHeap(), 0, Data);
                     }
-                    HeapFree(GetProcessHeap(), 0, Data);
+                    else
+                    {
+                        Ok = FALSE;
+                    }
                 }
             }
             RegCloseKey(One);
@@ -1572,6 +1589,22 @@ CopyElements(
     RegCloseKey(SrcObject);
     RegCloseKey(Objects);
     return Ok;
+}
+
+/* Remove an object and everything under it, to undo a create or copy that did not complete. */
+static
+VOID
+DeleteObject(
+    _In_ HKEY Store,
+    _In_ PCWSTR Id)
+{
+    HKEY Objects;
+
+    if (RegOpenKeyExW(Store, L"Objects", 0, KEY_READ | KEY_WRITE, &Objects) == ERROR_SUCCESS)
+    {
+        RegDeleteTreeW(Objects, Id);
+        RegCloseKey(Objects);
+    }
 }
 
 /* /create [<id>] /d "name" [/application <type> | /inherit | /device]: add a new object. The id
@@ -1681,10 +1714,14 @@ CreateCommand(
         PrintResource(IDS_ERR_SETFAIL);
         return 1;
     }
-    if (Description != NULL)
+    if (Description != NULL &&
+        !WriteElement(Store, Id, 0x12000004, REG_SZ, Description,
+                      (DWORD)((wcslen(Description) + 1) * sizeof(WCHAR))))
     {
-        WriteElement(Store, Id, 0x12000004, REG_SZ, Description,
-                     (DWORD)((wcslen(Description) + 1) * sizeof(WCHAR)));
+        DeleteObject(Store, Id);
+        RegCloseKey(Store);
+        PrintResource(IDS_ERR_SETFAIL);
+        return 1;
     }
     RegCloseKey(Store);
 
@@ -1766,14 +1803,19 @@ CopyCommand(
     }
     if (!CopyElements(Store, Src, Generated))
     {
+        DeleteObject(Store, Generated);
         RegCloseKey(Store);
         PrintResource(IDS_ERR_SETFAIL);
         return 1;
     }
-    if (Description != NULL)
+    if (Description != NULL &&
+        !WriteElement(Store, Generated, 0x12000004, REG_SZ, Description,
+                      (DWORD)((wcslen(Description) + 1) * sizeof(WCHAR))))
     {
-        WriteElement(Store, Generated, 0x12000004, REG_SZ, Description,
-                     (DWORD)((wcslen(Description) + 1) * sizeof(WCHAR)));
+        DeleteObject(Store, Generated);
+        RegCloseKey(Store);
+        PrintResource(IDS_ERR_SETFAIL);
+        return 1;
     }
     RegCloseKey(Store);
 
