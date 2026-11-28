@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT Update
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     Internal contracts for the LiberNT Update bootstrap
+ * PURPOSE:     Internal contracts for the Orosi Update bootstrap
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -17,21 +17,21 @@
 
 #define BS_VERSION              L"0.1-dev"
 
-#define BS_SERVICING_DIR        L"LiberNT\\Servicing"
-#define BS_STORE_DIR            L"LiberNT\\Servicing\\store"
-#define BS_JOURNAL_DIR          L"LiberNT\\Servicing\\journal"
-#define BS_PENDING_DIR          L"LiberNT\\Servicing\\pending"
-#define BS_BACKUP_DIR           L"LiberNT\\Servicing\\backup"
-#define BS_BIN_DIR              L"LiberNT\\Servicing\\bin"
-#define BS_LOGS_DIR             L"LiberNT\\Servicing\\logs"
-#define BS_META_DIR             L"LiberNT\\Servicing\\bootstrap"
-#define BS_INSTALLED_JSON       L"LiberNT\\Servicing\\bootstrap\\installed.json"
-#define BS_DEVKEY_FILE          L"LiberNT\\Servicing\\store\\dev-public-key.bin"
-#define BS_SYSTEM32_PENDING     L"Windows\\System32\\LiberNTUpdatePending.exe"
-#define BS_BOOTEXECUTE_APP      L"LiberNTUpdatePending"
-#define BS_SERVICE_NAME         L"LiberNTUpdateSvc"
-#define BS_SERVICE_BINARY       L"LiberNT\\Servicing\\bin\\LiberNTUpdateSvc.exe"
-#define BS_LOADED_HIVE_NAME     L"LiberNTUpdateBootstrap"
+#define BS_SERVICING_DIR        L"Orosi\\Servicing"
+#define BS_STORE_DIR            L"Orosi\\Servicing\\store"
+#define BS_JOURNAL_DIR          L"Orosi\\Servicing\\journal"
+#define BS_PENDING_DIR          L"Orosi\\Servicing\\pending"
+#define BS_BACKUP_DIR           L"Orosi\\Servicing\\backup"
+#define BS_BIN_DIR              L"Orosi\\Servicing\\bin"
+#define BS_LOGS_DIR             L"Orosi\\Servicing\\logs"
+#define BS_META_DIR             L"Orosi\\Servicing\\bootstrap"
+#define BS_INSTALLED_JSON       L"Orosi\\Servicing\\bootstrap\\installed.json"
+#define BS_DEVKEY_FILE          L"Orosi\\Servicing\\store\\dev-public-key.bin"
+#define BS_SYSTEM32_PENDING     L"Windows\\System32\\OrosiUpdatePending.exe"
+#define BS_BOOTEXECUTE_APP      L"OrosiUpdatePending"
+#define BS_SERVICE_NAME         L"OrosiUpdateSvc"
+#define BS_SERVICE_BINARY       L"Orosi\\Servicing\\bin\\OrosiUpdateSvc.exe"
+#define BS_LOADED_HIVE_NAME     L"OrosiUpdateBootstrap"
 
 #define BS_MAX_PATH_BUF         520
 
@@ -59,8 +59,8 @@ typedef struct _BS_BUNDLE_FILE
  * uninstall removes exactly what install created. */
 typedef struct _BS_BUNDLE_SHORTCUT
 {
-    WCHAR Name[64];                 /* .lnk file name, e.g. L"libernt-update-ui.lnk" */
-    WCHAR Target[BS_MAX_PATH_BUF];  /* root-relative exe, e.g. L"LiberNT\\Update\\libernt-update-ui.exe" */
+    WCHAR Name[64];                 /* .lnk file name, e.g. L"orosi-update-ui.lnk" */
+    WCHAR Target[BS_MAX_PATH_BUF];  /* root-relative exe, e.g. L"Orosi\\Update\\orosi-update-ui.exe" */
     WCHAR Arguments[128];
 } BS_BUNDLE_SHORTCUT;
 
@@ -152,7 +152,7 @@ BsCheckSecure(
     _In_ PCWSTR Path);
 
 /* Accepts only normalized relative paths under the allowed prefixes
- * (Windows\ or LiberNT\) whose existing components resolve to themselves
+ * (Windows\ or Orosi\) whose existing components resolve to themselves
  * (no reparse points, no 8.3 aliases). Mirrors LnIsSafeRelativePath and
  * LnTargetValidateReal of libservicing/util.c and libservicing/target.c;
  * keep the three in sync. */

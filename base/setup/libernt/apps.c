@@ -747,7 +747,7 @@ InstallOobeApp(
     }
 
     if (!GetTempPathW(ARRAYSIZE(Folder), Folder) ||
-        FAILED(StringCchCatW(Folder, ARRAYSIZE(Folder), L"LiberNT Components")) ||
+        FAILED(StringCchCatW(Folder, ARRAYSIZE(Folder), L"Orosi Components")) ||
         FAILED(StringCchPrintfW(Path, ARRAYSIZE(Path), L"%s\\%s", Folder, App->File)))
     {
         App->Result = ERROR_BUFFER_OVERFLOW;

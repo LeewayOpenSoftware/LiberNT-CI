@@ -66,7 +66,7 @@ BsRegOpenSm(
          * (Pam review B5). An unreadable Select\\Current or a missing
          * control set is an error, not a silent default. */
         Ret = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                            L"LiberNTUpdateBootstrap\\Select", 0, KEY_READ,
+                            L"OrosiUpdateBootstrap\\Select", 0, KEY_READ,
                             &Session->Machine);
         if (Ret != ERROR_SUCCESS)
         {
@@ -84,7 +84,7 @@ BsRegOpenSm(
             goto unload;
         }
         swprintf(ControlSet, RTL_NUMBER_OF(ControlSet),
-                 L"LiberNTUpdateBootstrap\\ControlSet%03lu", (unsigned long)Current);
+                 L"OrosiUpdateBootstrap\\ControlSet%03lu", (unsigned long)Current);
     }
 
     if (swprintf(HivePath, RTL_NUMBER_OF(HivePath),

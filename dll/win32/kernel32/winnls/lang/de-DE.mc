@@ -341,7 +341,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_REM_NOT_LIST
 Language=German
-ERROR_REM_NOT_LIST - LiberNT konnte den Netzwerkpfad nicht finden. Stellen Sie sicher, dass der Netzwerkpfad korrekt ist und der Zielcomputer nicht belegt oder aus ist. Wenn LiberNT den Netzwerkpfad immer noch nicht finden kann, kontaktieren Sie den Netzwerkadministrator.
+ERROR_REM_NOT_LIST - Orosi konnte den Netzwerkpfad nicht finden. Stellen Sie sicher, dass der Netzwerkpfad korrekt ist und der Zielcomputer nicht belegt oder aus ist. Wenn Orosi den Netzwerkpfad immer noch nicht finden kann, kontaktieren Sie den Netzwerkadministrator.
 .
 
 MessageId=52
@@ -1877,7 +1877,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_NET_OPEN_FAILED
 Language=German
-ERROR_NET_OPEN_FAILED - Die NtCreateFile-API schlug fehl. Dieser Fehler sollte nie einem Programm zurückgegeben werden, es ist ein Platzhalter für den LiberNT Lan Manager Redirector zur verwendung in dessen internen Fehlerbehandlungsroutinen.
+ERROR_NET_OPEN_FAILED - Die NtCreateFile-API schlug fehl. Dieser Fehler sollte nie einem Programm zurückgegeben werden, es ist ein Platzhalter für den Orosi Lan Manager Redirector zur verwendung in dessen internen Fehlerbehandlungsroutinen.
 .
 
 MessageId=571
@@ -2077,7 +2077,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_LOST_WRITEBEHIND_DATA
 Language=German
-ERROR_LOST_WRITEBEHIND_DATA - LiberNT konnte nicht alle Daten für die Datei %hs speichern, die Daten gingen verloren. Dieser Fehler könnte von einer fehlerhaften Hardware oder einer getrennten Netzwerkverbindung kommen. Bitte versuchen Sie, die Datei woanders zu speichern.
+ERROR_LOST_WRITEBEHIND_DATA - Orosi konnte nicht alle Daten für die Datei %hs speichern, die Daten gingen verloren. Dieser Fehler könnte von einer fehlerhaften Hardware oder einer getrennten Netzwerkverbindung kommen. Bitte versuchen Sie, die Datei woanders zu speichern.
 .
 
 MessageId=597
@@ -2285,7 +2285,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_EVALUATION_EXPIRATION
 Language=German
-ERROR_EVALUATION_EXPIRATION - LiberNT ist ein freies Open-Source-Betriebsystem und lizenziert under der GNU GPL.  Daher gibt es auch keine Evaluationszeit, die ablaufen könnte. Wenn Sie diesen Fehler sehen, dann lesen Sie vermutlich den Quellcode.
+ERROR_EVALUATION_EXPIRATION - Orosi ist ein freies Open-Source-Betriebsystem und lizenziert under der GNU GPL.  Daher gibt es auch keine Evaluationszeit, die ablaufen könnte. Wenn Sie diesen Fehler sehen, dann lesen Sie vermutlich den Quellcode.
 .
 
 MessageId=623
@@ -2293,7 +2293,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_ILLEGAL_DLL_RELOCATION
 Language=German
-ERROR_ILLEGAL_DLL_RELOCATION - Die System-DLL %hs wurde im Speicher neu adressiert. Die Anwendung wird nicht korrekt funktionieren. Die Neuadressierung wurde durchgeführt, weil die DLL %hs einen Adressbereich belegte, der für LiberNT-System-DLLs reserviert ist. Der Entwickler sollte wegen Auslieferung einer neuen DLL kontaktiert werden.
+ERROR_ILLEGAL_DLL_RELOCATION - Die System-DLL %hs wurde im Speicher neu adressiert. Die Anwendung wird nicht korrekt funktionieren. Die Neuadressierung wurde durchgeführt, weil die DLL %hs einen Adressbereich belegte, der für Orosi-System-DLLs reserviert ist. Der Entwickler sollte wegen Auslieferung einer neuen DLL kontaktiert werden.
 .
 
 MessageId=624
@@ -2389,7 +2389,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_COMMITMENT_MINIMUM
 Language=German
-ERROR_COMMITMENT_MINIMUM - Ihr System hat nur noch wenig virtuellen Speicher. LiberNT vergrößert ihre Pagingdatei. Während dieses Vorgangs könnten Speicheranfragen von Anwendungen abgelehnt werden. Für weitere Informationen siehe Hilfe.
+ERROR_COMMITMENT_MINIMUM - Ihr System hat nur noch wenig virtuellen Speicher. Orosi vergrößert ihre Pagingdatei. Während dieses Vorgangs könnten Speicheranfragen von Anwendungen abgelehnt werden. Für weitere Informationen siehe Hilfe.
 .
 
 MessageId=636
@@ -2445,7 +2445,7 @@ Severity=Success
 Facility=System
 SymbolicName=ERROR_DS_VERSION_CHECK_FAILURE
 Language=German
-ERROR_DS_VERSION_CHECK_FAILURE - This version of LiberNT is not compatible with the behavior version of directory forest, domain or domain controller.
+ERROR_DS_VERSION_CHECK_FAILURE - This version of Orosi is not compatible with the behavior version of directory forest, domain or domain controller.
 .
 
 MessageId=644

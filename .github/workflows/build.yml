@@ -224,10 +224,10 @@ jobs:
     - name: Build stage-1 applier
       run: |
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
-        ninja -C ${{steps.configure.outputs.outdir}} LiberNTUpdatePending
-        f=$(find ${{steps.configure.outputs.outdir}} -name LiberNTUpdatePending.exe | head -n1)
+        ninja -C ${{steps.configure.outputs.outdir}} OrosiUpdatePending
+        f=$(find ${{steps.configure.outputs.outdir}} -name OrosiUpdatePending.exe | head -n1)
         mkdir -p applier-out && cp "$f" applier-out/
-        (cd applier-out && sha256sum LiberNTUpdatePending.exe | tee LiberNTUpdatePending.exe.sha256 && wc -c < LiberNTUpdatePending.exe)
+        (cd applier-out && sha256sum OrosiUpdatePending.exe | tee OrosiUpdatePending.exe.sha256 && wc -c < OrosiUpdatePending.exe)
 
     - name: Print ccache statistics
       if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
@@ -275,7 +275,7 @@ jobs:
     - name: Upload stage-1 applier
       uses: actions/upload-artifact@v7
       with:
-        name: libernt-update-pending-${{steps.images.outputs.tag}}
+        name: orosi-update-pending-${{steps.images.outputs.tag}}
         path: applier-out/
 
     - name: Upload bootcd.iso
@@ -284,23 +284,23 @@ jobs:
         name: bootcd-iso-${{steps.images.outputs.tag}}
         path: ${{steps.configure.outputs.outdir}}/bootcd.iso
 
-    - name: Upload LiberNT.img
+    - name: Upload Orosi.img
       uses: actions/upload-artifact@v7
       with:
-        name: LiberNT-img-${{steps.images.outputs.tag}}
-        path: ${{steps.configure.outputs.outdir}}/LiberNT.img
+        name: Orosi-img-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/Orosi.img
 
-    - name: Upload LiberNT.vhd
+    - name: Upload Orosi.vhd
       uses: actions/upload-artifact@v7
       with:
-        name: LiberNT-vhd-${{steps.images.outputs.tag}}
-        path: ${{steps.configure.outputs.outdir}}/LiberNT.vhd
+        name: Orosi-vhd-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/Orosi.vhd
 
-    - name: Upload LiberNT.vhdx
+    - name: Upload Orosi.vhdx
       uses: actions/upload-artifact@v7
       with:
-        name: LiberNT-vhdx-${{steps.images.outputs.tag}}
-        path: ${{steps.configure.outputs.outdir}}/LiberNT.vhdx
+        name: Orosi-vhdx-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/Orosi.vhdx
 
     - name: Check build dependencies
       run: python3 sdk/tools/depcheck.py ${{steps.configure.outputs.outdir}} --mode depfiles --nested --fail-on-gaps
@@ -401,8 +401,8 @@ jobs:
       run: |
         OUT=${{steps.configure.outputs.outdir}}
         mkdir -p i386-out
-        cp "$OUT/bootcd.iso" "$OUT/LiberNT.img" i386-out/
-        (cd i386-out && sha256sum bootcd.iso LiberNT.img | tee SHA256SUMS)
+        cp "$OUT/bootcd.iso" "$OUT/Orosi.img" i386-out/
+        (cd i386-out && sha256sum bootcd.iso Orosi.img | tee SHA256SUMS)
         echo "tag=clang-i386-${GITHUB_SHA::11}" >> "$GITHUB_OUTPUT"
 
     - name: Print ccache statistics
@@ -1091,12 +1091,12 @@ jobs:
         path: ${{steps.configure.outputs.outdir}}/bootcd.iso
         if-no-files-found: error
 
-    - name: Upload LiberNT.img
+    - name: Upload Orosi.img
       if: ${{ !cancelled() && steps.sysimg.outcome == 'success' }}
       uses: actions/upload-artifact@v7
       with:
-        name: LiberNT-img-${{steps.images.outputs.tag}}
-        path: ${{steps.configure.outputs.outdir}}/LiberNT.img
+        name: Orosi-img-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/Orosi.img
         if-no-files-found: error
 
     - name: Upload lnrspoc.sys and the Rust archives (MSVC lab image only)

@@ -948,7 +948,7 @@ BootUiRenderMenu(PUI_MENU_INFO Menu, LONG TimeOut, BOOLEAN CanEscape, BOOTUI_MEN
             Icon = 1;
         if (!strncmp(Item, "Back", 4))
             Icon = 2;
-        if (Menu->MenuItemIcons && Menu->MenuItemIcons[I] == UiMenuIconLiberNT)
+        if (Menu->MenuItemIcons && Menu->MenuItemIcons[I] == UiMenuIconOrosi)
         {
             BootUiLogo(Left + 20, Y + (RowHeight - 21) / 2, 2);
             TextInset = 64;

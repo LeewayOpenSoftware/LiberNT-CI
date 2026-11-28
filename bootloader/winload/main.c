@@ -28,7 +28,7 @@ PVOID UefiServiceStack;
 
 static const PCWSTR OslStorePaths[] =
 {
-    L"\\EFI\\LiberNT\\Boot\\BCD",
+    L"\\EFI\\Orosi\\Boot\\BCD",
     L"\\EFI\\Microsoft\\Boot\\BCD",
     L"\\Boot\\BCD",
 };
@@ -381,7 +381,7 @@ OslMain(VOID)
     if (!FwDebugEnabled && OslDebugRequested(Options))
     {
         FwDebugEnable();
-        FwDebugAnnounce("LiberNT OS Loader", FALSE);
+        FwDebugAnnounce("Orosi OS Loader", FALSE);
     }
     FwDebugScreen = OslHasDebugPort(Options, "SCREEN");
 
@@ -540,7 +540,7 @@ BlMain(VOID)
 {
     PUCHAR Stack;
 
-    FwDebugAnnounce("LiberNT OS Loader", FALSE);
+        FwDebugAnnounce("Orosi OS Loader", FALSE);
     OslTrace("OS loader: describing the platform");
     OslArchInitialize();
 

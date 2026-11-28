@@ -68,7 +68,7 @@ typedef struct _UI_PROGRESS_BAR
 typedef enum
 {
     UiMenuIconNone,
-    UiMenuIconLiberNT,
+    UiMenuIconOrosi,
     UiMenuIconDesktop,
     UiMenuIconImage
 } UI_MENU_ICON;

@@ -896,7 +896,7 @@ InstallBootloaderFiles(
 #define EFI_BOOT_ORDER_MAX              512
 #define EFI_BOOT_OPTION_SEARCH_MAX      0x1000
 #define EFI_BOOT_MANAGER_DESCRIPTION    L"Orosi Boot Manager"
-#define EFI_BOOT_MANAGER_FILE           L"\\EFI\\LiberNT\\Boot\\bootmgfw.efi"
+#define EFI_BOOT_MANAGER_FILE           L"\\EFI\\Orosi\\Boot\\bootmgfw.efi"
 #define EFI_WINDOWS_BOOT_MANAGER_FILE   L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi"
 #define GPT_HEADER_ENTRIES_LBA_OFFSET   72
 #define GPT_HEADER_ENTRY_COUNT_OFFSET   80
@@ -1510,7 +1510,7 @@ InstallBcdStore(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    CombinePaths(Path, ARRAYSIZE(Path), 2, SystemRootPath->Buffer, L"EFI\\LiberNT\\Boot");
+    CombinePaths(Path, ARRAYSIZE(Path), 2, SystemRootPath->Buffer, L"EFI\\Orosi\\Boot");
     Status = SetupCreateDirectory(Path);
     if (!NT_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_COLLISION)
         return Status;
