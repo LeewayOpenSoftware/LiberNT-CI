@@ -119,19 +119,6 @@ WlHlLsaTransportFailed(
            Status == STATUS_INVALID_HANDLE || Status == STATUS_INVALID_PORT_HANDLE;
 }
 
-/* A dead LSA connection is replaced once, so one sign-in is not lost to it. */
-static BOOL
-WlHlReconnectLsa(VOID)
-{
-    if (g_Connected)
-    {
-        LsaDeregisterLogonProcess(g_Lsa);
-        g_Lsa = NULL;
-        g_Connected = FALSE;
-    }
-    return WlHlConnectLsa();
-}
-
 static const GUID WlHlPasswordProvider =
     { 0x60b78e88, 0xead8, 0x445c, { 0x9c, 0xfd, 0x0b, 0x87, 0xf7, 0x4e, 0xa6, 0xcd } };
 
@@ -334,15 +321,6 @@ WlHlLsaLogon(
     Status = Groups ? LsaLogonUser(g_Lsa, &Origin, Interactive, g_MsvPackage, Msv, MsvSize, Groups, &Source,
                                    &Profile, &ProfileSize, LogonId, Token, &Quotas, SubStatus)
                     : (NTSTATUS)STATUS_NO_MEMORY;
-    if (WlHlLsaTransportFailed(Status))
-    {
-        ERR("WL: LsaLogonUser lost the LSA connection (0x%08lx); reconnecting once\n", Status);
-        Status = WlHlReconnectLsa() ? LsaLogonUser(g_Lsa, &Origin, Interactive, g_MsvPackage, Msv, MsvSize, Groups,
-                                                   &Source, &Profile, &ProfileSize, LogonId, Token, &Quotas,
-                                                   SubStatus)
-                                    : Status;
-        ERR("WL: LsaLogonUser after reconnecting: 0x%08lx (sub 0x%08lx)\n", Status, *SubStatus);
-    }
     WlHlFreeLogonGroups(Groups);
     if (Profile)
         LsaFreeReturnBuffer(Profile);
@@ -1010,7 +988,7 @@ WlHlTryAutoLogon(VOID)
     Password[0] = UNICODE_NULL;
     if (Registry && !WlHlLsaDefaultPassword(Password, ARRAYSIZE(Password)))
     {
-        ERR("WL: no DefaultPassword secret; using the Winlogon value, if any\n");
+        TRACE("WL: no DefaultPassword secret; using the Winlogon value, if any\n");
         WlHlWinlogonString(L"DefaultPassword", Password, ARRAYSIZE(Password));
     }
 
