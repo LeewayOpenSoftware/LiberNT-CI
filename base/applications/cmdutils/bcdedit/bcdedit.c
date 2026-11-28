@@ -371,6 +371,135 @@ static const struct { ULONG Type; UINT Heading; } g_ObjectHeadings[] =
     { 0x30000000, IDS_HDR_DEVOPTIONS },
 };
 
+/* Enum-typed integer elements print a token instead of a number; the value is the index into
+ * the element's token list (Windows 11 element enum tables, interoperability data). */
+static const struct { ULONG Type; ULONG Value; PCWSTR Token; } g_EnumTokens[] =
+{
+    { 0x1500000c, 0, L"UseNone" },
+    { 0x1500000c, 1, L"UseAll" },
+    { 0x1500000c, 2, L"UsePrivate" },
+    { 0x15000011, 0, L"Serial" },
+    { 0x15000011, 1, L"1394" },
+    { 0x15000011, 2, L"USB" },
+    { 0x15000011, 3, L"NET" },
+    { 0x15000011, 4, L"Local" },
+    { 0x15000018, 0, L"Active" },
+    { 0x15000018, 1, L"AutoEnable" },
+    { 0x15000018, 2, L"Disable" },
+    { 0x15000047, 0, L"Default" },
+    { 0x15000047, 1, L"DisallowMmConfig" },
+    { 0x1500004b, 0, L"Default" },
+    { 0x1500004b, 1, L"Enable" },
+    { 0x1500004b, 2, L"Disable" },
+    { 0x15000052, 0, L"1024x768" },
+    { 0x15000052, 1, L"800x600" },
+    { 0x15000052, 2, L"1024x600" },
+    { 0x15000065, 0, L"Default" },
+    { 0x15000065, 1, L"Resume" },
+    { 0x15000065, 2, L"HyperV" },
+    { 0x15000065, 3, L"Recovery" },
+    { 0x15000065, 4, L"StartupRepair" },
+    { 0x15000065, 5, L"SystemImageRecovery" },
+    { 0x15000065, 6, L"CommandPrompt" },
+    { 0x15000065, 7, L"SystemRestore" },
+    { 0x15000065, 8, L"PushButtonReset" },
+    { 0x15000066, 0, L"Default" },
+    { 0x15000066, 1, L"Resume" },
+    { 0x15000066, 2, L"HyperV" },
+    { 0x15000066, 3, L"Recovery" },
+    { 0x15000066, 4, L"StartupRepair" },
+    { 0x15000066, 5, L"SystemImageRecovery" },
+    { 0x15000066, 6, L"CommandPrompt" },
+    { 0x15000066, 7, L"SystemRestore" },
+    { 0x15000066, 8, L"PushButtonReset" },
+    { 0x1500007d, 0, L"Legacy" },
+    { 0x1500007d, 1, L"Standard" },
+    { 0x1500007d, 2, L"Simple" },
+    { 0x1500007f, 0, L"Default" },
+    { 0x1500007f, 1, L"Sha1" },
+    { 0x15000080, 0, L"0" },
+    { 0x15000080, 1, L"90" },
+    { 0x15000080, 2, L"180" },
+    { 0x15000080, 3, L"270" },
+    { 0x15000088, 0, L"default" },
+    { 0x15000088, 1, L"optout" },
+    { 0x15000088, 2, L"optin" },
+    { 0x25000002, 0, L"Basic" },
+    { 0x25000002, 1, L"Extended" },
+    { 0x25000007, 0, L"Disabled" },
+    { 0x25000007, 1, L"Basic" },
+    { 0x25000007, 2, L"Standard" },
+    { 0x25000008, 0, L"Legacy" },
+    { 0x25000008, 1, L"Standard" },
+    { 0x25000020, 0, L"OptIn" },
+    { 0x25000020, 1, L"OptOut" },
+    { 0x25000020, 2, L"AlwaysOff" },
+    { 0x25000020, 3, L"AlwaysOn" },
+    { 0x25000021, 0, L"Default" },
+    { 0x25000021, 1, L"ForceEnable" },
+    { 0x25000021, 2, L"ForceDisable" },
+    { 0x25000055, 0, L"Default" },
+    { 0x25000055, 1, L"Disable" },
+    { 0x25000055, 2, L"Enable" },
+    { 0x25000071, 0, L"Default" },
+    { 0x25000071, 1, L"ForceDisable" },
+    { 0x25000072, 0, L"Default" },
+    { 0x25000072, 1, L"ForceDisable" },
+    { 0x25000080, 0, L"Minimal" },
+    { 0x25000080, 1, L"Network" },
+    { 0x25000080, 2, L"DsRepair" },
+    { 0x250000a6, 0, L"Default" },
+    { 0x250000a6, 1, L"Legacy" },
+    { 0x250000a6, 2, L"Enhanced" },
+    { 0x250000c1, 0, L"Fatal" },
+    { 0x250000c1, 1, L"UseErrorControl" },
+    { 0x250000c2, 0, L"Legacy" },
+    { 0x250000c2, 1, L"Standard" },
+    { 0x250000e0, 0, L"DisplayAllFailures" },
+    { 0x250000e0, 1, L"IgnoreAllFailures" },
+    { 0x250000e0, 2, L"IgnoreShutdownFailures" },
+    { 0x250000e0, 3, L"IgnoreBootFailures" },
+    { 0x250000e0, 4, L"IgnoreCheckpointFailures" },
+    { 0x250000e0, 5, L"DisplayShutdownFailures" },
+    { 0x250000e0, 6, L"DisplayBootFailures" },
+    { 0x250000e0, 7, L"DisplayCheckpointFailures" },
+    { 0x250000e0, 8, L"AlwaysDisplayStartupFailures" },
+    { 0x250000f0, 0, L"Off" },
+    { 0x250000f0, 1, L"Auto" },
+    { 0x250000f0, 2, L"On" },
+    { 0x250000f3, 0, L"Serial" },
+    { 0x250000f3, 1, L"1394" },
+    { 0x250000f3, 2, L"None" },
+    { 0x250000f3, 3, L"NET" },
+    { 0x250000f7, 0, L"Disabled" },
+    { 0x250000f7, 1, L"Basic" },
+    { 0x250000f7, 2, L"Standard" },
+    { 0x25000100, 0, L"Default" },
+    { 0x25000100, 1, L"ForceDisable" },
+    { 0x25000100, 2, L"ForceEnable" },
+    { 0x25000115, 0, L"Default" },
+    { 0x25000115, 1, L"Enable" },
+    { 0x25000115, 2, L"Disable" },
+    { 0x25000118, 0, L"Disable" },
+    { 0x25000118, 1, L"Enable" },
+    { 0x25000119, 0, L"Disable" },
+    { 0x25000119, 1, L"Enable" },
+    { 0x2500011a, 0, L"Classic" },
+    { 0x2500011a, 1, L"Core" },
+    { 0x2500011a, 2, L"Root" },
+    { 0x2500011c, 0, L"System" },
+    { 0x2500011c, 1, L"Hypervisor" },
+    { 0x2500012c, 0, L"Serial" },
+    { 0x2500012c, 1, L"1394" },
+    { 0x2500012c, 2, L"USB" },
+    { 0x2500012c, 3, L"NET" },
+    { 0x25000142, 0, L"Off" },
+    { 0x25000142, 1, L"Auto" },
+    { 0x25000144, 0, L"Disable" },
+    { 0x25000144, 1, L"Enable" },
+    { 0x25000144, 2, L"Strict" },
+};
+
 static
 VOID
 PrintResource(
@@ -395,6 +524,45 @@ AliasForId(
             return g_WellKnownIds[i].Alias;
     }
     return Guid;
+}
+
+/* The token an enum element prints for a stored value, or NULL when the element is not an enum
+ * or the value is outside its table (then the raw number is shown). */
+static
+PCWSTR
+EnumTokenForValue(
+    _In_ ULONG Type,
+    _In_ ULONGLONG Value)
+{
+    SIZE_T i;
+
+    for (i = 0; i < ARRAYSIZE(g_EnumTokens); i++)
+    {
+        if (g_EnumTokens[i].Type == Type && g_EnumTokens[i].Value == Value)
+            return g_EnumTokens[i].Token;
+    }
+    return NULL;
+}
+
+/* The stored value for an enum element's token (OptIn, Standard, ...); FALSE if not a known token. */
+static
+BOOL
+ValueForEnumToken(
+    _In_ ULONG Type,
+    _In_ PCWSTR Token,
+    _Out_ PULONGLONG Value)
+{
+    SIZE_T i;
+
+    for (i = 0; i < ARRAYSIZE(g_EnumTokens); i++)
+    {
+        if (g_EnumTokens[i].Type == Type && _wcsicmp(g_EnumTokens[i].Token, Token) == 0)
+        {
+            *Value = g_EnumTokens[i].Value;
+            return TRUE;
+        }
+    }
+    return FALSE;
 }
 
 static
@@ -667,10 +835,15 @@ PrintElement(
         case BCD_ELEMENT_FORMAT_INTEGERLIST:
         {
             ULONGLONG Value = 0;
+            PCWSTR Token;
             DWORD i;
             for (i = 0; i < Length && i < 8; i++)
                 Value |= (ULONGLONG)Data[i] << (8 * i);
-            wprintf(L"%llu\n", Value);
+            Token = (Format == BCD_ELEMENT_FORMAT_INTEGER) ? EnumTokenForValue(Type, Value) : NULL;
+            if (Token != NULL)
+                wprintf(L"%s\n", Token);
+            else
+                wprintf(L"%llu\n", Value);
             break;
         }
         case BCD_ELEMENT_FORMAT_DEVICE:
@@ -1117,7 +1290,9 @@ SetValue(
             ULONGLONG Value;
             int i;
 
-            if (First >= Argc || !ParseInteger(Argv[First], &Value))
+            /* Accept a number or, for an enum element, one of its tokens (nx OptOut, ...). */
+            if (First >= Argc ||
+                (!ParseInteger(Argv[First], &Value) && !ValueForEnumToken(Type, Argv[First], &Value)))
                 return FALSE;
             for (i = 0; i < 8; i++)
             {

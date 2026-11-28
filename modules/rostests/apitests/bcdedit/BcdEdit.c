@@ -14,6 +14,7 @@
 #define EL_DEFAULT      0x23000003  /* object  -> REG_SZ, on {bootmgr} */
 #define EL_TIMEOUT      0x25000004  /* integer -> REG_BINARY, 8 bytes LE, on {bootmgr} */
 #define EL_DISPLAYORDER 0x24000001  /* list    -> REG_MULTI_SZ, on {bootmgr} */
+#define EL_NX           0x25000020  /* integer enum -> nx: 0 OptIn, 1 OptOut, 2 AlwaysOff, 3 AlwaysOn */
 
 static const WCHAR Loader[]  = L"{11111111-2222-3333-4444-555555555555}";
 static const WCHAR Other[]   = L"{aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}";
@@ -198,7 +199,7 @@ START_TEST(BcdEdit)
     WCHAR File[MAX_PATH], Dir[MAX_PATH], Args[512];
     WCHAR Buffer[128], NewId[64];
     BYTE *B = (BYTE *)Buffer;
-    char Out[256];
+    char Out[256], Big[8192];
     DWORD Length, RegType;
     DWORD Code;
     static const WCHAR Fresh[] = L"{cccccccc-1111-2222-3333-444444444444}";
@@ -241,6 +242,18 @@ START_TEST(BcdEdit)
     RegType = ReadElement(File, Loader, EL_DEBUG, B, &Length);
     ok(RegType == REG_BINARY && Length == 1 && B[0] == 1, "debug bytes: type %lu len %lu b0 %u\n",
        RegType, Length, B[0]);
+
+    /* enum round-trip: /set <loader> nx OptOut stores the token's value (1) as an 8-byte integer. */
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /set %s nx OptOut", File, Loader);
+    Code = RunBcd(Args);
+    ok(Code == 0, "/set nx OptOut exit %lu\n", Code);
+    Length = sizeof(Buffer);
+    RegType = ReadElement(File, Loader, EL_NX, B, &Length);
+    ok(RegType == REG_BINARY && Length == 8 && B[0] == 1 && B[1] == 0, "nx value: type %lu b0 %u\n",
+       RegType, B[0]);
+    /* An unknown token for the element is rejected. */
+    StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /set %s nx NotAToken", File, Loader);
+    ok(RunBcd(Args) == 1, "an unknown enum token should be rejected\n");
 
     /* object-list round-trip: /set <loader> inherit <other> -> REG_MULTI_SZ, one id. */
     StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /set %s inherit %s", File, Loader, Other);
@@ -393,9 +406,12 @@ START_TEST(BcdEdit)
         }
     }
 
-    /* /enum over the /store file opens and lists it. */
+    /* /enum opens and lists the store, and prints the enum element as its token, not a number. */
     StringCchPrintfW(Args, ARRAYSIZE(Args), L"/store \"%s\" /enum", File);
-    ok(RunBcd(Args) == 0, "/enum of the store should succeed\n");
+    Big[0] = 0;
+    Code = RunBcdCapture(Args, Big, sizeof(Big));
+    ok(Code == 0, "/enum of the store should succeed, exit %lu\n", Code);
+    ok(strstr(Big, "OptOut") != NULL, "/enum should print nx as its token OptOut\n");
 
     DeleteFileW(File);
 }
