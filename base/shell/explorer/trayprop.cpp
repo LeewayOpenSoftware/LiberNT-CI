@@ -46,6 +46,43 @@ static void SetBitmap(HWND hwnd, HBITMAP* hbmp, UINT uImageId)
 
 }
 
+/* Widen a combo box's drop-down list to its longest item, so a localized string that is wider
+   than the control (the Spanish taskbar strings are much longer than the English ones) is not
+   clipped when the list drops down. */
+static void AdjustComboDroppedWidth(HWND hCombo)
+{
+    if (!hCombo)
+        return;
+
+    HDC hdc = GetDC(hCombo);
+    if (!hdc)
+        return;
+
+    HFONT hFont = (HFONT)SendMessageW(hCombo, WM_GETFONT, 0, 0);
+    HGDIOBJ hOld = hFont ? SelectObject(hdc, hFont) : NULL;
+
+    LONG maxWidth = 0;
+    LRESULT count = SendMessageW(hCombo, CB_GETCOUNT, 0, 0);
+    for (LRESULT i = 0; i < count; ++i)
+    {
+        WCHAR szItem[256];
+        LRESULT len = SendMessageW(hCombo, CB_GETLBTEXT, i, (LPARAM)szItem);
+        SIZE sz;
+        if (len > 0 && len < _countof(szItem) &&
+            GetTextExtentPoint32W(hdc, szItem, (int)len, &sz) && sz.cx > maxWidth)
+        {
+            maxWidth = sz.cx;
+        }
+    }
+
+    if (hOld)
+        SelectObject(hdc, hOld);
+    ReleaseDC(hCombo, hdc);
+
+    if (maxWidth > 0)
+        SendMessageW(hCombo, CB_SETDROPPEDWIDTH, maxWidth + GetSystemMetrics(SM_CXVSCROLL) + ShellScaleForDpi(8), 0);
+}
+
 class CTaskBarSettingsPage : public CPropertyPageImpl<CTaskBarSettingsPage>
 {
 private:
@@ -121,6 +158,7 @@ public:
                 szGroup[0] = L'\0';
             SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)szGroup);
         }
+        AdjustComboDroppedWidth(GetDlgItem(IDC_TASKBARPROP_GROUP));
         SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_SETCURSEL, g_TaskbarSettings.dwTaskbarGlomLevel);
         //CheckDlgButton(IDC_TASKBARPROP_SHOWQL, g_TaskbarSettings.bShowQuickLaunch ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(IDC_TASKBARPROP_SMALLICONS, g_TaskbarSettings.bSmallIcons ? BST_CHECKED : BST_UNCHECKED);
@@ -149,6 +187,7 @@ public:
                     szMM[0] = L'\0';
                 SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)szMM);
             }
+            AdjustComboDroppedWidth(hMMButtons);
             UINT uMode = g_TaskbarSettings.uMMTaskbarMode;
             if (uMode > 2)
                 uMode = 0;
