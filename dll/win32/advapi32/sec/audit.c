@@ -506,34 +506,6 @@ PrivilegedServiceAuditAlarmW(LPCWSTR SubsystemName,
  * @unimplemented
  */
 BOOL WINAPI
-AccessCheckByTypeResultListAndAuditAlarmByHandleW(IN LPCWSTR SubsystemName,
-                                                  IN LPVOID HandleId,
-                                                  IN HANDLE ClientToken,
-                                                  IN LPCWSTR ObjectTypeName,
-                                                  IN LPCWSTR ObjectName,
-                                                  IN PSECURITY_DESCRIPTOR pSecurityDescriptor,
-                                                  IN PSID PrincipalSelfSid,
-                                                  IN DWORD DesiredAccess,
-                                                  IN AUDIT_EVENT_TYPE AuditType,
-                                                  IN DWORD Flags,
-                                                  IN POBJECT_TYPE_LIST ObjectTypeList,
-                                                  IN DWORD ObjectTypeListLength,
-                                                  IN PGENERIC_MAPPING GenericMapping,
-                                                  IN BOOL ObjectCreation,
-                                                  OUT LPDWORD GrantedAccess,
-                                                  OUT LPDWORD AccessStatusList,
-                                                  OUT LPBOOL pfGenerateOnClose)
-{
-    FIXME("%s() not implemented!\n", __FUNCTION__);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
-
-
-/*
- * @unimplemented
- */
-BOOL WINAPI
 AccessCheckByTypeResultListAndAuditAlarmByHandleA(IN LPCSTR SubsystemName,
                                                   IN LPVOID HandleId,
                                                   IN HANDLE ClientToken,
@@ -562,33 +534,6 @@ AccessCheckByTypeResultListAndAuditAlarmByHandleA(IN LPCSTR SubsystemName,
  * @unimplemented
  */
 BOOL WINAPI
-AccessCheckByTypeResultListAndAuditAlarmW(IN LPCWSTR SubsystemName,
-                                          IN LPVOID HandleId,
-                                          IN LPCWSTR ObjectTypeName,
-                                          IN LPCWSTR ObjectName,
-                                          IN PSECURITY_DESCRIPTOR pSecurityDescriptor,
-                                          IN PSID PrincipalSelfSid,
-                                          IN DWORD DesiredAccess,
-                                          IN AUDIT_EVENT_TYPE AuditType,
-                                          IN DWORD Flags,
-                                          IN POBJECT_TYPE_LIST ObjectTypeList,
-                                          IN DWORD ObjectTypeListLength,
-                                          IN PGENERIC_MAPPING GenericMapping,
-                                          IN BOOL ObjectCreation,
-                                          OUT LPDWORD GrantedAccess,
-                                          OUT LPDWORD AccessStatusList,
-                                          OUT LPBOOL pfGenerateOnClose)
-{
-    FIXME("%s() not implemented!\n", __FUNCTION__);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
-
-
-/*
- * @unimplemented
- */
-BOOL WINAPI
 AccessCheckByTypeResultListAndAuditAlarmA(IN LPCSTR SubsystemName,
                                           IN LPVOID HandleId,
                                           IN LPCSTR ObjectTypeName,
@@ -605,33 +550,6 @@ AccessCheckByTypeResultListAndAuditAlarmA(IN LPCSTR SubsystemName,
                                           OUT LPDWORD GrantedAccess,
                                           OUT LPDWORD AccessStatusList,
                                           OUT LPBOOL pfGenerateOnClose)
-{
-    FIXME("%s() not implemented!\n", __FUNCTION__);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
-
-
-/*
- * @unimplemented
- */
-BOOL WINAPI
-AccessCheckByTypeAndAuditAlarmW(IN LPCWSTR SubsystemName,
-                                IN LPVOID HandleId,
-                                IN LPCWSTR ObjectTypeName,
-                                IN LPCWSTR ObjectName,
-                                IN PSECURITY_DESCRIPTOR pSecurityDescriptor,
-                                IN PSID PrincipalSelfSid,
-                                IN DWORD DesiredAccess,
-                                IN AUDIT_EVENT_TYPE AuditType,
-                                IN DWORD Flags,
-                                IN POBJECT_TYPE_LIST ObjectTypeList,
-                                IN DWORD ObjectTypeListLength,
-                                IN PGENERIC_MAPPING GenericMapping,
-                                IN BOOL ObjectCreation,
-                                OUT LPDWORD GrantedAccess,
-                                OUT LPBOOL AccessStatus,
-                                OUT LPBOOL pfGenerateOnClose)
 {
     FIXME("%s() not implemented!\n", __FUNCTION__);
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);

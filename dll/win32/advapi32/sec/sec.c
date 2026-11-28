@@ -125,22 +125,6 @@ GetSecurityDescriptorOwner(PSECURITY_DESCRIPTOR pSecurityDescriptor,
 /*
  * @implemented
  */
-DWORD
-WINAPI
-GetSecurityDescriptorRMControl(PSECURITY_DESCRIPTOR SecurityDescriptor,
-                               PUCHAR RMControl)
-{
-    if (!RtlGetSecurityDescriptorRMControl(SecurityDescriptor,
-                                           RMControl))
-        return ERROR_INVALID_DATA;
-
-    return ERROR_SUCCESS;
-}
-
-
-/*
- * @implemented
- */
 BOOL
 WINAPI
 GetSecurityDescriptorSacl(PSECURITY_DESCRIPTOR pSecurityDescriptor,
@@ -331,21 +315,6 @@ SetSecurityDescriptorOwner(PSECURITY_DESCRIPTOR pSecurityDescriptor,
 /*
  * @implemented
  */
-DWORD
-WINAPI
-SetSecurityDescriptorRMControl(PSECURITY_DESCRIPTOR SecurityDescriptor,
-                               PUCHAR RMControl)
-{
-    RtlSetSecurityDescriptorRMControl(SecurityDescriptor,
-                                      RMControl);
-
-    return ERROR_SUCCESS;
-}
-
-
-/*
- * @implemented
- */
 BOOL
 WINAPI
 SetSecurityDescriptorSacl(PSECURITY_DESCRIPTOR pSecurityDescriptor,
@@ -388,30 +357,6 @@ QuerySecurityAccessMask(IN SECURITY_INFORMATION SecurityInformation,
 
     if (SecurityInformation & SACL_SECURITY_INFORMATION)
         *DesiredAccess |= ACCESS_SYSTEM_SECURITY;
-}
-
-
-/*
- * @implemented
- */
-VOID
-WINAPI
-SetSecurityAccessMask(IN SECURITY_INFORMATION SecurityInformation,
-                      OUT LPDWORD DesiredAccess)
-{
-    *DesiredAccess = 0;
-
-    if (SecurityInformation & (OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION))
-        *DesiredAccess |= WRITE_OWNER;
-
-    if (SecurityInformation & DACL_SECURITY_INFORMATION)
-        *DesiredAccess |= WRITE_DAC;
-
-    if (SecurityInformation & SACL_SECURITY_INFORMATION)
-        *DesiredAccess |= ACCESS_SYSTEM_SECURITY;
-
-    if (SecurityInformation & LABEL_SECURITY_INFORMATION)
-        *DesiredAccess |= WRITE_OWNER;
 }
 
 

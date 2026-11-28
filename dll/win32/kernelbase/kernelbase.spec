@@ -1,10 +1,10 @@
 @ stdcall AccessCheck(ptr long long ptr ptr ptr ptr ptr)
 @ stdcall AccessCheckAndAuditAlarmW(wstr ptr wstr wstr ptr long ptr long ptr ptr ptr)
 @ stdcall AccessCheckByType(ptr ptr long long ptr long ptr ptr ptr ptr ptr)
-@ stdcall AccessCheckByTypeAndAuditAlarmW(wstr ptr wstr wstr ptr ptr long long long ptr long ptr long ptr ptr ptr) advapi32.AccessCheckByTypeAndAuditAlarmW
+@ stdcall AccessCheckByTypeAndAuditAlarmW(wstr ptr wstr wstr ptr ptr long long long ptr long ptr long ptr ptr ptr)
 @ stdcall AccessCheckByTypeResultList(ptr ptr long long ptr long ptr ptr ptr ptr ptr)
-@ stdcall AccessCheckByTypeResultListAndAuditAlarmByHandleW(wstr ptr ptr wstr wstr ptr long long long long ptr long ptr long ptr ptr ptr) advapi32.AccessCheckByTypeResultListAndAuditAlarmByHandleW
-@ stdcall AccessCheckByTypeResultListAndAuditAlarmW(wstr ptr wstr wstr ptr long long long long ptr long ptr long ptr ptr ptr) advapi32.AccessCheckByTypeResultListAndAuditAlarmW
+@ stdcall AccessCheckByTypeResultListAndAuditAlarmByHandleW(wstr ptr ptr wstr wstr ptr long long long long ptr long ptr long ptr ptr ptr)
+@ stdcall AccessCheckByTypeResultListAndAuditAlarmW(wstr ptr wstr wstr ptr long long long long ptr long ptr long ptr ptr ptr)
 @ stdcall -version=0x600+ AcquireSRWLockExclusive(ptr) ntdll.RtlAcquireSRWLockExclusive
 @ stdcall -version=0x600+ AcquireSRWLockShared(ptr) ntdll.RtlAcquireSRWLockShared
 @ stdcall ActivateActCtx(ptr ptr) kernel32.ActivateActCtx
@@ -550,7 +550,7 @@
 @ stdcall GetSecurityDescriptorGroup(ptr ptr ptr)
 @ stdcall GetSecurityDescriptorLength(ptr)
 @ stdcall GetSecurityDescriptorOwner(ptr ptr ptr)
-@ stdcall GetSecurityDescriptorRMControl(ptr ptr) advapi32.GetSecurityDescriptorRMControl
+@ stdcall GetSecurityDescriptorRMControl(ptr ptr)
 @ stdcall GetSecurityDescriptorSacl(ptr ptr ptr ptr)
 @ stdcall GetShortPathNameW(wstr ptr long) kernel32.GetShortPathNameW
 @ stdcall GetSidIdentifierAuthority(ptr)
@@ -1205,12 +1205,12 @@
 @ stdcall SetProcessShutdownParameters(long long) kernel32.SetProcessShutdownParameters
 @ stdcall SetProcessValidCallTargets(long ptr long long ptr) kernel32.SetProcessValidCallTargets
 @ stdcall SetProcessWorkingSetSizeEx(long long long long) kernel32.SetProcessWorkingSetSizeEx
-@ stdcall SetSecurityAccessMask(long ptr) advapi32.SetSecurityAccessMask
+@ stdcall SetSecurityAccessMask(long ptr)
 @ stdcall SetSecurityDescriptorControl(ptr long long)
 @ stdcall SetSecurityDescriptorDacl(ptr long ptr long)
 @ stdcall SetSecurityDescriptorGroup(ptr ptr long)
 @ stdcall SetSecurityDescriptorOwner(ptr ptr long)
-@ stdcall SetSecurityDescriptorRMControl(ptr ptr) advapi32.SetSecurityDescriptorRMControl
+@ stdcall SetSecurityDescriptorRMControl(ptr ptr)
 @ stdcall SetSecurityDescriptorSacl(ptr long ptr long)
 @ stdcall SetStdHandle(long long)
 @ stdcall -version=0x600+ SetStdHandleEx(long long ptr)

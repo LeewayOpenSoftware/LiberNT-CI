@@ -553,3 +553,139 @@ QuerySecurityAccessMask(
     /* TODO: PROCESS_TRUST_LABEL and ACCESS_FILTER information have no documented right and add none */
     *DesiredAccess = Access;
 }
+
+/*
+ * The resource-manager control and security access-mask helpers, and the
+ * AccessCheckByType audit-alarm entry points, moved here from advapi32 so
+ * kernelbase owns the bodies and advapi32 forwards to it, matching the
+ * Windows 11 26100 export direction (all six live in kernelbase.dll there).
+ */
+
+NTSYSAPI BOOLEAN NTAPI RtlGetSecurityDescriptorRMControl(_In_ PSECURITY_DESCRIPTOR SecurityDescriptor, _Out_ PUCHAR RMControl);
+NTSYSAPI VOID NTAPI RtlSetSecurityDescriptorRMControl(_Inout_ PSECURITY_DESCRIPTOR SecurityDescriptor, _In_ PUCHAR RMControl);
+
+DWORD
+WINAPI
+GetSecurityDescriptorRMControl(
+    _In_ PSECURITY_DESCRIPTOR SecurityDescriptor,
+    _Out_ PUCHAR RMControl)
+{
+    if (!RtlGetSecurityDescriptorRMControl(SecurityDescriptor, RMControl))
+        return ERROR_INVALID_DATA;
+
+    return ERROR_SUCCESS;
+}
+
+DWORD
+WINAPI
+SetSecurityDescriptorRMControl(
+    _Inout_ PSECURITY_DESCRIPTOR SecurityDescriptor,
+    _In_ PUCHAR RMControl)
+{
+    RtlSetSecurityDescriptorRMControl(SecurityDescriptor, RMControl);
+
+    return ERROR_SUCCESS;
+}
+
+VOID
+WINAPI
+SetSecurityAccessMask(
+    _In_ SECURITY_INFORMATION SecurityInformation,
+    _Out_ LPDWORD DesiredAccess)
+{
+    DWORD Access = 0;
+
+    if (SecurityInformation & (OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION))
+        Access |= WRITE_OWNER;
+
+    if (SecurityInformation & DACL_SECURITY_INFORMATION)
+        Access |= WRITE_DAC;
+
+    if (SecurityInformation & SACL_SECURITY_INFORMATION)
+        Access |= ACCESS_SYSTEM_SECURITY;
+
+    if (SecurityInformation & LABEL_SECURITY_INFORMATION)
+        Access |= WRITE_OWNER;
+
+    *DesiredAccess = Access;
+}
+
+/*
+ * The three AccessCheckByType audit-alarm entry points are moved as-is from
+ * advapi32, where they were stubs; a full implementation is a separate parity
+ * task tracked under the kernelbase direction. They keep the not-implemented
+ * contract (ERROR_CALL_NOT_IMPLEMENTED) so no behaviour changes with the move.
+ */
+
+BOOL
+WINAPI
+AccessCheckByTypeAndAuditAlarmW(
+    _In_ LPCWSTR SubsystemName,
+    _In_opt_ LPVOID HandleId,
+    _In_ LPCWSTR ObjectTypeName,
+    _In_ LPCWSTR ObjectName,
+    _In_opt_ PSECURITY_DESCRIPTOR pSecurityDescriptor,
+    _In_opt_ PSID PrincipalSelfSid,
+    _In_ DWORD DesiredAccess,
+    _In_ AUDIT_EVENT_TYPE AuditType,
+    _In_ DWORD Flags,
+    _In_opt_ POBJECT_TYPE_LIST ObjectTypeList,
+    _In_ DWORD ObjectTypeListLength,
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _In_ BOOL ObjectCreation,
+    _Out_ LPDWORD GrantedAccess,
+    _Out_ LPBOOL AccessStatus,
+    _Out_ LPBOOL pfGenerateOnClose)
+{
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+BOOL
+WINAPI
+AccessCheckByTypeResultListAndAuditAlarmW(
+    _In_ LPCWSTR SubsystemName,
+    _In_opt_ LPVOID HandleId,
+    _In_ LPCWSTR ObjectTypeName,
+    _In_ LPCWSTR ObjectName,
+    _In_opt_ PSECURITY_DESCRIPTOR pSecurityDescriptor,
+    _In_opt_ PSID PrincipalSelfSid,
+    _In_ DWORD DesiredAccess,
+    _In_ AUDIT_EVENT_TYPE AuditType,
+    _In_ DWORD Flags,
+    _In_opt_ POBJECT_TYPE_LIST ObjectTypeList,
+    _In_ DWORD ObjectTypeListLength,
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _In_ BOOL ObjectCreation,
+    _Out_ LPDWORD GrantedAccess,
+    _Out_ LPDWORD AccessStatusList,
+    _Out_ LPBOOL pfGenerateOnClose)
+{
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
+
+BOOL
+WINAPI
+AccessCheckByTypeResultListAndAuditAlarmByHandleW(
+    _In_ LPCWSTR SubsystemName,
+    _In_opt_ LPVOID HandleId,
+    _In_ HANDLE ClientToken,
+    _In_ LPCWSTR ObjectTypeName,
+    _In_ LPCWSTR ObjectName,
+    _In_opt_ PSECURITY_DESCRIPTOR pSecurityDescriptor,
+    _In_opt_ PSID PrincipalSelfSid,
+    _In_ DWORD DesiredAccess,
+    _In_ AUDIT_EVENT_TYPE AuditType,
+    _In_ DWORD Flags,
+    _In_opt_ POBJECT_TYPE_LIST ObjectTypeList,
+    _In_ DWORD ObjectTypeListLength,
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _In_ BOOL ObjectCreation,
+    _Out_ LPDWORD GrantedAccess,
+    _Out_ LPDWORD AccessStatusList,
+    _Out_ LPBOOL pfGenerateOnClose)
+{
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return FALSE;
+}
