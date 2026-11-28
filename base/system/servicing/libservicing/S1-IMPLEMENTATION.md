@@ -1,16 +1,16 @@
-# LiberNT Update etapa 1: implementacion del nucleo (libservicing + libernt-update.exe)
+# Orosi Update etapa 1: implementacion del nucleo (libservicing + orosi-update.exe)
 
 Autora: Meredith, 2026-10-30. Rama `feature/libernt-update-s1-core-meredith` sobre integration-1031 (483daf4db0). Interno de Leeway.
 **Contrato unico: `shared/leeway/libernt-update/S1-CONTRACTS.md`** (formatos de plan, journal, attempt, transactionId y estados; incluye la seccion "Reconciliacion con S1-CORE.md"). `S1-CORE.md` (Oscar) queda superado. Condiciones del dueno: `OWNER-STAGE1-CONDITIONS.md`. Revision de seguridad: Pam (B1-B4, N1-N7).
 
-**Estado: compilado y probado en host (Windows 11, wintrust real). No probado en la VM de LiberNT ni en la dx2400.** Los informes de compilacion y de pruebas van separados (secciones 8 y 9).
+**Estado: compilado y probado en host (Windows 11, wintrust real). No probado en la VM de Orosi ni en la dx2400.** Los informes de compilacion y de pruebas van separados (secciones 8 y 9).
 
 ## 1. Piezas
 
 | pieza | ubicacion | funcion |
 |---|---|---|
 | libservicing | `base/system/servicing/libservicing/` | manifest, store, journal, transacciones, verificacion ENFORCE, plan/attempt, targets Online/Image, arbol protegido |
-| libernt-update.exe | `base/applications/cmdutils/libernt-update/` | CLI: init, query, verify, add-package, apply, confirm, rollback, remove-package, pending, export-log |
+| orosi-update.exe | `base/applications/cmdutils/libernt-update/` | CLI: init, query, verify, add-package, apply, confirm, rollback, remove-package, pending, export-log |
 | scripts de host | `tools/libernt-update/` | `New-DevSigningCert.ps1`, `New-FixturePackage.ps1`, `Build-And-Test.ps1`, certificado publico en `certs/` |
 | tests | `libservicing/tests/tests.c` | 412 comprobaciones (con ganchos `LN_TESTING`, solo en la copia de pruebas de la libreria) |
 
@@ -19,8 +19,8 @@ El CLI y la libreria necesitan privilegios de administrador (o SYSTEM) para crea
 
 ## 2. Modelo de seguridad
 
-El arbol `TARGET\LiberNT\Servicing` (store, ancla de confianza, journal, plan, backups) decide que instala el motor como administrador:
-- se crea con DACL **protegido** SYSTEM + Administrators; al abrir un target se exige duenio SYSTEM/Administrators/TrustedInstaller, DACL protegido y solo ACE de permiso para esos principales (tambien en `TARGET\LiberNT`); si no, `LN_E_INSECURE_TARGET` antes de leer nada. Sin ACL (FAT) falla cerrado.
+El arbol `TARGET\Orosi\Servicing` (store, ancla de confianza, journal, plan, backups) decide que instala el motor como administrador:
+- se crea con DACL **protegido** SYSTEM + Administrators; al abrir un target se exige duenio SYSTEM/Administrators/TrustedInstaller, DACL protegido y solo ACE de permiso para esos principales (tambien en `TARGET\Orosi`); si no, `LN_E_INSECURE_TARGET` antes de leer nada. Sin ACL (FAT) falla cerrado.
 - `add-package` copia el paquete a un staging privado dentro del arbol protegido, verifica SOLO la copia e importa de ella.
 - `apply` y `confirm` vuelven a verificar el paquete guardado (secciones 3 y 4).
 - `pending` valida el plan contra el paquete firmado (`LnServicingValidatePlan`): digest, transactionId, y cada operacion contra el manifest.
@@ -47,7 +47,7 @@ Del catalogo, el certificado DEV es autofirmado: `WinVerifyTrust` devuelve `CERT
 - **idempotencia:** el mismo request reanuda o devuelve el resultado; `prepared/applying` se reanuda desde `undo.json`.
 
 ## 5. Certificado de desarrollo y scripts
-`New-DevSigningCert.ps1` crea `CN=Leeway LiberNT Update DEV` (RSA 3072, SHA-256, 5 anos); la clave privada solo en `C:\Users\Nicolas\.leeway-dev-signing\` (PFX + contrasena aleatoria, ACL solo del usuario), nunca en el repo ni en las VMs (se niega a usar una carpeta dentro del repo). Al repo solo el `.cer` publico (SHA-256 `829459d8db6adc0a4fe7500e0572149e1d469b6a3707cf48e374b7660d754a34`); `.gitignore` bloquea pfx/key/contrasena. No se genero ni publico clave de distribucion. `New-FixturePackage.ps1` arma y firma paquetes (manifest + `manifest.sig` + payload + catalogo v2 firmado) con interruptores para fixtures negativos.
+`New-DevSigningCert.ps1` crea `CN=Leeway Orosi Update DEV` (RSA 3072, SHA-256, 5 anos); la clave privada solo en `C:\Users\Nicolas\.leeway-dev-signing\` (PFX + contrasena aleatoria, ACL solo del usuario), nunca en el repo ni en las VMs (se niega a usar una carpeta dentro del repo). Al repo solo el `.cer` publico (SHA-256 `829459d8db6adc0a4fe7500e0572149e1d469b6a3707cf48e374b7660d754a34`); `.gitignore` bloquea pfx/key/contrasena. No se genero ni publico clave de distribucion. `New-FixturePackage.ps1` arma y firma paquetes (manifest + `manifest.sig` + payload + catalogo v2 firmado) con interruptores para fixtures negativos.
 
 ## 6. Dependencias y limites
 - Usa kernel32, advapi32 (seguridad, CryptoAPI), crypt32 y wintrust. SHA-256, JSON y UTF-8 son propios. Sin user32.
@@ -58,25 +58,25 @@ Del catalogo, el certificado DEV es autofirmado: `WinVerifyTrust` devuelve `CERT
 - Sin dependencias entre paquetes, CAB/MSU/deltas, red, kernel/SMSS.
 
 ## 7. Cambios de la revision de Pam
-B1 arbol protegido + re-verificacion en apply/confirm/pending; B2 staging privado; B3 lista blanca, 8.3, dispositivos, reparse points y camino real; B4 journal estricto + ancla; N1 solo `CERT_E_UNTRUSTEDROOT`; N3 ACCESS_DENIED acotado; N4 ganchos de prueba solo con `LN_TESTING`; N5 ids sin nombres de dispositivo; N6 plan validado contra el paquete. N2 (prueba negativa del `.cat` con la firma CMS alterada en la VM de LiberNT, y SIP de `.cat` registrado) y N7 (lock, GC, vencimiento del certificado DEV en 5 anos) quedan pendientes.
+B1 arbol protegido + re-verificacion en apply/confirm/pending; B2 staging privado; B3 lista blanca, 8.3, dispositivos, reparse points y camino real; B4 journal estricto + ancla; N1 solo `CERT_E_UNTRUSTEDROOT`; N3 ACCESS_DENIED acotado; N4 ganchos de prueba solo con `LN_TESTING`; N5 ids sin nombres de dispositivo; N6 plan validado contra el paquete. N2 (prueba negativa del `.cat` con la firma CMS alterada en la VM de Orosi, y SIP de `.cat` registrado) y N7 (lock, GC, vencimiento del certificado DEV en 5 anos) quedan pendientes.
 
 ## 8. Informe de COMPILACION
-- **Host** (`tools/libernt-update/Build-And-Test.ps1`, clang llvm-mingw x86_64, `-Wall -Wextra`): libservicing (10 archivos) + `s1core.c`, libernt-update.exe y libservicing-tests.exe (con `-DLN_TESTING`) -> 0 avisos, `COMPILATION: OK`.
-- **Contra LiberNT** (headers `sdk/include`, toolchain Clang de RosBE, amd64, `ninja -j1`, con los dos `add_subdirectory` aplicados solo en un arbol local sin commitear): `libservicing`, `libservicing_testlib`, `libernt-update` y `libservicing_tests` compilan y enlazan contra las bibliotecas de importacion de LiberNT, incluyendo `s1core.c`. Dos hallazgos que el host no daba: `GetNamedSecurityInfoW` recibe `LPWSTR` en los headers de LiberNT (cast), y `s1core.c` de Kevin dejaba un `fprintf(stderr, ...)` de depuracion dentro de `S1Rsa2048Sha256Verify` que no enlaza en LiberNT (`_iob` no existe en su msvcrt): se quitaron esas dos lineas en la copia importada; Kevin debe quitarlas tambien en su rama. `libernt-update.exe` importa solo advapi32, kernel32, msvcrt y wintrust. Esto confirma que las APIs usadas existen en LiberNT; NO prueba que se comporten igual.
+- **Host** (`tools/libernt-update/Build-And-Test.ps1`, clang llvm-mingw x86_64, `-Wall -Wextra`): libservicing (10 archivos) + `s1core.c`, orosi-update.exe y libservicing-tests.exe (con `-DLN_TESTING`) -> 0 avisos, `COMPILATION: OK`.
+- **Contra Orosi** (headers `sdk/include`, toolchain Clang de RosBE, amd64, `ninja -j1`, con los dos `add_subdirectory` aplicados solo en un arbol local sin commitear): `libservicing`, `libservicing_testlib`, `libernt-update` y `libservicing_tests` compilan y enlazan contra las bibliotecas de importacion de Orosi, incluyendo `s1core.c`. Dos hallazgos que el host no daba: `GetNamedSecurityInfoW` recibe `LPWSTR` en los headers de Orosi (cast), y `s1core.c` de Kevin dejaba un `fprintf(stderr, ...)` de depuracion dentro de `S1Rsa2048Sha256Verify` que no enlaza en Orosi (`_iob` no existe en su msvcrt): se quitaron esas dos lineas en la copia importada; Kevin debe quitarlas tambien en su rama. `orosi-update.exe` importa solo advapi32, kernel32, msvcrt y wintrust. Esto confirma que las APIs usadas existen en Orosi; NO prueba que se comporten igual.
 - Los `CMakeLists.txt` padres no se modificaron en la rama (el nucleo sigue desconectado).
 
 ## 9. Informe de PRUEBAS
 Host, Windows 11 sin elevar, wintrust real: **343 comprobaciones, 0 fallos**: SHA-256, JSON, rutas y lista blanca, esquema del manifest, transactionId, journal incl. ancla, identidad del target, arbol protegido, verificacion con `manifest.sig` real (bueno, payload alterado, manifest alterado tras firmar, firma danada, sin firma, firmado por otro certificado, destino kernel, payload ausente, catalogo opcional ausente / presente sin firma, driver con y sin catalogo), rechazo antes de staging, ciclo completo, fallo a mitad con rollback, objeto corrupto, re-verificacion en apply/confirm, copia privada ante cambio del origen, junction, plan pendiente y su validacion, reglas de intentos, export-log.
 - **AddressSanitizer** (clang `-fsanitize=address`, mismo codigo): 343/0, sin errores. Encontro y corrigio un uso despues de liberar real en `LnServicingApplyPackage` (se leia `last->phase` despues de `LnJournalFree`); antes aparecia como segfault intermitente.
 - **Robustez ante antivirus/indexadores:** el host de pruebas tiene escaneo en tiempo real y producia fallos transitorios (sharing violation, acceso denegado, archivo mapeado) al reemplazar un archivo recien escrito. `LnWriteFileAtomic`, la apertura del journal y el reemplazo de destinos reintentan unos instantes (mas en una imagen offline, menos en el sistema en marcha).
-- No probado: VM LiberNT/dx2400, `WinVerifyTrust` de LiberNT sobre un `.cat`, target Online real, archivo realmente en uso, corte de luz real, aplicador de arranque/BootExecute, servicio, ejecucion elevada con el DACL solo SYSTEM+Administrators (los tests aceptan ademas la cuenta que los corre), `manifest.sig` verificado por el aplicador real de Kevin (comparten el codigo, no se probo en conjunto).
+- No probado: VM Orosi/dx2400, `WinVerifyTrust` de Orosi sobre un `.cat`, target Online real, archivo realmente en uso, corte de luz real, aplicador de arranque/BootExecute, servicio, ejecucion elevada con el DACL solo SYSTEM+Administrators (los tests aceptan ademas la cuenta que los corre), `manifest.sig` verificado por el aplicador real de Kevin (comparten el codigo, no se probo en conjunto).
 
 ## 10. Integracion de s1core (Kevin, bfa62cef6d) y notas de la 2da pasada de Pam
 - `base/system/servicing/pending/s1core.{c,h}` es ahora EXACTAMENTE el commit bfa62cef6d de Kevin (unica fuente; sin copia divergente; sin fprintf; pinning e==65537; helpers de prueba bajo `S1_HOST_TEST`).
 - `CertRsa2048Key` exige ademas bit alto del modulo, modulo impar y e==65537 (misma politica que el core). El `.cer` y `manifest.json` se leen UNA sola vez en `VerifyCommon`; los mismos bytes se parsean, hashean y verifican.
-- `apply` compara el `manifestSha256` del paquete re-verificado con el de la transaccion; `LnTargetOpen` rechaza reparse points en `LiberNT` y `LiberNT\Servicing`; `LnTargetValidateReal` se llama justo antes de cada escritura; `COM`/`LPT` con superindices U+00B9/B2/B3 son nombres reservados.
+- `apply` compara el `manifestSha256` del paquete re-verificado con el de la transaccion; `LnTargetOpen` rechaza reparse points en `Orosi` y `Orosi\Servicing`; `LnTargetValidateReal` se llama justo antes de cada escritura; `COM`/`LPT` con superindices U+00B9/B2/B3 son nombres reservados.
 - Politica de nombres de stage 1 (documentada en `target.c`): la lista blanca dice que PUEDE reemplazarse, no que es peligroso; lsasrv, samsrv, msv1_0, sechost, svchost, kernel32, kernelbase no estan en la lista de exclusion: quien firma con la clave DEV es confiable para entregarlos; el dueno decide cuando crece esa lista.
-- Pruebas negativas nuevas (29): bit flip de la firma en 4 posiciones, firma de 255/257/1 bytes, e=3, e=65539, modulo sin bit alto, modulo par, DER truncado. Host 343/0, ASan 343/0. Compilacion contra LiberNT: repetir pendiente en este commit (el anterior enlazo bien).
+- Pruebas negativas nuevas (29): bit flip de la firma en 4 posiciones, firma de 255/257/1 bytes, e=3, e=65539, modulo sin bit alto, modulo par, DER truncado. Host 343/0, ASan 343/0. Compilacion contra Orosi: repetir pendiente en este commit (el anterior enlazo bien).
 
 ## Entrega por red (add-package --from)
 

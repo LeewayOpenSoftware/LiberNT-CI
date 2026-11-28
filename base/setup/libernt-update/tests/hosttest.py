@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Host test for libernt-update-bootstrap.exe (offline/image mode).
+"""Host test for orosi-update-bootstrap.exe (offline/image mode).
 
 Drives the built bootstrap binary against a fake target root and a
 RegSaveKey-generated SYSTEM hive. Requires administrator (SeRestoreName for
 RegLoadKey/SaveKey and for setting the O:SY owner on the servicing tree).
 
-Usage: python hosttest.py <path to libernt-update-bootstrap.exe> [devkey.pem|devkey.pfx]
+Usage: python hosttest.py <path to orosi-update-bootstrap.exe> [devkey.pem|devkey.pfx]
 """
 
 import ctypes
@@ -130,7 +130,7 @@ def build_bundle(bundle_dir, files, key_path):
     manifest = json.dumps({"schema": 1, "binaries": entries,
                            "shortcuts": [{
                                "name": "ln-hosttest.lnk",
-                               "target": r"LiberNT\Servicing\bin\libernt-update.exe",
+                               "target": r"Orosi\Servicing\bin\orosi-update.exe",
                                "arguments": "/query",
                            }]},
                           separators=(",", ":")).encode()
@@ -151,7 +151,7 @@ def run(exe, *args):
 def main():
     exe = os.path.abspath(sys.argv[1])
     devkey = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
-        os.environ["USERPROFILE"], ".leeway-dev-signing", "Leeway-LiberNT-Update-DEV.pfx")
+        os.environ["USERPROFILE"], ".leeway-dev-signing", "Leeway-Orosi-Update-DEV.pfx")
     devkey = os.path.abspath(devkey)
 
     tmp = tempfile.mkdtemp(prefix="bs-hosttest-")
@@ -165,8 +165,8 @@ def main():
     payload_cli = os.urandom(2048)
     bundle = os.path.join(tmp, "bundle")
     build_bundle(bundle, [
-        ("pending.exe", r"Windows\System32\LiberNTUpdatePending.exe", True, payload_pending),
-        ("libernt-update.exe", r"LiberNT\Servicing\bin\libernt-update.exe", False, payload_cli),
+        ("pending.exe", r"Windows\System32\OrosiUpdatePending.exe", True, payload_pending),
+        ("orosi-update.exe", r"Orosi\Servicing\bin\orosi-update.exe", False, payload_cli),
     ], devkey)
 
     # 1. dry-run writes nothing (no privileges needed)
@@ -174,7 +174,7 @@ def main():
     check(rc == 0, f"dry-run exit 0 (rc={rc})")
     check("BootExecute +=" in out, "dry-run prints BootExecute plan")
     check("pin development public key" in out, "dry-run prints key pinning")
-    check(not os.path.exists(os.path.join(root, "LiberNT")),
+    check(not os.path.exists(os.path.join(root, "Orosi")),
           "dry-run created nothing")
 
     # 2. unsigned manifest refused (no privileges needed)
@@ -184,7 +184,7 @@ def main():
         f.write(os.urandom(256))
     rc, out = run(exe, "install", "--image", root, "--bundle", bundle_bad)
     check(rc != 0 and "refused" in out, f"unsigned bundle refused (rc={rc})")
-    check(not os.path.exists(os.path.join(root, "LiberNT")),
+    check(not os.path.exists(os.path.join(root, "Orosi")),
           "refused bundle created nothing")
 
     if not (enable_privilege("SeRestorePrivilege") and
@@ -201,40 +201,40 @@ def main():
     # 3. real install
     rc, out = run(exe, "install", "--image", root, "--bundle", bundle)
     check(rc == 0, f"install exit 0 (rc={rc}): {out[-300:] if rc else ''}")
-    pending = os.path.join(root, "Windows", "System32", "LiberNTUpdatePending.exe")
+    pending = os.path.join(root, "Windows", "System32", "OrosiUpdatePending.exe")
     check(open(pending, "rb").read() == payload_pending, "pending.exe installed byte-identical")
-    cli = os.path.join(root, "LiberNT", "Servicing", "bin", "libernt-update.exe")
+    cli = os.path.join(root, "Orosi", "Servicing", "bin", "orosi-update.exe")
     check(open(cli, "rb").read() == payload_cli, "CLI installed byte-identical")
-    check(os.path.exists(os.path.join(root, "LiberNT", "Servicing", "bootstrap", "installed.json")),
+    check(os.path.exists(os.path.join(root, "Orosi", "Servicing", "bootstrap", "installed.json")),
           "installed.json written")
-    with open(os.path.join(root, "LiberNT", "Servicing", "bootstrap", "installed.json"),
+    with open(os.path.join(root, "Orosi", "Servicing", "bootstrap", "installed.json"),
               encoding="utf-8") as f:
         inv = json.load(f)
     check(inv.get("schema") == 1 and isinstance(inv.get("files"), list) and len(inv["files"]) >= 2,
           f"installed.json is strict JSON with a files list: schema={inv.get('schema')}, "
           f"files={len(inv.get('files', []))}")
-    check(any(rec.get("path") == r"Windows\System32\LiberNTUpdatePending.exe"
+    check(any(rec.get("path") == r"Windows\System32\OrosiUpdatePending.exe"
               for rec in inv.get("files", [])),
           "installed.json path round-trips with its backslashes")
-    key = os.path.join(root, "LiberNT", "Servicing", "store", "dev-public-key.bin")
+    key = os.path.join(root, "Orosi", "Servicing", "store", "dev-public-key.bin")
     check(os.path.exists(key) and os.path.getsize(key) == 256, "dev public key pinned (256 bytes)")
     lnk = os.path.join(root, "ProgramData", "Microsoft", "Windows", "Start Menu",
                        "Programs", "ln-hosttest.lnk")
     check(os.path.exists(lnk), "start menu shortcut created from manifest")
     be = hive_bootexecute(hive_path, "HostTestVerify")
-    check(be[:2] == ["autocheck", "autochk *"] and "LiberNTUpdatePending" in be,
+    check(be[:2] == ["autocheck", "autochk *"] and "OrosiUpdatePending" in be,
           f"hive BootExecute updated preserving order: {be}")
-    check(be.index("LiberNTUpdatePending") > be.index("autochk *"),
+    check(be.index("OrosiUpdatePending") > be.index("autochk *"),
           "entry landed after autocheck")
 
     # 4. idempotence: second install, no duplicate BootExecute entry
     rc, out = run(exe, "install", "--image", root, "--bundle", bundle)
     check(rc == 0, f"second install exit 0 (rc={rc})")
     be = hive_bootexecute(hive_path, "HostTestVerify2")
-    check(be.count("LiberNTUpdatePending") == 1, f"no duplicate BootExecute entry: {be}")
+    check(be.count("OrosiUpdatePending") == 1, f"no duplicate BootExecute entry: {be}")
 
     # 5. uninstall refuses with a pending plan
-    plan = os.path.join(root, "LiberNT", "Servicing", "pending", "plan.json")
+    plan = os.path.join(root, "Orosi", "Servicing", "pending", "plan.json")
     with open(plan, "w") as f:
         f.write("{}")
     rc, out = run(exe, "uninstall", "--image", root)
@@ -249,7 +249,7 @@ def main():
     check(not os.path.exists(cli), "CLI removed")
     check(not os.path.exists(lnk), "start menu shortcut removed by uninstall")
     be = hive_bootexecute(hive_path, "HostTestVerify3")
-    check("LiberNTUpdatePending" not in be and be[:2] == ["autocheck", "autochk *"],
+    check("OrosiUpdatePending" not in be and be[:2] == ["autocheck", "autochk *"],
           f"BootExecute reverted: {be}")
     check(os.path.exists(os.path.join(export_dir, "bootstrap.log")),
           "bootstrap.log exported (logs kept)")

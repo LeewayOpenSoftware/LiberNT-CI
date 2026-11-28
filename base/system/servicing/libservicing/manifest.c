@@ -6,7 +6,7 @@
  *
  * manifest.json:
  *   { "schemaVersion":1, "packageId":"...", "releaseVersion":"...", "type":"system-component",
- *     "targetFamily":"LiberNT", "architecture":"amd64", "certificateSha256":"<64 hex>",
+ *     "targetFamily":"Orosi", "architecture":"amd64", "certificateSha256":"<64 hex>",
  *     "payloads":[ {"path":"a.dll","target":"Windows\\System32\\a.dll","sha256":"<64 hex>"},
  *                  {"action":"delete","target":"Windows\\System32\\old.dll"} ] }
  */
@@ -87,7 +87,7 @@ DWORD LnManifestParse(const char *text, size_t len, LN_MANIFEST *m)
         goto bad;                                       /* "engine" is not part of stage 1 */
     strcpy(m->type, s);
     s = LnJsonGetString(root, "targetFamily");
-    if (!s || strcmp(s, "LiberNT")) goto bad;
+    if (!s || strcmp(s, "Orosi")) goto bad;
     s = LnJsonGetString(root, "architecture");
     if (!s || (strcmp(s, "amd64") && strcmp(s, "x86"))) goto bad;
     strcpy(m->architecture, s);

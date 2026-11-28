@@ -8,7 +8,7 @@
  * The Image mode only reads and writes files below the given root. It never loads or runs
  * anything found there (DESIGN-v0, section 3).
  *
- * Trust boundary: everything under <root>\LiberNT\Servicing (store, trust anchor, journal, plan,
+ * Trust boundary: everything under <root>\Orosi\Servicing (store, trust anchor, journal, plan,
  * backups) decides what the engine installs as an administrator, so the tree is created with a
  * PROTECTED DACL that grants only SYSTEM and Administrators, and a target whose servicing tree has
  * another owner or any other ACE is refused (LN_E_INSECURE_TARGET) before anything is read from it.
@@ -21,8 +21,8 @@
 #include <aclapi.h>
 #include <sddl.h>
 
-#define SERVICING_REL L"LiberNT\\Servicing"
-#define LIBERNT_REL   L"LiberNT"
+#define SERVICING_REL L"Orosi\\Servicing"
+#define LIBERNT_REL   L"Orosi"
 
 #ifdef LN_TESTING
 PSID LnTestExtraSid = NULL;
@@ -48,7 +48,7 @@ BOOL LnTargetItemAllowed(const WCHAR *rel, int driverStart)
     };
     static const WCHAR *deniedPrefix[] =
     {
-        L"Windows\\System32\\config\\", L"Windows\\System32\\boot\\", L"LiberNT\\"
+        L"Windows\\System32\\config\\", L"Windows\\System32\\boot\\", L"Orosi\\"
     };
     /* kernel, HAL, boot path and the critical processes: never replaced by the engine in stage 1 */
     static const WCHAR *deniedName[] =

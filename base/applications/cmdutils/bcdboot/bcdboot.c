@@ -246,12 +246,12 @@ wmain(
         fputws(L"Failure when attempting to copy boot files.\n", stderr);
         /* \??\X -> \\?\X; \Device\... -> \\?\GLOBALROOT\Device\... */
         if (SUCCEEDED(StringCchPrintfW(Check, ARRAYSIZE(Check),
-                                       wcsncmp(SystemPartition, L"\\??\\", 4) == 0 ? L"\\\\?\\%sEFI\\LiberNT\\Boot\\BCD.bak"
-                                                                                  : L"\\\\?\\GLOBALROOT%sEFI\\LiberNT\\Boot\\BCD.bak",
+                                       wcsncmp(SystemPartition, L"\\??\\", 4) == 0 ? L"\\\\?\\%sEFI\\Orosi\\Boot\\BCD.bak"
+                                                                                  : L"\\\\?\\GLOBALROOT%sEFI\\Orosi\\Boot\\BCD.bak",
                                        wcsncmp(SystemPartition, L"\\??\\", 4) == 0 ? SystemPartition + 4 : SystemPartition)) &&
             GetFileAttributesW(Check) != INVALID_FILE_ATTRIBUTES)
         {
-            fputws(L"A copy of the earlier boot configuration is \\EFI\\LiberNT\\Boot\\BCD.bak on the system partition.\n",
+            fputws(L"A copy of the earlier boot configuration is \\EFI\\Orosi\\Boot\\BCD.bak on the system partition.\n",
                    stderr);
         }
         return RtlNtStatusToDosError(Status);

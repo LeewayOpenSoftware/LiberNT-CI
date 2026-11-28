@@ -17,12 +17,12 @@
 #define BM_WINDOWS_MANAGER L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi"
 #define BM_WINDOWS_STORE   L"\\EFI\\Microsoft\\Boot\\BCD"
 #define BM_WINDOWS_TITLE   L"Windows Boot Manager"
-#define BM_LIBERNT_MANAGER L"\\EFI\\LiberNT\\Boot\\bootmgfw.efi"
-#define BM_LIBERNT_STORE   L"\\EFI\\LiberNT\\Boot\\BCD"
-#define BM_LIBERNT_TITLE   L"LiberNT"
-#define BM_LIBERNT_ENTRY   L"{354fa6e5-5e45-49af-91bf-1fd2754e470a}"
+#define BM_OROSI_MANAGER L"\\EFI\\Orosi\\Boot\\bootmgfw.efi"
+#define BM_OROSI_STORE   L"\\EFI\\Orosi\\Boot\\BCD"
+#define BM_OROSI_TITLE   L"Orosi"
+#define BM_OROSI_ENTRY   L"{354fa6e5-5e45-49af-91bf-1fd2754e470a}"
 #define BM_INSTALL_IMAGE_OPTION L"INSTALLIMAGE="
-#define BM_UPDATE_STATE    L"\\EFI\\LiberNT\\Boot\\update.state"
+#define BM_UPDATE_STATE    L"\\EFI\\Orosi\\Boot\\update.state"
 #define BM_UPDATE_STARTS   3
 #define BM_UPDATE_UNDO_STARTS (BM_UPDATE_STARTS * 2)
 #define BM_UPDATE_STATE_CHARS 160
@@ -34,14 +34,14 @@
 
 typedef enum _BM_FOUND_SYSTEM
 {
-    BmFoundLiberNT,
+    BmFoundOrosi,
     BmFoundWindows,
     BmFoundRemovable
 } BM_FOUND_SYSTEM;
 
 static const PCWSTR BmStorePaths[] =
 {
-    L"\\EFI\\LiberNT\\Boot\\BCD",
+    L"\\EFI\\Orosi\\Boot\\BCD",
     L"\\Boot\\BCD",
 };
 
@@ -63,7 +63,7 @@ static PCSTR BmToolMenuNames[BM_MAX_TOOLS];
 static ULONG BmCount;
 static ULONG BmToolCount;
 static ULONG BmSelected;
-static ULONG BmLiberNTEntry = MAXULONG;
+static ULONG BmOrosiEntry = MAXULONG;
 static BOOLEAN BmUsb[BM_MAX_ENTRIES];
 static ULONG BmStoreCount;
 static PVOID BmKnownVolumes[BM_MAX_VOLUMES];
@@ -117,9 +117,9 @@ BmGetStoreDescription(
     PVOID Store;
     ULONG Size, Index, Loaders = 0;
 
-    RtlStringCchCopyW(Description, Chars, Windows ? BM_WINDOWS_TITLE : BM_LIBERNT_TITLE);
+    RtlStringCchCopyW(Description, Chars, Windows ? BM_WINDOWS_TITLE : BM_OROSI_TITLE);
 
-    Store = BcdReadStoreFile(Device, Windows ? BM_WINDOWS_STORE : BM_LIBERNT_STORE, &Size);
+    Store = BcdReadStoreFile(Device, Windows ? BM_WINDOWS_STORE : BM_OROSI_STORE, &Size);
     if (!Store)
         return;
 
@@ -294,7 +294,7 @@ BmAddFoundEntry(
     Entry = &BmEntries[Index];
     Entry->FirmwareDevice = Device;
     Entry->FirmwarePath = Path;
-    if (System == BmFoundLiberNT)
+    if (System == BmFoundOrosi)
     {
         Entry->FirmwareOptions = BM_START_DEFAULT_OPTION;
         BmGetStoreDescription(Device, FALSE, Entry->Description, RTL_NUMBER_OF(Entry->Description));
@@ -335,8 +335,8 @@ BmExamineVolume(
 
     Usb = FwIsUsbVolume(Device);
     Boot = FwIsBootVolume(Device);
-    if (!Boot && FwFileExists(Device, BM_LIBERNT_MANAGER) &&
-        BmAddFoundEntry(Device, Usb, BmFoundLiberNT, BM_LIBERNT_MANAGER))
+    if (!Boot && FwFileExists(Device, BM_OROSI_MANAGER) &&
+        BmAddFoundEntry(Device, Usb, BmFoundOrosi, BM_OROSI_MANAGER))
     {
         Added = TRUE;
     }
@@ -442,7 +442,7 @@ BmBuildMenu(VOID)
         BmMenuName(BmEntries[i].Description, BmNames[i]);
         BmMenuNames[i] = BmNames[i];
         BmMenuIcons[i] = (!BmEntries[i].FirmwareDevice ||
-                          _wcsicmp(BmEntries[i].FirmwarePath, BM_LIBERNT_MANAGER) == 0) ? UiMenuIconLiberNT :
+                          _wcsicmp(BmEntries[i].FirmwarePath, BM_OROSI_MANAGER) == 0) ? UiMenuIconOrosi :
                          BmLogos[i].Pixels ? UiMenuIconImage : UiMenuIconDesktop;
         BmMenuImages[i] = BmLogos[i].Pixels ? &BmLogos[i] : NULL;
     }
@@ -491,7 +491,7 @@ BmStartSelectedApplication(
     if (Startup->Profile != 0 && !FwDebugEnabled)
     {
         FwDebugEnable();
-        FwDebugAnnounce("LiberNT Boot Manager", TRUE);
+        FwDebugAnnounce("Orosi Boot Manager", TRUE);
     }
 
     if (BmStartApplication(Entry, BmStorePath, Startup, &Cancelled) || Cancelled)
@@ -533,10 +533,10 @@ BmChooseStartup(
         return TRUE;
     }
 
-    if (BmLiberNTEntry >= BmCount)
+    if (BmOrosiEntry >= BmCount)
         return FALSE;
 
-    *Entry = &BmEntries[BmLiberNTEntry];
+    *Entry = &BmEntries[BmOrosiEntry];
     return TRUE;
 }
 
@@ -815,7 +815,7 @@ BlMain(VOID)
     ULONG Size, Default = 0, DefaultTool = MAXULONG, i;
     LONG Timeout;
 
-    FwDebugAnnounce("LiberNT Boot Manager", TRUE);
+    FwDebugAnnounce("Orosi Boot Manager", TRUE);
     Store = BmReadStore(BmStorePath, RTL_NUMBER_OF(BmStorePath), &Size);
 
     RtlStringCchCopyW(BmTitle, RTL_NUMBER_OF(BmTitle), BM_DEFAULT_TITLE);
@@ -830,7 +830,7 @@ BlMain(VOID)
             BcdGetBoolean(&BootMgr, BcdLibraryBoolean_DebuggerEnabled, &Debug) && Debug)
         {
             FwDebugEnable();
-            FwDebugAnnounce("LiberNT Boot Manager", TRUE);
+            FwDebugAnnounce("Orosi Boot Manager", TRUE);
         }
 
         BmStore = Store;
@@ -843,8 +843,8 @@ BlMain(VOID)
 
         for (i = 0; i < BmCount; i++)
         {
-            if (_wcsicmp(BmEntries[i].Id, BM_LIBERNT_ENTRY) == 0)
-                BmLiberNTEntry = i;
+            if (_wcsicmp(BmEntries[i].Id, BM_OROSI_ENTRY) == 0)
+                BmOrosiEntry = i;
         }
 
         BmToolCount = BmEnumerateToolEntries(BmTools, RTL_NUMBER_OF(BmTools), &DefaultTool);

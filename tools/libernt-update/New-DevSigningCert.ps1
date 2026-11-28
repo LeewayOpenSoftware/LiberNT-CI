@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Creates the internal DEVELOPMENT signing certificate for LiberNT Update (stage 1).
+    Creates the internal DEVELOPMENT signing certificate for Orosi Update (stage 1).
 
 .DESCRIPTION
     - The private key is written ONLY to a PFX inside KeyDir (default %USERPROFILE%\.leeway-dev-signing),
@@ -15,19 +15,19 @@
 param(
     [string]$KeyDir = (Join-Path $env:USERPROFILE '.leeway-dev-signing'),
     [string]$PublicOut,
-    [string]$Subject = 'CN=Leeway LiberNT Update DEV'
+    [string]$Subject = 'CN=Leeway Orosi Update DEV'
 )
 
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-if (-not $PublicOut) { $PublicOut = Join-Path $here 'certs\Leeway-LiberNT-Update-DEV.cer' }
+if (-not $PublicOut) { $PublicOut = Join-Path $here 'certs\Leeway-Orosi-Update-DEV.cer' }
 $repoRoot = (Resolve-Path (Join-Path $here '..\..')).Path
 $keyFull = [IO.Path]::GetFullPath($KeyDir)
 if ($keyFull.StartsWith($repoRoot, [StringComparison]::OrdinalIgnoreCase)) {
     throw "KeyDir '$keyFull' is inside the repository '$repoRoot'. The private key must stay outside."
 }
 
-$pfx = Join-Path $keyFull 'Leeway-LiberNT-Update-DEV.pfx'
+$pfx = Join-Path $keyFull 'Leeway-Orosi-Update-DEV.pfx'
 $pwFile = Join-Path $keyFull 'pfx-password.txt'
 New-Item -ItemType Directory -Force -Path $keyFull | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path $PublicOut) | Out-Null

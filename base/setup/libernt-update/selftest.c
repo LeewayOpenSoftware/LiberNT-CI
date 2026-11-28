@@ -58,8 +58,8 @@ static DWORD
 BsSelfTestSimulatedTransaction(
     _In_ const BS_TARGET *Target)
 {
-    static const WCHAR *Scratch = L"LiberNT\\Servicing\\bootstrap\\selftest.tmp";
-    static const WCHAR *Backup = L"LiberNT\\Servicing\\bootstrap\\selftest.tmp.bak";
+    static const WCHAR *Scratch = L"Orosi\\Servicing\\bootstrap\\selftest.tmp";
+    static const WCHAR *Backup = L"Orosi\\Servicing\\bootstrap\\selftest.tmp.bak";
     WCHAR Original[] = L"bootstrap-selftest";
     WCHAR ScratchPath[BS_MAX_PATH_BUF], BackupPath[BS_MAX_PATH_BUF];
     HANDLE Handle;
@@ -212,7 +212,7 @@ static DWORD
 BsSelfTestTrustCert(
     _In_ const BS_TARGET *Target)
 {
-    static const WCHAR CerRel[] = L"trust\\Leeway-LiberNT-Update-DEV.cer";
+    static const WCHAR CerRel[] = L"trust\\Leeway-Orosi-Update-DEV.cer";
     WCHAR Path[BS_MAX_PATH_BUF];
     HANDLE Handle;
     LARGE_INTEGER Size;

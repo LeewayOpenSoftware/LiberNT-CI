@@ -126,7 +126,7 @@ typedef struct _LN_TARGET
 {
     LN_TARGET_MODE mode;
     WCHAR root[MAX_PATH];         /* ends with a backslash */
-    WCHAR servicing[MAX_PATH];    /* <root>LiberNT\Servicing */
+    WCHAR servicing[MAX_PATH];    /* <root>Orosi\Servicing */
     char identity[65];            /* machineId: a GUID kept in target-id, stable per target */
 } LN_TARGET;
 
@@ -229,7 +229,7 @@ DWORD LnStoreRemovePackage(const LN_TARGET *t, const char *packageId, const char
 DWORD LnStoreList(const LN_TARGET *t, char (**ids)[130], size_t *count);   /* "id\\version", free(*ids) */
 
 /* ---- servicing.c: add / apply / rollback ------------------------------- */
-/* TRUE when a raw BootExecute value (REG_SZ or REG_MULTI_SZ) lists the LiberNT boot
+/* TRUE when a raw BootExecute value (REG_SZ or REG_MULTI_SZ) lists the Orosi boot
  * applier. `bytes` is the buffer size in bytes. Each entry is matched by its first
  * token (up to a space), with any path and a trailing ".exe" stripped,
  * case-insensitively. The buffer must contain a L'\0' within `bytes` (or be zeroed

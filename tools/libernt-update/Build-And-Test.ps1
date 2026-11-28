@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Host build and unit tests of the LiberNT Update stage 1 core (libservicing + libernt-update.exe).
+    Host build and unit tests of the Orosi Update stage 1 core (libservicing + orosi-update.exe).
 
 .DESCRIPTION
     Standalone: it does not use the LiberNT build. It compiles the sources with llvm-mingw clang (the
@@ -23,10 +23,10 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo = (Resolve-Path (Join-Path $here '..\..')).Path
 $lib = Join-Path $repo 'base\system\servicing\libservicing'
 $cli = Join-Path $repo 'base\applications\cmdutils\libernt-update'
-$cer = Join-Path $here 'certs\Leeway-LiberNT-Update-DEV.cer'
+$cer = Join-Path $here 'certs\Leeway-Orosi-Update-DEV.cer'
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-if (-not (Test-Path (Join-Path $KeyDir 'Leeway-LiberNT-Update-DEV.pfx')) -or -not (Test-Path $cer)) {
+if (-not (Test-Path (Join-Path $KeyDir 'Leeway-Orosi-Update-DEV.pfx')) -or -not (Test-Path $cer)) {
     & (Join-Path $here 'New-DevSigningCert.ps1') -KeyDir $KeyDir
 }
 
@@ -50,9 +50,9 @@ function Invoke-Cc([string[]]$cargs, [string]$what) {
     return $true
 }
 
-$exe = Join-Path $OutDir 'libernt-update.exe'
+$exe = Join-Path $OutDir 'orosi-update.exe'
 $tst = Join-Path $OutDir 'libservicing-tests.exe'
-if (-not (Invoke-Cc ($common + $srcs + @((Join-Path $cli 'main.c'), '-o', $exe) + $libs) 'libernt-update.exe')) { $compileOk = $false }
+if (-not (Invoke-Cc ($common + $srcs + @((Join-Path $cli 'main.c'), '-o', $exe) + $libs) 'orosi-update.exe')) { $compileOk = $false }
 if (-not (Invoke-Cc ($common + @('-DLN_TESTING') + $srcs + @((Join-Path $lib 'tests\tests.c'), '-o', $tst) + $libs + @('-lole32')) 'libservicing-tests.exe (with the test hooks)')) { $compileOk = $false }
 Write-Host ("COMPILATION: " + $(if ($compileOk) { 'OK' } else { 'FAILED' }))
 if (-not $compileOk) { exit 1 }
@@ -84,7 +84,7 @@ if (-not $SkipFixtures) {
     $tmpKey = Join-Path $env:TEMP ('lnwrong-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force -Path $tmpKey | Out-Null
     try {
-        $c = New-SelfSignedCertificate -Subject 'CN=Not The LiberNT Dev Cert' -Type CodeSigningCert -CertStoreLocation 'Cert:\CurrentUser\My'
+        $c = New-SelfSignedCertificate -Subject 'CN=Not The Orosi Dev Cert' -Type CodeSigningCert -CertStoreLocation 'Cert:\CurrentUser\My'
         $pw = 'throwaway'
         Export-PfxCertificate -Cert $c -FilePath "$tmpKey\w.pfx" -Password (ConvertTo-SecureString $pw -AsPlainText -Force) | Out-Null
         [IO.File]::WriteAllText("$tmpKey\pw.txt", $pw)
@@ -108,14 +108,14 @@ if (-not $SkipFixtures) {
     # review F1: a manifest naming a ~5000-char payload path must fail cleanly, not overflow the URL buffer
     $hp = Join-Path $httpRoot 'hugepath'
     New-Item -ItemType Directory -Force -Path $hp | Out-Null
-    $hpCert = New-Object Security.Cryptography.X509Certificates.X509Certificate2((Join-Path $KeyDir 'Leeway-LiberNT-Update-DEV.pfx'), [IO.File]::ReadAllText((Join-Path $KeyDir 'pfx-password.txt')))
+    $hpCert = New-Object Security.Cryptography.X509Certificates.X509Certificate2((Join-Path $KeyDir 'Leeway-Orosi-Update-DEV.pfx'), [IO.File]::ReadAllText((Join-Path $KeyDir 'pfx-password.txt')))
     $hpSha = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($hpCert.RawData)).Replace('-', '').ToLower()
     $hpMan = [ordered]@{
         schemaVersion     = 1
         packageId         = 'ln.hugepath'
         releaseVersion    = '1.0'
         type              = 'system-component'
-        targetFamily      = 'LiberNT'
+        targetFamily      = 'Orosi'
         architecture      = 'amd64'
         certificateSha256 = $hpSha
         payloads          = @(@{ path = (('a/' * 2500) + 'f0.bin'); target = 'Windows\System32\x.dll'; sha256 = ('0' * 64) })

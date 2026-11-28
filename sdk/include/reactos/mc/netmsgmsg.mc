@@ -663,7 +663,7 @@ Language=English
 An internal error occurred.
 .
 Language=Polish
-Wystąpił wewnętrzny błąd systemu LiberNT.
+Wystąpił wewnętrzny błąd systemu Orosi.
 .
 Language=Romanian
 An internal error occurred.
@@ -8841,7 +8841,7 @@ Language=English
 This version of the operating system cannot be joined to a domain.
 .
 Language=Polish
-Tej wersji systemu LiberNT nie można przyłączyć do domeny.
+Tej wersji systemu Orosi nie można przyłączyć do domeny.
 .
 Language=Romanian
 This version of the operating system cannot be joined to a domain.

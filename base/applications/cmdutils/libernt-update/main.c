@@ -1,10 +1,10 @@
 /*
  * PROJECT:     LiberNT Update
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     libernt-update.exe: command line over libservicing (stage 1 core)
+ * PURPOSE:     orosi-update.exe: command line over libservicing (stage 1 core)
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * Usage: libernt-update [--image <root>] <command> [arguments]
+ * Usage: orosi-update [--image <root>] <command> [arguments]
  *   init [--trust-cer <file.cer>]     create the servicing tree; install the trusted dev certificate
  *   query                              target, trust anchor, packages and their state
  *   verify <package-dir>               enforce verification only; writes nothing
@@ -26,7 +26,7 @@
 
 static void Usage(void)
 {
-    fputs("usage: libernt-update [--image <root>] <command> [arguments]\n"
+    fputs("usage: orosi-update [--image <root>] <command> [arguments]\n"
           "  init [--trust-cer <file.cer>] | query | verify <dir> | add-package <dir>\n"
           "  add-package --from <url>   fetch the package over HTTP, then verify and stage it\n"
           "  apply <id> <version> [--confirm] | confirm <id> <version> | rollback <id> <version>\n"
@@ -58,7 +58,7 @@ static const char *ErrName(DWORD e)
 
 static int Fail(const char *what, DWORD err)
 {
-    fprintf(stderr, "libernt-update: %s failed: %s (0x%08lx)\n", what, ErrName(err), (unsigned long)err);
+    fprintf(stderr, "orosi-update: %s failed: %s (0x%08lx)\n", what, ErrName(err), (unsigned long)err);
     return (int)(err ? err : 1);
 }
 
@@ -76,7 +76,7 @@ static int CmdInit(LN_TARGET *t, int argc, WCHAR **argv)
         if (!wcscmp(argv[i], L"--trust-cer") && i + 1 < argc)
         {
             char h[65];
-            WCHAR *dst = LnTargetPath(t, L"trust\\Leeway-LiberNT-Update-DEV.cer");
+            WCHAR *dst = LnTargetPath(t, L"trust\\Leeway-Orosi-Update-DEV.cer");
             DWORD err = LnCertFileSha256(argv[i + 1], h);
 
             if (!err && dst)
@@ -100,7 +100,7 @@ static int CmdQuery(const LN_TARGET *t)
     size_t n, i;
     LN_JOURNAL j;
     DWORD err;
-    WCHAR *cer = LnTargetPath(t, L"trust\\Leeway-LiberNT-Update-DEV.cer");
+    WCHAR *cer = LnTargetPath(t, L"trust\\Leeway-Orosi-Update-DEV.cer");
     char h[65];
 
     printf("target: %s\nidentity: %s\n", t->mode == LnTargetOnline ? "online" : "image", t->identity);
@@ -211,7 +211,7 @@ int wmain(int argc, WCHAR **argv)
         }
         else
         {
-            fputs("libernt-update: the target has no servicing tree; run init first\n", stderr);
+            fputs("orosi-update: the target has no servicing tree; run init first\n", stderr);
             return 2;
         }
     }
@@ -242,7 +242,7 @@ int wmain(int argc, WCHAR **argv)
                 cerPath = argv[a + 2];
             else if (t.servicing[0])
             {
-                cer = LnTargetPath(&t, L"trust\\Leeway-LiberNT-Update-DEV.cer");
+                cer = LnTargetPath(&t, L"trust\\Leeway-Orosi-Update-DEV.cer");
                 cerPath = cer;
             }
             err = cerPath ? LnServicingVerifyPackage(argv[a], cerPath, &m) : LN_E_NO_TRUST_ANCHOR;

@@ -328,7 +328,7 @@ GetDriverKeyString(
 static VOID
 PrintHeader(VOID)
 {
-    ConPuts(StdOut, L"LiberNT PnP Utility\n\n");
+    ConPuts(StdOut, L"Orosi PnP Utility\n\n");
 }
 
 static BOOL

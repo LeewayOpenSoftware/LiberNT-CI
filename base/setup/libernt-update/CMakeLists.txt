@@ -1,5 +1,5 @@
 
-# LiberNTUpdateBootstrap — installs/uninstalls the stage-1 LiberNT Update
+# OrosiUpdateBootstrap — installs/uninstalls the stage-1 Orosi Update
 # infrastructure (boot applier, servicing tree, BootExecute, service).
 # Built in the tree for verification; deliberately not added to the ISO
 # (owner condition: no ISO integration without approval).
@@ -18,6 +18,6 @@ list(APPEND SOURCE
     target.c
     ${REACTOS_SOURCE_DIR}/base/system/servicing/pending/s1core.c)
 
-add_executable(libernt-update-bootstrap ${SOURCE})
-set_module_type(libernt-update-bootstrap win32cui UNICODE)
-add_importlibs(libernt-update-bootstrap advapi32 shell32 ole32 msvcrt kernel32 ntdll)
+add_executable(orosi-update-bootstrap ${SOURCE})
+set_module_type(orosi-update-bootstrap win32cui UNICODE)
+add_importlibs(orosi-update-bootstrap advapi32 shell32 ole32 msvcrt kernel32 ntdll)

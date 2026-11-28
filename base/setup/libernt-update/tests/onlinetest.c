@@ -76,11 +76,11 @@ main(void)
     Target.Root[2] = 0;
     Target.IsImage = FALSE;
 
-    Error = BsValidateTargetRelPath(&Target, L"Windows\\System32\\LiberNTUpdatePending.exe");
+    Error = BsValidateTargetRelPath(&Target, L"Windows\\System32\\OrosiUpdatePending.exe");
     Check(Error == ERROR_SUCCESS, "online Windows\\System32 dest accepted");
-    Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Servicing\\bin\\libernt-update.exe");
-    Check(Error == ERROR_SUCCESS, "online LiberNT dest accepted");
-    Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Update\\libernt-update-ui.exe");
+    Error = BsValidateTargetRelPath(&Target, L"Orosi\\Servicing\\bin\\orosi-update.exe");
+    Check(Error == ERROR_SUCCESS, "online Orosi dest accepted");
+    Error = BsValidateTargetRelPath(&Target, L"Orosi\\Update\\orosi-update-ui.exe");
     Check(Error == ERROR_SUCCESS, "online UI exe dest accepted");
     Error = BsValidateTargetRelPath(&Target, L"ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\x.lnk");
     Check(Error == ERROR_SUCCESS, "online Start Menu shortcut dest accepted");
@@ -105,7 +105,7 @@ main(void)
         DirW2[RTL_NUMBER_OF(DirW2) - 1] = 0;
         swprintf(TargetW, RTL_NUMBER_OF(TargetW), L"%s\\attacker", DirW2);
         CreateDirectoryW(TargetW, NULL);
-        swprintf(LinkW, RTL_NUMBER_OF(LinkW), L"%s\\LiberNT", DirW2);
+        swprintf(LinkW, RTL_NUMBER_OF(LinkW), L"%s\\Orosi", DirW2);
         swprintf(Cmd, RTL_NUMBER_OF(Cmd), L"/c mklink /J \"%s\" \"%s\"", LinkW, TargetW);
         swprintf(Cmd, RTL_NUMBER_OF(Cmd), L"cmd.exe /c mklink /J \"%s\" \"%s\"", LinkW, TargetW);
         {
@@ -129,24 +129,24 @@ main(void)
         memset(&Target, 0, sizeof(Target));
         wcscpy(Target.Root, DirW2);
         Target.IsImage = FALSE;
-        Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Update\\x.exe");
+        Error = BsValidateTargetRelPath(&Target, L"Orosi\\Update\\x.exe");
         Check(Error == ERROR_BAD_PATHNAME, "online refuses a junction on the destination dir");
 
         Target.IsImage = TRUE;
-        Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Update\\x.exe");
+        Error = BsValidateTargetRelPath(&Target, L"Orosi\\Update\\x.exe");
         Check(Error == ERROR_BAD_PATHNAME, "image mode refuses the same junction");
 
         /* the pre-existing plain tree still validates, both modes */
         RemoveDirectoryW(LinkW);
-        swprintf(LinkW, RTL_NUMBER_OF(LinkW), L"%s\\LiberNT", DirW2);
+        swprintf(LinkW, RTL_NUMBER_OF(LinkW), L"%s\\Orosi", DirW2);
         CreateDirectoryW(LinkW, NULL);
-        swprintf(TargetW, RTL_NUMBER_OF(TargetW), L"%s\\LiberNT\\Update", DirW2);
+        swprintf(TargetW, RTL_NUMBER_OF(TargetW), L"%s\\Orosi\\Update", DirW2);
         CreateDirectoryW(TargetW, NULL);
         Target.IsImage = FALSE;
-        Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Update\\x.exe");
+        Error = BsValidateTargetRelPath(&Target, L"Orosi\\Update\\x.exe");
         Check(Error == ERROR_SUCCESS, "online accepts the plain nested tree");
         Target.IsImage = TRUE;
-        Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Update\\x.exe");
+        Error = BsValidateTargetRelPath(&Target, L"Orosi\\Update\\x.exe");
         Check(Error == ERROR_SUCCESS, "image mode accepts the plain nested tree (canonical compare)");
 
         /* final-component file symlink: refused when the privilege allows
@@ -154,7 +154,7 @@ main(void)
         {
             WCHAR SymW[MAX_PATH], RealW[MAX_PATH];
 
-            swprintf(SymW, RTL_NUMBER_OF(SymW), L"%s\\LiberNT\\Update\\x.exe", DirW2);
+            swprintf(SymW, RTL_NUMBER_OF(SymW), L"%s\\Orosi\\Update\\x.exe", DirW2);
             swprintf(RealW, RTL_NUMBER_OF(RealW), L"%s\\attacker\\planted.exe", DirW2);
             {
                 HANDLE H = CreateFileW(RealW, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
@@ -164,7 +164,7 @@ main(void)
             }
             if (CreateSymbolicLinkW(SymW, RealW, 0))
             {
-                Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Update\\x.exe");
+                Error = BsValidateTargetRelPath(&Target, L"Orosi\\Update\\x.exe");
                 Check(Error == ERROR_BAD_PATHNAME, "image mode refuses a final file symlink");
             }
             else
@@ -176,9 +176,9 @@ main(void)
         /* cleanup */
         {
             WCHAR DelW[MAX_PATH * 2];
-            static const WCHAR *Rel[] = { L"\\LiberNT\\Update\\x.exe",
-                                          L"\\LiberNT\\Update",
-                                          L"\\LiberNT",
+            static const WCHAR *Rel[] = { L"\\Orosi\\Update\\x.exe",
+                                          L"\\Orosi\\Update",
+                                          L"\\Orosi",
                                           L"\\attacker\\planted.exe",
                                           L"\\attacker" };
             size_t k;

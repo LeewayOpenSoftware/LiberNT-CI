@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Builds (and signs) a LiberNT Update package: manifest.json, payload\, catalog.cat.
+    Builds (and signs) an Orosi Update package: manifest.json, payload\, catalog.cat.
 
 .DESCRIPTION
     The package layout is the S1 contract: manifest.json + catalog.cat + payload\. The catalog covers
@@ -43,7 +43,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if (-not $SigningPfx) { $SigningPfx = Join-Path $KeyDir 'Leeway-LiberNT-Update-DEV.pfx' }
+if (-not $SigningPfx) { $SigningPfx = Join-Path $KeyDir 'Leeway-Orosi-Update-DEV.pfx' }
 if (-not $SigningPasswordFile) { $SigningPasswordFile = Join-Path $KeyDir 'pfx-password.txt' }
 $utf8 = New-Object Text.UTF8Encoding($false)
 
@@ -74,7 +74,7 @@ $manifest = [ordered]@{
     packageId         = $PackageId
     releaseVersion    = $Version
     type              = $Type
-    targetFamily      = 'LiberNT'
+    targetFamily      = 'Orosi'
     architecture      = 'amd64'
     certificateSha256 = $certSha
     payloads          = $payloads

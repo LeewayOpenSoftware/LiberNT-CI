@@ -163,10 +163,10 @@ if(DEFINED EFI_PLATFORM_ID AND EXISTS "${REACTOS_SOURCE_DIR}/bootloader/arch/${A
         set(_uefi_media_store media)
     endif()
     set(_uefi_loader_files
-        -mkdir EFI/LiberNT
-        -mkdir EFI/LiberNT/Boot
-        -add $<TARGET_FILE:winload> EFI/LiberNT/Boot/winload.efi
-        -add ${REACTOS_BINARY_DIR}/bootloader/image/${_uefi_media_store}/BCD EFI/LiberNT/Boot/BCD)
+        -mkdir EFI/Orosi
+        -mkdir EFI/Orosi/Boot
+        -add $<TARGET_FILE:winload> EFI/Orosi/Boot/winload.efi
+        -add ${REACTOS_BINARY_DIR}/bootloader/image/${_uefi_media_store}/BCD EFI/Orosi/Boot/BCD)
     set(_uefi_loader_deps bootmgfw winload bootloader${_uefi_media_store}bcd)
     set(_efisys_sectors 16384)
     set_property(GLOBAL PROPERTY BOOTLOADER_UEFI TRUE)
@@ -470,7 +470,7 @@ add_custom_target(bootcd
     VERBATIM)
 
 
-## LiberNTImg
+## OrosiImg
 # Create the file list
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "")
 # The NTFS image importer requires every entry to map an image path to a host path.
@@ -478,9 +478,9 @@ file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/preinstall.cmake.lst "")
 set(_preinstall_boot_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.boot.fat)
 set(_preinstall_system_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.ntfs)
 set(_preinstall_vhd_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.vhd.ntfs)
-set(_preinstall_image_file ${REACTOS_BINARY_DIR}/LiberNT.img)
-set(_preinstall_vhd_file ${REACTOS_BINARY_DIR}/LiberNT.vhd)
-set(_preinstall_vhdx_file ${REACTOS_BINARY_DIR}/LiberNT.vhdx)
+set(_preinstall_image_file ${REACTOS_BINARY_DIR}/Orosi.img)
+set(_preinstall_vhd_file ${REACTOS_BINARY_DIR}/Orosi.vhd)
+set(_preinstall_vhdx_file ${REACTOS_BINARY_DIR}/Orosi.vhdx)
 # Keep ROSBOOT as an active MBR ESP. UEFI discovers it by type, while the BIOS
 # MBR follows the active flag and loads its FAT32 boot sector. The Raspberry Pi
 # 1-3 boot ROM only scans for FAT MBR ids and skips 0xEF, so the Raspberry Pi
@@ -812,9 +812,9 @@ if(STARFIVE_JH7110_SUPPORT)
     list(APPEND _preinstall_partition_deps ${STARFIVE_JH7110_DTB} ${STARFIVE_JH7110_UENV})
 endif()
 macro(libernt_standard_disk_ids)
-    string(UUID _standard_disk NAMESPACE 354fa6e5-5e45-49af-91bf-1fd2754e470a NAME "LiberNT standard disk" TYPE SHA1)
+    string(UUID _standard_disk NAMESPACE 354fa6e5-5e45-49af-91bf-1fd2754e470a NAME "Orosi standard disk" TYPE SHA1)
     libernt_standard_disk_signature(_standard_signature)
-    string(UUID _standard_system NAMESPACE 354fa6e5-5e45-49af-91bf-1fd2754e470a NAME "LiberNT standard system partition" TYPE SHA1)
+    string(UUID _standard_system NAMESPACE 354fa6e5-5e45-49af-91bf-1fd2754e470a NAME "Orosi standard system partition" TYPE SHA1)
     if(";${_liberntimg_mbr_args};" MATCHES ";-gpt;")
         list(APPEND _liberntimg_mbr_args -diskid ${_standard_disk})
         list(APPEND _liberntimg_system_partition_args -id ${_standard_system})
@@ -865,14 +865,14 @@ if(DEFINED EFI_PLATFORM_ID)
     list(APPEND _preinstall_partition_deps ${_uefi_loader})
     if(BOOTLOADER_UEFI)
         list(APPEND _preinstall_boot_partition_files
-            -mkdir EFI/LiberNT
-            -mkdir EFI/LiberNT/Boot
-            -add $<TARGET_FILE:bootmgfw> EFI/LiberNT/Boot/bootmgfw.efi
-            -add ${REACTOS_BINARY_DIR}/bootloader/image/standard/BCD EFI/LiberNT/Boot/BCD)
+            -mkdir EFI/Orosi
+            -mkdir EFI/Orosi/Boot
+            -add $<TARGET_FILE:bootmgfw> EFI/Orosi/Boot/bootmgfw.efi
+            -add ${REACTOS_BINARY_DIR}/bootloader/image/standard/BCD EFI/Orosi/Boot/BCD)
         list(APPEND _preinstall_partition_deps bootloaderstandardbcd)
         if((BOOTLOADER_HTTP_BOOT AND BOOTLOADER_HTTP_BOOT_URL) OR BOOTLOADER_HTTP_IMAGE_URL)
             list(APPEND _preinstall_boot_partition_files
-                -add $<TARGET_FILE:winload> EFI/LiberNT/Boot/winload.efi)
+                -add $<TARGET_FILE:winload> EFI/Orosi/Boot/winload.efi)
             list(APPEND _preinstall_partition_deps winload)
         endif()
         libernt_standard_disk_ids()
@@ -944,7 +944,7 @@ add_custom_target(preinstall_partition
         -DPACKAGE_PDBS=${ROSPROFILER_PACKAGE_IMAGE_PDBS}
         -P ${REACTOS_SOURCE_DIR}/boot/pack_rosprofiler_symbols.cmake
     COMMAND native-fatten ${_preinstall_boot_partition_file}
-        -format ${_preinstall_boot_partition_sectors} ${_preinstall_boot_partition_fs} LIBERNTBOOT
+        -format ${_preinstall_boot_partition_sectors} ${_preinstall_boot_partition_fs} OROSIBOOT
         ${_preinstall_boot_partition_options}
         ${_preinstall_boot_fatten_fileargs}
     COMMAND native-ntfsimg
@@ -953,7 +953,7 @@ add_custom_target(preinstall_partition
         ${_preinstall_system_partition_sectors}
         ${_preinstall_system_partition_start}
         ${_preinstall_ntfs_sectors_per_cluster}
-        LiberNT
+        Orosi
     COMMAND native-ntfsimg
         --addfiles
         ${_preinstall_system_partition_file}
@@ -985,14 +985,14 @@ add_dependencies(liberntimg preinstall_partition)
 
 set(LIBERNT_RAM_IMAGE_FREE_MB 512 CACHE STRING
     "Free space in MB added to the payload of the RAM disk image system partition (liberntramimg)")
-set(_preinstall_ram_image_file ${REACTOS_BINARY_DIR}/LiberNT-ram.img)
+set(_preinstall_ram_image_file ${REACTOS_BINARY_DIR}/Orosi-ram.img)
 set(_preinstall_ram_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.ram.ntfs)
 if(TARGET native-ntfsimg)
     set(_preinstall_ram_ntfsimg $<TARGET_FILE:native-ntfsimg>)
 else()
     set(_preinstall_ram_ntfsimg native-ntfsimg)
 endif()
-string(UUID _ram_disk NAMESPACE 354fa6e5-5e45-49af-91bf-1fd2754e470a NAME "LiberNT RAM disk image" TYPE SHA1)
+string(UUID _ram_disk NAMESPACE 354fa6e5-5e45-49af-91bf-1fd2754e470a NAME "Orosi RAM disk image" TYPE SHA1)
 string(SUBSTRING "${_ram_disk}" 0 8 _ram_signature)
 add_custom_target(liberntramimg
     COMMAND ${CMAKE_COMMAND} -E rm -f ${_preinstall_ram_image_file} ${_preinstall_ram_partition_file}
@@ -1003,7 +1003,7 @@ add_custom_target(liberntramimg
         -DHIDDEN_SECTORS=${_preinstall_system_partition_start}
         -DSECTORS_PER_CLUSTER=${_preinstall_ntfs_sectors_per_cluster}
         -DFREE_MB=${LIBERNT_RAM_IMAGE_FREE_MB}
-        -DLABEL=LiberNT
+        -DLABEL=Orosi
         -P ${REACTOS_SOURCE_DIR}/boot/format_ram_partition.cmake
     COMMAND native-ntfsimg
         --addfiles
@@ -1043,7 +1043,7 @@ if(STARFIVE_JH7110_SUPPORT)
     add_custom_target(jh7110sdimg
         COMMAND ${CMAKE_COMMAND} -E rm -f ${_jh7110_boot_partition_file} ${_jh7110_sd_image_file}
         COMMAND native-fatten ${_jh7110_boot_partition_file}
-            -format ${STARFIVE_JH7110_BOOT_SECTORS} fat32 LIBERNTSD
+            -format ${STARFIVE_JH7110_BOOT_SECTORS} fat32 OROSISD
             -add ${STARFIVE_JH7110_BOOT_SCRIPT} boot.scr
             -add ${STARFIVE_JH7110_BOOT_SCRIPT_SOURCE} boot.cmd
         COMMAND native-mkdiskimg
@@ -1074,27 +1074,27 @@ endif()
 if(NINTENDO_SWITCH_SUPPORT)
     set(_switch_media_dir ${REACTOS_BINARY_DIR}/bootloader/image/mediawim)
     set(_switch_partition_file ${CMAKE_CURRENT_BINARY_DIR}/switch-sd.fat)
-    set(_switch_sd_image_file ${REACTOS_BINARY_DIR}/LiberNT-switch-sd.img)
+    set(_switch_sd_image_file ${REACTOS_BINARY_DIR}/Orosi-switch-sd.img)
     add_custom_target(switchsdimg
         COMMAND ${CMAKE_COMMAND} -E rm -f ${_switch_partition_file} ${_switch_sd_image_file}
         COMMAND native-fatten ${_switch_partition_file}
-            -format ${NINTENDO_SWITCH_SD_SECTORS} fat32 LIBERNT
+            -format ${NINTENDO_SWITCH_SD_SECTORS} fat32 OROSI
             -mkdir bootloader
             -mkdir bootloader/ini
             -mkdir switchroot
-            -mkdir switchroot/libernt
+            -mkdir switchroot/orosi
             -mkdir EFI
             -mkdir EFI/BOOT
-            -mkdir EFI/LiberNT
-            -mkdir EFI/LiberNT/Boot
-            -add ${NINTENDO_SWITCH_HEKATE_INI} bootloader/ini/libernt.ini
-            -add ${NINTENDO_SWITCH_BL33} switchroot/libernt/bl33.bin
-            -add ${NINTENDO_SWITCH_BOOT_SCRIPT} switchroot/libernt/boot.scr
-            -add ${NINTENDO_SWITCH_BOOT_SCRIPT_SOURCE} switchroot/libernt/boot.cmd
-            -add ${NINTENDO_SWITCH_README} switchroot/libernt/README.txt
+            -mkdir EFI/Orosi
+            -mkdir EFI/Orosi/Boot
+            -add ${NINTENDO_SWITCH_HEKATE_INI} bootloader/ini/orosi.ini
+            -add ${NINTENDO_SWITCH_BL33} switchroot/orosi/bl33.bin
+            -add ${NINTENDO_SWITCH_BOOT_SCRIPT} switchroot/orosi/boot.scr
+            -add ${NINTENDO_SWITCH_BOOT_SCRIPT_SOURCE} switchroot/orosi/boot.cmd
+            -add ${NINTENDO_SWITCH_README} switchroot/orosi/README.txt
             -add $<TARGET_FILE:bootmgfw> EFI/BOOT/BOOTAA64.EFI
-            -add $<TARGET_FILE:winload> EFI/LiberNT/Boot/winload.efi
-            -add ${_switch_media_dir}/BCD EFI/LiberNT/Boot/BCD
+            -add $<TARGET_FILE:winload> EFI/Orosi/Boot/winload.efi
+            -add ${_switch_media_dir}/BCD EFI/Orosi/Boot/BCD
             -add ${_switch_media_dir}/boot.wim boot.wim
         COMMAND native-mkdiskimg
             -o ${_switch_sd_image_file}
@@ -1128,7 +1128,7 @@ add_custom_target(liberntvhd
         ${_preinstall_vhd_partition_sectors}
         ${_preinstall_system_partition_start}
         ${_preinstall_ntfs_sectors_per_cluster}
-        LiberNT
+        Orosi
     COMMAND native-ntfsimg
         --addfiles
         ${_preinstall_vhd_partition_file}

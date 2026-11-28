@@ -1,6 +1,6 @@
-; LiberNT theme (LiberNT Green)
+; Orosi theme (Orosi Green)
 [Theme]
-DisplayName=LiberNT Green
+DisplayName=Orosi Green
 
 [Control Panel\Desktop]
 Wallpaper=%SystemRoot%\Web\Wallpaper\Forest Canopy.jpg

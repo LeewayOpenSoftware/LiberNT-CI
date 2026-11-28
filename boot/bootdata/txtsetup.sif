@@ -17,7 +17,7 @@ Windows = "\"
 "Windows\welcome.ini" = 1
 "Windows\welcome" = 1
 
-; A file listed here keeps its installed copy when Setup upgrades LiberNT,
+; A file listed here keeps its installed copy when Setup upgrades Orosi,
 ; and is copied only when it is missing.
 [SystemTrees.Preserve]
 "Windows\system.ini" = 1
@@ -577,7 +577,7 @@ HKCU,"Keyboard Layout\Preload"
 ; copy upgraded in place: a whole key, or one value when a value name is given.
 [HiveInfs.Upgrade.Remove]
 HKLM,"SYSTEM\CurrentControlSet\Services\DiagData"
-HKLM,"SOFTWARE\LiberNT\DiagnosticData"
+HKLM,"SOFTWARE\Orosi\DiagnosticData"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection","AllowTelemetry"
 
 ; Files and directories of such a component, named relative to the system root.
@@ -605,7 +605,7 @@ system32\taskmgr11.exe
 DiagnosticData,dir
 
 [Strings]
-cdname      = "LiberNT Installation Media"
-productname = "LiberNT"
+cdname      = "Orosi Installation Media"
+productname = "Orosi"
 
 ; EOF
