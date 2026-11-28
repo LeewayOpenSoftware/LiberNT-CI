@@ -1474,8 +1474,11 @@ WlHostLoggedOutSas(
         /* Posted messages keep flowing to the SAS window: win32k posts the shutdown notification
          * (WM_LOGONNOTIFY) there and a plain wait starved it (leg finding 2). A second SAS is
          * ignored in STATE_LOGGED_OFF_SAS, but a logoff, shutdown or lock notification runs its
-         * whole action nested in here; the state check after the loop is the guard. */
-        Which = MsgWaitForMultipleObjects(2, Waits, FALSE, INFINITE, QS_ALLINPUT);
+         * whole action nested in here; the state check after the loop is the guard.
+         * MWMO_INPUTAVAILABLE: a message already queued when the wait starts (a self-posted SAS
+         * from the sign-out) wakes it too. A plain wait only wakes for input that arrives
+         * later, so that SAS stayed queued until after the sign-in and opened the options page. */
+        Which = MsgWaitForMultipleObjectsEx(2, Waits, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         if (Which == WAIT_OBJECT_0 + 2)
         {
             MSG Msg;
@@ -1738,7 +1741,8 @@ WlHostLoggedOnSas(
 
         Waits[0] = g_SubmitEvent;
         Waits[1] = WlHostEndedEvent(g_Launch);
-        Which = MsgWaitForMultipleObjects(2, Waits, FALSE, INFINITE, QS_ALLINPUT);
+        /* Queued messages wake the wait too (see WlHostLoggedOutSas). */
+        Which = MsgWaitForMultipleObjectsEx(2, Waits, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         if (Which == WAIT_OBJECT_0 + 2)
         {
             MSG Msg;
@@ -1792,7 +1796,7 @@ WlHostLoggedOnSas(
                 BOOL Quit = FALSE;
 
                 if (Now >= Until ||
-                    MsgWaitForMultipleObjects(1, &Ended, FALSE, (DWORD)(Until - Now), QS_ALLINPUT) != WAIT_OBJECT_0 + 1)
+                    MsgWaitForMultipleObjectsEx(1, &Ended, (DWORD)(Until - Now), QS_ALLINPUT, MWMO_INPUTAVAILABLE) != WAIT_OBJECT_0 + 1)
                     break;
                 while (PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
                 {
