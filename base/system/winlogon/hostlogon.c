@@ -863,12 +863,73 @@ WlHlDisableAutoLogon(
     RegCloseKey(Key);
 }
 
+/*
+ * The CD boot: MiniNT (the /MININT start option, as smss checks it) and the setup account
+ * preinstall.inf names by RID in SYSTEM\Setup. That account signs in by itself on the CD.
+ */
+static BOOL
+WlHlCdSetupAccount(
+    _Out_writes_opt_(Chars) PWSTR Name,
+    _In_ DWORD Chars)
+{
+    LSA_OBJECT_ATTRIBUTES Attributes;
+    LSA_HANDLE Policy;
+    PPOLICY_ACCOUNT_DOMAIN_INFO Domain = NULL;
+    BYTE SidBuffer[SECURITY_MAX_SID_SIZE];
+    PSID Sid = (PSID)SidBuffer;
+    WCHAR DomainName[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD Rid = 0, Size = sizeof(Rid), NameChars = Chars, DomainChars = ARRAYSIZE(DomainName);
+    SID_NAME_USE Use;
+    UCHAR Count;
+    HKEY Key;
+    BOOL Found = FALSE;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\MiniNT", 0,
+                      KEY_QUERY_VALUE, &Key) != ERROR_SUCCESS)
+        return FALSE;
+    RegCloseKey(Key);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SYSTEM\\Setup", L"SetupAccountRid", RRF_RT_REG_DWORD, NULL,
+                     &Rid, &Size) != ERROR_SUCCESS || Rid == 0)
+        return FALSE;
+    if (Name == NULL)
+        return TRUE;
+
+    Name[0] = UNICODE_NULL;
+    ZeroMemory(&Attributes, sizeof(Attributes));
+    Attributes.Length = sizeof(Attributes);
+    if (!NT_SUCCESS(LsaOpenPolicy(NULL, &Attributes, POLICY_VIEW_LOCAL_INFORMATION, &Policy)))
+        return FALSE;
+    if (NT_SUCCESS(LsaQueryInformationPolicy(Policy, PolicyAccountDomainInformation, (PVOID *)&Domain)) &&
+        Domain != NULL && Domain->DomainSid != NULL)
+    {
+        Count = *RtlSubAuthorityCountSid(Domain->DomainSid);
+        if (RtlLengthRequiredSid(Count + 1) <= sizeof(SidBuffer) &&
+            NT_SUCCESS(RtlCopySid(sizeof(SidBuffer), Sid, Domain->DomainSid)))
+        {
+            *RtlSubAuthorityCountSid(Sid) = Count + 1;
+            *RtlSubAuthoritySid(Sid, Count) = Rid;
+            Found = LookupAccountSidW(NULL, Sid, Name, &NameChars, DomainName, &DomainChars, &Use) &&
+                    Use == SidTypeUser;
+        }
+    }
+    if (Domain != NULL)
+        LsaFreeMemory(Domain);
+    LsaClose(Policy);
+    if (!Found)
+        Name[0] = UNICODE_NULL;
+    return Found;
+}
+
 static BOOL
 WlHlAutoLogonWanted(VOID)
 {
     if (g_AutoLogonTried && !g_AutoLogonAgain)
         return FALSE;
-    return WlHlWinlogonNumber(L"AutoAdminLogon", 0) != 0 && !WlHlHasLegalNotice();
+    if (WlHlHasLegalNotice())
+        return FALSE;
+    /* The CD's own sign-in happens once per boot; a sign-out there shows the logon page. */
+    return WlHlWinlogonNumber(L"AutoAdminLogon", 0) != 0 ||
+           (!g_AutoLogonTried && WlHlCdSetupAccount(NULL, 0));
 }
 
 /* Signs in DefaultUserName once; the result goes to WlHostLoggedOutSas like a host submit. Never on unlock. */
@@ -879,6 +940,7 @@ WlHlTryAutoLogon(VOID)
     WCHAR User[256], Domain[256], Password[256];
     HKEY Key;
     DWORD Left, Chars;
+    BOOL Registry;
     HANDLE Token = NULL;
     LUID LogonId = { 0, 0 };
     NTSTATUS Status, SubStatus = STATUS_SUCCESS;
@@ -892,15 +954,23 @@ WlHlTryAutoLogon(VOID)
         ERR("WL: automatic sign-in skipped: Shift is held\n");
         return FALSE;
     }
-    Left = WlHlWinlogonNumber(L"AutoLogonCount", MAXDWORD);
+    Registry = WlHlWinlogonNumber(L"AutoAdminLogon", 0) != 0;
+    Left = Registry ? WlHlWinlogonNumber(L"AutoLogonCount", MAXDWORD) : MAXDWORD;
     if (Left == 0)
     {
         WlHlDisableAutoLogon(TRUE);
-        return FALSE;
+        Registry = FALSE;
     }
-    WlHlWinlogonString(L"DefaultUserName", User, ARRAYSIZE(User));
+    User[0] = UNICODE_NULL;
+    if (Registry)
+        WlHlWinlogonString(L"DefaultUserName", User, ARRAYSIZE(User));
+    /* The CD boot signs its setup account in even when AutoAdminLogon is off or names nobody. */
     if (User[0] == UNICODE_NULL)
-        return FALSE;
+    {
+        Registry = FALSE;
+        if (!WlHlCdSetupAccount(User, ARRAYSIZE(User)))
+            return FALSE;
+    }
     WlHlWinlogonString(L"DefaultDomainName", Domain, ARRAYSIZE(Domain));
     Chars = ARRAYSIZE(Domain);
     if (Domain[0] == UNICODE_NULL && !GetComputerNameW(Domain, &Chars))
@@ -933,10 +1003,14 @@ WlHlTryAutoLogon(VOID)
         g_AutoLogonAgain = WlHlWinlogonNumber(L"ForceAutoLogon", 0) != 0;
         WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, 0);
     }
-    else
+    else if (Registry)
     {
         ERR("WL: automatic sign-in failed (0x%08lx); AutoAdminLogon turned off\n", Status);
         WlHlDisableAutoLogon(FALSE);
+    }
+    else
+    {
+        ERR("WL: automatic sign-in of the CD setup account failed (0x%08lx); showing the logon page\n", Status);
     }
     SecureZeroMemory(Password, sizeof(Password));
     SecureZeroMemory(&Logon, sizeof(Logon));
