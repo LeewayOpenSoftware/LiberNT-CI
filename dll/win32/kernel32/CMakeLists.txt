@@ -28,7 +28,6 @@ list(APPEND SOURCE
     client/except.c
     client/fiber.c
     client/handle.c
-    client/heapmem.c
     client/job.c
     client/loader.c
     client/mui.c
@@ -121,8 +120,6 @@ endif()
 if(ARCH STREQUAL "amd64")
     list(APPEND ASM_SOURCE
         client/amd64/except.S)
-else()
-    list(APPEND SOURCE
 endif()
 
 if(ARCH STREQUAL "i386")
