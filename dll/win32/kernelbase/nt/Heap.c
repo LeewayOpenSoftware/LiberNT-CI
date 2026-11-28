@@ -1,10 +1,10 @@
 /*
  * PROJECT:         ReactOS Win32 Base API (Orosi KernelBase)
- * LICENSE:         GPL-2.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * LICENSE:         GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
  * PURPOSE:         Heap memory APIs (wrappers for RtlHeap*), Global/Local movable memory
  *                  Moved from kernel32 client/heapmem.c; kernelbase implements them on
  *                  Windows 11 26100 and kernel32 forwards.
- * COPYRIGHT:       Alex Ionescu (alex.ionescu@reactos.org)
+ * COPYRIGHT:       Copyright 2005 Alex Ionescu (alex.ionescu@reactos.org)
  */
 
 #include <stdio.h>

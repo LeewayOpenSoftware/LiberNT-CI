@@ -6,7 +6,7 @@ extern BOOL is_wow64;
 
 void init_locale( HMODULE module );
 void WerCleanupRuntimeExceptionModules(void);
-void BaseDllInitializeMemoryManager(void);
+VOID NTAPI BaseDllInitializeMemoryManager(VOID);
 
 const WCHAR windows_dir[] = L"C:\\windows";
 const WCHAR system_dir[] = L"C:\\windows\\system32";
