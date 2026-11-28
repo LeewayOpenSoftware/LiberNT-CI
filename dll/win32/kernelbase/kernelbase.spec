@@ -291,7 +291,6 @@
 @ stdcall FindFirstFileExA(str long ptr long ptr long) kernel32.FindFirstFileExA
 @ stdcall FindFirstFileExW(wstr long ptr long ptr long) kernel32.FindFirstFileExW
 @ stdcall -version=0x600+ FindFirstFileNameW(wstr long ptr ptr) kernel32.FindFirstFileNameW
-@ stdcall -version=0x600+ FindNextFileNameW(long ptr wstr) kernel32.FindNextFileNameW
 @ stdcall FindFirstFileW(wstr ptr) kernel32.FindFirstFileW
 @ stdcall FindFirstFreeAce(ptr ptr)
 @ stdcall FindFirstStreamW(wstr ptr ptr long) kernel32.FindFirstStreamW
@@ -1412,7 +1411,6 @@
 @ stdcall VerFindFileW(long wstr wstr wstr ptr ptr ptr ptr)
 @ stdcall VerLanguageNameA(long str long) kernel32.VerLanguageNameA
 @ stdcall VerLanguageNameW(long wstr long) kernel32.VerLanguageNameW
-@ stdcall VerifyScripts(long wstr long wstr long)
 @ stdcall VerQueryValueA(ptr str ptr ptr)
 @ stdcall VerQueryValueW(ptr wstr ptr ptr)
 @ stdcall VerifyScripts(long wstr long wstr long)
