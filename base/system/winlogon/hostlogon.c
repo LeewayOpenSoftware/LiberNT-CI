@@ -12,6 +12,7 @@
 #include <ntsecapi.h>
 #include <ndk/setypes.h>
 #include <credser.h>
+#include <ntsam.h>
 #include <wlui_s.h>
 #include <reactos/desktopready.h>
 
@@ -1074,6 +1075,143 @@ WlHlDisableCad(VOID)
     return !WlHlDomainJoined();
 }
 
+/* ---- the only account, with a blank password ------------------------------------ */
+
+static BOOL g_BlankLogonTried;          /* considered once per boot, never after a sign-out */
+
+/* Winlogon\SpecialAccounts\UserList: a DWORD 0 keeps the account off the logon page. */
+static BOOL
+WlHlAccountHidden(
+    _In_ PCUNICODE_STRING Name)
+{
+    WCHAR Text[CREDSER_MAX_NAME_CHARS + 1];
+    DWORD Value = 1, Size = sizeof(Value);
+
+    WlHlCopyString(Name, Text, ARRAYSIZE(Text));
+    return RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY L"\\SpecialAccounts\\UserList",
+                        Text, RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS && Value == 0;
+}
+
+/*
+ * The accounts the logon page lists (logonuihost LuhUsersCreate): every enabled normal local
+ * account that SpecialAccounts does not hide. TRUE with the name when there is exactly one and
+ * SAM says its password is blank (UserLogonUIInformation, no trial logon, so no bad-password count).
+ */
+static BOOL
+WlHlOnlyAccountIsBlank(
+    _Out_writes_(Chars) PWSTR Name,
+    _In_ DWORD Chars)
+{
+    WCHAR Computer[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD ComputerChars = ARRAYSIZE(Computer);
+    UNICODE_STRING DomainName;
+    SAM_HANDLE Server = NULL, Domain = NULL, User;
+    PSID DomainSid = NULL;
+    SAM_ENUMERATE_HANDLE Context = 0;
+    PSAM_RID_ENUMERATION Buffer;
+    PUSER_LOGON_UI_INFORMATION Info;
+    ULONG Count, i, Listed = 0;
+    BOOL Blank = FALSE;
+    NTSTATUS Status;
+
+    Name[0] = UNICODE_NULL;
+    if (!GetComputerNameW(Computer, &ComputerChars))
+        return FALSE;
+    RtlInitUnicodeString(&DomainName, Computer);
+    if (!NT_SUCCESS(SamConnect(NULL, &Server, SAM_SERVER_CONNECT | SAM_SERVER_LOOKUP_DOMAIN, NULL)))
+        return FALSE;
+    if (!NT_SUCCESS(SamLookupDomainInSamServer(Server, &DomainName, &DomainSid)) ||
+        !NT_SUCCESS(SamOpenDomain(Server, DOMAIN_LIST_ACCOUNTS | DOMAIN_LOOKUP, DomainSid, &Domain)))
+        goto done;
+
+    do
+    {
+        Buffer = NULL;
+        Count = 0;
+        Status = SamEnumerateUsersInDomain(Domain, &Context, USER_NORMAL_ACCOUNT, (PVOID *)&Buffer,
+                                           MAXULONG, &Count);
+        if (!NT_SUCCESS(Status))
+            break;
+        for (i = 0; Buffer != NULL && i < Count && Listed < 2; i++)
+        {
+            Info = NULL;
+            if (!NT_SUCCESS(SamOpenUser(Domain, USER_READ_GENERAL | USER_READ_ACCOUNT, Buffer[i].RelativeId, &User)))
+                continue;
+            if (NT_SUCCESS(SamQueryInformationUser(User, UserLogonUIInformation, (PVOID *)&Info)) && Info &&
+                !Info->AccountIsDisabled && !WlHlAccountHidden(&Buffer[i].Name))
+            {
+                if (Listed++ == 0)
+                {
+                    Blank = Info->PasswordIsBlank;
+                    WlHlCopyString(&Buffer[i].Name, Name, Chars);
+                }
+            }
+            if (Info)
+                SamFreeMemory(Info);
+            SamCloseHandle(User);
+        }
+        if (Buffer)
+            SamFreeMemory(Buffer);
+    } while (Status == STATUS_MORE_ENTRIES && Listed < 2);
+
+done:
+    if (Domain)
+        SamCloseHandle(Domain);
+    if (DomainSid)
+        SamFreeMemory(DomainSid);
+    SamCloseHandle(Server);
+    if (Listed != 1 || !Blank)
+        Name[0] = UNICODE_NULL;
+    return Name[0] != UNICODE_NULL;
+}
+
+/*
+ * Windows signs in by itself when the logon page would list one account and it has no password:
+ * only at the first logged-out state after boot, only where the page needs no Ctrl+Alt+Del and
+ * names its accounts, and not under a legal notice. A sign-out shows the page.
+ */
+static BOOL
+WlHlTryBlankLogon(VOID)
+{
+    CREDSER_LOGON Logon;
+    WCHAR User[CREDSER_MAX_NAME_CHARS + 1], Domain[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD Chars = ARRAYSIZE(Domain);
+    HANDLE Token = NULL;
+    LUID LogonId = { 0, 0 };
+    NTSTATUS Status, SubStatus = STATUS_SUCCESS;
+
+    if (g_BlankLogonTried)
+        return FALSE;
+    g_BlankLogonTried = TRUE;
+    if (!WlHlDisableCad() || WlHlDomainJoined() || WlHlHasLegalNotice() ||
+        WlHlPolicyDword(L"DontDisplayLastUserName", 0) != 0)
+        return FALSE;
+    if (!WlHlOnlyAccountIsBlank(User, ARRAYSIZE(User)) || !GetComputerNameW(Domain, &Chars))
+        return FALSE;
+
+    ZeroMemory(&Logon, sizeof(Logon));
+    Logon.MessageType = KerbInteractiveLogon;
+    RtlInitUnicodeString(&Logon.LogonDomainName, Domain);
+    RtlInitUnicodeString(&Logon.UserName, User);
+    RtlInitUnicodeString(&Logon.Password, L"");
+    Status = WlHlLsaLogon(&Logon, FALSE, &Token, &LogonId, &SubStatus);
+    if (NT_SUCCESS(Status) && WlHlSafeModeBlocksNonAdmins() && !WlHlTokenIsAdmin(Token))
+    {
+        CloseHandle(Token);
+        Token = NULL;
+        Status = STATUS_ACCOUNT_RESTRICTION;
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        /* A refused blank sign-in (policy, expiry, a forced change) is the page's to explain. */
+        ERR("WL: blank-password sign-in of the only account failed (0x%08lx); showing the logon page\n", Status);
+        return FALSE;
+    }
+    ERR("WL: the only account has a blank password; signing it in\n");
+    WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, 0);
+    return TRUE;
+}
+
 /* P2: how long a lock or logoff waits for the host's first frame before switching anyway. */
 static DWORD
 WlHlLockReadyMs(VOID)
@@ -1454,7 +1592,7 @@ WlHostLoggedOutSas(
 
     /* A self-posted SAS may be an automatic sign-in; with CAD required only a real one raises the page. */
     WlHlSetAccepting(TRUE);
-    if (!UserSas && !WlHlTryAutoLogon() && !WlHlDisableCad())
+    if (!UserSas && !WlHlTryAutoLogon() && !WlHlTryBlankLogon() && !WlHlDisableCad())
     {
         WlHlSetAccepting(FALSE);
         return WLX_SAS_ACTION_NONE;
