@@ -19,43 +19,6 @@
 #define NDEBUG
 #include <debug.h>
 
-/* Internal read of the process error mode; kernel32 cannot import kernelbase,
- * so UnhandledExceptionFilter keeps its own reader while the export forwards. */
-static
-UINT
-BasepGetErrorMode(VOID)
-{
-    UINT ErrMode = 0;
-    NtQueryInformationProcess(NtCurrentProcess(),
-                              ProcessDefaultHardErrorMode,
-                              &ErrMode,
-                              sizeof(ErrMode),
-                              NULL);
-    return ErrMode;
-}
-
-/* Internal set of the process error mode, same inversion as the exported
- * kernelbase body; kernel32 cannot import kernelbase. */
-static
-UINT
-BasepSetErrorMode(IN UINT uMode)
-{
-    UINT PrevErrMode, NewMode;
-
-    PrevErrMode = BasepGetErrorMode();
-    NewMode = uMode;
-    if (NewMode & SEM_FAILCRITICALERRORS)
-        NewMode &= ~SEM_FAILCRITICALERRORS;
-    else
-        NewMode |= SEM_FAILCRITICALERRORS;
-    NewMode |= (PrevErrMode & SEM_NOALIGNMENTFAULTEXCEPT);
-    NtSetInformationProcess(NtCurrentProcess(),
-                            ProcessDefaultHardErrorMode,
-                            (PVOID)&NewMode,
-                            sizeof(NewMode));
-    return PrevErrMode;
-}
-
 /*
  * Private helper function to lookup the module name from a given address.
  * The address can point to anywhere within the module.
@@ -531,7 +494,7 @@ UnhandledExceptionFilter(IN PEXCEPTION_POINTERS ExceptionInfo)
      * Now pop up an error if needed. Check both the process-wide (Win32)
      * and per-thread error-mode flags (NT).
      */
-    if ((BasepGetErrorMode() & SEM_NOGPFAULTERRORBOX) ||
+    if ((GetErrorMode() & SEM_NOGPFAULTERRORBOX) ||
         (RtlGetThreadErrorMode() & RTL_SEM_NOGPFAULTERRORBOX))
     {
         /* Do not display the pop-up error box, just transfer control to the exception handler */
@@ -865,6 +828,11 @@ Quit:
      */
 
     return EXCEPTION_EXECUTE_HANDLER;
+}
+
+/*
+ * @implemented
+ */
 
 /*
  * @implemented

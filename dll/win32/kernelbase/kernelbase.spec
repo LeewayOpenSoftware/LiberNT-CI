@@ -187,8 +187,8 @@
 @ stdcall CreateWellKnownSid(long ptr ptr ptr)
 @ stdcall CtrlRoutine(ptr)
 @ stdcall DeactivateActCtx(long ptr) kernel32.DeactivateActCtx
-@ stdcall DebugActiveProcess(long) kernel32.DebugActiveProcess
-@ stdcall DebugActiveProcessStop(long) kernel32.DebugActiveProcessStop
+@ stdcall DebugActiveProcess(long)
+@ stdcall DebugActiveProcessStop(long)
 @ stdcall DebugBreak() ntdll.DbgBreakPoint
 @ stdcall DecodePointer(ptr) ntdll.RtlDecodePointer
 @ stdcall DecodeSystemPointer(ptr) ntdll.RtlDecodeSystemPointer
@@ -274,8 +274,8 @@
 @ stdcall ExpandEnvironmentStringsW(wstr ptr long) kernel32.ExpandEnvironmentStringsW
 @ stdcall ExpungeConsoleCommandHistoryA(long)
 @ stdcall ExpungeConsoleCommandHistoryW(long)
-@ stdcall FatalAppExitA(long str) kernel32.FatalAppExitA
-@ stdcall FatalAppExitW(long wstr) kernel32.FatalAppExitW
+@ stdcall FatalAppExitA(long str)
+@ stdcall FatalAppExitW(long wstr)
 @ stdcall FileTimeToLocalFileTime(ptr ptr) kernel32.FileTimeToLocalFileTime
 @ stdcall FileTimeToSystemTime(ptr ptr) kernel32.FileTimeToSystemTime
 @ stdcall FillConsoleOutputAttribute(long long long long ptr)
@@ -863,8 +863,8 @@
 @ stdcall OpenThread(long long long)
 @ stdcall OpenThreadToken(long long long ptr)
 @ stdcall OpenWaitableTimerW(long long wstr) kernel32.OpenWaitableTimerW
-@ stdcall OutputDebugStringA(str) kernel32.OutputDebugStringA
-@ stdcall OutputDebugStringW(wstr) kernel32.OutputDebugStringW
+@ stdcall OutputDebugStringA(str)
+@ stdcall OutputDebugStringW(wstr)
 @ stdcall PackageFamilyNameFromFullName(wstr ptr ptr)
 @ stdcall PackageIdFromFullName(wstr long ptr ptr)
 @ stdcall ParseApplicationUserModelId(wstr ptr ptr ptr ptr)

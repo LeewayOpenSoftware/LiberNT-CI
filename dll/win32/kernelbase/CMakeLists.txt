@@ -20,6 +20,7 @@ add_library(kernelbase MODULE
     CompatLinks.c
     ConsoleLegacy.c
     CpuSets.c
+    debugger.c
     DllMain.c
     DurationFormat.c
     AppModelToken.c

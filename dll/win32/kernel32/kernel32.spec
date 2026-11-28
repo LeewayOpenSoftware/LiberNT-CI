@@ -205,8 +205,8 @@
 @ stdcall CreateWaitableTimerW(ptr long wstr)
 @ stdcall CtrlRoutine(ptr) kernelbase.CtrlRoutine
 @ stdcall DeactivateActCtx(long ptr)
-@ stdcall DebugActiveProcess(long)
-@ stdcall DebugActiveProcessStop(long)
+@ stdcall DebugActiveProcess(long) kernelbase.DebugActiveProcess
+@ stdcall DebugActiveProcessStop(long) kernelbase.DebugActiveProcessStop
 @ stdcall DebugBreak() ntdll.DbgBreakPoint
 @ stdcall DebugBreakProcess(long)
 @ stdcall DebugSetProcessKillOnExit(long)
@@ -312,8 +312,8 @@
 @ stdcall ExpandEnvironmentStringsW(wstr ptr long)
 @ stdcall ExpungeConsoleCommandHistoryA(long) kernelbase.ExpungeConsoleCommandHistoryA
 @ stdcall ExpungeConsoleCommandHistoryW(long) kernelbase.ExpungeConsoleCommandHistoryW
-@ stdcall FatalAppExitA(long str)
-@ stdcall FatalAppExitW(long wstr)
+@ stdcall FatalAppExitA(long str) kernelbase.FatalAppExitA
+@ stdcall FatalAppExitW(long wstr) kernelbase.FatalAppExitW
 @ stdcall FatalExit(long)
 @ stdcall FileTimeToDosDateTime(ptr ptr ptr)
 @ stdcall FileTimeToLocalFileTime(ptr ptr)
@@ -985,8 +985,8 @@
 @ stdcall -version=0x602+ OpenThreadToken(long long long ptr) kernelbase.OpenThreadToken
 @ stdcall OpenWaitableTimerA(long long str)
 @ stdcall OpenWaitableTimerW(long long wstr)
-@ stdcall OutputDebugStringA(str)
-@ stdcall OutputDebugStringW(wstr)
+@ stdcall OutputDebugStringA(str) kernelbase.OutputDebugStringA
+@ stdcall OutputDebugStringW(wstr) kernelbase.OutputDebugStringW
 @ stdcall -version=0x602+ PackageFamilyNameFromFullName(wstr ptr ptr) kernelbase.PackageFamilyNameFromFullName
 @ stdcall -version=0x602+ ParseApplicationUserModelId(wstr ptr ptr ptr ptr) kernelbase.ParseApplicationUserModelId
 @ stdcall PeekConsoleInputA(ptr ptr long ptr) kernelbase.PeekConsoleInputA

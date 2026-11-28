@@ -1622,64 +1622,10 @@ TerminateProcess(IN HANDLE hProcess,
 /*
  * @implemented
  */
-VOID
-WINAPI
-FatalAppExitA(UINT uAction,
-              LPCSTR lpMessageText)
-{
-    PUNICODE_STRING MessageTextU;
-    ANSI_STRING MessageText;
-    NTSTATUS Status;
-
-    /* Initialize the string using the static TEB pointer */
-    MessageTextU = &NtCurrentTeb()->StaticUnicodeString;
-    RtlInitAnsiString(&MessageText, (LPSTR)lpMessageText);
-
-    /* Convert to unicode, or just exit normally if this failed */
-    Status = RtlAnsiStringToUnicodeString(MessageTextU, &MessageText, FALSE);
-    if (!NT_SUCCESS(Status)) ExitProcess(0);
-
-    /* Call the Wide function */
-    FatalAppExitW(uAction, MessageTextU->Buffer);
-}
 
 /*
  * @implemented
  */
-VOID
-WINAPI
-FatalAppExitW(IN UINT uAction,
-              IN LPCWSTR lpMessageText)
-{
-    UNICODE_STRING UnicodeString;
-    ULONG Response;
-    NTSTATUS Status;
-
-    /* Setup the string to print out */
-    RtlInitUnicodeString(&UnicodeString, lpMessageText);
-
-    /* Display the hard error no matter what */
-    Status = NtRaiseHardError(STATUS_FATAL_APP_EXIT | HARDERROR_OVERRIDE_ERRORMODE,
-                              1,
-                              1,
-                              (PULONG_PTR)&UnicodeString,
-#if DBG
-    /* On Checked builds, Windows allows the user to cancel the operation */
-                              OptionOkCancel,
-#else
-                              OptionOk,
-#endif
-                              &Response);
-
-    /* Give the user a chance to abort */
-    if ((NT_SUCCESS(Status)) && (Response == ResponseCancel))
-    {
-        return;
-    }
-
-    /* Otherwise kill the process */
-    ExitProcess(0);
-}
 
 /*
  * @implemented
