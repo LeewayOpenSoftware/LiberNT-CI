@@ -2759,10 +2759,6 @@ MsqCleanupMessageQueue(PTHREADINFO pti)
        UserDereferenceObject(pCursor);
    }
 
-   if (gpqForeground == MessageQueue)
-   {
-      IntSetFocusMessageQueue(NULL);
-   }
    if (gpqForegroundPrev == MessageQueue)
    {
       gpqForegroundPrev = NULL;
@@ -2809,12 +2805,13 @@ MsqDestroyMessageQueue(_In_ PTHREADINFO pti)
    NT_ASSERT(MessageQueue != NULL);
    MessageQueue->QF_flags |= QF_INDESTROY;
 
-   /* remove the message queue from any desktops */
-   if ((desk = InterlockedExchangePointer((PVOID*)&MessageQueue->Desktop, 0)))
-   {
-      (void)InterlockedExchangePointer((PVOID*)&desk->ActiveMessageQueue, 0);
-      IntDereferenceMessageQueue(MessageQueue);
-   }
+   /* Remove the message queue from the desktop whose foreground it is; on the
+    * input desktop this also clears the global foreground. */
+   desk = MessageQueue->Desktop;
+   if (desk)
+      IntSetFocusMessageQueue(desk, NULL);
+   NT_ASSERT(MessageQueue->Desktop == NULL);
+   NT_ASSERT(gpqForeground != MessageQueue);
 
    /* clean it up */
    MsqCleanupMessageQueue(pti);

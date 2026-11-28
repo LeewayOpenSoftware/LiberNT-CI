@@ -1240,8 +1240,8 @@ UserAttachThreadInput(PTHREADINFO ptiFrom, PTHREADINFO ptiTo, BOOL fAttach)
               RtlCopyMemory(&ptiTo->MessageQueue->CaretInfo,
                             &ptiFrom->MessageQueue->CaretInfo,
                             sizeof(ptiTo->MessageQueue->CaretInfo));
-              IntSetFocusMessageQueue(NULL);
-              IntSetFocusMessageQueue(ptiTo->MessageQueue);
+              IntSetFocusMessageQueue(gpdeskInputDesktop, NULL);
+              IntSetFocusMessageQueue(ptiTo->rpdesk, ptiTo->MessageQueue);
               IntSetForegroundThread(ptiTo);
            }
            else
@@ -1346,8 +1346,8 @@ UserAttachThreadInput(PTHREADINFO ptiFrom, PTHREADINFO ptiTo, BOOL fAttach)
                  ptiTo->MessageQueue->spwndActive = 0;
                  if (ptiTo->MessageQueue == gpqForeground)
                  {
-                    IntSetFocusMessageQueue(NULL);
-                    IntSetFocusMessageQueue(ptiFrom->MessageQueue);
+                    IntSetFocusMessageQueue(gpdeskInputDesktop, NULL);
+                    IntSetFocusMessageQueue(ptiFrom->rpdesk, ptiFrom->MessageQueue);
                     IntSetForegroundThread(ptiFrom);
                  }
               }
@@ -1384,8 +1384,8 @@ UserAttachThreadInput(PTHREADINFO ptiFrom, PTHREADINFO ptiTo, BOOL fAttach)
                  spwndActive->head.pti->MessageQueue->spwndActive = NULL;
                  ptiLive->MessageQueue->spwndActive = pwnd;
                  ptiLive->MessageQueue->spwndFocus = pwnd;
-                 IntSetFocusMessageQueue(NULL);
-                 IntSetFocusMessageQueue(ptiLive->MessageQueue);
+                 IntSetFocusMessageQueue(ptiLive->rpdesk, NULL);
+                 IntSetFocusMessageQueue(ptiLive->rpdesk, ptiLive->MessageQueue);
                  IntSetForegroundThread(ptiLive);
               }
            }

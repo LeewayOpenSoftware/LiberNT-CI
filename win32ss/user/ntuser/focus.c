@@ -906,14 +906,14 @@ co_IntSetForegroundMessageQueue(
    if (Wnd)
    {
       ptiChg = Wnd->head.pti;
-      IntSetFocusMessageQueue(Wnd->head.pti->MessageQueue);
+      IntSetFocusMessageQueue(Wnd->head.rpdesk, Wnd->head.pti->MessageQueue);
       IntSetForegroundThread(Wnd->head.pti);
       //ERR("Set Foreground pti 0x%p Q 0x%p hWnd 0x%p\n", Wnd->head.pti, Wnd->head.pti->MessageQueue, UserHMGetHandle(Wnd));
    }
    else
    {
       ptiChg = NULL;
-      IntSetFocusMessageQueue(NULL);
+      IntSetFocusMessageQueue(gpdeskInputDesktop, NULL);
       IntSetForegroundThread(NULL);
       //ERR("Set Foreground pti 0x0 Q 0x0 hWnd 0x0\n");
    }

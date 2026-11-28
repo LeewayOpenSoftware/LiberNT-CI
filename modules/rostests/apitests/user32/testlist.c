@@ -52,6 +52,7 @@ extern void func_ForegroundAfterHide(void);
 extern void func_ForegroundHideLaunch(void);
 extern void func_ForegroundRetake(void);
 extern void func_ForegroundRight(void);
+extern void func_ForegroundSwitchDesktop(void);
 extern void func_ForegroundStartup(void);
 extern void func_FrameMetrics(void);
 extern void func_GetClassInfo(void);
@@ -209,6 +210,7 @@ const struct test winetest_testlist[] =
     { "ForegroundHideLaunch", func_ForegroundHideLaunch },
     { "ForegroundRetake", func_ForegroundRetake },
     { "ForegroundRight", func_ForegroundRight },
+    { "ForegroundSwitchDesktop", func_ForegroundSwitchDesktop },
     { "ForegroundStartup", func_ForegroundStartup },
     { "FrameMetrics", func_FrameMetrics },
     { "GetClassInfo", func_GetClassInfo },

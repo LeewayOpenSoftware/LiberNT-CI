@@ -51,6 +51,7 @@ list(APPEND SOURCE
     ForegroundHideLaunch.c
     ForegroundRetake.c
     ForegroundRight.c
+    ForegroundSwitchDesktop.c
     ForegroundStartup.c
     GetClassInfo.c
     GetDCEx.c
