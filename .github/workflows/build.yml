@@ -3,9 +3,43 @@ on:
   push:
     branches-ignore: [main-nt10]
   pull_request:
+  # Manual restart for a branch whose push event was lost (GitHub incident of 2026-11-12).
+  # lrm_rs=true builds instead an experimental image with LIBERNT_ENABLE_RUST and
+  # LIBERNT_ENABLE_LRM_RS ON (special pool routed through Rust) plus lnrspoc.sys, for VM
+  # tests only: build-linux only, artifact names carry -lrmrs, no LBI allocation, no ccache save.
+  workflow_dispatch:
+    inputs:
+      lrm_rs:
+        description: 'LRM-RS special pool: default (ON on amd64) | on (also build the lnrspoc PoC lab image) | off (flag-OFF control build)'
+        type: choice
+        options:
+          - default
+          - 'on'
+          - 'off'
+        default: default
+      force_panic:
+        description: 'LAB-ONLY LRM-RS force-panic image (implies the lnrspoc PoC + FORCE_PANIC_TEST + LNRSPOC_TEST_IOCTLS, FORBID_PANIC off, lnrspoc 0x80B); disposable VM only, never ship'
+        type: boolean
+        default: false
+      i386_image:
+        description: 'Also build the full clang i386 image (bootcd + LiberNT.img); always built on leeway/main and integration/*'
+        type: boolean
+        default: false
+      msvc:
+        description: 'Also run build-msvc (MSVC + Rust leg and C-only leg, with bootcd.iso artifacts)'
+        type: boolean
+        default: false
+      msvc_lab:
+        description: 'MSVC amd64 lrmrs lab image: LAB_POC (lnrspoc.sys + lnrspoc_lrmtest.exe when the tree ships it + Rust archives); disposable VM only'
+        type: boolean
+        default: false
+      msvc_force_panic:
+        description: 'MSVC LAB-ONLY force-panic image (implies msvc_lab + FORCE_PANIC_TEST + LNRSPOC_TEST_IOCTLS, FORBID_PANIC off, lnrspoc 0x80B); disposable VM only, never ship'
+        type: boolean
+        default: false
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' && inputs.force_panic) && 'lrmrsfp' || (github.event_name == 'workflow_dispatch' && inputs.msvc_force_panic) && 'msvclabfp' || (github.event_name == 'workflow_dispatch' && inputs.msvc_lab) && 'msvclab' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') && 'lrmpoc' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'off') && 'lrmoff' || 'std' }}
   cancel-in-progress: true
 
 permissions:
@@ -21,6 +55,13 @@ jobs:
             arch: amd64
       fail-fast: false
     runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      # LRM-RS special pool is the amd64 default (owner order 2026-11-14). ON unless an explicit opt-out.
+      LRM_RS: ${{ (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'off' && !inputs.force_panic) && 'OFF' || 'ON' }}
+      # The opt-in lnrspoc PoC (ENABLE_RUST umbrella) is built only for lab images that need the usermode driver.
+      LAB_POC: ${{ (github.event_name == 'workflow_dispatch' && (inputs.lrm_rs == 'on' || inputs.force_panic)) && 'ON' || 'OFF' }}
+      FORCE_PANIC: ${{ (github.event_name == 'workflow_dispatch' && inputs.force_panic) && 'ON' || 'OFF' }}
     steps:
     - name: Free disk space
       run: |
@@ -32,10 +73,27 @@ jobs:
     - name: Source checkout
       uses: actions/checkout@v6
 
-    - name: Install host build tools
+    - name: Reproducible hive timestamp
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake ninja-build flex bison ccache wget xz-utils tar python3-mako python3-yaml python3-packaging glslang-tools msitools
+        # mkhive stamps registry key LastWriteTime from SOURCE_DATE_EPOCH
+        # (sdk/tools/mkhive); keep hives identical across CI reruns of the
+        # same commit. safe.directory guards odd container ownership.
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        e=$(git log -1 --format=%ct) && [ -n "$e" ] || exit 1
+        echo "SOURCE_DATE_EPOCH=$e" >> "$GITHUB_ENV"
+
+    - name: Install host build tools
+      timeout-minutes: 15
+      run: |
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y cmake ninja-build flex bison ccache wget xz-utils tar python3-mako python3-yaml python3-packaging glslang-tools msitools
+
+    - name: Install pinned Rust toolchain (amd64 LRM-RS default build)
+      if: ${{ env.LRM_RS == 'ON' }}
+      run: |
+        TC=$(sed -n 's/^set(LIBERNT_RUST_TOOLCHAIN "\([^"]*\)".*/\1/p' sdk/cmake/rust.cmake)
+        rustup toolchain install "$TC" --profile minimal --component llvm-tools --target x86_64-pc-windows-gnu
+        rustc +"$TC" --version --verbose
 
     - name: Compute RosBE bootstrap SHA
       id: rosbe_spec
@@ -59,15 +117,16 @@ jobs:
       uses: actions/cache/restore@v5
       with:
         path: ccache
-        key: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-${{github.run_id}}-${{github.run_attempt}}
+        key: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-image-${{github.run_id}}-${{github.run_attempt}}
         restore-keys: |
+          ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-image-
           ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-
 
     - name: Set ccache settings
       run: |
         echo "CCACHE_BASEDIR=${{github.workspace}}" >> $GITHUB_ENV
         echo "CCACHE_DIR=${{github.workspace}}/ccache" >> $GITHUB_ENV
-        echo "CCACHE_MAXSIZE=1G" >> $GITHUB_ENV
+        echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
         echo "CCACHE_SLOPPINESS=time_macros" >> $GITHUB_ENV
 
     - name: Allocate the Leeway Build Identity
@@ -77,6 +136,11 @@ jobs:
       run: |
         ENV_NAME=$([ "${{matrix.compiler}}" = "clang" ] && echo Clang || echo GCC)
         OUTDIR="output-$ENV_NAME-${{matrix.arch}}-debug"
+        if [ "$LRM_RS" = ON ]; then
+          echo "::notice::LBI: experimental LRM-RS image, no build identity is allocated"
+          echo "require=OFF" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         if [ -z "$LBI_LEDGER_DEPLOY_KEY" ]; then
           echo "::notice::LBI: no ledger key in this context; the build stays unallocated"
           echo "require=OFF" >> "$GITHUB_OUTPUT"
@@ -103,6 +167,11 @@ jobs:
         [ "${{matrix.compiler}}" = "gcc" ] && FLAGS="$FLAGS --gcc"
         [ -n "${{matrix.profile}}" ] && FLAGS="$FLAGS -DROSCONFIG_PROFILE=${{matrix.profile}}"
         [ "${{matrix.compiler}}" = "clang" ] && case "${{matrix.arch}}" in amd64) FLAGS="$FLAGS -DENABLE_MESA_LLVMPIPE=ON" ;; esac
+        # LRM-RS special pool is the amd64 CMake default; only override it for an explicit flag-OFF control.
+        [ "$LRM_RS" = OFF ] && FLAGS="$FLAGS -DLIBERNT_ENABLE_LRM_RS=OFF"
+        # The lnrspoc PoC (ENABLE_RUST umbrella) is opt-in: build it for lab images only.
+        [ "$LAB_POC" = ON ] && FLAGS="$FLAGS -DLIBERNT_ENABLE_RUST=ON"
+        [ "$FORCE_PANIC" = ON ] && FLAGS="$FLAGS -DLIBERNT_LRM_RS_FORCE_PANIC_TEST=ON -DLNRSPOC_TEST_IOCTLS=ON"
         ./configure.sh $FLAGS -a ${{matrix.arch}} \
           -DREACTOS_TARGET_NT=0xA00 \
           -DDIAGDATA_CHANNEL= \
@@ -122,6 +191,36 @@ jobs:
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
         ninja -C ${{steps.configure.outputs.outdir}} bootcd liberntimg liberntvhd -k0
 
+    - name: Check the LRM-RS kernel exports (special pool routed through Rust)
+      if: ${{ env.LRM_RS == 'ON' }}
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        OUT=${{steps.configure.outputs.outdir}}
+        def=$(find "$OUT" -name 'ntoskrnl.def' -type f | head -n1)
+        [ -n "$def" ] && grep -q LrmRsSelfTest "$def" || { echo "::error::ntoskrnl does not export LrmRsSelfTest"; exit 1; }
+        if [ "$FORCE_PANIC" = ON ]; then grep -q LrmRsForcePanic "$def" || { echo "::error::force-panic image does not export LrmRsForcePanic"; exit 1; }; fi
+
+    - name: Build lnrspoc PoC driver (lab image only)
+      if: ${{ env.LAB_POC == 'ON' }}
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        OUT=${{steps.configure.outputs.outdir}}
+        ninja -C "$OUT" lnrspoc
+        mkdir -p lrmrs-out
+        cp "$OUT/tools/rust-poc/lnrspoc.sys" "$OUT/tools/rust-poc/libleeway_rs_poc.a" "$OUT/ntoskrnl/liblrm_rs.a" lrmrs-out/
+        (cd lrmrs-out && sha256sum * | tee SHA256SUMS)
+
+    - name: Assert flag-OFF ntoskrnl has no LRM-RS exports (default build)
+      if: ${{ env.LRM_RS == 'OFF' }}
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        OUT=${{steps.configure.outputs.outdir}}
+        def=$(find "$OUT" -name 'ntoskrnl.def' -type f | head -n1)
+        if [ -n "$def" ] && grep -qiE 'LrmRs' "$def"; then
+          echo "::error::flag-OFF ntoskrnl.def exports an LrmRs symbol; export table must match a no-flag build"; grep -iE "LrmRs" "$def"; exit 1
+        fi
+        echo "flag-OFF export-table parity OK: no LrmRs exports in ${def:-<no ntoskrnl.def>}"
+
     - name: Build stage-1 applier
       run: |
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
@@ -136,7 +235,7 @@ jobs:
 
     - name: Save ccache
       id: ccache_save
-      if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
+      if: ${{ always() && steps.ccache_restore.outcome == 'success' && env.LAB_POC != 'ON' }}
       uses: actions/cache/save@v5
       with:
         path: ccache
@@ -147,7 +246,7 @@ jobs:
       continue-on-error: true
       env:
         GH_TOKEN: ${{ github.token }}
-        CACHE_KEY_PREFIX: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-
+        CACHE_KEY_PREFIX: ccache-${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-image-
         CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
       run: |
         gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key \
@@ -158,7 +257,20 @@ jobs:
 
     - name: Name artifacts
       id: images
-      run: echo "tag=${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-${GITHUB_SHA::11}" >> "$GITHUB_OUTPUT"
+      run: |
+        V=""
+        [ "$LAB_POC" = ON ] && V="-lrmrs"
+        [ "$LRM_RS" = OFF ] && V="-lrmoff"
+        [ "$FORCE_PANIC" = ON ] && V="-lrmrs-fp"
+        echo "tag=${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}$V-${GITHUB_SHA::11}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload lnrspoc.sys and the Rust archives (lab image only)
+      if: ${{ env.LAB_POC == 'ON' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: lnrspoc-lrmrs-${{steps.images.outputs.tag}}
+        path: lrmrs-out/
+        if-no-files-found: error
 
     - name: Upload stage-1 applier
       uses: actions/upload-artifact@v7
@@ -197,7 +309,137 @@ jobs:
       timeout-minutes: 10
       run: python3 -u sdk/tools/check-forwarder-loops.py ${{steps.configure.outputs.outdir}}
 
+    - name: Check the FreeLoader size
+      # The PC loader stops itself at boot when its PE exceeds MAX_FREELDR_PE_SIZE.
+      run: python3 -u sdk/tools/check-freeldr-size.py ${{steps.configure.outputs.outdir}}
+
+  build-linux-i386:
+    # Native i386 clang tree: the amd64 jobs never configure it, so i386-only breakages (calling
+    # convention, win64-only exports, missing link libraries) stayed invisible. Images only, no rostests yet.
+    if: ${{ github.ref == 'refs/heads/leeway/main' || startsWith(github.ref, 'refs/heads/integration/') || startsWith(github.ref, 'refs/heads/land/') || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.i386_image) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+    - name: Free disk space
+      run: |
+        df -h /
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/lib/jvm /usr/local/share/powershell /usr/local/share/chromium
+        sudo docker system prune --all --force
+        df -h /
+
+    - name: Source checkout
+      uses: actions/checkout@v6
+
+    - name: Reproducible hive timestamp
+      run: |
+        # mkhive stamps registry key LastWriteTime from SOURCE_DATE_EPOCH
+        # (sdk/tools/mkhive); keep hives identical across CI reruns of the
+        # same commit. safe.directory guards odd container ownership.
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        e=$(git log -1 --format=%ct) && [ -n "$e" ] || exit 1
+        echo "SOURCE_DATE_EPOCH=$e" >> "$GITHUB_ENV"
+
+    - name: Install host build tools
+      timeout-minutes: 15
+      run: |
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y cmake ninja-build flex bison ccache wget xz-utils tar python3-mako python3-yaml python3-packaging glslang-tools msitools
+
+    - name: Compute RosBE bootstrap SHA
+      id: rosbe_spec
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/LiberNT/libernt-build-toolchain/main/rosbe-unix-bootstrap.sh -o /tmp/rosbe-bootstrap.sh
+        echo "sha=$(sha1sum /tmp/rosbe-bootstrap.sh | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+    - name: Cache RosBE
+      id: cache_rosbe
+      uses: actions/cache@v5
+      with:
+        path: ~/.local/opt/rosbe
+        key: rosbe-${{runner.os}}-${{steps.rosbe_spec.outputs.sha}}
+
+    - name: Install RosBE
+      if: ${{ steps.cache_rosbe.outputs.cache-hit != 'true' }}
+      run: sh /tmp/rosbe-bootstrap.sh
+
+    - name: Restore ccache
+      id: ccache_restore
+      uses: actions/cache/restore@v5
+      with:
+        path: ccache
+        key: ccache-clang-i386-image-${{github.run_id}}-${{github.run_attempt}}
+        restore-keys: |
+          ccache-clang-i386-image-
+          ccache-clang-i386-
+
+    - name: Set ccache settings
+      run: |
+        echo "CCACHE_BASEDIR=${{github.workspace}}" >> $GITHUB_ENV
+        echo "CCACHE_DIR=${{github.workspace}}/ccache" >> $GITHUB_ENV
+        echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
+        echo "CCACHE_SLOPPINESS=time_macros" >> $GITHUB_ENV
+
+    - name: Configure
+      id: configure
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        ./configure.sh --clang -a i386 \
+          -DREACTOS_TARGET_NT=0xA00 \
+          -DDIAGDATA_CHANNEL= \
+          -DLIBERNT_BUILD_UPDATE_PENDING=ON \
+          -DENABLE_CCACHE=1 \
+          -DLBI_REQUIRE_ALLOCATION=OFF
+        echo "outdir=output-Clang-i386-debug" >> "$GITHUB_OUTPUT"
+
+    - name: Build images
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        ninja -C ${{steps.configure.outputs.outdir}} bootcd liberntimg -k0
+
+    - name: Hash the images
+      id: images
+      run: |
+        OUT=${{steps.configure.outputs.outdir}}
+        mkdir -p i386-out
+        cp "$OUT/bootcd.iso" "$OUT/LiberNT.img" i386-out/
+        (cd i386-out && sha256sum bootcd.iso LiberNT.img | tee SHA256SUMS)
+        echo "tag=clang-i386-${GITHUB_SHA::11}" >> "$GITHUB_OUTPUT"
+
+    - name: Print ccache statistics
+      if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
+      run: ccache -s
+
+    - name: Save ccache
+      id: ccache_save
+      if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
+      uses: actions/cache/save@v5
+      with:
+        path: ccache
+        key: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+
+    - name: Prune older ccache entries
+      if: ${{ always() && steps.ccache_save.outcome == 'success' }}
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CACHE_KEY_PREFIX: ccache-clang-i386-image-
+        CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+      run: |
+        gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key \
+          --jq '.[] | select(.key != env.CACHE_KEY_KEEP) | .id' |
+        while read -r id; do
+          gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true
+        done
+
+    - name: Upload i386 images and hashes
+      uses: actions/upload-artifact@v7
+      with:
+        name: images-${{steps.images.outputs.tag}}
+        path: i386-out/
+        if-no-files-found: error
+
   build-rostests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
     # Compile the test suite (modules/rostests) with clang for amd64. A
     # separate build, because ENABLE_ROSTESTS also changes what goes into
     # the images that build-linux produces. Compile only, no test run.
@@ -212,9 +454,16 @@ jobs:
       uses: actions/checkout@v6
 
     - name: Install host build tools
+      timeout-minutes: 15
       run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake ninja-build flex bison ccache wget xz-utils tar python3-mako python3-yaml python3-packaging glslang-tools msitools
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y cmake ninja-build flex bison ccache wget xz-utils tar python3-mako python3-yaml python3-packaging glslang-tools msitools
+
+    - name: Install pinned Rust toolchain (full-tree configure, LRM-RS default ON on amd64)
+      run: |
+        TC=$(sed -n 's/^set(LIBERNT_RUST_TOOLCHAIN "\([^"]*\)".*/\1/p' sdk/cmake/rust.cmake)
+        rustup toolchain install "$TC" --profile minimal --component llvm-tools --target x86_64-pc-windows-gnu
+        rustc +"$TC" --version --verbose
 
     - name: Compute RosBE bootstrap SHA
       id: rosbe_spec
@@ -271,15 +520,195 @@ jobs:
         else
           ninja -C "$OUT" -k0
         fi
+        # credprovs_test.dll lives under dll/, outside modules/rostests/all; the apitests artifact needs it.
+        if ninja -C "$OUT" -t targets all | grep -q "^credprovs_test:"; then
+          ninja -C "$OUT" credprovs_test
+        fi
+
+    - name: Collect the kmtests binaries
+      # kmtest.exe + kmtest_drv.sys (and the standalone test drivers) for a lab
+      # run against the LiberNT.img of the same commit; the images themselves
+      # are built without ENABLE_ROSTESTS and carry no kmtest.
+      run: |
+        OUT=${{steps.configure.outputs.outdir}}
+        mkdir -p kmtests-out
+        find "$OUT/modules/rostests/kmtests" -type f \( -name '*.exe' -o -name '*.sys' -o -name '*.dll' -o -name '*.inf' \) -exec cp -v {} kmtests-out/ \;
+        ls -l kmtests-out
+
+    - name: Upload the kmtests binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: kmtests-clang-amd64-${{github.sha}}
+        path: kmtests-out/
+        if-no-files-found: error
+
+    - name: Collect the apitests binaries
+      # Every *_apitest.exe, native amd64 and the WoW64 i386 build, for a lab run
+      # against the LiberNT.img of the same commit; the images carry no apitest.
+      run: |
+        OUT=${{steps.configure.outputs.outdir}}
+        mkdir -p apitests-out/amd64 apitests-out/wow64
+        find "$OUT/modules/rostests/apitests" -type f -name '*_apitest.exe' -exec cp -v {} apitests-out/amd64/ \;
+        if [ -d "$OUT/_wow64_i386/modules/rostests/apitests" ]; then
+          find "$OUT/_wow64_i386/modules/rostests/apitests" -type f -name '*_apitest.exe' -exec cp -v {} apitests-out/wow64/ \;
+        fi
+        find "$OUT/modules/rostests/tests" -type f \( -name 'lowil.exe' -o -name 'elevadm.exe' \) -exec cp -v {} apitests-out/amd64/ \;
+        if [ -d "$OUT/_wow64_i386/modules/rostests/tests" ]; then
+          find "$OUT/_wow64_i386/modules/rostests/tests" -type f \( -name 'lowil.exe' -o -name 'elevadm.exe' \) -exec cp -v {} apitests-out/wow64/ \;
+        fi
+        # credprov_apitest needs its harness, test modules and the hooked credprovs build beside it;
+        # credprov_absent.dll must stay missing for the Framework missing-dependency case.
+        if [ -d "$OUT/modules/rostests/apitests/credprov" ]; then
+          find "$OUT/modules/rostests/apitests/credprov" -type f \( -name '*.exe' -o -name '*.dll' \) ! -name 'credprov_absent.dll' -exec cp -v {} apitests-out/amd64/ \;
+          cp -v "$OUT/dll/win32/credprovs/credprovs_test.dll" apitests-out/amd64/
+        fi
+        # Hooked helper hosts (add_rostests_file targets under base/) that apitests start from beside them.
+        [ -d "$OUT/base" ] && find "$OUT/base" -type f -name '*_test.exe' -exec cp -v {} apitests-out/amd64/ \;
+        ls -lR apitests-out | head -100
+
+    - name: Upload the apitests binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: apitests-clang-amd64-${{github.sha}}
+        path: apitests-out/
+        if-no-files-found: error
+
+    - name: Collect the winetests binaries
+      # Every *_winetest.exe (amd64), for a lab run against the image of the same commit.
+      run: |
+        OUT=${{steps.configure.outputs.outdir}}
+        mkdir -p winetests-out
+        find "$OUT/modules/rostests/winetests" -type f -name '*_winetest.exe' -exec cp {} winetests-out/ \;
+        ls winetests-out | wc -l
+
+    - name: Upload the winetests binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: winetests-clang-amd64-${{github.sha}}
+        path: winetests-out/
+        if-no-files-found: error
 
     - name: Save ccache
+      id: ccache_save
       if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
       uses: actions/cache/save@v5
       with:
         path: ccache
         key: ${{ steps.ccache_restore.outputs.cache-primary-key }}
 
+    - name: Prune older ccache entries
+      if: ${{ always() && steps.ccache_save.outcome == 'success' }}
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CACHE_KEY_PREFIX: ccache-clang-amd64-rostests-
+        CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+      run: |
+        gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key           --jq '.[] | select(.key != env.CACHE_KEY_KEEP) | .id' |
+        while read -r id; do
+          gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true
+        done
+
+  build-rostests-i386:
+    # Compile-only native i386 test suite. Not blocking: the i386 tests still have -Wformat
+    # failures (SIZE_T printed with %Ix); drop continue-on-error once those are fixed.
+    if: ${{ github.ref == 'refs/heads/leeway/main' || startsWith(github.ref, 'refs/heads/integration/') || startsWith(github.ref, 'refs/heads/land/') || startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.i386_image) }}
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+    - name: Free disk space
+      run: |
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/lib/jvm /usr/local/share/powershell /usr/local/share/chromium
+        df -h /
+
+    - name: Source checkout
+      uses: actions/checkout@v6
+
+    - name: Install host build tools
+      timeout-minutes: 15
+      run: |
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y cmake ninja-build flex bison ccache wget xz-utils tar python3-mako python3-yaml python3-packaging glslang-tools msitools
+
+    - name: Compute RosBE bootstrap SHA
+      id: rosbe_spec
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/LiberNT/libernt-build-toolchain/main/rosbe-unix-bootstrap.sh -o /tmp/rosbe-bootstrap.sh
+        echo "sha=$(sha1sum /tmp/rosbe-bootstrap.sh | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+    - name: Cache RosBE
+      id: cache_rosbe
+      uses: actions/cache@v5
+      with:
+        path: ~/.local/opt/rosbe
+        key: rosbe-${{runner.os}}-${{steps.rosbe_spec.outputs.sha}}
+
+    - name: Install RosBE
+      if: ${{ steps.cache_rosbe.outputs.cache-hit != 'true' }}
+      run: sh /tmp/rosbe-bootstrap.sh
+
+    - name: Restore ccache
+      id: ccache_restore
+      uses: actions/cache/restore@v5
+      with:
+        path: ccache
+        key: ccache-clang-i386-rostests-${{github.run_id}}-${{github.run_attempt}}
+        restore-keys: |
+          ccache-clang-i386-rostests-
+          ccache-clang-i386-
+
+    - name: Set ccache settings
+      run: |
+        echo "CCACHE_BASEDIR=${{github.workspace}}" >> $GITHUB_ENV
+        echo "CCACHE_DIR=${{github.workspace}}/ccache" >> $GITHUB_ENV
+        echo "CCACHE_MAXSIZE=1G" >> $GITHUB_ENV
+        echo "CCACHE_SLOPPINESS=time_macros" >> $GITHUB_ENV
+
+    - name: Configure
+      id: configure
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        ./configure.sh --clang -a i386 \
+          -DREACTOS_TARGET_NT=0xA00 \
+          -DDIAGDATA_CHANNEL= \
+          -DENABLE_ROSTESTS=1 \
+          -DENABLE_CCACHE=1
+        echo "outdir=output-Clang-i386-debug" >> "$GITHUB_OUTPUT"
+
+    - name: Build the test suite
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        OUT=${{steps.configure.outputs.outdir}}
+        if ninja -C "$OUT" -t targets all | grep -q "^modules/rostests/all:"; then
+          ninja -C "$OUT" -k0 modules/rostests/all
+        else
+          ninja -C "$OUT" -k0
+        fi
+
+    - name: Save ccache
+      id: ccache_save
+      if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
+      uses: actions/cache/save@v5
+      with:
+        path: ccache
+        key: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+
+    - name: Prune older ccache entries
+      if: ${{ always() && steps.ccache_save.outcome == 'success' }}
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CACHE_KEY_PREFIX: ccache-clang-i386-rostests-
+        CACHE_KEY_KEEP: ${{ steps.ccache_restore.outputs.cache-primary-key }}
+      run: |
+        gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$CACHE_KEY_PREFIX" --limit 100 --json id,key           --jq '.[] | select(.key != env.CACHE_KEY_KEEP) | .id' |
+        while read -r id; do
+          gh cache delete "$id" --repo "$GITHUB_REPOSITORY" || true
+        done
+
   ntfslib-host-tests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
     # The host tests of the NTFS library, outside the image build: the
     # volume check (index walk unit test, cluster claim smoke test), a
     # directory index that grows past its base record, a size change made
@@ -287,6 +716,8 @@ jobs:
     # the shape verifier, which also runs after every change here. Built
     # under ASan and UBSan with the library's asserts live.
     runs-on: ubuntu-24.04
+    # Minutes normally; a wedged runner must not hold it for hours
+    timeout-minutes: 45
     steps:
     - name: Source checkout
       uses: actions/checkout@v6
@@ -296,9 +727,10 @@ jobs:
           base/applications/cmdutils/lntexpandstorage
 
     - name: Install host build tools
+      timeout-minutes: 15
       run: |
-        sudo apt-get update
-        sudo apt-get install -y g++ cmake ninja-build pkg-config libfuse3-dev ntfs-3g
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y g++ cmake ninja-build pkg-config libfuse3-dev ntfs-3g
 
     - name: Configure
       run: |
@@ -307,7 +739,7 @@ jobs:
 
     - name: Build
       run: |
-        cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_size_persist_times_test ntfslib_lookup_index_cache_test ntfslib_mft_mirror_fallback_test ntfslib_corrupt_runlist_dirty_test ntfslib_fuse
+        cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_size_persist_times_test ntfslib_lookup_index_cache_test ntfslib_mft_mirror_fallback_test ntfslib_corrupt_runlist_dirty_test ntfslib_lost_write_dirty_test ntfslib_fuse
 
     - name: Run the host tests
       env:
@@ -315,7 +747,7 @@ jobs:
         UBSAN_OPTIONS: print_stacktrace=1
         NTFSLIB_KEEP_FAILED: ${{ runner.temp }}/ntfslib-failed
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape|index_spill|crash_consistency|lookup_index_cache|mft_mirror_fallback|corrupt_runlist_dirty|full_base_growth"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape|index_spill|crash_consistency|lookup_index_cache|mft_mirror_fallback|corrupt_runlist_dirty|lost_write_dirty|full_base_growth"
 
     - name: Upload the images of failed host tests
       if: ${{ failure() }}
@@ -326,6 +758,7 @@ jobs:
         if-no-files-found: ignore
 
   cmlib-host-tests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
     # Host test of the configuration-manager hive library: HvMarkCellDirty must
     # mark every block a cell occupies, including a block-aligned header and a
     # cell that spans several blocks. Regression for the dx2400 STOP 0x1E at
@@ -342,9 +775,10 @@ jobs:
           submodules/host-tests/cmlib
 
     - name: Install host build tools
+      timeout-minutes: 15
       run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc cmake ninja-build
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y gcc cmake ninja-build
 
     - name: Configure
       run: |
@@ -361,18 +795,133 @@ jobs:
       run: |
         ctest --test-dir build/cmlib-host --output-on-failure -R "cmlib_mark_dirty|cmlib_dirty_arith"
 
+  ke-host-tests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
+    # Host tests of the kernel and executive: the amd64 xstate layout, and
+    # fixtures that compile code taken from ntoskrnl/ and hal/ (freeze
+    # timeout, publication and bugcheck interaction, SMP start and IPI send,
+    # interrupt dispatch, work queue start-up).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - name: Source checkout
+      uses: actions/checkout@v6
+      with:
+        sparse-checkout: |
+          ntoskrnl
+          hal
+          sdk/include
+          submodules/host-tests
+
+    - name: Install host build tools
+      timeout-minutes: 15
+      run: |
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y gcc cmake ninja-build python3
+
+    - name: Configure
+      run: |
+        cmake -S submodules/host-tests -B build/ke-host -G Ninja -DCMAKE_BUILD_TYPE=Debug -DHOST_TEST_MMCC=OFF -DHOST_TEST_NTDLL=OFF -DHOST_TEST_RTL=OFF -DHOST_TEST_I8042=OFF -DHOST_TEST_ACPI=OFF -DHOST_TEST_NDIS=OFF -DHOST_TEST_DHCPCSVC=OFF
+
+    - name: Build
+      run: |
+        cmake --build build/ke-host
+
+    - name: Run the host tests
+      run: |
+        ctest --test-dir build/ke-host --output-on-failure -R "^(ke|ex|io|kd|ps)\."
+
+  mmcc-host-tests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
+    # Host tests of the NVS memory manager core on a simulated machine: page
+    # tables, faults, sections, the cache manager on top, system regions and
+    # the guarded special pool region, for amd64, arm64 and high memory, plus
+    # ASan/UBSan and TSan builds of the light test set.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+    - name: Source checkout
+      uses: actions/checkout@v6
+      with:
+        sparse-checkout: |
+          ntoskrnl
+          sdk/include
+          subsystems/linux/lxcore
+          submodules/host-tests
+
+    - name: Install host build tools
+      timeout-minutes: 15
+      run: |
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+        sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y gcc cmake ninja-build
+
+    - name: Configure
+      run: |
+        cmake -S submodules/host-tests/mmcc/nvs/core -B build/mmcc-host -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+    - name: Build
+      run: |
+        cmake --build build/mmcc-host
+
+    - name: Run the host tests
+      env:
+        ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+        UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        TSAN_OPTIONS: halt_on_error=1
+      run: |
+        ctest --test-dir build/mmcc-host --output-on-failure -j 4
+
   build-msvc:
-    if: github.ref == 'refs/heads/leeway/main'
+    # MSVC + Rust is a required configuration (owner order 2026-11-14). The lrmrs leg is the primary one;
+    # the conly leg (LRM-RS OFF, no Rust toolchain installed) only shows that the C-only build still works.
+    # Runs on leeway/main, on the ci/msvc-rust* work branches and on a manual run with msvc=true.
+    if: ${{ github.ref == 'refs/heads/leeway/main' || startsWith(github.ref, 'refs/heads/ci/msvc-rust') || (github.event_name == 'workflow_dispatch' && inputs.msvc) }}
     strategy:
       matrix:
-        arch: [amd64]
+        include:
+          - arch: amd64
+            lrm_rs: 'ON'
+            variant: lrmrs
+            rust_target: x86_64-pc-windows-msvc
+          - arch: amd64
+            lrm_rs: 'ON'
+            variant: lrmrs
+            rust_target: x86_64-pc-windows-msvc
+            build_type: release
+          - arch: amd64
+            lrm_rs: 'OFF'
+            variant: conly
+          - arch: i386
+            lrm_rs: 'ON'
+            variant: lrmrs
+            rust_target: i686-pc-windows-msvc
+          - arch: i386
+            lrm_rs: 'OFF'
+            variant: conly
       fail-fast: false
     runs-on: windows-2025
+    env:
+      # The MSVC lab variants ride on the amd64 lrmrs leg only, mirroring how
+      # build-linux drives LAB_POC/FORCE_PANIC from the dispatch inputs. The
+      # conly legs never see the Rust umbrella flags.
+      LAB_POC: ${{ (github.event_name == 'workflow_dispatch' && (inputs.msvc_lab || inputs.msvc_force_panic)) && 'ON' || 'OFF' }}
+      FORCE_PANIC: ${{ (github.event_name == 'workflow_dispatch' && inputs.msvc_force_panic) && 'ON' || 'OFF' }}
     steps:
     - name: Source checkout
       uses: actions/checkout@v6
 
+    - name: Reproducible hive timestamp
+      shell: pwsh
+      run: |
+        # mkhive stamps registry key LastWriteTime from SOURCE_DATE_EPOCH
+        # (sdk/tools/mkhive); keep hives identical across CI reruns of the
+        # same commit.
+        $epoch = (git log -1 --format=%ct).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $epoch) { throw "git log failed; cannot set SOURCE_DATE_EPOCH" }
+        "SOURCE_DATE_EPOCH=$epoch" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
     - name: Install host build tools
+      timeout-minutes: 15
       shell: pwsh
       env:
         GH_TOKEN: ${{ github.token }}
@@ -397,6 +946,26 @@ jobs:
         Copy-Item "$tools\win_bison.exe" "$tools\bison.exe" -Force
         echo "$tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+    - name: Install pinned Rust toolchain (MSVC target of the leg)
+      if: ${{ matrix.lrm_rs == 'ON' }}
+      shell: pwsh
+      run: |
+        $m = Select-String -Path sdk/cmake/rust.cmake -Pattern '^set\(LIBERNT_RUST_TOOLCHAIN "([^"]+)"'
+        if (-not $m) { throw "sdk/cmake/rust.cmake has no LIBERNT_RUST_TOOLCHAIN pin" }
+        $tc = $m.Matches[0].Groups[1].Value
+        rustup toolchain install $tc --profile minimal --component llvm-tools --target ${{matrix.rust_target}}
+        if ($LASTEXITCODE -ne 0) { throw "rustup could not install Rust $tc" }
+        $vv = rustup run $tc rustc --version --verbose
+        if ($LASTEXITCODE -ne 0) { throw "Rust $tc does not run" }
+        $vv
+        if (-not ($vv | Select-String -SimpleMatch 'host: x86_64-pc-windows-msvc')) {
+            throw "Rust $tc is not the x86_64-pc-windows-msvc host toolchain"
+        }
+        $libdir = rustup run $tc rustc --print target-libdir --target ${{matrix.rust_target}}
+        if (-not (Get-ChildItem "$libdir/libcore-*.rlib" -ErrorAction SilentlyContinue)) {
+            throw "Rust $tc has no core library for ${{matrix.rust_target}}"
+        }
+
     - name: Set up the MSVC build environment
       uses: ilammy/msvc-dev-cmd@v1
       with:
@@ -408,8 +977,17 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
       run: |
-        call configure.cmd /arch=${{matrix.arch}} -DREACTOS_TARGET_NT=0xA00 -DDIAGDATA_CHANNEL= -DENABLE_CCACHE=0
-        echo outdir=output-VS-${{matrix.arch}}-debug>> "%GITHUB_OUTPUT%"
+        :: LRM-RS is set explicitly in both legs, so a leg can never fall back to the other configuration.
+        set RUST_ARGS=
+        if "${{matrix.lrm_rs}}"=="ON" set RUST_ARGS=-DLIBERNT_RUST_TARGET=${{matrix.rust_target}}
+        if "${{matrix.arch}}-${{matrix.variant}}"=="amd64-lrmrs" if "%LAB_POC%"=="ON" set RUST_ARGS=%RUST_ARGS% -DLIBERNT_ENABLE_RUST=ON
+        if "${{matrix.arch}}-${{matrix.variant}}"=="amd64-lrmrs" if "%FORCE_PANIC%"=="ON" set RUST_ARGS=%RUST_ARGS% -DLIBERNT_LRM_RS_FORCE_PANIC_TEST=ON -DLNRSPOC_TEST_IOCTLS=ON
+        set BT_ARGS=
+        set BT_SUFFIX=debug
+        if "${{matrix.build_type}}"=="release" set BT_ARGS=/r
+        if "${{matrix.build_type}}"=="release" set BT_SUFFIX=release
+        call configure.cmd /arch=${{matrix.arch}} %BT_ARGS% -DREACTOS_TARGET_NT=0xA00 -DDIAGDATA_CHANNEL= -DENABLE_CCACHE=0 -DLIBERNT_ENABLE_LRM_RS=${{matrix.lrm_rs}} %RUST_ARGS%
+        echo outdir=output-VS-${{matrix.arch}}-%BT_SUFFIX%>> "%GITHUB_OUTPUT%"
 
     - name: Build submodules
       shell: cmd
@@ -418,3 +996,297 @@ jobs:
     - name: Build
       shell: cmd
       run: ninja -C ${{steps.configure.outputs.outdir}} -k0
+
+    - name: Check the LRM-RS exports of the linked kernel
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      shell: pwsh
+      run: |
+        $k = "${{steps.configure.outputs.outdir}}/ntoskrnl/ntoskrnl.exe"
+        if (-not (Test-Path $k)) { throw "ntoskrnl.exe was not linked" }
+        $exports = dumpbin /nologo /exports $k
+        if ($LASTEXITCODE -ne 0) { throw "dumpbin could not read ntoskrnl.exe" }
+        $hits = $exports | Select-String -SimpleMatch 'LrmRs'
+        if ('${{matrix.lrm_rs}}' -eq 'ON') {
+            if (-not ($exports | Select-String -SimpleMatch 'LrmRsSelfTest')) {
+                throw "ntoskrnl.exe was built with LRM-RS ON but does not export LrmRsSelfTest"
+            }
+            if ($env:FORCE_PANIC -eq 'ON' -and '${{matrix.arch}}-${{matrix.variant}}' -eq 'amd64-lrmrs' -and -not ($exports | Select-String -SimpleMatch 'LrmRsForcePanic')) {
+                throw "force-panic ntoskrnl.exe does not export LrmRsForcePanic"
+            }
+            $hits
+        } elseif ($hits) {
+            $hits
+            throw "The C-only ntoskrnl.exe exports an LrmRs symbol"
+        } else {
+            "C-only ntoskrnl.exe has no LrmRs exports"
+        }
+
+    - name: Build bootcd.iso
+      id: bootcd
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      shell: cmd
+      run: ninja -C ${{steps.configure.outputs.outdir}} bootcd -k0
+
+    - name: Build the persistent system disk images
+      # The lab boots LiberNT.img/.vhd/.vhdx: a read-write system disk whose
+      # registry and state persist across runs, unlike the bootcd live image.
+      id: sysimg
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      shell: pwsh
+      run: |
+        $out = "${{steps.configure.outputs.outdir}}"
+        ninja -C $out liberntimg -k0 -v
+        $code = $LASTEXITCODE
+        if ($code -ne 0) {
+          Write-Host '=== DIAG: preinstall_partition batch files ==='
+          Get-ChildItem -Recurse "$out/boot/CMakeFiles" -Filter 'preinstall_partition*.bat' -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "----- $($_.FullName) -----"
+            Get-Content $_.FullName | ForEach-Object { Write-Host $_ }
+          }
+          Write-Host '=== DIAG: host-tool exe presence/size ==='
+          foreach ($t in 'fatten.exe','ntfsimg.exe','mkdiskimg.exe') {
+            Get-ChildItem -Recurse "$out" -Filter $t -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('{0}  {1} bytes' -f $_.FullName, $_.Length) }
+          }
+          throw "ninja liberntimg failed (code $code); diagnostics above"
+        }
+
+    - name: Build the lnrspoc PoC driver and archives (MSVC lab image only)
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' && env.LAB_POC == 'ON' && matrix.arch == 'amd64' && matrix.variant == 'lrmrs' }}
+      shell: pwsh
+      run: |
+        $out = "${{steps.configure.outputs.outdir}}"
+        ninja -C $out lnrspoc
+        if ($LASTEXITCODE -ne 0) { throw "ninja lnrspoc failed" }
+        New-Item -ItemType Directory -Force lrmrs-out | Out-Null
+        Copy-Item "$out/tools/rust-poc/lnrspoc.sys" lrmrs-out/
+        Get-ChildItem "$out/tools/rust-poc" -File | Where-Object { $_.Name -match 'leeway_rs_poc' } | ForEach-Object { Copy-Item $_.FullName lrmrs-out/ }
+        Get-ChildItem "$out/ntoskrnl" -Recurse -File | Where-Object { $_.Name -match 'lrm_rs' -and $_.Extension -in '.a', '.lib' } | ForEach-Object { Copy-Item $_.FullName lrmrs-out/ }
+        $lrmtest = Get-ChildItem -Recurse -Filter lnrspoc_lrmtest.exe $out -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($lrmtest) {
+            Copy-Item $lrmtest.FullName lrmrs-out/
+        } else {
+            "lnrspoc_lrmtest.exe is not produced by this tree; skipping it"
+        }
+        $sums = Get-ChildItem lrmrs-out -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }
+        $sums | Set-Content lrmrs-out/SHA256SUMS
+        $sums
+
+    - name: Name artifacts
+      id: images
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      shell: pwsh
+      run: |
+        $V = ""
+        if ($env:LAB_POC -eq 'ON') { $V = "-lrmrs" }
+        if ($env:FORCE_PANIC -eq 'ON') { $V = "-lrmrs-fp" }
+        $BT = ""
+        if ('${{matrix.build_type}}' -eq 'release') { $BT = "-release" }
+        "tag=msvc-${{matrix.arch}}-${{matrix.variant}}$BT$V-$($env:GITHUB_SHA.Substring(0, 11))" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+    - name: Upload bootcd.iso
+      if: ${{ !cancelled() && steps.bootcd.outcome == 'success' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: bootcd-iso-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/bootcd.iso
+        if-no-files-found: error
+
+    - name: Upload LiberNT.img
+      if: ${{ !cancelled() && steps.sysimg.outcome == 'success' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: LiberNT-img-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/LiberNT.img
+        if-no-files-found: error
+
+    - name: Upload lnrspoc.sys and the Rust archives (MSVC lab image only)
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' && env.LAB_POC == 'ON' && matrix.arch == 'amd64' && matrix.variant == 'lrmrs' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: lnrspoc-${{steps.images.outputs.tag}}
+        path: lrmrs-out/
+        if-no-files-found: error
+
+    - name: Upload the kernel and the Rust library (for the ABI review)
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: ntoskrnl-${{steps.images.outputs.tag}}
+        path: |
+          ${{steps.configure.outputs.outdir}}/ntoskrnl/ntoskrnl.exe
+          ${{steps.configure.outputs.outdir}}/ntoskrnl/ntoskrnl.map
+          ${{steps.configure.outputs.outdir}}/ntoskrnl/**/ntoskrnl.pdb
+          ${{steps.configure.outputs.outdir}}/ntoskrnl/**/lrm_rs*.lib
+          ${{steps.configure.outputs.outdir}}/ntoskrnl/**/liblrm_rs*.a
+        if-no-files-found: warn
+
+    - name: Collect kernel-mode symbols for crash symbolication
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      shell: pwsh
+      run: |
+        $out = (Resolve-Path "${{steps.configure.outputs.outdir}}").Path
+        New-Item -ItemType Directory -Force symbols | Out-Null
+        # Every kernel-mode binary (.sys), its .pdb wherever the linker
+        # placed it (matched by base name across the whole output tree, so
+        # win32k and the drivers are caught even when the .pdb and the .sys
+        # land in different directories), and any .map. Kernel modules that
+        # are not .sys are covered by name (ntoskrnl, hal, kdcom, bootvid,
+        # win32k, freeldr).
+        $sysNames = @{}
+        Get-ChildItem $out -Recurse -File -Include *.sys | ForEach-Object { $sysNames[$_.BaseName] = $true }
+        $kernelNames = @('ntoskrnl','hal','kdcom','bootvid','win32k','freeldr')
+
+        $keep = Get-ChildItem $out -Recurse -File -Include *.sys,*.map | ForEach-Object { $_.FullName }
+        $keep += Get-ChildItem $out -Recurse -File -Include *.pdb | Where-Object {
+            $sysNames.ContainsKey($_.BaseName) -or ($kernelNames -contains $_.BaseName)
+        } | ForEach-Object { $_.FullName }
+
+        # User-mode DLL PDBs, smallest first, while the artifact stays under
+        # the 500 MB budget.
+        $budget = 500MB
+        $current = ($keep | ForEach-Object { (Get-Item $_).Length } | Measure-Object -Sum).Sum
+        foreach ($pdb in (Get-ChildItem $out -Recurse -File -Include *.pdb | Where-Object { $keep -notcontains $_.FullName } | Sort-Object Length)) {
+            if ($current + $pdb.Length -gt $budget) { break }
+            $keep += $pdb.FullName
+            $current += $pdb.Length
+        }
+
+        foreach ($f in ($keep | Sort-Object -Unique)) {
+            $rel = $f.Substring($out.Length + 1)
+            $dest = Join-Path symbols $rel
+            New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
+            Copy-Item $f $dest
+        }
+        "collected $((Get-ChildItem symbols -Recurse -File).Count) symbol files, $current bytes"
+
+    - name: Upload kernel-mode symbols
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: symbols-${{steps.images.outputs.tag}}
+        path: symbols/
+        if-no-files-found: warn
+        retention-days: 14
+
+  build-rostests-msvc:
+    # Compile the test suite (modules/rostests) with MSVC for amd64, a separate
+    # build because ENABLE_ROSTESTS changes what goes into the images, exactly
+    # like build-rostests does for clang. The kmtests/apitests artifacts let the
+    # lab run the MSVC-built tree of the same commit. Compile only, no test run.
+    if: ${{ (github.ref == 'refs/heads/leeway/main' || startsWith(github.ref, 'refs/heads/ci/msvc-rust') || (github.event_name == 'workflow_dispatch' && inputs.msvc)) && !(github.event_name == 'workflow_dispatch' && (inputs.msvc_lab || inputs.msvc_force_panic)) }}
+    runs-on: windows-2025
+    steps:
+    - name: Source checkout
+      uses: actions/checkout@v6
+
+    - name: Install host build tools
+      timeout-minutes: 15
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # Same pinned winflexbison as build-msvc; gh downloads with the job token.
+        $zip = "$env:RUNNER_TEMP\win_flex_bison-2.5.24.zip"
+        foreach ($attempt in 1..4) {
+            gh release download v2.5.24 --repo lexxmark/winflexbison --pattern win_flex_bison-2.5.24.zip --output $zip --clobber
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($attempt -eq 4) { throw "Downloading winflexbison failed" }
+            Start-Sleep -Seconds (15 * $attempt)
+        }
+        if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne "39C6086CE211D5415500ACC5ED2D8939861CA1696AEE48909C7F6DAF5122B505") {
+            throw "win_flex_bison-2.5.24.zip does not have the expected SHA256"
+        }
+        $tools = "$env:RUNNER_TEMP\winflexbison"
+        Expand-Archive $zip -DestinationPath $tools -Force
+        python -m pip install --upgrade mako pyyaml packaging
+        Copy-Item "$tools\win_flex.exe" "$tools\flex.exe" -Force
+        Copy-Item "$tools\win_bison.exe" "$tools\bison.exe" -Force
+        echo "$tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Install pinned Rust toolchain (MSVC target; LRM-RS defaults ON on amd64)
+      shell: pwsh
+      run: |
+        $m = Select-String -Path sdk/cmake/rust.cmake -Pattern '^set\(LIBERNT_RUST_TOOLCHAIN "([^"]+)"'
+        if (-not $m) { throw "sdk/cmake/rust.cmake has no LIBERNT_RUST_TOOLCHAIN pin" }
+        $tc = $m.Matches[0].Groups[1].Value
+        rustup toolchain install $tc --profile minimal --component llvm-tools --target x86_64-pc-windows-msvc
+        if ($LASTEXITCODE -ne 0) { throw "rustup could not install Rust $tc" }
+        $vv = rustup run $tc rustc --version --verbose
+        if ($LASTEXITCODE -ne 0) { throw "Rust $tc does not run" }
+        $vv
+
+    - name: Set up the MSVC build environment
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: amd64
+
+    - name: Configure
+      id: configure
+      shell: cmd
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        call configure.cmd /arch=amd64 -DREACTOS_TARGET_NT=0xA00 -DDIAGDATA_CHANNEL= -DENABLE_CCACHE=0 -DLIBERNT_RUST_TARGET=x86_64-pc-windows-msvc -DENABLE_ROSTESTS=1
+        echo outdir=output-VS-amd64-debug>> "%GITHUB_OUTPUT%"
+
+    - name: Build the test suite
+      shell: cmd
+      run: |
+        :: credprovs_test.dll lives under dll/, outside modules/rostests/all; the apitests artifact needs it.
+        ninja -C ${{steps.configure.outputs.outdir}} -t targets all | findstr /B /C:"credprovs_test:" >nul && (ninja -C ${{steps.configure.outputs.outdir}} credprovs_test || exit /b 1)
+        :: The per-directory target of the Ninja generator; without it, build everything.
+        ninja -C ${{steps.configure.outputs.outdir}} -t targets all | findstr /B /C:"modules/rostests/all:" >nul
+        if %ERRORLEVEL% EQU 0 (ninja -C ${{steps.configure.outputs.outdir}} -k0 modules/rostests/all) else (ninja -C ${{steps.configure.outputs.outdir}} -k0)
+
+    - name: Collect the kmtests binaries
+      # kmtest.exe + kmtest_drv.sys (and the standalone test drivers) for a lab
+      # run against the LiberNT.img of the same commit; the images themselves
+      # are built without ENABLE_ROSTESTS and carry no kmtest.
+      shell: pwsh
+      run: |
+        $out = "${{steps.configure.outputs.outdir}}"
+        New-Item -ItemType Directory -Force kmtests-out | Out-Null
+        Get-ChildItem -Recurse "$out/modules/rostests/kmtests" -File |
+            Where-Object { $_.Extension -in '.exe', '.sys', '.dll', '.inf' } |
+            ForEach-Object { Copy-Item -Verbose $_.FullName kmtests-out/ }
+        Get-ChildItem kmtests-out
+
+    - name: Upload the kmtests binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: kmtests-msvc-amd64-${{github.sha}}
+        path: kmtests-out/
+        if-no-files-found: error
+
+    - name: Collect the apitests binaries
+      # Every *_apitest.exe, native amd64 and the WoW64 i386 build, for a lab run
+      # against the LiberNT.img of the same commit; the images carry no apitest.
+      shell: pwsh
+      run: |
+        $out = "${{steps.configure.outputs.outdir}}"
+        New-Item -ItemType Directory -Force apitests-out/amd64 apitests-out/wow64 | Out-Null
+        Get-ChildItem -Recurse "$out/modules/rostests/apitests" -Filter '*_apitest.exe' -File |
+            ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
+        if (Test-Path "$out/_wow64_i386/modules/rostests/apitests") {
+            Get-ChildItem -Recurse "$out/_wow64_i386/modules/rostests/apitests" -Filter '*_apitest.exe' -File |
+                ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/wow64/ }
+        }
+        Get-ChildItem -Recurse "$out/modules/rostests/tests" -File |
+            Where-Object { $_.Name -in 'lowil.exe', 'elevadm.exe' } |
+            ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
+        # credprov_apitest needs its harness, test modules and the hooked credprovs build beside it;
+        # credprov_absent.dll must stay missing for the Framework missing-dependency case.
+        if (Test-Path "$out/modules/rostests/apitests/credprov") {
+            Get-ChildItem -Recurse "$out/modules/rostests/apitests/credprov" -File |
+                Where-Object { $_.Extension -in '.exe', '.dll' -and $_.Name -ne 'credprov_absent.dll' } |
+                ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
+            Copy-Item -Verbose -ErrorAction Stop "$out/dll/win32/credprovs/credprovs_test.dll" apitests-out/amd64/
+        }
+        Get-ChildItem -Recurse apitests-out | Select-Object -First 100
+
+    - name: Upload the apitests binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: apitests-msvc-amd64-${{github.sha}}
+        path: apitests-out/
+        if-no-files-found: error
