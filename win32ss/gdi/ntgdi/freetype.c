@@ -4811,6 +4811,8 @@ IntGetBitmapGlyphWithCache(
     PFONT_CACHE_ENTRY NewEntry;
     FT_Bitmap AlignedBitmap;
     FT_BitmapGlyph BitmapGlyph;
+    FT_BBox InkCBox;
+    FT_Bool HaveInkBox = FALSE;
 
     ASSERT_FREETYPE_LOCK_HELD();
 
@@ -4821,11 +4823,27 @@ IntGetBitmapGlyphWithCache(
         return NULL;
     };
 
+    /*
+     * Capture the grid-fitted bounding box of the outline actually about to be
+     * rendered, for the LCD padding trim below.  It must come from GlyphCopy,
+     * not GlyphSlot->metrics: emulated oblique/embolden shear or widen this
+     * outline without updating the slot metrics, so only the rendered outline's
+     * box describes the real ink.  Bitmap strikes and the emptied-outline
+     * fallback below are left untrimmed.
+     */
+    if (GlyphCopy->format == FT_GLYPH_FORMAT_OUTLINE &&
+        ((FT_OutlineGlyph)GlyphCopy)->outline.n_points > 0)
+    {
+        FT_Glyph_Get_CBox(GlyphCopy, FT_GLYPH_BBOX_GRIDFIT, &InkCBox);
+        HaveInkBox = TRUE;
+    }
+
     error = FT_Glyph_To_Bitmap(&GlyphCopy, Cache->Hashed.Aspect.RenderMode, 0, 1);
     if (error && GlyphCopy->format == FT_GLYPH_FORMAT_OUTLINE)
     {
         ((FT_OutlineGlyph)GlyphCopy)->outline.n_points = 0;
         ((FT_OutlineGlyph)GlyphCopy)->outline.n_contours = 0;
+        HaveInkBox = FALSE;
         error = FT_Glyph_To_Bitmap(&GlyphCopy, Cache->Hashed.Aspect.RenderMode, 0, 1);
     }
     if (error)
@@ -4876,12 +4894,12 @@ IntGetBitmapGlyphWithCache(
      * inside the box is never touched; grayscale and mono bitmaps are left
      * alone.
      */
-    if (BitmapGlyph->bitmap.pixel_mode == FT_PIXEL_MODE_LCD &&
+    if (HaveInkBox &&
+        BitmapGlyph->bitmap.pixel_mode == FT_PIXEL_MODE_LCD &&
         BitmapGlyph->bitmap.pitch > 0 && BitmapGlyph->bitmap.width >= 3)
     {
-        LONG InkLeft  = (LONG)(GlyphSlot->metrics.horiBearingX >> 6);
-        LONG InkRight = (LONG)((GlyphSlot->metrics.horiBearingX +
-                                GlyphSlot->metrics.width + 63) >> 6);
+        LONG InkLeft  = (LONG)(InkCBox.xMin >> 6);
+        LONG InkRight = (LONG)(InkCBox.xMax >> 6);
         LONG WidthPx  = (LONG)(BitmapGlyph->bitmap.width / 3);
         LONG TrimL    = InkLeft - (LONG)BitmapGlyph->left;
         LONG TrimR    = ((LONG)BitmapGlyph->left + WidthPx) - InkRight;
