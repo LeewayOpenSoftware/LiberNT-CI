@@ -115,6 +115,22 @@ BEGIN
     PUSHBUTTON "Cancelar", IDCANCEL, 210, 53, 50, 14
 END
 
+IDD_AUTOLOGON DIALOGEX 0, 0, 267, 116
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_SHELLFONT
+CAPTION "Iniciar sesión automáticamente"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Puede configurar el equipo para que los usuarios no tengan que escribir un nombre de usuario y una contraseña para iniciar sesión. Para ello, especifique a continuación el usuario que iniciará sesión automáticamente:", -1, 7, 7, 253, 34
+    RTEXT "Nombre de usuario:", -1, 7, 48, 96, 8
+    EDITTEXT IDC_AUTOLOGON_USER, 107, 45, 153, 14, ES_AUTOHSCROLL
+    RTEXT "Contraseña:", -1, 7, 66, 96, 8
+    EDITTEXT IDC_AUTOLOGON_PASSWORD1, 107, 63, 153, 14, ES_AUTOHSCROLL | ES_PASSWORD
+    RTEXT "Confirmar contraseña:", -1, 7, 84, 96, 8
+    EDITTEXT IDC_AUTOLOGON_PASSWORD2, 107, 81, 153, 14, ES_AUTOHSCROLL | ES_PASSWORD
+    DEFPUSHBUTTON "Aceptar", IDOK, 156, 99, 50, 14
+    PUSHBUTTON "Cancelar", IDCANCEL, 210, 99, 50, 14
+END
+
 IDD_USER_NEW DIALOGEX 0, 0, 267, 200
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_SHELLFONT
 CAPTION "Nuevo usuario"

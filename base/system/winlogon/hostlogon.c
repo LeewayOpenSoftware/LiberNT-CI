@@ -12,6 +12,7 @@
 #include <ntsecapi.h>
 #include <ndk/setypes.h>
 #include <credser.h>
+#include <ntsam.h>
 #include <wlui_s.h>
 #include <reactos/desktopready.h>
 
@@ -862,12 +863,73 @@ WlHlDisableAutoLogon(
     RegCloseKey(Key);
 }
 
+/*
+ * The CD boot: MiniNT (the /MININT start option, as smss checks it) and the setup account
+ * preinstall.inf names by RID in SYSTEM\Setup. That account signs in by itself on the CD.
+ */
+static BOOL
+WlHlCdSetupAccount(
+    _Out_writes_opt_(Chars) PWSTR Name,
+    _In_ DWORD Chars)
+{
+    LSA_OBJECT_ATTRIBUTES Attributes;
+    LSA_HANDLE Policy;
+    PPOLICY_ACCOUNT_DOMAIN_INFO Domain = NULL;
+    BYTE SidBuffer[SECURITY_MAX_SID_SIZE];
+    PSID Sid = (PSID)SidBuffer;
+    WCHAR DomainName[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD Rid = 0, Size = sizeof(Rid), NameChars = Chars, DomainChars = ARRAYSIZE(DomainName);
+    SID_NAME_USE Use;
+    UCHAR Count;
+    HKEY Key;
+    BOOL Found = FALSE;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\MiniNT", 0,
+                      KEY_QUERY_VALUE, &Key) != ERROR_SUCCESS)
+        return FALSE;
+    RegCloseKey(Key);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SYSTEM\\Setup", L"SetupAccountRid", RRF_RT_REG_DWORD, NULL,
+                     &Rid, &Size) != ERROR_SUCCESS || Rid == 0)
+        return FALSE;
+    if (Name == NULL)
+        return TRUE;
+
+    Name[0] = UNICODE_NULL;
+    ZeroMemory(&Attributes, sizeof(Attributes));
+    Attributes.Length = sizeof(Attributes);
+    if (!NT_SUCCESS(LsaOpenPolicy(NULL, &Attributes, POLICY_VIEW_LOCAL_INFORMATION, &Policy)))
+        return FALSE;
+    if (NT_SUCCESS(LsaQueryInformationPolicy(Policy, PolicyAccountDomainInformation, (PVOID *)&Domain)) &&
+        Domain != NULL && Domain->DomainSid != NULL)
+    {
+        Count = *RtlSubAuthorityCountSid(Domain->DomainSid);
+        if (RtlLengthRequiredSid(Count + 1) <= sizeof(SidBuffer) &&
+            NT_SUCCESS(RtlCopySid(sizeof(SidBuffer), Sid, Domain->DomainSid)))
+        {
+            *RtlSubAuthorityCountSid(Sid) = Count + 1;
+            *RtlSubAuthoritySid(Sid, Count) = Rid;
+            Found = LookupAccountSidW(NULL, Sid, Name, &NameChars, DomainName, &DomainChars, &Use) &&
+                    Use == SidTypeUser;
+        }
+    }
+    if (Domain != NULL)
+        LsaFreeMemory(Domain);
+    LsaClose(Policy);
+    if (!Found)
+        Name[0] = UNICODE_NULL;
+    return Found;
+}
+
 static BOOL
 WlHlAutoLogonWanted(VOID)
 {
     if (g_AutoLogonTried && !g_AutoLogonAgain)
         return FALSE;
-    return WlHlWinlogonNumber(L"AutoAdminLogon", 0) != 0 && !WlHlHasLegalNotice();
+    if (WlHlHasLegalNotice())
+        return FALSE;
+    /* The CD's own sign-in happens once per boot; a sign-out there shows the logon page. */
+    return WlHlWinlogonNumber(L"AutoAdminLogon", 0) != 0 ||
+           (!g_AutoLogonTried && WlHlCdSetupAccount(NULL, 0));
 }
 
 /* Signs in DefaultUserName once; the result goes to WlHostLoggedOutSas like a host submit. Never on unlock. */
@@ -878,6 +940,7 @@ WlHlTryAutoLogon(VOID)
     WCHAR User[256], Domain[256], Password[256];
     HKEY Key;
     DWORD Left, Chars;
+    BOOL Registry;
     HANDLE Token = NULL;
     LUID LogonId = { 0, 0 };
     NTSTATUS Status, SubStatus = STATUS_SUCCESS;
@@ -891,20 +954,30 @@ WlHlTryAutoLogon(VOID)
         ERR("WL: automatic sign-in skipped: Shift is held\n");
         return FALSE;
     }
-    Left = WlHlWinlogonNumber(L"AutoLogonCount", MAXDWORD);
+    Registry = WlHlWinlogonNumber(L"AutoAdminLogon", 0) != 0;
+    Left = Registry ? WlHlWinlogonNumber(L"AutoLogonCount", MAXDWORD) : MAXDWORD;
     if (Left == 0)
     {
         WlHlDisableAutoLogon(TRUE);
-        return FALSE;
+        Registry = FALSE;
     }
-    WlHlWinlogonString(L"DefaultUserName", User, ARRAYSIZE(User));
+    User[0] = UNICODE_NULL;
+    if (Registry)
+        WlHlWinlogonString(L"DefaultUserName", User, ARRAYSIZE(User));
+    /* The CD boot signs its setup account in even when AutoAdminLogon is off or names nobody. */
     if (User[0] == UNICODE_NULL)
-        return FALSE;
+    {
+        Registry = FALSE;
+        if (!WlHlCdSetupAccount(User, ARRAYSIZE(User)))
+            return FALSE;
+    }
     WlHlWinlogonString(L"DefaultDomainName", Domain, ARRAYSIZE(Domain));
     Chars = ARRAYSIZE(Domain);
     if (Domain[0] == UNICODE_NULL && !GetComputerNameW(Domain, &Chars))
         Domain[0] = UNICODE_NULL;
-    if (!WlHlLsaDefaultPassword(Password, ARRAYSIZE(Password)))
+    /* DefaultPassword belongs to DefaultUserName; the CD setup account has an empty password. */
+    Password[0] = UNICODE_NULL;
+    if (Registry && !WlHlLsaDefaultPassword(Password, ARRAYSIZE(Password)))
         WlHlWinlogonString(L"DefaultPassword", Password, ARRAYSIZE(Password));
 
     ZeroMemory(&Logon, sizeof(Logon));
@@ -932,10 +1005,14 @@ WlHlTryAutoLogon(VOID)
         g_AutoLogonAgain = WlHlWinlogonNumber(L"ForceAutoLogon", 0) != 0;
         WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, 0);
     }
-    else
+    else if (Registry)
     {
         ERR("WL: automatic sign-in failed (0x%08lx); AutoAdminLogon turned off\n", Status);
         WlHlDisableAutoLogon(FALSE);
+    }
+    else
+    {
+        ERR("WL: automatic sign-in of the CD setup account failed (0x%08lx); showing the logon page\n", Status);
     }
     SecureZeroMemory(Password, sizeof(Password));
     SecureZeroMemory(&Logon, sizeof(Logon));
@@ -1072,6 +1149,160 @@ WlHlDisableCad(VOID)
                      RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS)
         return Value != 0;
     return !WlHlDomainJoined();
+}
+
+/* ---- the only account, with a blank password ------------------------------------ */
+
+static BOOL g_BlankLogonTried;          /* considered once per boot, never after a sign-out */
+
+/* Winlogon\SpecialAccounts\UserList: a DWORD 0 keeps the account off the logon page. */
+static BOOL
+WlHlAccountHidden(
+    _In_ PCUNICODE_STRING Name)
+{
+    WCHAR Text[CREDSER_MAX_NAME_CHARS + 1];
+    DWORD Value = 1, Size = sizeof(Value);
+
+    WlHlCopyString(Name, Text, ARRAYSIZE(Text));
+    return RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY L"\\SpecialAccounts\\UserList",
+                        Text, RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS && Value == 0;
+}
+
+/*
+ * The accounts the logon page lists (logonuihost LuhUsersCreate): every enabled normal local
+ * account that SpecialAccounts does not hide. TRUE with the name when there is exactly one and
+ * SAM says its password is blank (UserLogonUIInformation, no trial logon, so no bad-password count).
+ */
+static BOOL
+WlHlOnlyAccountIsBlank(
+    _Out_writes_(Chars) PWSTR Name,
+    _In_ DWORD Chars)
+{
+    WCHAR Computer[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD ComputerChars = ARRAYSIZE(Computer);
+    UNICODE_STRING DomainName;
+    SAM_HANDLE Server = NULL, Domain = NULL, User;
+    PSID DomainSid = NULL;
+    SAM_ENUMERATE_HANDLE Context = 0;
+    PSAM_RID_ENUMERATION Buffer;
+    PUSER_LOGON_UI_INFORMATION Info;
+    ULONG Count, i, Listed = 0;
+    BOOL Blank = FALSE;
+    NTSTATUS Status;
+
+    Name[0] = UNICODE_NULL;
+    if (!GetComputerNameW(Computer, &ComputerChars))
+        return FALSE;
+    RtlInitUnicodeString(&DomainName, Computer);
+    if (!NT_SUCCESS(SamConnect(NULL, &Server, SAM_SERVER_CONNECT | SAM_SERVER_LOOKUP_DOMAIN, NULL)))
+        return FALSE;
+    if (!NT_SUCCESS(SamLookupDomainInSamServer(Server, &DomainName, &DomainSid)) ||
+        !NT_SUCCESS(SamOpenDomain(Server, DOMAIN_LIST_ACCOUNTS | DOMAIN_LOOKUP, DomainSid, &Domain)))
+        goto done;
+
+    do
+    {
+        Buffer = NULL;
+        Count = 0;
+        Status = SamEnumerateUsersInDomain(Domain, &Context, USER_NORMAL_ACCOUNT, (PVOID *)&Buffer,
+                                           MAXULONG, &Count);
+        if (!NT_SUCCESS(Status))
+            break;
+        for (i = 0; Buffer != NULL && i < Count && Listed < 2; i++)
+        {
+            BOOL Shown = TRUE, ThisBlank = FALSE;
+
+            if (WlHlAccountHidden(&Buffer[i].Name))
+                continue;
+            /* Fail closed: an account SAM does not describe counts as listed, with a password. */
+            Info = NULL;
+            if (NT_SUCCESS(SamOpenUser(Domain, USER_READ_GENERAL | USER_READ_ACCOUNT, Buffer[i].RelativeId, &User)))
+            {
+                if (NT_SUCCESS(SamQueryInformationUser(User, UserLogonUIInformation, (PVOID *)&Info)) && Info)
+                {
+                    Shown = !Info->AccountIsDisabled;
+                    ThisBlank = Info->PasswordIsBlank;
+                }
+                if (Info)
+                    SamFreeMemory(Info);
+                SamCloseHandle(User);
+            }
+            if (!Shown)
+                continue;
+            if (Listed++ == 0)
+            {
+                Blank = ThisBlank;
+                WlHlCopyString(&Buffer[i].Name, Name, Chars);
+            }
+        }
+        if (Buffer)
+            SamFreeMemory(Buffer);
+    } while (Status == STATUS_MORE_ENTRIES && Listed < 2);
+    /* A page the enumeration could not read may hold more accounts: no automatic sign-in. */
+    if (!NT_SUCCESS(Status))
+        Blank = FALSE;
+
+done:
+    if (Domain)
+        SamCloseHandle(Domain);
+    if (DomainSid)
+        SamFreeMemory(DomainSid);
+    SamCloseHandle(Server);
+    if (Listed != 1 || !Blank)
+        Name[0] = UNICODE_NULL;
+    return Name[0] != UNICODE_NULL;
+}
+
+/*
+ * Windows signs in by itself when the logon page would list one account and it has no password:
+ * only at the first logged-out state after boot, only where the page needs no Ctrl+Alt+Del and
+ * names its accounts, and not under a legal notice. A sign-out shows the page.
+ */
+static BOOL
+WlHlTryBlankLogon(VOID)
+{
+    CREDSER_LOGON Logon;
+    WCHAR User[CREDSER_MAX_NAME_CHARS + 1], Domain[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD Chars = ARRAYSIZE(Domain);
+    HANDLE Token = NULL;
+    LUID LogonId = { 0, 0 };
+    NTSTATUS Status, SubStatus = STATUS_SUCCESS;
+
+    if (g_BlankLogonTried)
+        return FALSE;
+    g_BlankLogonTried = TRUE;
+    if (!WlHlDisableCad() || WlHlDomainJoined() || WlHlHasLegalNotice() ||
+        WlHlPolicyDword(L"DontDisplayLastUserName", 0) != 0)
+        return FALSE;
+    if (WlHlWinlogonNumber(L"IgnoreShiftOverride", 0) == 0 && (GetAsyncKeyState(VK_SHIFT) & 0x8000))
+    {
+        ERR("WL: blank-password sign-in skipped: Shift is held\n");
+        return FALSE;
+    }
+    if (!WlHlOnlyAccountIsBlank(User, ARRAYSIZE(User)) || !GetComputerNameW(Domain, &Chars))
+        return FALSE;
+
+    ZeroMemory(&Logon, sizeof(Logon));
+    Logon.MessageType = KerbInteractiveLogon;
+    RtlInitUnicodeString(&Logon.LogonDomainName, Domain);
+    RtlInitUnicodeString(&Logon.UserName, User);
+    RtlInitUnicodeString(&Logon.Password, L"");
+    Status = WlHlLsaLogon(&Logon, FALSE, &Token, &LogonId, &SubStatus);
+    if (NT_SUCCESS(Status) && WlHlSafeModeBlocksNonAdmins() && !WlHlTokenIsAdmin(Token))
+    {
+        CloseHandle(Token);
+        Token = NULL;
+        Status = STATUS_ACCOUNT_RESTRICTION;
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        /* A refused blank sign-in (policy, expiry, a forced change) is the page's to explain. */
+        ERR("WL: blank-password sign-in of the only account failed (0x%08lx); showing the logon page\n", Status);
+        return FALSE;
+    }
+    ERR("WL: the only account has a blank password; signing it in\n");
+    WlHlFinishLogon(Status, SubStatus, Token, &LogonId, &Logon, 0);
+    return TRUE;
 }
 
 /* P2: how long a lock or logoff waits for the host's first frame before switching anyway. */
@@ -1457,7 +1688,7 @@ WlHostLoggedOutSas(
 
     /* A self-posted SAS may be an automatic sign-in; with CAD required only a real one raises the page. */
     WlHlSetAccepting(TRUE);
-    if (!UserSas && !WlHlTryAutoLogon() && !WlHlDisableCad())
+    if (!UserSas && !WlHlTryAutoLogon() && !WlHlTryBlankLogon() && !WlHlDisableCad())
     {
         WlHlSetAccepting(FALSE);
         return WLX_SAS_ACTION_NONE;

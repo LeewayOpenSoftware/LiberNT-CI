@@ -16,6 +16,7 @@
 
 #include "usrmgr.h"
 #include <winreg.h>
+#include <ntsecapi.h>
 
 typedef struct _USER_DATA
 {
@@ -643,43 +644,177 @@ UpdateUserProperties(HWND hwndDlg)
     NetApiBufferFree(pUserInfo);
 }
 
+#define WINLOGON_KEY L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
+
+/* The password of the automatic sign-in lives in the LSA secret DefaultPassword, as Windows keeps it;
+ * a NULL password deletes the secret. */
+static NTSTATUS
+StoreDefaultPassword(_In_opt_ PCWSTR Password)
+{
+    LSA_OBJECT_ATTRIBUTES Attributes;
+    LSA_HANDLE Policy;
+    LSA_UNICODE_STRING Name, Data;
+    NTSTATUS Status;
+
+    ZeroMemory(&Attributes, sizeof(Attributes));
+    Attributes.Length = sizeof(Attributes);
+    Status = LsaOpenPolicy(NULL, &Attributes, POLICY_CREATE_SECRET, &Policy);
+    if (Status != 0)
+        return Status;
+    Name.Buffer = L"DefaultPassword";
+    Name.Length = sizeof(L"DefaultPassword") - sizeof(WCHAR);
+    Name.MaximumLength = sizeof(L"DefaultPassword");
+    if (Password != NULL)
+    {
+        Data.Buffer = (PWSTR)Password;
+        Data.Length = (USHORT)(wcslen(Password) * sizeof(WCHAR));
+        Data.MaximumLength = Data.Length;
+    }
+    Status = LsaStorePrivateData(Policy, &Name, Password != NULL ? &Data : NULL);
+    LsaClose(Policy);
+    return Status;
+}
+
+typedef struct _AUTOLOGON_DATA
+{
+    WCHAR UserName[UNLEN + 1];
+    WCHAR Password[PWLEN + 1];
+} AUTOLOGON_DATA, *PAUTOLOGON_DATA;
+
+static INT_PTR CALLBACK
+AutoLogonDlgProc(HWND hwndDlg,
+                 UINT uMsg,
+                 WPARAM wParam,
+                 LPARAM lParam)
+{
+    PAUTOLOGON_DATA Data = (PAUTOLOGON_DATA)GetWindowLongPtr(hwndDlg, DWLP_USER);
+
+    switch (uMsg)
+    {
+        case WM_INITDIALOG:
+            SetWindowLongPtr(hwndDlg, DWLP_USER, lParam);
+            Data = (PAUTOLOGON_DATA)lParam;
+            SendDlgItemMessageW(hwndDlg, IDC_AUTOLOGON_USER, EM_LIMITTEXT, UNLEN, 0);
+            SendDlgItemMessageW(hwndDlg, IDC_AUTOLOGON_PASSWORD1, EM_LIMITTEXT, PWLEN, 0);
+            SendDlgItemMessageW(hwndDlg, IDC_AUTOLOGON_PASSWORD2, EM_LIMITTEXT, PWLEN, 0);
+            SetDlgItemTextW(hwndDlg, IDC_AUTOLOGON_USER, Data->UserName);
+            if (Data->UserName[0])
+            {
+                SetFocus(GetDlgItem(hwndDlg, IDC_AUTOLOGON_PASSWORD1));
+                return FALSE;
+            }
+            return TRUE;
+
+        case WM_COMMAND:
+            switch (LOWORD(wParam))
+            {
+                case IDOK:
+                    if (!GetDlgItemTextW(hwndDlg, IDC_AUTOLOGON_USER, Data->UserName, ARRAYSIZE(Data->UserName)))
+                    {
+                        SetFocus(GetDlgItem(hwndDlg, IDC_AUTOLOGON_USER));
+                        break;
+                    }
+                    if (CheckPasswords(hwndDlg, IDC_AUTOLOGON_PASSWORD1, IDC_AUTOLOGON_PASSWORD2))
+                    {
+                        GetDlgItemTextW(hwndDlg, IDC_AUTOLOGON_PASSWORD1, Data->Password, ARRAYSIZE(Data->Password));
+                        EndDialog(hwndDlg, IDOK);
+                    }
+                    break;
+
+                case IDCANCEL:
+                    EndDialog(hwndDlg, IDCANCEL);
+                    break;
+            }
+            break;
+
+        default:
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*
+ * "Users must enter a user name and password to use this computer", as netplwiz on Windows:
+ * clearing it asks which account signs in automatically and its password (DefaultUserName,
+ * DefaultDomainName, the DefaultPassword secret, AutoAdminLogon "1"); setting it again turns
+ * automatic sign-in off and forgets the password.
+ */
 VOID OnToggleRequireLogon(_In_ HWND hwndDlg)
 {
+    AUTOLOGON_DATA Data;
+    WCHAR Computer[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD ComputerChars = ARRAYSIZE(Computer), Size;
+    HWND hwndLV;
+    INT nItem;
     HKEY hKey;
     LONG lResult;
-    BOOL bIsChecked;
-    PCWSTR pszAutoAdminLogonValue;
+    NTSTATUS Status;
 
-    lResult = RegCreateKeyExW(HKEY_LOCAL_MACHINE,
-                              L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
-                              0,
-                              NULL,
-                              REG_OPTION_NON_VOLATILE,
-                              KEY_SET_VALUE,
-                              NULL,
-                              &hKey,
-                              NULL);
+    lResult = RegCreateKeyExW(HKEY_LOCAL_MACHINE, WINLOGON_KEY, 0, NULL, REG_OPTION_NON_VOLATILE,
+                              KEY_QUERY_VALUE | KEY_SET_VALUE, NULL, &hKey, NULL);
     if (lResult != ERROR_SUCCESS)
     {
         ERR("OnToggleRequireLogon: Failed to open or create Winlogon registry key. Error code: %ld\n", lResult);
-        return; 
+        CheckDlgButton(hwndDlg, IDC_USERS_STARTUP_REQUIRE,
+                       IsDlgButtonChecked(hwndDlg, IDC_USERS_STARTUP_REQUIRE) == BST_CHECKED ? BST_UNCHECKED : BST_CHECKED);
+        return;
     }
 
-    bIsChecked = IsDlgButtonChecked(hwndDlg, IDC_USERS_STARTUP_REQUIRE) == BST_CHECKED;
-    pszAutoAdminLogonValue = bIsChecked ? L"0" : L"1";
-
-    lResult = RegSetValueExW(hKey,
-                             L"AutoAdminLogon",
-                             0,
-                             REG_SZ, 
-                             (const BYTE*)pszAutoAdminLogonValue,
-                             2 * sizeof(WCHAR));
-    if (lResult != ERROR_SUCCESS)
+    if (IsDlgButtonChecked(hwndDlg, IDC_USERS_STARTUP_REQUIRE) == BST_CHECKED)
     {
-        ERR("OnToggleRequireLogon: Failed to set AutoAdminLogon registry value. Error code: %ld\n", lResult);
+        RegSetValueExW(hKey, L"AutoAdminLogon", 0, REG_SZ, (const BYTE *)L"0", sizeof(L"0"));
+        RegDeleteValueW(hKey, L"DefaultPassword");
+        StoreDefaultPassword(NULL);
+        RegCloseKey(hKey);
+        return;
     }
 
+    ZeroMemory(&Data, sizeof(Data));
+    hwndLV = GetDlgItem(hwndDlg, IDC_USERS_LIST);
+    nItem = ListView_GetNextItem(hwndLV, -1, LVNI_SELECTED);
+    if (nItem != -1)
+    {
+        ListView_GetItemText(hwndLV, nItem, 0, Data.UserName, ARRAYSIZE(Data.UserName));
+    }
+    else
+    {
+        Size = sizeof(Data.UserName) - sizeof(WCHAR);
+        if (RegQueryValueExW(hKey, L"DefaultUserName", NULL, NULL, (PBYTE)Data.UserName, &Size) != ERROR_SUCCESS)
+            Data.UserName[0] = UNICODE_NULL;
+    }
+
+    if (DialogBoxParamW(hApplet, MAKEINTRESOURCEW(IDD_AUTOLOGON), hwndDlg, AutoLogonDlgProc,
+                        (LPARAM)&Data) != IDOK)
+    {
+        CheckDlgButton(hwndDlg, IDC_USERS_STARTUP_REQUIRE, BST_CHECKED);
+        RegCloseKey(hKey);
+        SecureZeroMemory(&Data, sizeof(Data));
+        return;
+    }
+
+    Status = StoreDefaultPassword(Data.Password);
+    if (Status != 0)
+    {
+        ERR("OnToggleRequireLogon: LsaStorePrivateData failed (0x%08lx)\n", Status);
+        ShowNetworkError(LsaNtStatusToWinError(Status));
+        CheckDlgButton(hwndDlg, IDC_USERS_STARTUP_REQUIRE, BST_CHECKED);
+        RegCloseKey(hKey);
+        SecureZeroMemory(&Data, sizeof(Data));
+        return;
+    }
+    if (!GetComputerNameW(Computer, &ComputerChars))
+        Computer[0] = UNICODE_NULL;
+    RegSetValueExW(hKey, L"DefaultUserName", 0, REG_SZ, (const BYTE *)Data.UserName,
+                   (DWORD)((wcslen(Data.UserName) + 1) * sizeof(WCHAR)));
+    RegSetValueExW(hKey, L"DefaultDomainName", 0, REG_SZ, (const BYTE *)Computer,
+                   (DWORD)((wcslen(Computer) + 1) * sizeof(WCHAR)));
+    RegDeleteValueW(hKey, L"DefaultPassword");      /* the secret replaces a plain-text copy */
+    lResult = RegSetValueExW(hKey, L"AutoAdminLogon", 0, REG_SZ, (const BYTE *)L"1", sizeof(L"1"));
+    if (lResult != ERROR_SUCCESS)
+        ERR("OnToggleRequireLogon: Failed to set AutoAdminLogon registry value. Error code: %ld\n", lResult);
     RegCloseKey(hKey);
+    SecureZeroMemory(&Data, sizeof(Data));
 }
 
 INT_PTR CALLBACK

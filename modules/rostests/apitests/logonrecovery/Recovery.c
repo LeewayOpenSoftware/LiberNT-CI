@@ -87,6 +87,11 @@ DWORD __stdcall TestWluiExiting(handle_t h, GUID LaunchId, WLUI_EXIT_REASON Reas
     CheckId(&LaunchId); g_ExitReason = Reason; SetEvent(g_ExitEvent); return ERROR_SUCCESS;
 }
 
+DWORD __stdcall TestWluiCommandShown(handle_t h, GUID LaunchId, DWORD Sequence)
+{
+    return ERROR_NOT_READY;     /* only the host role reports a shown command */
+}
+
 /* ---- helpers --------------------------------------------------------------- */
 
 static PSID
