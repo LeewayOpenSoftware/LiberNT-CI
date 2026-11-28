@@ -1558,10 +1558,6 @@ DetectBusMouse(
 }
 #endif /* _M_IX86 */
 
-// Implemented in pcvesa.c, returns the VESA version
-USHORT  BiosIsVesaSupported(VOID);
-BOOLEAN BiosIsVesaDdcSupported(VOID);
-BOOLEAN BiosVesaReadEdid(VOID);
 
 static VOID
 DetectDisplayController(PCONFIGURATION_COMPONENT_DATA BusKey)
@@ -1653,14 +1649,10 @@ DetectDisplayController(PCONFIGURATION_COMPONENT_DATA BusKey)
     /* FIXME: Add display peripheral (monitor) data */
     if (VesaVersion != 0)
     {
-        if (BiosIsVesaDdcSupported())
-        {
-            TRACE("VESA/DDC supported!\n");
-            if (BiosVesaReadEdid())
-            {
-                TRACE("EDID data read successfully!\n");
-            }
-        }
+        UCHAR Edid[128];
+
+        if (BiosVesaGetEdid(Edid))
+            TRACE("EDID data read successfully!\n");
     }
 }
 

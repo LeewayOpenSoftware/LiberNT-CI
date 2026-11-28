@@ -48,6 +48,13 @@ VOID PcVideoPrepareForReactOS(VOID);
 BOOLEAN
 PcVideoInitializeBootFramebuffer(
     _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBuffer);
+
+/* pcvesa.c */
+USHORT BiosIsVesaSupported(VOID);
+BOOLEAN BiosIsVesaDdcSupported(VOID);
+BOOLEAN BiosVesaReadEdid(VOID);
+/* The monitor's EDID, read through VBE/DDC once per boot; FALSE when absent or invalid. */
+BOOLEAN BiosVesaGetEdid(_Out_writes_bytes_(128) PUCHAR Edid);
 VOID PcPrepareForReactOS(VOID);
 
 PFREELDR_MEMORY_DESCRIPTOR PcMemGetMemoryMap(ULONG *MemoryMapSize);

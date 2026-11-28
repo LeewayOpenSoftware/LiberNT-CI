@@ -266,6 +266,37 @@ BiosIsVesaDdcSupported(VOID)
     return (Regs.b.ah == 0);
 }
 
+/* The EDID is read once per boot; a corrupt DDC read can carry a valid header; the 128 bytes must sum to 0 */
+BOOLEAN
+BiosVesaGetEdid(
+    _Out_writes_bytes_(128) PUCHAR Edid)
+{
+    static const UCHAR Header[8] = { 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00 };
+    static UCHAR Cached[128];
+    static enum { EdidNotRead, EdidValid, EdidMissing } State = EdidNotRead;
+    UCHAR Sum = 0;
+    ULONG i;
+
+    if (State == EdidNotRead)
+    {
+        State = EdidMissing;
+        if (BiosIsVesaDdcSupported() && BiosVesaReadEdid())
+        {
+            RtlCopyMemory(Cached, (PVOID)BIOSCALLBUFFER, sizeof(Cached));
+            for (i = 0; i < sizeof(Cached); i++)
+                Sum += Cached[i];
+            if (Sum == 0 && RtlCompareMemory(Cached, Header, sizeof(Header)) == sizeof(Header))
+                State = EdidValid;
+            else
+                WARN("EDID ignored: bad header or checksum\n");
+        }
+    }
+    if (State != EdidValid)
+        return FALSE;
+    RtlCopyMemory(Edid, Cached, sizeof(Cached));
+    return TRUE;
+}
+
 BOOLEAN
 BiosVesaReadEdid(VOID)
 {
