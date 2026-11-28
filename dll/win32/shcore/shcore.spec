@@ -87,7 +87,7 @@
 # @ stub SHTaskPoolGetUniqueContext
 # @ stub SHTaskPoolQueueTask
 # @ stub SHTaskPoolSetThreadReuseAllowed
-@ stdcall SHUnicodeToAnsi(wstr ptr ptr)
+@ stdcall SHUnicodeToAnsi(wstr ptr long)
 @ stdcall SHUnicodeToUnicode(wstr ptr long)
 @ stdcall SetCurrentProcessExplicitAppUserModelID(wstr)
 @ stdcall SetProcessDpiAwareness(long)

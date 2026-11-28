@@ -2,6 +2,7 @@
 #define STANDALONE
 #include <apitest.h>
 
+extern void func_apisethosts(void);
 extern void func_apisets(void);
 extern void func_win11_fallback(void);
 extern void func_apisetmap(void);
@@ -10,6 +11,7 @@ extern void func_win32versionvalue_child(void);
 
 const struct test winetest_testlist[] =
 {
+    { "apisethosts", func_apisethosts },
     { "apisets", func_apisets },
     { "win11_fallback", func_win11_fallback },
     { "apisetmap", func_apisetmap },
