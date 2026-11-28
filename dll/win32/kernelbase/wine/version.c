@@ -1700,9 +1700,7 @@ GetPackagePathByFullName(const WCHAR *name, UINT32 *len, WCHAR *path)
     if (!len || !name)
         return ERROR_INVALID_PARAMETER;
 
-    FIXME("(%s %p %p): stub\n", debugstr_w(name), len, path);
+    FIXME( "(%s %p %p): stub\n", debugstr_w(name), len, path );
 
     return APPMODEL_ERROR_NO_PACKAGE;
 }
-
-/* Package identity conversion implementations live in PackageFamily.c. */
