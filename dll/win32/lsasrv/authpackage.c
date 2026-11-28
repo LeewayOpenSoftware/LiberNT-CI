@@ -2549,9 +2549,6 @@ done:
     }
 
     TRACE("LsapLogonUser done (Status 0x%08lx)\n", Status);
-    if (!NT_SUCCESS(Status))
-        ERR("LSA-DIAG: LsapLogonUser context %p failed 0x%08lx (sub 0x%08lx)\n", LogonContext, Status,
-            RequestMsg->LogonUser.Reply.SubStatus);
 
     return Status;
 }
