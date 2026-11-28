@@ -975,7 +975,9 @@ WlHlTryAutoLogon(VOID)
     Chars = ARRAYSIZE(Domain);
     if (Domain[0] == UNICODE_NULL && !GetComputerNameW(Domain, &Chars))
         Domain[0] = UNICODE_NULL;
-    if (!WlHlLsaDefaultPassword(Password, ARRAYSIZE(Password)))
+    /* DefaultPassword belongs to DefaultUserName; the CD setup account has an empty password. */
+    Password[0] = UNICODE_NULL;
+    if (Registry && !WlHlLsaDefaultPassword(Password, ARRAYSIZE(Password)))
         WlHlWinlogonString(L"DefaultPassword", Password, ARRAYSIZE(Password));
 
     ZeroMemory(&Logon, sizeof(Logon));
@@ -1208,25 +1210,37 @@ WlHlOnlyAccountIsBlank(
             break;
         for (i = 0; Buffer != NULL && i < Count && Listed < 2; i++)
         {
-            Info = NULL;
-            if (!NT_SUCCESS(SamOpenUser(Domain, USER_READ_GENERAL | USER_READ_ACCOUNT, Buffer[i].RelativeId, &User)))
+            BOOL Shown = TRUE, ThisBlank = FALSE;
+
+            if (WlHlAccountHidden(&Buffer[i].Name))
                 continue;
-            if (NT_SUCCESS(SamQueryInformationUser(User, UserLogonUIInformation, (PVOID *)&Info)) && Info &&
-                !Info->AccountIsDisabled && !WlHlAccountHidden(&Buffer[i].Name))
+            /* Fail closed: an account SAM does not describe counts as listed, with a password. */
+            Info = NULL;
+            if (NT_SUCCESS(SamOpenUser(Domain, USER_READ_GENERAL | USER_READ_ACCOUNT, Buffer[i].RelativeId, &User)))
             {
-                if (Listed++ == 0)
+                if (NT_SUCCESS(SamQueryInformationUser(User, UserLogonUIInformation, (PVOID *)&Info)) && Info)
                 {
-                    Blank = Info->PasswordIsBlank;
-                    WlHlCopyString(&Buffer[i].Name, Name, Chars);
+                    Shown = !Info->AccountIsDisabled;
+                    ThisBlank = Info->PasswordIsBlank;
                 }
+                if (Info)
+                    SamFreeMemory(Info);
+                SamCloseHandle(User);
             }
-            if (Info)
-                SamFreeMemory(Info);
-            SamCloseHandle(User);
+            if (!Shown)
+                continue;
+            if (Listed++ == 0)
+            {
+                Blank = ThisBlank;
+                WlHlCopyString(&Buffer[i].Name, Name, Chars);
+            }
         }
         if (Buffer)
             SamFreeMemory(Buffer);
     } while (Status == STATUS_MORE_ENTRIES && Listed < 2);
+    /* A page the enumeration could not read may hold more accounts: no automatic sign-in. */
+    if (!NT_SUCCESS(Status))
+        Blank = FALSE;
 
 done:
     if (Domain)
@@ -1260,6 +1274,11 @@ WlHlTryBlankLogon(VOID)
     if (!WlHlDisableCad() || WlHlDomainJoined() || WlHlHasLegalNotice() ||
         WlHlPolicyDword(L"DontDisplayLastUserName", 0) != 0)
         return FALSE;
+    if (WlHlWinlogonNumber(L"IgnoreShiftOverride", 0) == 0 && (GetAsyncKeyState(VK_SHIFT) & 0x8000))
+    {
+        ERR("WL: blank-password sign-in skipped: Shift is held\n");
+        return FALSE;
+    }
     if (!WlHlOnlyAccountIsBlank(User, ARRAYSIZE(User)) || !GetComputerNameW(Domain, &Chars))
         return FALSE;
 
