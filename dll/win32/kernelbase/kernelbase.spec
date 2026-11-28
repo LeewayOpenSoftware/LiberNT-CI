@@ -35,8 +35,8 @@
 @ stdcall AllocConsole()
 @ stdcall AllocateAndInitializeSid(ptr long long long long long long long long long ptr)
 @ stdcall AllocateLocallyUniqueId(ptr)
-@ stdcall AllocateUserPhysicalPages(long ptr ptr)
-@ stdcall -version=0x600+ AllocateUserPhysicalPagesNuma(long ptr ptr long)
+@ stdcall AllocateUserPhysicalPages(ptr ptr ptr)
+@ stdcall -version=0x600+ AllocateUserPhysicalPagesNuma(ptr ptr ptr long)
 @ stdcall AppContainerFreeMemory(ptr)
 @ stdcall AppContainerLookupMoniker(ptr ptr)
 @ stdcall AppContainerRegisterSid(ptr wstr wstr)
@@ -329,7 +329,7 @@
 @ stdcall -version=0x600+ FreeLibraryWhenCallbackReturns(ptr ptr) ntdll.TpCallbackUnloadDllOnCompletion
 @ stdcall FreeResource(long) kernel32.FreeResource
 @ stdcall FreeSid(ptr)
-@ stdcall FreeUserPhysicalPages(long long long)
+@ stdcall FreeUserPhysicalPages(ptr ptr ptr)
 @ stdcall GenerateConsoleCtrlEvent(long long)
 @ stdcall GetACP() kernel32.GetACP
 @ stdcall GetAcceptLanguagesA(ptr ptr)

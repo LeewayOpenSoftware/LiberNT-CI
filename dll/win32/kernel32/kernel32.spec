@@ -18,7 +18,7 @@
 @ stdcall AddVectoredExceptionHandler(long ptr) ntdll.RtlAddVectoredExceptionHandler
 @ stdcall -version=0x600+ AdjustCalendarDate(ptr long long)
 @ stdcall AllocConsole() kernelbase.AllocConsole
-@ stdcall AllocateUserPhysicalPages(long ptr ptr) kernelbase.AllocateUserPhysicalPages
+@ stdcall AllocateUserPhysicalPages(ptr ptr ptr) kernelbase.AllocateUserPhysicalPages
 @ stdcall -version=0x600+ AllocateUserPhysicalPagesNuma(ptr ptr ptr long) kernelbase.AllocateUserPhysicalPagesNuma
 @ stdcall -version=0x602+ AppXFreeMemory(ptr) kernelbase.AppXFreeMemory
 @ stdcall -version=0x602+ AppXGetPackageSid(wstr ptr) kernelbase.AppXGetPackageSid
@@ -384,7 +384,7 @@
 @ stdcall FreeLibraryAndExitThread(long long)
 @ stdcall -version=0x600+ FreeLibraryWhenCallbackReturns(ptr ptr) ntdll.TpCallbackUnloadDllOnCompletion
 @ stdcall FreeResource(long)
-@ stdcall FreeUserPhysicalPages(long long long) kernelbase.FreeUserPhysicalPages
+@ stdcall FreeUserPhysicalPages(ptr ptr ptr) kernelbase.FreeUserPhysicalPages
 @ stdcall GenerateConsoleCtrlEvent(long long) kernelbase.GenerateConsoleCtrlEvent
 @ stdcall GetACP()
 @ stdcall -version=0x601+ GetActiveProcessorCount(long)
