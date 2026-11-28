@@ -1086,6 +1086,11 @@ InstallEfiLoaderFiles(
 #define BCD_OSLOADER_OBJECT         L"{354fa6e5-5e45-49af-91bf-1fd2754e470a}"
 #define BCD_APPLICATION_DEVICE      L"11000001"
 #define BCD_OS_DEVICE               L"21000001"
+#define BCD_APPLICATION_PATH        L"12000002"
+#define BCD_DESCRIPTION             L"12000004"
+#define BCD_PREFERRED_LOCALE        L"12000005"
+#define BCD_SYSTEM_ROOT             L"22000002"
+#define BCD_OS_LOADER_FILE          L"system32\\winload.efi"
 #define BCD_TEMPLATE_PATH           L"Windows\\System32\\config\\BCD-Template"
 #define BCD_BOOT_MANAGER_PATTERN    L"boot*.efi"
 #define BCD_RELATIVE_PARTITION      L"partition("
@@ -1273,6 +1278,7 @@ GetBcdPartitionElement(
 static
 NTSTATUS
 SetBcdElement(
+    _In_ PCWSTR Store,
     _In_ PCWSTR Object,
     _In_ PCWSTR Element,
     _In_reads_bytes_(BCD_DEVICE_ELEMENT_SIZE) PUCHAR Data)
@@ -1285,8 +1291,8 @@ SetBcdElement(
     NTSTATUS Status;
 
     RtlStringCchPrintfW(Path, ARRAYSIZE(Path),
-                        L"\\Registry\\Machine\\SetupBcd\\Objects\\%s\\Elements\\%s",
-                        Object, Element);
+                        L"\\Registry\\Machine\\%s\\Objects\\%s\\Elements\\%s",
+                        Store, Object, Element);
     RtlInitUnicodeString(&KeyName, Path);
     InitializeObjectAttributes(&ObjectAttributes, &KeyName, OBJ_CASE_INSENSITIVE, NULL, NULL);
 
@@ -1324,31 +1330,52 @@ GetPartitionDeviceNumber(
 
 static
 NTSTATUS
-InstallBcdStore(
-    _In_ PCUNICODE_STRING SystemRootPath,
-    _In_ PCWSTR TemplatePath,
-    _In_ PCWSTR BootManagerPath,
-    _In_ PCUNICODE_STRING DestinationArcPath)
+SetBcdStringElement(
+    _In_ PCWSTR Store,
+    _In_ PCWSTR Object,
+    _In_ PCWSTR Element,
+    _In_ PCWSTR Value)
 {
-    static UNICODE_STRING MountPoint = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SetupBcd");
-    OBJECT_ATTRIBUTES KeyAttributes, FileAttributes;
-    UCHAR SystemElement[BCD_DEVICE_ELEMENT_SIZE];
-    UCHAR OsElement[BCD_DEVICE_ELEMENT_SIZE];
-    STORAGE_DEVICE_NUMBER DeviceNumber;
-    UNICODE_STRING FileName;
-    UNICODE_STRING NtPath;
-    WCHAR StorePath[MAX_PATH];
+    static UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"Element");
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING KeyName;
     WCHAR Path[MAX_PATH];
-    PCWSTR Text;
-    ULONG Disk, Number;
-    BOOLEAN PrivilegeSet[2] = {FALSE, FALSE};
+    HANDLE Key;
     NTSTATUS Status;
 
-    Status = GetPartitionDeviceNumber(SystemRootPath, &DeviceNumber);
+    RtlStringCchPrintfW(Path, ARRAYSIZE(Path),
+                        L"\\Registry\\Machine\\%s\\Objects\\%s\\Elements\\%s",
+                        Store, Object, Element);
+    RtlInitUnicodeString(&KeyName, Path);
+    InitializeObjectAttributes(&ObjectAttributes, &KeyName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+
+    Status = NtCreateKey(&Key, KEY_SET_VALUE, &ObjectAttributes, 0, NULL, REG_OPTION_BACKUP_RESTORE, NULL);
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Status = GetBcdPartitionElement(DeviceNumber.DeviceNumber, DeviceNumber.PartitionNumber, FALSE, SystemElement);
+    Status = NtSetValueKey(Key, &ValueName, 0, REG_SZ, (PVOID)Value,
+                           (ULONG)(wcslen(Value) + 1) * sizeof(WCHAR));
+    NtClose(Key);
+    return Status;
+}
+
+/* The BCD device element of the partition a setup ARC path names; an empty or NT-style path means the system
+ * partition itself. */
+static
+NTSTATUS
+GetArcPathBcdElement(
+    _In_ PCUNICODE_STRING SystemRootPath,
+    _In_ PCUNICODE_STRING DestinationArcPath,
+    _Out_writes_bytes_(BCD_DEVICE_ELEMENT_SIZE) PUCHAR OsElement)
+{
+    STORAGE_DEVICE_NUMBER DeviceNumber;
+    UNICODE_STRING NtPath;
+    WCHAR Path[MAX_PATH];
+    PCWSTR Text;
+    ULONG Disk, Number;
+    NTSTATUS Status;
+
+    Status = GetPartitionDeviceNumber(SystemRootPath, &DeviceNumber);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -1383,7 +1410,103 @@ InstallBcdStore(
         Number = wcstoul(Text + ARRAYSIZE(BCD_PARTITION_PREFIX) - 1, NULL, 10);
     }
 
-    Status = GetBcdPartitionElement(Disk, Number, *DestinationArcPath->Buffer != UNICODE_NULL && *DestinationArcPath->Buffer != OBJ_NAME_PATH_SEPARATOR, OsElement);
+    return GetBcdPartitionElement(Disk, Number, *DestinationArcPath->Buffer != UNICODE_NULL && *DestinationArcPath->Buffer != OBJ_NAME_PATH_SEPARATOR, OsElement);
+}
+
+#define BCD_STORE_LIVE      0x1     /* the store is the system's, loaded at \Registry\Machine\BCD00000000 */
+#define BCD_STORE_BACKUP    0x2     /* keep the previous store as BCD.bak */
+
+/* Replaces the whole content of a loaded store with a hive file. */
+static
+NTSTATUS
+RestoreStoreFromFile(
+    _In_ HANDLE Key,
+    _In_ PCWSTR HivePath)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    UNICODE_STRING Name;
+    HANDLE File;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&Name, HivePath);
+    InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = NtOpenFile(&File, GENERIC_READ | SYNCHRONIZE, &ObjectAttributes, &IoStatusBlock,
+                        FILE_SHARE_READ, FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = NtRestoreKey(Key, File, REG_FORCE_RESTORE);
+    NtClose(File);
+    return Status;
+}
+
+/* The loaded system store cannot be copied or loaded again: save it through the registry and rebuild it in place. */
+static
+NTSTATUS
+RebuildLoadedStore(
+    _In_ HANDLE Key,
+    _In_opt_ PCWSTR BackupPath,
+    _In_ PCWSTR TemplatePath)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    UNICODE_STRING Name;
+    HANDLE File;
+    NTSTATUS Status;
+
+    if (BackupPath)
+    {
+        RtlInitUnicodeString(&Name, BackupPath);
+        InitializeObjectAttributes(&ObjectAttributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        Status = NtCreateFile(&File, GENERIC_WRITE | SYNCHRONIZE, &ObjectAttributes, &IoStatusBlock, NULL,
+                              FILE_ATTRIBUTE_NORMAL, 0, FILE_OVERWRITE_IF,
+                              FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE, NULL, 0);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Status = NtSaveKey(Key, File);
+        NtClose(File);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    return RestoreStoreFromFile(Key, TemplatePath);
+}
+
+/* Build the store in \EFI\LiberNT\Boot of the system partition from the template and point it at that partition
+ * and at the OS partition, then copy the boot manager beside it (last, so a failed store leaves the old pair).
+ * SystemDirectory (e.g. \Windows), Locale and Description replace the template's values when given. */
+static
+NTSTATUS
+InstallBcdStore(
+    _In_ PCUNICODE_STRING SystemRootPath,
+    _In_ PCWSTR TemplatePath,
+    _In_ PCWSTR BootManagerPath,
+    _In_reads_bytes_(BCD_DEVICE_ELEMENT_SIZE) PUCHAR OsElement,
+    _In_opt_ PCWSTR SystemDirectory,
+    _In_opt_ PCWSTR Locale,
+    _In_opt_ PCWSTR Description,
+    _In_ ULONG Flags)
+{
+    static UNICODE_STRING MountPoint = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SetupBcd");
+    static UNICODE_STRING SystemStore = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\BCD00000000");
+    OBJECT_ATTRIBUTES KeyAttributes, FileAttributes;
+    UCHAR SystemElement[BCD_DEVICE_ELEMENT_SIZE];
+    STORAGE_DEVICE_NUMBER DeviceNumber;
+    UNICODE_STRING FileName;
+    WCHAR StorePath[MAX_PATH];
+    WCHAR BackupPath[MAX_PATH];
+    WCHAR Path[MAX_PATH];
+    BOOLEAN PrivilegeSet[2] = {FALSE, FALSE};
+    BOOLEAN Live = !!(Flags & BCD_STORE_LIVE), Loaded = FALSE, Rebuilt = FALSE;
+    PCWSTR Store = Live ? L"BCD00000000" : L"SetupBcd";
+    HANDLE Key = NULL;
+    NTSTATUS Status;
+
+    Status = GetPartitionDeviceNumber(SystemRootPath, &DeviceNumber);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = GetBcdPartitionElement(DeviceNumber.DeviceNumber, DeviceNumber.PartitionNumber, FALSE, SystemElement);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -1392,18 +1515,23 @@ InstallBcdStore(
     if (!NT_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_COLLISION)
         return Status;
 
-    CombinePaths(Path, ARRAYSIZE(Path), 2, SystemRootPath->Buffer, L"EFI\\LiberNT\\Boot\\bootmgfw.efi");
-    Status = SetupCopyFile(BootManagerPath, Path, FALSE);
-    if (!NT_SUCCESS(Status))
-        return Status;
-
     CombinePaths(StorePath, ARRAYSIZE(StorePath), 2, SystemRootPath->Buffer, L"EFI\\LiberNT\\Boot\\BCD");
-    Status = SetupCopyFile(TemplatePath, StorePath, FALSE);
-    if (!NT_SUCCESS(Status))
-        return Status;
+    CombinePaths(BackupPath, ARRAYSIZE(BackupPath), 2, SystemRootPath->Buffer, L"EFI\\LiberNT\\Boot\\BCD.bak");
+    if (!Live)
+    {
+        if ((Flags & BCD_STORE_BACKUP) && DoesFileExist(NULL, StorePath))
+        {
+            Status = SetupCopyFile(StorePath, BackupPath, FALSE);
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
+        Status = SetupCopyFile(TemplatePath, StorePath, FALSE);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
 
     RtlInitUnicodeString(&FileName, StorePath);
-    InitializeObjectAttributes(&KeyAttributes, &MountPoint, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    InitializeObjectAttributes(&KeyAttributes, Live ? &SystemStore : &MountPoint, OBJ_CASE_INSENSITIVE, NULL, NULL);
     InitializeObjectAttributes(&FileAttributes, &FileName, OBJ_CASE_INSENSITIVE, NULL, NULL);
 
     Status = RtlAdjustPrivilege(SE_RESTORE_PRIVILEGE, TRUE, FALSE, &PrivilegeSet[0]);
@@ -1413,23 +1541,113 @@ InstallBcdStore(
     Status = RtlAdjustPrivilege(SE_BACKUP_PRIVILEGE, TRUE, FALSE, &PrivilegeSet[1]);
     if (NT_SUCCESS(Status))
     {
-        Status = NtLoadKey(&KeyAttributes, &FileAttributes);
-        if (NT_SUCCESS(Status))
+        if (Live)
         {
-            Status = SetBcdElement(BCD_BOOTMGR_OBJECT, BCD_APPLICATION_DEVICE, SystemElement);
+            Status = NtOpenKey(&Key, KEY_ALL_ACCESS, &KeyAttributes);
             if (NT_SUCCESS(Status))
-                Status = SetBcdElement(BCD_OSLOADER_OBJECT, BCD_APPLICATION_DEVICE, OsElement);
-            if (NT_SUCCESS(Status))
-                Status = SetBcdElement(BCD_OSLOADER_OBJECT, BCD_OS_DEVICE, OsElement);
-
-            NtUnloadKey(&KeyAttributes);
+            {
+                Status = RebuildLoadedStore(Key, (Flags & BCD_STORE_BACKUP) ? BackupPath : NULL, TemplatePath);
+                Rebuilt = NT_SUCCESS(Status);
+            }
+        }
+        else
+        {
+            Status = NtLoadKey(&KeyAttributes, &FileAttributes);
+            Loaded = NT_SUCCESS(Status);
         }
 
+        if (NT_SUCCESS(Status))
+        {
+            Status = SetBcdElement(Store, BCD_BOOTMGR_OBJECT, BCD_APPLICATION_DEVICE, SystemElement);
+            if (NT_SUCCESS(Status))
+                Status = SetBcdElement(Store, BCD_OSLOADER_OBJECT, BCD_APPLICATION_DEVICE, OsElement);
+            if (NT_SUCCESS(Status))
+                Status = SetBcdElement(Store, BCD_OSLOADER_OBJECT, BCD_OS_DEVICE, OsElement);
+            if (NT_SUCCESS(Status) && SystemDirectory)
+            {
+                CombinePaths(Path, ARRAYSIZE(Path), 2, SystemDirectory, BCD_OS_LOADER_FILE);
+                Status = SetBcdStringElement(Store, BCD_OSLOADER_OBJECT, BCD_APPLICATION_PATH, Path);
+                if (NT_SUCCESS(Status))
+                    Status = SetBcdStringElement(Store, BCD_OSLOADER_OBJECT, BCD_SYSTEM_ROOT, SystemDirectory);
+            }
+            if (NT_SUCCESS(Status) && Locale)
+            {
+                Status = SetBcdStringElement(Store, BCD_BOOTMGR_OBJECT, BCD_PREFERRED_LOCALE, Locale);
+                if (NT_SUCCESS(Status))
+                    Status = SetBcdStringElement(Store, BCD_OSLOADER_OBJECT, BCD_PREFERRED_LOCALE, Locale);
+            }
+            if (NT_SUCCESS(Status) && Description)
+                Status = SetBcdStringElement(Store, BCD_OSLOADER_OBJECT, BCD_DESCRIPTION, Description);
+            /* The running system must not keep a bare template: put the saved store back. */
+            if (!NT_SUCCESS(Status) && Rebuilt && (Flags & BCD_STORE_BACKUP) &&
+                !NT_SUCCESS(RestoreStoreFromFile(Key, BackupPath)))
+            {
+                DPRINT1("Restoring the boot store from %S failed\n", BackupPath);
+            }
+            if (Key)
+                NtFlushKey(Key);
+        }
+
+        if (Loaded)
+            NtUnloadKey(&KeyAttributes);
+        if (Key)
+            NtClose(Key);
         RtlAdjustPrivilege(SE_BACKUP_PRIVILEGE, PrivilegeSet[1], FALSE, &PrivilegeSet[1]);
     }
 
     RtlAdjustPrivilege(SE_RESTORE_PRIVILEGE, PrivilegeSet[0], FALSE, &PrivilegeSet[0]);
-    return Status;
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    CombinePaths(Path, ARRAYSIZE(Path), 2, SystemRootPath->Buffer, L"EFI\\LiberNT\\Boot\\bootmgfw.efi");
+    return SetupCopyFile(BootManagerPath, Path, FALSE);
+}
+
+/* Whether the store on this system partition is the one loaded for the running system: hivelist names the file
+ * behind \Registry\Machine\BCD00000000 (smss may have loaded \Boot\BCD instead, or another partition's). */
+static
+BOOLEAN
+IsLoadedSystemStore(
+    _In_ PCUNICODE_STRING SystemRootPath)
+{
+    static const WCHAR StoreFile[] = L"\\EFI\\LiberNT\\Boot\\BCD";
+    UNICODE_STRING ListKey = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\hivelist");
+    UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"\\REGISTRY\\MACHINE\\BCD00000000");
+    STORAGE_DEVICE_NUMBER Target, Loaded;
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING Device;
+    HANDLE Key;
+    ULONG Length, Chars, Suffix = ARRAYSIZE(StoreFile) - 1;
+    PWCHAR File;
+    NTSTATUS Status;
+    union
+    {
+        KEY_VALUE_PARTIAL_INFORMATION Info;
+        UCHAR Buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + MAX_PATH * sizeof(WCHAR)];
+    } Value;
+
+    InitializeObjectAttributes(&ObjectAttributes, &ListKey, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    if (!NT_SUCCESS(NtOpenKey(&Key, KEY_QUERY_VALUE, &ObjectAttributes)))
+        return FALSE;
+    Status = NtQueryValueKey(Key, &ValueName, KeyValuePartialInformation,
+                             &Value, sizeof(Value) - sizeof(WCHAR), &Length);
+    NtClose(Key);
+    if (!NT_SUCCESS(Status) || Value.Info.Type != REG_SZ || Value.Info.DataLength < sizeof(WCHAR))
+        return FALSE;
+
+    /* \Device\HarddiskVolumeN\EFI\LiberNT\Boot\BCD: our store's name, on the target partition */
+    File = (PWCHAR)Value.Info.Data;
+    File[Value.Info.DataLength / sizeof(WCHAR)] = UNICODE_NULL;
+    Chars = (ULONG)wcslen(File);
+    if (Chars <= Suffix || _wcsicmp(File + Chars - Suffix, StoreFile) != 0)
+        return FALSE;
+    File[Chars - Suffix] = UNICODE_NULL;
+    RtlInitUnicodeString(&Device, File);
+
+    return NT_SUCCESS(GetPartitionDeviceNumber(SystemRootPath, &Target)) &&
+           NT_SUCCESS(GetPartitionDeviceNumber(&Device, &Loaded)) &&
+           Target.DeviceNumber == Loaded.DeviceNumber &&
+           Target.PartitionNumber == Loaded.PartitionNumber;
 }
 
 static
@@ -1777,6 +1995,8 @@ InstallFirmwareBootEntry(
             if (Order[i] != Number)
                 Order[j++] = Order[i];
         }
+        if (Options & BOOT_OPTION_ADD_LAST)
+            Position = j;
         for (i = 0; AfterWindows && i < j; i++)
         {
             RtlStringCchPrintfW(Name, ARRAYSIZE(Name), L"Boot%04X", Order[i]);
@@ -1815,6 +2035,7 @@ InstallBcdFromTemplate(
     WCHAR SrcDir[MAX_PATH];
     WCHAR BootManagerPath[MAX_PATH];
     WCHAR FileName[MAX_PATH];
+    UCHAR OsElement[BCD_DEVICE_ELEMENT_SIZE];
     HANDLE DirectoryHandle;
     NTSTATUS EntryStatus;
     union
@@ -1855,7 +2076,9 @@ InstallBcdFromTemplate(
                        Entry.Info.FileNameLength / sizeof(WCHAR));
     CombinePaths(BootManagerPath, ARRAYSIZE(BootManagerPath), 2, SrcDir, FileName);
 
-    *Status = InstallBcdStore(SystemRootPath, TemplatePath, BootManagerPath, DestinationArcPath);
+    *Status = GetArcPathBcdElement(SystemRootPath, DestinationArcPath, OsElement);
+    if (NT_SUCCESS(*Status))
+        *Status = InstallBcdStore(SystemRootPath, TemplatePath, BootManagerPath, OsElement, NULL, NULL, NULL, 0);
     if (!NT_SUCCESS(*Status))
     {
         DPRINT1("Writing the boot configuration data failed (Status %lx)\n", *Status);
@@ -1920,6 +2143,115 @@ InstallEfiSystemPartition(
     if (!NT_SUCCESS(Status))
         DPRINT1("Writing 'freeldr.ini' failed (Status %lx)\n", Status);
     return Status;
+}
+
+#ifdef _M_IX86
+#define EFI_FALLBACK_FILE           L"EFI\\BOOT\\BOOTIA32.EFI"
+#else
+#define EFI_FALLBACK_FILE           L"EFI\\BOOT\\BOOTX64.EFI"
+#endif
+#define SYSTEM_BOOT_MANAGER_FILE    L"Boot\\EFI\\bootmgfw.efi"
+#define SYSTEM_BCD_TEMPLATE_FILE    L"System32\\config\\BCD-Template"
+
+/*
+ * Boot files of an installed system (bcdboot): the boot manager from <system>\Boot\EFI and a store from
+ * <system>\System32\config\BCD-Template go to \EFI\LiberNT\Boot of the system partition, with the OS loader on the
+ * system's own partition and directory; then the firmware boot entry (unless BOOT_OPTION_NO_FIRMWARE_ENTRY or not
+ * on UEFI firmware) and the removable-media fallback loader. The system partition must be FAT; a previous store
+ * is kept as BCD.bak. Other systems' boot files are never replaced: their directories are not touched, and a
+ * fallback loader that is not ours stays (*FallbackKept).
+ */
+NTSTATUS
+NTAPI
+InstallSystemBootFiles(
+    _In_ PCUNICODE_STRING SystemRootPath,
+    _In_ PCUNICODE_STRING SystemVolume,
+    _In_ PCWSTR SystemDirectory,
+    _In_opt_ PCWSTR Locale,
+    _In_opt_ PCWSTR Description,
+    _In_ ULONG_PTR Options,
+    _Out_opt_ PBOOLEAN FallbackKept)
+{
+    UCHAR OsElement[BCD_DEVICE_ELEMENT_SIZE];
+    STORAGE_DEVICE_NUMBER DeviceNumber;
+    WCHAR BootManagerPath[MAX_PATH];
+    WCHAR TemplatePath[MAX_PATH];
+    WCHAR OwnManagerPath[MAX_PATH];
+    WCHAR FallbackPath[MAX_PATH];
+    WCHAR Path[MAX_PATH];
+    WCHAR FileSystem[MAX_PATH + 1];
+    UNICODE_STRING RootPartition;
+    HANDLE Handle;
+    BOOLEAN FallbackOurs;
+    NTSTATUS Status;
+
+    if (FallbackKept)
+        *FallbackKept = FALSE;
+
+    CombinePaths(BootManagerPath, ARRAYSIZE(BootManagerPath), 3,
+                 SystemVolume->Buffer, SystemDirectory, SYSTEM_BOOT_MANAGER_FILE);
+    CombinePaths(TemplatePath, ARRAYSIZE(TemplatePath), 3,
+                 SystemVolume->Buffer, SystemDirectory, SYSTEM_BCD_TEMPLATE_FILE);
+    if (!DoesFileExist(NULL, BootManagerPath) || !DoesFileExist(NULL, TemplatePath))
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+
+    /* UEFI firmware reads FAT only: anything else would get an entry it cannot start */
+    RootPartition = *SystemRootPath;
+    TrimTrailingPathSeparators_UStr(&RootPartition);
+    Status = pOpenDeviceEx_UStr(&RootPartition, &Handle, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = GetFileSystemName_UStr(NULL, Handle, FileSystem, sizeof(FileSystem));
+    NtClose(Handle);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (_wcsicmp(FileSystem, L"FAT") != 0 && _wcsicmp(FileSystem, L"FAT32") != 0)
+        return STATUS_UNRECOGNIZED_VOLUME;
+
+    Status = GetPartitionDeviceNumber(SystemVolume, &DeviceNumber);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = GetBcdPartitionElement(DeviceNumber.DeviceNumber, DeviceNumber.PartitionNumber, FALSE, OsElement);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* Ours is the fallback loader that is missing, or the same file as our boot manager before or after this
+     * update (an older Orosi build is ours too); decided before the manager is replaced. */
+    CombinePaths(OwnManagerPath, ARRAYSIZE(OwnManagerPath), 2, SystemRootPath->Buffer, &EFI_BOOT_MANAGER_FILE[1]);
+    CombinePaths(FallbackPath, ARRAYSIZE(FallbackPath), 2, SystemRootPath->Buffer, EFI_FALLBACK_FILE);
+    FallbackOurs = !DoesFileExist(NULL, FallbackPath) ||
+                   (DoesFileExist(NULL, OwnManagerPath) && AreFilesIdentical(FallbackPath, OwnManagerPath)) ||
+                   AreFilesIdentical(FallbackPath, BootManagerPath);
+
+    /* The previous store stays as BCD.bak; the running system's store is rebuilt where smss loaded it. */
+    Status = InstallBcdStore(SystemRootPath, TemplatePath, BootManagerPath, OsElement,
+                             SystemDirectory, Locale, Description,
+                             BCD_STORE_BACKUP | (IsLoadedSystemStore(SystemRootPath) ? BCD_STORE_LIVE : 0));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (!(Options & BOOT_OPTION_NO_FIRMWARE_ENTRY) && IsUefiFirmware())
+    {
+        Status = InstallFirmwareBootEntry(SystemRootPath, Options);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    if (!FallbackOurs)
+    {
+        DPRINT1("Keep %S, which belongs to another operating system\n", FallbackPath);
+        if (FallbackKept)
+            *FallbackKept = TRUE;
+        return STATUS_SUCCESS;
+    }
+
+    CombinePaths(Path, ARRAYSIZE(Path), 2, SystemRootPath->Buffer, L"EFI\\BOOT");
+    Status = SetupCreateDirectory(Path);
+    if (!NT_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_COLLISION)
+        return Status;
+
+    return SetupCopyFile(OwnManagerPath, FallbackPath, FALSE);
 }
 
 static

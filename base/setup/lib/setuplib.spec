@@ -81,3 +81,4 @@
 
 ;; bootsup
 @ stdcall InstallBootManagerAndBootEntries(long ptr ptr ptr ptr)
+@ stdcall InstallSystemBootFiles(ptr ptr wstr wstr wstr ptr ptr)

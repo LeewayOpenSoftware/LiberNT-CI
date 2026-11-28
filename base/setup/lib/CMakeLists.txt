@@ -49,5 +49,6 @@ add_dependencies(setuplib xdk) # psdk
 set_module_type(setuplib nativedll)
 target_link_libraries(setuplib ext2lib vfatlib ntfslib btrfslib ${PSEH_LIB})
 add_importlibs(setuplib ntdll)
-add_cd_file(TARGET setuplib DESTINATION reactos/system32 NO_CAB FOR bootcd livecd)
+# Also in the installed system, where bcdboot uses its boot file installer.
+add_cd_file(TARGET setuplib DESTINATION reactos/system32 NO_CAB FOR all)
 add_cd_file(TARGET setuplib DESTINATION ${ARCH}/system32 FOR preinstall)
