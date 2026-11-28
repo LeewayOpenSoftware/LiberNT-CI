@@ -38,7 +38,6 @@ add_library(kernelbase MODULE
     VolumeInformation.c
     WerRegistration.c
     WerRuntime.c
-    W3.c
     Wow64Directory.c
     XState.c
     ${REACTOS_SOURCE_DIR}/sdk/lib/crt/string/wcsnlen.c

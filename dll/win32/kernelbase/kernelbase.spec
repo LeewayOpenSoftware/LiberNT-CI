@@ -425,8 +425,8 @@
 @ stdcall -version=0x600+ GetDynamicTimeZoneInformation(ptr)
 @ stdcall -version=0x602+ GetDynamicTimeZoneInformationEffectiveYears(ptr ptr ptr)
 @ stdcall -version=0x601+ GetEnabledXStateFeatures() kernel32.GetEnabledXStateFeatures
-@ stdcall GetEnvironmentStrings() GetEnvironmentStringsA
-@ stdcall GetEnvironmentStringsA()
+@ stdcall GetEnvironmentStrings()
+@ stdcall GetEnvironmentStringsA() GetEnvironmentStrings
 @ stdcall GetEnvironmentStringsW()
 @ stdcall GetEnvironmentVariableA(str ptr long)
 @ stdcall GetEnvironmentVariableW(wstr ptr long)
@@ -1121,8 +1121,8 @@
 @ stdcall SetProcessWorkingSetSize(long long long) kernel32.SetProcessWorkingSetSize
 @ stdcall -version=0x602+ SetThreadpoolTimerEx(ptr ptr long long) ntdll.TpSetTimerEx
 @ stdcall -version=0x602+ SetThreadpoolWaitEx(ptr long ptr ptr) ntdll.TpSetWaitEx
-@ stdcall SHExpandEnvironmentStringsA(str ptr long) kernel32.ExpandEnvironmentStringsA
-@ stdcall SHExpandEnvironmentStringsW(wstr ptr long) kernel32.ExpandEnvironmentStringsW
+@ stdcall SHExpandEnvironmentStringsA(str ptr long) ExpandEnvironmentStringsA
+@ stdcall SHExpandEnvironmentStringsW(wstr ptr long) ExpandEnvironmentStringsW
 @ stdcall SHLoadIndirectString(wstr ptr long ptr)
 @ stdcall SHRegCloseUSKey(ptr)
 @ stdcall SHRegCreateUSKeyA(str long long ptr long)

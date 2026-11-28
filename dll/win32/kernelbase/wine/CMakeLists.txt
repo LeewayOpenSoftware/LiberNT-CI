@@ -46,7 +46,6 @@ list(APPEND SOURCE_STATIC
     locale.c
     main.c
     path.c
-    process.c
     registry.c
     security.c
     string.c

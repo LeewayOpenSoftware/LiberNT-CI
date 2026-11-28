@@ -6,6 +6,7 @@ include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/subsys)
 list(APPEND SOURCE
     ComputerName.c
     debugger.c
+    Environment.c
     FileMapping.c
     SystemInfo.c
     VirtualMemory.c)
