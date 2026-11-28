@@ -87,14 +87,25 @@ INT WINAPI MulDiv( INT a, INT b, INT c )
  *          AppPolicyGetMediaFoundationCodecLoading (KERNELBASE.@)
  */
 
+static LONG app_policy(HANDLE token, void *policy, UINT32 value)
+{
+    TOKEN_TYPE type;
+    ULONG length;
+    NTSTATUS status;
+
+    if (!token || !policy)
+        return ERROR_INVALID_PARAMETER;
+    *(UINT32 *)policy = 0;
+    status = NtQueryInformationToken(token, TokenType, &type, sizeof(type), &length);
+    if (status < 0)
+        return RtlNtStatusToDosError(status);
+    *(UINT32 *)policy = value;
+    return ERROR_SUCCESS;
+}
+
 LONG WINAPI AppPolicyGetMediaFoundationCodecLoading(HANDLE token, AppPolicyMediaFoundationCodecLoading *policy)
 {
-    FIXME("%p, %p\n", token, policy);
-
-    if(policy)
-        *policy = AppPolicyMediaFoundationCodecLoading_All;
-
-    return ERROR_SUCCESS;
+    return app_policy(token, policy, AppPolicyMediaFoundationCodecLoading_All);
 }
 
 /***********************************************************************
@@ -102,12 +113,7 @@ LONG WINAPI AppPolicyGetMediaFoundationCodecLoading(HANDLE token, AppPolicyMedia
  */
 LONG WINAPI AppPolicyGetProcessTerminationMethod(HANDLE token, AppPolicyProcessTerminationMethod *policy)
 {
-    FIXME("%p, %p\n", token, policy);
-
-    if(policy)
-        *policy = AppPolicyProcessTerminationMethod_ExitProcess;
-
-    return ERROR_SUCCESS;
+    return app_policy(token, policy, AppPolicyProcessTerminationMethod_ExitProcess);
 }
 
 /***********************************************************************
@@ -115,12 +121,7 @@ LONG WINAPI AppPolicyGetProcessTerminationMethod(HANDLE token, AppPolicyProcessT
  */
 LONG WINAPI AppPolicyGetThreadInitializationType(HANDLE token, AppPolicyThreadInitializationType *policy)
 {
-    FIXME("%p, %p\n", token, policy);
-
-    if(policy)
-        *policy = AppPolicyThreadInitializationType_None;
-
-    return ERROR_SUCCESS;
+    return app_policy(token, policy, AppPolicyThreadInitializationType_None);
 }
 
 /***********************************************************************
@@ -128,12 +129,7 @@ LONG WINAPI AppPolicyGetThreadInitializationType(HANDLE token, AppPolicyThreadIn
  */
 LONG WINAPI AppPolicyGetShowDeveloperDiagnostic(HANDLE token, AppPolicyShowDeveloperDiagnostic *policy)
 {
-    FIXME("%p, %p\n", token, policy);
-
-    if(policy)
-        *policy = AppPolicyShowDeveloperDiagnostic_ShowUI;
-
-    return ERROR_SUCCESS;
+    return app_policy(token, policy, AppPolicyShowDeveloperDiagnostic_ShowUI);
 }
 
 /***********************************************************************
@@ -141,15 +137,7 @@ LONG WINAPI AppPolicyGetShowDeveloperDiagnostic(HANDLE token, AppPolicyShowDevel
  */
 LONG WINAPI AppPolicyGetWindowingModel(HANDLE token, AppPolicyWindowingModel *policy)
 {
-    static int once;
-
-    if(!once++)
-        FIXME("%p, %p\n", token, policy);
-
-    if(policy)
-        *policy = AppPolicyWindowingModel_ClassicDesktop;
-
-    return ERROR_SUCCESS;
+    return app_policy(token, policy, AppPolicyWindowingModel_ClassicDesktop);
 }
 
 struct counterset_template
