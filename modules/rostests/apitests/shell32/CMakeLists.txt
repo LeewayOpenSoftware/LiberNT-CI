@@ -60,6 +60,7 @@ list(APPEND SOURCE
     SHEvaluateSystemCommandTemplate.cpp
     SHGetComputerDisplayNameW.cpp
     SHGetUnreadMailCountW.cpp
+    SHTestTokenPrivilegeW.cpp
     SHIsBadInterfacePtr.cpp
     SHParseDisplayName.cpp
     SHRestricted.cpp
