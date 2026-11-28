@@ -161,11 +161,13 @@ done:
     {
         if (LsaHandle != NULL)
         {
-            Status = LsaDeregisterLogonProcess(LsaHandle);
-            if (!NT_SUCCESS(Status))
+            /* The open failed: report that status, not the result of the cleanup */
+            NTSTATUS CloseStatus = LsaDeregisterLogonProcess(LsaHandle);
+            if (!NT_SUCCESS(CloseStatus))
             {
-                TRACE("LsaDeregisterLogonProcess failed (Status 0x%08lx)\n", Status);
+                TRACE("LsaDeregisterLogonProcess failed (Status 0x%08lx)\n", CloseStatus);
             }
+            LsaHandle = NULL;
         }
     }
 
@@ -185,6 +187,8 @@ CloseLogonLsaHandle(VOID)
         {
             TRACE("LsaDeregisterLogonProcess failed (Status 0x%08lx)\n", Status);
         }
+        /* The handle is closed either way; a later LogonUser opens a new one */
+        LsaHandle = NULL;
     }
 
     return Status;
