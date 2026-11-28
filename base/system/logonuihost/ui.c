@@ -2430,6 +2430,9 @@ LuhShowCurtain(
     LuhUpdateClock();
     LuhBuildFace();
     LuhArmClock(Window);
+    /* After a sign-out nothing on the Winlogon desktop is active, so without this the keys go
+     * nowhere and only a click lifts the curtain (lab: Enter and Space did nothing). */
+    SetForegroundWindow(Window);
     SetFocus(Window);
     LuhTrace("curtain", NULL);
     InvalidateRect(Window, NULL, TRUE);
@@ -3453,6 +3456,9 @@ LuhUiRun(
             LuhPickOption(WluiActionCancel);
             continue;
         }
+        /* Any key lifts the curtain, whichever of our windows holds the focus. */
+        if (g_Ui.Curtain && Msg.message == WM_KEYDOWN && Msg.hwnd != Window && IsChild(Window, Msg.hwnd))
+            Msg.hwnd = Window;
         if (!((g_Ui.Page || g_Ui.OptionsUp) && IsDialogMessageW(Window, &Msg)))
         {
             TranslateMessage(&Msg);
