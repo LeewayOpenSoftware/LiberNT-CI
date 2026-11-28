@@ -191,6 +191,8 @@ wmain(
         fputws(L"BFSVC Error: AddBootmgrLast and PreserveBootOrder options are ignored when custom volume is specified\n", stdout);
         Options &= ~(BOOT_OPTION_ADD_LAST | BOOT_OPTION_KEEP_ORDER);
     }
+    if (Target)
+        Options |= BOOT_OPTION_NO_FIRMWARE_ENTRY;
     if (Firmware && _wcsicmp(Firmware, L"UEFI") != 0)
     {
         if (_wcsicmp(Firmware, L"BIOS") == 0 || _wcsicmp(Firmware, L"ALL") == 0)
