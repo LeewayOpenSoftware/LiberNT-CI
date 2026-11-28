@@ -244,7 +244,7 @@ PackageArchitectureFromString(
             return Architectures[Index].Value;
         }
     }
-    return MAXUINT32;
+    return MAXDWORD;
 }
 
 static BOOL
@@ -314,7 +314,7 @@ PackageIdFromFullName(
         !IsValidPackageString(Fields[0], Lengths[0], 3, 50, FALSE) ||
         !IsValidPackageString(Fields[3], Lengths[3], 0, 30, TRUE) || Lengths[4] != 13 ||
         !ParsePackageVersion(Fields[1], Lengths[1], &Version) ||
-        (Architecture = PackageArchitectureFromString(Fields[2], Lengths[2])) == MAXUINT32)
+        (Architecture = PackageArchitectureFromString(Fields[2], Lengths[2])) == MAXDWORD)
         return ERROR_INVALID_PARAMETER;
     for (Index = 0; Index < Lengths[4]; Index++)
     {
