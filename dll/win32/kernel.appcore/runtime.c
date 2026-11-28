@@ -6,6 +6,7 @@
  */
 
 #include "appcore.h"
+#include <winternl.h>
 
 #define APPCORE_MAX_PACKAGE_NAME 50
 #define APPCORE_MAX_RESOURCE_ID 30
@@ -361,7 +362,7 @@ AppCorePolicy(HANDLE Token, PVOID Policy, UINT32 Value)
     *(UINT32 *)Policy = 0;
     Status = NtQueryInformationToken(Token, TokenType, &Type, sizeof(Type), &Length);
     if (Status < 0)
-        return Status;
+        return RtlNtStatusToDosError(Status);
     *(UINT32 *)Policy = Value;
     return ERROR_SUCCESS;
 }
@@ -374,11 +375,6 @@ APPCORE_HRESULT_STUB(AddPackageDependency2, (PCWSTR Id, INT32 Rank, AddPackageDe
 LONG WINAPI AppPolicyGetClrCompat(HANDLE Token, AppPolicyClrCompat *Policy) { return AppCorePolicy(Token, Policy, AppPolicyClrCompat_ClassicDesktop); }
 LONG WINAPI AppPolicyGetCreateFileAccess(HANDLE Token, AppPolicyCreateFileAccess *Policy) { return AppCorePolicy(Token, Policy, AppPolicyCreateFileAccess_Full); }
 LONG WINAPI AppPolicyGetLifecycleManagement(HANDLE Token, AppPolicyLifecycleManagement *Policy) { return AppCorePolicy(Token, Policy, AppPolicyLifecycleManagement_Unmanaged); }
-LONG WINAPI AppPolicyGetMediaFoundationCodecLoading(HANDLE Token, AppPolicyMediaFoundationCodecLoading *Policy) { return AppCorePolicy(Token, Policy, AppPolicyMediaFoundationCodecLoading_All); }
-LONG WINAPI AppPolicyGetProcessTerminationMethod(HANDLE Token, AppPolicyProcessTerminationMethod *Policy) { return AppCorePolicy(Token, Policy, AppPolicyProcessTerminationMethod_ExitProcess); }
-LONG WINAPI AppPolicyGetShowDeveloperDiagnostic(HANDLE Token, AppPolicyShowDeveloperDiagnostic *Policy) { return AppCorePolicy(Token, Policy, AppPolicyShowDeveloperDiagnostic_ShowUI); }
-LONG WINAPI AppPolicyGetThreadInitializationType(HANDLE Token, AppPolicyThreadInitializationType *Policy) { return AppCorePolicy(Token, Policy, AppPolicyThreadInitializationType_None); }
-LONG WINAPI AppPolicyGetWindowingModel(HANDLE Token, AppPolicyWindowingModel *Policy) { return AppCorePolicy(Token, Policy, AppPolicyWindowingModel_ClassicDesktop); }
 APPCORE_HRESULT_STUB(CheckIsMSIXPackage, (PCWSTR FullName, BOOL *IsMsix))
 APPCORE_LONG_STUB(ClosePackageInfo, (PACKAGE_INFO_REFERENCE Reference))
 APPCORE_HRESULT_STUB(DeletePackageDependency, (PCWSTR Id))
@@ -594,49 +590,6 @@ PackageNameAndPublisherIdFromFamilyName(
     CopyMemory(Publisher, PublisherId, (APPCORE_PUBLISHER_ID_LENGTH + 1) * sizeof(WCHAR));
     *NameLength = ParsedNameLength + 1;
     *PublisherLength = APPCORE_PUBLISHER_ID_LENGTH + 1;
-    return ERROR_SUCCESS;
-}
-
-LONG
-WINAPI
-PackageIdFromFullName(
-    _In_ PCWSTR FullName,
-    _In_ UINT32 Flags,
-    _Inout_ UINT32 *Length,
-    _Out_writes_bytes_opt_(*Length) BYTE *Buffer)
-{
-    APPCORE_FULL_NAME_PARTS Parts;
-    PACKAGE_ID *Id;
-    PWSTR Cursor;
-    UINT32 Required;
-
-    if (!Length || !AppCoreParseFullName(FullName, &Parts))
-        return ERROR_INVALID_PARAMETER;
-    if (Flags & PACKAGE_INFORMATION_FULL)
-        return ERROR_NOT_FOUND;
-    Required = sizeof(PACKAGE_ID) +
-               (Parts.NameLength + Parts.ResourceIdLength + APPCORE_PUBLISHER_ID_LENGTH + 3) * sizeof(WCHAR);
-    if (!Buffer || *Length < Required)
-    {
-        *Length = Required;
-        return ERROR_INSUFFICIENT_BUFFER;
-    }
-    Id = (PACKAGE_ID *)Buffer;
-    ZeroMemory(Id, sizeof(*Id));
-    Id->processorArchitecture = Parts.Architecture;
-    Id->version = Parts.Version;
-    Cursor = (PWSTR)(Id + 1);
-    Id->name = Cursor;
-    CopyMemory(Cursor, Parts.Name, Parts.NameLength * sizeof(WCHAR));
-    Cursor[Parts.NameLength] = UNICODE_NULL;
-    Cursor += Parts.NameLength + 1;
-    Id->resourceId = Cursor;
-    CopyMemory(Cursor, Parts.ResourceId, Parts.ResourceIdLength * sizeof(WCHAR));
-    Cursor[Parts.ResourceIdLength] = UNICODE_NULL;
-    Cursor += Parts.ResourceIdLength + 1;
-    Id->publisherId = Cursor;
-    CopyMemory(Cursor, Parts.PublisherId, (APPCORE_PUBLISHER_ID_LENGTH + 1) * sizeof(WCHAR));
-    *Length = Required;
     return ERROR_SUCCESS;
 }
 

@@ -230,10 +230,17 @@ TestUnpackagedAndPolicy(VOID)
         ok(Value == Policies[Index].Expected, "%s returned value %u\n", Policies[Index].Name, Value);
         Value = MAXUINT32;
         Result = Function((HANDLE)(ULONG_PTR)0x1234, &Value);
-        ok((ULONG)Result == 0xD0000008, "%s invalid token returned 0x%08lx\n", Policies[Index].Name, Result);
+        ok(Result == ERROR_INVALID_HANDLE, "%s invalid token returned %ld\n", Policies[Index].Name, Result);
         ok(Value == 0, "%s invalid token left value %u\n", Policies[Index].Name, Value);
         ok(Function(NULL, &Value) == ERROR_INVALID_PARAMETER, "%s accepted null token\n", Policies[Index].Name);
         ok(Function(Token, NULL) == ERROR_INVALID_PARAMETER, "%s accepted null output\n", Policies[Index].Name);
+    }
+    {
+        PFN_POLICY Function = (PFN_POLICY)FindAppModelExport("AppPolicyGetProcessTerminationMethod");
+        Value = MAXUINT32;
+        Result = Function(GetCurrentProcessToken(), &Value);
+        ok(Result == ERROR_SUCCESS, "pseudo-token termination policy returned %ld\n", Result);
+        ok(Value == AppPolicyProcessTerminationMethod_ExitProcess, "pseudo-token termination policy returned %u\n", Value);
     }
     CloseHandle(Token);
 }

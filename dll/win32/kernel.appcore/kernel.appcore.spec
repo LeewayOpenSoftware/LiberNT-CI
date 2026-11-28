@@ -3,11 +3,11 @@
 @ stdcall AppPolicyGetClrCompat(ptr ptr)
 @ stdcall AppPolicyGetCreateFileAccess(ptr ptr)
 @ stdcall AppPolicyGetLifecycleManagement(ptr ptr)
-@ stdcall AppPolicyGetMediaFoundationCodecLoading(ptr ptr)
-@ stdcall AppPolicyGetProcessTerminationMethod(ptr ptr)
-@ stdcall AppPolicyGetShowDeveloperDiagnostic(ptr ptr)
-@ stdcall AppPolicyGetThreadInitializationType(ptr ptr)
-@ stdcall AppPolicyGetWindowingModel(ptr ptr)
+@ stdcall AppPolicyGetMediaFoundationCodecLoading(ptr ptr) kernelbase.AppPolicyGetMediaFoundationCodecLoading
+@ stdcall AppPolicyGetProcessTerminationMethod(ptr ptr) kernelbase.AppPolicyGetProcessTerminationMethod
+@ stdcall AppPolicyGetShowDeveloperDiagnostic(ptr ptr) kernelbase.AppPolicyGetShowDeveloperDiagnostic
+@ stdcall AppPolicyGetThreadInitializationType(ptr ptr) kernelbase.AppPolicyGetThreadInitializationType
+@ stdcall AppPolicyGetWindowingModel(ptr ptr) kernelbase.AppPolicyGetWindowingModel
 @ stdcall CheckIsMSIXPackage(wstr ptr)
 @ stdcall ClosePackageInfo(ptr)
 @ stdcall DeletePackageDependency(wstr)
@@ -16,7 +16,7 @@
 @ stdcall FormatApplicationUserModelId(wstr wstr ptr ptr)
 @ stdcall GetApplicationUserModelId(ptr ptr ptr)
 @ stdcall GetApplicationUserModelIdFromToken(ptr ptr ptr) kernelbase.GetApplicationUserModelIdFromToken
-@ stdcall GetCurrentApplicationUserModelId(ptr ptr) kernel32.GetCurrentApplicationUserModelId
+@ stdcall GetCurrentApplicationUserModelId(ptr ptr) kernelbase.GetCurrentApplicationUserModelId
 @ stdcall GetCurrentPackageFamilyName(ptr ptr) kernelbase.GetCurrentPackageFamilyName
 @ stdcall GetCurrentPackageFullName(ptr ptr) kernel32.GetCurrentPackageFullName
 @ stdcall GetCurrentPackageId(ptr ptr) kernel32.GetCurrentPackageId
@@ -50,7 +50,7 @@
 @ stdcall PackageFamilyNameFromFullName(wstr ptr ptr) kernelbase.PackageFamilyNameFromFullName
 @ stdcall PackageFamilyNameFromId(ptr ptr ptr)
 @ stdcall PackageFullNameFromId(ptr ptr ptr)
-@ stdcall PackageIdFromFullName(wstr long ptr ptr)
+@ stdcall PackageIdFromFullName(wstr long ptr ptr) kernelbase.PackageIdFromFullName
 @ stdcall PackageNameAndPublisherIdFromFamilyName(wstr ptr ptr ptr ptr)
 @ stdcall ParseApplicationUserModelId(wstr ptr ptr ptr ptr) kernelbase.ParseApplicationUserModelId
 @ stdcall RemovePackageDependency(ptr)
