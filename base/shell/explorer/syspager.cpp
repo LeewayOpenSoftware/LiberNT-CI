@@ -479,15 +479,15 @@ TrayIconRenderPad(VOID)
 static HICON
 TrayCentreIcon(_In_ HIMAGELIST himl, _In_ HICON hIcon)
 {
-    INT cxSlot, cySlot, cxIcon, cyIcon;
-    ICONINFO Info;
+    INT cxSlot, cySlot, cxIcon, cyIcon, x, y, row;
+    ICONINFO Info, Centred;
     BITMAP bm;
     BITMAPINFO bi;
-    HBITMAP hbmColor, hbmMask;
-    HDC hdcScreen, hdc;
+    HBITMAP hbmColor = NULL, hbmMask = NULL;
+    HDC hdcScreen, hdcSrc, hdcDst;
     HGDIOBJ hOld;
-    HICON hCentred;
-    PVOID pvBits;
+    HICON hCentred = NULL;
+    PBYTE pbSlot = NULL, pbIcon = NULL;
 
     if (!hIcon || !ImageList_GetIconSize(himl, &cxSlot, &cySlot))
         return NULL;
@@ -499,14 +499,22 @@ TrayCentreIcon(_In_ HIMAGELIST himl, _In_ HICON hIcon)
     GetObjectW(Info.hbmColor ? Info.hbmColor : Info.hbmMask, sizeof(bm), &bm);
     cxIcon = bm.bmWidth;
     cyIcon = Info.hbmColor ? bm.bmHeight : bm.bmHeight / 2;
-    if (Info.hbmColor)
-        DeleteObject(Info.hbmColor);
-    if (Info.hbmMask)
-        DeleteObject(Info.hbmMask);
 
-    if (cxIcon <= 0 || cyIcon <= 0 || cxIcon >= cxSlot || cyIcon >= cySlot)
-        return NULL;
+    /* Nothing to centre when the icon fills the slot; mask-only icons are
+       left to the image list as they are. */
+    if (!Info.hbmColor || cxIcon <= 0 || cyIcon <= 0 ||
+        cxIcon >= cxSlot || cyIcon >= cySlot)
+    {
+        goto Cleanup;
+    }
 
+    x = (cxSlot - cxIcon) / 2;
+    y = (cySlot - cyIcon) / 2;
+
+    /* Colour: copy the icon's colour bits as 32 bpp at the centred offset so
+       a source alpha channel survives (DrawIconEx would blend it away and
+       leave the image list with an opaque, all-black slot).  The slot
+       outside the icon stays zero, i.e. transparent. */
     ZeroMemory(&bi, sizeof(bi));
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
     bi.bmiHeader.biWidth = cxSlot;
@@ -516,39 +524,71 @@ TrayCentreIcon(_In_ HIMAGELIST himl, _In_ HICON hIcon)
     bi.bmiHeader.biCompression = BI_RGB;
 
     hdcScreen = GetDC(NULL);
-    hbmColor = CreateDIBSection(hdcScreen, &bi, DIB_RGB_COLORS, &pvBits, NULL, 0);
+    hbmColor = CreateDIBSection(hdcScreen, &bi, DIB_RGB_COLORS, (PVOID *)&pbSlot, NULL, 0);
+    pbIcon = (PBYTE)HeapAlloc(hProcessHeap, 0, (SIZE_T)cxIcon * cyIcon * 4);
+    if (hbmColor && pbIcon)
+    {
+        bi.bmiHeader.biWidth = cxIcon;
+        bi.bmiHeader.biHeight = -cyIcon;
+        if (GetDIBits(hdcScreen, Info.hbmColor, 0, cyIcon, pbIcon, &bi, DIB_RGB_COLORS) == cyIcon)
+        {
+            for (row = 0; row < cyIcon; row++)
+            {
+                CopyMemory(pbSlot + ((SIZE_T)(y + row) * cxSlot + x) * 4,
+                           pbIcon + (SIZE_T)row * cxIcon * 4,
+                           (SIZE_T)cxIcon * 4);
+            }
+        }
+        else
+        {
+            DeleteObject(hbmColor);
+            hbmColor = NULL;
+        }
+    }
     if (hdcScreen)
         ReleaseDC(NULL, hdcScreen);
     if (!hbmColor)
-        return NULL;
+        goto Cleanup;
 
-    hdc = CreateCompatibleDC(NULL);
-    if (!hdc)
-    {
-        DeleteObject(hbmColor);
-        return NULL;
-    }
-
-    hOld = SelectObject(hdc, hbmColor);
-    DrawIconEx(hdc, (cxSlot - cxIcon) / 2, (cySlot - cyIcon) / 2, hIcon,
-               cxIcon, cyIcon, 0, NULL, DI_NORMAL);
-    SelectObject(hdc, hOld);
-    DeleteDC(hdc);
-
+    /* Mask: transparent everywhere, with the icon's own mask in the centre.
+       CreateBitmap leaves the bits undefined, so it must be filled. */
     hbmMask = CreateBitmap(cxSlot, cySlot, 1, 1, NULL);
-    if (!hbmMask)
+    hdcSrc = CreateCompatibleDC(NULL);
+    hdcDst = CreateCompatibleDC(NULL);
+    if (hbmMask && hdcSrc && hdcDst)
     {
-        DeleteObject(hbmColor);
-        return NULL;
-    }
+        hOld = SelectObject(hdcDst, hbmMask);
+        PatBlt(hdcDst, 0, 0, cxSlot, cySlot, WHITENESS);
+        if (Info.hbmMask)
+        {
+            HGDIOBJ hOldSrc = SelectObject(hdcSrc, Info.hbmMask);
+            BitBlt(hdcDst, x, y, cxIcon, cyIcon, hdcSrc, 0, 0, SRCCOPY);
+            SelectObject(hdcSrc, hOldSrc);
+        }
+        SelectObject(hdcDst, hOld);
 
-    ZeroMemory(&Info, sizeof(Info));
-    Info.fIcon = TRUE;
-    Info.hbmColor = hbmColor;
-    Info.hbmMask = hbmMask;
-    hCentred = CreateIconIndirect(&Info);
-    DeleteObject(hbmColor);
-    DeleteObject(hbmMask);
+        ZeroMemory(&Centred, sizeof(Centred));
+        Centred.fIcon = TRUE;
+        Centred.hbmColor = hbmColor;
+        Centred.hbmMask = hbmMask;
+        hCentred = CreateIconIndirect(&Centred);
+    }
+    if (hdcSrc)
+        DeleteDC(hdcSrc);
+    if (hdcDst)
+        DeleteDC(hdcDst);
+
+Cleanup:
+    if (pbIcon)
+        HeapFree(hProcessHeap, 0, pbIcon);
+    if (hbmMask)
+        DeleteObject(hbmMask);
+    if (hbmColor)
+        DeleteObject(hbmColor);
+    if (Info.hbmColor)
+        DeleteObject(Info.hbmColor);
+    if (Info.hbmMask)
+        DeleteObject(Info.hbmMask);
     return hCentred;
 }
 
