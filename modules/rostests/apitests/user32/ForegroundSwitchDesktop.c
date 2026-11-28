@@ -13,6 +13,8 @@ static HDESK OriginalDesktop;
 static HDESK OtherDesktop;
 static BOOL HelperSwitched;
 static BOOL HelperForeground;
+static HWND ExitWindow;
+static BOOL ExitForeground;
 
 static LRESULT CALLBACK MainProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -73,6 +75,61 @@ static DWORD WINAPI HelperThread(LPVOID Parameter)
     while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
         DispatchMessageW(&msg);
     return 0;
+}
+
+/* A thread that owns the foreground window on the input desktop exits without
+ * destroying it: the foreground must not keep pointing at its queue. */
+static DWORD WINAPI ExitingThread(LPVOID Parameter)
+{
+    MSG msg;
+    int i;
+
+    ExitWindow = CreateWindowExW(0, L"static", NULL, WS_POPUP | WS_VISIBLE, 150, 150, 100, 100,
+                                 NULL, NULL, NULL, NULL);
+    if (!ExitWindow)
+        return 1;
+    SetForegroundWindow(ExitWindow);
+    for (i = 0; i < 50 && GetForegroundWindow() != ExitWindow; i++)
+    {
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+            DispatchMessageW(&msg);
+        Sleep(10);
+    }
+    ExitForeground = (GetForegroundWindow() == ExitWindow);
+    return 0;
+}
+
+static void TestForegroundThreadExit(void)
+{
+    HANDLE Thread;
+    HWND Foreground;
+    DWORD ExitCode = 0;
+
+    Thread = CreateThread(NULL, 0, ExitingThread, NULL, 0, NULL);
+    ok(Thread != NULL, "CreateThread failed: %lu\n", GetLastError());
+    if (!Thread)
+        return;
+    while (MsgWaitForMultipleObjects(1, &Thread, FALSE, 5000, QS_ALLINPUT) == WAIT_OBJECT_0 + 1)
+        PumpMessages();
+    GetExitCodeThread(Thread, &ExitCode);
+    CloseHandle(Thread);
+    ok(ExitCode == 0, "Exiting thread failed: %lu\n", ExitCode);
+    if (!ExitForeground)
+    {
+        skip("The exiting thread's window did not become the foreground window\n");
+        return;
+    }
+
+    PumpFor(200);
+    ok(!IsWindow(ExitWindow), "The exiting thread's window still exists\n");
+    Foreground = GetForegroundWindow();
+    ok(Foreground != ExitWindow, "The foreground window is still the exited thread's window %p\n", Foreground);
+
+    /* Input routing must not touch the dead queue */
+    keybd_event('Q', 0, 0, 0);
+    keybd_event('Q', 0, KEYEVENTF_KEYUP, 0);
+    PumpFor(200);
+    ok(TRUE, "Keyboard input after the foreground thread exited did not fault\n");
 }
 
 START_TEST(ForegroundSwitchDesktop)
@@ -144,6 +201,8 @@ START_TEST(ForegroundSwitchDesktop)
     keybd_event('Q', 0, KEYEVENTF_KEYUP, 0);
     PumpFor(300);
     ok(KeyDowns == Before + 1, "The key went to %ld window(s), expected 1\n", KeyDowns - Before);
+
+    TestForegroundThreadExit();
 
 Cleanup:
     if (MainWindow)
