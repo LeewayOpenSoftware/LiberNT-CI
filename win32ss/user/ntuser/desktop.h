@@ -124,7 +124,7 @@ PUSER_MESSAGE_QUEUE FASTCALL
 IntGetFocusMessageQueue(VOID);
 
 VOID FASTCALL
-IntSetFocusMessageQueue(PUSER_MESSAGE_QUEUE NewQueue);
+IntSetFocusMessageQueue(PDESKTOP pdo, PUSER_MESSAGE_QUEUE NewQueue);
 
 PDESKTOP FASTCALL
 IntGetActiveDesktop(VOID);

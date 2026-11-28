@@ -449,7 +449,7 @@ co_WinPosActivateOtherWindow(PWND Wnd)
    if (IntIsDesktopWindow(Wnd))
    {
       //ERR("WinPosActivateOtherWindow Set Focus Msg Q No window!\n");
-      IntSetFocusMessageQueue(NULL);
+      IntSetFocusMessageQueue(Wnd->head.rpdesk, NULL);
       return;
    }
 
