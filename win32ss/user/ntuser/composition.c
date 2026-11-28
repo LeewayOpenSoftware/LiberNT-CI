@@ -3949,8 +3949,17 @@ IntCompositionCleanupProcess(_In_ PEPROCESS Process)
 {
     PWND Desktop;
 
+    /* A compositor that dies (or one the watchdog already detached) never completes what was
+     * published to it. Each pending publication holds a reference on the compositor process,
+     * which then never leaves the process list, and its producer waits on the ready event
+     * forever. Complete them now. This runs before dxgkrnl's exit notification destroys the
+     * process's GPU device, but the dying process has no thread left to submit work, and what
+     * it already queued can only misread the producer surfaces for a frame nobody presents. */
+    IntCompositionDrainDxPublications(Process, FALSE);
+
     if (g_DwmProcess != Process)
         return;
+    ERR("DWM exited - composition off, reverting to direct draw\n");
     IntCompositionDwmTeardown();
     IntCompositionSetEnabled(FALSE);
     Desktop = UserGetDesktopWindow();
