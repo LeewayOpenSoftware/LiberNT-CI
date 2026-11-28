@@ -27,6 +27,11 @@
 
 #include "baseheap.h"
 
+/* kernel32_shared */
+DWORD
+WINAPI
+BaseSetLastNTError(IN NTSTATUS Status);
+
 /* GLOBALS ********************************************************************/
 
 RTL_HANDLE_TABLE BaseHeapHandleTable;
@@ -47,6 +52,18 @@ BaseDllInitializeMemoryManager(VOID)
                              &SystemRangeStart,
                              sizeof(SystemRangeStart),
                              NULL);
+}
+
+/* kernel32 reads this from the base server's static data; kernelbase asks the kernel once. */
+static
+PSYSTEM_BASIC_INFORMATION
+BasepSystemInfo(VOID)
+{
+    static SYSTEM_BASIC_INFORMATION BasicInfo;
+
+    if (BasicInfo.PageSize == 0)
+        NtQuerySystemInformation(SystemBasicInformation, &BasicInfo, sizeof(BasicInfo), NULL);
+    return &BasicInfo;
 }
 
 static
@@ -89,7 +106,7 @@ HeapCreate(DWORD flOptions,
     /* Check if heap is growable and ensure max size is correct */
     if (dwMaximumSize == 0)
         Flags |= HEAP_GROWABLE;
-    else if (dwMaximumSize < BaseStaticServerData->SysInfo.PageSize &&
+    else if (dwMaximumSize < BasepSystemInfo()->PageSize &&
             dwInitialSize > dwMaximumSize)
     {
         /* Max size is non-zero but less than page size which can't be correct.
@@ -1390,18 +1407,18 @@ GlobalMemoryStatusEx(LPMEMORYSTATUSEX lpBuffer)
     }
 
     /* Calculate memory load */
-    lpBuffer->dwMemoryLoad = ((DWORD)(BaseStaticServerData->SysInfo.NumberOfPhysicalPages -
+    lpBuffer->dwMemoryLoad = ((DWORD)(BasepSystemInfo()->NumberOfPhysicalPages -
                                       PerformanceInfo.AvailablePages) * 100) /
-                                      BaseStaticServerData->SysInfo.NumberOfPhysicalPages;
+                                      BasepSystemInfo()->NumberOfPhysicalPages;
 
     /* Save physical memory */
-    PhysicalMemory = (ULONGLONG)BaseStaticServerData->SysInfo.NumberOfPhysicalPages *
-                     BaseStaticServerData->SysInfo.PageSize;
+    PhysicalMemory = (ULONGLONG)BasepSystemInfo()->NumberOfPhysicalPages *
+                     BasepSystemInfo()->PageSize;
     lpBuffer->ullTotalPhys = PhysicalMemory;
 
     /* Now save available physical memory */
     PhysicalMemory = (ULONGLONG)PerformanceInfo.AvailablePages *
-                     BaseStaticServerData->SysInfo.PageSize;
+                     BasepSystemInfo()->PageSize;
     lpBuffer->ullAvailPhys = PhysicalMemory;
 
     /* Query VM and Quota Limits */
@@ -1430,7 +1447,7 @@ GlobalMemoryStatusEx(LPMEMORYSTATUSEX lpBuffer)
     /* Save the commit limit */
     lpBuffer->ullTotalPageFile = min(QuotaLimits.PagefileLimit,
                                      PerformanceInfo.CommitLimit);
-    lpBuffer->ullTotalPageFile *= BaseStaticServerData->SysInfo.PageSize;
+    lpBuffer->ullTotalPageFile *= BasepSystemInfo()->PageSize;
 
     /* Calculate how many pages are left */
     PageFile = PerformanceInfo.CommitLimit - PerformanceInfo.CommittedPages;
@@ -1439,11 +1456,11 @@ GlobalMemoryStatusEx(LPMEMORYSTATUSEX lpBuffer)
     lpBuffer->ullAvailPageFile = min(PageFile,
                                      QuotaLimits.PagefileLimit -
                                      VmCounters.PagefileUsage);
-    lpBuffer->ullAvailPageFile *= BaseStaticServerData->SysInfo.PageSize;
+    lpBuffer->ullAvailPageFile *= BasepSystemInfo()->PageSize;
 
     /* Now calculate the total virtual space */
-    lpBuffer->ullTotalVirtual = (BaseStaticServerData->SysInfo.MaximumUserModeAddress -
-                                 BaseStaticServerData->SysInfo.MinimumUserModeAddress) + 1;
+    lpBuffer->ullTotalVirtual = (BasepSystemInfo()->MaximumUserModeAddress -
+                                 BasepSystemInfo()->MinimumUserModeAddress) + 1;
 
     /* And finally the available virtual space */
     lpBuffer->ullAvailVirtual = lpBuffer->ullTotalVirtual - VmCounters.VirtualSize;
