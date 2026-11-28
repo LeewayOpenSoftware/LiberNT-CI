@@ -89,7 +89,7 @@
 @ stdcall CharUpperBuffW(wstr long)
 @ stdcall CharUpperW(wstr)
 @ stub CheckGroupPolicyEnabled
-@ stdcall CheckRemoteDebuggerPresent(long ptr) kernel32.CheckRemoteDebuggerPresent
+@ stdcall CheckRemoteDebuggerPresent(long ptr)
 @ stdcall CheckTokenCapability(ptr ptr ptr)
 @ stdcall CheckTokenMembership(long ptr ptr)
 @ stdcall CheckTokenMembershipEx(ptr ptr long ptr)
@@ -114,7 +114,7 @@
 @ stdcall CompareStringOrdinal(wstr long wstr long long) kernel32.CompareStringOrdinal
 @ stdcall CompareStringW(long long wstr long wstr long)
 @ stdcall ConnectNamedPipe(long ptr) kernel32.ConnectNamedPipe
-@ stdcall ContinueDebugEvent(long long long) kernel32.ContinueDebugEvent
+@ stdcall ContinueDebugEvent(long long long)
 @ stdcall ConvertDefaultLocale(long) kernel32.ConvertDefaultLocale
 @ stdcall ConvertFiberToThread() kernel32.ConvertFiberToThread
 @ stdcall ConvertThreadToFiber(ptr) kernel32.ConvertThreadToFiber
@@ -431,7 +431,7 @@
 @ stdcall GetEnvironmentVariableA(str ptr long) kernel32.GetEnvironmentVariableA
 @ stdcall GetEnvironmentVariableW(wstr ptr long) kernel32.GetEnvironmentVariableW
 @ stub GetEraNameCountedString
-@ stdcall -version=0x600+ GetErrorMode() kernel32.GetErrorMode
+@ stdcall -version=0x600+ GetErrorMode()
 @ stdcall GetExitCodeProcess(long ptr) kernel32.GetExitCodeProcess
 @ stdcall GetExitCodeThread(long ptr)
 @ stub GetFallbackDisplayName
@@ -736,7 +736,7 @@
 @ stdcall IsCharXDigitW(long)
 @ stdcall IsDBCSLeadByte(long) kernel32.IsDBCSLeadByte
 @ stdcall IsDBCSLeadByteEx(long long) kernel32.IsDBCSLeadByteEx
-@ stdcall IsDebuggerPresent() kernel32.IsDebuggerPresent
+@ stdcall IsDebuggerPresent()
 @ stdcall IsInternetESCEnabled()
 @ stdcall IsNLSDefinedString(long long ptr wstr long)
 @ stdcall IsNormalizedString(long wstr long)
@@ -1027,7 +1027,7 @@
 @ stdcall QueueUserWorkItem(ptr ptr long)
 @ stdcall QuirkIsEnabled(ptr)
 @ stdcall QuirkIsEnabled3(ptr ptr)
-@ stdcall RaiseException(long long long ptr) kernel32.RaiseException
+@ stdcall RaiseException(long long long ptr)
 @ stdcall RaiseFailFastException(ptr ptr long)
 @ stdcall -version=0x600+ RegDisablePredefinedCacheEx() advapi32.RegDisablePredefinedCacheEx
 @ stdcall -version=0x600+ RegisterApplicationRestart(wstr long) kernel32.RegisterApplicationRestart
@@ -1193,7 +1193,7 @@
 @ stdcall SetEnvironmentStringsW(ptr) kernel32.SetEnvironmentStringsW
 @ stdcall SetEnvironmentVariableA(str str) kernel32.SetEnvironmentVariableA
 @ stdcall SetEnvironmentVariableW(wstr wstr) kernel32.SetEnvironmentVariableW
-@ stdcall SetErrorMode(long) kernel32.SetErrorMode
+@ stdcall SetErrorMode(long)
 @ stdcall SetEvent(long) kernel32.SetEvent
 @ stdcall -version=0x600+ SetEventWhenCallbackReturns(ptr ptr) ntdll.TpCallbackSetEventOnCompletion
 @ stdcall SetFileApisToANSI() kernel32.SetFileApisToANSI
@@ -1420,8 +1420,8 @@
 @ stdcall VirtualQueryEx(long ptr ptr long) kernel32.VirtualQueryEx
 @ stdcall VirtualUnlock(ptr long) kernel32.VirtualUnlock
 @ stdcall WaitCommEvent(long ptr ptr) kernel32.WaitCommEvent
-@ stdcall WaitForDebugEvent(ptr long) kernel32.WaitForDebugEvent
-@ stdcall -version=0xA00+ WaitForDebugEventEx(ptr long) kernel32.WaitForDebugEventEx
+@ stdcall WaitForDebugEvent(ptr long)
+@ stdcall -version=0xA00+ WaitForDebugEventEx(ptr long)
 @ stdcall WaitForMultipleObjects(long ptr long long) kernel32.WaitForMultipleObjects
 @ stdcall WaitForMultipleObjectsEx(long ptr long long long) kernel32.WaitForMultipleObjectsEx
 @ stdcall WaitForSingleObject(long long) kernel32.WaitForSingleObject

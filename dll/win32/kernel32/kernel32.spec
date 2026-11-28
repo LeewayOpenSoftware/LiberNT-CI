@@ -76,7 +76,7 @@
 @ stub -version=0x600+ CheckForReadOnlyResource
 @ stdcall CheckNameLegalDOS8Dot3A(str str long long long)
 @ stdcall CheckNameLegalDOS8Dot3W(wstr str long long long)
-@ stdcall CheckRemoteDebuggerPresent(long ptr)
+@ stdcall CheckRemoteDebuggerPresent(long ptr) kernelbase.CheckRemoteDebuggerPresent
 @ stdcall -version=0x602+ CheckTokenCapability(ptr ptr ptr) kernelbase.CheckTokenCapability
 @ stdcall ClearCommBreak(long)
 @ stdcall ClearCommError(long ptr ptr)
@@ -106,7 +106,7 @@
 @ stdcall ConnectNamedPipe(long ptr)
 @ stdcall -version=0x502-0x600 -arch=win64 ConsoleIMERoutine(ptr) kernelbase.ConsoleIMERoutine
 @ stdcall ConsoleMenuControl(long long long) kernelbase.ConsoleMenuControl
-@ stdcall ContinueDebugEvent(long long long)
+@ stdcall ContinueDebugEvent(long long long) kernelbase.ContinueDebugEvent
 @ stdcall -version=0x600+ ConvertCalDateTimeToSystemTime(ptr ptr)
 @ stdcall ConvertDefaultLocale(long)
 @ stdcall ConvertFiberToThread()
@@ -514,7 +514,7 @@
 @ stdcall GetEnvironmentStringsW()
 @ stdcall GetEnvironmentVariableA(str ptr long)
 @ stdcall GetEnvironmentVariableW(wstr ptr long)
-@ stdcall -version=0x600+ GetErrorMode()
+@ stdcall -version=0x600+ GetErrorMode() kernelbase.GetErrorMode
 @ stdcall GetExitCodeProcess(long ptr)
 @ stdcall GetExitCodeThread(long ptr) kernelbase.GetExitCodeThread
 @ stdcall GetExpandedNameA(str ptr)
@@ -841,7 +841,7 @@
 @ stdcall -version=0x600+ IsCalendarLeapYear(long long long)
 @ stdcall IsDBCSLeadByte(long)
 @ stdcall IsDBCSLeadByteEx(long long)
-@ stdcall IsDebuggerPresent()
+@ stdcall IsDebuggerPresent() kernelbase.IsDebuggerPresent
 @ stdcall IsNLSDefinedString(long long ptr long long) kernelbase.IsNLSDefinedString
 @ stdcall -version=0x600+ IsNormalizedString(long wstr long) kernelbase.IsNormalizedString
 @ stdcall IsProcessInJob(long long ptr)
@@ -1033,7 +1033,7 @@
 @ stdcall -version=0x602+ QueryUnbiasedInterruptTimePrecise(ptr)
 @ stdcall QueueUserAPC(ptr long long)
 @ stdcall QueueUserWorkItem(ptr ptr long) kernelbase.QueueUserWorkItem
-@ stdcall -norelay RaiseException(long long long ptr)
+@ stdcall -norelay RaiseException(long long long ptr) kernelbase.RaiseException
 @ stdcall -version=0x602+ RaiseFailFastException(ptr ptr long) kernelbase.RaiseFailFastException
 @ stdcall ReOpenFile(ptr long long long)
 @ stdcall ReadConsoleA(long ptr long ptr ptr) kernelbase.ReadConsoleA
@@ -1218,7 +1218,7 @@
 @ stdcall SetEnvironmentStringsW(ptr)
 @ stdcall SetEnvironmentVariableA(str str)
 @ stdcall SetEnvironmentVariableW(wstr wstr)
-@ stdcall SetErrorMode(long)
+@ stdcall SetErrorMode(long) kernelbase.SetErrorMode
 @ stdcall SetEvent(long)
 @ stdcall -version=0x600+ SetEventWhenCallbackReturns(ptr ptr) ntdll.TpCallbackSetEventOnCompletion
 @ stdcall SetFileApisToANSI()
@@ -1392,8 +1392,8 @@
 @ stdcall VirtualUnlock(ptr long)
 @ stdcall WTSGetActiveConsoleSessionId()
 @ stdcall WaitCommEvent(long ptr ptr)
-@ stdcall WaitForDebugEvent(ptr long)
-@ stdcall -version=0xA00+ WaitForDebugEventEx(ptr long)
+@ stdcall WaitForDebugEvent(ptr long) kernelbase.WaitForDebugEvent
+@ stdcall -version=0xA00+ WaitForDebugEventEx(ptr long) kernelbase.WaitForDebugEventEx
 @ stdcall WaitForMultipleObjects(long ptr long long)
 @ stdcall WaitForMultipleObjectsEx(long ptr long long long)
 @ stdcall WaitForSingleObject(long long)

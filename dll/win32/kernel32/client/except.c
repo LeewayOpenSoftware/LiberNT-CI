@@ -19,6 +19,43 @@
 #define NDEBUG
 #include <debug.h>
 
+/* Internal read of the process error mode; kernel32 cannot import kernelbase,
+ * so UnhandledExceptionFilter keeps its own reader while the export forwards. */
+static
+UINT
+BasepGetErrorMode(VOID)
+{
+    UINT ErrMode = 0;
+    NtQueryInformationProcess(NtCurrentProcess(),
+                              ProcessDefaultHardErrorMode,
+                              &ErrMode,
+                              sizeof(ErrMode),
+                              NULL);
+    return ErrMode;
+}
+
+/* Internal set of the process error mode, same inversion as the exported
+ * kernelbase body; kernel32 cannot import kernelbase. */
+static
+UINT
+BasepSetErrorMode(IN UINT uMode)
+{
+    UINT PrevErrMode, NewMode;
+
+    PrevErrMode = BasepGetErrorMode();
+    NewMode = uMode;
+    if (NewMode & SEM_FAILCRITICALERRORS)
+        NewMode &= ~SEM_FAILCRITICALERRORS;
+    else
+        NewMode |= SEM_FAILCRITICALERRORS;
+    NewMode |= (PrevErrMode & SEM_NOALIGNMENTFAULTEXCEPT);
+    NtSetInformationProcess(NtCurrentProcess(),
+                            ProcessDefaultHardErrorMode,
+                            (PVOID)&NewMode,
+                            sizeof(NewMode));
+    return PrevErrMode;
+}
+
 /*
  * Private helper function to lookup the module name from a given address.
  * The address can point to anywhere within the module.
@@ -387,41 +424,6 @@ BasepCheckForReadOnlyResource(IN PVOID Ptr)
     return Ret;
 }
 
-UINT
-WINAPI
-GetErrorMode(VOID)
-{
-    NTSTATUS Status;
-    UINT ErrMode;
-
-    /* Query the current setting */
-    Status = NtQueryInformationProcess(NtCurrentProcess(),
-                                       ProcessDefaultHardErrorMode,
-                                       &ErrMode,
-                                       sizeof(ErrMode),
-                                       NULL);
-    if (!NT_SUCCESS(Status))
-    {
-        /* Fail if we couldn't query */
-        BaseSetLastNTError(Status);
-        return 0;
-    }
-
-    /* Check if NOT failing critical errors was requested */
-    if (ErrMode & SEM_FAILCRITICALERRORS)
-    {
-        /* Mask it out, since the native API works differently */
-        ErrMode &= ~SEM_FAILCRITICALERRORS;
-    }
-    else
-    {
-        /* OR it if the caller didn't, due to different native semantics */
-        ErrMode |= SEM_FAILCRITICALERRORS;
-    }
-
-    /* Return the mode */
-    return ErrMode;
-}
 
 /*
  * @implemented
@@ -529,7 +531,7 @@ UnhandledExceptionFilter(IN PEXCEPTION_POINTERS ExceptionInfo)
      * Now pop up an error if needed. Check both the process-wide (Win32)
      * and per-thread error-mode flags (NT).
      */
-    if ((GetErrorMode() & SEM_NOGPFAULTERRORBOX) ||
+    if ((BasepGetErrorMode() & SEM_NOGPFAULTERRORBOX) ||
         (RtlGetThreadErrorMode() & RTL_SEM_NOGPFAULTERRORBOX))
     {
         /* Do not display the pop-up error box, just transfer control to the exception handler */
@@ -863,45 +865,6 @@ Quit:
      */
 
     return EXCEPTION_EXECUTE_HANDLER;
-}
-
-/*
- * @implemented
- */
-UINT
-WINAPI
-SetErrorMode(IN UINT uMode)
-{
-    UINT PrevErrMode, NewMode;
-
-    /* Get the previous mode */
-    PrevErrMode = GetErrorMode();
-    NewMode = uMode;
-
-    /* Check if failing critical errors was requested */
-    if (NewMode & SEM_FAILCRITICALERRORS)
-    {
-        /* Mask it out, since the native API works differently */
-        NewMode &= ~SEM_FAILCRITICALERRORS;
-    }
-    else
-    {
-        /* OR it if the caller didn't, due to different native semantics */
-        NewMode |= SEM_FAILCRITICALERRORS;
-    }
-
-    /* Always keep no alignment faults if they were set */
-    NewMode |= (PrevErrMode & SEM_NOALIGNMENTFAULTEXCEPT);
-
-    /* Set the new mode */
-    NtSetInformationProcess(NtCurrentProcess(),
-                            ProcessDefaultHardErrorMode,
-                            (PVOID)&NewMode,
-                            sizeof(NewMode));
-
-    /* Return the previous mode */
-    return PrevErrMode;
-}
 
 /*
  * @implemented

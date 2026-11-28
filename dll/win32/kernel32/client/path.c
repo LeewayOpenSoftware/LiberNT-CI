@@ -13,6 +13,9 @@
 #define NDEBUG
 #include <debug.h>
 
+extern UINT BasepGetErrorMode(VOID);
+extern UINT BasepSetErrorMode(UINT uMode);
+
 /* GLOBALS ********************************************************************/
 
 UNICODE_STRING NoDefaultCurrentDirectoryInExePath = RTL_CONSTANT_STRING(L"NoDefaultCurrentDirectoryInExePath");
@@ -1713,7 +1716,7 @@ GetLongPathNameW(IN LPCWSTR lpszShortPath,
     }
 
     /* We will be touching removed, removable drives -- don't warn the user */
-    ErrorMode = SetErrorMode(SEM_NOOPENFILEERRORBOX | SEM_FAILCRITICALERRORS);
+    ErrorMode = BasepSetErrorMode(SEM_NOOPENFILEERRORBOX | SEM_FAILCRITICALERRORS);
 
     /* Do a simple check to see if the path exists */
     if (GetFileAttributesW(lpszShortPath) == INVALID_FILE_ATTRIBUTES)
@@ -1894,7 +1897,7 @@ Quickie:
     /* General function end: free memory, restore error mode, return length */
     if (Original) RtlFreeHeap(RtlGetProcessHeap(), 0, Original);
     if (Buffer) RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
-    SetErrorMode(ErrorMode);
+    BasepSetErrorMode(ErrorMode);
     return ReturnLength;
 }
 
@@ -2009,7 +2012,7 @@ GetShortPathNameW(IN LPCWSTR lpszLongPath,
     }
 
     /* We will be touching removed, removable drives -- don't warn the user */
-    ErrorMode = SetErrorMode(SEM_NOOPENFILEERRORBOX | SEM_FAILCRITICALERRORS);
+    ErrorMode = BasepSetErrorMode(SEM_NOOPENFILEERRORBOX | SEM_FAILCRITICALERRORS);
 
     /* Do a simple check to see if the path exists */
     if (GetFileAttributesW(lpszLongPath) == INVALID_FILE_ATTRIBUTES)
@@ -2194,7 +2197,7 @@ Quickie:
     /* General function end: free memory, restore error mode, return length */
     if (Original) RtlFreeHeap(RtlGetProcessHeap(), 0, Original);
     if (Buffer) RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
-    SetErrorMode(ErrorMode);
+    BasepSetErrorMode(ErrorMode);
     return ReturnLength;
 }
 

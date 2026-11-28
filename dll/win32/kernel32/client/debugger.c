@@ -373,69 +373,12 @@ ProcessIdToHandle(IN DWORD dwProcessId)
  */
 BOOL
 WINAPI
-CheckRemoteDebuggerPresent(IN HANDLE hProcess,
-                           OUT PBOOL pbDebuggerPresent)
-{
-    HANDLE DebugPort;
-    NTSTATUS Status;
-
-    /* Make sure we have an output and process*/
-    if (!(pbDebuggerPresent) || !(hProcess))
-    {
-        /* Fail */
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-
-    /* Check if the process has a debug object/port */
-    Status = NtQueryInformationProcess(hProcess,
-                                       ProcessDebugPort,
-                                       &DebugPort,
-                                       sizeof(DebugPort),
-                                       NULL);
-    if (NT_SUCCESS(Status))
-    {
-        /* Return the current state */
-        *pbDebuggerPresent = DebugPort != NULL;
-        return TRUE;
-    }
-
-    /* Otherwise, fail */
-    BaseSetLastNTError(Status);
-    return FALSE;
-}
 
 /*
  * @implemented
  */
 BOOL
 WINAPI
-ContinueDebugEvent(IN DWORD dwProcessId,
-                   IN DWORD dwThreadId,
-                   IN DWORD dwContinueStatus)
-{
-    CLIENT_ID ClientId;
-    NTSTATUS Status;
-
-    /* Set the Client ID */
-    ClientId.UniqueProcess = UlongToHandle(dwProcessId);
-    ClientId.UniqueThread = UlongToHandle(dwThreadId);
-
-    /* Continue debugging */
-    Status = DbgUiContinue(&ClientId, dwContinueStatus);
-    if (!NT_SUCCESS(Status))
-    {
-        /* Fail */
-        BaseSetLastNTError(Status);
-        return FALSE;
-    }
-
-    /* Remove the process/thread handles */
-    RemoveHandles(dwProcessId, dwThreadId);
-
-    /* Success */
-    return TRUE;
-}
 
 /*
  * @implemented
@@ -579,144 +522,18 @@ DebugSetProcessKillOnExit(IN BOOL KillOnExit)
  */
 BOOL
 WINAPI
-IsDebuggerPresent(VOID)
-{
-    return (BOOL)NtCurrentPeb()->BeingDebugged;
-}
 
 /*
  * @implemented
  */
 static
 BOOL
-BasepWaitForDebugEvent(IN LPDEBUG_EVENT lpDebugEvent,
-                       IN DWORD dwMilliseconds,
-                       IN BOOLEAN UnicodeStrings)
-{
-    LARGE_INTEGER WaitTime;
-    PLARGE_INTEGER Timeout;
-    DBGUI_WAIT_STATE_CHANGE WaitStateChange;
-    NTSTATUS Status;
-
-    /* Convert to NT Timeout */
-    Timeout = BaseFormatTimeOut(&WaitTime, dwMilliseconds);
-
-    /* Loop while we keep getting interrupted */
-    for (;;)
-    {
-        /* Call the native API */
-        Status = DbgUiWaitStateChange(&WaitStateChange, Timeout);
-        if ((Status == STATUS_ALERTED) || (Status == STATUS_USER_APC))
-            continue;
-
-        if (!UnicodeStrings &&
-            (Status == STATUS_SUCCESS) &&
-            (WaitStateChange.NewState == DbgExceptionStateChange) &&
-            (WaitStateChange.StateInfo.Exception.ExceptionRecord.ExceptionCode == DBG_PRINTEXCEPTION_WIDE_C) &&
-            (WaitStateChange.StateInfo.Exception.ExceptionRecord.NumberParameters >= 2))
-        {
-            DbgUiContinue(&WaitStateChange.AppClientId, DBG_EXCEPTION_NOT_HANDLED);
-            continue;
-        }
-
-        break;
-    }
-
-    /* Check if the wait failed */
-    if (!(NT_SUCCESS(Status)) || (Status == DBG_UNABLE_TO_PROVIDE_HANDLE))
-    {
-        /* Set the error code and quit */
-        BaseSetLastNTError(Status);
-        return FALSE;
-    }
-
-    /* Check if we timed out */
-    if (Status == STATUS_TIMEOUT)
-    {
-        /* Fail with a timeout error */
-        SetLastError(ERROR_SEM_TIMEOUT);
-        return FALSE;
-    }
-
-    /* Convert the structure */
-    Status = DbgUiConvertStateChangeStructure(&WaitStateChange, lpDebugEvent);
-    if (!NT_SUCCESS(Status))
-    {
-        /* Set the error code and quit */
-        BaseSetLastNTError(Status);
-        return FALSE;
-    }
-
-    /* Check what kind of event this was */
-    switch (lpDebugEvent->dwDebugEventCode)
-    {
-        /* New thread was created */
-        case CREATE_THREAD_DEBUG_EVENT:
-
-            /* Setup the thread data */
-            SaveThreadHandle(lpDebugEvent->dwProcessId,
-                             lpDebugEvent->dwThreadId,
-                             lpDebugEvent->u.CreateThread.hThread);
-            break;
-
-        /* New process was created */
-        case CREATE_PROCESS_DEBUG_EVENT:
-
-            /* Setup the process data */
-            SaveProcessHandle(lpDebugEvent->dwProcessId,
-                              lpDebugEvent->u.CreateProcessInfo.hProcess);
-
-            /* Setup the thread data */
-            SaveThreadHandle(lpDebugEvent->dwProcessId,
-                             lpDebugEvent->dwThreadId,
-                             lpDebugEvent->u.CreateProcessInfo.hThread);
-            break;
-
-        /* Process was exited */
-        case EXIT_PROCESS_DEBUG_EVENT:
-
-            /* Mark the thread data as such and fall through */
-            MarkProcessHandle(lpDebugEvent->dwProcessId);
-
-        /* Thread was exited */
-        case EXIT_THREAD_DEBUG_EVENT:
-
-            /* Mark the thread data */
-            MarkThreadHandle(lpDebugEvent->dwThreadId);
-            break;
-
-        /* Nothing to do */
-        case EXCEPTION_DEBUG_EVENT:
-        case LOAD_DLL_DEBUG_EVENT:
-        case UNLOAD_DLL_DEBUG_EVENT:
-        case OUTPUT_DEBUG_STRING_EVENT:
-        case RIP_EVENT:
-            break;
-
-        /* Fail anything else */
-        default:
-            return FALSE;
-    }
-
-    /* Return success */
-    return TRUE;
-}
 
 BOOL
 WINAPI
-WaitForDebugEvent(IN LPDEBUG_EVENT lpDebugEvent,
-                  IN DWORD dwMilliseconds)
-{
-    return BasepWaitForDebugEvent(lpDebugEvent, dwMilliseconds, FALSE);
-}
 
 BOOL
 WINAPI
-WaitForDebugEventEx(IN LPDEBUG_EVENT lpDebugEvent,
-                    IN DWORD dwMilliseconds)
-{
-    return BasepWaitForDebugEvent(lpDebugEvent, dwMilliseconds, TRUE);
-}
 
 /*
  * @implemented
