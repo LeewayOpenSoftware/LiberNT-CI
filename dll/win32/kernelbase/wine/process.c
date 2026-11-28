@@ -1148,11 +1148,31 @@ BOOL WINAPI DECLSPEC_HOTPATCH QueryProcessCycleTime( HANDLE process, ULONG64 *cy
  */
 UINT WINAPI DECLSPEC_HOTPATCH SetErrorMode( UINT mode )
 {
-    UINT old = GetErrorMode();
+    UINT PrevErrMode, NewMode;
 
+    /* Get the previous mode */
+    PrevErrMode = GetErrorMode();
+    NewMode = mode;
+
+    /* Check if failing critical errors was requested */
+    if (NewMode & SEM_FAILCRITICALERRORS)
+    {
+        /* Mask it out, since the native API works differently */
+        NewMode &= ~SEM_FAILCRITICALERRORS;
+    }
+    else
+    {
+        /* OR it if the caller did not, due to different native semantics */
+        NewMode |= SEM_FAILCRITICALERRORS;
+    }
+
+    /* Always keep no alignment faults if they were set */
+    NewMode |= (PrevErrMode & SEM_NOALIGNMENTFAULTEXCEPT);
+
+    /* Set the new mode */
     NtSetInformationProcess( GetCurrentProcess(), ProcessDefaultHardErrorMode,
-                             &mode, sizeof(mode) );
-    return old;
+                             &NewMode, sizeof(NewMode) );
+    return PrevErrMode;
 }
 
 

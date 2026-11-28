@@ -123,7 +123,6 @@ if(ARCH STREQUAL "amd64")
         client/amd64/except.S)
 else()
     list(APPEND SOURCE
-        client/raise.c)
 endif()
 
 if(ARCH STREQUAL "i386")
