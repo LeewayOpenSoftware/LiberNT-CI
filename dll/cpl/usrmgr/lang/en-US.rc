@@ -113,6 +113,22 @@ BEGIN
     PUSHBUTTON "Cancel", IDCANCEL, 210, 53, 50, 14
 END
 
+IDD_AUTOLOGON DIALOGEX 0, 0, 267, 116
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_SHELLFONT
+CAPTION "Automatically sign in"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "You can set up your computer so that users do not have to type a user name and password to sign in. To do this, specify a user who will be automatically signed in below:", -1, 7, 7, 253, 34
+    RTEXT "User name:", -1, 7, 48, 96, 8
+    EDITTEXT IDC_AUTOLOGON_USER, 107, 45, 153, 14, ES_AUTOHSCROLL
+    RTEXT "Password:", -1, 7, 66, 96, 8
+    EDITTEXT IDC_AUTOLOGON_PASSWORD1, 107, 63, 153, 14, ES_AUTOHSCROLL | ES_PASSWORD
+    RTEXT "Confirm Password:", -1, 7, 84, 96, 8
+    EDITTEXT IDC_AUTOLOGON_PASSWORD2, 107, 81, 153, 14, ES_AUTOHSCROLL | ES_PASSWORD
+    DEFPUSHBUTTON "OK", IDOK, 156, 99, 50, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 210, 99, 50, 14
+END
+
 IDD_USER_NEW DIALOGEX 0, 0, 267, 200
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_SHELLFONT
 CAPTION "New User"
