@@ -98,7 +98,7 @@ jobs:
       run: |
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
         OUT=${{steps.configure.outputs.outdir}}
-        WANT="libernt-update libernt-update-bootstrap LiberNTUpdatePending lnfailstub lnokstub lnfailstub_smss lnfailstub_win32 ntoskrnl ntdll win32k hal bootvid winlogon"
+        WANT="orosi-update orosi-update-bootstrap OrosiUpdatePending lnfailstub lnokstub lnfailstub_smss lnfailstub_win32 ntoskrnl ntdll win32k hal bootvid winlogon"
         avail=$(ninja -C "$OUT" -t targets all | cut -d: -f1)
         build=""
         for t in $WANT; do
@@ -121,9 +121,9 @@ jobs:
             echo "::notice::not built on this branch: $1"
           fi
         }
-        collect LiberNTUpdatePending.exe   applier
-        collect libernt-update.exe         cli
-        collect libernt-update-bootstrap.exe bootstrap
+        collect OrosiUpdatePending.exe   applier
+        collect orosi-update.exe         cli
+        collect orosi-update-bootstrap.exe bootstrap
         collect lnfailstub.sys             stub-driver-bad
         collect lnokstub.sys               stub-driver-good
         collect lnfailstub_smss.exe        stub-smss-bad

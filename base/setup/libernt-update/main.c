@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT Update
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     libernt-update-bootstrap: install/uninstall the LiberNT Update stage-1 infrastructure
+ * PURPOSE:     orosi-update-bootstrap: install/uninstall the Orosi Update stage-1 infrastructure
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -65,7 +65,7 @@ BsLogInit(
     memset(Log, 0, sizeof(*Log));
     Log->Target = Target;
     if (BsBuildTargetPath(Log->LogPath, RTL_NUMBER_OF(Log->LogPath),
-                          Target, L"LiberNT\\Servicing\\logs\\bootstrap.log") == ERROR_SUCCESS)
+                          Target, L"Orosi\\Servicing\\logs\\bootstrap.log") == ERROR_SUCCESS)
         Log->Ready = TRUE;
 }
 
@@ -505,7 +505,7 @@ BsInstall(
             return ERROR_FILE_NOT_FOUND;
         }
     }
-    if (BsBuildTargetPath(Dest, RTL_NUMBER_OF(Dest), Target, L"LiberNT") != ERROR_SUCCESS)
+    if (BsBuildTargetPath(Dest, RTL_NUMBER_OF(Dest), Target, L"Orosi") != ERROR_SUCCESS)
         return ERROR_FILENAME_EXCED_RANGE;
     if (Target->IsImage)
     {
@@ -544,7 +544,7 @@ BsInstall(
     BsPrint(L"  pin development public key -> %ls\\%ls\n", Target->Root, BS_DEVKEY_FILE);
     BsPrint(L"  service: %s\n",
             ServiceWanted ? (Target->IsImage ? L"record stub in installed.json (offline)"
-                                             : L"create LiberNTUpdateSvc disabled, enable after self-test")
+                                             : L"create OrosiUpdateSvc disabled, enable after self-test")
                           : L"explicit stub (no service binary in bundle)");
     BsPrint(L"  self-test: read-back hashes, DACL check, pinned key, trust cert, simulated transaction\n");
     BsPrint(L"  BootExecute += %s (only after the self-test passes)\n", BS_BOOTEXECUTE_APP);
@@ -674,7 +674,7 @@ BsUninstall(
     ULONG i;
     DWORD Error;
 
-    if (BsTargetFileExists(Target, L"LiberNT\\Servicing\\pending\\plan.json"))
+    if (BsTargetFileExists(Target, L"Orosi\\Servicing\\pending\\plan.json"))
     {
         BsPrint(L"uninstall refused: a servicing plan is pending; run it or roll it back first\n");
         return ERROR_BUSY;
@@ -720,11 +720,11 @@ BsUninstall(
     BsPrint(L"PLAN%s:\n", DryRun ? L" (dry-run)" : L"");
     BsPrint(L"  BootExecute -= %s\n", BS_BOOTEXECUTE_APP);
     if (wcscmp(Inventory.ServiceState, L"installed") == 0 && !Target->IsImage)
-        BsPrint(L"  delete service LiberNTUpdateSvc\n");
+        BsPrint(L"  delete service OrosiUpdateSvc\n");
     for (i = 0; i < Inventory.FileCount; i++)
         BsPrint(L"  delete %ls\n", Inventory.Files[i].Path);
     BsPrint(L"  keep logs; export to %ls\n",
-            ExportDir ? ExportDir : L"LiberNT\\Servicing\\logs (in place)");
+            ExportDir ? ExportDir : L"Orosi\\Servicing\\logs (in place)");
     if (DryRun)
         return ERROR_SUCCESS;
 
@@ -738,7 +738,7 @@ BsUninstall(
         if (!CreateDirectoryW(ExportDir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
             return GetLastError();
         Error = BsBuildTargetPath(Src, RTL_NUMBER_OF(Src), Target,
-                                  L"LiberNT\\Servicing\\journal\\transactions.jsonl");
+                                  L"Orosi\\Servicing\\journal\\transactions.jsonl");
         if (Error == ERROR_SUCCESS &&
             GetFileAttributesW(Src) != INVALID_FILE_ATTRIBUTES)
         {
@@ -802,10 +802,10 @@ BsUninstall(
 static VOID
 BsUsage(VOID)
 {
-    BsPrint(L"libernt-update-bootstrap %ls\n", BS_VERSION);
+    BsPrint(L"orosi-update-bootstrap %ls\n", BS_VERSION);
     BsPrint(L"usage:\n");
-    BsPrint(L"  libernt-update-bootstrap.exe install --bundle <dir> [--image <root>] [--dry-run]\n");
-    BsPrint(L"  libernt-update-bootstrap.exe uninstall [--image <root>] [--export <dir>] [--dry-run]\n");
+    BsPrint(L"  orosi-update-bootstrap.exe install --bundle <dir> [--image <root>] [--dry-run]\n");
+    BsPrint(L"  orosi-update-bootstrap.exe uninstall [--image <root>] [--export <dir>] [--dry-run]\n");
 }
 
 int

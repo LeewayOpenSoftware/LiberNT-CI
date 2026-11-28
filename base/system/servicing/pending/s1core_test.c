@@ -4,7 +4,7 @@
  * PURPOSE:     Host logic tests for the S1 boot applier core
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * Runs on the host (and as a LiberNT apitest): plan parse + signature verify,
+ * Runs on the host (and as a Orosi apitest): plan parse + signature verify,
  * hash-chained journal integrity, deterministic transactionId and the
  * two-attempt rollback rule. Fixtures were generated with the development
  * signing key (private key kept outside the repository) and an attacker key.

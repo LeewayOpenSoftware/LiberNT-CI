@@ -4,7 +4,7 @@
  * PURPOSE:     Stage-1 boot applier core: pure logic, no OS dependencies
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * Portable core of LiberNTUpdatePending.exe: SHA-256 (FIPS 180-4), RSA-2048
+ * Portable core of OrosiUpdatePending.exe: SHA-256 (FIPS 180-4), RSA-2048
  * PKCS#1 v1.5 signature verification over SHA-256, a minimal JSON reader for
  * the S1 contracts (plan.json / attempt.json), the hash-chained journal, the
  * deterministic transaction id and the two-attempt rollback rule. This file

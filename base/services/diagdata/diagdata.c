@@ -20,9 +20,9 @@
 #define NDEBUG
 #include <debug.h>
 
-#define DIAGDATA_KEY L"SOFTWARE\\LiberNT\\DiagnosticData"
+#define DIAGDATA_KEY L"SOFTWARE\\Orosi\\DiagnosticData"
 #define DIAGDATA_ENDPOINT L"https://ci.libernt.com/api/diagnostic-data/v1/report"
-#define DIAGDATA_AGENT L"LiberNT-DiagnosticData/1"
+#define DIAGDATA_AGENT L"Orosi-DiagnosticData/1"
 #define DIAGDATA_SETTLE_MS 30000
 #define DIAGDATA_PNP_POLL_MS 500
 #define DIAGDATA_OFF_LEVEL 0

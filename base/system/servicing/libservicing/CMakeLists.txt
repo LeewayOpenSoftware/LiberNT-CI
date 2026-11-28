@@ -1,4 +1,4 @@
-# LiberNT Update, stage 1 core (libservicing). STANDALONE: no parent CMakeLists.txt includes this
+# Orosi Update, stage 1 core (libservicing). STANDALONE: no parent CMakeLists.txt includes this
 # directory, so it is not part of the global build or the ISO (owner condition 3).
 #
 # To try it in a local, uncommitted tree add to base/system/CMakeLists.txt:

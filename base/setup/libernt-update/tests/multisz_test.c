@@ -51,21 +51,21 @@ main(void)
     WCHAR Empty[] = L"\0";
     SIZE_T Chars;
 
-    Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), In1, L"LiberNTUpdatePending");
+    Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), In1, L"OrosiUpdatePending");
     CHECK(Chars > 0, "add to autocheck-only list succeeds");
     if (Chars)
-        ExpectSeq(Out, L"autocheck\0autochk *\0LiberNTUpdatePending\0", "lands after autochk *");
+        ExpectSeq(Out, L"autocheck\0autochk *\0OrosiUpdatePending\0", "lands after autochk *");
 
-    Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), In2, L"LiberNTUpdatePending");
+    Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), In2, L"OrosiUpdatePending");
     CHECK(Chars > 0, "add with trailing entry succeeds");
     if (Chars)
-        ExpectSeq(Out, L"autocheck\0autochk *\0LiberNTUpdatePending\0something\0",
+        ExpectSeq(Out, L"autocheck\0autochk *\0OrosiUpdatePending\0something\0",
                   "inserted before first non-autocheck entry");
 
-    Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), In3, L"LiberNTUpdatePending");
+    Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), In3, L"OrosiUpdatePending");
     CHECK(Chars > 0, "add to foreign-only list succeeds");
     if (Chars)
-        ExpectSeq(Out, L"LiberNTUpdatePending\0onlyapp\0",
+        ExpectSeq(Out, L"OrosiUpdatePending\0onlyapp\0",
                   "prepended when no autocheck entry exists");
 
     {
@@ -73,33 +73,33 @@ main(void)
          * push the app ahead of the filesystem checks. */
         WCHAR InForeignFirst[] = L"something\0autocheck\0autochk *\0";
         Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), InForeignFirst,
-                             L"LiberNTUpdatePending");
+                             L"OrosiUpdatePending");
         CHECK(Chars > 0, "add with foreign first entry succeeds");
         if (Chars)
-            ExpectSeq(Out, L"something\0autocheck\0autochk *\0LiberNTUpdatePending\0",
+            ExpectSeq(Out, L"something\0autocheck\0autochk *\0OrosiUpdatePending\0",
                       "inserted after the last autocheck, not before the first");
     }
 
-    Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), Empty, L"LiberNTUpdatePending");
+    Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), Empty, L"OrosiUpdatePending");
     CHECK(Chars > 0, "add to empty value succeeds");
     if (Chars)
-        ExpectSeq(Out, L"LiberNTUpdatePending\0", "empty value becomes the single entry");
+        ExpectSeq(Out, L"OrosiUpdatePending\0", "empty value becomes the single entry");
 
-    Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), In1, L"LiberNTUpdatePending");
+    Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), In1, L"OrosiUpdatePending");
     {
         WCHAR Again[256];
         SIZE_T AgainChars = BsMultiSzAdd(Again, RTL_NUMBER_OF(Again), Out,
-                                         L"LiberNTUpdatePending");
+                                         L"OrosiUpdatePending");
         CHECK(AgainChars == Chars, "second add is idempotent (same length)");
         if (AgainChars)
-            ExpectSeq(Again, L"autocheck\0autochk *\0LiberNTUpdatePending\0",
+            ExpectSeq(Again, L"autocheck\0autochk *\0OrosiUpdatePending\0",
                       "no duplicate entry");
     }
 
     {
         WCHAR Mixed[256];
-        WCHAR InMixed[] = L"autocheck\0LiberNTUpdatePending\0autochk *\0";
-        Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), InMixed, L"LiberNTUpdatePending");
+        WCHAR InMixed[] = L"autocheck\0OrosiUpdatePending\0autochk *\0";
+        Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), InMixed, L"OrosiUpdatePending");
         CHECK(Chars > 0, "add to already-containing list succeeds");
         if (Chars)
         {
@@ -108,7 +108,7 @@ main(void)
         }
     }
 
-    Chars = BsMultiSzRemove(Out, RTL_NUMBER_OF(Out), In1, L"LiberNTUpdatePending");
+    Chars = BsMultiSzRemove(Out, RTL_NUMBER_OF(Out), In1, L"OrosiUpdatePending");
     CHECK(Chars > 0, "remove absent entry succeeds");
     if (Chars)
         ExpectSeq(Out, In1, "list unchanged when entry absent");

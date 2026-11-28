@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT Update
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     LiberNTUpdateSvc registration for the online bootstrap
+ * PURPOSE:     OrosiUpdateSvc registration for the online bootstrap
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -45,7 +45,7 @@ BsServiceInstall(
         return ERROR_NOT_SUPPORTED; /* services are registered online only */
 
     if (BsBuildTargetPath(BinaryPath, RTL_NUMBER_OF(BinaryPath), Target,
-                          L"LiberNT\\Servicing\\bin\\LiberNTUpdateSvc.exe") != ERROR_SUCCESS)
+                          L"Orosi\\Servicing\\bin\\OrosiUpdateSvc.exe") != ERROR_SUCCESS)
         return ERROR_FILENAME_EXCED_RANGE;
 
     Manager = OpenSCManagerW(NULL, NULL,
@@ -77,7 +77,7 @@ BsServiceInstall(
 
     /* Created disabled; the bootstrap enables it only after the self-test. */
     Service = CreateServiceW(Manager, BS_SERVICE_NAME,
-                             L"LiberNT Update Servicing",
+                             L"Orosi Update Servicing",
                              SERVICE_CHANGE_CONFIG | SERVICE_QUERY_STATUS,
                              SERVICE_WIN32_OWN_PROCESS,
                              Enable ? SERVICE_DEMAND_START : SERVICE_DISABLED,

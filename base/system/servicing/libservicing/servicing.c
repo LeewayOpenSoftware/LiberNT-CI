@@ -21,7 +21,7 @@
 #include <string.h>
 #include <wchar.h>
 
-#define CER_NAME L"trust\\Leeway-LiberNT-Update-DEV.cer"
+#define CER_NAME L"trust\\Leeway-Orosi-Update-DEV.cer"
 
 #ifdef LN_TESTING
 BOOL LnTestLockedAsPending = FALSE;
@@ -901,7 +901,7 @@ static DWORD DoRollback(CTX *c, const char *why)
  * the offline root is checked for the exe; its BootExecute lives in unmounted
  * hives, and an image that carries the exe came from an installed system. */
 /* TRUE when a raw BootExecute value (REG_SZ or REG_MULTI_SZ, maybe unterminated or
- * without the double NUL) lists the LiberNT boot applier. `bytes` is the buffer
+ * without the double NUL) lists the Orosi boot applier. `bytes` is the buffer
  * size in bytes. Each entry is matched by its first token (up to a space), with
  * any path and a trailing ".exe" stripped, case-insensitively. */
 BOOL
@@ -926,7 +926,7 @@ LnBootExecuteListed(const WCHAR *multiSz, size_t bytes)
         len = wcslen(base);
         if (len > 4 && _wcsicmp(base + len - 4, L".exe") == 0)
             base[len - 4] = 0;
-        if (_wcsicmp(base, L"LiberNTUpdatePending") == 0)
+        if (_wcsicmp(base, L"OrosiUpdatePending") == 0)
             return TRUE;
     }
     return FALSE;
@@ -937,7 +937,7 @@ RequireBootApplier(const LN_TARGET *t)
 {
     if (t->mode == LnTargetImage)
     {
-        WCHAR *p = LnTargetFile(t, L"Windows\\System32\\LiberNTUpdatePending.exe");
+        WCHAR *p = LnTargetFile(t, L"Windows\\System32\\OrosiUpdatePending.exe");
         DWORD attrs;
 
         if (!p)
@@ -956,7 +956,7 @@ RequireBootApplier(const LN_TARGET *t)
         n = GetSystemDirectoryW(exe, MAX_PATH - 30);
         if (n == 0)
             return ERROR_NOT_ENOUGH_MEMORY;
-        wcscat(exe, L"\\LiberNTUpdatePending.exe");
+        wcscat(exe, L"\\OrosiUpdatePending.exe");
         if (GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES)
             return LN_E_NO_BOOT_APPLIER;
         r = RegOpenKeyExW(HKEY_LOCAL_MACHINE,

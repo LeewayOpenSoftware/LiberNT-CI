@@ -1,4 +1,4 @@
-# S1-BOOTSTRAP: bootstrap online/offline de LiberNT Update (etapa 1)
+# S1-BOOTSTRAP: bootstrap online/offline de Orosi Update (etapa 1)
 
 Autoría: Kevin (card `libernt-update-s1-bootstrap`, 2026-10-30). Implementa
 DESIGN-v0 §9 bajo OWNER-STAGE1-CONDITIONS.md. Nombres provisionales
@@ -6,14 +6,14 @@ DESIGN-v0 §9 bajo OWNER-STAGE1-CONDITIONS.md. Nombres provisionales
 
 ## Qué es
 
-`libernt-update-bootstrap.exe` instala o desinstala la infraestructura de
-LiberNT Update sobre un LiberNT existente, en marcha (online) o sobre una
+`orosi-update-bootstrap.exe` instala o desinstala la infraestructura de
+Orosi Update sobre un Orosi existente, en marcha (online) o sobre una
 raíz montada/apagada (offline, `--image <root>`), sin reinstalar el sistema
 (condición: "instalable y desinstalable online u offline").
 
 ```
-libernt-update-bootstrap.exe install   --bundle <dir> [--image <root>] [--dry-run]
-libernt-update-bootstrap.exe uninstall [--image <root>] [--export <dir>] [--dry-run]
+orosi-update-bootstrap.exe install   --bundle <dir> [--image <root>] [--dry-run]
+orosi-update-bootstrap.exe uninstall [--image <root>] [--export <dir>] [--dry-run]
 ```
 
 ## El bundle
@@ -38,14 +38,14 @@ bundle/
   "schema": 1,
   "binaries": [
     {"name": "...", "source": "files/pending.exe",
-     "dest": "Windows\\System32\\LiberNTUpdatePending.exe",
+     "dest": "Windows\\System32\\OrosiUpdatePending.exe",
      "sha256": "<64 hex>", "required": true}
   ]
 }
 ```
 
 - `dest` es relativo a la raíz del target. Solo se aceptan destinos dentro
-  de `Windows\...` o `LiberNT\...` (allowlist deliberada; sin rutas
+  de `Windows\...` o `Orosi\...` (allowlist deliberada; sin rutas
   arbitrarias, DESIGN §4).
 - `required: true` ⇒ el archivo debe existir en el bundle; si falta, no se
   instala nada.
@@ -54,7 +54,7 @@ bundle/
 
 ## Qué instala
 
-1. `TARGET\LiberNT\Servicing\` con el árbol `store`, `journal`, `pending`,
+1. `TARGET\Orosi\Servicing\` con el árbol `store`, `journal`, `pending`,
    `backup`, `bin`, `logs`, `bootstrap`. Cada directorio se crea con el DACL
    protegido de la revisión B1 de Pam: owner SYSTEM, DACL heredable
    protegida con únicamente ACEs de allow para SYSTEM y Administrators
@@ -69,13 +69,13 @@ bundle/
 3. `store\dev-public-key.bin`: clave pública DEV embebida fijada en el store
    protegido (pinning, S1-CONTRACTS §1b).
 4. `HKLM\SYSTEM\<CurrentControlSet|ControlSet00N>\Control\Session Manager\
-   BootExecute` (REG_MULTI_SZ): añade `LiberNTUpdatePending` **después** de
+   BootExecute` (REG_MULTI_SZ): añade `OrosiUpdatePending` **después** de
    las entradas `autocheck`/`autochk`, preservando el orden existente y sin
    duplicar (idempotente). Offline: el hive `SYSTEM` del target se carga con
    `RegLoadKeyW` (advapi32 reg.c:3134), se resuelve el control set por
    `Select\Current` (las cargas offline no tienen el enlace simbólico
    `CurrentControlSet`), se edita y se descarga con `RegUnLoadKeyW`.
-5. Servicio `LiberNTUpdateSvc` (solo online, y solo si el bundle trae el
+5. Servicio `OrosiUpdateSvc` (solo online, y solo si el bundle trae el
    binario con `"service": true`): se crea **deshabilitado**, y solo se
    habilita (demand start) si el self-test pasa. Si el bundle no trae el
    servicio, queda un **stub explícito**: `installed.json` lo declara como
@@ -150,7 +150,7 @@ servicio → self-test).
 
 ## Pruebas
 
-- En el árbol: target `libernt-update-bootstrap` (amd64); no se agrega al
+- En el árbol: target `orosi-update-bootstrap` (amd64); no se agrega al
   ISO ni a `bootcd` (condición del dueño).
 - En el host: `tests/hosttest.py` (python 3, requiere administrador)
   construye un bundle firmado con la clave DEV (`%USERPROFILE%\.leeway-dev-signing\`,

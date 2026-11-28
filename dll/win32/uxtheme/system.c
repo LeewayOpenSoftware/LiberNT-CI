@@ -853,7 +853,7 @@ BOOL UXTHEME_MicaCapable(void)
 /* Store names of the two LiberNT version-4 styles: Aero with composited materials, Basic without */
 LPCWSTR UXTHEME_SelectDefaultStyleName(void)
 {
-    return UXTHEME_MicaCapable() ? L"LiberNTAero" : L"LiberNT";
+    return UXTHEME_MicaCapable() ? L"OrosiAero" : L"Orosi";
 }
 
 static void UXTHEME_ClearLiquidProperties(HWND hwnd, ULONG region)

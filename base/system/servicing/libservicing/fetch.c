@@ -173,7 +173,7 @@ LnFetchFile(const WCHAR *url, const WCHAR *destPath)
         }
 
         n = _snprintf(req, sizeof(req),
-                      "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: libernt-update\r\n"
+                      "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: orosi-update\r\n"
                       "Connection: close\r\n\r\n",
                       pathA, hostA);
         if (n < 0 || (DWORD)n >= sizeof(req))
@@ -321,7 +321,7 @@ LnFetchPackage(const LN_TARGET *t, const WCHAR *baseUrl, const WCHAR *destDir)
 
     url = malloc(sizeof(WCHAR) * (wcslen(baseUrl) + 32));
     file = malloc(sizeof(WCHAR) * (wcslen(destDir) + 32));
-    cer = LnTargetPath(t, L"trust\\Leeway-LiberNT-Update-DEV.cer");
+    cer = LnTargetPath(t, L"trust\\Leeway-Orosi-Update-DEV.cer");
     if (!url || !file || !cer)
     {
         err = ERROR_NOT_ENOUGH_MEMORY;

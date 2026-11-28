@@ -71,8 +71,8 @@ main(void)
 
     CreateDirectoryW(DirW, NULL);
     {
-        static const WCHAR *Chain[] = { L"\\LiberNT", L"\\LiberNT\\Servicing",
-                                        L"\\LiberNT\\Servicing\\bootstrap" };
+        static const WCHAR *Chain[] = { L"\\Orosi", L"\\Orosi\\Servicing",
+                                        L"\\Orosi\\Servicing\\bootstrap" };
         WCHAR Mk[BS_MAX_PATH_BUF];
         size_t c;
 
@@ -90,9 +90,9 @@ main(void)
         HexA[i] = "0123456789abcdef"[i & 15];
     HexA[64] = 0;
     strcpy(In.ManifestDigest, HexA);
-    wcscpy(In.Files[0].Path, L"Windows\\System32\\LiberNTUpdatePending.exe");
+    wcscpy(In.Files[0].Path, L"Windows\\System32\\OrosiUpdatePending.exe");
     strcpy(In.Files[0].Sha256, HexA);
-    wcscpy(In.Files[1].Path, L"LiberNT\\Servicing\\bin\\libernt-update.exe");
+    wcscpy(In.Files[1].Path, L"Orosi\\Servicing\\bin\\orosi-update.exe");
     strcpy(In.Files[1].Sha256, HexA);
     wcscpy(In.Files[2].Path, L"Windows\\System32\\quo\"te\x01.dll");
     strcpy(In.Files[2].Sha256, HexA);
@@ -150,9 +150,9 @@ main(void)
         Check(wcscmp(Out.ServiceState, L"stub") == 0, "service state round-trips");
         Check(Out.BootExecute == TRUE, "bootExecute=true round-trips");
         Check(strcmp(Out.ManifestDigest, HexA) == 0, "manifest digest round-trips");
-        Check(wcscmp(Out.Files[0].Path, L"Windows\\System32\\LiberNTUpdatePending.exe") == 0,
+        Check(wcscmp(Out.Files[0].Path, L"Windows\\System32\\OrosiUpdatePending.exe") == 0,
               "backslash path 1 round-trips");
-        Check(wcscmp(Out.Files[1].Path, L"LiberNT\\Servicing\\bin\\libernt-update.exe") == 0,
+        Check(wcscmp(Out.Files[1].Path, L"Orosi\\Servicing\\bin\\orosi-update.exe") == 0,
               "backslash path 2 round-trips");
         Check(wcscmp(Out.Files[2].Path, L"Windows\\System32\\quo\"te\x01.dll") == 0,
               "quote and control-char path round-trips");
@@ -164,11 +164,11 @@ main(void)
 
         swprintf(DelW, RTL_NUMBER_OF(DelW), L"%s\\%s", DirW, BS_INSTALLED_JSON);
         DeleteFileW(DelW);
-        swprintf(DelW, RTL_NUMBER_OF(DelW), L"%s\\LiberNT\\Servicing\\bootstrap", DirW);
+        swprintf(DelW, RTL_NUMBER_OF(DelW), L"%s\\Orosi\\Servicing\\bootstrap", DirW);
         RemoveDirectoryW(DelW);
-        swprintf(DelW, RTL_NUMBER_OF(DelW), L"%s\\LiberNT\\Servicing", DirW);
+        swprintf(DelW, RTL_NUMBER_OF(DelW), L"%s\\Orosi\\Servicing", DirW);
         RemoveDirectoryW(DelW);
-        swprintf(DelW, RTL_NUMBER_OF(DelW), L"%s\\LiberNT", DirW);
+        swprintf(DelW, RTL_NUMBER_OF(DelW), L"%s\\Orosi", DirW);
         RemoveDirectoryW(DelW);
         RemoveDirectoryW(DirW);
     }

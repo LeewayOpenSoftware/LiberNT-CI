@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT Update
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     LiberNT Update window: status header, packages, history, roll back
+ * PURPOSE:     Orosi Update window: status header, packages, history, roll back
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
  * Layout and calls: shared/leeway/libernt-update/ui/DESIGN.md. Same frame, fonts and palette as SystemSettings.
@@ -176,7 +176,7 @@ protected:
             }
             case WM_CLOSE:
                 if (m_Busy && MessageBoxW(m_hwnd, L"An update step is still running. Wait for it to finish.",
-                                          L"LiberNT Update", MB_OK | MB_ICONINFORMATION))
+                                          L"Orosi Update", MB_OK | MB_ICONINFORMATION))
                     return 0;
                 break;
         }
@@ -324,7 +324,7 @@ private:
                         }
                         break;
                     case Head::Restart:
-                        if (MessageBoxW(m_hwnd, L"Restart now to finish the update?", L"LiberNT Update",
+                        if (MessageBoxW(m_hwnd, L"Restart now to finish the update?", L"Orosi Update",
                                         MB_YESNO | MB_ICONQUESTION) == IDYES)
                         {
                             HANDLE token;
@@ -514,7 +514,7 @@ private:
             status = L"Working...";
 
         rc = { left, y, right, y + m_Theme.Scale(44) };
-        canvas.Text(L"LiberNT Update", rc, m_Theme.Font(TextStyle::Title), c.Text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        canvas.Text(L"Orosi Update", rc, m_Theme.Font(TextStyle::Title), c.Text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         y += m_Theme.Scale(60);
 
         iconRc = { left + m_Theme.Scale(8), y, left + m_Theme.Scale(8) + iconSize, y + iconSize };
@@ -837,7 +837,7 @@ wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR commandLine, int showCmd
     UNREFERENCED_PARAMETER(instance);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     {
-        HWND existing = FindWindowW(L"LiberNTUpdateFrame", NULL);
+        HWND existing = FindWindowW(L"OrosiUpdateFrame", NULL);
 
         if (existing)
         {
@@ -851,7 +851,7 @@ wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR commandLine, int showCmd
     InitCommonControlsEx(&icc);
     if (!Startup())
         return 1;
-    if (!window.Create(L"LiberNTUpdateFrame", L"LiberNT Update", NULL, 1000, 700, showCmd))
+    if (!window.Create(L"OrosiUpdateFrame", L"Orosi Update", NULL, 1000, 700, showCmd))
     {
         Shutdown();
         return 1;

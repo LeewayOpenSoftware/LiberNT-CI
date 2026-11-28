@@ -25,8 +25,8 @@ namespace lntdrv
 namespace
 {
 
-const WCHAR HistoryKey[] = L"SOFTWARE\\LiberNT\\Drivers\\History";
-const WCHAR NamesKey[] = L"SOFTWARE\\LiberNT\\Drivers\\Names";
+const WCHAR HistoryKey[] = L"SOFTWARE\\Orosi\\Drivers\\History";
+const WCHAR NamesKey[] = L"SOFTWARE\\Orosi\\Drivers\\Names";
 const WCHAR DownloadsSecurity[] = L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
 const size_t MaximumInfSize = 16 * 1024 * 1024;
 const DWORD MsiTimeout = 10 * 60 * 1000;
@@ -753,7 +753,7 @@ std::wstring DownloadsRoot()
 
     if (FAILED(SHGetFolderPathW(NULL, CSIDL_COMMON_APPDATA, NULL, SHGFP_TYPE_CURRENT, root)))
         return std::wstring();
-    return std::wstring(root) + L"\\LiberNT\\Drivers";
+    return std::wstring(root) + L"\\Orosi\\Drivers";
 }
 
 std::wstring PackageDirectory(const std::wstring &updateId)

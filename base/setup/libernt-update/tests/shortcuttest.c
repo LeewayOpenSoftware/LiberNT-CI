@@ -10,7 +10,7 @@
  * Regression for Pam's review of ae40ee1347: the shortcut target used to be
  * built as Root+Target without a separator; this tree's BS_TARGET.Root has
  * no trailing backslash ('C:' online, stripped for images), so the .lnk
- * destination came out drive-relative ('C:LiberNT\...').
+ * destination came out drive-relative ('C:Orosi\...').
  *
  * Build (from this directory, MinGW/Clang on PATH):
  *   clang --target=x86_64-w64-mingw32 -O1 -Wall -Wextra -DUNICODE -D_UNICODE -I../../../system/servicing/pending shortcuttest.c ../bundle.c ../multisz.c ../reg.c ../selftest.c ../service.c ../target.c ../../../system/servicing/pending/s1core.c -mconsole -o shortcuttest.exe -lmsvcrt-os -lkernel32 -lntdll -ladvapi32 -lshell32 -lole32 -luuid
@@ -78,7 +78,7 @@ main(void)
 
     memset(&Bundle, 0, sizeof(Bundle));
     wcscpy(Bundle.Shortcuts[0].Name, L"ln-shortcut-test.lnk");
-    wcscpy(Bundle.Shortcuts[0].Target, L"LiberNT\\Update\\libernt-update-ui.exe");
+    wcscpy(Bundle.Shortcuts[0].Target, L"Orosi\\Update\\orosi-update-ui.exe");
     wcscpy(Bundle.Shortcuts[0].Arguments, L"/query");
     Bundle.ShortcutCount = 1;
 
@@ -123,7 +123,7 @@ main(void)
                     WCHAR Expected[MAX_PATH * 2];
 
                     swprintf(Expected, RTL_NUMBER_OF(Expected),
-                             L"%s\\LiberNT\\Update\\libernt-update-ui.exe", DirW);
+                             L"%s\\Orosi\\Update\\orosi-update-ui.exe", DirW);
                     Check(wcscmp(GotPath, Expected) == 0,
                           ".lnk destination is the fully-qualified exe");
                     if (wcscmp(GotPath, Expected) != 0)
