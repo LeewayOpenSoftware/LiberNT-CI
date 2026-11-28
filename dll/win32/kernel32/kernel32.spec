@@ -424,8 +424,8 @@
 @ stdcall -version=0x600+ GetCompressedFileSizeTransactedW(wstr ptr ptr)
 @ stdcall GetCompressedFileSizeW(long ptr)
 @ stdcall GetComputerNameA(ptr ptr)
-@ stdcall GetComputerNameExA(long ptr ptr)
-@ stdcall GetComputerNameExW(long ptr ptr)
+@ stdcall GetComputerNameExA(long ptr ptr) kernelbase.GetComputerNameExA
+@ stdcall GetComputerNameExW(long ptr ptr) kernelbase.GetComputerNameExW
 @ stdcall GetComputerNameW(ptr ptr)
 @ stdcall GetConsoleAliasA(str str long str) kernelbase.GetConsoleAliasA
 @ stdcall GetConsoleAliasExesA(str long) kernelbase.GetConsoleAliasExesA
@@ -1167,10 +1167,10 @@
 @ stdcall SetCommMask(long ptr)
 @ stdcall SetCommState(long ptr)
 @ stdcall SetCommTimeouts(long ptr)
-@ stdcall SetComputerNameA(str)
-@ stdcall SetComputerNameExA(long str)
-@ stdcall SetComputerNameExW(long wstr)
-@ stdcall SetComputerNameW(wstr)
+@ stdcall SetComputerNameA(str) kernelbase.SetComputerNameA
+@ stdcall SetComputerNameExA(long str) kernelbase.SetComputerNameExA
+@ stdcall SetComputerNameExW(long wstr) kernelbase.SetComputerNameExW
+@ stdcall SetComputerNameW(wstr) kernelbase.SetComputerNameW
 @ stdcall SetConsoleActiveScreenBuffer(long) kernelbase.SetConsoleActiveScreenBuffer
 @ stdcall SetConsoleCP(long) kernelbase.SetConsoleCP
 @ stdcall -version=0x351-0x502 SetConsoleCommandHistoryMode(long) kernelbase.SetConsoleCommandHistoryMode
