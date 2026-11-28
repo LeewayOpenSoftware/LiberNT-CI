@@ -17,6 +17,7 @@
 #include <credentialprovider.h>
 #include <shlguid.h>
 #include <credser.h>
+#include <lm.h>
 
 typedef struct _TEST_USER
 {
@@ -189,6 +190,26 @@ static const ICredentialProviderUserArrayVtbl ArrayVtbl =
 };
 
 static ICredentialProviderUserArray *
+CreateUserArray(_In_ PCWSTR Name, _In_ PCWSTR Sid)
+{
+    TEST_USER_ARRAY *Array;
+    TEST_USER *User;
+
+    User = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*User));
+    Array = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Array));
+    if (!User || !Array)
+        return NULL;
+    User->ICredentialProviderUser_iface.lpVtbl = &UserVtbl;
+    User->Ref = 1;
+    Array->ICredentialProviderUserArray_iface.lpVtbl = &ArrayVtbl;
+    Array->Ref = 1;
+    Array->User = User;
+    lstrcpynW(User->Name, Name, ARRAYSIZE(User->Name));
+    lstrcpynW(User->Sid, Sid, ARRAYSIZE(User->Sid));
+    return &Array->ICredentialProviderUserArray_iface;
+}
+
+static ICredentialProviderUserArray *
 CreateCurrentUserArray(void)
 {
     TEST_USER_ARRAY *Array;
@@ -248,24 +269,38 @@ CreateProvider(_Out_ ICredentialProvider **Provider)
 }
 
 static ICredentialProviderCredential *
+OpenTileForUsers(_In_ ICredentialProvider *Provider, _In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenario,
+                 _In_opt_ ICredentialProviderUserArray *Users);
+
+static ICredentialProviderCredential *
 OpenTile(_In_ ICredentialProvider *Provider, _In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenario, _In_ BOOL WithUsers)
 {
+    ICredentialProviderUserArray *Users = WithUsers ? CreateCurrentUserArray() : NULL;
+    ICredentialProviderCredential *Credential;
+
+    Credential = OpenTileForUsers(Provider, Scenario, Users);
+    if (Users)
+        ICredentialProviderUserArray_Release(Users);
+    return Credential;
+}
+
+static ICredentialProviderCredential *
+OpenTileForUsers(_In_ ICredentialProvider *Provider, _In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenario,
+                 _In_opt_ ICredentialProviderUserArray *Users)
+{
     ICredentialProviderSetUserArray *SetUsers;
-    ICredentialProviderUserArray *Users;
     ICredentialProviderCredential *Credential = NULL;
     DWORD Count = 0, Default = 0;
     BOOL AutoLogon = TRUE;
     HRESULT hr;
 
-    if (WithUsers)
+    if (Users)
     {
         hr = ICredentialProvider_QueryInterface(Provider, &IID_ICredentialProviderSetUserArray, (void **)&SetUsers);
         ok_hr(hr, S_OK);
         if (FAILED(hr))
             return NULL;
-        Users = CreateCurrentUserArray();
         ok_hr(ICredentialProviderSetUserArray_SetUserArray(SetUsers, Users), S_OK);
-        ICredentialProviderUserArray_Release(Users);
         ICredentialProviderSetUserArray_Release(SetUsers);
     }
     ok_hr(ICredentialProvider_SetUsageScenario(Provider, Scenario, 0), S_OK);
@@ -353,8 +388,16 @@ TestTiles(void)
         ok_long(State, WithUsers ? CPFS_HIDDEN : CPFS_DISPLAY_IN_SELECTED_TILE);
         ok_long(Interactive, WithUsers ? CPFIS_NONE : CPFIS_FOCUSED);
         ok_hr(ICredentialProviderCredential_GetFieldState(Credential, PasswordField, &State, &Interactive), S_OK);
-        ok_long(State, CPFS_DISPLAY_IN_SELECTED_TILE);
-        ok_long(Interactive, WithUsers ? CPFIS_FOCUSED : CPFIS_NONE);
+        /* The account running the test may have a blank password (TestBlankPassword covers that). */
+        if (WithUsers && State == CPFS_HIDDEN)
+        {
+            ok_long(Interactive, CPFIS_NONE);
+        }
+        else
+        {
+            ok_long(State, CPFS_DISPLAY_IN_SELECTED_TILE);
+            ok_long(Interactive, WithUsers ? CPFIS_FOCUSED : CPFIS_NONE);
+        }
 
         ok_hr(ICredentialProviderCredential_QueryInterface(Credential, &IID_ICredentialProviderCredential2,
                                                            (void **)&Credential2), S_OK);
@@ -513,6 +556,97 @@ TestSerialization(void)
     Serialize(CPUS_CREDUI, FALSE, L"someone", Computer, L"someone", NULL, NULL);
 }
 
+/* A local account with a blank password gets only the Sign in button on the sign-in and unlock
+ * pages; one with a password keeps the box. Uses real accounts, created and removed here. */
+static BOOL
+AddTestAccount(_In_ PCWSTR Name, _In_opt_ PCWSTR Password, _Out_writes_(SidChars) PWSTR Sid, _In_ DWORD SidChars)
+{
+    USER_INFO_1 Info;
+    BYTE SidBuffer[SECURITY_MAX_SID_SIZE];
+    WCHAR Domain[256];
+    DWORD SidSize = sizeof(SidBuffer), DomainChars = ARRAYSIZE(Domain);
+    SID_NAME_USE Use;
+    LPWSTR SidString;
+    NET_API_STATUS Status;
+
+    NetUserDel(NULL, Name);
+    ZeroMemory(&Info, sizeof(Info));
+    Info.usri1_name = (LPWSTR)Name;
+    Info.usri1_password = (LPWSTR)(Password ? Password : L"");
+    Info.usri1_priv = USER_PRIV_USER;
+    Info.usri1_flags = UF_SCRIPT | (Password ? 0 : UF_PASSWD_NOTREQD);
+    Status = NetUserAdd(NULL, 1, (LPBYTE)&Info, NULL);
+    if (Status != NERR_Success)
+    {
+        skip("NetUserAdd(%ls) failed with %lu\n", Name, Status);
+        return FALSE;
+    }
+    if (!LookupAccountNameW(NULL, Name, SidBuffer, &SidSize, Domain, &DomainChars, &Use) ||
+        !ConvertSidToStringSidW(SidBuffer, &SidString))
+    {
+        ok(0, "cannot look up %ls: %lu\n", Name, GetLastError());
+        NetUserDel(NULL, Name);
+        return FALSE;
+    }
+    lstrcpynW(Sid, SidString, SidChars);
+    LocalFree(SidString);
+    return TRUE;
+}
+
+static VOID
+CheckPasswordBox(_In_ PCWSTR Name, _In_ PCWSTR Sid, _In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenario,
+                 _In_ BOOL ExpectBox)
+{
+    ICredentialProvider *Provider;
+    ICredentialProviderUserArray *Users;
+    ICredentialProviderCredential *Credential;
+    CREDENTIAL_PROVIDER_FIELD_STATE State;
+    CREDENTIAL_PROVIDER_FIELD_INTERACTIVE_STATE Interactive;
+
+    if (FAILED(CreateProvider(&Provider)))
+        return;
+    Users = CreateUserArray(Name, Sid);
+    Credential = Users ? OpenTileForUsers(Provider, Scenario, Users) : NULL;
+    if (Credential)
+    {
+        ok_hr(ICredentialProviderCredential_GetFieldState(Credential, 2, &State, &Interactive), S_OK);
+        ok(State == (ExpectBox ? CPFS_DISPLAY_IN_SELECTED_TILE : CPFS_HIDDEN),
+           "%ls, scenario %d: password state %d\n", Name, Scenario, State);
+        ok(Interactive == (ExpectBox ? CPFIS_FOCUSED : CPFIS_NONE),
+           "%ls, scenario %d: password interactive state %d\n", Name, Scenario, Interactive);
+        ok_hr(ICredentialProviderCredential_GetFieldState(Credential, 12, &State, &Interactive), S_OK);
+        ok_long(State, CPFS_DISPLAY_IN_SELECTED_TILE);
+        ok(Interactive == (ExpectBox ? CPFIS_NONE : CPFIS_FOCUSED),
+           "%ls, scenario %d: submit interactive state %d\n", Name, Scenario, Interactive);
+        ICredentialProviderCredential_Release(Credential);
+    }
+    if (Users)
+        ICredentialProviderUserArray_Release(Users);
+    ICredentialProvider_Release(Provider);
+}
+
+static VOID
+TestBlankPassword(void)
+{
+    static const WCHAR BlankName[] = L"cptest_blank", PasswordName[] = L"cptest_pw";
+    WCHAR BlankSid[128], PasswordSid[128];
+
+    if (!AddTestAccount(BlankName, NULL, BlankSid, ARRAYSIZE(BlankSid)))
+        return;
+    if (AddTestAccount(PasswordName, L"Cp7!tile-Box", PasswordSid, ARRAYSIZE(PasswordSid)))
+    {
+        CheckPasswordBox(BlankName, BlankSid, CPUS_LOGON, FALSE);
+        CheckPasswordBox(BlankName, BlankSid, CPUS_UNLOCK_WORKSTATION, FALSE);
+        CheckPasswordBox(BlankName, BlankSid, CPUS_CREDUI, TRUE);
+        CheckPasswordBox(PasswordName, PasswordSid, CPUS_LOGON, TRUE);
+        CheckPasswordBox(PasswordName, PasswordSid, CPUS_UNLOCK_WORKSTATION, TRUE);
+        /* A SID that is no account of this computer keeps the box. */
+        CheckPasswordBox(BlankName, L"S-1-5-21-1-2-3-1001", CPUS_LOGON, TRUE);
+        NetUserDel(NULL, PasswordName);
+    }
+    NetUserDel(NULL, BlankName);
+}
+
 static BOOL
 AllZero(_In_ const WCHAR *Buffer, _In_ SIZE_T Bytes)
 {
@@ -596,6 +730,7 @@ START_TEST(PasswordProvider)
     }
     TestTiles();
     TestSerialization();
+    TestBlankPassword();
     TestSecretZeroing();
     if (Module)
         FreeLibrary(Module);
