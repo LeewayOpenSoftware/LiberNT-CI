@@ -109,12 +109,12 @@ typedef struct _MOUNTMGR_MOUNT_POINT {
 typedef struct _MOUNTMGR_MOUNT_POINTS {
   ULONG Size;
   ULONG NumberOfMountPoints;
-  _Field_size_(NumberOfMountPoints) MOUNTMGR_MOUNT_POINT MountPoints[ANYSIZE_ARRAY];
+  _Field_size_(NumberOfMountPoints) MOUNTMGR_MOUNT_POINT MountPoints[1];
 } MOUNTMGR_MOUNT_POINTS, *PMOUNTMGR_MOUNT_POINTS;
 
 typedef struct _MOUNTMGR_DRIVE_LETTER_TARGET {
   USHORT DeviceNameLength;
-  _Field_size_bytes_(DeviceNameLength) WCHAR DeviceName[ANYSIZE_ARRAY];
+  _Field_size_bytes_(DeviceNameLength) WCHAR DeviceName[1];
 } MOUNTMGR_DRIVE_LETTER_TARGET, *PMOUNTMGR_DRIVE_LETTER_TARGET;
 
 typedef struct _MOUNTMGR_DRIVE_LETTER_INFORMATION {
@@ -135,12 +135,12 @@ typedef struct _MOUNTMGR_CHANGE_NOTIFY_INFO {
 
 typedef struct _MOUNTMGR_TARGET_NAME {
   USHORT DeviceNameLength;
-  _Field_size_bytes_(DeviceNameLength) WCHAR DeviceName[ANYSIZE_ARRAY];
+  _Field_size_bytes_(DeviceNameLength) WCHAR DeviceName[1];
 } MOUNTMGR_TARGET_NAME, *PMOUNTMGR_TARGET_NAME;
 
 typedef struct _MOUNTDEV_NAME {
   USHORT NameLength;
-  _Field_size_bytes_(NameLength) WCHAR Name[ANYSIZE_ARRAY];
+  _Field_size_bytes_(NameLength) WCHAR Name[1];
 } MOUNTDEV_NAME, *PMOUNTDEV_NAME;
 
 #endif /* (NTDDI_VERSION >= NTDDI_WIN2K) */
@@ -163,7 +163,7 @@ typedef struct _MOUNTDEV_NAME {
 
 typedef struct _MOUNTMGR_VOLUME_PATHS {
   ULONG MultiSzLength;
-  _Field_size_bytes_(MultiSzLength) WCHAR MultiSz[ANYSIZE_ARRAY];
+  _Field_size_bytes_(MultiSzLength) WCHAR MultiSz[1];
 } MOUNTMGR_VOLUME_PATHS, *PMOUNTMGR_VOLUME_PATHS;
 
 #endif /* (NTDDI_VERSION >= NTDDI_WINXP) */
