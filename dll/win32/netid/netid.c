@@ -767,7 +767,7 @@ NetIDPageProc(IN HWND hwndDlg,
                                        NetworkPropDlgProc,
                                        (LPARAM)pNetIdData))
                     {
-                        UpdateFullComputerName(hwndDlg, IDC_COMPUTERNAME, pNetIdData);
+                        SetFullComputerName(hwndDlg, IDC_COMPUTERNAME, pNetIdData);
                         CheckForChangedNames(hwndDlg, pNetIdData);
                     }
                     break;
