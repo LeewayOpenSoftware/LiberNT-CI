@@ -707,16 +707,29 @@ static void LISTBOX_PaintItem( LB_DESCR *descr, HDC hdc, const RECT *rect,
         else if (!(descr->style & LBS_USETABSTOPS))
 #ifdef __REACTOS__
         {
-            RECT rc = *rect;
             if (!selected)
             {
+                /* Paint the opaque text background only behind the text so
+                   the themed row fill stays visible, then draw the glyphs
+                   clipped to the whole item.  The pen starts at
+                   rect->left + 1 and the last glyph may overhang its
+                   advance, so a clip sized to the text extent cut the last
+                   pixel column of every unselected row ("Restar|t"). */
+                RECT rc = *rect;
                 SIZE sz;
-                GetTextExtentPoint32(hdc, item_str, lstrlenW(item_str), &sz);
-                rc.right = min(sz.cx, rc.right);
+
+                GetTextExtentPoint32W(hdc, item_str, lstrlenW(item_str), &sz);
+                rc.right = min(rc.left + 1 + sz.cx, rc.right);
+                ExtTextOutW( hdc, rect->left + 1, rect->top,
+                             ETO_OPAQUE | ETO_CLIPPED, &rc, NULL, 0, NULL );
+                ExtTextOutW( hdc, rect->left + 1, rect->top,
+                             ETO_CLIPPED, rect, item_str,
+                             lstrlenW(item_str), NULL );
             }
-            ExtTextOutW( hdc, rect->left + 1, rect->top,
-                         ETO_OPAQUE | ETO_CLIPPED, &rc, item_str,
-                         lstrlenW(item_str), NULL);
+            else
+                ExtTextOutW( hdc, rect->left + 1, rect->top,
+                             ETO_OPAQUE | ETO_CLIPPED, rect, item_str,
+                             lstrlenW(item_str), NULL );
         }
 #else
             ExtTextOutW( hdc, rect->left + 1, rect->top,

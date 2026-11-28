@@ -4811,6 +4811,8 @@ IntGetBitmapGlyphWithCache(
     PFONT_CACHE_ENTRY NewEntry;
     FT_Bitmap AlignedBitmap;
     FT_BitmapGlyph BitmapGlyph;
+    FT_BBox InkCBox;
+    FT_Bool HaveInkBox = FALSE;
 
     ASSERT_FREETYPE_LOCK_HELD();
 
@@ -4821,11 +4823,27 @@ IntGetBitmapGlyphWithCache(
         return NULL;
     };
 
+    /*
+     * Capture the grid-fitted bounding box of the outline actually about to be
+     * rendered, for the LCD padding trim below.  It must come from GlyphCopy,
+     * not GlyphSlot->metrics: emulated oblique/embolden shear or widen this
+     * outline without updating the slot metrics, so only the rendered outline's
+     * box describes the real ink.  Bitmap strikes and the emptied-outline
+     * fallback below are left untrimmed.
+     */
+    if (GlyphCopy->format == FT_GLYPH_FORMAT_OUTLINE &&
+        ((FT_OutlineGlyph)GlyphCopy)->outline.n_points > 0)
+    {
+        FT_Glyph_Get_CBox(GlyphCopy, FT_GLYPH_BBOX_GRIDFIT, &InkCBox);
+        HaveInkBox = TRUE;
+    }
+
     error = FT_Glyph_To_Bitmap(&GlyphCopy, Cache->Hashed.Aspect.RenderMode, 0, 1);
     if (error && GlyphCopy->format == FT_GLYPH_FORMAT_OUTLINE)
     {
         ((FT_OutlineGlyph)GlyphCopy)->outline.n_points = 0;
         ((FT_OutlineGlyph)GlyphCopy)->outline.n_contours = 0;
+        HaveInkBox = FALSE;
         error = FT_Glyph_To_Bitmap(&GlyphCopy, Cache->Hashed.Aspect.RenderMode, 0, 1);
     }
     if (error)
@@ -4861,6 +4879,54 @@ IntGetBitmapGlyphWithCache(
 
     FT_Bitmap_Done(GlyphSlot->library, &BitmapGlyph->bitmap);
     BitmapGlyph->bitmap = AlignedBitmap;
+
+    /*
+     * ft_lcd_padding() grows an LCD (ClearType) glyph bitmap by 43/64 of a
+     * pixel on each side.  This FreeType build defines
+     * FT_CONFIG_OPTION_SUBPIXEL_RENDERING, so that padding is unconditional and
+     * FT_Library_SetLcdGeometry is unavailable to remove it at the source.  The
+     * extra filter columns push the glyph ink past its advance, so an
+     * ETO_CLIPPED rectangle sized to the advance cuts the last glyph (e.g.
+     * "Restar|t"), unlike Windows, which keeps ClearType ink inside the
+     * advance.  Drop only the padding pixel columns that fall outside the
+     * glyph's own ink box (from the grid-fitted outline metrics), so the
+     * subpixel ink matches the grayscale path and the clip stays exact.  Ink
+     * inside the box is never touched; grayscale and mono bitmaps are left
+     * alone.
+     */
+    if (HaveInkBox &&
+        BitmapGlyph->bitmap.pixel_mode == FT_PIXEL_MODE_LCD &&
+        BitmapGlyph->bitmap.pitch > 0 && BitmapGlyph->bitmap.width >= 3)
+    {
+        LONG InkLeft  = (LONG)(InkCBox.xMin >> 6);
+        LONG InkRight = (LONG)(InkCBox.xMax >> 6);
+        LONG WidthPx  = (LONG)(BitmapGlyph->bitmap.width / 3);
+        LONG TrimL    = InkLeft - (LONG)BitmapGlyph->left;
+        LONG TrimR    = ((LONG)BitmapGlyph->left + WidthPx) - InkRight;
+
+        if (TrimL < 0) TrimL = 0;
+        if (TrimR < 0) TrimR = 0;
+        if ((TrimL + TrimR) > 0 && (WidthPx - TrimL - TrimR) >= 1)
+        {
+            FT_Int pitch = BitmapGlyph->bitmap.pitch;
+            unsigned int row;
+
+            if (TrimR > 0)
+                BitmapGlyph->bitmap.width -= (unsigned int)(TrimR * 3);
+
+            if (TrimL > 0)
+            {
+                unsigned int keep = BitmapGlyph->bitmap.width - (unsigned int)(TrimL * 3);
+                for (row = 0; row < BitmapGlyph->bitmap.rows; ++row)
+                {
+                    FT_Byte *line = BitmapGlyph->bitmap.buffer + (SIZE_T)row * pitch;
+                    RtlMoveMemory(line, line + (TrimL * 3), keep);
+                }
+                BitmapGlyph->bitmap.width = keep;
+                BitmapGlyph->left += TrimL;
+            }
+        }
+    }
 
     NewEntry->BitmapGlyph = BitmapGlyph;
     NewEntry->dwHash = Cache->dwHash;
