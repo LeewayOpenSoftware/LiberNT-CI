@@ -13,7 +13,7 @@
 #include <ntsecapi.h>
 #include <credser.h>
 
-extern RPC_IF_HANDLE wlui_v1_0_s_ifspec;
+extern RPC_IF_HANDLE Testwlui_v1_0_s_ifspec;
 
 static const GUID CLSID_PasswordProvider =
     { 0x60b78e88, 0xead8, 0x445c, { 0x9c, 0xfd, 0x0b, 0x87, 0xf7, 0x4e, 0xa6, 0xcd } };
@@ -35,17 +35,17 @@ static BYTE g_SubmitBlob[CREDSER_MAX_BLOB_SIZE];
 
 static void CheckId(const GUID *Id) { if (!IsEqualGUID(Id, &g_ExpectedId)) InterlockedIncrement(&g_WrongId); }
 
-DWORD __stdcall WluiReady(handle_t h, GUID LaunchId)
+DWORD __stdcall TestWluiReady(handle_t h, GUID LaunchId)
 {
     CheckId(&LaunchId); SetEvent(g_ReadyEvent); return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiHeartbeat(handle_t h, GUID LaunchId)
+DWORD __stdcall TestWluiHeartbeat(handle_t h, GUID LaunchId)
 {
     CheckId(&LaunchId); InterlockedIncrement(&g_Heartbeats); return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiWaitForCommand(handle_t h, GUID LaunchId, WLUI_COMMAND *Command)
+DWORD __stdcall TestWluiWaitForCommand(handle_t h, GUID LaunchId, WLUI_COMMAND *Command)
 {
     BOOL Got;
     DWORD Error;
@@ -57,7 +57,7 @@ DWORD __stdcall WluiWaitForCommand(handle_t h, GUID LaunchId, WLUI_COMMAND *Comm
     return Error;
 }
 
-DWORD __stdcall WluiSubmitSerialization(handle_t h, GUID LaunchId, DWORD Scenario, GUID ProviderClsid,
+DWORD __stdcall TestWluiSubmitSerialization(handle_t h, GUID LaunchId, DWORD Scenario, GUID ProviderClsid,
                                         DWORD AuthenticationPackage, DWORD cbSerialization,
                                         const byte *Serialization)
 {
@@ -72,19 +72,24 @@ DWORD __stdcall WluiSubmitSerialization(handle_t h, GUID LaunchId, DWORD Scenari
     return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiRequestAction(handle_t h, GUID LaunchId, WLUI_ACTION Action)
+DWORD __stdcall TestWluiRequestAction(handle_t h, GUID LaunchId, WLUI_ACTION Action)
 {
     CheckId(&LaunchId); g_Action = Action; return ERROR_SUCCESS;
 }
 
-DWORD __stdcall WluiReportProviderFault(handle_t h, GUID LaunchId, GUID ProviderClsid, DWORD Reason)
+DWORD __stdcall TestWluiReportProviderFault(handle_t h, GUID LaunchId, GUID ProviderClsid, DWORD Reason)
 {
     return ERROR_NOT_READY;     /* the recovery dialog has no providers to report */
 }
 
-DWORD __stdcall WluiExiting(handle_t h, GUID LaunchId, WLUI_EXIT_REASON Reason)
+DWORD __stdcall TestWluiExiting(handle_t h, GUID LaunchId, WLUI_EXIT_REASON Reason)
 {
     CheckId(&LaunchId); g_ExitReason = Reason; SetEvent(g_ExitEvent); return ERROR_SUCCESS;
+}
+
+DWORD __stdcall TestWluiCommandShown(handle_t h, GUID LaunchId, DWORD Sequence)
+{
+    return ERROR_NOT_READY;     /* only the host role reports a shown command */
 }
 
 /* ---- helpers --------------------------------------------------------------- */
@@ -125,7 +130,7 @@ StartServer(PCWSTR Endpoint, PSID Own)
     LocalFree(Sd);
     if (Status != RPC_S_OK)
         return FALSE;
-    if (RpcServerRegisterIfEx(wlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
+    if (RpcServerRegisterIfEx(Testwlui_v1_0_s_ifspec, NULL, NULL, RPC_IF_ALLOW_LOCAL_ONLY,
                               RPC_C_LISTEN_MAX_CALLS_DEFAULT, WluiServerIfCallback) != RPC_S_OK)
         return FALSE;
     Status = RpcServerListen(1, 4, TRUE);
@@ -443,5 +448,5 @@ START_TEST(Recovery)
 
     DeleteFileW(Trace);
     RpcMgmtStopServerListening(NULL);
-    RpcServerUnregisterIf(wlui_v1_0_s_ifspec, NULL, TRUE);
+    RpcServerUnregisterIf(Testwlui_v1_0_s_ifspec, NULL, TRUE);
 }
