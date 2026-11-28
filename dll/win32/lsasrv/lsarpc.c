@@ -3558,9 +3558,21 @@ LsarStorePrivateData(
             goto done;
         }
 
-        /* FIXME: Decrypt data */
-        Value = EncryptedData->Buffer;
-        ValueLength = EncryptedData->MaximumLength;
+        /*
+         * FIXME: Decrypt data
+         * Only Length bytes arrive; store them with a terminator, the form the
+         * secret readers expect (they report the stored size less one WCHAR).
+         */
+        ValueLength = EncryptedData->Length + sizeof(WCHAR);
+        Value = midl_user_allocate(ValueLength);
+        if (Value == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto done;
+        }
+        if (EncryptedData->Length != 0)
+            RtlCopyMemory(Value, EncryptedData->Buffer, EncryptedData->Length);
+        *(UNALIGNED WCHAR *)(Value + EncryptedData->Length) = UNICODE_NULL;
 
         /* Get the current time */
         Status = NtQuerySystemTime(&Time);
@@ -3623,6 +3635,12 @@ LsarStorePrivateData(
     }
 
 done:
+    if (Value != NULL)
+    {
+        SecureZeroMemory(Value, ValueLength);
+        midl_user_free(Value);
+    }
+
     if (SecretObject != NULL)
         LsapCloseDbObject(SecretObject);
 
@@ -3707,8 +3725,11 @@ LsarRetrievePrivateData(
     if (!NT_SUCCESS(Status))
         goto done;
 
-    /* Allocate a buffer for the encrypted current value */
-    EncCurrentValue = midl_user_allocate(sizeof(LSAPR_CR_CIPHER_VALUE) + CurrentValueLength);
+    /*
+     * Allocate the encrypted current value. Its Buffer is a separate block, as in
+     * LsarQuerySecret: the server stub frees the embedded pointer on its own.
+     */
+    EncCurrentValue = midl_user_allocate(sizeof(LSAPR_CR_CIPHER_VALUE));
     if (EncCurrentValue == NULL)
     {
         Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -3716,12 +3737,10 @@ LsarRetrievePrivateData(
     }
 
     /* FIXME: Encrypt the current value */
-    EncCurrentValue->Length = (USHORT)(CurrentValueLength - sizeof(WCHAR));
-    EncCurrentValue->MaximumLength = (USHORT)CurrentValueLength;
-    EncCurrentValue->Buffer = (PBYTE)(EncCurrentValue + 1);
-    RtlCopyMemory(EncCurrentValue->Buffer,
-                  CurrentValue,
-                  CurrentValueLength);
+    EncCurrentValue->Length = (CurrentValueLength >= sizeof(WCHAR)) ? CurrentValueLength - sizeof(WCHAR) : 0;
+    EncCurrentValue->MaximumLength = CurrentValueLength;
+    EncCurrentValue->Buffer = CurrentValue;
+    CurrentValue = NULL;
 
 done:
     if (NT_SUCCESS(Status))
@@ -3736,6 +3755,12 @@ done:
 
         if (EncCurrentValue != NULL)
             midl_user_free(EncCurrentValue);
+    }
+
+    if (CurrentValue != NULL)
+    {
+        SecureZeroMemory(CurrentValue, CurrentValueLength);
+        midl_user_free(CurrentValue);
     }
 
     if (SecretObject != NULL)
