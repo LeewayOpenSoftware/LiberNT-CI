@@ -179,9 +179,20 @@ wmain(
         return ERROR_INVALID_PARAMETER;
     }
     if (Firmware && !Target)
-        return Fail(L"/f can only be used with /s.", ERROR_INVALID_PARAMETER);
-    if ((Options & BOOT_OPTION_ADD_LAST) && (Options & BOOT_OPTION_KEEP_ORDER))
+    {
+        PrintUsage();
+        return ERROR_INVALID_PARAMETER;
+    }
+    if ((Options & BOOT_OPTION_ADD_LAST) && (Options & BOOT_OPTION_KEEP_ORDER) && !Target)
         return Fail(L"/addlast and /p cannot be used together.", ERROR_INVALID_PARAMETER);
+    if (Target && (Options & BOOT_OPTION_ADD_LAST) && (Options & BOOT_OPTION_KEEP_ORDER))
+    {
+        fputws(L"BFSVC Error: AddBootmgrLast and PreserveBootOrder options are ignored when custom volume is specified\n", stdout);
+        fputws(L"BFSVC Error: AddBootmgrLast and PreserveBootOrder options are ignored when custom volume is specified\n", stdout);
+        Options &= ~(BOOT_OPTION_ADD_LAST | BOOT_OPTION_KEEP_ORDER);
+    }
+    if (Target)
+        Options |= BOOT_OPTION_NO_FIRMWARE_ENTRY;
     if (Firmware && _wcsicmp(Firmware, L"UEFI") != 0)
     {
         if (_wcsicmp(Firmware, L"BIOS") == 0 || _wcsicmp(Firmware, L"ALL") == 0)

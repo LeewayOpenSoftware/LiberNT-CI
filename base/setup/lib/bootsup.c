@@ -2158,9 +2158,9 @@ InstallEfiSystemPartition(
  * Boot files of an installed system (bcdboot): the boot manager from <system>\Boot\EFI and a store from
  * <system>\System32\config\BCD-Template go to \EFI\Orosi\Boot of the system partition, with the OS loader on the
  * system's own partition and directory; then the firmware boot entry (unless BOOT_OPTION_NO_FIRMWARE_ENTRY or not
- * on UEFI firmware) and the removable-media fallback loader. The system partition must be FAT; a previous store
- * is kept as BCD.bak. Other systems' boot files are never replaced: their directories are not touched, and a
- * fallback loader that is not ours stays (*FallbackKept).
+ * on UEFI firmware) and the removable-media fallback loader. A previous store is kept as BCD.bak. Other systems'
+ * boot files are never replaced: their directories are not touched, and a fallback loader that is not ours stays
+ * (*FallbackKept).
  */
 NTSTATUS
 NTAPI
@@ -2180,9 +2180,6 @@ InstallSystemBootFiles(
     WCHAR OwnManagerPath[MAX_PATH];
     WCHAR FallbackPath[MAX_PATH];
     WCHAR Path[MAX_PATH];
-    WCHAR FileSystem[MAX_PATH + 1];
-    UNICODE_STRING RootPartition;
-    HANDLE Handle;
     BOOLEAN FallbackOurs;
     NTSTATUS Status;
 
@@ -2196,19 +2193,8 @@ InstallSystemBootFiles(
     if (!DoesFileExist(NULL, BootManagerPath) || !DoesFileExist(NULL, TemplatePath))
         return STATUS_OBJECT_NAME_NOT_FOUND;
 
-    /* UEFI firmware reads FAT only: anything else would get an entry it cannot start */
-    RootPartition = *SystemRootPath;
-    TrimTrailingPathSeparators_UStr(&RootPartition);
-    Status = pOpenDeviceEx_UStr(&RootPartition, &Handle, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    Status = GetFileSystemName_UStr(NULL, Handle, FileSystem, sizeof(FileSystem));
-    NtClose(Handle);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    if (_wcsicmp(FileSystem, L"FAT") != 0 && _wcsicmp(FileSystem, L"FAT32") != 0)
-        return STATUS_UNRECOGNIZED_VOLUME;
-
+    /* The system partition may use any file system, as on Windows 11; an NTFS target
+       gets the same layout, and whether UEFI firmware can start it is the firmware's concern. */
     Status = GetPartitionDeviceNumber(SystemVolume, &DeviceNumber);
     if (!NT_SUCCESS(Status))
         return Status;
