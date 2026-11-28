@@ -332,6 +332,9 @@ DisplayStatusMessage(
     UNREFERENCED_PARAMETER(hDesktop);
 
     /* The host shows status in place; it keeps the text until the next command. */
+    ResourceId = WlHostStatusText(ResourceId);
+    if (ResourceId == 0)
+        return TRUE;
     if (LoadStringW(hAppInstance, ResourceId, StatusMsg, MAX_PATH) != 0)
         WlHostStatus(StatusMsg);
     return TRUE;
@@ -471,6 +474,11 @@ WinMain(
         NtRaiseHardError(STATUS_SYSTEM_PROCESS_TERMINATED, 0, 0, NULL, OptionOk, &HardErrorResponse);
         ExitProcess(1);
     }
+
+    /* The Winlogon desktop is on screen: the boot spinner goes on turning until the logon UI is up.
+     * Setup runs on the application desktop without a logon UI, so it gets no spinner. */
+    if (GetSetupType() == 0)
+        WlBootSpinnerShow(WLSession);
 
     LockWorkstation(WLSession);
 

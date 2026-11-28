@@ -514,6 +514,9 @@ co_IntInitializeDesktopGraphics(VOID)
     /* Setup Menu */
     MenuInit();
 
+    /* The first paint after the mode set keeps the boot logo, not a blank desktop (INVESTIGACION.md 6.3). */
+    SpiSetBootScreenWallpaper();
+
     /* Show the desktop */
     pdesk = IntGetActiveDesktop();
     if (pdesk != NULL)

@@ -12,6 +12,7 @@
 #include "logo.h"
 #include "resource.h"
 #include "inbvgop.h"
+#include <reactos/bootspin.h>
 
 
 #ifndef BI_RGB
@@ -24,37 +25,12 @@
 #define INBV_WORDMARK_SCALE_DEN     5
 #define INBV_WORDMARK_TOP_VPOS      0.08f
 #define INBV_WORDMARK_BGRT_SAFE_TOP 0.35f
-#define INBV_CENTERMARK_VPOS        0.625f
 
-#define INBV_LOGO_FRAME_MS          15
 #define INBV_LOGO_DEFAULT_INCREMENT 100000UL
 #define INBV_LOGO_POOL_TAG          'oLbI'
-/* Where the spinner sits: the centre of the 51 x 45 area the previous mark used */
-#define INBV_LOGO_WIDTH             51
-#define INBV_LOGO_TOP_WIDTH         64
-#define INBV_LOGO_LIFT              20
-#define INBV_LOGO_UNITS             407
-#define INBV_LOGO_UNITS_HIGH        356
 #define INBV_LOGO_PROGRESS_MAX      10000
 #define INBV_LOGO_PROGRESS_CEILING  9500
 #define INBV_LOGO_PROGRESS_SHARE    5
-/* Double-stroke breathing spinner, sizes in pixels at 96 DPI */
-#define INBV_SPIN_SIZE              32
-#define INBV_SPIN_INSET             7
-#define INBV_SPIN_SUB               4
-#define INBV_SPIN_TURN              65536
-#define INBV_SPIN_OUTER_TURN        22000000ULL /* 2.2 s clockwise, in 100 ns */
-#define INBV_SPIN_INNER_TURN        28000000ULL /* 2.8 s counterclockwise */
-#define INBV_SPIN_BREATH            26000000ULL /* 2.6 s, eased each half */
-#define INBV_SPIN_OUTER_MIN         45
-#define INBV_SPIN_OUTER_MAX         285
-#define INBV_SPIN_INNER_MAX         250
-#define INBV_SPIN_INNER_MIN         50
-#define INBV_SPIN_INNER_ALPHA       166 /* 0.65 */
-#define INBV_SPIN_EASE_STEPS        1024
-#define INBV_LOGO_RED               0xE0
-#define INBV_LOGO_GREEN             0xE0
-#define INBV_LOGO_BLUE              0xE0
 
 typedef struct _INBV_GOP_RECT
 {
@@ -63,14 +39,6 @@ typedef struct _INBV_GOP_RECT
     ULONG Width;
     ULONG Height;
 } INBV_GOP_RECT, *PINBV_GOP_RECT;
-
-/* One sub-pixel sample on a ring: its angle clockwise from the top, and the ring's opacity there */
-typedef struct _INBV_SPIN_SAMPLE
-{
-    USHORT Angle;
-    UCHAR Alpha;
-    UCHAR Inner;
-} INBV_SPIN_SAMPLE, *PINBV_SPIN_SAMPLE;
 
 typedef struct _INBV_LOGO_STATE
 {
@@ -180,25 +148,6 @@ static ULONG InbvPackColor(ULONG RedMask, ULONG GreenMask, ULONG BlueMask,
            (BlueMask  ? ((B << BlueShift)  & BlueMask)  : 0);
 }
 
-static ULONG
-InbvGopNormalizeDpi(ULONG Dpi)
-{
-    if (Dpi < LOADER_PARAMETER_FRAMEBUFFER_DPI_MIN || Dpi > LOADER_PARAMETER_FRAMEBUFFER_DPI_MAX)
-    {
-        return LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT;
-    }
-
-    return Dpi;
-}
-
-static ULONG
-InbvGopScaleForDpi(ULONG Value, ULONG Dpi)
-{
-    return (ULONG)(((ULONGLONG)Value * InbvGopNormalizeDpi(Dpi) +
-                    LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT / 2) /
-                   LOADER_PARAMETER_FRAMEBUFFER_DPI_DEFAULT);
-}
-
 static BOOLEAN
 InbvGopValidateWordmarkHeader(_In_ const BITMAPINFOHEADER *Header)
 {
@@ -251,14 +200,14 @@ InbvGopComputeWordmarkRect(
     DstWidth = (ULONG)(((ULONGLONG)SrcWidth * INBV_WORDMARK_SCALE_NUM +
                         INBV_WORDMARK_SCALE_DEN / 2) /
                        INBV_WORDMARK_SCALE_DEN);
-    DstWidth = InbvGopScaleForDpi(DstWidth, Dpi);
+    DstWidth = InbvSpinScaleForDpi(DstWidth, Dpi);
     if (DstWidth == 0)
         DstWidth = 1;
 
     DstHeight = (ULONG)(((ULONGLONG)SrcHeight * INBV_WORDMARK_SCALE_NUM +
                          INBV_WORDMARK_SCALE_DEN / 2) /
                         INBV_WORDMARK_SCALE_DEN);
-    DstHeight = InbvGopScaleForDpi(DstHeight, Dpi);
+    DstHeight = InbvSpinScaleForDpi(DstHeight, Dpi);
     if (DstHeight == 0)
         DstHeight = 1;
 
@@ -324,81 +273,30 @@ InbvGopLogoBlit(VOID)
     return TRUE;
 }
 
-/* Eased fraction (0..65536) of one half breath, at Position 0..Half */
-static ULONG
-InbvGopSpinEase(
-    _In_ ULONGLONG Position,
-    _In_ ULONGLONG Half)
-{
-    const INBV_LOGO_STATE *S = &g_Logo;
-    ULONGLONG Scaled = Position * INBV_SPIN_EASE_STEPS * 256 / Half;
-    ULONG Index = (ULONG)(Scaled >> 8), Fraction = (ULONG)(Scaled & 0xFF);
-
-    if (Index >= INBV_SPIN_EASE_STEPS)
-        return S->Ease[INBV_SPIN_EASE_STEPS];
-    return S->Ease[Index] + (((S->Ease[Index + 1] - S->Ease[Index]) * Fraction) >> 8);
-}
-
-/* Sweep in turn units at time T: From at both ends of the breath, To at its middle */
-static ULONG
-InbvGopSpinSweep(
-    _In_ ULONGLONG T,
-    _In_ LONG From,
-    _In_ LONG To)
-{
-    const ULONGLONG Half = INBV_SPIN_BREATH / 2;
-    ULONGLONG Phase = T % INBV_SPIN_BREATH;
-    LONG Degrees256;
-
-    if (Phase < Half)
-        Degrees256 = From * 256 + (LONG)(((LONGLONG)(To - From) * 256 * InbvGopSpinEase(Phase, Half)) >> 16);
-    else
-        Degrees256 = To * 256 + (LONG)(((LONGLONG)(From - To) * 256 * InbvGopSpinEase(Phase - Half, Half)) >> 16);
-    return (ULONG)(((LONGLONG)Degrees256 * INBV_SPIN_TURN) / (360 * 256));
-}
-
-/* Draws the spinner as it stands T (100 ns) after it started */
+/* Draws the spinner as it stands at interrupt time T (100 ns since boot) */
 static VOID
 InbvGopLogoRender(
     _In_ ULONGLONG T)
 {
     const INBV_LOGO_STATE *S = &g_Logo;
-    ULONG Rotation[2], Sweep[2], Pixel, Count = S->Width * S->Height, i;
 
-    Rotation[0] = (ULONG)((T % INBV_SPIN_OUTER_TURN) * INBV_SPIN_TURN / INBV_SPIN_OUTER_TURN);
-    Rotation[1] = (INBV_SPIN_TURN - (ULONG)((T % INBV_SPIN_INNER_TURN) * INBV_SPIN_TURN / INBV_SPIN_INNER_TURN)) %
-                  INBV_SPIN_TURN;
-    Sweep[0] = InbvGopSpinSweep(T, INBV_SPIN_OUTER_MIN, INBV_SPIN_OUTER_MAX);
-    Sweep[1] = InbvGopSpinSweep(T, INBV_SPIN_INNER_MAX, INBV_SPIN_INNER_MIN);
-
-    for (Pixel = 0; Pixel < Count; Pixel++)
-    {
-        ULONG Coverage = 0;
-
-        for (i = S->PixelStart[Pixel]; i < S->PixelStart[Pixel + 1]; i++)
-        {
-            const INBV_SPIN_SAMPLE *Sample = &S->Samples[i];
-
-            if (((Sample->Angle - Rotation[Sample->Inner]) & (INBV_SPIN_TURN - 1)) < Sweep[Sample->Inner])
-                Coverage += Sample->Alpha;
-        }
-        Coverage /= INBV_SPIN_SUB * INBV_SPIN_SUB;
-        S->Frame[Pixel] = S->Lut[min(Coverage, 255UL)];
-    }
+    InbvSpinRenderFrame(S->Samples, S->PixelStart, S->Width * S->Height, S->Ease, T, S->Lut, S->Frame);
 }
 
 static VOID NTAPI
 InbvGopLogoThread(PVOID Context)
 {
     LARGE_INTEGER Delay;
-    ULONGLONG Start, Now, Next;
+    ULONGLONG Now, Next;
 
     UNREFERENCED_PARAMETER(Context);
-    Start = Next = KeQueryInterruptTime();
+    Next = KeQueryInterruptTime();
 
+    /* The phase follows the boot clock, so whoever draws the spinner after the hand-over
+     * (winlogon) continues it from the same clock without a jump. */
     for (;;)
     {
-        InbvGopLogoRender(KeQueryInterruptTime() - Start);
+        InbvGopLogoRender(KeQueryInterruptTime());
         if (!InbvGopLogoBlit())
             break;
 
@@ -417,128 +315,13 @@ InbvGopLogoThread(PVOID Context)
         }
     }
 
-    /* The display is handed over showing the spinner at rest */
-    InbvGopLogoRender(0);
+    /* The display is handed over showing the spinner where it is now */
+    InbvGopLogoRender(KeQueryInterruptTime());
     InbvGopLogoBlit();
 
     InbvGopLogoResetState();
     KeSetEvent(&g_LogoDone, IO_NO_INCREMENT, FALSE);
     PsTerminateSystemThread(STATUS_SUCCESS);
-}
-
-/* Angle of (Right, Up) clockwise from up, in turn units, by CORDIC */
-CODE_SEG("INIT")
-static USHORT
-InbvGopSpinAngle(
-    _In_ LONG Right,
-    _In_ LONG Up)
-{
-    /* atan(2^-i) in 1/65536 turn */
-    static const LONG Atan[] = { 8192, 4836, 2555, 1297, 651, 326, 163, 81, 41, 20, 10, 5, 3, 1 };
-    LONG X = Up, Y = Right, Z = 0, NextX, i;
-
-    if (X < 0)
-    {
-        X = -X;
-        Y = -Y;
-        Z = INBV_SPIN_TURN / 2;
-    }
-    X *= 64;
-    Y *= 64;
-    for (i = 0; i < (LONG)RTL_NUMBER_OF(Atan); i++)
-    {
-        if (Y > 0)
-        {
-            NextX = X + (Y >> i);
-            Y -= X >> i;
-            Z += Atan[i];
-        }
-        else
-        {
-            NextX = X - (Y >> i);
-            Y += X >> i;
-            Z -= Atan[i];
-        }
-        X = NextX;
-    }
-    return (USHORT)(Z & (INBV_SPIN_TURN - 1));
-}
-
-CODE_SEG("INIT")
-static ULONG
-InbvGopSpinSqrt(
-    _In_ ULONGLONG Value)
-{
-    ULONGLONG Root = 0, Bit = 1ULL << 62;
-
-    while (Bit > Value)
-        Bit >>= 2;
-    while (Bit)
-    {
-        if (Value >= Root + Bit)
-        {
-            Value -= Root + Bit;
-            Root = (Root >> 1) + Bit;
-        }
-        else
-        {
-            Root >>= 1;
-        }
-        Bit >>= 2;
-    }
-    return (ULONG)Root;
-}
-
-/*
- * Opacity (0..255) of a 2 px ring of outer radius Radius at Distance from its centre, both in
- * 1/256 px with Unit = 1 px: rises from Radius - 2 to Radius - 1.5, falls from Radius - 0.5.
- */
-CODE_SEG("INIT")
-static UCHAR
-InbvGopSpinRing(
-    _In_ LONG Distance,
-    _In_ LONG Radius,
-    _In_ LONG Unit)
-{
-    LONG Start = Radius - 2 * Unit, Full = Radius - Unit * 3 / 2, End = Radius - Unit / 2;
-
-    if (Distance <= Start || Distance >= Radius)
-        return 0;
-    if (Distance < Full)
-        return (UCHAR)((Distance - Start) * 255 / (Full - Start));
-    if (Distance <= End)
-        return 255;
-    return (UCHAR)((Radius - Distance) * 255 / (Radius - End));
-}
-
-/* cubic-bezier(0.42, 0, 0.58, 1), the CSS ease-in-out of the owner's preview, as y for x steps */
-CODE_SEG("INIT")
-static VOID
-InbvGopSpinEaseTable(VOID)
-{
-    INBV_LOGO_STATE *S = &g_Logo;
-    ULONG Step;
-
-    for (Step = 0; Step <= INBV_SPIN_EASE_STEPS; Step++)
-    {
-        ULONGLONG Target = ((ULONGLONG)Step << 48) / INBV_SPIN_EASE_STEPS;
-        ULONGLONG Low = 0, High = 65536, P, Q, X, Y;
-
-        while (High - Low > 1)
-        {
-            P = (Low + High) / 2;
-            Q = 65536 - P;
-            X = (126 * Q * Q * P + 174 * Q * P * P) / 100 + P * P * P;
-            if (X < Target)
-                Low = P;
-            else
-                High = P;
-        }
-        P = High;
-        Q = 65536 - P;
-        Y = (3 * Q * P * P + P * P * P) >> 32;
-        S->Ease[Step] = (ULONG)min(Y, 65536ULL);
-    }
 }
 
 CODE_SEG("INIT")
@@ -551,90 +334,37 @@ InbvGopLogoSetup(
     LOADER_PARAMETER_FRAMEBUFFER FbInfo;
     ULONG RedShift, GreenShift, BlueShift;
     ULONG RedMax, GreenMax, BlueMax;
-    ULONG HalfHeight, CenterY, TopHalf, Lift, i, Root;
-    ULONG MarkWidth, MarkHeight, MarkTop, Pass, Pixel, Count, x, y, sx, sy;
+    ULONG i, Root, MarkHeight, MarkTop, Count, Samples;
     ULONG Increment, Frame100ns;
-    LONG Unit, Center, Outer, Inner;
+    INBV_SPIN_RECT Rect;
 
     RtlZeroMemory(S, sizeof(*S));
 
     if (!InbvGopQueryInfo(&FbInfo))
         return FALSE;
 
-    S->Width = S->Height = InbvGopScaleForDpi(INBV_SPIN_SIZE, FbInfo.Dpi);
-    MarkWidth = InbvGopScaleForDpi(INBV_LOGO_WIDTH, FbInfo.Dpi);
-    MarkHeight = (INBV_LOGO_UNITS_HIGH * MarkWidth + INBV_LOGO_UNITS / 2) / INBV_LOGO_UNITS;
-    if (S->Width == 0 ||
-        S->Width > ScreenWidth ||
-        S->Height > ScreenHeight ||
-        MarkHeight > ScreenHeight)
-    {
+    Rect = InbvSpinComputeRect(ScreenWidth, ScreenHeight, FbInfo.Dpi);
+    if (Rect.Width == 0)
         return FALSE;
-    }
+    S->Left = Rect.Left;
+    S->Top = Rect.Top;
+    S->Width = Rect.Width;
+    S->Height = Rect.Height;
+    MarkHeight = InbvSpinMarkHeight(FbInfo.Dpi);
+    MarkTop = InbvSpinMarkTop(ScreenHeight, FbInfo.Dpi);
 
-    S->Left = (ScreenWidth - S->Width) / 2;
-    HalfHeight = ScreenHeight / 2;
-    CenterY = (ULONG)(HalfHeight +
-                      (ScreenHeight - HalfHeight) * INBV_CENTERMARK_VPOS);
-    TopHalf = (ULONG)(((ULONGLONG)MarkHeight * INBV_LOGO_TOP_WIDTH) / (2 * INBV_LOGO_WIDTH));
-    Lift = InbvGopScaleForDpi(INBV_LOGO_LIFT, FbInfo.Dpi);
-    MarkTop = (CenterY > TopHalf + Lift) ? (CenterY - TopHalf - Lift) : 0;
-    S->Top = MarkTop + (MarkHeight + 1 - min(MarkHeight + 1, S->Height)) / 2;
-    if (S->Top + S->Height > ScreenHeight)
-        S->Top = ScreenHeight - S->Height;
-
-    /* Sub-pixel samples on either ring, counted in pass 0 and stored in pass 1 */
+    /* Sub-pixel samples on either ring: counted first, then stored */
     Count = S->Width * S->Height;
     S->PixelStart = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)(Count + 1) * sizeof(ULONG), INBV_LOGO_POOL_TAG);
     if (!S->PixelStart)
         return FALSE;
-    Unit = (LONG)S->Width * 256 / INBV_SPIN_SIZE;
-    Center = (LONG)S->Width * 128;
-    Outer = Center;
-    Inner = Center - INBV_SPIN_INSET * Unit;
-    for (Pass = 0; Pass < 2; Pass++)
-    {
-        ULONG Next = 0;
-
-        for (Pixel = 0, y = 0; y < S->Height; y++)
-        {
-            for (x = 0; x < S->Width; x++, Pixel++)
-            {
-                S->PixelStart[Pixel] = Next;
-                for (sy = 0; sy < INBV_SPIN_SUB; sy++)
-                {
-                    for (sx = 0; sx < INBV_SPIN_SUB; sx++)
-                    {
-                        LONG Dx = (LONG)(x * 256 + (sx * 256 + 128) / INBV_SPIN_SUB) - Center;
-                        LONG Dy = (LONG)(y * 256 + (sy * 256 + 128) / INBV_SPIN_SUB) - Center;
-                        LONG Distance = (LONG)InbvGopSpinSqrt((ULONGLONG)((LONGLONG)Dx * Dx + (LONGLONG)Dy * Dy));
-                        UCHAR OuterAlpha = InbvGopSpinRing(Distance, Outer, Unit);
-                        UCHAR InnerAlpha = InbvGopSpinRing(Distance, Inner, Unit);
-
-                        if (!OuterAlpha && !InnerAlpha)
-                            continue;
-                        if (Pass)
-                        {
-                            S->Samples[Next].Angle = InbvGopSpinAngle(Dx, -Dy);
-                            S->Samples[Next].Inner = OuterAlpha ? 0 : 1;
-                            S->Samples[Next].Alpha = OuterAlpha ? OuterAlpha :
-                                                     (UCHAR)(InnerAlpha * INBV_SPIN_INNER_ALPHA / 255);
-                        }
-                        Next++;
-                    }
-                }
-            }
-        }
-        S->PixelStart[Count] = Next;
-        if (!Pass)
-        {
-            S->Samples = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)max(Next, 1UL) * sizeof(INBV_SPIN_SAMPLE),
-                                               INBV_LOGO_POOL_TAG);
-            if (!S->Samples)
-                return FALSE;
-        }
-    }
-    InbvGopSpinEaseTable();
+    Samples = InbvSpinBuildSamples(S->Width, S->Height, NULL, S->PixelStart);
+    S->Samples = ExAllocatePoolWithTag(NonPagedPool, (SIZE_T)max(Samples, 1UL) * sizeof(INBV_SPIN_SAMPLE),
+                                       INBV_LOGO_POOL_TAG);
+    if (!S->Samples)
+        return FALSE;
+    InbvSpinBuildSamples(S->Width, S->Height, S->Samples, S->PixelStart);
+    InbvSpinEaseTable(S->Ease);
 
     {
         VID_DISPLAY_INFO DisplayInfo;
@@ -685,25 +415,25 @@ InbvGopLogoSetup(
         S->Lut[i] = InbvPackColor(FbInfo.RedMask, FbInfo.GreenMask, FbInfo.BlueMask,
                                   RedShift, GreenShift, BlueShift,
                                   RedMax, GreenMax, BlueMax,
-                                  (UCHAR)(INBV_LOGO_RED * i / 255),
-                                  (UCHAR)(INBV_LOGO_GREEN * i / 255),
-                                  (UCHAR)(INBV_LOGO_BLUE * i / 255));
+                                  (UCHAR)(INBV_SPIN_RED * i / 255),
+                                  (UCHAR)(INBV_SPIN_GREEN * i / 255),
+                                  (UCHAR)(INBV_SPIN_BLUE * i / 255));
         for (Root = 0; (Root + 1) * (Root + 1) <= i * 255; Root++);
         if (i * 255 - Root * Root > Root)
             Root++;
         g_Status.Lut[i] = InbvPackColor(FbInfo.RedMask, FbInfo.GreenMask, FbInfo.BlueMask,
                                         RedShift, GreenShift, BlueShift,
                                         RedMax, GreenMax, BlueMax,
-                                        (UCHAR)(INBV_LOGO_RED * Root / 255),
-                                        (UCHAR)(INBV_LOGO_GREEN * Root / 255),
-                                        (UCHAR)(INBV_LOGO_BLUE * Root / 255));
+                                        (UCHAR)(INBV_SPIN_RED * Root / 255),
+                                        (UCHAR)(INBV_SPIN_GREEN * Root / 255),
+                                        (UCHAR)(INBV_SPIN_BLUE * Root / 255));
     }
 
     Increment = KeQueryTimeIncrement();
     if (Increment == 0)
         Increment = INBV_LOGO_DEFAULT_INCREMENT;
 
-    Frame100ns = (ULONG)INBV_LOGO_FRAME_MS * 10000;
+    Frame100ns = (ULONG)INBV_SPIN_FRAME_MS * 10000;
     Frame100ns = ((Frame100ns + Increment - 1) / Increment) * Increment;
     if (Frame100ns == 0)
         Frame100ns = Increment;
@@ -1076,7 +806,7 @@ InbvDiscardBootScreen(VOID)
 NTSTATUS
 NTAPI
 InbvCopyBootScreen(
-    _Out_writes_bytes_(Height * Stride) PVOID Bits,
+    _Out_writes_bytes_((Height - 1) * Stride + Width * sizeof(ULONG)) PVOID Bits,
     _In_ LONG Stride,
     _In_ ULONG Width,
     _In_ ULONG Height)

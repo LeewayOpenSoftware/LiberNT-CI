@@ -529,7 +529,7 @@ SpiAdoptBootScreenWallpaper(
     gspv.hbmWallpaper = Bitmap;
     gspv.cxWallpaper = Width;
     gspv.cyWallpaper = Height;
-    gspv.WallpaperMode = wmFill;
+    gspv.WallpaperMode = wmCenter;     /* where the boot screen was seen; dxgkrnl centres it too */
     gspv.bBootScreenWallpaper = TRUE;
     gspv.awcWallpaper[0] = UNICODE_NULL;
     gspv.ustrWallpaper.Buffer = gspv.awcWallpaper;
@@ -1348,6 +1348,8 @@ SpiSetBootScreenWallpaper(VOID)
 
     OldBitmap = gspv.hbmWallpaper;
     SpiAdoptBootScreenWallpaper(Bitmap, Width, Height);
+    /* The lab reads from this line whether win32k or dxgkrnl took the boot screen first. */
+    ERR("K2TRACE: W32K boot screen adopted %lux%lu\n", Width, Height);
 
     if (OldBitmap && OldBitmap != Bitmap)
     {

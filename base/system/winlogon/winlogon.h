@@ -72,6 +72,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(winlogon);
 #define WLHOST_EVENT_SHUTDOWN       3   /* power flyout while locked or logged off outside a SAS */
 #define WLHOST_EVENT_RESTART        4
 #define WLHOST_EVENT_MUST_CHANGE    5   /* the unlock credentials must change their password first */
+#define WLHOST_EVENT_SLEEP          6   /* power flyout Sleep while locked or logged off outside a SAS */
 
 /* The GINA interface is gone: the LogonUI host is the only logon path. */
 
@@ -302,10 +303,16 @@ VOID
 WluiLaunchUnregister(
     _In_ PWLUI_LAUNCH_STATE State);
 
-BOOL
+DWORD
 WluiLaunchPostCommand(
     _In_ PWLUI_LAUNCH_STATE State,
     _In_ const struct _WLUI_COMMAND *Command);
+
+BOOL
+WluiLaunchWaitShown(
+    _In_ PWLUI_LAUNCH_STATE State,
+    _In_ DWORD Sequence,
+    _In_ DWORD TimeoutMs);
 
 BOOL
 WluiLaunchWaitReady(
@@ -372,10 +379,16 @@ WlHostWaitReady(
     _In_ PWLHOST_LAUNCH Launch,
     _In_ DWORD TimeoutMs);
 
-BOOL
+DWORD
 WlHostPost(
     _In_ PWLHOST_LAUNCH Launch,
     _In_ const struct _WLUI_COMMAND *Command);
+
+BOOL
+WlHostWaitShown(
+    _In_ PWLHOST_LAUNCH Launch,
+    _In_ DWORD Sequence,
+    _In_ DWORD TimeoutMs);
 
 HANDLE
 WlHostEndedEvent(
@@ -447,6 +460,29 @@ WlHostDisplaySasNotice(
 VOID
 WlHostStatus(
     _In_ PCWSTR Text);
+
+/* transition.c */
+typedef struct _WL_COVER *PWL_COVER;
+
+PWL_COVER
+WlSwitchDesktopCovered(
+    _In_ HDESK From,
+    _In_ HDESK To);
+
+VOID
+WlCoverRelease(
+    _In_opt_ PWL_COVER Cover);
+
+UINT
+WlHostStatusText(
+    _In_ UINT ResourceId);
+
+VOID
+WlHostWaitStatusShown(VOID);
+
+BOOL
+WlHostShowUnlockWelcome(
+    _In_ PWLSESSION Session);
 
 VOID
 WlHostThemeWait(VOID);
@@ -612,5 +648,13 @@ CreateWindowStationAndDesktops(
 VOID
 LogonStage(
     _In_ PCSTR Stage);
+
+/* bootspinner.c */
+VOID
+WlBootSpinnerShow(
+    _Inout_ PWLSESSION Session);
+
+VOID
+WlBootSpinnerStop(VOID);
 
 #endif /* __WINLOGON_MAIN_H__ */

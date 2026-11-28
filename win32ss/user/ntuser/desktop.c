@@ -2147,6 +2147,9 @@ IntPaintDesktopContent(HDC hDC)
         DesktopBrush = (HBRUSH)WndDesktop->pcls->hbrBackground;
         if (DesktopBrush && DesktopBrush <= (HBRUSH)(COLOR_MENUBAR + 1))
             DesktopBrush = IntGetSysColorBrush(HandleToUlong(DesktopBrush) - 1);
+        /* Around the boot screen the margin stays black, as dxgkrnl presented it. */
+        if (gspv.hbmWallpaper != NULL && gspv.bBootScreenWallpaper)
+            DesktopBrush = StockObjects[BLACK_BRUSH];
 
         if ((gspv.hbmWallpaper == NULL ||
              (gspv.WallpaperMode != wmStretch &&
@@ -2159,9 +2162,14 @@ IntPaintDesktopContent(HDC hDC)
         }
 
         /*
-         * Paint desktop background
+         * Paint desktop background. The scaling below divides by the wallpaper and desktop sizes:
+         * an empty bitmap, or a desktop that has no size yet (dwm can paint one while it is being
+         * set up), leaves the brush alone to fill the desktop.
          */
-        if (gspv.hbmWallpaper != NULL)
+        if (gspv.hbmWallpaper != NULL &&
+            gspv.cxWallpaper != 0 && gspv.cyWallpaper != 0 &&
+            WndDesktop->rcWindow.right > WndDesktop->rcWindow.left &&
+            WndDesktop->rcWindow.bottom > WndDesktop->rcWindow.top)
         {
             SIZE sz;
             int x, y;

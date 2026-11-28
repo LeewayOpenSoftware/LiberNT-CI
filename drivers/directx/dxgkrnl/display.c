@@ -3378,14 +3378,28 @@ DxgkpDisplayCommitVidPnCandidateWithTarget(
      * display over right after the first successful mode set and before any
      * present.  The check keeps the later ownership notifications (adapter
      * start, POSTDISPLAY reassert) idempotent.
+     *
+     * A commit of the POST size keeps the boot display: inbv keeps drawing
+     * the spinner until win32k shows its first window.  This relies on the
+     * BasicDisplay platform (softgpu root) offering one mode per size, the
+     * current one at the POST pitch, so that commit sets no mode and clears
+     * nothing.  A platform with several pitches for one size must release.
      */
     if (!TopologyEmpty &&
         Adapter->IsBasicDisplayFallback &&
         InbvCheckDisplayOwnership())
     {
-        DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: adapter %p mode %lux%lu committed, releasing the boot display\n",
-                     Adapter, NewCommittedWidth, NewCommittedHeight);
-        InbvNotifyDisplayOwnershipLost(NULL);
+        if (NewCommittedWidth != Adapter->PostDisplayWidth || NewCommittedHeight != Adapter->PostDisplayHeight)
+        {
+            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: adapter %p mode %lux%lu committed, releasing the boot display\n",
+                          Adapter, NewCommittedWidth, NewCommittedHeight);
+            InbvNotifyDisplayOwnershipLost(NULL);
+        }
+        else
+        {
+            DXGKRNL_TRACE("DxgkpCommitVidPnToMiniport: adapter %p keeps the boot display at %lux%lu\n",
+                          Adapter, NewCommittedWidth, NewCommittedHeight);
+        }
     }
 
     /* The monitor on each committed target may be a different one. */
@@ -3961,6 +3975,8 @@ DxgkDisplayPresentBootScreen(
 {
     ULONG Width = 0;
     ULONG Height = 0;
+    ULONG OffsetX = 0, OffsetY = 0;
+    ULONG CropX = 0, CropY = 0;
     ULONG Pitch;
     SIZE_T Size;
     PVOID Pixels;
@@ -3983,10 +3999,46 @@ DxgkDisplayPresentBootScreen(
     if (Pixels == NULL)
         return;
 
+    /* A smaller boot screen (the POST mode) stays where it was seen: centred, black around it. */
     if (InbvQueryBootScreen(NULL, 0, &Width, &Height) == STATUS_BUFFER_TOO_SMALL &&
-        Width == Adapter->CommittedWidth && Height == Adapter->CommittedHeight)
+        Width <= Adapter->CommittedWidth && Height <= Adapter->CommittedHeight)
     {
-        (VOID)InbvCopyBootScreen(Pixels, (LONG)Pitch, Width, Height);
+        PUCHAR Origin;
+
+        OffsetX = (Adapter->CommittedWidth - Width) / 2;
+        OffsetY = (Adapter->CommittedHeight - Height) / 2;
+        Origin = (PUCHAR)Pixels + (SIZE_T)OffsetY * Pitch + (SIZE_T)OffsetX * sizeof(ULONG);
+
+        (VOID)InbvCopyBootScreen(Origin, (LONG)Pitch, Width, Height);
+    }
+    /* A larger one (the loader set a bigger mode than the one committed) keeps its centre, as win32k
+     * centres the adopted boot screen afterwards, so the logo does not drop to black in between. */
+    else if (Width != 0 && Height != 0 && Width <= MAXULONG / sizeof(ULONG) / Height)
+    {
+        ULONG BootPitch = Width * sizeof(ULONG);
+        ULONG CopyWidth = min(Width, Adapter->CommittedWidth);
+        ULONG CopyHeight = min(Height, Adapter->CommittedHeight);
+        PUCHAR Boot = ExAllocatePoolWithTag(PagedPool, (SIZE_T)BootPitch * Height, TAG_DXGK_PRESENT);
+
+        if (Boot != NULL)
+        {
+            if (NT_SUCCESS(InbvCopyBootScreen(Boot, (LONG)BootPitch, Width, Height)))
+            {
+                ULONG y;
+
+                CropX = (Width - CopyWidth) / 2;
+                CropY = (Height - CopyHeight) / 2;
+                OffsetX = (Adapter->CommittedWidth - CopyWidth) / 2;
+                OffsetY = (Adapter->CommittedHeight - CopyHeight) / 2;
+                for (y = 0; y < CopyHeight; y++)
+                {
+                    RtlCopyMemory((PUCHAR)Pixels + (SIZE_T)(OffsetY + y) * Pitch + (SIZE_T)OffsetX * sizeof(ULONG),
+                                  Boot + (SIZE_T)(CropY + y) * BootPitch + (SIZE_T)CropX * sizeof(ULONG),
+                                  (SIZE_T)CopyWidth * sizeof(ULONG));
+                }
+            }
+            ExFreePoolWithTag(Boot, TAG_DXGK_PRESENT);
+        }
     }
 
     Rect.left = 0;
@@ -3994,8 +4046,9 @@ DxgkDisplayPresentBootScreen(
     Rect.right = (LONG)Adapter->CommittedWidth;
     Rect.bottom = (LONG)Adapter->CommittedHeight;
     Status = DxgkpPresentSourceRects(Adapter, Pixels, Pitch, Size, &Rect, 1, "boot");
-    DXGKRNL_TRACE("DxgkDisplayPresentBootScreen: adapter %p %lux%lu status 0x%08lX\n",
-                  Adapter, Adapter->CommittedWidth, Adapter->CommittedHeight, Status);
+    DXGKRNL_TRACE("DxgkDisplayPresentBootScreen: adapter %p %lux%lu boot %lux%lu from %lu,%lu at %lu,%lu status 0x%08lX\n",
+                  Adapter, Adapter->CommittedWidth, Adapter->CommittedHeight, Width, Height, CropX, CropY,
+                  OffsetX, OffsetY, Status);
     ExFreePoolWithTag(Pixels, TAG_DXGK_PRESENT);
 }
 
