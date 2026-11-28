@@ -1,0 +1,56 @@
+/*
+ * PROJECT:     LiberNT Boot Configuration Data editor
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * TRANSLATOR:  Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+STRINGTABLE
+BEGIN
+    IDS_USAGE "BCDEDIT - Boot Configuration Data Store Editor\n\
+\n\
+The Bcdedit.exe command-line tool modifies the boot configuration data store.\n\
+The boot configuration data store contains boot configuration parameters and\n\
+controls how the operating system is started.\n\
+\n\
+Commands that operate on a store\n\
+  /enum           Lists entries in a store.\n\
+  /store          Used to specify a BCD store other than the system default.\n\
+  /createstore    Creates a new and empty boot configuration data store.\n\
+  /create         Creates a new entry in the boot configuration data store.\n\
+  /copy           Makes copies of entries in the store.\n\
+  /delete         Deletes an entry from the store.\n\
+  /deletevalue    Deletes an element from an entry.\n\
+  /set            Sets an entry option value.\n\
+  /default        Sets the default entry that the boot manager will use.\n\
+  /displayorder   Sets the order in which the boot manager displays the\n\
+                  multiboot menu.\n\
+  /timeout        Sets the boot manager time-out value.\n\
+\n\
+Use ""bcdedit /?"" for help.\n"
+    IDS_ERR_OPENSTORE "The boot configuration data store could not be opened.\n"
+    IDS_ERR_BADPARAM "The parameter is incorrect.\n"
+    IDS_ERR_NOSTORE "The requested system device cannot be found.\n"
+    IDS_OK "The operation completed successfully.\n"
+    IDS_ERR_SETFAIL "The store entry or element could not be set.\n"
+    IDS_ERR_BADID "The specified identifier is not valid.\n"
+
+    IDS_HDR_FWBOOTMGR      "Firmware Boot Manager"
+    IDS_HDR_BOOTMGR        "Windows Boot Manager"
+    IDS_HDR_MEMDIAG        "Windows Memory Tester"
+    IDS_HDR_RESUME         "Resume from Hibernate"
+    IDS_HDR_BOOTLOADER     "Windows Boot Loader"
+    IDS_HDR_NTLDR          "Windows Legacy OS Loader"
+    IDS_HDR_BOOTSECTOR     "Real-mode Boot Sector"
+    IDS_HDR_STARTUP        "Windows Setup"
+    IDS_HDR_GLOBALSETTINGS "Global Settings"
+    IDS_HDR_BOOTLOADERSET  "Boot Loader Settings"
+    IDS_HDR_HYPERVISORSET  "Hypervisor Settings"
+    IDS_HDR_RESUMESET      "Resume Loader Settings"
+    IDS_HDR_DBGSETTINGS    "Debugger Settings"
+    IDS_HDR_EMSSETTINGS    "EMS Settings"
+    IDS_HDR_BADMEMORY      "RAM Defects"
+    IDS_HDR_DEVOPTIONS     "Device options"
+    IDS_HDR_UNKNOWN        "Unknown object"
+END

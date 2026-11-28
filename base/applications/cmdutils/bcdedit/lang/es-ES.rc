@@ -1,0 +1,56 @@
+/*
+ * PROJECT:     LiberNT Boot Configuration Data editor
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * TRANSLATOR:  Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_SPANISH, SUBLANG_SPANISH_MODERN
+
+STRINGTABLE
+BEGIN
+    IDS_USAGE "BCDEDIT - Editor del almacen de datos de configuracion de arranque\n\
+\n\
+La herramienta de linea de comandos Bcdedit.exe modifica el almacen de datos de\n\
+configuracion de arranque. Este almacen contiene los parametros de arranque y\n\
+controla como se inicia el sistema operativo.\n\
+\n\
+Comandos que operan sobre un almacen\n\
+  /enum           Muestra las entradas de un almacen.\n\
+  /store          Especifica un almacen BCD distinto del predeterminado.\n\
+  /createstore    Crea un almacen de datos de configuracion de arranque vacio.\n\
+  /create         Crea una entrada nueva en el almacen.\n\
+  /copy           Hace copias de entradas del almacen.\n\
+  /delete         Elimina una entrada del almacen.\n\
+  /deletevalue    Elimina un elemento de una entrada.\n\
+  /set            Establece el valor de una opcion de una entrada.\n\
+  /default        Establece la entrada predeterminada del administrador de arranque.\n\
+  /displayorder   Establece el orden en que el administrador de arranque muestra\n\
+                  el menu de arranque multiple.\n\
+  /timeout        Establece el valor de tiempo de espera del administrador de arranque.\n\
+\n\
+Use ""bcdedit /?"" para obtener ayuda.\n"
+    IDS_ERR_OPENSTORE "No se pudo abrir el almacen de datos de configuracion de arranque.\n"
+    IDS_ERR_BADPARAM "El parametro no es correcto.\n"
+    IDS_ERR_NOSTORE "No se encuentra el dispositivo de sistema solicitado.\n"
+    IDS_OK "La operacion se completo correctamente.\n"
+    IDS_ERR_SETFAIL "No se pudo establecer la entrada o el elemento del almacen.\n"
+    IDS_ERR_BADID "El identificador especificado no es valido.\n"
+
+    IDS_HDR_FWBOOTMGR      "Administrador de arranque de firmware"
+    IDS_HDR_BOOTMGR        "Administrador de arranque de Windows"
+    IDS_HDR_MEMDIAG        "Comprobador de memoria de Windows"
+    IDS_HDR_RESUME         "Reanudar desde hibernacion"
+    IDS_HDR_BOOTLOADER     "Cargador de arranque de Windows"
+    IDS_HDR_NTLDR          "Cargador de SO heredado de Windows"
+    IDS_HDR_BOOTSECTOR     "Sector de arranque en modo real"
+    IDS_HDR_STARTUP        "Programa de instalacion de Windows"
+    IDS_HDR_GLOBALSETTINGS "Configuracion global"
+    IDS_HDR_BOOTLOADERSET  "Configuracion del cargador de arranque"
+    IDS_HDR_HYPERVISORSET  "Configuracion del hipervisor"
+    IDS_HDR_RESUMESET      "Configuracion del cargador de reanudacion"
+    IDS_HDR_DBGSETTINGS    "Configuracion del depurador"
+    IDS_HDR_EMSSETTINGS    "Configuracion de EMS"
+    IDS_HDR_BADMEMORY      "Defectos de RAM"
+    IDS_HDR_DEVOPTIONS     "Opciones de dispositivo"
+    IDS_HDR_UNKNOWN        "Objeto desconocido"
+END
