@@ -1290,7 +1290,7 @@ EtwpLogModernEvent(
     PETWP_LOGGER Logger;
     PETHREAD Thread = PsGetCurrentThread();
     ULONG Total = sizeof(ETWP_EVENT_HEADER), Reserved, i;
-    BOOLEAN Narrow;
+    BOOLEAN Narrow, PayloadFault;
     PUCHAR Data;
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -1352,6 +1352,7 @@ EtwpLogModernEvent(
         Record = (PETWP_EVENT_HEADER)((PUCHAR)Buffer + Buffer->CurrentOffset);
         Data = (PUCHAR)(Record + 1);
 
+        PayloadFault = FALSE;
         _SEH2_TRY
         {
             for (i = 0; i < UserDataCount; i++)
@@ -1366,11 +1367,13 @@ EtwpLogModernEvent(
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
-            Status = _SEH2_GetExceptionCode();
+            /* Win11 semantics: a payload that faults is dropped, the write succeeds */
+            Logger->EventsLost++;
+            PayloadFault = TRUE;
         }
         _SEH2_END;
 
-        if (NT_SUCCESS(Status))
+        if (!PayloadFault)
         {
             RtlZeroMemory(Record, sizeof(*Record));
             Record->Size = (USHORT)Total;

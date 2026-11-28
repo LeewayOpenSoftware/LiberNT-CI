@@ -14,6 +14,8 @@
 
 #include <guiddef.h>
 
+#include <wmistr.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -569,11 +571,10 @@ typedef struct _TRACE_LOGFILE_HEADER64 {
 
 #endif /* !_NTDDK_ || _WMIKM_ */
 
-#if !defined(_WMIKM_) && !defined(_NTDDK_) && !defined(_NTIFS_)
-
 #define ENABLE_TRACE_PARAMETERS_VERSION     1
 #define ENABLE_TRACE_PARAMETERS_VERSION_2   2
 
+#if !defined(_WMIKM_) && !defined(_NTDDK_) && !defined(_NTIFS_)
 typedef struct _EVENT_TRACE_PROPERTIES {
   WNODE_HEADER Wnode;
   ULONG BufferSize;
@@ -604,7 +605,11 @@ typedef struct _EVENT_RECORD EVENT_RECORD, *PEVENT_RECORD;
 typedef struct _EVENT_TRACE_LOGFILEW EVENT_TRACE_LOGFILEW, *PEVENT_TRACE_LOGFILEW;
 typedef struct _EVENT_TRACE_LOGFILEA EVENT_TRACE_LOGFILEA, *PEVENT_TRACE_LOGFILEA;
 #ifndef _EVNTPROV_
-typedef struct _EVENT_FILTER_DESCRIPTOR EVENT_FILTER_DESCRIPTOR, *PEVENT_FILTER_DESCRIPTOR;
+typedef struct _EVENT_FILTER_DESCRIPTOR {
+  ULONGLONG Ptr;
+  ULONG Size;
+  ULONG Type;
+} EVENT_FILTER_DESCRIPTOR, *PEVENT_FILTER_DESCRIPTOR;
 #endif
 
 typedef ULONG
@@ -716,6 +721,7 @@ typedef struct _ENABLE_TRACE_PARAMETERS {
   ULONG ControlFlags;
   GUID SourceId;
   PEVENT_FILTER_DESCRIPTOR EnableFilterDesc;
+  ULONG EnableFilterDescCount;
 } ENABLE_TRACE_PARAMETERS, *PENABLE_TRACE_PARAMETERS;
 
 #define INVALID_PROCESSTRACE_HANDLE ((TRACEHANDLE)(ULONG_PTR)INVALID_HANDLE_VALUE)

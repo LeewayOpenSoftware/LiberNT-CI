@@ -831,6 +831,7 @@ ULONG WINAPI EtwEnableTrace( ULONG enable, ULONG flag, ULONG level, LPCGUID guid
     Params.LoggerId = (ULONG)hSession;
     Params.ControlCode = enable ? EVENT_CONTROL_CODE_ENABLE_PROVIDER : EVENT_CONTROL_CODE_DISABLE_PROVIDER;
     Params.Level = (UCHAR)level;
+    Params.Version = ENABLE_TRACE_PARAMETERS_VERSION;
     Params.MatchAnyKeyword = flag;
     Status = NtTraceControl(EtwEnableGuidCode, &Params, sizeof(Params), NULL, 0, &ReturnSize);
     return RtlNtStatusToDosError(Status);
