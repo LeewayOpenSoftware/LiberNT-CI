@@ -1,4 +1,7 @@
 
+# Before the Wine definitions and include path below, which nt/ must not inherit.
+add_subdirectory(nt)
+
 remove_definitions(-D_WIN32_WINNT=${REACTOS_TARGET_NT} -DWINVER=${REACTOS_TARGET_NT})
 
 add_definitions(
@@ -44,7 +47,7 @@ add_library(kernelbase MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/kernelbase.def)
 
 set_module_type(kernelbase win32dll ENTRYPOINT DllMain 12)
-target_link_libraries(kernelbase psapi_static kernelbase_static kernel32_shared win32_registry_hkcr wine chkstk uuid)
+target_link_libraries(kernelbase psapi_static kernelbase_static kernelbase_nt kernel32_shared win32_registry_hkcr wine chkstk uuid)
 add_importlibs(kernelbase kernel32 kernel32_vista ntdll ntdll_vista)
 add_dependencies(kernelbase psdk errcodes)
 add_cd_file(TARGET kernelbase DESTINATION reactos/system32 FOR all)

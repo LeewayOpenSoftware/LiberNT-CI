@@ -118,14 +118,6 @@ elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     set_source_files_properties(winnls/string/locale.c PROPERTIES COMPILE_OPTIONS "-Wno-unused-variable")
 endif()
 
-if(ARCH STREQUAL "amd64")
-    list(APPEND ASM_SOURCE
-        client/amd64/except.S)
-else()
-    list(APPEND SOURCE
-        client/raise.c)
-endif()
-
 if(ARCH STREQUAL "i386")
     list(APPEND ASM_SOURCE
         client/i386/fiber.S

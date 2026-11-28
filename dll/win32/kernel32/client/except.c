@@ -387,41 +387,6 @@ BasepCheckForReadOnlyResource(IN PVOID Ptr)
     return Ret;
 }
 
-UINT
-WINAPI
-GetErrorMode(VOID)
-{
-    NTSTATUS Status;
-    UINT ErrMode;
-
-    /* Query the current setting */
-    Status = NtQueryInformationProcess(NtCurrentProcess(),
-                                       ProcessDefaultHardErrorMode,
-                                       &ErrMode,
-                                       sizeof(ErrMode),
-                                       NULL);
-    if (!NT_SUCCESS(Status))
-    {
-        /* Fail if we couldn't query */
-        BaseSetLastNTError(Status);
-        return 0;
-    }
-
-    /* Check if NOT failing critical errors was requested */
-    if (ErrMode & SEM_FAILCRITICALERRORS)
-    {
-        /* Mask it out, since the native API works differently */
-        ErrMode &= ~SEM_FAILCRITICALERRORS;
-    }
-    else
-    {
-        /* OR it if the caller didn't, due to different native semantics */
-        ErrMode |= SEM_FAILCRITICALERRORS;
-    }
-
-    /* Return the mode */
-    return ErrMode;
-}
 
 /*
  * @implemented
@@ -868,40 +833,6 @@ Quit:
 /*
  * @implemented
  */
-UINT
-WINAPI
-SetErrorMode(IN UINT uMode)
-{
-    UINT PrevErrMode, NewMode;
-
-    /* Get the previous mode */
-    PrevErrMode = GetErrorMode();
-    NewMode = uMode;
-
-    /* Check if failing critical errors was requested */
-    if (NewMode & SEM_FAILCRITICALERRORS)
-    {
-        /* Mask it out, since the native API works differently */
-        NewMode &= ~SEM_FAILCRITICALERRORS;
-    }
-    else
-    {
-        /* OR it if the caller didn't, due to different native semantics */
-        NewMode |= SEM_FAILCRITICALERRORS;
-    }
-
-    /* Always keep no alignment faults if they were set */
-    NewMode |= (PrevErrMode & SEM_NOALIGNMENTFAULTEXCEPT);
-
-    /* Set the new mode */
-    NtSetInformationProcess(NtCurrentProcess(),
-                            ProcessDefaultHardErrorMode,
-                            (PVOID)&NewMode,
-                            sizeof(NewMode));
-
-    /* Return the previous mode */
-    return PrevErrMode;
-}
 
 /*
  * @implemented

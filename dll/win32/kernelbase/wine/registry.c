@@ -3851,6 +3851,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH DnsHostnameToComputerNameExW( const WCHAR *hostnam
 }
 
 
+#ifndef __REACTOS__ /* Orosi keeps the computer names in kernelbase/nt/ComputerName.c (Windows registry layout) */
 /***********************************************************************
  * GetComputerNameExA   (kernelbase.@)
  */
@@ -4064,6 +4065,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH SetComputerNameExW( COMPUTER_NAME_FORMAT type, con
     if (ret) SetLastError( ret );
     return !ret;
 }
+#endif /* __REACTOS__ */
 
 struct USKEY
 {

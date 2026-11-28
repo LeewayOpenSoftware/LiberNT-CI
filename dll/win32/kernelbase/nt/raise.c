@@ -1,12 +1,18 @@
 /*
- * PROJECT:     LiberNT Win32 Base API
+ * PROJECT:     LiberNT KernelBase
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
  * PURPOSE:     RaiseException for architectures without an assembly version
+ *              (moved from kernel32 client/raise.c)
  * COPYRIGHT:   Copyright 1998 Ariadne (ariadne@xs4all.nl)
  *              Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
-#include <k32.h>
+#define WIN32_NO_STATUS
+#include <windef.h>
+#include <winbase.h>
+
+#define NTOS_MODE_USER
+#include <ndk/rtlfuncs.h>
 
 #define NDEBUG
 #include <debug.h>
