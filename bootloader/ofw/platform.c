@@ -75,7 +75,7 @@ static ULONG OfwMapCount;
 
 static const PCWSTR OfwStorePaths[] =
 {
-    L"\\EFI\\LiberNT\\Boot\\BCD",
+    L"\\EFI\\Orosi\\Boot\\BCD",
     L"\\Boot\\BCD",
 };
 

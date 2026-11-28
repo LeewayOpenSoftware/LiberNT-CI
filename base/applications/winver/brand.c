@@ -16,8 +16,7 @@ Winver_ApplyBrand(
 {
     if (!szName[0] ||
         lstrcmpiW(szName, L"ReactOS") == 0 ||
-        lstrcmpiW(szName, L"Orosi") == 0 ||
-        lstrcmpiW(szName, L"LiberNT") == 0)
+        lstrcmpiW(szName, L"Orosi") == 0)
     {
         StringCchCopyW(szName, cchName, WINVER_BRAND_NAME);
     }

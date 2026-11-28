@@ -949,9 +949,9 @@ SelfTestBoot(
     SelfTestCheck(Context, !SelfTestKeyExists(L"\\Registry\\Machine\\SetupBcd"), L"A.boot", L"BCD hive unloaded");
     SelfTestVolumeIdle(Context, L"A.boot", SystemDevice);
 
-    StringCchPrintfW(Probe, ARRAYSIZE(Probe), L"\\\\?\\GLOBALROOT%s\\EFI\\LiberNT\\Boot\\BCD", SystemDevice);
+    StringCchPrintfW(Probe, ARRAYSIZE(Probe), L"\\\\?\\GLOBALROOT%s\\EFI\\Orosi\\Boot\\BCD", SystemDevice);
     SelfTestCheck(Context, GetFileAttributesW(Probe) != INVALID_FILE_ATTRIBUTES, L"A.boot", L"BCD present");
-    StringCchPrintfW(Probe, ARRAYSIZE(Probe), L"\\\\?\\GLOBALROOT%s\\EFI\\LiberNT\\Boot\\bootmgfw.efi", SystemDevice);
+    StringCchPrintfW(Probe, ARRAYSIZE(Probe), L"\\\\?\\GLOBALROOT%s\\EFI\\Orosi\\Boot\\bootmgfw.efi", SystemDevice);
     SelfTestCheck(Context, GetFileAttributesW(Probe) != INVALID_FILE_ATTRIBUTES, L"A.boot", L"boot manager present");
 
     NewSize = GetFirmwareEnvironmentVariableExW(L"BootOrder", L"{8BE4DF61-93CA-11D2-AA0D-00E098032B8C}",
@@ -1129,7 +1129,7 @@ SelfTestReadBcdOsPartition(
 
     RtlAdjustPrivilege(SE_RESTORE_PRIVILEGE, TRUE, FALSE, &Enabled);
     RtlAdjustPrivilege(SE_BACKUP_PRIVILEGE, TRUE, FALSE, &Enabled);
-    StringCchPrintfW(StorePath, ARRAYSIZE(StorePath), L"%s\\EFI\\LiberNT\\Boot\\BCD", SystemDevice);
+    StringCchPrintfW(StorePath, ARRAYSIZE(StorePath), L"%s\\EFI\\Orosi\\Boot\\BCD", SystemDevice);
     StringCchPrintfW(ElementPath, ARRAYSIZE(ElementPath),
                      L"%s\\Objects\\{354fa6e5-5e45-49af-91bf-1fd2754e470a}\\Elements\\21000001", MountName);
     RtlInitUnicodeString(&MountPoint, MountName);

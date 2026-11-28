@@ -1378,7 +1378,7 @@ TestBootExecuteListed(void)
     CHECK(LnBootExecuteListed(buf, sizeof(buf)));
 
     memset(buf, 0, sizeof(buf));
-    wcscpy(buf, L"liberntupdatepending");                                          /* case-insensitive */
+    wcscpy(buf, L"orosiupdatepending");                                           /* case-insensitive */
     CHECK(LnBootExecuteListed(buf, sizeof(buf)));
     wcscpy(buf, L"C:\\Windows\\System32\\OrosiUpdatePending.exe");               /* path and .exe stripped */
     CHECK(LnBootExecuteListed(buf, sizeof(buf)));

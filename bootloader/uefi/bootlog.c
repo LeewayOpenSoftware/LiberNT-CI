@@ -7,7 +7,7 @@
 
 #include <blefi.h>
 
-#define BOOTLOG_PATH   L"\\EFI\\LiberNT\\Boot\\boot.log"
+#define BOOTLOG_PATH   L"\\EFI\\Orosi\\Boot\\boot.log"
 #define BOOTLOG_BYTES  4096
 
 static EFI_GUID BootLogFileSystemGuid = EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
