@@ -139,7 +139,7 @@ WlHlCopyString(
     _Out_writes_(Chars) PWSTR Dest,
     _In_ SIZE_T Chars)
 {
-    SIZE_T Count = Source->Length / sizeof(WCHAR);
+    SIZE_T Count = Source->Buffer != NULL ? Source->Length / sizeof(WCHAR) : 0;
     if (Count >= Chars)
         Count = Chars - 1;
     CopyMemory(Dest, Source->Buffer, Count * sizeof(WCHAR));
@@ -1158,14 +1158,38 @@ static BOOL g_BlankLogonTried;          /* considered once per boot, never after
 /* Winlogon\SpecialAccounts\UserList: a DWORD 0 keeps the account off the logon page. */
 static BOOL
 WlHlAccountHidden(
-    _In_ PCUNICODE_STRING Name)
+    _In_ PCWSTR Name)
 {
-    WCHAR Text[CREDSER_MAX_NAME_CHARS + 1];
     DWORD Value = 1, Size = sizeof(Value);
 
-    WlHlCopyString(Name, Text, ARRAYSIZE(Text));
     return RegGetValueW(HKEY_LOCAL_MACHINE, WLHL_WINLOGON_KEY L"\\SpecialAccounts\\UserList",
-                        Text, RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS && Value == 0;
+                        Name, RRF_RT_REG_DWORD, NULL, &Value, &Size) == ERROR_SUCCESS && Value == 0;
+}
+
+/* samsrv enumerates RIDs only and leaves the names empty, so the name comes from the account. */
+static BOOL
+WlHlUserAccountName(
+    _In_ SAM_HANDLE User,
+    _Out_writes_(Chars) PWSTR Name,
+    _In_ DWORD Chars)
+{
+    PUSER_ACCOUNT_NAME_INFORMATION Info = NULL;
+    BOOL Found = FALSE;
+
+    Name[0] = UNICODE_NULL;
+    if (NT_SUCCESS(SamQueryInformationUser(User, UserAccountNameInformation, (PVOID *)&Info)) && Info)
+    {
+        if (Info->UserName.Buffer != NULL && Info->UserName.Length != 0)
+        {
+            WlHlCopyString(&Info->UserName, Name, Chars);
+            Found = TRUE;
+        }
+        if (Info->UserName.Buffer != NULL)
+            SamFreeMemory(Info->UserName.Buffer);
+    }
+    if (Info)
+        SamFreeMemory(Info);
+    return Found;
 }
 
 /*
@@ -1186,6 +1210,7 @@ WlHlOnlyAccountIsBlank(
     SAM_ENUMERATE_HANDLE Context = 0;
     PSAM_RID_ENUMERATION Buffer;
     PUSER_LOGON_UI_INFORMATION Info;
+    WCHAR ThisName[CREDSER_MAX_NAME_CHARS + 1];
     ULONG Count, i, Listed = 0;
     BOOL Blank = FALSE;
     NTSTATUS Status;
@@ -1210,15 +1235,17 @@ WlHlOnlyAccountIsBlank(
             break;
         for (i = 0; Buffer != NULL && i < Count && Listed < 2; i++)
         {
-            BOOL Shown = TRUE, ThisBlank = FALSE;
+            BOOL Shown = TRUE, ThisBlank = FALSE, Named = FALSE;
 
-            if (WlHlAccountHidden(&Buffer[i].Name))
-                continue;
             /* Fail closed: an account SAM does not describe counts as listed, with a password. */
             Info = NULL;
+            ThisName[0] = UNICODE_NULL;
             if (NT_SUCCESS(SamOpenUser(Domain, USER_READ_GENERAL | USER_READ_ACCOUNT, Buffer[i].RelativeId, &User)))
             {
-                if (NT_SUCCESS(SamQueryInformationUser(User, UserLogonUIInformation, (PVOID *)&Info)) && Info)
+                Named = WlHlUserAccountName(User, ThisName, ARRAYSIZE(ThisName));
+                if (Named && WlHlAccountHidden(ThisName))
+                    Shown = FALSE;
+                else if (NT_SUCCESS(SamQueryInformationUser(User, UserLogonUIInformation, (PVOID *)&Info)) && Info)
                 {
                     Shown = !Info->AccountIsDisabled;
                     ThisBlank = Info->PasswordIsBlank;
@@ -1231,8 +1258,9 @@ WlHlOnlyAccountIsBlank(
                 continue;
             if (Listed++ == 0)
             {
-                Blank = ThisBlank;
-                WlHlCopyString(&Buffer[i].Name, Name, Chars);
+                /* A sign-in needs the name: an unnamed account still counts, but never signs in. */
+                Blank = ThisBlank && Named;
+                StringCchCopyW(Name, Chars, ThisName);
             }
         }
         if (Buffer)
