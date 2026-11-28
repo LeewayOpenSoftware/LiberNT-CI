@@ -34,7 +34,6 @@ list(APPEND SOURCE
     client/mui.c
     client/path.c
     client/pathansi.c
-    client/perfcnt.c
     client/power.c
     client/privatens.c
     client/proc.c
