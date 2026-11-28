@@ -3791,8 +3791,8 @@ IntSetThreadDesktop(IN HDESK hDesktop,
         return FALSE;
     }
 
-    /* Desktop is being re-set so clear out foreground. */
-    if (pti->rpdesk != pdesk && pti->MessageQueue == gpqForeground)
+    /* Desktop is being re-set so clear out the foreground this queue holds on its desktop. */
+    if (pti->rpdesk != pdesk && pti->MessageQueue->Desktop)
     {
         // Like above, there shouldn't be any windows, hooks or anything active on this threads desktop!
         IntSetFocusMessageQueue(pti->MessageQueue->Desktop, NULL);
