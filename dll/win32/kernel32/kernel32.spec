@@ -1030,7 +1030,6 @@
 @ stdcall -version=0x600+ QueryThreadpoolStackInformation(ptr ptr) kernelbase.QueryThreadpoolStackInformation
 @ stdcall -arch=win64 QueryUmsThreadInformation(ptr long ptr long ptr)
 @ stdcall -version=0x600+ QueryUnbiasedInterruptTime(ptr) kernelbase.QueryUnbiasedInterruptTime
-@ stdcall -version=0x602+ QueryUnbiasedInterruptTimePrecise(ptr) kernelbase.QueryUnbiasedInterruptTimePrecise
 @ stdcall QueueUserAPC(ptr long long)
 @ stdcall QueueUserWorkItem(ptr ptr long) kernelbase.QueueUserWorkItem
 @ stdcall -norelay RaiseException(long long long ptr) kernelbase.RaiseException
@@ -1160,7 +1159,6 @@
 @ stdcall -version=0x500-0x502 SetCPGlobal(long)
 @ stdcall SetCalendarInfoA(long long long str)
 @ stdcall SetCalendarInfoW(long long long wstr)
-@ stdcall SetClientTimeZoneInformation(ptr) kernelbase.SetClientTimeZoneInformation
 @ stdcall SetComPlusPackageInstallStatus(long)
 @ stdcall SetCommBreak(long)
 @ stdcall SetCommConfig(long ptr long)
@@ -1498,7 +1496,5 @@
 ;@ stdcall -arch=x86_64 uaw_wcsicmp(wstr wstr)
 ;@ stdcall -arch=x86_64 uaw_wcslen(wstr)
 ;@ stdcall -arch=x86_64 uaw_wcsrchr(wstr long)
-@ stdcall QueryInterruptTime(ptr) kernelbase.QueryInterruptTime
-@ stdcall QueryInterruptTimePrecise(ptr) kernelbase.QueryInterruptTimePrecise
 @ stdcall GetThreadDescription(ptr ptr)
 @ stdcall SetThreadDescription(ptr wstr) kernelbase.SetThreadDescription

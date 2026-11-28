@@ -32,10 +32,11 @@ START_TEST(QueryInterruptTimePrecise)
     LARGE_INTEGER Frequency;
     ULONG Attempt;
     BOOL Checked = FALSE;
-    HMODULE Kernel32 = GetModuleHandleW(L"kernel32.dll");
+    /* Windows 11 exports both from kernelbase only */
+    HMODULE KernelBase = GetModuleHandleW(L"kernelbase.dll");
 
-    QueryTick = (PFN_QUERY_INTERRUPT_TIME)GetProcAddress(Kernel32, "QueryInterruptTime");
-    QueryPrecise = (PFN_QUERY_INTERRUPT_TIME)GetProcAddress(Kernel32, "QueryInterruptTimePrecise");
+    QueryTick = (PFN_QUERY_INTERRUPT_TIME)GetProcAddress(KernelBase, "QueryInterruptTime");
+    QueryPrecise = (PFN_QUERY_INTERRUPT_TIME)GetProcAddress(KernelBase, "QueryInterruptTimePrecise");
     if (!QueryTick || !QueryPrecise)
     {
         skip("QueryInterruptTime or QueryInterruptTimePrecise is not exported\n");
