@@ -12,11 +12,16 @@
 #include <nvs/include/mienv.h>
 
 #define MAXIMUM_PROCESSORS 64
+#ifndef MI_AMD64_TLB_MAXIMUM_PROCESSORS
+#define MI_AMD64_TLB_MAXIMUM_PROCESSORS MAXIMUM_PROCESSORS
+#endif
 #define NTAPI
 
 extern volatile LONG KiTbFlushTimeStamp;
 ULONG MiAmd64TlbCpu(VOID);
 ULONG64 MiAmd64TlbActiveCpus(VOID);
+ULONG MiAmd64TlbGroupCount(VOID);
+ULONG64 MiAmd64TlbActiveGroup(ULONG Group);
 ULONG64 MiAmd64TlbReadCr3(VOID);
 ULONG64 MiAmd64TlbReadCr4(VOID);
 VOID MiAmd64TlbWriteCr3(ULONG64 Value);
@@ -24,6 +29,11 @@ VOID MiAmd64TlbWriteCr4(ULONG64 Value);
 VOID MiAmd64TlbPage(ULONG64 Address);
 VOID MiAmd64TlbCpuid(int Registers[4], int Leaf);
 VOID MiAmd64TlbPause(VOID);
+BOOLEAN MiAmd64TlbWatchdogEnabled(VOID);
+BOOLEAN MiAmd64TlbWatchdogFreezeActive(VOID);
+ULONG64 MiAmd64TlbWatchdogEpoch(VOID);
+ULONG64 MiAmd64TlbWatchdogNow(PULONG64 Frequency);
+VOID MiAmd64TlbWatchdogBugcheck(ULONG64 Frequency, ULONG64 Now, ULONG64 Baseline);
 BOOLEAN MiAmd64TlbDisableInterrupts(VOID);
 VOID MiAmd64TlbRestoreInterrupts(BOOLEAN Enabled);
 KIRQL MiAmd64TlbRaiseIrql(VOID);

@@ -21,13 +21,18 @@
 #include <winsvc.h>
 #include <svc.h>
 #include <userenv.h>
+#include <winuser.h>
+#include <aclapi.h>
+#include <strsafe.h>
 
 #define NTOS_MODE_USER
+#include <ndk/obfuncs.h>
 #include <ndk/rtlfuncs.h>
 
 #include <wine/debug.h>
 
 extern HINSTANCE hDllInstance;
+extern CRITICAL_SECTION DesktopAccessLock;
 extern PSVCHOST_GLOBAL_DATA lpServiceGlobals;
 
 DWORD

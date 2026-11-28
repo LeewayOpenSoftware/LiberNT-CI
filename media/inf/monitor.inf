@@ -77,7 +77,7 @@ ServiceBinary = %12%\monitor.sys
 
 [Strings]
 ; Non-localizable
-ReactOS = "LiberNT Project"
+ReactOS = "Orosi Project"
 
 ; Localizable
 MonitorClassName = "Monitors"

@@ -84,9 +84,22 @@ UefiGetRandom(
 {
     static EFI_GUID RngGuid = {0x3152bca5, 0xeade, 0x433d, {0x86, 0x2e, 0xc0, 0x1c, 0xdc, 0x29, 0x1f, 0x44}};
     FREELDR_EFI_RNG_PROTOCOL *Rng;
+    PUCHAR Output = Buffer;
+    ULONG Chunk;
 
     if (EFI_ERROR(GlobalSystemTable->BootServices->LocateProtocol(&RngGuid, NULL, (VOID**)&Rng)))
         return FALSE;
 
-    return !EFI_ERROR(Rng->GetRNG(Rng, NULL, Size, Buffer));
+    /* Some firmware RNGs refuse large requests */
+    while (Size)
+    {
+        Chunk = min(Size, 64);
+        if (EFI_ERROR(Rng->GetRNG(Rng, NULL, Chunk, Output)))
+            return FALSE;
+
+        Output += Chunk;
+        Size -= Chunk;
+    }
+
+    return TRUE;
 }

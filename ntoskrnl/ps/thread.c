@@ -52,10 +52,20 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     }
     else
     {
-        /* Get the Locale ID and save Preferred Proc */
+        /* Get the Locale ID and save Preferred Proc. The TEB is memory of the
+         * process, which another thread can already have taken away or made
+         * read-only. */
         Teb =  NtCurrentTeb();
-        Teb->CurrentLocale = MmGetSessionLocaleId();
-        Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
+        _SEH2_TRY
+        {
+            Teb->CurrentLocale = MmGetSessionLocaleId();
+            Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            /* The thread starts without them */
+        }
+        _SEH2_END;
     }
 
     /* Check if this is a dead thread, or if we're hiding */
@@ -68,6 +78,9 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     /* Make sure we're not already dead */
     if (!DeadThread)
     {
+        /* PsCreateThreadNotifyNonSystem routines run on the new thread */
+        PspRunNonSystemThreadNotifyRoutines(Thread, TRUE);
+
         /* Check if the Prefetcher is enabled */
         if (CcPfEnablePrefetcher)
         {
@@ -587,10 +600,11 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
         if (!Result) Thread->SpareUlong0 = 0;
 
-        /* Set least some minimum access */
+        /* Set at least some minimum access */
         Thread->SpareUlong0 |= (THREAD_TERMINATE |
                                 THREAD_SET_INFORMATION |
-                                THREAD_QUERY_INFORMATION);
+                                THREAD_QUERY_INFORMATION |
+                                THREAD_QUERY_LIMITED_INFORMATION);
     }
     else
     {
@@ -600,10 +614,11 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
 #else
         if (!Result) Thread->GrantedAccess = 0;
 
-        /* Set least some minimum access */
+        /* Set at least some minimum access */
         Thread->GrantedAccess |= (THREAD_TERMINATE |
                                   THREAD_SET_INFORMATION |
-                                  THREAD_QUERY_INFORMATION);
+                                  THREAD_QUERY_INFORMATION |
+                                  THREAD_QUERY_LIMITED_INFORMATION);
     }
     else
     {
@@ -735,6 +750,16 @@ NTAPI
 PsGetThreadHardErrorsAreDisabled(IN PETHREAD Thread)
 {
     return Thread->HardErrorsAreDisabled ? TRUE : FALSE;
+}
+
+/*
+ * @implemented
+ */
+LONGLONG
+NTAPI
+PsGetThreadCreateTime(IN PETHREAD Thread)
+{
+    return Thread->CreateTime.QuadPart;
 }
 
 /*
@@ -908,6 +933,19 @@ NTAPI
 PsIsThreadTerminating(IN PETHREAD Thread)
 {
     return Thread->Terminated ? TRUE : FALSE;
+}
+
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+PsGetThreadExitStatus(
+    _In_ PETHREAD Thread)
+{
+    /* STATUS_PENDING from creation until PspExitThread stores the real status */
+    return Thread->ExitStatus;
 }
 
 /*

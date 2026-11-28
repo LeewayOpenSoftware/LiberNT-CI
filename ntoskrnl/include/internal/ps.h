@@ -187,6 +187,13 @@ PsInitSystem(
     IN PLOADER_PARAMETER_BLOCK LoaderBlock
 );
 
+CODE_SEG("INIT")
+VOID
+NTAPI
+PsSiloInitialize(
+    VOID
+);
+
 #define PSP_WS_WATCH_RECORDS 1024
 #define PSP_WS_WATCH_SIZE FIELD_OFFSET(PAGEFAULT_HISTORY, WatchInfo[PSP_WS_WATCH_RECORDS])
 
@@ -821,6 +828,8 @@ extern LARGE_INTEGER ShortPsLockDelay;
 extern EPROCESS_QUOTA_BLOCK PspDefaultQuotaBlock;
 extern PHANDLE_TABLE PspCidTable;
 extern EX_CALLBACK PspThreadNotifyRoutine[PSP_MAX_CREATE_THREAD_NOTIFY];
+extern EX_CALLBACK PspNonSystemThreadNotifyRoutine[PSP_MAX_CREATE_THREAD_NOTIFY];
+extern ULONG PspNonSystemThreadNotifyRoutineCount;
 extern EX_CALLBACK PspProcessNotifyRoutine[PSP_MAX_CREATE_PROCESS_NOTIFY];
 extern EX_CALLBACK PspLoadImageNotifyRoutine[PSP_MAX_LOAD_IMAGE_NOTIFY];
 extern PLEGO_NOTIFY_ROUTINE PspLegoNotifyRoutine;

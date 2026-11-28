@@ -64,6 +64,11 @@ static inline HRESULT generate_ipid(struct stub_manager *m, IPID *ipid)
     }
 
     ipid->Data1 = InterlockedIncrement(&m->apt->ipidc);
+#ifdef __REACTOS__
+    if (m->apt->neutral)
+        ipid->Data2 = NEUTRAL_IPID_MARKER;
+    else
+#endif
     ipid->Data2 = !m->apt->multi_threaded ? (USHORT)m->apt->tid : 0;
     ipid->Data3 = (USHORT)GetCurrentProcessId();
     return S_OK;
@@ -602,6 +607,10 @@ static HRESULT ipid_to_ifstub(const IPID *ipid, struct apartment **stub_apt,
     /* FIXME: hack for IRemUnknown */
     if (ipid->Data2 == 0xffff)
         *stub_apt = apartment_findfromoxid(*(const OXID *)ipid->Data4);
+#ifdef __REACTOS__
+    else if (ipid->Data2 == NEUTRAL_IPID_MARKER && (ipid->Data3 == (USHORT)GetCurrentProcessId()))
+        *stub_apt = apartment_get_na();
+#endif
     else if (!ipid->Data2 && (ipid->Data3 == (USHORT)GetCurrentProcessId()))
         *stub_apt = apartment_get_mta();
     else

@@ -45,6 +45,12 @@ typedef struct _CC_NT_MAP
      * which an age-out pass last wrote it back completely. Read and written
      * with the 64-bit atomics: the stamp and the age test do not share a lock. */
     volatile LONG64 DirtySince;
+    /* Lazy write-back failures: the map is skipped until FlushBackoffUntil
+     * (interrupt time, 0 = none); the delay grows with FlushFailures. */
+    volatile LONG64 FlushBackoffUntil;
+    ULONG FlushFailures;
+    NTSTATUS FlushFailureStatus;
+    BOOLEAN FlushFailureLogged;
 } CC_NT_MAP, *PCC_NT_MAP;
 
 C_ASSERT(FIELD_OFFSET(CC_NT_MAP, Map) == 0);
@@ -102,5 +108,14 @@ VOID CcNtBcbCreated(_Inout_ PCC_BCB Bcb);
 VOID CcNtBcbDeleting(_Inout_ PCC_BCB Bcb);
 NTSTATUS CcNtFlushMap(_Inout_ PCC_NT_MAP NtMap, _In_ ULONG64 Offset, _In_ ULONG64 Length, _In_ ULONG MaximumPages,
                       _Out_opt_ PULONG PagesFlushed);
+/* Lazy write-back failure backoff: first delay, cap (the lazy period), failure
+ * count cap, rounds a throttled writer waits and passes a deferred write is held
+ * while every dirty map is in backoff. */
+#define CC_NT_BACKOFF_FIRST_100NS      (50 * 10 * 1000)
+#define CC_NT_BACKOFF_MAX_100NS        (1000 * 10 * 1000)
+#define CC_NT_BACKOFF_MAX_FAILURES     16
+#define CC_NT_STALLED_WAIT_ROUNDS      50
+#define CC_NT_STALLED_DEFERRED_PASSES  8
 VOID CcNtKickLazyWriter(VOID);
+BOOLEAN CcNtLazyIsStalled(VOID);
 VOID CcNtProcessDeferredWrites(VOID);

@@ -94,6 +94,7 @@ typedef struct DOMEvent {
     DOM_EVENT_PHASE phase;
 
     IHTMLEventObj *event_obj;
+    VARIANT return_value;
 } DOMEvent;
 
 const WCHAR *get_event_name(eventid_t);
@@ -157,19 +158,26 @@ IHTMLEventObj *HTMLElement_set_current_event(DispatchEx*,IHTMLEventObj*);
     .get_cp_container        = HTMLElement_get_cp_container,        \
     .set_current_event       = HTMLElement_set_current_event
 
+EventTarget *get_window_event_prop_target(HTMLDOMNode*,int);
+
 static inline EventTarget *get_node_event_prop_target(HTMLDOMNode *node, eventid_t eid)
 {
     return node->vtbl->get_event_prop_target ? node->vtbl->get_event_prop_target(node, eid) : &node->event_target;
 }
 
-static inline HRESULT set_node_event(HTMLDOMNode *node, eventid_t eid, VARIANT *var)
-{
-    return set_event_handler(get_node_event_prop_target(node, eid), eid, var);
-}
+HRESULT set_node_event(HTMLDOMNode*,eventid_t,VARIANT*);
+void remove_node_event_attr(HTMLDOMNode*,const WCHAR*);
+BOOL is_event_attr(const WCHAR*);
 
 static inline HRESULT get_node_event(HTMLDOMNode *node, eventid_t eid, VARIANT *var)
 {
-    return get_event_handler(get_node_event_prop_target(node, eid), eid, var);
+    EventTarget *target = get_node_event_prop_target(node, eid);
+
+    if(!target) {
+        V_VT(var) = VT_EMPTY;
+        return S_OK;
+    }
+    return get_event_handler(target, eid, var);
 }
 
 static inline HRESULT set_doc_event(HTMLDocumentNode *doc, eventid_t eid, VARIANT *var)

@@ -432,7 +432,7 @@ CurrentPointerSize()
 bool
 ApplyPointer(PointerStyle style, COLORREF color, int size)
 {
-    static const LPCWSTR Schemes[] = { L"LiberNT Default", L"LiberNT Black", L"LiberNT Inverted", L"LiberNT Default" };
+    static const LPCWSTR Schemes[] = { L"Orosi Default", L"Orosi Black", L"Orosi Inverted", L"Orosi Default" };
     bool generate, ok = true;
     std::wstring directory;
     HMODULE user32 = GetModuleHandleW(L"user32.dll");

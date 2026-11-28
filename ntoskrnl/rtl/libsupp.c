@@ -79,6 +79,34 @@ RtlpCheckForActiveDebugger(VOID)
     return FALSE;
 }
 
+ULONG
+NTAPI
+DebugPrint(
+    _In_ PSTRING DebugString,
+    _In_ ULONG ComponentId,
+    _In_ ULONG Level);
+
+/* The two hooks of sdk/lib/rtl/debug.c (upstream 7fdb0385a88). Upstream's kernel
+ * defers the print when no output is enabled; this kernel prints as it always did. */
+BOOLEAN
+NTAPI
+RtlpDebugPrintWanted(
+    _Out_ PNTSTATUS Status)
+{
+    *Status = STATUS_SUCCESS;
+    return TRUE;
+}
+
+NTSTATUS
+NTAPI
+RtlpDebugPrint(
+    _In_ PSTRING DebugString,
+    _In_ ULONG ComponentId,
+    _In_ ULONG Level)
+{
+    return DebugPrint(DebugString, ComponentId, Level);
+}
+
 BOOLEAN
 NTAPI
 RtlpSetInDbgPrint(VOID)
@@ -517,12 +545,36 @@ RtlpGetStackLimits(
     OUT PULONG_PTR HighLimit)
 {
     PKTHREAD CurrentThread = KeGetCurrentThread();
+#ifdef _M_AMD64
+    PKPRCB Prcb = KeGetCurrentPrcb();
+    ULONG_PTR StackPointer = (ULONG_PTR)&CurrentThread;
+    ULONG_PTR IsrStack = (ULONG_PTR)Prcb->IsrStack;
+    ULONG_PTR DpcStack = (ULONG_PTR)Prcb->DpcStack;
+
+    /* Interrupt service routines and DPCs run on per-processor stacks */
+    if ((IsrStack - StackPointer) <= ISR_STACK_SIZE)
+    {
+        *LowLimit = IsrStack - ISR_STACK_SIZE;
+        *HighLimit = IsrStack;
+        return;
+    }
+    if ((DpcStack - StackPointer) <= KERNEL_STACK_SIZE)
+    {
+        *LowLimit = DpcStack - KERNEL_STACK_SIZE;
+        *HighLimit = DpcStack;
+        return;
+    }
+#endif
     *LowLimit = (ULONG_PTR)CurrentThread->StackLimit;
 #ifdef _M_IX86
     *HighLimit = (ULONG_PTR)CurrentThread->InitialStack -
         sizeof(FX_SAVE_AREA);
 #else
     *HighLimit = (ULONG_PTR)CurrentThread->InitialStack;
+
+    /* On an expansion stack InitialStack is still on the stack the thread came from */
+    if ((*HighLimit <= *LowLimit) || (*HighLimit > (ULONG_PTR)CurrentThread->StackBase))
+        *HighLimit = (ULONG_PTR)CurrentThread->StackBase;
 #endif
 }
 

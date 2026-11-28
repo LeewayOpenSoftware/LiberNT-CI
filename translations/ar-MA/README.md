@@ -1,6 +1,6 @@
 <div dir="rtl" lang="ar">
 
-> [English](../../README.md) | [中文](../zh-CN/README.md) | [Français](../fr-FR/README.md) | [Español](../es-ES/README.md) | [日本語](../ja-JP/README.md) | **العربية**
+> [English](../../README.md) | [中文](../zh-CN/README.md) | [Français](../fr-FR/README.md) | [Español](../es-ES/README.md) | [日本語](../ja-JP/README.md) | **العربية** | [Українська](../uk-UA/README.md)
 
 <p align="center">
   <img src="../../media/graphics/branding/libernt-banner.png" width="480" alt="LiberNT">
@@ -144,7 +144,7 @@ LiberNT نظام تشغيل NT حر. والاسم يدل على ذلك: كلمة
 
 أقلع ‎`bootcd.iso`‎ في آلة افتراضية أو على حاسوب، واتبع تعليمات **برنامج إعداد LiberNT**.
 
-يحمل القرص المثبّت مسبقًا أيضًا برنامج إعداد LiberNT. شغّل ‎`C:\<المعمارية>\libernt.exe`‎، مثلًا ‎`C:\arm64\libernt.exe`‎، لتثبيت LiberNT على قرص آخر من النظام قيد التشغيل.
+يحمل القرص المثبّت مسبقًا أيضًا برنامج إعداد LiberNT. شغّل ‎`C:\<المعمارية>\system32\oobe\oros.exe`‎، مثلًا ‎`C:\arm64\system32\oobe\oros.exe`‎، لتثبيت LiberNT على قرص آخر من النظام قيد التشغيل.
 
 > [!CAUTION]
 > يستطيع برنامج الإعداد حذف الأقسام وتهيئتها. انسخ احتياطيًا كل ما هو مهم على القرص الهدف قبل التثبيت.

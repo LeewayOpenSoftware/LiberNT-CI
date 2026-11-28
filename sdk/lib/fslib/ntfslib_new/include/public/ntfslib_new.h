@@ -249,6 +249,32 @@ typedef struct NtfsDataStreamInformation
     WCHAR Name[NTFS_MAX_FILE_NAME_LENGTH + 1];
 } NtfsDataStreamInformation, *PNtfsDataStreamInformation;
 
+/* USN change journal state, as reported by FSCTL_QUERY_USN_JOURNAL */
+typedef struct NtfsUsnJournalData
+{
+    UINT64 UsnJournalId;
+    LONGLONG FirstUsn;
+    LONGLONG NextUsn;
+    LONGLONG LowestValidUsn;
+    LONGLONG MaxUsn;
+    UINT64 MaximumSize;
+    UINT64 AllocationDelta;
+} NtfsUsnJournalData, *PNtfsUsnJournalData;
+
+/* Fields of one USN_RECORD_V2 to append; FileNameLength is in bytes */
+typedef struct NtfsUsnRecordInput
+{
+    UINT64 FileReferenceNumber;
+    UINT64 ParentFileReferenceNumber;
+    UINT64 TimeStamp;
+    UINT32 Reason;
+    UINT32 SourceInfo;
+    UINT32 SecurityId;
+    UINT32 FileAttributes;
+    const WCHAR* FileName;
+    UINT16 FileNameLength;
+} NtfsUsnRecordInput, *PNtfsUsnRecordInput;
+
 /*
  * Platform-neutral projection of $STANDARD_INFORMATION. Fields is a mask of
  * NTFS_BASIC_INFO_* values, allowing callers to update an explicit subset
@@ -477,12 +503,50 @@ NTSTATUS
 NtfsFileRecordDeleteExternalBacking(
     _In_ NtfsFileRecord *FileRecord);
 
+NTSTATUS
+NtfsFileRecordReadObjectId(
+    _In_ NtfsFileRecord *FileRecord,
+    _Out_ PObjectIdEx ObjectId);
+
+NTSTATUS
+NtfsFileRecordSetObjectId(
+    _In_ NtfsFileRecord *FileRecord,
+    _In_ const ObjectIdEx* ObjectId);
+
+NTSTATUS
+NtfsFileRecordSetObjectIdExtended(
+    _In_ NtfsFileRecord *FileRecord,
+    _In_reads_bytes_(48) const UCHAR* ExtendedInfo);
+
+NTSTATUS
+NtfsFileRecordDeleteObjectId(
+    _In_ NtfsFileRecord *FileRecord);
+
+NTSTATUS
+NtfsFileRecordRenameDataStream(
+    _In_ NtfsFileRecord *FileRecord,
+    _In_opt_ PWSTR OldName,
+    _In_opt_ PWSTR NewName,
+    _In_ BOOLEAN ReplaceIfExists);
+
 /*
  * Validates and projects IO_REPARSE_TAG_SYMLINK or
  * IO_REPARSE_TAG_MOUNT_POINT data without allocating or copying strings.
  */
 NTSTATUS
 NtfsParseNameSurrogateReparsePoint(
+    _In_ const UCHAR* Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PNtfsReparseNameView View);
+
+/*
+ * Same layout checks as NtfsParseNameSurrogateReparsePoint (both names inside
+ * the data, even offsets and lengths, a substitute name), without judging the
+ * characters: for data that is already on the volume, possibly written by
+ * another system, where only the bounds are checked.
+ */
+NTSTATUS
+NtfsCheckNameSurrogateReparseBounds(
     _In_ const UCHAR* Buffer,
     _In_ ULONG BufferLength,
     _Out_ PNtfsReparseNameView View);
@@ -577,6 +641,19 @@ NTSTATUS
 NtfsFileRecordCreateNamedDataStream(
     _In_ NtfsFileRecord *FileRecord,
     _In_ PWSTR StreamName);
+
+/* Stores the USN of the file's latest journal record in $STANDARD_INFORMATION (NTFS 3.x layout) */
+NTSTATUS
+NtfsFileRecordSetUpdateSequenceNumber(
+    _In_ NtfsFileRecord *FileRecord,
+    _In_ LONGLONG Usn);
+
+/* The USN and security id in $STANDARD_INFORMATION (0 for an NTFS 1.x value) */
+NTSTATUS
+NtfsFileRecordGetUsnInformation(
+    _In_ NtfsFileRecord *FileRecord,
+    _Out_ LONGLONG* Usn,
+    _Out_ ULONG* SecurityId);
 
 NTSTATUS
 NtfsFileRecordDeleteNamedDataStream(
@@ -747,6 +824,14 @@ NtfsMasterFileTableGetLinkShortName(
     _In_ ULONGLONG ParentReference,
     _In_ PUNICODE_STRING Name,
     _Out_ PUNICODE_STRING ShortName);
+
+NTSTATUS
+NtfsMasterFileTableEnumerateLinks(
+    _In_ PNtfsMasterFileTable Mft,
+    _In_ PNtfsFileRecord File,
+    _Inout_ PULONG Context,
+    _Out_ PULONGLONG ParentReference,
+    _Out_ PUNICODE_STRING LinkName);
 
 NTSTATUS
 NtfsMasterFileTableIsDescendantDirectory(
@@ -948,6 +1033,13 @@ void
 NtfsSetGenerate8dot3Names(
     _In_ BOOLEAN Generate);
 
+/* Shape verification after every metadata change (builds with the hook
+ * compiled in: checked or NTFSLIB_VERIFY_SHAPE). Off by default in kernel
+ * builds. */
+void
+NtfsSetShapeVerifyAfterMutation(
+    _In_ BOOLEAN Enable);
+
 /*
  * Opens subsequent volumes without journal recovery or write support.
  * Intended for diagnostic readers such as the Linux FUSE frontend.
@@ -979,6 +1071,15 @@ NtfsVolumeNextReparsePoint(
     _In_ BOOLEAN Inclusive,
     _Out_ PULONG Tag,
     _Out_ PULONGLONG FileReference);
+
+NTSTATUS
+NtfsVolumeCheckObjectIdSupport(
+    _In_ PNtfsVolume DiskVolume);
+
+NTSTATUS
+NtfsVolumeReadObjectId(
+    _In_ PNtfsVolume DiskVolume,
+    _Out_ PObjectIdEx ObjectId);
 
 void
 NtfsVolumeDestroy(
@@ -1047,6 +1148,57 @@ NtfsVolumeGetLFS(
 PNtfsMasterFileTable
 NtfsVolumeGetMft(
     _In_ PNtfsVolume DiskVolume);
+
+/*
+ * USN change journal ($Extend\$UsnJrnl). Create also modifies the size targets of an
+ * existing journal; the identifier is used only for a new one. Appends are not logged
+ * through LFS: a torn tail record is dropped on the next query or append. Calls for one
+ * volume must be serialized by the caller.
+ */
+NTSTATUS
+NtfsUsnJournalCreate(
+    _In_ PNtfsVolume Volume,
+    _In_ UINT64 MaximumSize,
+    _In_ UINT64 AllocationDelta,
+    _In_ UINT64 NewJournalId);
+
+NTSTATUS
+NtfsUsnJournalQuery(
+    _In_ PNtfsVolume Volume,
+    _Out_ PNtfsUsnJournalData Data);
+
+NTSTATUS
+NtfsUsnJournalAppend(
+    _In_ PNtfsVolume Volume,
+    _In_ const NtfsUsnRecordInput* Input,
+    _Out_ LONGLONG* Usn);
+
+/*
+ * FSCTL_ENUM_USN_DATA: version 2 records for the in-use files from StartFileReference whose
+ * $STANDARD_INFORMATION USN is in [LowUsn, HighUsn]; STATUS_END_OF_FILE when none is left.
+ * One call looks at a bounded number of MFT records (4096) and may return none with success: continue
+ * from NextFileReference.
+ */
+NTSTATUS
+NtfsUsnJournalEnumerate(
+    _In_ PNtfsVolume Volume,
+    _In_ UINT64 StartFileReference,
+    _In_ LONGLONG LowUsn,
+    _In_ LONGLONG HighUsn,
+    _Out_writes_bytes_(BufferLength) PUCHAR Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PULONG BytesReturned,
+    _Out_ UINT64* NextFileReference);
+
+/* Copies whole records from StartUsn (0 = first record) and returns the USN to read next */
+NTSTATUS
+NtfsUsnJournalRead(
+    _In_ PNtfsVolume Volume,
+    _In_ LONGLONG StartUsn,
+    _Out_writes_bytes_(BufferLength) PUCHAR Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PULONG BytesReturned,
+    _Out_ LONGLONG* NextUsn);
 
 USHORT
 NtfsVolumeGetMajorVersion(
@@ -1331,6 +1483,27 @@ NtfsVolumeRetainDirty(
 NTSTATUS
 NtfsVolumeMarkCleanForShutdown(
     _In_ PNtfsVolume DiskVolume);
+
+/* A check that wrote nothing found the volume consistent: clear the dirty
+ * flag it was mounted with, retained or not, and forget a corruption note.
+ * The check is the authority on the medium. Caller holds the metadata lock. */
+NTSTATUS
+NtfsVolumeMarkCleanAfterCheck(
+    _In_ PNtfsVolume DiskVolume);
+
+/*
+ * Leeway control code, sent by the checker on the handle that holds the volume
+ * lock when its check wrote nothing: the mounted instance clears the dirty
+ * flag itself and stays mounted, so nothing has to restart. Vendor range of
+ * the file system device type; no input, no output.
+ */
+#define FSCTL_NTFS_CLEAR_DIRTY_AFTER_CHECK \
+    CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 0x8E0, METHOD_BUFFERED, FILE_WRITE_DATA)
+
+BOOLEAN
+NtfsVolumeReportsDirty(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ USHORT Flags);
 
 /* After a read met corrupt structure, write and retain the dirty flag now
  * rather than at the next write or the dismount. Once per mount, cheap when

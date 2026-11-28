@@ -68,7 +68,7 @@ static const unsigned int message_pointer_flags[] =
     /* 0x60 - 0x7f */
     SET(WM_STYLECHANGING) | SET(WM_STYLECHANGED),
     /* 0x80 - 0x9f */
-    SET(WM_NCCREATE) | SET(WM_NCCALCSIZE) | SET(WM_GETDLGCODE),
+    SET(WM_NCCREATE) | SET(WM_NCCALCSIZE) | SET(WM_GETDLGCODE) | SET(WM_KLUDGEMINRECT),
     /* 0xa0 - 0xbf */
     SET(EM_GETSEL) | SET(EM_GETRECT) | SET(EM_SETRECT) | SET(EM_SETRECTNP),
     /* 0xc0 - 0xdf */
@@ -111,7 +111,7 @@ static const unsigned int message_pointer_flags[] =
     /* 0x2c0 - 0x2df */
     0,
     /* 0x2e0 - 0x2ff */
-    0,
+    SET(WM_DPICHANGED) | SET(WM_GETDPISCALEDSIZE),
     /* 0x300 - 0x31f */
     SET(WM_ASKCBFORMATNAME),
     /* 0x320 - 0x33f */
@@ -127,6 +127,11 @@ static inline int is_pointer_message( UINT message, WPARAM wparam )
     return (message_pointer_flags[message / 32] & SET(message)) != 0;
 }
 #undef SET
+
+/* Upper bound for the variable part of a message structure whose length comes
+   from the structure itself. It keeps every size sum inside the INT that
+   carries the buffer size to the callback. */
+#define MSG_MAX_VARIABLE_BYTES 0x3FFFFFFF
 
 #define MMS_SIZE_WPARAM      -1
 #define MMS_SIZE_WPARAMWCHAR -2
@@ -150,6 +155,8 @@ static MSGMEMORY g_MsgMemory[] =
 {
     { WM_CREATE, MMS_SIZE_SPECIAL, MMS_FLAG_READWRITE },
     { WM_GETMINMAXINFO, sizeof(MINMAXINFO), MMS_FLAG_READWRITE },
+    { WM_DPICHANGED, sizeof(RECT), MMS_FLAG_READ },
+    { WM_GETDPISCALEDSIZE, sizeof(SIZE), MMS_FLAG_READWRITE },
     { WM_KLUDGEMINRECT, sizeof(RECT), MMS_FLAG_READWRITE },
     { WM_GETTEXT, MMS_SIZE_WPARAMWCHAR, MMS_FLAG_WRITE },
     { WM_NCCALCSIZE, MMS_SIZE_SPECIAL, MMS_FLAG_READWRITE },
@@ -291,7 +298,10 @@ MsgMemorySize(PMSGMEMORY MsgMemoryEntry, WPARAM wParam, LPARAM lParam)
             case WM_COPYDATA:
                 {
                 COPYDATASTRUCT *cds = (COPYDATASTRUCT *)lParam;
-                Size = sizeof(COPYDATASTRUCT) + (cds->lpData ? cds->cbData : 0);
+                ULONG_PTR DataBytes = cds->lpData ? cds->cbData : 0;
+
+                if (DataBytes <= MSG_MAX_VARIABLE_BYTES)
+                    Size = (UINT)(sizeof(COPYDATASTRUCT) + DataBytes);
                 }
                 break;
 
@@ -300,7 +310,13 @@ MsgMemorySize(PMSGMEMORY MsgMemoryEntry, WPARAM wParam, LPARAM lParam)
                     if ( lParam && (wParam & 0x8000) )
                     {
                         DEV_BROADCAST_HDR *header = (DEV_BROADCAST_HDR *)lParam;
-                        Size = header->dbch_size;
+                        ULONG HeaderBytes = header->dbch_size;
+
+                        if (HeaderBytes >= sizeof(DEV_BROADCAST_HDR) &&
+                            HeaderBytes <= MSG_MAX_VARIABLE_BYTES)
+                        {
+                            Size = HeaderBytes;
+                        }
                     }
                 }
                 break;
@@ -309,7 +325,10 @@ MsgMemorySize(PMSGMEMORY MsgMemoryEntry, WPARAM wParam, LPARAM lParam)
                 if (wParam == PBT_POWERSETTINGCHANGE)
                 {
                     POWERBROADCAST_SETTING *Setting = (POWERBROADCAST_SETTING *)lParam;
-                    Size = FIELD_OFFSET(POWERBROADCAST_SETTING, Data) + Setting->DataLength;
+                    ULONG DataBytes = Setting->DataLength;
+
+                    if (DataBytes <= MSG_MAX_VARIABLE_BYTES)
+                        Size = FIELD_OFFSET(POWERBROADCAST_SETTING, Data) + DataBytes;
                 }
                 break;
 
@@ -557,8 +576,94 @@ UnpackParam(LPARAM lParamPacked, UINT Msg, WPARAM wParam, LPARAM lParam, BOOL No
     return STATUS_INVALID_PARAMETER;
 }
 
+typedef struct tagMSGCAPTURE
+{
+    UINT Size;
+    INT Flags;
+    PWINDOWPOS UserWindowPos;
+}
+MSGCAPTURE, *PMSGCAPTURE;
+
+static NTSTATUS
+IntCaptureMdiCreate(PVOID UserMdi, PVOID *Captured, UINT *CapturedSize)
+{
+    MDICREATESTRUCTW Mdi;
+    MDICREATESTRUCTW *CapturedMdi;
+    SIZE_T ClassBytes = 0, TitleBytes = 0;
+    NTSTATUS Status;
+    PBYTE Data;
+
+    Status = MmCopyFromCaller(&Mdi, UserMdi, sizeof(Mdi));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    _SEH2_TRY
+    {
+        if (Mdi.szClass && !IS_ATOM(Mdi.szClass))
+        {
+            ProbeForRead(Mdi.szClass, sizeof(WCHAR), 1);
+            ClassBytes = (wcslen(Mdi.szClass) + 1) * sizeof(WCHAR);
+        }
+        if (Mdi.szTitle)
+        {
+            ProbeForRead(Mdi.szTitle, sizeof(WCHAR), 1);
+            TitleBytes = (wcslen(Mdi.szTitle) + 1) * sizeof(WCHAR);
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (ClassBytes > MAXLONG / 4 || TitleBytes > MAXLONG / 4)
+        return STATUS_INVALID_PARAMETER;
+
+    CapturedMdi = ExAllocatePoolWithTag(PagedPool,
+                                        sizeof(Mdi) + ClassBytes + TitleBytes,
+                                        TAG_MSG);
+    if (!CapturedMdi)
+        return STATUS_NO_MEMORY;
+
+    *CapturedMdi = Mdi;
+    Data = (PBYTE)(CapturedMdi + 1);
+    if (ClassBytes)
+    {
+        Status = MmCopyFromCaller(Data, (PVOID)Mdi.szClass, ClassBytes);
+        if (!NT_SUCCESS(Status))
+            goto Failed;
+        /* The copy always ends with a terminator */
+        ((PWCHAR)Data)[ClassBytes / sizeof(WCHAR) - 1] = UNICODE_NULL;
+        CapturedMdi->szClass = (LPCWSTR)Data;
+        Data += ClassBytes;
+    }
+    if (TitleBytes)
+    {
+        Status = MmCopyFromCaller(Data, (PVOID)Mdi.szTitle, TitleBytes);
+        if (!NT_SUCCESS(Status))
+            goto Failed;
+        ((PWCHAR)Data)[TitleBytes / sizeof(WCHAR) - 1] = UNICODE_NULL;
+        CapturedMdi->szTitle = (LPCWSTR)Data;
+    }
+
+    *Captured = CapturedMdi;
+    *CapturedSize = (UINT)(sizeof(Mdi) + ClassBytes + TitleBytes);
+    return STATUS_SUCCESS;
+
+Failed:
+    ExFreePoolWithTag(CapturedMdi, TAG_MSG);
+    return Status;
+}
+
+/*
+ * Replaces the lParam of a message that comes from user mode by a kernel copy
+ * of the memory it points to. Everything after this (hooks, server side window
+ * procedures, the callback to the window procedure) works on the copy.
+ * CopyMsgToUserMem writes the reply back and frees the copy.
+ */
 static NTSTATUS FASTCALL
-CopyMsgToKernelMem(MSG *KernelModeMsg, MSG *UserModeMsg, PMSGMEMORY MsgMemoryEntry)
+CopyMsgToKernelMem(MSG *KernelModeMsg, MSG *UserModeMsg, PMSGMEMORY MsgMemoryEntry, PMSGCAPTURE Capture)
 {
     NTSTATUS Status;
 
@@ -566,6 +671,9 @@ CopyMsgToKernelMem(MSG *KernelModeMsg, MSG *UserModeMsg, PMSGMEMORY MsgMemoryEnt
     UINT Size;
 
     *KernelModeMsg = *UserModeMsg;
+    Capture->Size = 0;
+    Capture->Flags = 0;
+    Capture->UserWindowPos = NULL;
 
     /* See if this message type is present in the table */
     if (NULL == MsgMemoryEntry)
@@ -574,8 +682,101 @@ CopyMsgToKernelMem(MSG *KernelModeMsg, MSG *UserModeMsg, PMSGMEMORY MsgMemoryEnt
         return STATUS_SUCCESS;
     }
 
+    if (UserModeMsg->lParam &&
+        is_pointer_message(UserModeMsg->message, UserModeMsg->wParam))
+    {
+        /* The size of the data is read through lParam before it is copied */
+        if ((ULONG_PTR)UserModeMsg->lParam >= (ULONG_PTR)MmUserProbeAddress)
+            return STATUS_ACCESS_VIOLATION;
+
+        /* These carry kernel-format strings and are only generated by window creation */
+        if (UserModeMsg->message == WM_CREATE || UserModeMsg->message == WM_NCCREATE)
+            return STATUS_INVALID_PARAMETER;
+
+        if (UserModeMsg->message == WM_NCCALCSIZE && UserModeMsg->wParam)
+        {
+            NCCALCSIZE_PARAMS *Params;
+
+            Size = sizeof(NCCALCSIZE_PARAMS) + sizeof(WINDOWPOS);
+            Params = ExAllocatePoolWithTag(PagedPool, Size, TAG_MSG);
+            if (!Params)
+                return STATUS_NO_MEMORY;
+            Status = MmCopyFromCaller(Params, (PVOID)UserModeMsg->lParam, sizeof(*Params));
+            if (NT_SUCCESS(Status))
+            {
+                Capture->UserWindowPos = Params->lppos;
+                Status = MmCopyFromCaller(Params + 1, Params->lppos, sizeof(WINDOWPOS));
+            }
+            if (!NT_SUCCESS(Status) || !Capture->UserWindowPos)
+            {
+                Capture->UserWindowPos = NULL;
+                ExFreePoolWithTag(Params, TAG_MSG);
+                return NT_SUCCESS(Status) ? STATUS_INVALID_PARAMETER : Status;
+            }
+            Params->lppos = (PWINDOWPOS)(Params + 1);
+            KernelModeMsg->lParam = (LPARAM)Params;
+            Capture->Size = Size;
+            Capture->Flags = MsgMemoryEntry->Flags;
+            return STATUS_SUCCESS;
+        }
+
+        if (UserModeMsg->message == WM_COPYDATA)
+        {
+            COPYDATASTRUCT Cds;
+            COPYDATASTRUCT *CapturedData;
+            ULONG DataBytes;
+
+            Status = MmCopyFromCaller(&Cds, (PVOID)UserModeMsg->lParam, sizeof(Cds));
+            if (!NT_SUCCESS(Status))
+                return Status;
+            DataBytes = Cds.lpData ? Cds.cbData : 0;
+            if (DataBytes > MSG_MAX_VARIABLE_BYTES)
+                return STATUS_INVALID_PARAMETER;
+
+            Size = (UINT)(sizeof(Cds) + DataBytes);
+            CapturedData = ExAllocatePoolWithTag(PagedPool, Size, TAG_MSG);
+            if (!CapturedData)
+                return STATUS_NO_MEMORY;
+            if (Cds.lpData)
+            {
+                Status = MmCopyFromCaller(CapturedData + 1, Cds.lpData, DataBytes);
+                if (!NT_SUCCESS(Status))
+                {
+                    ExFreePoolWithTag(CapturedData, TAG_MSG);
+                    return Status;
+                }
+                Cds.lpData = CapturedData + 1;
+            }
+            *CapturedData = Cds;
+            KernelModeMsg->lParam = (LPARAM)CapturedData;
+            Capture->Size = Size;
+            Capture->Flags = MsgMemoryEntry->Flags;
+            return STATUS_SUCCESS;
+        }
+
+        if (UserModeMsg->message == WM_MDICREATE)
+        {
+            Status = IntCaptureMdiCreate((PVOID)UserModeMsg->lParam, &KernelMem, &Size);
+            if (NT_SUCCESS(Status))
+            {
+                KernelModeMsg->lParam = (LPARAM)KernelMem;
+                Capture->Size = Size;
+                Capture->Flags = MsgMemoryEntry->Flags;
+            }
+            return Status;
+        }
+    }
+
     /* Determine required size */
     Size = MsgMemorySize(MsgMemoryEntry, UserModeMsg->wParam, UserModeMsg->lParam);
+
+    if (0 == Size && UserModeMsg->lParam &&
+        (UserModeMsg->message == WM_DEVICECHANGE || UserModeMsg->message == WM_POWERBROADCAST) &&
+        is_pointer_message(UserModeMsg->message, UserModeMsg->wParam))
+    {
+        /* The length the structure gives for itself is unreadable or out of range */
+        return STATUS_INVALID_PARAMETER;
+    }
 
     if (0 != Size)
     {
@@ -587,93 +788,13 @@ CopyMsgToKernelMem(MSG *KernelModeMsg, MSG *UserModeMsg, PMSGMEMORY MsgMemoryEnt
             return STATUS_NO_MEMORY;
         }
         KernelModeMsg->lParam = (LPARAM) KernelMem;
+        Capture->Size = Size;
+        Capture->Flags = MsgMemoryEntry->Flags;
 
         /* Copy data if required */
         if (0 != (MsgMemoryEntry->Flags & MMS_FLAG_READ))
         {
             TRACE("Copy Message %u from usermode buffer\n", KernelModeMsg->message);
-            if (KernelModeMsg->message == WM_COPYDATA)
-            {
-                COPYDATASTRUCT *CapturedData = KernelMem;
-
-                Status = MmCopyFromCaller(CapturedData,
-                                          (PVOID)UserModeMsg->lParam,
-                                          sizeof(*CapturedData));
-                if (NT_SUCCESS(Status) &&
-                    sizeof(*CapturedData) + (CapturedData->lpData ? CapturedData->cbData : 0) != Size)
-                {
-                    Status = STATUS_INVALID_PARAMETER;
-                }
-                if (NT_SUCCESS(Status) && CapturedData->lpData)
-                {
-                    Status = MmCopyFromCaller(CapturedData + 1,
-                                              CapturedData->lpData,
-                                              CapturedData->cbData);
-                    CapturedData->lpData = CapturedData + 1;
-                }
-                if (!NT_SUCCESS(Status))
-                {
-                    ERR("Failed to copy message to kernel: invalid usermode lParam buffer\n");
-                    ExFreePoolWithTag(KernelMem, TAG_MSG);
-                }
-                return Status;
-            }
-            if (KernelModeMsg->message == WM_MDICREATE)
-            {
-                MDICREATESTRUCTW Mdi;
-                MDICREATESTRUCTW *CapturedMdi = KernelMem;
-                PBYTE Data = (PBYTE)(CapturedMdi + 1);
-                SIZE_T ClassBytes = 0, TitleBytes = 0;
-
-                Status = MmCopyFromCaller(&Mdi,
-                                          (PVOID)UserModeMsg->lParam,
-                                          sizeof(Mdi));
-                if (!NT_SUCCESS(Status))
-                    goto CopyFailed;
-
-                _SEH2_TRY
-                {
-                    if (!IS_ATOM(Mdi.szClass))
-                        ClassBytes = (wcslen(Mdi.szClass) + 1) * sizeof(WCHAR);
-                    if (Mdi.szTitle)
-                        TitleBytes = (wcslen(Mdi.szTitle) + 1) * sizeof(WCHAR);
-                }
-                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                {
-                    Status = _SEH2_GetExceptionCode();
-                }
-                _SEH2_END;
-                if (!NT_SUCCESS(Status) ||
-                    sizeof(Mdi) + ClassBytes + TitleBytes != Size)
-                {
-                    if (NT_SUCCESS(Status))
-                        Status = STATUS_INVALID_PARAMETER;
-                    goto CopyFailed;
-                }
-
-                *CapturedMdi = Mdi;
-                if (ClassBytes)
-                {
-                    Status = MmCopyFromCaller(Data,
-                                              (PVOID)Mdi.szClass,
-                                              ClassBytes);
-                    if (!NT_SUCCESS(Status))
-                        goto CopyFailed;
-                    CapturedMdi->szClass = (LPCWSTR)Data;
-                    Data += ClassBytes;
-                }
-                if (TitleBytes)
-                {
-                    Status = MmCopyFromCaller(Data,
-                                              (PVOID)Mdi.szTitle,
-                                              TitleBytes);
-                    if (!NT_SUCCESS(Status))
-                        goto CopyFailed;
-                    CapturedMdi->szTitle = (LPCWSTR)Data;
-                }
-                return STATUS_SUCCESS;
-            }
-
             /* Don't do extra testing for 1 word messages. For examples see
              * https://wiki.winehq.org/List_Of_Windows_Messages and
              * we are just handling WM_WININICHANGE here. */
@@ -681,20 +802,26 @@ CopyMsgToKernelMem(MSG *KernelModeMsg, MSG *UserModeMsg, PMSGMEMORY MsgMemoryEnt
                 KernelModeMsg->message == WM_WININICHANGE)
             {
                 WCHAR lParamMsg[_countof(StrUserKernel[0]) + 1] = { 0 };
+
+                Status = STATUS_SUCCESS;
                 _SEH2_TRY
                 {
-                    RtlCopyMemory(lParamMsg, (WCHAR*)UserModeMsg->lParam, sizeof(lParamMsg));
+                    ProbeForRead((PVOID)UserModeMsg->lParam, min(sizeof(lParamMsg), Size), 1);
+                    RtlCopyMemory(lParamMsg, (WCHAR*)UserModeMsg->lParam, min(sizeof(lParamMsg), Size));
                 }
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {
-                    _SEH2_YIELD(return STATUS_ACCESS_VIOLATION);
+                    Status = STATUS_ACCESS_VIOLATION;
                 }
                 _SEH2_END;
+                if (!NT_SUCCESS(Status))
+                    goto CopyFailed;
 
                 /* Make sure that we have a UNICODE_NULL within lParamMsg */
                 lParamMsg[ARRAYSIZE(lParamMsg) - 1] = UNICODE_NULL;
 
-                if (!UserModeMsg->wParam && PosInArray(lParamMsg) >= 0)
+                if (!UserModeMsg->wParam && PosInArray(lParamMsg) >= 0 &&
+                    (wcslen(lParamMsg) + 1) * sizeof(WCHAR) <= Size)
                 {
                     TRACE("Copy String '%S' from usermode buffer\n", lParamMsg);
                     wcscpy(KernelMem, lParamMsg);
@@ -704,11 +831,21 @@ CopyMsgToKernelMem(MSG *KernelModeMsg, MSG *UserModeMsg, PMSGMEMORY MsgMemoryEnt
 
             Status = MmCopyFromCaller(KernelMem, (PVOID)UserModeMsg->lParam, Size);
             if (!NT_SUCCESS(Status))
+                goto CopyFailed;
+
+            /* The copy carries the size that was used for the capture */
+            if (MsgMemoryEntry->Size == MMS_SIZE_LPARAMSZ)
             {
-CopyFailed:
-                ERR("Failed to copy message to kernel: invalid usermode lParam buffer\n");
-                ExFreePoolWithTag(KernelMem, TAG_MSG);
-                return Status;
+                ((PWCHAR)KernelMem)[Size / sizeof(WCHAR) - 1] = UNICODE_NULL;
+            }
+            else if (MsgMemoryEntry->Size == MMS_SIZE_EM_GETLINE ||
+                     MsgMemoryEntry->Size == MMS_SIZE_SPECIAL)
+            {
+                if (MsgMemorySize(MsgMemoryEntry, UserModeMsg->wParam, (LPARAM)KernelMem) != Size)
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    goto CopyFailed;
+                }
             }
         }
         else
@@ -723,43 +860,47 @@ CopyFailed:
     }
 
     return STATUS_SUCCESS;
+
+CopyFailed:
+    ERR("Failed to copy message to kernel: invalid usermode lParam buffer\n");
+    ExFreePoolWithTag(KernelMem, TAG_MSG);
+    KernelModeMsg->lParam = 0;
+    Capture->Size = 0;
+    return Status;
 }
 
 static NTSTATUS FASTCALL
-CopyMsgToUserMem(MSG *UserModeMsg, MSG *KernelModeMsg)
+CopyMsgToUserMem(MSG *UserModeMsg, MSG *KernelModeMsg, PMSGCAPTURE Capture)
 {
-    NTSTATUS Status;
-    PMSGMEMORY MsgMemoryEntry;
-    UINT Size;
+    NTSTATUS Status = STATUS_SUCCESS;
 
-    /* See if this message type is present in the table */
-    MsgMemoryEntry = FindMsgMemory(UserModeMsg->message);
-    if (NULL == MsgMemoryEntry)
+    /* Nothing was captured */
+    if (0 == Capture->Size)
     {
-        /* Not present, no copying needed */
         return STATUS_SUCCESS;
     }
 
-    /* Determine required size */
-    Size = MsgMemorySize(MsgMemoryEntry, UserModeMsg->wParam, UserModeMsg->lParam);
-
-    if (0 != Size)
+    /* The size is the one of the capture: the caller's memory is not asked again */
+    if (Capture->UserWindowPos)
     {
-        /* Copy data if required */
-        if (0 != (MsgMemoryEntry->Flags & MMS_FLAG_WRITE))
-        {
-            Status = MmCopyToCaller((PVOID) UserModeMsg->lParam, (PVOID) KernelModeMsg->lParam, Size);
-            if (! NT_SUCCESS(Status))
-            {
-                ERR("Failed to copy message from kernel: invalid usermode lParam buffer\n");
-                ExFreePool((PVOID) KernelModeMsg->lParam);
-                return Status;
-            }
-        }
-        ExFreePool((PVOID) KernelModeMsg->lParam);
-    }
+        NCCALCSIZE_PARAMS *Params = (NCCALCSIZE_PARAMS *)KernelModeMsg->lParam;
 
-    return STATUS_SUCCESS;
+        Params->lppos = Capture->UserWindowPos;
+        Status = MmCopyToCaller((PVOID)UserModeMsg->lParam, Params, sizeof(*Params));
+        if (NT_SUCCESS(Status))
+            Status = MmCopyToCaller(Capture->UserWindowPos, Params + 1, sizeof(WINDOWPOS));
+    }
+    else if (0 != (Capture->Flags & MMS_FLAG_WRITE))
+    {
+        Status = MmCopyToCaller((PVOID) UserModeMsg->lParam, (PVOID) KernelModeMsg->lParam, Capture->Size);
+    }
+    if (! NT_SUCCESS(Status))
+    {
+        ERR("Failed to copy message from kernel: invalid usermode lParam buffer\n");
+    }
+    ExFreePool((PVOID) KernelModeMsg->lParam);
+
+    return Status;
 }
 
 //
@@ -1057,6 +1198,9 @@ static LRESULT handle_internal_message( PWND pWnd, UINT msg, WPARAM wparam, LPAR
           ExFreePoolWithTag(winpos, USERTAG_SWP);
           return lRes;
        }
+       case WM_ASYNC_REFITMAXIMIZED:
+          co_WinPosRefitMaximizedWindow(pWnd);
+          return 0;
        case WM_ASYNC_DESTROYWINDOW:
        {
           TRACE("WM_ASYNC_DESTROYWINDOW\n");
@@ -1212,6 +1356,31 @@ IntDispatchMessage(PMSG pMsg)
     return retval;
 }
 
+static LRESULT
+co_IntCallMessageHook(INT HookId, INT Code, WPARAM wParam, PMSG Msg)
+{
+    MSG Logical = *Msg, Initial;
+    LRESULT Result;
+
+    UserDpiVirtualizeMessage(&Logical);
+    if (RtlEqualMemory(&Logical, Msg, sizeof(MSG)))
+        return co_HOOK_CallHooks(HookId, Code, wParam, (LPARAM)Msg);
+    Initial = Logical;
+    Result = co_HOOK_CallHooks(HookId, Code, wParam, (LPARAM)&Logical);
+    Msg->hwnd = Logical.hwnd;
+    Msg->message = Logical.message;
+    Msg->wParam = Logical.wParam;
+    Msg->time = Logical.time;
+    if (Logical.lParam != Initial.lParam)
+        Msg->lParam = Logical.lParam;
+    if (Logical.pt.x != Initial.pt.x || Logical.pt.y != Initial.pt.y)
+    {
+        Msg->pt = Logical.pt;
+        UserDpiPointToPhysical(&Msg->pt);
+    }
+    return Result;
+}
+
 /*
  * Internal version of PeekMessage() doing all the work
  *
@@ -1238,6 +1407,8 @@ co_IntPeekMessage( PMSG Msg,
     BOOL Hit = FALSE;
 
     pti = PsGetCurrentThreadWin32Thread();
+
+    co_IntSyncForegroundKeyboardLayout(pti);
 
     RemoveMessages = RemoveMsg & PM_REMOVE;
     ProcessMask = HIWORD(RemoveMsg);
@@ -1536,7 +1707,7 @@ co_IntGetPeekMessage( PMSG pMsg,
            // The WH_GETMESSAGE hook enables an application to monitor messages about to
            // be returned by the GetMessage or PeekMessage function.
 
-           co_HOOK_CallHooks( WH_GETMESSAGE, HC_ACTION, RemoveMsg & PM_REMOVE, (LPARAM)pMsg);
+           co_IntCallMessageHook(WH_GETMESSAGE, HC_ACTION, RemoveMsg & PM_REMOVE, pMsg);
 
            if ( bGMSG || pMsg->message == WM_PAINT) break;
         }
@@ -1765,6 +1936,32 @@ co_IntSendMessage( HWND hWnd,
         return (LRESULT)Result;
     }
     return 0;
+}
+
+LRESULT FASTCALL
+co_IntSendSystemMessage(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
+{
+    USER_DPI_MESSAGE Conv;
+    LRESULT Result;
+
+    if (!UserDpiBeginMessage(ValidateHwndNoErr(hWnd), Msg, &wParam, &lParam, &Conv, TRUE))
+        return co_IntSendMessage(hWnd, Msg, wParam, lParam);
+    Result = co_IntSendMessage(hWnd, Msg, wParam, lParam);
+    UserDpiEndMessage(&Conv);
+    return Result;
+}
+
+LRESULT FASTCALL
+co_IntSendSystemMessageNoWait(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
+{
+    USER_DPI_MESSAGE Conv;
+    LRESULT Result;
+
+    if (!UserDpiBeginMessage(ValidateHwndNoErr(hWnd), Msg, &wParam, &lParam, &Conv, TRUE))
+        return co_IntSendMessageNoWait(hWnd, Msg, wParam, lParam);
+    Result = co_IntSendMessageNoWait(hWnd, Msg, wParam, lParam);
+    UserDpiEndMessage(&Conv);
+    return Result;
 }
 
 static LRESULT FASTCALL
@@ -2286,6 +2483,8 @@ co_IntDoSendMessage( HWND hWnd,
     MSG UserModeMsg, KernelModeMsg;
     PMSGMEMORY MsgMemoryEntry;
     PTHREADINFO ptiSendTo;
+    MSGCAPTURE Capture;
+    BOOL Captured;
 
     if (hWnd != HWND_BROADCAST && hWnd != HWND_TOPMOST)
     {
@@ -2306,14 +2505,32 @@ co_IntDoSendMessage( HWND hWnd,
     ptiSendTo = IntSendTo(Window, gptiCurrent, Msg);
 
     // If broadcasting or sending to another thread, save the users data.
-    if (!Window || ptiSendTo )
+    Captured = (!Window || ptiSendTo);
+
+    /* A message for a window of this thread is delivered at once, but the code
+       that delivers it reads and writes the memory behind lParam, so that memory
+       has to be captured as well. Only the message numbers flagged as pointer
+       messages pay for the lookup. A string in user memory is the exception:
+       it is handed to the window procedure as the pointer it is. */
+    if (!Captured && lParam && is_pointer_message(Msg, wParam))
+    {
+       MsgMemoryEntry = FindMsgMemory(Msg);
+       if (MsgMemoryEntry &&
+           (MsgMemoryEntry->Size != MMS_SIZE_LPARAMSZ ||
+            (ULONG_PTR)lParam >= (ULONG_PTR)MmUserProbeAddress))
+       {
+          Captured = TRUE;
+       }
+    }
+
+    if (Captured)
     {
        UserModeMsg.hwnd    = hWnd;
        UserModeMsg.message = Msg;
        UserModeMsg.wParam  = wParam;
        UserModeMsg.lParam  = lParam;
        MsgMemoryEntry = FindMsgMemory(UserModeMsg.message);
-       Status = CopyMsgToKernelMem(&KernelModeMsg, &UserModeMsg, MsgMemoryEntry);
+       Status = CopyMsgToKernelMem(&KernelModeMsg, &UserModeMsg, MsgMemoryEntry, &Capture);
        if (!NT_SUCCESS(Status))
        {
           EngSetLastError(ERROR_INVALID_PARAMETER);
@@ -2346,9 +2563,9 @@ co_IntDoSendMessage( HWND hWnd,
                                          &dsm->Result );
     }
 
-    if (!Window || ptiSendTo )
+    if (Captured)
     {
-       Status = CopyMsgToUserMem(&UserModeMsg, &KernelModeMsg);
+       Status = CopyMsgToUserMem(&UserModeMsg, &KernelModeMsg, &Capture);
        if (!NT_SUCCESS(Status))
        {
           EngSetLastError(ERROR_INVALID_PARAMETER);
@@ -2422,11 +2639,11 @@ IntGetQueueStatus(DWORD Changes)
        Low  word, types of messages that have been added to the queue and that
                   are still in the queue
      */
-    UserDomainLockExclusive(DLT_QUEUE);
+    BOOLEAN bDom0 = UserDomainLockExclusive(DLT_QUEUE);
     Result = MAKELONG(pti->pcti->fsChangeBits & Changes, pti->pcti->fsWakeBits & Changes);
 
     pti->pcti->fsChangeBits &= ~Changes;
-    UserDomainUnlockExclusive(DLT_QUEUE);
+    UserDomainUnlockExclusive(DLT_QUEUE, bDom0);
 
     return Result;
 }
@@ -2466,9 +2683,9 @@ IntCallMsgFilter(LPMSG lpmsg, INT code)
 {
     BOOL Ret;
 
-    Ret = co_HOOK_CallHooks(WH_SYSMSGFILTER, code, 0, (LPARAM)lpmsg);
+    Ret = co_IntCallMessageHook(WH_SYSMSGFILTER, code, 0, lpmsg);
     if (!Ret)
-        Ret = co_HOOK_CallHooks(WH_MSGFILTER, code, 0, (LPARAM)lpmsg);
+        Ret = co_IntCallMessageHook(WH_MSGFILTER, code, 0, lpmsg);
 
     return Ret;
 }
@@ -2787,6 +3004,13 @@ NtUserPostMessage(HWND hWnd,
 {
     BOOL ret;
 
+    /* The numbers above WM_MAXIMUM are the messages win32k sends to itself */
+    if (Msg & ~WM_MAXIMUM)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
     UserEnterExclusive();
 
     if (hWnd == HWND_BROADCAST || hWnd == HWND_TOPMOST)
@@ -2825,6 +3049,12 @@ NtUserPostThreadMessage(DWORD idThread,
     PETHREAD peThread;
     PTHREADINFO pThread;
     NTSTATUS Status;
+
+    if (Msg & ~WM_MAXIMUM)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
 
     UserEnterExclusive();
 
@@ -2886,6 +3116,8 @@ NtUserGetMessage(PMSG pMsg,
     RtlZeroMemory(&Msg, sizeof(MSG));
 
     Ret = co_IntGetPeekMessage(&Msg, hWnd, MsgFilterMin, MsgFilterMax, PM_REMOVE, TRUE);
+    if (Ret)
+        UserDpiVirtualizeMessage(&Msg);
 
     UserLeave();
 
@@ -2931,6 +3163,8 @@ NtUserPeekMessage( PMSG pMsg,
     RtlZeroMemory(&Msg, sizeof(MSG));
 
     Ret = co_IntGetPeekMessage(&Msg, hWnd, MsgFilterMin, MsgFilterMax, RemoveMsg, FALSE);
+    if (Ret)
+        UserDpiVirtualizeMessage(&Msg);
 
     UserLeave();
 
@@ -3320,6 +3554,266 @@ IntDoSendMessageAnsi(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam)
     return 0;
 }
 
+/*
+ * The window procedures that run in the kernel (the default one and the ones of
+ * the desktop, menu and message-only classes) are also reached from user mode,
+ * through NtUserMessageCall, with the caller's lParam. The memory behind it is
+ * captured here first, and they work on the copy.
+ */
+typedef struct tagPROCCAPTURE
+{
+    MSGCAPTURE Capture;
+    MSG UserMsg;
+    MSG KernelMsg;
+    BOOL Generic;
+    PVOID TextOut;
+    SIZE_T TextUnits;
+    UNICODE_STRING TextIn;
+    CREATESTRUCTW Cs;
+}
+PROCCAPTURE, *PPROCCAPTURE;
+
+static NTSTATUS
+IntCaptureProcMessage(PWND Window, DWORD fnid, UINT Msg, WPARAM *wParam, LPARAM *lParam, BOOL *Ansi, PPROCCAPTURE Pc)
+{
+    PMSGMEMORY MsgMemoryEntry;
+    NTSTATUS Status;
+
+    RtlZeroMemory(Pc, sizeof(*Pc));
+    Pc->UserMsg.hwnd = Window ? UserHMGetHandle(Window) : NULL;
+    Pc->UserMsg.message = Msg;
+    Pc->UserMsg.wParam = *wParam;
+    Pc->UserMsg.lParam = *lParam;
+
+    if (!*lParam || !is_pointer_message(Msg, *wParam))
+        return STATUS_SUCCESS;
+    MsgMemoryEntry = FindMsgMemory(Msg);
+    if (!MsgMemoryEntry)
+        return STATUS_SUCCESS;
+
+    /* It is a user address */
+    if ((ULONG_PTR)*lParam >= (ULONG_PTR)MmUserProbeAddress)
+        return STATUS_ACCESS_VIOLATION;
+
+    if (Msg == WM_GETTEXT)
+    {
+        SIZE_T Units;
+
+        /* Without a window or a count nothing is written */
+        if (!Window || !*wParam)
+        {
+            *lParam = 0;
+            return STATUS_SUCCESS;
+        }
+
+        /* The procedure writes the window text and a terminator, never more
+           than the count it is given */
+        if (*Ansi)
+            Units = (SIZE_T)Window->strName.Length + 1;
+        else
+            Units = Window->strName.Length / sizeof(WCHAR) + 1;
+        if (Units > *wParam)
+            Units = *wParam;
+
+        Pc->TextOut = ExAllocatePoolWithTag(PagedPool,
+                                            Units * (*Ansi ? sizeof(CHAR) : sizeof(WCHAR)),
+                                            TAG_MSG);
+        if (!Pc->TextOut)
+            return STATUS_NO_MEMORY;
+        RtlZeroMemory(Pc->TextOut, Units * (*Ansi ? sizeof(CHAR) : sizeof(WCHAR)));
+        Pc->TextUnits = Units;
+        *wParam = Units;
+        *lParam = (LPARAM)Pc->TextOut;
+        return STATUS_SUCCESS;
+    }
+
+    if (Msg == WM_SETTEXT && *Ansi)
+    {
+        Status = IntCaptureAnsiString((PCSZ)*lParam, &Pc->TextIn);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        *lParam = (LPARAM)Pc->TextIn.Buffer;
+        *Ansi = FALSE;
+        return STATUS_SUCCESS;
+    }
+
+    if (Msg == WM_CREATE || Msg == WM_NCCREATE)
+    {
+        /* Only the menu window procedure reads the structure, and of it only
+           the creation parameter */
+        if (fnid != FNID_MENU || Msg != WM_CREATE)
+            return STATUS_SUCCESS;
+        Status = MmCopyFromCaller(&Pc->Cs, (PVOID)*lParam, sizeof(Pc->Cs));
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Pc->Cs.lpszName = NULL;
+        Pc->Cs.lpszClass = NULL;
+        *lParam = (LPARAM)&Pc->Cs;
+        return STATUS_SUCCESS;
+    }
+
+    /* The structures of a fixed size, the two forms of WM_NCCALCSIZE and the
+       text of WM_SETTEXT are what these procedures read or write. The other
+       pointer messages pass through as the user address they are: nothing
+       here dereferences them. */
+    if ((INT)MsgMemoryEntry->Size > 0 || Msg == WM_NCCALCSIZE || Msg == WM_SETTEXT)
+    {
+        Status = CopyMsgToKernelMem(&Pc->KernelMsg, &Pc->UserMsg, MsgMemoryEntry, &Pc->Capture);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Pc->Generic = TRUE;
+        *lParam = Pc->KernelMsg.lParam;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static VOID
+IntReleaseProcMessage(PPROCCAPTURE Pc, BOOL Ansi, LRESULT *Result)
+{
+    if (Pc->TextOut)
+    {
+        SIZE_T Units = (SIZE_T)*Result + 1;
+
+        if (Units > Pc->TextUnits)
+            Units = Pc->TextUnits;
+        if (!NT_SUCCESS(MmCopyToCaller((PVOID)Pc->UserMsg.lParam,
+                                       Pc->TextOut,
+                                       Units * (Ansi ? sizeof(CHAR) : sizeof(WCHAR)))))
+        {
+            *Result = 0;
+        }
+        ExFreePoolWithTag(Pc->TextOut, TAG_MSG);
+    }
+    if (Pc->TextIn.Buffer)
+        RtlFreeUnicodeString(&Pc->TextIn);
+    if (Pc->Generic)
+        CopyMsgToUserMem(&Pc->UserMsg, &Pc->KernelMsg, &Pc->Capture);
+}
+
+/* A built-in window procedure runs only for a window of its own class, in the
+   thread that owns the window */
+static BOOL
+IntIsServerProcWindow(PWND Window, int fnid)
+{
+    int iCls;
+
+    if (Window->head.pti != PsGetCurrentThreadWin32Thread())
+        return FALSE;
+    if (!LookupFnIdToiCls(fnid, &iCls))
+        return FALSE;
+    return gpsi->atomSysClass[iCls] != 0 &&
+           Window->pcls->atomClassName == gpsi->atomSysClass[iCls];
+}
+
+/* Is this the setting change that announces new environment variables? The
+   name is the caller's string: it is copied before it is compared. */
+static BOOL
+IntIsEnvironmentBroadcast(UINT Msg, WPARAM wParam, LPARAM lParam)
+{
+    static const WCHAR EnvironmentName[] = L"Environment";
+    WCHAR Name[RTL_NUMBER_OF(EnvironmentName)];
+    BOOL Captured = TRUE;
+
+    if (Msg != WM_SETTINGCHANGE || wParam || !lParam)
+        return FALSE;
+
+    _SEH2_TRY
+    {
+        /* A string that is not readable up to here is shorter than the name */
+        ProbeForRead((PVOID)lParam, sizeof(Name), 1);
+        RtlCopyMemory(Name, (PVOID)lParam, sizeof(Name));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Captured = FALSE;
+    }
+    _SEH2_END;
+
+    return Captured &&
+           Name[RTL_NUMBER_OF(Name) - 1] == UNICODE_NULL &&
+           _wcsicmp(Name, EnvironmentName) == 0;
+}
+
+static SIZE_T
+IntDpiMessageDataSize(UINT Msg, WPARAM wParam)
+{
+    switch (Msg)
+    {
+        case WM_NCCALCSIZE:
+            return wParam ? sizeof(NCCALCSIZE_PARAMS) : sizeof(RECT);
+        case WM_SIZING:
+        case WM_MOVING:
+            return sizeof(RECT);
+        case WM_WINDOWPOSCHANGING:
+        case WM_WINDOWPOSCHANGED:
+            return sizeof(WINDOWPOS);
+        case WM_GETMINMAXINFO:
+            return sizeof(MINMAXINFO);
+    }
+    return 0;
+}
+
+static LRESULT
+co_IntCallDefWindowProc(PWND Window, UINT Msg, WPARAM wParam, LPARAM lParam, BOOL Ansi)
+{
+    USER_DPI_MESSAGE Conv;
+    USER_DPI_MESSAGE_DATA Captured;
+    LPARAM UserParam = lParam;
+    WINDOWPOS *UserPos = NULL;
+    SIZE_T Size;
+    LRESULT Result;
+
+    if (Window == NULL || !UserDpiIsVirtualCaller())
+        return IntDefWindowProc(Window, Msg, wParam, lParam, Ansi);
+
+    Size = IntDpiMessageDataSize(Msg, wParam);
+    if (Size != 0)
+    {
+        if (lParam == 0)
+            return IntDefWindowProc(Window, Msg, wParam, lParam, Ansi);
+        /* lParam is the kernel copy made by IntCaptureProcMessage */
+        _SEH2_TRY
+        {
+            RtlCopyMemory(&Captured, (PVOID)lParam, Size);
+            if (Msg == WM_NCCALCSIZE && wParam && Captured.NcCalc.Params.lppos != NULL)
+            {
+                UserPos = Captured.NcCalc.Params.lppos;
+                Captured.NcCalc.Pos = *UserPos;
+                Captured.NcCalc.Params.lppos = &Captured.NcCalc.Pos;
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return 0);
+        }
+        _SEH2_END;
+        lParam = (LPARAM)&Captured;
+    }
+
+    if (!UserDpiBeginMessage(Window, Msg, &wParam, &lParam, &Conv, FALSE))
+        return IntDefWindowProc(Window, Msg, wParam, UserParam, Ansi);
+    Result = IntDefWindowProc(Window, Msg, wParam, lParam, Ansi);
+    UserDpiEndMessage(&Conv);
+
+    if (Size != 0)
+    {
+        if (UserPos != NULL)
+            Captured.NcCalc.Params.lppos = UserPos;
+        _SEH2_TRY
+        {
+            RtlCopyMemory((PVOID)UserParam, &Captured, Size);
+            if (UserPos != NULL)
+                *UserPos = Captured.NcCalc.Pos;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+        }
+        _SEH2_END;
+    }
+    return Result;
+}
+
 LRESULT APIENTRY
 NtUserMessageCall( HWND hWnd,
                    UINT Msg,
@@ -3333,6 +3827,17 @@ NtUserMessageCall( HWND hWnd,
     BOOL Ret = FALSE;
     PWND Window = NULL;
     USER_REFERENCE_ENTRY Ref;
+    PROCCAPTURE ProcCapture;
+    BOOL ProcAnsi;
+    NTSTATUS Status;
+
+    /* The numbers above WM_MAXIMUM are the messages win32k sends to itself;
+       they are not accepted from user mode. */
+    if (Msg & ~WM_MAXIMUM)
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
 
     UserEnterExclusive();
 
@@ -3357,38 +3862,40 @@ NtUserMessageCall( HWND hWnd,
     {
     case FNID_SCROLLBAR:
         {
-           lResult = ScrollBarWndProc(hWnd, Msg, wParam, lParam);
+           Window = UserGetWindowObject(hWnd);
+           if (Window && Window->head.pti == PsGetCurrentThreadWin32Thread())
+           {
+              lResult = ScrollBarWndProc(hWnd, Msg, wParam, lParam);
+           }
            break;
         }
     case FNID_DESKTOP:
+    case FNID_MENU:
+    case FNID_MESSAGEWND:
         {
            Window = UserGetWindowObject(hWnd);
-           if (Window)
+           if (!Window || !IntIsServerProcWindow(Window, dwType))
            {
-              //ERR("FNID_DESKTOP IN\n");
-              Ret = DesktopWindowProc(Window, Msg, wParam, lParam, &lResult);
-              //ERR("FNID_DESKTOP OUT\n");
+              break;
            }
+           ProcAnsi = FALSE;
+           Status = IntCaptureProcMessage(Window, dwType, Msg, &wParam, &lParam, &ProcAnsi, &ProcCapture);
+           if (!NT_SUCCESS(Status))
+           {
+              SetLastNtError(Status);
+              break;
+           }
+           UserRefObjectCo(Window, &Ref);
+           if (dwType == FNID_DESKTOP)
+              Ret = DesktopWindowProc(Window, Msg, wParam, lParam, &lResult);
+           else if (dwType == FNID_MENU)
+              Ret = PopupMenuWndProc(Window, Msg, wParam, lParam, &lResult);
+           else
+              Ret = !UserMessageWindowProc(Window, Msg, wParam, lParam, &lResult);
+           UserDerefObjectCo(Window);
+           IntReleaseProcMessage(&ProcCapture, FALSE, &lResult);
            break;
         }
-   case FNID_MENU:
-       {
-          Window = UserGetWindowObject(hWnd);
-          if (Window)
-          {
-              Ret = PopupMenuWndProc( Window, Msg, wParam, lParam, &lResult);
-          }
-          break;
-       }
-   case FNID_MESSAGEWND:
-       {
-           Window = UserGetWindowObject(hWnd);
-           if (Window)
-           {
-                Ret = !UserMessageWindowProc(Window, Msg, wParam, lParam, &lResult);
-           }
-           break;
-       }
     case FNID_DEFWINDOWPROC:
         /* Validate input */
         if (hWnd)
@@ -3398,9 +3905,27 @@ NtUserMessageCall( HWND hWnd,
            {
                break;
            }
+           /* The default procedure is what a window procedure calls for its
+              own window, and a window procedure runs in the thread that owns
+              the window. */
+           if (Window->head.pti != PsGetCurrentThreadWin32Thread())
+           {
+               EngSetLastError(ERROR_ACCESS_DENIED);
+               break;
+           }
            UserRefObjectCo(Window, &Ref);
         }
-        lResult = IntDefWindowProc(Window, Msg, wParam, lParam, Ansi);
+        ProcAnsi = Ansi;
+        Status = IntCaptureProcMessage(Window, dwType, Msg, &wParam, &lParam, &ProcAnsi, &ProcCapture);
+        if (NT_SUCCESS(Status))
+        {
+           lResult = co_IntCallDefWindowProc(Window, Msg, wParam, lParam, ProcAnsi);
+           IntReleaseProcMessage(&ProcCapture, Ansi, &lResult);
+        }
+        else
+        {
+           SetLastNtError(Status);
+        }
         Ret = TRUE;
         if (hWnd)
             UserDerefObjectCo(Window);
@@ -3574,11 +4099,11 @@ NtUserMessageCall( HWND hWnd,
                         }
                         ExFreePoolWithTag(List, USERTAG_WINDOWLIST);
                      }
-                     if (lParam && !wParam && _wcsicmp((WCHAR*)lParam, L"Environment") == 0)
+                     if (IntIsEnvironmentBroadcast(Msg, wParam, lParam))
                      {
                          /* Handle Broadcast of WM_SETTINGCHAGE for Environment */
-                         co_IntDoSendMessage(HWND_BROADCAST, WM_SETTINGCHANGE,
-                                             0, (LPARAM)L"Environment", 0);
+                         co_IntSendMessage(HWND_BROADCAST, WM_SETTINGCHANGE,
+                                           0, (LPARAM)L"Environment");
                      }
                      Ret = TRUE;
                   }

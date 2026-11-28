@@ -38,6 +38,7 @@ typedef struct _TARGET_SETTINGS
     DWORD TimeZoneIndex;
     BOOL AutoDaylight;
     BOOL Components;
+    BOOL Upgrade;
 } TARGET_SETTINGS, *PTARGET_SETTINGS;
 
 typedef struct _TARGET_REGISTRATION
@@ -148,6 +149,8 @@ ReadTargetSettings(
             Settings->AutoDaylight = (wcstoul(Value, NULL, 10) != 0);
         else if (!_wcsicmp(Line, L"Components"))
             Settings->Components = (wcstoul(Value, NULL, 10) != 0);
+        else if (!_wcsicmp(Line, L"Upgrade"))
+            Settings->Upgrade = (wcstoul(Value, NULL, 10) != 0);
     }
 
     SecureZeroMemory(Buffer, cbBuffer);
@@ -156,8 +159,8 @@ ReadTargetSettings(
     return Result &&
            *Settings->MachineKey && *Settings->UserKey &&
            *Settings->SystemVolume && *Settings->SystemDrive &&
-           *Settings->SystemRoot && *Settings->ComputerName &&
-           *Settings->UserName;
+           *Settings->SystemRoot &&
+           (Settings->Upgrade || (*Settings->ComputerName && *Settings->UserName));
 }
 
 static NTSTATUS
@@ -287,7 +290,8 @@ ApplyTargetEnvironment(
         DestroyEnvironmentBlock(Environment);
     }
 
-    SetEnvironmentVariableW(L"COMPUTERNAME", Settings->ComputerName);
+    if (*Settings->ComputerName)
+        SetEnvironmentVariableW(L"COMPUTERNAME", Settings->ComputerName);
     SetTargetProfileEnvironment(Settings);
 }
 
@@ -554,8 +558,12 @@ CreateTargetAccount(
         if (NT_SUCCESS(Status))
         {
             RelativeId = RelativeIds[0];
-            Status = (Use[0] == SidTypeUser) ? SamOpenUser(DomainHandle, USER_ALL_ACCESS, RelativeId, &UserHandle)
-                                             : STATUS_USER_EXISTS;
+            /* The built-in Administrator is never reused as the target
+             * account; ask the user for another name. */
+            if (Use[0] == SidTypeUser && RelativeId != DOMAIN_USER_RID_ADMIN)
+                Status = SamOpenUser(DomainHandle, USER_ALL_ACCESS, RelativeId, &UserHandle);
+            else
+                Status = STATUS_USER_EXISTS;
             SamFreeMemory(RelativeIds);
             SamFreeMemory(Use);
         }
@@ -670,6 +678,379 @@ WriteTargetLogon(
     return ERROR_SUCCESS;
 }
 
+/* F4 post-check: a fresh target install must leave at least one enabled
+ * account-domain administrator that is not the built-in Administrator.
+ * When one exists, RID 500 - which a fresh install carries enabled with
+ * a blank password and which the target path otherwise never retires -
+ * is disabled; when none exists, re-enable RID 500 and report instead
+ * of leaving an unrecoverable machine. Everything is identified by SID
+ * or RID. */
+static DWORD
+EnsureTargetAdministrator(VOID)
+{
+    LSA_OBJECT_ATTRIBUTES ObjectAttributes;
+    LSA_HANDLE PolicyHandle = NULL;
+    PPOLICY_ACCOUNT_DOMAIN_INFO AccountDomain = NULL;
+    SAM_HANDLE ServerHandle = NULL;
+    SAM_HANDLE AccountDomainHandle = NULL;
+    SAM_HANDLE BuiltinHandle = NULL;
+    SAM_HANDLE AliasHandle = NULL;
+    SAM_HANDLE UserHandle = NULL;
+    PUSER_CONTROL_INFORMATION ControlInfo = NULL;
+    PSID BuiltinSid = NULL, MemberSid;
+    ULONG MemberCount = 0;
+    PSID *MemberSids = NULL;
+    ULONG i, Rid;
+    UCHAR DomainSubAuthorityCount;
+    NTSTATUS Status;
+    DWORD Result = ERROR_SUCCESS;
+    BOOLEAN FoundAdmin = FALSE;
+    BOOLEAN ReEnabled = FALSE;
+    SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
+
+    memset(&ObjectAttributes, 0, sizeof(ObjectAttributes));
+    Status = LsaOpenPolicy(NULL, &ObjectAttributes,
+                           POLICY_VIEW_LOCAL_INFORMATION, &PolicyHandle);
+    if (NT_SUCCESS(Status))
+        Status = LsaQueryInformationPolicy(PolicyHandle,
+                                           PolicyAccountDomainInformation,
+                                           (PVOID *)&AccountDomain);
+    if (PolicyHandle != NULL)
+        LsaClose(PolicyHandle);
+    if (!NT_SUCCESS(Status) || AccountDomain == NULL)
+    {
+        Result = ERROR_INVALID_DATA;
+        goto ReEnable;
+    }
+
+    Status = SamConnect(NULL, &ServerHandle,
+                          SAM_SERVER_CONNECT | SAM_SERVER_LOOKUP_DOMAIN,
+                          NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    Status = SamOpenDomain(ServerHandle, DOMAIN_LOOKUP,
+                           AccountDomain->DomainSid, &AccountDomainHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    Status = RtlAllocateAndInitializeSid(&NtAuthority, 1,
+                                         SECURITY_BUILTIN_DOMAIN_RID,
+                                         0, 0, 0, 0, 0, 0, 0,
+                                         &BuiltinSid);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    Status = SamOpenDomain(ServerHandle, DOMAIN_LOOKUP, BuiltinSid,
+                           &BuiltinHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    Status = SamOpenAlias(BuiltinHandle, ALIAS_READ, DOMAIN_ALIAS_RID_ADMINS,
+                          &AliasHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    Status = SamGetMembersInAlias(AliasHandle, &MemberSids, &MemberCount);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    DomainSubAuthorityCount = *RtlSubAuthorityCountSid(AccountDomain->DomainSid);
+    for (i = 0; i < MemberCount; i++)
+    {
+        BYTE ExpectedSidBuffer[SECURITY_MAX_SID_SIZE];
+        PSID ExpectedSid = (PSID)ExpectedSidBuffer;
+
+        MemberSid = MemberSids[i];
+
+        /* Match only members that are exactly this domain SID with one
+         * more sub-authority; the count check alone is not enough. */
+        if (*RtlSubAuthorityCountSid(MemberSid) != DomainSubAuthorityCount + 1)
+            continue;
+        RtlCopyMemory(ExpectedSid, AccountDomain->DomainSid,
+                      RtlLengthSid(AccountDomain->DomainSid));
+        *RtlSubAuthorityCountSid(ExpectedSid) = DomainSubAuthorityCount + 1;
+        *RtlSubAuthoritySid(ExpectedSid, DomainSubAuthorityCount) =
+            *RtlSubAuthoritySid(MemberSid, DomainSubAuthorityCount);
+        if (!RtlEqualSid(MemberSid, ExpectedSid))
+            continue;
+
+        Rid = *RtlSubAuthoritySid(MemberSid, DomainSubAuthorityCount);
+        if (Rid == DOMAIN_USER_RID_ADMIN)
+            continue;
+
+        Status = SamOpenUser(AccountDomainHandle,
+                             USER_READ_ACCOUNT | USER_READ_GENERAL,
+                             Rid, &UserHandle);
+        if (!NT_SUCCESS(Status))
+            continue;
+        Status = SamQueryInformationUser(UserHandle,
+                                         UserControlInformation,
+                                         (PVOID *)&ControlInfo);
+        if (NT_SUCCESS(Status))
+        {
+            if (!(ControlInfo->UserAccountControl & USER_ACCOUNT_DISABLED))
+            {
+                FoundAdmin = TRUE;
+                SamFreeMemory(ControlInfo);
+                ControlInfo = NULL;
+                SamCloseHandle(UserHandle);
+                UserHandle = NULL;
+                break;
+            }
+            SamFreeMemory(ControlInfo);
+            ControlInfo = NULL;
+        }
+        SamCloseHandle(UserHandle);
+        UserHandle = NULL;
+    }
+
+    if (FoundAdmin)
+    {
+        /* The replacement administrator is verified in place, so retire
+         * the built-in Administrator exactly here and only here. */
+        Status = SamOpenUser(AccountDomainHandle,
+                             USER_READ_ACCOUNT | USER_WRITE_ACCOUNT,
+                             DOMAIN_USER_RID_ADMIN, &UserHandle);
+        if (NT_SUCCESS(Status))
+        {
+            Status = SamQueryInformationUser(UserHandle,
+                                             UserControlInformation,
+                                             (PVOID *)&ControlInfo);
+            if (NT_SUCCESS(Status))
+            {
+                ControlInfo->UserAccountControl |= USER_ACCOUNT_DISABLED;
+                Status = SamSetInformationUser(UserHandle, UserControlInformation,
+                                               ControlInfo);
+                SamFreeMemory(ControlInfo);
+                ControlInfo = NULL;
+            }
+            SamCloseHandle(UserHandle);
+            UserHandle = NULL;
+        }
+        if (!NT_SUCCESS(Status))
+            DPRINT1("EnsureTargetAdministrator: retiring RID 500 failed (Status 0x%08lx); it stays enabled\n", Status);
+        goto done;
+    }
+
+ReEnable:
+    /* No enabled non-500 administrator: re-enable RID 500 and report. */
+    DPRINT1("EnsureTargetAdministrator: no enabled administrator besides RID 500 (result %lu); re-enabling the built-in Administrator\n", Result);
+    if (ServerHandle != NULL && AccountDomainHandle != NULL)
+    {
+        Status = SamOpenUser(AccountDomainHandle,
+                             USER_READ_ACCOUNT | USER_WRITE_ACCOUNT,
+                             DOMAIN_USER_RID_ADMIN, &UserHandle);
+        if (NT_SUCCESS(Status))
+        {
+            Status = SamQueryInformationUser(UserHandle,
+                                             UserControlInformation,
+                                             (PVOID *)&ControlInfo);
+            if (NT_SUCCESS(Status))
+            {
+                ControlInfo->UserAccountControl &= ~USER_ACCOUNT_DISABLED;
+                Status = SamSetInformationUser(UserHandle, UserControlInformation,
+                                               ControlInfo);
+                if (NT_SUCCESS(Status))
+                    ReEnabled = TRUE;
+                SamFreeMemory(ControlInfo);
+                ControlInfo = NULL;
+            }
+            SamCloseHandle(UserHandle);
+            UserHandle = NULL;
+        }
+    }
+
+    /* Once the account really is enabled again, leave the reason under
+     * SYSTEM\Setup for the first-boot path to surface to the user. */
+    if (ReEnabled)
+    {
+        HKEY hKey;
+
+        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\Setup", 0, NULL,
+                            REG_OPTION_NON_VOLATILE, KEY_SET_VALUE,
+                            NULL, &hKey, NULL) == ERROR_SUCCESS)
+        {
+            RegSetValueExW(hKey, L"BuiltinAdministratorEnabled", 0, REG_DWORD,
+                           (const BYTE *)&Result, sizeof(Result));
+            RegCloseKey(hKey);
+        }
+    }
+
+done:
+    if (MemberSids != NULL)
+        SamFreeMemory(MemberSids);
+    if (ControlInfo != NULL)
+        SamFreeMemory(ControlInfo);
+    if (UserHandle != NULL)
+        SamCloseHandle(UserHandle);
+    if (AliasHandle != NULL)
+        SamCloseHandle(AliasHandle);
+    if (BuiltinHandle != NULL)
+        SamCloseHandle(BuiltinHandle);
+    if (AccountDomainHandle != NULL)
+        SamCloseHandle(AccountDomainHandle);
+    if (ServerHandle != NULL)
+        SamCloseHandle(ServerHandle);
+    if (BuiltinSid != NULL)
+        RtlFreeSid(BuiltinSid);
+    if (AccountDomain != NULL)
+        LsaFreeMemory(AccountDomain);
+    return ERROR_SUCCESS;
+}
+#ifdef LIBERNT_ACCEPTANCE_HOOKS
+#define SETUP_PROVOKE_FILE L"LiberNT.SetupProvokePause"
+
+/* Test-only provocation gate: the acceptance harness may leave SETUP_PROVOKE_FILE
+ * at the root of the target volume, holding the name of the account-domain account
+ * to disable before the F4 post-check; the installer applies it and deletes the file. */
+static VOID
+ApplySetupProvocation(
+    _In_ PCWSTR SystemDrive)
+{
+    WCHAR FileName[MAX_PATH + 40];
+    WCHAR AccountName[UNLEN + 1];
+    WCHAR Line[160];
+    BYTE Buffer[UNLEN + 2];
+    HANDLE hFile;
+    DWORD cbRead = 0, i;
+    LSA_OBJECT_ATTRIBUTES ObjectAttributes;
+    LSA_HANDLE PolicyHandle = NULL;
+    PPOLICY_ACCOUNT_DOMAIN_INFO AccountDomain = NULL;
+    SAM_HANDLE ServerHandle = NULL;
+    SAM_HANDLE DomainHandle = NULL;
+    SAM_HANDLE UserHandle = NULL;
+    PULONG RelativeIds = NULL;
+    PSID_NAME_USE Use = NULL;
+    PUSER_CONTROL_INFORMATION ControlInfo = NULL;
+    UNICODE_STRING Name;
+    NTSTATUS Status;
+
+    if (FAILED(StringCchPrintfW(FileName, ARRAYSIZE(FileName),
+                                L"%s\\" SETUP_PROVOKE_FILE, SystemDrive)))
+        return;
+
+    hFile = CreateFileW(FileName, GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return;
+
+    if (ReadFile(hFile, Buffer, UNLEN + 1, &cbRead, NULL))
+    {
+        while (cbRead > 0 && (Buffer[cbRead - 1] == '\n' || Buffer[cbRead - 1] == '\r'))
+            cbRead--;
+    }
+    CloseHandle(hFile);
+
+    if (cbRead == 0)
+    {
+        DeleteFileW(FileName);
+        return;
+    }
+
+    for (i = 0; i < cbRead && i < UNLEN; i++)
+        AccountName[i] = (WCHAR)Buffer[i];
+    AccountName[i] = UNICODE_NULL;
+
+    StringCchPrintfW(Line, ARRAYSIZE(Line), L"#8P provocation: disabling '%s'", AccountName);
+    ReportTargetProgress(Line);
+
+    ZeroMemory(&ObjectAttributes, sizeof(ObjectAttributes));
+    Status = LsaOpenPolicy(NULL, &ObjectAttributes,
+                           POLICY_VIEW_LOCAL_INFORMATION, &PolicyHandle);
+    if (NT_SUCCESS(Status))
+        Status = LsaQueryInformationPolicy(PolicyHandle,
+                                           PolicyAccountDomainInformation,
+                                           (PVOID *)&AccountDomain);
+    if (NT_SUCCESS(Status) && AccountDomain == NULL)
+        Status = STATUS_UNSUCCESSFUL;
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    Status = SamConnect(NULL, &ServerHandle,
+                        SAM_SERVER_CONNECT | SAM_SERVER_LOOKUP_DOMAIN, NULL);
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    Status = SamOpenDomain(ServerHandle, DOMAIN_LOOKUP,
+                           AccountDomain->DomainSid, &DomainHandle);
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    RtlInitUnicodeString(&Name, AccountName);
+    Status = SamLookupNamesInDomain(DomainHandle, 1, &Name, &RelativeIds, &Use);
+    if (!NT_SUCCESS(Status) || Use[0] != SidTypeUser)
+        goto Failed;
+
+    Status = SamOpenUser(DomainHandle,
+                         USER_READ_ACCOUNT | USER_WRITE_ACCOUNT,
+                         RelativeIds[0], &UserHandle);
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    Status = SamQueryInformationUser(UserHandle,
+                                     UserControlInformation,
+                                     (PVOID *)&ControlInfo);
+    if (NT_SUCCESS(Status))
+    {
+        ControlInfo->UserAccountControl |= USER_ACCOUNT_DISABLED;
+        Status = SamSetInformationUser(UserHandle, UserControlInformation, ControlInfo);
+    }
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    StringCchPrintfW(Line, ARRAYSIZE(Line),
+                     L"#8P provocation: '%s' (rid %lu) disabled", AccountName,
+                     RelativeIds[0]);
+    ReportTargetProgress(Line);
+    goto Cleanup;
+
+Failed:
+    StringCchPrintfW(Line, ARRAYSIZE(Line),
+                     L"#8P provocation: disabling '%s' failed (Status 0x%08lx)",
+                     AccountName, Status);
+    ReportTargetProgress(Line);
+
+Cleanup:
+    if (ControlInfo != NULL)
+        SamFreeMemory(ControlInfo);
+    if (Use != NULL)
+        SamFreeMemory(Use);
+    if (RelativeIds != NULL)
+        SamFreeMemory(RelativeIds);
+    if (UserHandle != NULL)
+        SamCloseHandle(UserHandle);
+    if (DomainHandle != NULL)
+        SamCloseHandle(DomainHandle);
+    if (ServerHandle != NULL)
+        SamCloseHandle(ServerHandle);
+    if (AccountDomain != NULL)
+        LsaFreeMemory(AccountDomain);
+    if (PolicyHandle != NULL)
+        LsaClose(PolicyHandle);
+    DeleteFileW(FileName);
+}
+#endif
+
 static DWORD
 ScheduleFirstBootComponents(
     _In_ PTARGET_SETTINGS Settings)
@@ -678,7 +1059,7 @@ ScheduleFirstBootComponents(
     HKEY hKey;
     LONG Error;
 
-    if (FAILED(StringCchPrintfW(Path, ARRAYSIZE(Path), L"%s\\system32\\oobe\\oobe.exe", Settings->SystemRoot)) ||
+    if (FAILED(StringCchPrintfW(Path, ARRAYSIZE(Path), L"%s\\system32\\oobe\\msoobe.exe", Settings->SystemRoot)) ||
         GetFileAttributesW(Path) == INVALID_FILE_ATTRIBUTES)
     {
         return ERROR_FILE_NOT_FOUND;
@@ -696,7 +1077,7 @@ ScheduleFirstBootComponents(
     if (Error != ERROR_SUCCESS)
         return Error;
 
-    SetRegString(hKey, L"OOBE", REG_EXPAND_SZ, L"%SystemRoot%\\system32\\oobe\\oobe.exe /components");
+    SetRegString(hKey, L"OOBE", REG_EXPAND_SZ, L"%SystemRoot%\\system32\\oobe\\msoobe.exe /components");
     RegCloseKey(hKey);
 
     return ERROR_SUCCESS;
@@ -719,6 +1100,46 @@ EnableTargetPlugPlay(VOID)
     Error = SetRegDword(hKey, L"Start", SERVICE_AUTO_START);
     RegCloseKey(hKey);
     return Error;
+}
+
+/* A first boot still pending from before an upgrade names the old oobe.exe. */
+static VOID
+RetargetPendingOobe(VOID)
+{
+    static const WCHAR OldName[] = L"\\oobe\\oobe.exe";
+    WCHAR Value[MAX_PATH + 32], NewValue[MAX_PATH + 32];
+    SIZE_T cchOld = ARRAYSIZE(OldName) - 1;
+    DWORD Type, cb;
+    PWSTR p;
+    HKEY hKey;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+                      0, KEY_QUERY_VALUE | KEY_SET_VALUE, &hKey) != ERROR_SUCCESS)
+    {
+        return;
+    }
+
+    ZeroMemory(Value, sizeof(Value));
+    cb = sizeof(Value) - sizeof(WCHAR);
+    if (RegQueryValueExW(hKey, L"OOBE", NULL, &Type, (LPBYTE)Value, &cb) == ERROR_SUCCESS &&
+        (Type == REG_SZ || Type == REG_EXPAND_SZ))
+    {
+        for (p = Value; *p; p++)
+        {
+            if (_wcsnicmp(p, OldName, cchOld) == 0)
+                break;
+        }
+        if (*p)
+        {
+            *p = UNICODE_NULL;
+            if (SUCCEEDED(StringCchPrintfW(NewValue, ARRAYSIZE(NewValue), L"%s\\oobe\\msoobe.exe%s",
+                                           Value, p + cchOld)))
+            {
+                SetRegString(hKey, L"OOBE", Type, NewValue);
+            }
+        }
+    }
+    RegCloseKey(hKey);
 }
 
 static UINT CALLBACK
@@ -1134,51 +1555,55 @@ CreateTargetBootStatusData(
 }
 
 static DWORD
-ConfigureTargetSystem(VOID)
+ConfigureTargetSystem(
+    _Inout_ PTARGET_SETTINGS Settings)
 {
-    TARGET_SETTINGS Settings;
     WCHAR LiveRoot[MAX_PATH];
     ITEMSDATA ItemsData = { NULL };
     REGISTRATIONNOTIFY Notify;
     NTSTATUS Status;
     DWORD Error;
 
-    if (!ReadTargetSettings(&Settings))
-        return ERROR_INVALID_PARAMETER;
-
     if (!GetWindowsDirectoryW(LiveRoot, ARRAYSIZE(LiveRoot)))
         return GetLastError();
 
-    Error = OpenTargetView(&Settings);
+    Error = OpenTargetView(Settings);
     if (Error != ERROR_SUCCESS)
         return Error;
 
-    Error = MapTargetDrive(&Settings);
+    Error = MapTargetDrive(Settings);
     if (Error != ERROR_SUCCESS)
         return Error;
 
-    SetEnvironmentVariableW(L"SystemDrive", Settings.SystemDrive);
-    SetEnvironmentVariableW(L"SystemRoot", Settings.SystemRoot);
-    SetEnvironmentVariableW(L"windir", Settings.SystemRoot);
-    SetTargetProfileEnvironment(&Settings);
+    SetEnvironmentVariableW(L"SystemDrive", Settings->SystemDrive);
+    SetEnvironmentVariableW(L"SystemRoot", Settings->SystemRoot);
+    SetEnvironmentVariableW(L"windir", Settings->SystemRoot);
+    SetTargetProfileEnvironment(Settings);
 
     ReportTargetPhase(1);
-    CreateTempDir(L"TEMP");
-    CreateTempDir(L"TMP");
+    if (!Settings->Upgrade)
+    {
+        CreateTempDir(L"TEMP");
+        CreateTempDir(L"TMP");
+    }
     if (!InitializeProgramFilesDir())
         return ERROR_GEN_FAILURE;
-    if (!InitializeProfiles())
+    if (!Settings->Upgrade && !InitializeProfiles())
         return GetLastError();
-    ApplyTargetEnvironment(&Settings);
-    InitializeDefaultUserLocale();
-    Error = WriteTargetSystemRoot(&Settings);
+    ApplyTargetEnvironment(Settings);
+    if (!Settings->Upgrade)
+        InitializeDefaultUserLocale();
+    Error = WriteTargetSystemRoot(Settings);
     if (Error != ERROR_SUCCESS)
         return Error;
-    Error = SaveDefaultUserHive();
-    if (Error != ERROR_SUCCESS)
-        return Error;
-    if (!CopySystemProfile(0))
-        return GetLastError();
+    if (!Settings->Upgrade)
+    {
+        Error = SaveDefaultUserHive();
+        if (Error != ERROR_SUCCESS)
+            return Error;
+        if (!CopySystemProfile(0))
+            return GetLastError();
+    }
 
     hSysSetupInf = SetupOpenInfFileW(L"syssetup.inf", NULL, INF_STYLE_WIN4, NULL);
     if (hSysSetupInf == INVALID_HANDLE_VALUE)
@@ -1187,7 +1612,7 @@ ConfigureTargetSystem(VOID)
     ReportTargetPhase(2);
     if (!InstallSysSetupInfDevices())
         return GetLastError();
-    if (!InstallSysSetupInfComponents(SPINST_ALL))
+    if (!InstallSysSetupInfComponents(Settings->Upgrade ? (SPINST_ALL & ~SPINST_FILES) : SPINST_ALL))
         return GetLastError();
     StartWow64Registration();
     Error = EnableTargetPlugPlay();
@@ -1195,64 +1620,93 @@ ConfigureTargetSystem(VOID)
         return Error;
 
     ReportTargetPhase(3);
-    if (!InstallNetworkComponent(L"MS_TCPIP", TRUE) && GetLastError() != ERROR_FILE_NOT_FOUND)
+    if (!Settings->Upgrade &&
+        !InstallNetworkComponent(L"MS_TCPIP", TRUE) && GetLastError() != ERROR_FILE_NOT_FOUND)
+    {
         DPRINT1("InstallNetworkComponent() failed (Error %lu)\n", GetLastError());
+    }
 
     ReportTargetPhase(4);
-    DoWriteInstallationType(INSTALLATION_TYPE_WORKSTATION);
-    WriteOwnerSettings(Settings.UserName, L"");
-    Error = WriteTargetComputerName(&Settings);
-    if (Error != ERROR_SUCCESS)
-        return Error;
-    Error = WriteTargetTimeZone(&Settings);
-    if (Error != ERROR_SUCCESS)
-        DPRINT1("WriteTargetTimeZone() failed (Error %lu)\n", Error);
-    Status = SetAccountsDomainSid(NULL, Settings.ComputerName);
-    if (!NT_SUCCESS(Status))
-        return RtlNtStatusToDosError(Status);
+    if (!Settings->Upgrade)
+    {
+        DoWriteInstallationType(INSTALLATION_TYPE_WORKSTATION);
+        WriteOwnerSettings(Settings->UserName, L"");
+        Error = WriteTargetComputerName(Settings);
+        if (Error != ERROR_SUCCESS)
+            return Error;
+        Error = WriteTargetTimeZone(Settings);
+        if (Error != ERROR_SUCCESS)
+            DPRINT1("WriteTargetTimeZone() failed (Error %lu)\n", Error);
+        Status = SetAccountsDomainSid(NULL, Settings->ComputerName);
+        if (!NT_SUCCESS(Status))
+            return RtlNtStatusToDosError(Status);
+    }
+    CreateMachineGuid();
+    CreateSystemIdSeed(TRUE);
 
     ReportTargetPhase(5);
     RegisterTargetComponents();
 
     ReportTargetPhase(6);
-    InstallStartMenuItems(&ItemsData);
+    InstallStartMenuItems(&ItemsData, Settings->Upgrade);
 
     ReportTargetPhase(7);
-    ZeroMemory(&Notify, sizeof(Notify));
-    InstallSecurity(&ItemsData, &Notify);
+    if (!Settings->Upgrade)
+    {
+        ZeroMemory(&Notify, sizeof(Notify));
+        InstallSecurity(&ItemsData, &Notify);
+    }
+    /* FIXME: An upgrade keeps the installed SAM and SECURITY hives; accounts and privileges a newer build adds are not merged. */
 
     ReportTargetPhase(8);
-    Status = CreateTargetAccount(Settings.UserName, Settings.Password);
-    Error = NT_SUCCESS(Status) ? WriteTargetLogon(&Settings) : RtlNtStatusToDosError(Status);
-    SecureZeroMemory(Settings.Password, sizeof(Settings.Password));
-    if (Error != ERROR_SUCCESS)
-        return Error;
+    if (!Settings->Upgrade)
+    {
+        Status = CreateTargetAccount(Settings->UserName, Settings->Password);
+        Error = NT_SUCCESS(Status) ? WriteTargetLogon(Settings) : RtlNtStatusToDosError(Status);
+        SecureZeroMemory(Settings->Password, sizeof(Settings->Password));
+        if (Error != ERROR_SUCCESS)
+            return Error;
+#ifdef LIBERNT_ACCEPTANCE_HOOKS
+        ApplySetupProvocation(Settings->SystemDrive);
+#endif
+        EnsureTargetAdministrator();
+    }
 
     ReportTargetPhase(9);
-    if (Settings.Components)
+    if (Settings->Upgrade)
+        RetargetPendingOobe();
+    if (Settings->Components && !Settings->Upgrade)
     {
-        Error = ScheduleFirstBootComponents(&Settings);
+        Error = ScheduleFirstBootComponents(Settings);
         if (Error != ERROR_SUCCESS)
             DPRINT1("ScheduleFirstBootComponents() failed (Error %lu)\n", Error);
     }
     SetupCloseInfFile(hSysSetupInf);
     hSysSetupInf = INVALID_HANDLE_VALUE;
-    Error = CreateTargetBootStatusData(&Settings);
+    Error = CreateTargetBootStatusData(Settings);
     if (Error != ERROR_SUCCESS)
         DPRINT1("CreateTargetBootStatusData() failed (Error %lu)\n", Error);
-    RelocateTargetRegistry(LiveRoot, Settings.SystemRoot);
+    RelocateTargetRegistry(LiveRoot, Settings->SystemRoot);
 
-    return SaveTargetSecurityHives(&Settings);
+    if (Settings->Upgrade)
+        return ERROR_SUCCESS;
+    return SaveTargetSecurityHives(Settings);
 }
 
 DWORD
 InstallTargetSystem(VOID)
 {
-    BOOL Saved;
+    TARGET_SETTINGS Settings;
+    BOOL Saved = FALSE;
     DWORD Error;
 
-    Saved = SaveLiveSecurityHives();
-    Error = ConfigureTargetSystem();
+    if (!ReadTargetSettings(&Settings))
+        return ERROR_INVALID_PARAMETER;
+
+    if (!Settings.Upgrade)
+        Saved = SaveLiveSecurityHives();
+    Error = ConfigureTargetSystem(&Settings);
+    SecureZeroMemory(Settings.Password, sizeof(Settings.Password));
     if (Saved)
         ScheduleLiveSecurityRestore();
 

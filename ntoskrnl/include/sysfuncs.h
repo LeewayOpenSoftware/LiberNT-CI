@@ -436,6 +436,7 @@
     SVC_(AlpcImpersonateClientContainerOfPort, 3)
 #endif
 #if (NTDDI_VERSION >= NTDDI_VISTA)
+    SVC_(GetNextProcess, 5)
     SVC_(GetNextThread, 6)
 #endif
     SVC_(CreateWaitCompletionPacket, 3)
@@ -447,6 +448,8 @@
     SVC_(QueryLicenseValue, 5)
     SVC_(TraceControl, 6)
     SVC_(CreateTimer2, 5)
+    SVC_(CreateDirectoryObjectEx, 5)
+    SVC_(SetInformationSymbolicLink, 4)
 #if defined(WOW64_I386_RUNTIME) || defined(SYSFUNCS_WOW64)
     /* User-mode WoW64 services follow the native syscall table. */
     SVC_(Wow64GetNativeSystemInformation, 4)

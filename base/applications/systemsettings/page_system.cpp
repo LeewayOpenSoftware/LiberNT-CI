@@ -7,9 +7,14 @@
 
 #include "settings.h"
 #include <powrprof.h>
+#include <buildno.h>
 #include <algorithm>
+#include <dpiscale.h>
+#include <leewayui/display_backend.h>
 
 #define WINDOWS_NT_KEY L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
+#define DESKTOP_KEY L"Control Panel\\Desktop"
+#define MACHINE_DPI_KEY L"SYSTEM\\CurrentControlSet\\Hardware Profiles\\Current\\Software\\Fonts"
 
 extern "C" BOOL WINAPI GetPhysicallyInstalledSystemMemory(PULONGLONG TotalMemoryInKilobytes);
 
@@ -189,7 +194,96 @@ ApplyDisplayMode(HWND owner, const std::wstring &device, DEVMODEW mode)
     }
 }
 
-static const UINT ScaleSteps[] = { 100, 125, 150, 175, 200, 225, 250 };
+static bool
+IsPortableChassis()
+{
+    UINT size = GetSystemFirmwareTable('RSMB', 0, NULL, 0);
+    std::vector<BYTE> table;
+    DWORD length;
+    const BYTE *structure, *end, *next;
+
+    /* RawSMBIOSData: 8 byte header, table length at offset 4 */
+    if (size <= 8 || size > 1024 * 1024)
+        return false;
+    table.resize(size);
+    if (GetSystemFirmwareTable('RSMB', 0, &table[0], size) != size)
+        return false;
+    CopyMemory(&length, &table[4], sizeof(length));
+    structure = &table[8];
+    end = structure + (length < size - 8 ? length : size - 8);
+    while (structure + 4 <= end && structure[1] >= 4 && structure + structure[1] <= end && structure[0] != 127)
+    {
+        if (structure[0] == 3 && structure[1] > 5)
+            return DpiScaleIsPortableChassis(structure[5]) != 0;
+        next = structure + structure[1];
+        while (next + 1 < end && (next[0] || next[1]))
+            ++next;
+        if (next + 1 >= end)
+            break;
+        structure = next + 2;
+    }
+    return false;
+}
+
+static UINT
+ValidDpi(DWORD dpi)
+{
+    return (dpi >= 96 && dpi <= 480) ? dpi : 0;
+}
+
+/* The machine value win32k persisted (its recommendation unless an administrator set one); an unmarked 96
+ * predates F1 and win32k migrates it to the recommendation at the next boot */
+static UINT
+MachineDpi(UINT recommended)
+{
+    UINT dpi = ValidDpi(ReadDword(HKEY_LOCAL_MACHINE, MACHINE_DPI_KEY, L"LogPixels", 0));
+
+    if (dpi == 96 && !ReadDword(HKEY_LOCAL_MACHINE, MACHINE_DPI_KEY, L"LogPixelsChosen", 0))
+        dpi = 0;
+    return dpi ? dpi : recommended;
+}
+
+/* What the next sign-in loads: the per-user custom scale when armed, the machine value otherwise */
+static UINT
+NextSessionDpi(UINT machine)
+{
+    UINT dpi = 0;
+
+    if (ReadDword(HKEY_CURRENT_USER, DESKTOP_KEY, L"Win8DpiScaling", 0) == 1)
+        dpi = ValidDpi(ReadDword(HKEY_CURRENT_USER, DESKTOP_KEY, L"LogPixels", 0));
+    return dpi ? dpi : machine;
+}
+
+/* LiberNT has no per-monitor DPI or EDID monitor id yet, so every choice goes through the per-user keys */
+static bool
+StoreUserDpi(UINT dpi, UINT machine)
+{
+    LSTATUS status;
+
+    if (dpi == machine)
+    {
+        status = RegDeleteKeyValueW(HKEY_CURRENT_USER, DESKTOP_KEY, L"LogPixels");
+        if (status != ERROR_SUCCESS && status != ERROR_FILE_NOT_FOUND)
+            return false;
+        return WriteDword(HKEY_CURRENT_USER, DESKTOP_KEY, L"Win8DpiScaling", 0);
+    }
+    return WriteDword(HKEY_CURRENT_USER, DESKTOP_KEY, L"LogPixels", dpi) &&
+           WriteDword(HKEY_CURRENT_USER, DESKTOP_KEY, L"Win8DpiScaling", 1);
+}
+
+static void
+ApplyUserDpi(HWND owner, UINT dpi, UINT machine)
+{
+    UINT before = NextSessionDpi(machine);
+
+    if (!StoreUserDpi(dpi, machine))
+    {
+        ShowError(owner, ERROR_ACCESS_DENIED);
+        return;
+    }
+    if (dpi != before && dpi != LDispGetSystemDpi())
+        PromptSignOut(owner, Str(IDS_SIGNOUT_SCALE));
+}
 
 void
 BuildDisplay(PageBuilder &page)
@@ -201,15 +295,20 @@ BuildDisplay(PageBuilder &page)
     DISPLAY_DEVICEW adapter = { sizeof(adapter) };
     SettingsHost *host = page.Host;
     int selected = 0, sizeIndex = -1, frequencyIndex = -1;
-    DWORD logPixels;
+    UINT running, machine, next, recommended;
+    std::vector<UINT> offered;
 
     if (page.Indexing)
     {
         page.Group(Str(IDS_SCALE_LAYOUT));
         page.Choice(Str(IDS_SCALE), Str(IDS_SCALE_DESC), L"zoom_in_20_regular", options, -1, nullptr);
+        page.Slider(Str(IDS_SCALE_CUSTOM), Str(IDS_SCALE_CUSTOM_DESC), L"zoom_in_20_regular", DPI_SCALE_MIN,
+                    DPI_SCALE_MAX, DPI_SCALE_MIN, nullptr);
         page.Choice(Str(IDS_RESOLUTION), std::wstring(), L"desktop_20_regular", options, -1, nullptr);
         page.Choice(Str(IDS_ORIENTATION), std::wstring(), L"desktop_20_regular", options, -1, nullptr);
         page.Choice(Str(IDS_REFRESH_RATE), std::wstring(), L"desktop_pulse_20_regular", options, -1, nullptr);
+        page.Link(Str(IDS_GRAPHICS), Str(IDS_GFX_LINK_DESC), L"desktop_pulse_20_regular", nullptr).Keywords =
+            Str(IDS_GFX_LINK_KEYWORDS);
         return;
     }
     labels = DisplayDevices(names);
@@ -260,31 +359,51 @@ BuildDisplay(PageBuilder &page)
                     [host, names](int index) { host->Open(PageId::Display, names[index]); });
     }
 
-    page.Group(Str(IDS_SCALE_LAYOUT));
-    logPixels = GetDpiForSystem();
+    /* Recommended from the native (largest) mode, the offered list from the mode in use, as Windows does */
+    running = LDispGetSystemDpi();
+    recommended = MulDiv(96, DpiScaleRecommended(sizes.empty() ? current.dmPelsWidth : sizes[0].Width,
+                                                 sizes.empty() ? current.dmPelsHeight : sizes[0].Height,
+                                                 IsPortableChassis()), 100);
+    machine = MachineDpi(recommended);
+    next = NextSessionDpi(machine);
+    /* The machine value is what turns custom scaling off; it differs from Recommended when win32k recommended
+     * from the boot framebuffer or an administrator set another value */
+    page.Group(Str(IDS_SCALE_LAYOUT)).Footer = Format(IDS_SCALE_CUSTOM_NOTE, MulDiv(machine, 100, 96));
     options.clear();
-    for (UINT i = 0; i < _countof(ScaleSteps); i++)
+    for (UINT i = 0; i < DPI_SCALE_COUNT; i++)
     {
-        options.push_back(Printf(L"%u%%", ScaleSteps[i]));
-        if (MulDiv(96, ScaleSteps[i], 100) == (int)logPixels)
-            sizeIndex = (int)i;
+        UINT percent = DpiScaleStandard[i], dpi = MulDiv(96, percent, 100);
+        std::wstring label;
+
+        if (!DpiScaleIsOffered(current.dmPelsWidth, current.dmPelsHeight, percent) && dpi != recommended &&
+            dpi != machine)
+            continue;
+        if (dpi == recommended)
+            label = Format(IDS_SCALE_RECOMMENDED, percent);
+        else if (dpi == machine)
+            label = Format(IDS_SCALE_DEFAULT, percent);
+        else
+            label = Printf(L"%u%%", percent);
+        if (dpi == next)
+        {
+            sizeIndex = (int)offered.size();
+            if (next != running)
+                label += Str(IDS_SCALE_PENDING);
+        }
+        offered.push_back(dpi);
+        options.push_back(label);
     }
     page.Choice(Str(IDS_SCALE), Str(IDS_SCALE_DESC), L"zoom_in_20_regular", options, sizeIndex,
-                [host](int index)
+                [host, offered, machine](int index)
                 {
-                    DWORD dpi = (DWORD)MulDiv(96, ScaleSteps[index], 100);
-                    if (!WriteDword(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontDPI",
-                                    L"LogPixels", dpi) ||
-                        !WriteDword(HKEY_LOCAL_MACHINE,
-                                    L"SYSTEM\\CurrentControlSet\\Hardware Profiles\\Current\\Software\\Fonts",
-                                    L"LogPixels", dpi))
-                    {
-                        ShowError(host->Window(), ERROR_ACCESS_DENIED);
-                        return;
-                    }
-                    WriteDword(HKEY_CURRENT_USER, L"Control Panel\\Desktop\\WindowMetrics", L"AppliedDPI", dpi);
-                    PromptRestart(host->Window(), Str(IDS_RESTART_SCALE));
-                }).Enabled = IsAdmin();
+                    ApplyUserDpi(host->Window(), offered[index], machine);
+                });
+    page.Slider(Str(IDS_SCALE_CUSTOM), Str(IDS_SCALE_CUSTOM_DESC), L"zoom_in_20_regular", DPI_SCALE_MIN,
+                DPI_SCALE_MAX, MulDiv(next, 100, 96),
+                [host, machine](int percent)
+                {
+                    ApplyUserDpi(host->Window(), MulDiv(96, percent, 100), machine);
+                }).Label = [](int percent) { return Printf(L"%d%%", percent); };
 
     options.clear();
     sizeIndex = -1;
@@ -369,6 +488,9 @@ BuildDisplay(PageBuilder &page)
     page.Info(Str(IDS_DESKTOP_MODE),
               Printf(L"%lu \x00D7 %lu, %lu Hz", current.dmPelsWidth, current.dmPelsHeight, current.dmDisplayFrequency));
     page.Info(Str(IDS_COLOR_DEPTH), Format(IDS_BITS_FORMAT, current.dmBitsPerPel));
+    /* The Graphics tab (index 2) of the Leeway Display control panel applet 2 */
+    page.Link(Str(IDS_GRAPHICS), Str(IDS_GFX_LINK_DESC), L"desktop_pulse_20_regular",
+              [](int) { Launch(L"control.exe", L"leewaydisp.cpl,@2"); }).Keywords = Str(IDS_GFX_LINK_KEYWORDS);
 }
 
 static const DWORD PowerTimes[] = { 60, 120, 180, 300, 600, 900, 1200, 1500, 1800, 2700, 3600, 7200, 10800,
@@ -816,7 +938,7 @@ BuildAbout(PageBuilder &page)
         system.push_back(std::make_pair(Str(IDS_TARGET), Str(IDS_TARGET_FORMAT)));
         system.push_back(std::make_pair(Str(IDS_VERSION), version));
         system.push_back(std::make_pair(Str(IDS_INSTALLED_ON), InstallDate()));
-        system.push_back(std::make_pair(Str(IDS_OS_BUILD), build));
+        system.push_back(std::make_pair(Str(IDS_OS_BUILD), build + L" LBI " LIBERNT_LBI_BUILD_WSTR));
         system.push_back(std::make_pair(Str(IDS_BUILD_LAB), ReadString(HKEY_LOCAL_MACHINE, WINDOWS_NT_KEY, L"BuildLab")));
     }
     page.Hero(ComputerName(), model.empty() ? ProductName() : model, L"laptop_20_regular").Action = Str(IDS_RENAME_PC);

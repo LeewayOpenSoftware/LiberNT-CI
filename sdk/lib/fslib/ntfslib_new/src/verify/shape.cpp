@@ -1051,6 +1051,28 @@ NtfsVerifyIndexShape(
  * index walk only up to SHAPE_HOOK_INDEX_BYTES of allocation. A violation is
  * printed and asserted.
  */
+/*
+ * Whether the hook runs at all. A kernel build runs it only when the driver
+ * turns it on (ntfs_new: the NtfsVerifyShapeAfterMutation registry value):
+ * it runs inside the mutating request, and on a deep stack (a create
+ * reached through a filter and a storage stack) its frames and reads have
+ * overflowed the kernel stack. The portable build keeps it on, as the host
+ * tests built with NTFSLIB_VERIFY_SHAPE rely on it.
+ */
+#ifdef NTFSLIB_PORTABLE
+static BOOLEAN NtfsShapeVerifyAfterMutationEnabled = TRUE;
+#else
+static BOOLEAN NtfsShapeVerifyAfterMutationEnabled = FALSE;
+#endif
+
+extern "C"
+void
+NtfsSetShapeVerifyAfterMutation(
+    _In_ BOOLEAN Enable)
+{
+    NtfsShapeVerifyAfterMutationEnabled = Enable;
+}
+
 void
 NtfsVerifyShapeAfterMutation(
     _In_ PVolume DiskVolume,
@@ -1062,12 +1084,15 @@ NtfsVerifyShapeAfterMutation(
     ULONG Flags = NTFS_VERIFY_HOOK;
     NTSTATUS Status;
 
-    if (!DiskVolume || !DiskVolume->MFT || DiskVolume->ShapeVerifySuppressed ||
+    if (!NtfsShapeVerifyAfterMutationEnabled ||
+        !DiskVolume || !DiskVolume->MFT || DiskVolume->ShapeVerifySuppressed ||
         FileRecord == MAXULONG || FileRecord == (ULONGLONG)-1)
     {
         return;
     }
-    if (NT_SUCCESS(DiskVolume->QueryInformation(&Information)) &&
+    /* The MFT's own sizes: the volume query would also count free clusters,
+     * a bitmap read from inside the mutation */
+    if (NT_SUCCESS(DiskVolume->MFT->QueryVolumeInformation(&Information)) &&
         Information.BytesPerFileRecordSegment &&
         Information.MftValidDataLength / Information.BytesPerFileRecordSegment <= SHAPE_HOOK_SCAN_RECORDS)
     {

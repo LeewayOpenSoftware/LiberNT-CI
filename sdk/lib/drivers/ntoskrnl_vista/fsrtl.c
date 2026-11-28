@@ -789,51 +789,12 @@ FailEmpty:
     return STATUS_NOT_FOUND;
 }
 
-NTKRNLVISTAAPI
-BOOLEAN
-NTAPI
-FsRtlAreVolumeStartupApplicationsComplete(VOID)
-{
-    return TRUE;
-}
-
-NTKRNLVISTAAPI
-NTSTATUS
-NTAPI
-FsRtlCheckOplockEx(
-    _In_ POPLOCK Oplock,
-    _In_ PIRP Irp,
-    _In_ ULONG Flags,
-    _In_opt_ PVOID Context,
-    _In_opt_ POPLOCK_WAIT_COMPLETE_ROUTINE CompletionRoutine,
-    _In_opt_ POPLOCK_FS_PREPOST_IRP PostIrpRoutine)
-{
-    return FsRtlCheckOplock(Oplock, Irp, Context, CompletionRoutine, PostIrpRoutine);
-}
-
-NTKRNLVISTAAPI
-NTSTATUS
-NTAPI
-FsRtlOplockBreakH(
-    _In_ POPLOCK Oplock,
-    _In_ PIRP Irp,
-    _In_ ULONG Flags,
-    _In_opt_ PVOID Context,
-    _In_opt_ POPLOCK_WAIT_COMPLETE_ROUTINE CompletionRoutine,
-    _In_opt_ POPLOCK_FS_PREPOST_IRP PostIrpRoutine)
-{
-    return FsRtlCheckOplock(Oplock, Irp, Context, CompletionRoutine, PostIrpRoutine);
-}
-
-NTKRNLVISTAAPI
-BOOLEAN
-NTAPI
-FsRtlOplockIsSharedRequest(
-    _In_ PIRP Irp)
-{
-    return FALSE;
-}
-
+/* FsRtlCheckOplockEx, FsRtlOplockBreakH and FsRtlOplockIsSharedRequest are
+ * implemented by the kernel (ntoskrnl/fsrtl/oplock.c), which owns the oplock state.
+ * FsRtlCurrentOplockH stays FALSE: the kernel's oplocks are the legacy kinds only,
+ * with no lease handle-caching state; a Batch or Filter holder is reported by
+ * FsRtlCurrentBatchOplock, which its callers (fastfat rename) check as well.
+ */
 NTKRNLVISTAAPI
 BOOLEAN
 NTAPI
@@ -843,27 +804,12 @@ FsRtlCurrentOplockH(
     return FALSE;
 }
 
-NTKRNLVISTAAPI
-BOOLEAN
-NTAPI
-FsRtlAreThereCurrentOrInProgressFileLocks(
-    _In_ PFILE_LOCK FileLock)
-{
-    return FsRtlAreThereCurrentFileLocks(FileLock);
-}
-
-NTKRNLVISTAAPI
-VOID
-NTAPI
-CcCoherencyFlushAndPurgeCache(
-    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer,
-    _In_opt_ PLARGE_INTEGER FileOffset,
-    _In_ ULONG Length,
-    _Out_ PIO_STATUS_BLOCK IoStatus,
-    _In_opt_ ULONG Flags)
-{
-    CcFlushCache(SectionObjectPointer, FileOffset, Length, IoStatus);
-}
+/*
+ * CcCoherencyFlushAndPurgeCache now has a real implementation in the kernel
+ * (ntoskrnl/cc/api/ccflush.c) that flushes AND purges. The flush-only shim
+ * that used to live here is removed so the kernel symbol is the only one;
+ * drivers import it from the kernel. See AUDIT-R1-IO-CC-FS.md R2-A.1.
+ */
 
 NTKRNLVISTAAPI
 BOOLEAN

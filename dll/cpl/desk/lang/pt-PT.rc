@@ -84,7 +84,7 @@ CAPTION "Aspecto avançado"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL "", IDC_APPEARANCE_PREVIEW, "PreviewWndClass", WS_VISIBLE | WS_BORDER, 7, 7, 232, 120
-    LTEXT "Se seleccionar um tema que não seja o LiberNT classic, serão substituidas as seguintes definições, excepto em alguns programas mais antigos.", IDC_ADVAPPEARANCE_DISCLAIMER, 7, 133, 232, 30, BS_MULTILINE
+    LTEXT "Se seleccionar um tema que não seja o Orosi classic, serão substituidas as seguintes definições, excepto em alguns programas mais antigos.", IDC_ADVAPPEARANCE_DISCLAIMER, 7, 133, 232, 30, BS_MULTILINE
     LTEXT "&Item:", 8, 5, 160, 50, 9
     COMBOBOX IDC_ADVAPPEARANCE_ELEMENT, 5, 170, 130, 90, CBS_DROPDOWNLIST |
              CBS_HASSTRINGS | CBS_SORT | WS_VSCROLL | WS_TABSTOP
@@ -176,9 +176,8 @@ FONT 8, "MS Shell Dlg"
 BEGIN
     GROUPBOX "Visualização", -1, 7, 6, 237, 56, WS_GROUP
     //LTEXT "Se a resolução do ecrã tornar os items demasiado pequenos para ver confortavelmente, pode aumentar o valor ppp para compensar. Para alterar apenas o tamanho do tipo de letra, clique em ""Cancelar"" e vá até ao separador ""Aspecto"".", -1, 14, 20, 220, 45//FIXME: The whole dialog was relayouted by the pt-PT translator, and still this text doesn't fit. At least the current workaround is visually appealing. Nevertheless: Shrink the texts length! When done, try to live with the en-US dimensions and layout.
-    LTEXT "&Definição do valor ppp:", -1, 14, 20, 222, 9
-    COMBOBOX IDC_FONTSIZE_COMBO, 14, 30, 223, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT "", IDC_FONTSIZE_CUSTOM, 14, 46, 223, 12
+    LTEXT "", IDC_SCALE_CURRENT, 14, 20, 222, 9
+    PUSHBUTTON "Change in Settings...", IDC_SCALE_SETTINGS, 14, 34, 110, 14, WS_TABSTOP
     GROUPBOX "Compatibilidade", -1, 7, 67, 237, 100
     LTEXT "Alguns programas podem não funcionar correctamente se não reiniciar o computador após alterar as definições de visualização.\n\nApós alterar as definições de visualização:", -1, 12, 78, 228, 34
     AUTORADIOBUTTON "&Reiniciar o computador antes de aplicar as novas definições", IDC_RESTART_RB, 14, 116, 228, 10
@@ -307,4 +306,9 @@ BEGIN
     IDS_APPLY_FAILED "Falha ao aplicar as novas definições..."
     IDS_APPLY_NEEDS_RESTART "É necessário reiniciar o computador para aplicar as alterações."
     IDS_TIMEOUTTEXT "Reversão dentro de %d seconds."
+END
+
+STRINGTABLE
+BEGIN
+    IDS_SCALE_CURRENT "Scale: %u%%"
 END

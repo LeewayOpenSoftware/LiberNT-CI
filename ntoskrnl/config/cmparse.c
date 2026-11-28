@@ -70,7 +70,7 @@ CmpGetNextName(IN OUT PUNICODE_STRING RemainingName,
     return NameValid;
 }
 
-BOOLEAN
+NTSTATUS
 NTAPI
 CmpGetSymbolicLink(IN PHHIVE Hive,
                    IN OUT PUNICODE_STRING ObjectName,
@@ -84,13 +84,13 @@ CmpGetSymbolicLink(IN PHHIVE Hive,
     PWSTR NewBuffer;
     ULONG Length = 0;
     ULONG ValueLength = 0;
-    BOOLEAN Result = FALSE;
+    NTSTATUS Result = STATUS_OBJECT_NAME_NOT_FOUND;
     HCELL_INDEX CellToRelease = HCELL_NIL;
     PCM_KEY_NODE Node;
     UNICODE_STRING NewObjectName;
 
     /* Make sure we're not being deleted */
-    if (SymbolicKcb->Delete) return FALSE;
+    if (SymbolicKcb->Delete) return STATUS_OBJECT_NAME_NOT_FOUND;
 
     /* Get the key node */
     Node = (PCM_KEY_NODE)HvGetCell(SymbolicKcb->KeyHive, SymbolicKcb->KeyCell);
@@ -129,15 +129,23 @@ CmpGetSymbolicLink(IN PHHIVE Hive,
     /* Add the remaining name if needed */
     if (RemainingName) Length += RemainingName->Length + sizeof(WCHAR);
 
-    /* Check for overflow */
-    if (Length > 0xFFFF) goto Exit;
+    /* A target that makes the name too long is refused, not reported as missing */
+    if (Length > 0xFFFF)
+    {
+        Result = STATUS_INVALID_PARAMETER;
+        goto Exit;
+    }
 
     /* Check if we need a new buffer */
     if (Length > ObjectName->MaximumLength)
     {
         /* We do -- allocate one */
         NewBuffer = ExAllocatePoolWithTag(PagedPool, Length, TAG_CM);
-        if (!NewBuffer) goto Exit;
+        if (!NewBuffer)
+        {
+            Result = STATUS_INSUFFICIENT_RESOURCES;
+            goto Exit;
+        }
 
         /* Setup the new string and copy the symbolic target */
         NewObjectName.Buffer = NewBuffer;
@@ -180,7 +188,7 @@ CmpGetSymbolicLink(IN PHHIVE Hive,
 
     /* Null-terminate the whole thing */
     ObjectName->Buffer[ObjectName->Length / sizeof(WCHAR)] = UNICODE_NULL;
-    Result = TRUE;
+    Result = STATUS_SUCCESS;
 
 Exit:
     /* Free the link name */
@@ -314,10 +322,12 @@ CmpDoCreateChild(IN PHHIVE Hive,
     KeyBody = (PCM_KEY_BODY)(*Object);
     KeyBody->Type = CM_KEY_BODY_TYPE;
     KeyBody->NotifyClosed = FALSE;
+    KeyBody->NotifyBlock = NULL;
     KeyBody->KeyControlBlock = NULL;
     KeyBody->KcbLocked = FALSE;
     KeyBody->Trans.TransPtr = NULL;
     KeyBody->KtmUow = NULL;
+    KeyBody->ProcessID = PsGetCurrentProcessId();
     InitializeListHead(&KeyBody->ContextListHead);
 
     /* Check if we had a class */
@@ -384,8 +394,6 @@ CmpDoCreateChild(IN PHHIVE Hive,
     ASSERT(Kcb->RefCount == 1);
 
     /* Now fill out the Cm object */
-    KeyBody->NotifyBlock = NULL;
-    KeyBody->ProcessID = PsGetCurrentProcessId();
     KeyBody->KeyControlBlock = Kcb;
 
     /* Link it with the KCB */
@@ -486,6 +494,14 @@ CmpDoCreate(IN PHHIVE Hive,
         /* It has, quit */
         ASSERT(FALSE);
         Status = STATUS_OBJECT_NAME_NOT_FOUND;
+        goto Exit;
+    }
+
+    /* A key may be CMP_KEY_DEPTH_MAX levels deep, \Registry counted. Refuse
+       a deeper one here, before a cell is allocated for it */
+    if (ParentKcb->TotalLevels >= CMP_KEY_DEPTH_MAX)
+    {
+        Status = STATUS_INVALID_PARAMETER;
         goto Exit;
     }
 
@@ -1826,7 +1842,7 @@ CmpLookInCache(
  *
  * @return
  * Returns STATUS_SUCCESS if all the operations have succeeded without
- * problems. STATUS_NAME_TOO_LONG is returned if the key pathname has
+ * problems. STATUS_INVALID_PARAMETER is returned if the key pathname has
  * too many subkey levels (more than 32 levels deep). A failure NTSTATUS
  * code is returned otherwise. Refer to CmpLookInCache documentation
  * for more information about other returned status codes.
@@ -1869,9 +1885,10 @@ CmpBuildHashStackAndLookupCache(
     /* This key path has too many subkeys */
     if (SubkeysInTotal > CMP_SUBKEY_LEVELS_DEPTH_LIMIT)
     {
+        /* Windows refuses the 33rd component of one open or create with this status */
         DPRINT1("The key path has too many subkeys - %lu\n", SubkeysInTotal);
         *LockedKcbs = NULL;
-        return STATUS_NAME_TOO_LONG;
+        return STATUS_INVALID_PARAMETER;
     }
 
     /* Return hive and cell data */
@@ -2195,20 +2212,9 @@ CmpParseKey(IN PVOID ParseObject,
         CmpUnLockKcbArray(LockedKcbs);
         LockedKcbs = NULL;
 
-        /* Parse the symlink */
-        if (CmpGetSymbolicLink(Hive,
-                               CompleteName,
-                               Kcb,
-                               &Current))
-        {
-            /* Symlink parse succeeded */
-            Status = STATUS_REPARSE;
-        }
-        else
-        {
-            /* Couldn't find symlink */
-            Status = STATUS_OBJECT_NAME_NOT_FOUND;
-        }
+        /* Parse the symlink: a resolved link is reparsed, a missing or overlong target is its own failure */
+        Status = CmpGetSymbolicLink(Hive, CompleteName, Kcb, &Current);
+        if (NT_SUCCESS(Status)) Status = STATUS_REPARSE;
 
         /* We're done */
         goto Quickie;
@@ -2288,14 +2294,10 @@ KeyCachedOpenNow:
                             CmpUnLockKcbArray(LockedKcbs);
                             LockedKcbs = NULL;
 
-                            /* Parse the symlink */
-                            if (!CmpGetSymbolicLink(Hive,
-                                                    CompleteName,
-                                                    Kcb,
-                                                    NULL))
+                            /* Parse the symlink; its own failure, if any, is the result */
                             {
-                                /* Symlink parse failed */
-                                Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                                NTSTATUS LinkStatus = CmpGetSymbolicLink(Hive, CompleteName, Kcb, NULL);
+                                if (!NT_SUCCESS(LinkStatus)) Status = LinkStatus;
                             }
                         }
 
@@ -2418,20 +2420,9 @@ KeyCachedOpenNow:
                 CmpUnLockKcbArray(LockedKcbs);
                 LockedKcbs = NULL;
 
-                /* Parse the symlink */
-                if (CmpGetSymbolicLink(Hive,
-                                       CompleteName,
-                                       Kcb,
-                                       &Current))
-                {
-                    /* Symlink parse succeeded */
-                    Status = STATUS_REPARSE;
-                }
-                else
-                {
-                    /* Couldn't find symlink */
-                    Status = STATUS_OBJECT_NAME_NOT_FOUND;
-                }
+                /* Parse the symlink: a resolved link is reparsed, a missing or overlong target is its own failure */
+                Status = CmpGetSymbolicLink(Hive, CompleteName, Kcb, &Current);
+                if (NT_SUCCESS(Status)) Status = STATUS_REPARSE;
 
                 /* We're done */
                 break;

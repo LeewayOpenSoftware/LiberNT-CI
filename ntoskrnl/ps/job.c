@@ -2075,6 +2075,9 @@ PspQueryJobLimitInformation(
 {
     PKTHREAD CurrentThread = KeGetCurrentThread();
 
+    /* The whole structure is defined before it is filled */
+    RtlZeroMemory(ExtendedLimit, sizeof(*ExtendedLimit));
+
     /* Lock the job object */
     KeEnterGuardedRegionThread(CurrentThread);
     ExAcquireResourceSharedLite(&Job->JobLock, TRUE);
@@ -2109,9 +2112,6 @@ PspQueryJobLimitInformation(
 #else
         KeReleaseGuardedMutexUnsafe(&Job->MemoryLimitsLock);
 #endif
-
-        /* Zero out IoInfo to avoid kernel memory leaks */
-        RtlZeroMemory(&ExtendedLimit->IoInfo, sizeof(ExtendedLimit->IoInfo));
     }
 
     /* Release the job lock */

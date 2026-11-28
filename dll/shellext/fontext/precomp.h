@@ -26,8 +26,11 @@
 #include <shellutils.h>
 #include <ntquery.h>
 #include <propkey.h>
+#include <propsys.h>
+#include <thumbcache.h>
 
 extern const GUID CLSID_CFontExt;
+extern const GUID CLSID_CFontThumbnail;
 extern LONG g_ModuleRefCnt;
 
 typedef struct tagINSTALL_FONT_DATA
@@ -44,8 +47,10 @@ typedef struct tagINSTALL_FONT_DATA
 
 #include "resource.h"
 #include "fontpidl.hpp"
+#include "fontmeta.hpp"
 #include "CFontCache.hpp"
 #include "CFontExt.hpp"
+#include "CFontThumbnail.hpp"
 #include "CFontFolderViewCB.h"
 #include "CFontBackgroundMenu.h"
 
@@ -55,6 +60,14 @@ typedef struct tagINSTALL_FONT_DATA
 HRESULT _CEnumFonts_CreateInstance(CFontExt* zip, DWORD flags, REFIID riid, LPVOID* ppvOut);
 HRESULT _CDataObject_CreateInstance(PCIDLIST_ABSOLUTE folder, UINT cidl, PCUITEMID_CHILD_ARRAY apidl,
                                     REFIID riid, LPVOID* ppvOut);
+
+UINT FontTask_Count();
+CStringW FontTask_Title(UINT iTask);
+bool FontTask_Available(UINT iTask);
+HRESULT FontTask_Run(HWND hwnd, UINT iTask);
+HRESULT _CFontCommandProvider_Create(REFIID riid, LPVOID* ppvOut);
+HRESULT _CFontPaneVisibility_Create(REFIID riid, LPVOID* ppvOut);
+HRESULT _FontThumbnail_Create(PCWSTR pszPath, REFIID riid, LPVOID* ppvOut);
 
 inline BOOL IsFontDotExt(LPCWSTR pchDotExt)
 {

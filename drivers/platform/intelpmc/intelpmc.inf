@@ -35,6 +35,6 @@ ServiceBinary = %12%\intelpmc.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 IntelPmc.DeviceDesc = "Intel Power Management Controller"
-IntelPmc.ServiceDesc = "LiberNT Intel Power Management Controller Driver"
+IntelPmc.ServiceDesc = "Orosi Intel Power Management Controller Driver"

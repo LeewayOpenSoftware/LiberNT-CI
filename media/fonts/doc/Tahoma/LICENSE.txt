@@ -1,4 +1,4 @@
-tahoma.ttf Version 0.019 khmz
+tahoma.ttf Version 0.020 khmz
 tahomabd.ttf Version 0.021 khmz
 
 Fonts are based on (c) Bitstream (see below). Changes are in public domain.
@@ -99,3 +99,21 @@ be used in advertising or otherwise to promote the sale, use or other
 dealings in this Font Software without prior written authorization
 from Tavmjong Bah. For further information, contact: tavmjong @ free
 . fr.
+
+
+Wine's changes: GNU Lesser General Public License
+-------------------------------------------------
+
+tahoma.ttf and tahomabd.ttf are built from Wine's Tahoma (Copyright (c) 2004
+Larry Snyder, based on Bitstream Vera Sans Copyright (c) 2003 by Bitstream, Inc.).
+Their name table (ID 13) places Wine's changes under the GNU Lesser General
+Public License, version 2.1 or (at your option) any later version:
+
+  This library is free software; you can redistribute it and/or modify it
+  under the terms of the GNU Lesser General Public License as published by
+  the Free Software Foundation; either version 2.1 of the License, or (at
+  your option) any later version.
+
+The full text of the GNU Lesser General Public License, version 2.1, is in
+LGPL-2.1.txt next to this file. The Bitstream Vera Fonts licence above
+governs the base design.

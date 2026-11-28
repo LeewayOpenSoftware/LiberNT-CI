@@ -238,6 +238,22 @@ typedef struct _BINARY_BLOB_CREDENTIAL_INFO
 #define CREDUI_FLAGS_USERNAME_TARGET_CREDENTIALS    0x00080000
 #define CREDUI_FLAGS_KEEP_USERNAME                  0x00100000
 
+#define CREDUIWIN_GENERIC                           0x00000001
+#define CREDUIWIN_CHECKBOX                          0x00000002
+#define CREDUIWIN_AUTHPACKAGE_ONLY                  0x00000010
+#define CREDUIWIN_IN_CRED_ONLY                      0x00000020
+#define CREDUIWIN_USE_V2                            0x00000040
+#define CREDUIWIN_ENUMERATE_ADMINS                  0x00000100
+#define CREDUIWIN_ENUMERATE_CURRENT_USER            0x00000200
+#define CREDUIWIN_SECURE_PROMPT                     0x00001000
+#define CREDUIWIN_PREPROMPTING                      0x00002000
+#define CREDUIWIN_PACK_32_WOW                       0x10000000
+
+#define CRED_PACK_PROTECTED_CREDENTIALS             0x00000001
+#define CRED_PACK_WOW_BUFFER                        0x00000002
+#define CRED_PACK_GENERIC_CREDENTIALS               0x00000004
+#define CRED_PACK_ID_PROVIDER_CREDENTIALS           0x00000008
+
 /* flags for CredWrite and CredWriteDomainCredentials */
 #define CRED_PRESERVE_CREDENTIAL_BLOB               0x00000001
 
@@ -277,6 +293,64 @@ CredGetSessionTypes(
 WINADVAPI BOOL WINAPI CredIsMarshaledCredentialA(_In_ LPCSTR);
 WINADVAPI BOOL WINAPI CredIsMarshaledCredentialW(_In_ LPCWSTR);
 #define CredIsMarshaledCredential WINELIB_NAME_AW(CredIsMarshaledCredential)
+
+typedef enum _CRED_PROTECTION_TYPE
+{
+  CredUnprotected,
+  CredUserProtection,
+  CredTrustedProtection,
+  CredForSystemProtection
+} CRED_PROTECTION_TYPE, *PCRED_PROTECTION_TYPE;
+
+WINADVAPI
+BOOL
+WINAPI
+CredProtectA(
+  _In_ BOOL fAsSelf,
+  _In_reads_(cchCredentials) LPSTR pszCredentials,
+  _In_ DWORD cchCredentials,
+  _Out_writes_to_opt_(*pcchMaxChars, *pcchMaxChars) LPSTR pszProtectedCredentials,
+  _Inout_ DWORD *pcchMaxChars,
+  _Out_opt_ CRED_PROTECTION_TYPE *ProtectionType);
+
+WINADVAPI
+BOOL
+WINAPI
+CredProtectW(
+  _In_ BOOL fAsSelf,
+  _In_reads_(cchCredentials) LPWSTR pszCredentials,
+  _In_ DWORD cchCredentials,
+  _Out_writes_to_opt_(*pcchMaxChars, *pcchMaxChars) LPWSTR pszProtectedCredentials,
+  _Inout_ DWORD *pcchMaxChars,
+  _Out_opt_ CRED_PROTECTION_TYPE *ProtectionType);
+
+#define CredProtect WINELIB_NAME_AW(CredProtect)
+
+WINADVAPI
+BOOL
+WINAPI
+CredUnprotectA(
+  _In_ BOOL fAsSelf,
+  _In_reads_(cchProtectedCredentials) LPSTR pszProtectedCredentials,
+  _In_ DWORD cchProtectedCredentials,
+  _Out_writes_to_opt_(*pcchMaxChars, *pcchMaxChars) LPSTR pszCredentials,
+  _Inout_ DWORD *pcchMaxChars);
+
+WINADVAPI
+BOOL
+WINAPI
+CredUnprotectW(
+  _In_ BOOL fAsSelf,
+  _In_reads_(cchProtectedCredentials) LPWSTR pszProtectedCredentials,
+  _In_ DWORD cchProtectedCredentials,
+  _Out_writes_to_opt_(*pcchMaxChars, *pcchMaxChars) LPWSTR pszCredentials,
+  _Inout_ DWORD *pcchMaxChars);
+
+#define CredUnprotect WINELIB_NAME_AW(CredUnprotect)
+
+WINADVAPI BOOL WINAPI CredIsProtectedA(_In_ LPSTR pszProtectedCredentials, _Out_ CRED_PROTECTION_TYPE *pProtectionType);
+WINADVAPI BOOL WINAPI CredIsProtectedW(_In_ LPWSTR pszProtectedCredentials, _Out_ CRED_PROTECTION_TYPE *pProtectionType);
+#define CredIsProtected WINELIB_NAME_AW(CredIsProtected)
 
 WINADVAPI
 BOOL

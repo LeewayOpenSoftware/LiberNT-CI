@@ -42,8 +42,15 @@ QueryBinding(PIRP Irp, PIO_STACK_LOCATION IrpSp)
     ULONG i;
     ULONG BytesCopied = 0;
 
+    /* The answer is written over the request and is copied to the caller
+     * for the length reported, so it must fit both buffers */
+    if (BindingLength > IrpSp->Parameters.DeviceIoControl.OutputBufferLength)
+        BindingLength = IrpSp->Parameters.DeviceIoControl.OutputBufferLength;
+
     if (QueryBinding && BindingLength >= sizeof(NDISUIO_QUERY_BINDING))
     {
+        /* The adapter can be unbound and freed as soon as the list lock is
+         * released, so its name is copied with the lock held */
         KeAcquireSpinLock(&GlobalAdapterListLock, &OldIrql);
         i = 0;
         CurrentEntry = GlobalAdapterList.Flink;
@@ -57,10 +64,8 @@ QueryBinding(PIRP Irp, PIO_STACK_LOCATION IrpSp)
             i++;
             CurrentEntry = CurrentEntry->Flink;
         }
-        KeReleaseSpinLock(&GlobalAdapterListLock, OldIrql);
         if (AdapterContext)
         {
-            DPRINT("Query binding for index %d is adapter %wZ\n", i, &AdapterContext->DeviceName);
             BytesCopied = sizeof(NDISUIO_QUERY_BINDING);
             if (AdapterContext->DeviceName.Length <= BindingLength - BytesCopied)
             {
@@ -89,6 +94,7 @@ QueryBinding(PIRP Irp, PIO_STACK_LOCATION IrpSp)
             /* Invalid index */
             Status = STATUS_NO_MORE_ENTRIES;
         }
+        KeReleaseSpinLock(&GlobalAdapterListLock, OldIrql);
     }
     else
     {
@@ -143,9 +149,8 @@ CancelPacketRead(PIRP Irp, PIO_STACK_LOCATION IrpSp)
 
 static
 NTSTATUS
-SetAdapterOid(PIRP Irp, PIO_STACK_LOCATION IrpSp)
+SetAdapterOid(PNDISUIO_ADAPTER_CONTEXT AdapterContext, PIRP Irp, PIO_STACK_LOCATION IrpSp)
 {
-    PNDISUIO_ADAPTER_CONTEXT AdapterContext = IrpSp->FileObject->FsContext;
     PNDISUIO_SET_OID SetOidRequest;
     NDISUIO_REQUEST UioRequest;
     PNDIS_OID_REQUEST Request = &UioRequest.Request;
@@ -186,7 +191,13 @@ SetAdapterOid(PIRP Irp, PIO_STACK_LOCATION IrpSp)
         }
         else if (Status == NDIS_STATUS_SUCCESS)
         {
-            Irp->IoStatus.Information = sizeof(NDIS_OID) + Request->DATA.SET_INFORMATION.BytesRead;
+            /* The request buffer is copied back to the caller for the length
+             * reported here, so it is limited to what the caller can take and
+             * to what the request holds */
+            Irp->IoStatus.Information = sizeof(NDIS_OID) +
+                min(Request->DATA.SET_INFORMATION.BytesRead, RequestLength - sizeof(NDIS_OID));
+            if (Irp->IoStatus.Information > IrpSp->Parameters.DeviceIoControl.OutputBufferLength)
+                Irp->IoStatus.Information = IrpSp->Parameters.DeviceIoControl.OutputBufferLength;
         }
 
         DPRINT("Final request status: 0x%x (%d)\n", Status, Irp->IoStatus.Information);
@@ -206,9 +217,8 @@ SetAdapterOid(PIRP Irp, PIO_STACK_LOCATION IrpSp)
 
 static
 NTSTATUS
-QueryAdapterOid(PIRP Irp, PIO_STACK_LOCATION IrpSp)
+QueryAdapterOid(PNDISUIO_ADAPTER_CONTEXT AdapterContext, PIRP Irp, PIO_STACK_LOCATION IrpSp)
 {
-    PNDISUIO_ADAPTER_CONTEXT AdapterContext = IrpSp->FileObject->FsContext;
     PNDISUIO_QUERY_OID QueryOidRequest;
     NDISUIO_REQUEST UioRequest;
     PNDIS_OID_REQUEST Request = &UioRequest.Request;
@@ -219,6 +229,13 @@ QueryAdapterOid(PIRP Irp, PIO_STACK_LOCATION IrpSp)
 
     QueryOidRequest = Irp->AssociatedIrp.SystemBuffer;
     RequestLength = IrpSp->Parameters.DeviceIoControl.InputBufferLength;
+
+    /* The answer is written over the request and is copied to the caller
+     * for the length reported, so the adapter is given only the room that
+     * both buffers have */
+    if (RequestLength > IrpSp->Parameters.DeviceIoControl.OutputBufferLength)
+        RequestLength = IrpSp->Parameters.DeviceIoControl.OutputBufferLength;
+
     if (QueryOidRequest && RequestLength >= sizeof(NDIS_OID))
     {
         /* Setup the NDIS request */
@@ -249,7 +266,8 @@ QueryAdapterOid(PIRP Irp, PIO_STACK_LOCATION IrpSp)
         }
         else if (Status == NDIS_STATUS_SUCCESS)
         {
-            Irp->IoStatus.Information = sizeof(NDIS_OID) + Request->DATA.QUERY_INFORMATION.BytesWritten;
+            Irp->IoStatus.Information = sizeof(NDIS_OID) +
+                min(Request->DATA.QUERY_INFORMATION.BytesWritten, RequestLength - sizeof(NDIS_OID));
         }
 
         DPRINT("Final request status: 0x%x (%d)\n", Status, Irp->IoStatus.Information);
@@ -267,6 +285,34 @@ QueryAdapterOid(PIRP Irp, PIO_STACK_LOCATION IrpSp)
     return Status;
 }
 
+/* Compares two adapter names without regard to the case of the letters A to Z.
+ * It runs with the adapter list lock held, where the string routines of the
+ * system, which use the case tables, must not be called. */
+static
+BOOLEAN
+NduEqualAdapterName(PCUNICODE_STRING Name1, PCUNICODE_STRING Name2)
+{
+    USHORT i;
+    WCHAR Char1, Char2;
+
+    if (Name1->Length != Name2->Length)
+        return FALSE;
+
+    for (i = 0; i < Name1->Length / sizeof(WCHAR); i++)
+    {
+        Char1 = Name1->Buffer[i];
+        Char2 = Name2->Buffer[i];
+        if (Char1 >= L'a' && Char1 <= L'z')
+            Char1 -= L'a' - L'A';
+        if (Char2 >= L'a' && Char2 <= L'z')
+            Char2 -= L'a' - L'A';
+        if (Char1 != Char2)
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
 static
 NTSTATUS
 OpenDeviceReadWrite(PIRP Irp, PIO_STACK_LOCATION IrpSp)
@@ -275,75 +321,73 @@ OpenDeviceReadWrite(PIRP Irp, PIO_STACK_LOCATION IrpSp)
     UNICODE_STRING DeviceName;
     ULONG NameLength;
     NTSTATUS Status;
-    PNDISUIO_ADAPTER_CONTEXT AdapterContext;
+    PNDISUIO_ADAPTER_CONTEXT AdapterContext = NULL;
     PNDISUIO_OPEN_ENTRY OpenEntry;
+    PLIST_ENTRY CurrentEntry;
     KIRQL OldIrql;
 
-    NameLength = IrpSp->Parameters.DeviceIoControl.InputBufferLength;
-    if (NameLength != 0)
+    NameLength = IrpSp->Parameters.DeviceIoControl.InputBufferLength & ~(sizeof(WCHAR) - 1);
+    if (NameLength != 0 && NameLength <= UNICODE_STRING_MAX_BYTES)
     {
-        DeviceName.MaximumLength = DeviceName.Length = NameLength;
+        DeviceName.MaximumLength = DeviceName.Length = (USHORT)NameLength;
         DeviceName.Buffer = Irp->AssociatedIrp.SystemBuffer;
 
-        /* Check if this already has a context */
-        AdapterContext = FindAdapterContextByName(&DeviceName);
-        if (AdapterContext != NULL)
+        OpenEntry = ExAllocatePool(NonPagedPool, sizeof(*OpenEntry));
+        if (OpenEntry)
         {
-            DPRINT("Binding file object 0x%x to device %wZ\n", FileObject, &AdapterContext->DeviceName);
+            /* Set the file object pointer */
+            OpenEntry->FileObject = FileObject;
 
-            /* Reference the adapter context */
-            KeAcquireSpinLock(&AdapterContext->Spinlock, &OldIrql);
-            if (AdapterContext->OpenCount != 0)
+            /* Set the permissions */
+            OpenEntry->WriteOnly = FALSE;
+
+            /* The adapter is looked up and the file object is associated
+             * with it under the list lock, so an unbind sees both or none */
+            KeAcquireSpinLock(&GlobalAdapterListLock, &OldIrql);
+            CurrentEntry = GlobalAdapterList.Flink;
+            while (CurrentEntry != &GlobalAdapterList)
             {
+                AdapterContext = CONTAINING_RECORD(CurrentEntry, NDISUIO_ADAPTER_CONTEXT, ListEntry);
+                if (NduEqualAdapterName(&AdapterContext->DeviceName, &DeviceName))
+                    break;
+
+                AdapterContext = NULL;
+                CurrentEntry = CurrentEntry->Flink;
+            }
+
+            Status = STATUS_INVALID_PARAMETER;
+            if (AdapterContext != NULL && FileObject->FsContext == NULL)
+            {
+                KeAcquireSpinLockAtDpcLevel(&AdapterContext->Spinlock);
+
                 /* An open for read-write is exclusive,
                  * so we can't have any other open handles */
-                KeReleaseSpinLock(&AdapterContext->Spinlock, OldIrql);
-                Status = STATUS_INVALID_PARAMETER;
+                if (AdapterContext->OpenCount == 0)
+                {
+                    /* Add a reference */
+                    ReferenceAdapterContext(AdapterContext);
+
+                    /* Associate this FO with the adapter */
+                    FileObject->FsContext = AdapterContext;
+                    FileObject->FsContext2 = OpenEntry;
+
+                    /* Add it to the adapter's list */
+                    InsertTailList(&AdapterContext->OpenEntryList,
+                                   &OpenEntry->ListEntry);
+
+                    Status = STATUS_SUCCESS;
+                }
+
+                KeReleaseSpinLockFromDpcLevel(&AdapterContext->Spinlock);
             }
-            else
-            {
-                /* Add a reference */
-                ReferenceAdapterContext(AdapterContext);
-                Status = STATUS_SUCCESS;
-            }
+            KeReleaseSpinLock(&GlobalAdapterListLock, OldIrql);
+
+            if (!NT_SUCCESS(Status))
+                ExFreePool(OpenEntry);
         }
         else
         {
-            /* Invalid device name */
-            Status = STATUS_INVALID_PARAMETER;
-        }
-
-        /* Check that the bind succeeded */
-        if (NT_SUCCESS(Status))
-        {
-            OpenEntry = ExAllocatePool(NonPagedPool, sizeof(*OpenEntry));
-            if (OpenEntry)
-            {
-                /* Set the file object pointer */
-                OpenEntry->FileObject = FileObject;
-
-                /* Set the permissions */
-                OpenEntry->WriteOnly = FALSE;
-
-                /* Associate this FO with the adapter */
-                FileObject->FsContext = AdapterContext;
-                FileObject->FsContext2 = OpenEntry;
-
-                /* Add it to the adapter's list */
-                InsertTailList(&AdapterContext->OpenEntryList,
-                               &OpenEntry->ListEntry);
-
-                /* Success */
-                KeReleaseSpinLock(&AdapterContext->Spinlock, OldIrql);
-                Status = STATUS_SUCCESS;
-            }
-            else
-            {
-                /* Remove the reference we added */
-                KeReleaseSpinLock(&AdapterContext->Spinlock, OldIrql);
-                DereferenceAdapterContextWithOpenEntry(AdapterContext, NULL);
-                Status = STATUS_NO_MEMORY;
-            }
+            Status = STATUS_NO_MEMORY;
         }
     }
     else
@@ -448,7 +492,9 @@ NduDispatchDeviceControl(PDEVICE_OBJECT DeviceObject,
                          PIRP Irp)
 {
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
-    PNDISUIO_OPEN_ENTRY OpenEntry;
+    PNDISUIO_ADAPTER_CONTEXT AdapterContext;
+    BOOLEAN WriteOnly = FALSE;
+    NTSTATUS Status;
 
     ASSERT(DeviceObject == GlobalDeviceObject);
 
@@ -468,8 +514,10 @@ NduDispatchDeviceControl(PDEVICE_OBJECT DeviceObject,
             return QueryBinding(Irp, IrpSp);
 
         default:
-            /* Fail if this file object has no adapter associated */
-            if (IrpSp->FileObject->FsContext == NULL)
+            /* Fail if this file object has no adapter associated. The
+             * adapter stays until the request is done. */
+            AdapterContext = NduBeginIo(IrpSp->FileObject, &WriteOnly);
+            if (AdapterContext == NULL)
             {
                 Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
                 Irp->IoStatus.Information = 0;
@@ -478,42 +526,37 @@ NduDispatchDeviceControl(PDEVICE_OBJECT DeviceObject,
                 return STATUS_INVALID_PARAMETER;
             }
 
-            /* Now handle write IOCTLs */
             switch (IrpSp->Parameters.DeviceIoControl.IoControlCode)
             {
+                /* Write IOCTLs */
                 case IOCTL_NDISUIO_SET_OID_VALUE:
-                    return SetAdapterOid(Irp, IrpSp);
+                    Status = SetAdapterOid(AdapterContext, Irp, IrpSp);
+                    break;
+
+                /* Read IOCTLs need read permissions */
+                case IOCTL_NDISUIO_QUERY_OID_VALUE:
+                    if (!WriteOnly)
+                    {
+                        Status = QueryAdapterOid(AdapterContext, Irp, IrpSp);
+                        break;
+                    }
+
+                    Status = STATUS_INVALID_PARAMETER;
+                    Irp->IoStatus.Status = Status;
+                    Irp->IoStatus.Information = 0;
+                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    break;
 
                 default:
-                    /* Check that we have read permissions */
-                    OpenEntry = IrpSp->FileObject->FsContext2;
-                    if (OpenEntry->WriteOnly)
-                    {
-                        Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
-                        Irp->IoStatus.Information = 0;
-                        IoCompleteRequest(Irp, IO_NO_INCREMENT);
-
-                        return STATUS_INVALID_PARAMETER;
-                    }
-
-                    switch (IrpSp->Parameters.DeviceIoControl.IoControlCode)
-                    {
-#if 0
-                        case IOCTL_CANCEL_READ:
-                            return CancelPacketRead(Irp, IrpSp);
-#endif
-
-                        case IOCTL_NDISUIO_QUERY_OID_VALUE:
-                            return QueryAdapterOid(Irp, IrpSp);
-
-                        default:
-                            DPRINT1("Unimplemented\n");
-                            Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
-                            Irp->IoStatus.Information = 0;
-                            IoCompleteRequest(Irp, IO_NO_INCREMENT);
-                            return STATUS_NOT_IMPLEMENTED;
-                    }
+                    DPRINT1("Unimplemented\n");
+                    Status = WriteOnly ? STATUS_INVALID_PARAMETER : STATUS_NOT_IMPLEMENTED;
+                    Irp->IoStatus.Status = Status;
+                    Irp->IoStatus.Information = 0;
+                    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                    break;
             }
-            break;
+
+            NduEndIo(AdapterContext);
+            return Status;
     }
 }

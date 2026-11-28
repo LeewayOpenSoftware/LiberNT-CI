@@ -27,7 +27,7 @@ BEGIN
     IDS_CLOSE_TAB               "Close tab"
     IDS_CLOSE_OTHER_TABS        "Close other tabs"
     IDS_CLOSE_TABS_RIGHT        "Close tabs to the right"
-    IDS_COPYRIGHT               "(C) Copyright 2026 LiberNT Team."
+    IDS_COPYRIGHT               "(c) Leeway Open Software. All rights reserved."
     IDS_VERSION_LINE            "Version 1.0"
     IDS_DESCRIPTION             "A tabbed terminal for the command prompt, PowerShell and Linux shells."
     IDS_COPY                    "Copy"

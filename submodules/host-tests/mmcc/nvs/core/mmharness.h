@@ -31,6 +31,8 @@ typedef struct _TEST_PAGEFILE
     PMI_RWLOCK ProbeLock;
     volatile LONG IoUnderLock;
     volatile LONG WriteCalls;
+    void (*AfterWrite)(PVOID Context);
+    PVOID AfterWriteContext;
 } TEST_PAGEFILE;
 
 typedef struct _TEST_FILE
@@ -107,6 +109,7 @@ void TestWriteback(void);
 void TestNtPaging(void);
 void TestAsync(void);
 void TestSys(void);
+void TestGuard(void);
 void TestProcess(void);
 void TestHighMem(void);
 void TestLxMm(void);

@@ -101,6 +101,10 @@ typedef struct
     DWORD                  server_pid; /* id of server process */
     HANDLE                 event; /* cached event handle */
     IID                    iid; /* IID of the proxy this belongs to */
+#ifdef __REACTOS__
+    DWORD                  imp_level;
+    CRITICAL_SECTION       blanket_cs; /* orders blanket changes against binding use */
+#endif
 } ClientRpcChannelBuffer;
 
 struct dispatch_params
@@ -114,7 +118,75 @@ struct dispatch_params
     BOOL               bypass_rpcrt; /* bypass RPC runtime? */
     RPC_STATUS         status; /* status (out) */
     HRESULT            hr; /* hresult (out) */
+#ifdef __REACTOS__
+    DWORD              imp_level;
+    struct call_flight *flight; /* abandonable copy this call runs on, if any */
+#endif
 };
+
+#ifdef __REACTOS__
+/* A cancelable outgoing call runs on its own copy of the message, so that the caller can
+   abandon it; whoever finishes last frees it */
+struct call_flight
+{
+    LONG refs;
+    BOOL abandoned;
+    RPCOLEMESSAGE msg;
+    struct dispatch_params params;
+    IRpcChannelBuffer *chan; /* keeps the binding alive */
+};
+
+static struct call_flight *call_flight_create(IRpcChannelBuffer *chan, struct dispatch_params *params,
+        const RPCOLEMESSAGE *msg)
+{
+    struct call_flight *flight;
+
+    if (!(flight = calloc(1, sizeof(*flight))))
+        return NULL;
+    if (!(flight->params.handle = CreateEventW(NULL, FALSE, FALSE, NULL)))
+    {
+        free(flight);
+        return NULL;
+    }
+    flight->refs = 2; /* caller and executor */
+    flight->msg = *msg;
+    flight->params.msg = &flight->msg;
+    flight->params.stub = params->stub;
+    flight->params.chan = params->chan;
+    flight->params.iid = params->iid;
+    flight->params.iface = params->iface;
+    flight->params.bypass_rpcrt = params->bypass_rpcrt;
+    flight->params.imp_level = params->imp_level;
+    flight->params.flight = flight;
+    /* the stub and its channel now belong to the flight */
+    params->stub = NULL;
+    params->chan = NULL;
+    flight->chan = chan;
+    IRpcChannelBuffer_AddRef(chan);
+    return flight;
+}
+
+static void call_flight_release(struct call_flight *flight)
+{
+    if (InterlockedDecrement(&flight->refs))
+        return;
+    if (flight->abandoned)
+    {
+        if (flight->params.bypass_rpcrt)
+            free(flight->msg.Buffer);
+        else
+            I_RpcFreeBuffer((RPC_MESSAGE *)&flight->msg);
+        free(((RPC_MESSAGE *)&flight->msg)->RpcInterfaceInformation);
+    }
+    if (flight->params.stub)
+        IRpcStubBuffer_Release(flight->params.stub);
+    if (flight->params.chan)
+        IRpcChannelBuffer_Release(flight->params.chan);
+    CloseHandle(flight->params.handle);
+    IRpcChannelBuffer_Release(flight->chan);
+    free(flight);
+}
+#endif
 
 struct message_state
 {
@@ -128,6 +200,7 @@ struct message_state
     DWORD target_tid;
 #ifdef __REACTOS__
     OXID target_oxid;
+    BOOL neutral;
 #endif
     struct dispatch_params params;
 };
@@ -686,6 +759,23 @@ HRESULT rpc_get_local_class_object(REFCLSID rclsid, REFIID riid, void **obj)
                 return hr;
         }
 
+#ifdef __REACTOS__
+        /* Ask again as soon as the server may have registered instead of after a whole second */
+        wait_handle = process ? process : CreateEventW(NULL, TRUE, FALSE, NULL);
+        start_ticks = GetTickCount();
+        do
+        {
+            if (SUCCEEDED(CoWaitForMultipleHandles(0, 10, (wait_handle != 0), &wait_handle, &index)) && process && !index)
+            {
+                WARN("Server for %s failed to start.\n", debugstr_guid(rclsid));
+                CloseHandle(process);
+                return E_NOINTERFACE;
+            }
+        } while (GetTickCount() - start_ticks < 1000 && FAILED(hr = rpcss_get_class_object(rclsid, &objref)));
+
+        if (wait_handle) CloseHandle(wait_handle);
+        if (objref) break;
+#else
         /* Wait for one second, even if messages arrive. */
         wait_handle = process ? process : CreateEventW(NULL, TRUE, FALSE, NULL);
         start_ticks = GetTickCount();
@@ -700,6 +790,7 @@ HRESULT rpc_get_local_class_object(REFCLSID rclsid, REFIID riid, void **obj)
         } while (GetTickCount() - start_ticks < 1000);
 
         if (wait_handle) CloseHandle(wait_handle);
+#endif
     }
 
     if (!objref || tries >= MAXTRIES)
@@ -1155,6 +1246,9 @@ static ULONG WINAPI ClientRpcChannelBuffer_Release(LPRPCCHANNELBUFFER iface)
 
     if (This->event) CloseHandle(This->event);
     RpcBindingFree(&This->bind);
+#ifdef __REACTOS__
+    DeleteCriticalSection(&This->blanket_cs);
+#endif
     free(This);
     return 0;
 }
@@ -1323,6 +1417,7 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
     message_state->target_tid = 0;
 #ifdef __REACTOS__
     message_state->target_oxid = 0;
+    message_state->neutral = FALSE;
 #endif
     memset(&message_state->params, 0, sizeof(message_state->params));
 
@@ -1344,6 +1439,17 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
                                   &message_state->params.iface);
     if (hr == S_OK)
     {
+#ifdef __REACTOS__
+        /* a call into the neutral apartment runs on the calling thread */
+        if (apt->neutral)
+        {
+            message_state->params.bypass_rpcrt = TRUE;
+            message_state->params.imp_level = This->imp_level != RPC_C_IMP_LEVEL_DEFAULT ? This->imp_level : com_default_imp_level;
+            message_state->target_oxid = apartment_getoxid(apt);
+            message_state->neutral = TRUE;
+        }
+        else
+#endif
         /* stub, chan, iface and iid are unneeded in multi-threaded case as we go
          * via the RPC runtime */
         if (apt->multi_threaded)
@@ -1357,6 +1463,9 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
         else
         {
             message_state->params.bypass_rpcrt = TRUE;
+#ifdef __REACTOS__
+            message_state->params.imp_level = This->imp_level != RPC_C_IMP_LEVEL_DEFAULT ? This->imp_level : com_default_imp_level;
+#endif
             message_state->target_hwnd = apartment_getwindow(apt);
             message_state->target_tid = apt->tid;
 #ifdef __REACTOS__
@@ -1374,7 +1483,11 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
      * ClientRpcChannelBuffer_SendReceive */
 
     /* shortcut the RPC runtime */
+#ifdef __REACTOS__
+    if (message_state->target_hwnd || message_state->neutral)
+#else
     if (message_state->target_hwnd)
+#endif
     {
         msg->Buffer = malloc(msg->BufferLength);
         if (msg->Buffer)
@@ -1382,6 +1495,14 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
         else
             status = ERROR_OUTOFMEMORY;
     }
+#ifdef __REACTOS__
+    else if (com_call_security_enabled())
+    {
+        EnterCriticalSection(&This->blanket_cs);
+        status = I_RpcGetBuffer(msg);
+        LeaveCriticalSection(&This->blanket_cs);
+    }
+#endif
     else
         status = I_RpcGetBuffer(msg);
 
@@ -1465,9 +1586,37 @@ static DWORD WINAPI rpc_sendreceive_thread(LPVOID param)
     TRACE("completed with status %#lx\n", data->status);
 
     SetEvent(data->handle);
+#ifdef __REACTOS__
+    if (data->flight)
+        call_flight_release(data->flight);
+#endif
 
     return 0;
 }
+
+#ifdef __REACTOS__
+/* Waits for the call; a canceled call gets the caller's timeout before it is abandoned */
+static HRESULT client_wait_for_call(struct tlsdata *tlsdata, HANDLE done, struct call_cancel *cancel)
+{
+    HANDLE handles[2] = { done, callctl_client_event(cancel) };
+    DWORD index;
+    HRESULT hr;
+
+    if (!WaitForSingleObject(done, 0))
+        return S_OK;
+
+    tlsdata->pending_call_count_client++;
+    hr = CoWaitForMultipleHandles(0, INFINITE, handles[1] ? 2 : 1, handles, &index);
+    if (hr == S_OK && index == 1)
+    {
+        hr = CoWaitForMultipleHandles(0, callctl_client_timeout(cancel), 1, &done, &index);
+        if (hr == RPC_S_CALLPENDING)
+            hr = RPC_E_CALL_CANCELED;
+    }
+    tlsdata->pending_call_count_client--;
+    return hr;
+}
+#endif
 
 static inline HRESULT ClientRpcChannelBuffer_IsCorrectApartment(ClientRpcChannelBuffer *This, const struct apartment *apt)
 {
@@ -1484,7 +1633,9 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
     HRESULT hr;
     RPC_MESSAGE *msg = (RPC_MESSAGE *)olemsg;
     RPC_STATUS status;
+#ifndef __REACTOS__
     DWORD index;
+#endif
     struct message_state *message_state;
     ORPCTHAT orpcthat;
     ORPC_EXTENT_ARRAY orpc_ext_array;
@@ -1492,6 +1643,11 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
     HRESULT hrFault = S_OK;
     struct apartment *apt = apartment_get_current_or_mta();
     struct tlsdata *tlsdata;
+#ifdef __REACTOS__
+    struct dispatch_params *params;
+    struct call_cancel *cancel;
+    struct call_flight *flight = NULL;
+#endif
 
     TRACE("%p, iMethod %ld\n", olemsg, olemsg->iMethod);
 
@@ -1539,6 +1695,18 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
      * from DllMain */
 
     message_state->params.msg = olemsg;
+#ifdef __REACTOS__
+    params = &message_state->params;
+    cancel = callctl_client_begin(tlsdata);
+    if (callctl_client_event(cancel))
+    {
+        if (params->bypass_rpcrt)
+            msg->ProcNum &= ~RPC_FLAGS_VALID_BIT;
+        /* without a copy the call stays cancelable for the server, but is waited for */
+        if ((flight = call_flight_create(iface, params, olemsg)))
+            params = &flight->params;
+    }
+#endif
     if (message_state->params.bypass_rpcrt)
     {
 #ifdef __REACTOS__
@@ -1550,17 +1718,40 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
         msg->ProcNum &= ~RPC_FLAGS_VALID_BIT;
 
 #ifdef __REACTOS__
-        target_apt = apartment_findfromoxid(message_state->target_oxid);
-        if (target_apt)
+        if (message_state->neutral)
+        {
+            struct neutral_frame frame;
+
+            if (SUCCEEDED(hr = neutral_enter(&frame)))
+            {
+                rpc_execute_call(params);
+                neutral_leave(&frame);
+            }
+            posted = SUCCEEDED(hr);
+        }
+        else if (message_state->target_tid == GetCurrentThreadId() && neutral_is_outer(message_state->target_oxid))
+        {
+            struct neutral_frame saved;
+
+            neutral_suspend(&saved);
+            rpc_execute_call(params);
+            neutral_resume(&saved);
+            posted = TRUE;
+        }
+        else if ((target_apt = apartment_findfromoxid(message_state->target_oxid)))
         {
             EnterCriticalSection(&target_apt->cs);
             posted = !target_apt->leaving &&
-                     PostMessageW(message_state->target_hwnd, DM_EXECUTERPC, 0, (LPARAM)&message_state->params);
+                     PostMessageW(message_state->target_hwnd, DM_EXECUTERPC, 0, (LPARAM)params);
             LeaveCriticalSection(&target_apt->cs);
             apartment_release(target_apt);
         }
         if (!posted)
+        {
             hr = RPC_E_DISCONNECTED;
+            if (flight)
+                call_flight_release(flight);
+        }
 #else
         if (!PostMessageW(message_state->target_hwnd, DM_EXECUTERPC, 0,
                           (LPARAM)&message_state->params))
@@ -1582,10 +1773,18 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
          * and re-enter this STA from an incoming server thread will
          * deadlock. InstallShield is an example of that.
          */
+#ifdef __REACTOS__
+        if (!QueueUserWorkItem(rpc_sendreceive_thread, params, WT_EXECUTEDEFAULT))
+#else
         if (!QueueUserWorkItem(rpc_sendreceive_thread, &message_state->params, WT_EXECUTEDEFAULT))
+#endif
         {
             ERR("QueueUserWorkItem failed with error %lu\n", GetLastError());
             hr = E_UNEXPECTED;
+#ifdef __REACTOS__
+            if (flight)
+                call_flight_release(flight);
+#endif
         }
         else
             hr = S_OK;
@@ -1593,14 +1792,39 @@ static HRESULT WINAPI ClientRpcChannelBuffer_SendReceive(LPRPCCHANNELBUFFER ifac
 
     if (hr == S_OK)
     {
+#ifdef __REACTOS__
+        hr = client_wait_for_call(tlsdata, params->handle, flight ? cancel : NULL);
+#else
         if (WaitForSingleObject(message_state->params.handle, 0))
         {
             tlsdata->pending_call_count_client++;
             hr = CoWaitForMultipleHandles(0, INFINITE, 1, &message_state->params.handle, &index);
             tlsdata->pending_call_count_client--;
         }
+#endif
     }
     ClientRpcChannelBuffer_ReleaseEventHandle(This, message_state->params.handle);
+#ifdef __REACTOS__
+    if (flight)
+    {
+        if (hr == S_OK)
+        {
+            *olemsg = flight->msg;
+            message_state->params.hr = flight->params.hr;
+            message_state->params.status = flight->params.status;
+        }
+        else
+        {
+            /* abandoned or never sent: the buffers and interface information go with the flight */
+            flight->abandoned = TRUE;
+            msg->Buffer = NULL;
+            msg->BufferLength = 0;
+            msg->RpcInterfaceInformation = NULL;
+        }
+        call_flight_release(flight);
+    }
+    callctl_client_end(cancel);
+#endif
 
     /* for WM shortcut, faults are returned in params->hr */
     if (hr == S_OK)
@@ -1710,6 +1934,11 @@ static HRESULT WINAPI ClientRpcChannelBuffer_FreeBuffer(LPRPCCHANNELBUFFER iface
     msg->Buffer = (char *)msg->Buffer - message_state->prefix_data_len;
     msg->BufferLength += message_state->prefix_data_len;
 
+#ifdef __REACTOS__
+    if (!msg->Buffer)
+        status = RPC_S_OK;
+    else
+#endif
     if (message_state->params.bypass_rpcrt)
     {
         free(msg->Buffer);
@@ -1786,6 +2015,37 @@ static const IRpcChannelBufferVtbl ServerRpcChannelBufferVtbl =
     RpcChannelBuffer_IsConnected
 };
 
+#ifdef __REACTOS__
+static RPC_STATUS client_channel_apply_blanket(ClientRpcChannelBuffer *This)
+{
+    RPC_SECURITY_QOS qos;
+
+    qos.Version = RPC_C_SECURITY_QOS_VERSION;
+    qos.Capabilities = RPC_C_QOS_CAPABILITIES_DEFAULT;
+    qos.IdentityTracking = RPC_C_QOS_IDENTITY_STATIC;
+    qos.ImpersonationType = This->imp_level != RPC_C_IMP_LEVEL_DEFAULT ? This->imp_level : com_default_imp_level;
+    if (qos.ImpersonationType == RPC_C_IMP_LEVEL_DEFAULT)
+        qos.ImpersonationType = RPC_C_IMP_LEVEL_IDENTIFY;
+    return RpcBindingSetAuthInfoExW(This->bind, NULL, RPC_C_AUTHN_LEVEL_NONE, RPC_C_AUTHN_NONE, NULL, 0, &qos);
+}
+
+HRESULT rpc_channel_set_imp_level(IRpcChannelBuffer *chan, DWORD imp_level)
+{
+    ClientRpcChannelBuffer *This = (ClientRpcChannelBuffer *)chan;
+    RPC_STATUS status;
+
+    if (!chan || chan->lpVtbl != &ClientRpcChannelBufferVtbl)
+        return S_OK;
+    This->imp_level = imp_level;
+    if (!com_call_security_enabled())
+        return S_OK;
+    EnterCriticalSection(&This->blanket_cs);
+    status = client_channel_apply_blanket(This);
+    LeaveCriticalSection(&This->blanket_cs);
+    return status == RPC_S_OK ? S_OK : HRESULT_FROM_WIN32(status);
+}
+#endif
+
 /* returns a channel buffer for proxies */
 HRESULT rpc_create_clientchannel(const OXID *oxid, const IPID *ipid,
                                 const OXID_INFO *oxid_info, const IID *iid,
@@ -1848,6 +2108,12 @@ HRESULT rpc_create_clientchannel(const OXID *oxid, const IPID *ipid,
     This->server_pid = oxid_info->dwPid;
     This->event = NULL;
     This->iid = *iid;
+#ifdef __REACTOS__
+    This->imp_level = RPC_C_IMP_LEVEL_DEFAULT;
+    InitializeCriticalSection(&This->blanket_cs);
+    if (com_call_security_enabled())
+        client_channel_apply_blanket(This);
+#endif
 
     *chan = &This->super.IRpcChannelBuffer_iface;
 
@@ -2019,6 +2285,218 @@ static HRESULT unmarshal_ORPCTHAT(RPC_MESSAGE *msg, ORPCTHAT *orpcthat,
     return S_OK;
 }
 
+#ifdef __REACTOS__
+struct server_security
+{
+    IServerSecurity IServerSecurity_iface;
+    LONG refs;
+    RPC_BINDING_HANDLE binding;
+    DWORD imp_level;
+    BOOL in_call;
+    BOOL impersonating;
+    HANDLE saved_token; /* thread token present before the call, restored on revert */
+    WCHAR *client_name;
+};
+
+static inline struct server_security *impl_from_IServerSecurity(IServerSecurity *iface)
+{
+    return CONTAINING_RECORD(iface, struct server_security, IServerSecurity_iface);
+}
+
+static HRESULT WINAPI server_security_QueryInterface(IServerSecurity *iface, REFIID riid, void **obj)
+{
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IServerSecurity))
+    {
+        *obj = iface;
+        IServerSecurity_AddRef(iface);
+        return S_OK;
+    }
+    *obj = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI server_security_AddRef(IServerSecurity *iface)
+{
+    struct server_security *security = impl_from_IServerSecurity(iface);
+    return InterlockedIncrement(&security->refs);
+}
+
+static ULONG WINAPI server_security_Release(IServerSecurity *iface)
+{
+    struct server_security *security = impl_from_IServerSecurity(iface);
+    ULONG refs = InterlockedDecrement(&security->refs);
+
+    if (!refs)
+    {
+        CoTaskMemFree(security->client_name);
+        free(security);
+    }
+    return refs;
+}
+
+static void server_security_revert(struct server_security *security)
+{
+    if (security->binding)
+        RpcRevertToSelfEx(security->binding);
+    else
+        RevertToSelf();
+    if (security->saved_token)
+        SetThreadToken(NULL, security->saved_token);
+    security->impersonating = FALSE;
+}
+
+static WCHAR *server_security_client_name(struct server_security *security)
+{
+    HANDLE token = NULL;
+    BOOL was_impersonating = security->impersonating;
+    WCHAR *name = NULL;
+
+    if (!security->binding)
+        return NULL;
+    if (RpcImpersonateClient(security->binding) == RPC_S_OK)
+    {
+        if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
+            token = NULL;
+        if (!was_impersonating)
+            server_security_revert(security);
+    }
+    if (token)
+    {
+        name = com_security_token_user(token);
+        CloseHandle(token);
+    }
+    return name;
+}
+
+static HRESULT WINAPI server_security_QueryBlanket(IServerSecurity *iface, DWORD *authn_svc, DWORD *authz_svc,
+        OLECHAR **server_principal, DWORD *authn_level, DWORD *imp_level, void **privs, DWORD *capabilities)
+{
+    struct server_security *security = impl_from_IServerSecurity(iface);
+
+    TRACE("%p, %p, %p, %p, %p, %p, %p, %p.\n", iface, authn_svc, authz_svc, server_principal, authn_level,
+          imp_level, privs, capabilities);
+
+    if (!security->in_call)
+        return RPC_E_CALL_COMPLETE;
+    if (authn_svc)
+        *authn_svc = RPC_C_AUTHN_WINNT;
+    if (authz_svc)
+        *authz_svc = RPC_C_AUTHZ_NONE;
+    if (server_principal)
+        *server_principal = NULL;
+    if (authn_level)
+        *authn_level = RPC_C_AUTHN_LEVEL_PKT_PRIVACY;
+    if (imp_level)
+        *imp_level = RPC_C_IMP_LEVEL_ANONYMOUS;
+    if (privs)
+    {
+        if (!security->client_name)
+            security->client_name = server_security_client_name(security);
+        *privs = security->client_name;
+    }
+    if (capabilities)
+        *capabilities = EOAC_NONE;
+    return S_OK;
+}
+
+static HRESULT WINAPI server_security_ImpersonateClient(IServerSecurity *iface)
+{
+    static const SECURITY_IMPERSONATION_LEVEL levels[] =
+    {
+        /* ImpersonateSelf(SecurityAnonymous) fails, so ANONYMOUS maps to Identification */
+        SecurityIdentification, SecurityIdentification, SecurityIdentification, SecurityImpersonation, SecurityDelegation
+    };
+    struct server_security *security = impl_from_IServerSecurity(iface);
+    RPC_STATUS status;
+
+    TRACE("%p.\n", iface);
+
+    if (!security->in_call)
+        return RPC_E_CALL_COMPLETE;
+    if (security->binding)
+    {
+        status = RpcImpersonateClient(security->binding);
+        if (status != RPC_S_OK)
+            return HRESULT_FROM_WIN32(status);
+    }
+    else if (!ImpersonateSelf(levels[security->imp_level < ARRAY_SIZE(levels) ? security->imp_level : 0]))
+        return HRESULT_FROM_WIN32(GetLastError());
+    security->impersonating = TRUE;
+    return S_OK;
+}
+
+static HRESULT WINAPI server_security_RevertToSelf(IServerSecurity *iface)
+{
+    struct server_security *security = impl_from_IServerSecurity(iface);
+
+    TRACE("%p.\n", iface);
+
+    if (!security->in_call)
+        return RPC_E_CALL_COMPLETE;
+    if (security->impersonating)
+        server_security_revert(security);
+    return S_OK;
+}
+
+static BOOL WINAPI server_security_IsImpersonating(IServerSecurity *iface)
+{
+    struct server_security *security = impl_from_IServerSecurity(iface);
+
+    TRACE("%p.\n", iface);
+
+    return security->in_call && security->impersonating;
+}
+
+static const IServerSecurityVtbl server_security_vtbl =
+{
+    server_security_QueryInterface,
+    server_security_AddRef,
+    server_security_Release,
+    server_security_QueryBlanket,
+    server_security_ImpersonateClient,
+    server_security_RevertToSelf,
+    server_security_IsImpersonating,
+};
+
+static struct server_security *server_security_begin(RPC_BINDING_HANDLE binding, DWORD imp_level, IUnknown **old_context)
+{
+    struct server_security *security;
+    struct tlsdata *tlsdata;
+
+    if (FAILED(com_get_tlsdata(&tlsdata)) || !(security = calloc(1, sizeof(*security))))
+        return NULL;
+    security->IServerSecurity_iface.lpVtbl = &server_security_vtbl;
+    security->refs = 1;
+    security->binding = binding;
+    security->imp_level = imp_level;
+    security->in_call = TRUE;
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &security->saved_token))
+        security->saved_token = NULL;
+    *old_context = tlsdata->call_state;
+    tlsdata->call_state = (IUnknown *)&security->IServerSecurity_iface;
+    return security;
+}
+
+static void server_security_end(struct server_security *security, IUnknown *old_context)
+{
+    struct tlsdata *tlsdata;
+
+    if (!security)
+        return;
+    server_security_RevertToSelf(&security->IServerSecurity_iface);
+    security->in_call = FALSE;
+    security->binding = NULL;
+    if (security->saved_token)
+    {
+        CloseHandle(security->saved_token);
+        security->saved_token = NULL;
+    }
+    if (SUCCEEDED(com_get_tlsdata(&tlsdata)))
+        tlsdata->call_state = old_context;
+    IServerSecurity_Release(&security->IServerSecurity_iface);
+}
+#endif
+
 void rpc_execute_call(struct dispatch_params *params)
 {
     struct message_state *message_state = NULL;
@@ -2030,6 +2508,12 @@ void rpc_execute_call(struct dispatch_params *params)
     GUID old_causality_id;
     struct tlsdata *tlsdata;
     struct apartment *apt;
+#ifdef __REACTOS__
+    struct server_security *security;
+    IUnknown *old_context = NULL;
+    struct callctl_server_call call;
+    struct call_flight *flight = params->flight;
+#endif
 
     if (FAILED(com_get_tlsdata(&tlsdata)))
         return;
@@ -2064,6 +2548,9 @@ void rpc_execute_call(struct dispatch_params *params)
     message_state->channel_hook_info.iMethod = msg->ProcNum;
     message_state->channel_hook_info.pObject = params->iface;
 
+#ifdef __REACTOS__
+    callctl_server_prepare(tlsdata);
+#endif
     if (orpcthis.extensions && first_wire_orpc_extent &&
         orpcthis.extensions->size)
         ChannelHooks_ServerNotify(&message_state->channel_hook_info, msg->DataRepresentation, first_wire_orpc_extent, orpcthis.extensions->size);
@@ -2124,6 +2611,9 @@ void rpc_execute_call(struct dispatch_params *params)
     tlsdata->causality_id = orpcthis.cid;
     tlsdata->pending_call_count_server++;
 #ifdef __REACTOS__
+    callctl_server_begin(tlsdata, &call, &orpcthis.cid);
+    security = com_call_security_enabled() ? server_security_begin(message_state->bypass_rpcrt ? NULL : message_state->binding_handle,
+            params->imp_level, &old_context) : NULL;
     __TRY
     {
         params->hr = IRpcStubBuffer_Invoke(params->stub, params->msg, params->chan);
@@ -2133,6 +2623,8 @@ void rpc_execute_call(struct dispatch_params *params)
         params->hr = RPC_E_SERVERFAULT;
     }
     __ENDTRY
+    server_security_end(security, old_context);
+    callctl_server_end(tlsdata, &call);
 #else
     params->hr = IRpcStubBuffer_Invoke(params->stub, params->msg, params->chan);
 #endif
@@ -2152,6 +2644,10 @@ exit_reset_state:
 exit:
     free(message_state);
     if (params->handle) SetEvent(params->handle);
+#ifdef __REACTOS__
+    if (flight)
+        call_flight_release(flight);
+#endif
 }
 
 static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
@@ -2172,6 +2668,9 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
         RpcRaiseException(E_OUTOFMEMORY);
         return;
     }
+#ifdef __REACTOS__
+    params->flight = NULL;
+#endif
 
     hr = ipid_get_dispatch_params(&ipid, &apt, &stub_manager, &params->stub, &params->chan,
                                   &params->iid, &params->iface);
@@ -2188,6 +2687,9 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
     params->hr = S_OK;
     params->handle = NULL;
     params->bypass_rpcrt = FALSE;
+#ifdef __REACTOS__
+    params->imp_level = RPC_C_IMP_LEVEL_DEFAULT;
+#endif
 
     /* Note: this is the important difference between STAs and MTAs - we
      * always execute RPCs to STAs in the thread that originally created the
@@ -2228,6 +2730,22 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
 
         com_get_tlsdata(&tlsdata);
 
+#ifdef __REACTOS__
+        if (apt->neutral)
+        {
+            struct neutral_frame frame;
+
+            if (SUCCEEDED(neutral_enter(&frame)))
+            {
+                rpc_execute_call(params);
+                neutral_leave(&frame);
+            }
+            else
+                params->hr = E_OUTOFMEMORY;
+        }
+        else
+        {
+#endif
         if (!tlsdata->apt)
         {
             enter_apartment(tlsdata, COINIT_MULTITHREADED);
@@ -2238,6 +2756,9 @@ static void __RPC_STUB dispatch_rpc(RPC_MESSAGE *msg)
         {
             leave_apartment(tlsdata);
         }
+#ifdef __REACTOS__
+        }
+#endif
     }
 
     hr = params->hr;
@@ -2358,6 +2879,9 @@ HRESULT rpc_resolve_oxid(OXID oxid, OXID_INFO *oxid_info)
  * IRemUnknown object */
 void rpc_start_remoting(struct apartment *apt)
 {
+#ifdef __REACTOS__
+    com_security_init_default();
+#endif
     if (!InterlockedExchange(&apt->remoting_started, TRUE))
     {
         WCHAR endpoint[200];

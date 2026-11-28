@@ -27,7 +27,7 @@ KdpSysReadControlSpace(
     PKPRCB Prcb;
     PKIPCR Pcr;
 
-    if (Processor >= (ULONG)KeNumberProcessors)
+    if (Processor >= KiNumberProcessors)
     {
         *ActualLength = 0;
         return STATUS_INVALID_PARAMETER;
@@ -87,7 +87,7 @@ KdpSysWriteControlSpace(
     PVOID ControlStart;
     PKPRCB Prcb;
 
-    if (Processor >= (ULONG)KeNumberProcessors)
+    if (Processor >= KiNumberProcessors)
     {
         *ActualLength = 0;
         return STATUS_INVALID_PARAMETER;

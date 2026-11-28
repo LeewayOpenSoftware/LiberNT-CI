@@ -24,6 +24,8 @@ NTAPI
 NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
              _Inout_ PIRP Irp)
 {
+    BOOLEAN LastFileObject = FALSE;
+
     if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject)
         NtfsBindVolumeDisk((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension);
     /* Overview:
@@ -99,6 +101,7 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             if (FileCB->RequestedStream)
                 ExFreePool(FileCB->RequestedStream);
 
+            NtfsTxfReleaseFileContext(VolCB, FileCB);
             NtfsPagingFileClose(FileCB);
 
             if (FileCB->StreamCB)
@@ -142,10 +145,19 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             }
             IrpSp->FileObject->FsContext = NULL;
             IrpSp->FileObject->FsContext2 = NULL;
+
+            /* The last file object of a dismounted volume releases it: the
+             * handles went long before (an image section outlives its handle). */
+            ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+            NtfsDropFileObject(VolCB);
+            LastFileObject = VolCB->Dismounted && VolCB->FileObjectCount == 0;
+            ExReleaseFastMutex(&VolCB->VolumeStateMutex);
         }
     }
 
     Irp->IoStatus.Information = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    if (LastFileObject)
+        NtfsReleaseDismountedVolumeFromClose(VolumeDeviceObject);
     return STATUS_SUCCESS;
 }

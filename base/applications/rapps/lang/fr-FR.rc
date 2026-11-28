@@ -174,7 +174,7 @@ BEGIN
     IDS_APPTITLE "Gestionnaire d'applications ReactOS"
     IDS_APP_AUTHORS "Copyright 2009 Dmitry Chapyshev"
     IDS_WELCOME_TITLE "Bienvenue dans ReactOS Applications Manager !"
-    IDS_WELCOME_TEXT "Choisissez une catégorie à gauche, ensuite choisissez une application à installer ou désinstaller.\nSite internet de LiberNT : "
+    IDS_WELCOME_TEXT "Choisissez une catégorie à gauche, ensuite choisissez une application à installer ou désinstaller.\nSite internet d'Orosi : "
     IDS_WELCOME_URL "https://reactos.org"
 
     IDS_APPWIZ_TITLE "Ajout/Suppression de programmes" // "Ajouter/Supprimer des Programmes"
@@ -207,7 +207,7 @@ BEGIN
     IDS_UNABLE_TO_WRITE "Impossible d'écrire sur le disque. Votre disque pourrait être plein."
     IDS_INSTALL_SELECTED "Installer la sélection"
     IDS_SELECTEDFORINST "Sélectionnées pour installation"
-    IDS_MISMATCH_CERT_INFO "Certificat inconnu:\nSujet: %s\nEmetteur: %s\nVoulez-vous continuer ?"
+    IDS_MISMATCH_CERT_INFO "Certificat inconnu:\nSujet: %s\nEmetteur root: %s\nVoulez-vous continuer ?"
     IDS_UNABLE_PATH "Format de chemin invalide."
     IDS_APP_DISPLAY_DETAILS "Détails"
     IDS_APP_DISPLAY_LIST "Liste"

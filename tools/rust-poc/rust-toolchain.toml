@@ -1,0 +1,10 @@
+# Pinned Rust toolchain for LiberNT Rust components (reproducible builds).
+# Stable release; kernel staticlibs use the built-in x86_64-pc-windows-gnu target and its
+# precompiled core/alloc, so neither nightly nor -Zbuild-std is needed. Keep this equal to
+# LIBERNT_RUST_TOOLCHAIN in sdk/cmake/rust.cmake. The fuzz/ crate is the one exception: cargo-fuzz
+# needs nightly and is host-only.
+[toolchain]
+channel = "1.97.1"
+components = ["llvm-tools"]
+targets = ["x86_64-pc-windows-gnu"]
+profile = "minimal"

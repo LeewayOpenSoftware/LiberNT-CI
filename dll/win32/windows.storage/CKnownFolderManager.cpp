@@ -461,6 +461,8 @@ extern "C" HRESULT WINAPI SHSetKnownFolderPath(REFKNOWNFOLDERID id, DWORD flags,
             hr = HRESULT_FROM_WIN32(RegSetValueExW(key, definition.pszName, 0, REG_EXPAND_SZ,
                                                  reinterpret_cast<const BYTE *>(path), bytes));
         RegCloseKey(key);
+        if (SUCCEEDED(hr))
+            SHELL_AssocGenerationIncrement();
     }
     FreeKnownFolderDefinitionFields(&definition);
     return hr;

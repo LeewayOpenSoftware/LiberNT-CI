@@ -376,6 +376,21 @@ int OnPostWinPosChanged(HWND hWnd, WINDOWPOS* pWinPos)
     BOOL Ret, Clear, Force;
 
     style = GetWindowLongW(hWnd, GWL_STYLE);
+    if((style & WS_CAPTION)!=WS_CAPTION)
+    {
+        /* Drop the theme region once the caption is gone, e.g. when going fullscreen */
+        pwndData = ThemeFindWndData(hWnd);
+        if (pwndData && pwndData->HasThemeRgn && !pwndData->UpdatingRgn)
+        {
+            pwndData->HasThemeRgn = FALSE;
+            /* Rebuild it once the caption returns, even without a size change */
+            pwndData->DirtyThemeRegion = TRUE;
+            pwndData->UpdatingRgn = TRUE;
+            g_user32ApiHook.SetWindowRgn(hWnd, 0, TRUE);
+            pwndData->UpdatingRgn = FALSE;
+        }
+        return 0;
+    }
 
     /* Get theme data for this window */
     Entry = ThemeReferenceWndData(hWnd);
@@ -512,6 +527,7 @@ ThemeDwmUpdateThemedFrame(HWND hWnd)
         SetPropW(hWnd, DWM_PROP_THEMED_FRAME, (HANDLE)1);
     else
         RemovePropW(hWnd, DWM_PROP_THEMED_FRAME);
+    ThemeDwmUpdateFrameInsets(hWnd);
 }
 
 static BOOL CALLBACK
@@ -622,6 +638,24 @@ ThemePreWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR 
             pwndData->DirtyThemeRegion = TRUE;
             break;
         }
+        case WM_DWMCOMPOSITIONCHANGED:
+        {
+            PWND_DATA pwndData = ThemeGetWndData(hWnd);
+
+            if (pwndData == NULL)
+                return 0;
+
+            /* Reopening the window theme re-evaluates the composition gate and the Liquid properties. */
+            if (pwndData->hthemeWindow)
+            {
+                CloseThemeData(pwndData->hthemeWindow);
+                pwndData->hthemeWindow = NULL;
+            }
+
+            ThemeDwmUpdateThemedFrame(hWnd);
+            pwndData->DirtyThemeRegion = TRUE;
+            break;
+        }
         case WM_NCCREATE:
         {
             PWND_DATA pwndData = ThemeGetWndData(hWnd);
@@ -653,6 +687,15 @@ ThemePostWindowProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, ULONG_PTR
             }
             else if (style & (WS_HSCROLL | WS_VSCROLL))
             {
+                RedrawWindow(hWnd, NULL, NULL, RDW_FRAME | RDW_INVALIDATE);
+            }
+            return 0;
+        }
+        case WM_DWMCOMPOSITIONCHANGED:
+        {
+            if ((GetWindowLongW(hWnd, GWL_STYLE) & WS_CAPTION) == WS_CAPTION)
+            {
+                SetWindowPos(hWnd, NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
                 RedrawWindow(hWnd, NULL, NULL, RDW_FRAME | RDW_INVALIDATE);
             }
             return 0;
@@ -986,6 +1029,17 @@ ThemeDwmFrameChanged(HWND hWnd)
     ThemeDwmUpdateCaptionButtons(hWnd);
 }
 
+static BOOL CALLBACK
+ThemePostThemeChangedToProcess(HWND hWnd, LPARAM lParam)
+{
+    DWORD dwProcessId = 0;
+
+    GetWindowThreadProcessId(hWnd, &dwProcessId);
+    if (dwProcessId == (DWORD)(ULONG_PTR)lParam)
+        PostMessageW(hWnd, WM_THEMECHANGED, 0, 0);
+    return TRUE;
+}
+
 BOOL CALLBACK
 ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)
 {
@@ -1054,6 +1108,7 @@ ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)
     UAH_HOOK_MESSAGE(puah->WndProcArray, WM_MENUCHAR);
     UAH_HOOK_MESSAGE(puah->WndProcArray, WM_MDISETMENU);
     UAH_HOOK_MESSAGE(puah->WndProcArray, WM_THEMECHANGED);
+    UAH_HOOK_MESSAGE(puah->WndProcArray, WM_DWMCOMPOSITIONCHANGED);
     UAH_HOOK_MESSAGE(puah->WndProcArray, WM_UAHINIT);
 
     puah->DlgProcArray.MsgBitArray = gabDLGPmessages;
@@ -1067,12 +1122,65 @@ ThemeInitApiHook(UAPIHK State, PUSERAPIHOOK puah)
     UAH_HOOK_MESSAGE(puah->DlgProcArray, WM_ERASEBKGND);
     UAH_HOOK_MESSAGE(puah->DlgProcArray, WM_PRINTCLIENT);
 
-    UXTHEME_ReloadTheme(TRUE);
+    UXTHEME_LoadThemeIfChanged();
+
+    /* The hook is usually injected into a process lazily, on its first
+     * DefWindowProc, long after the session theme was established at logon.
+     * Top-level windows this process created before the hook loaded were
+     * painted unhooked, and the very WM_THEMECHANGED that triggered the load
+     * was dispatched by the still-unhooked DefWindowProc (WM_THEMECHANGED is a
+     * WndProcArray message only, so RealDefWindowProc did nothing with it), so
+     * they keep their classic frame.  Post a fresh WM_THEMECHANGED to this
+     * process's own top-level windows so they are re-evaluated now that the
+     * hook is active.  It must be Post, not Send: InitUserApiHook holds the
+     * user-api-hook critical section across this callback, so a synchronous
+     * message could deadlock. */
+    EnumWindows(ThemePostThemeChangedToProcess, (LPARAM)(ULONG_PTR)GetCurrentProcessId());
 
     return TRUE;
 }
 
 typedef BOOL (WINAPI *PREGISTER_UAH)(PUSERAPIHOOKINFO puah);
+
+static BOOL CALLBACK
+ThemeSendThemeChanged(HWND hWnd, LPARAM lParam)
+{
+    SendNotifyMessageW(hWnd, WM_THEMECHANGED, 0, 0);
+    return TRUE;
+}
+
+static BOOL CALLBACK
+ThemeSendThemeChangedTree(HWND hWnd, LPARAM lParam)
+{
+    SendNotifyMessageW(hWnd, WM_THEMECHANGED, 0, 0);
+    EnumChildWindows(hWnd, ThemeSendThemeChanged, 0);
+    return TRUE;
+}
+
+/*
+ * ThemeHooksInstall() runs in the Themes server, which lives in winlogon, so
+ * its thread sits on the Winlogon desktop and the broadcast above only reaches
+ * that desktop.  Windows already created on the interactive "Default" desktop
+ * before the active visual style was established at logon (for example an
+ * Explorer that started while the Themes service was still coming up) were
+ * painted unthemed and will not repaint on their own.  Post a single
+ * WM_THEMECHANGED to the Default desktop so those pre-existing windows pick up
+ * the session theme.  This fires once when the hooks are installed, not once
+ * per process, so it does not cause a broadcast storm, and SendNotifyMessage
+ * keeps a hung client from stalling winlogon.
+ */
+static VOID
+ThemeBroadcastToInteractiveDesktop(VOID)
+{
+    HDESK hDesk;
+
+    hDesk = OpenDesktopW(L"Default", 0, FALSE, DESKTOP_READOBJECTS);
+    if (!hDesk)
+        return;
+
+    EnumDesktopWindows(hDesk, ThemeSendThemeChangedTree, 0);
+    CloseDesktop(hDesk);
+}
 
 BOOL WINAPI
 ThemeHooksInstall()
@@ -1094,6 +1202,7 @@ ThemeHooksInstall()
     ret = register_hook(&uah);
 
     UXTHEME_broadcast_theme_changed (NULL, TRUE);
+    ThemeBroadcastToInteractiveDesktop();
 
     return ret;
 }

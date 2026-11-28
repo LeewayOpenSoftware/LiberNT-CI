@@ -221,6 +221,19 @@ FsRtlInitializeBaseMcb(
     Mcb->Mapping = NULL;
 }
 
+BOOLEAN
+NTAPI
+FsRtlInitializeBaseMcbEx(
+    _Out_ PBASE_MCB Mcb,
+    _In_ POOL_TYPE PoolType,
+    _In_ USHORT Flags)
+{
+    /* No pool is taken here; Flags decide whether a later growth failure raises or returns FALSE */
+    FsRtlInitializeBaseMcb(Mcb, PoolType);
+    Mcb->Flags = Flags;
+    return TRUE;
+}
+
 VOID
 NTAPI
 FsRtlUninitializeBaseMcb(

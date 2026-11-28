@@ -72,6 +72,46 @@ static NTSTATUS USBH_GetKeyboardInterface(_In_ PUSBHUB_PORT_PDO_EXTENSION PortEx
 
 static
 NTSTATUS
+USBH_QueryUsbCapability(
+    _In_ PUSBHUB_PORT_PDO_EXTENSION PortExtension,
+    _Inout_ PROS_USB_CAPABILITY_QUERY Query)
+{
+    ULONG Speed = PortExtension->PortPdoFlags & (USBHUB_PDO_FLAG_PORT_HIGH_SPEED | USBHUB_PDO_FLAG_PORT_SUPER_SPEED);
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    if (!Query || Query->Version != ROS_USB_CAPABILITY_QUERY_VERSION || Query->Size < sizeof(*Query))
+        return STATUS_INVALID_PARAMETER;
+
+    Query->ResultLength = 0;
+    if (IsEqualGUID(&Query->CapabilityType, &GUID_USB_CAPABILITY_DEVICE_CONNECTION_HIGH_SPEED_COMPATIBLE))
+        return Speed ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+    if (IsEqualGUID(&Query->CapabilityType, &GUID_USB_CAPABILITY_DEVICE_CONNECTION_SUPER_SPEED_COMPATIBLE))
+        return (Speed & USBHUB_PDO_FLAG_PORT_SUPER_SPEED) ? STATUS_SUCCESS : STATUS_NOT_SUPPORTED;
+    return USBH_ForwardDumpInterfaceRequest(PortExtension, IOCTL_INTERNAL_REACTOS_USB_QUERY_CAPABILITY, Query);
+}
+
+static
+NTSTATUS
+USBH_GetMsOs20DescriptorSet(
+    _In_ PUSBHUB_PORT_PDO_EXTENSION PortExtension,
+    _Inout_ PROS_USB_MSOS20_DESCRIPTOR_SET_QUERY Query)
+{
+    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
+
+    if (!Query || Query->Size < sizeof(*Query))
+        return STATUS_INVALID_PARAMETER;
+    Query->ResultLength = 0;
+    if (!PortExtension->MsOs20DescriptorSet)
+        return STATUS_NOT_SUPPORTED;
+    Query->ResultLength = PortExtension->MsOs20DescriptorSetLength;
+    if (!Query->Buffer || Query->BufferLength < PortExtension->MsOs20DescriptorSetLength)
+        return STATUS_BUFFER_TOO_SMALL;
+    RtlCopyMemory(Query->Buffer, PortExtension->MsOs20DescriptorSet, PortExtension->MsOs20DescriptorSetLength);
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 USBH_GetMsOsVendorCode(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
                        OUT PUCHAR VendorCode)
 {
@@ -398,7 +438,7 @@ USBH_PdoIoctlSubmitUrb(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
          * an external hub or any ancestor has disappeared, forwarding a
          * child teardown URB can wait forever because no device can complete
          * it. */
-        DPRINT1("USBH_PdoIoctlSubmitUrb: failing URB 0x%02X for removed device or hub chain\n", Urb->UrbHeader.Function);
+        DPRINT_IOCTL("USBH_PdoIoctlSubmitUrb: failing URB 0x%02X for removed device or hub chain\n", Urb->UrbHeader.Function);
         Urb->UrbHeader.Status = USBD_STATUS_DEVICE_GONE;
         USBH_CompleteIrp(Irp, STATUS_DEVICE_NOT_CONNECTED);
         Status = STATUS_DEVICE_NOT_CONNECTED;
@@ -960,6 +1000,62 @@ USBH_IoctlGetHubCapabilities(IN PUSBHUB_FDO_EXTENSION HubExtension,
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+USBH_IoctlGetHubCapabilitiesEx(IN PUSBHUB_FDO_EXTENSION HubExtension,
+                               IN PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack;
+    PUSB_HUB_CAPABILITIES_EX Capabilities;
+    USB_HUB_CAP_FLAGS Flags;
+    BOOLEAN IsRoot;
+    BOOLEAN IsHighSpeed;
+
+    ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
+
+    IoStack = IoGetCurrentIrpStackLocation(Irp);
+    Capabilities = Irp->AssociatedIrp.SystemBuffer;
+
+    if (IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(USB_HUB_CAPABILITIES_EX) ||
+        Capabilities == NULL)
+    {
+        USBH_CompleteIrp(Irp, STATUS_BUFFER_TOO_SMALL);
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    IsRoot = (HubExtension->LowerPDO == HubExtension->RootHubPdo);
+    IsHighSpeed = (HubExtension->HubFlags & USBHUB_FDO_FLAG_USB20_HUB) != 0;
+
+    Flags.ul = 0;
+    if (IsRoot)
+    {
+        Flags.HubIsRoot = 1;
+        Flags.HubIsHighSpeed = IsHighSpeed ||
+                               (HubExtension->HubDescriptor != NULL &&
+                                HubExtension->HubDescriptor->bDescriptorType == USB_30_HUB_DESCRIPTOR_TYPE);
+    }
+    else
+    {
+        BOOLEAN IsMultiTt = (HubExtension->HubFlags & USBHUB_FDO_FLAG_MULTIPLE_TTS) != 0;
+
+        ASSERT(!IsMultiTt || IsHighSpeed);
+        Flags.HubIsHighSpeedCapable = IsHighSpeed;
+        Flags.HubIsHighSpeed = IsHighSpeed;
+        Flags.HubIsMultiTtCapable = IsMultiTt;
+        Flags.HubIsMultiTt = IsMultiTt;
+        Flags.HubIsBusPowered = USBH_HubIsBusPowered(HubExtension->Common.SelfDevice,
+                                                     HubExtension->HubConfigDescriptor);
+    }
+    /* TODO: report HubIsArmedWakeOnConnect once the hub arms itself for wake on connect */
+
+    ASSERT(Flags.ReservedMBZ == 0);
+
+    Capabilities->CapabilityFlags = Flags;
+    Irp->IoStatus.Information = sizeof(USB_HUB_CAPABILITIES_EX);
+    USBH_CompleteIrp(Irp, STATUS_SUCCESS);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 USBH_IoctlGetHubInformationEx(IN PUSBHUB_FDO_EXTENSION HubExtension,
@@ -1352,8 +1448,8 @@ USBH_IoctlGetNodeConnectionInformation(IN PUSBHUB_FDO_EXTENSION HubExtension,
             Info->Speed = (Info->Speed == UsbLowSpeed);
         }
 
-        Irp->IoStatus.Information = sizeof(USB_NODE_CONNECTION_INFORMATION_EX) +
-                                    (Info->NumberOfOpenPipes - 1) * sizeof(USB_PIPE_INFO);
+        Irp->IoStatus.Information = FIELD_OFFSET(USB_NODE_CONNECTION_INFORMATION_EX, PipeList) +
+                                    Info->NumberOfOpenPipes * sizeof(USB_PIPE_INFO);
         goto Exit;
     }
 
@@ -1490,6 +1586,12 @@ USBH_IoctlGetNodeConnectionDriverKeyName(IN PUSBHUB_FDO_EXTENSION HubExtension,
 
     KeyName = Irp->AssociatedIrp.SystemBuffer;
     Status = STATUS_INVALID_PARAMETER;
+
+    if (KeyName->ConnectionIndex == 0 ||
+        KeyName->ConnectionIndex > HubExtension->HubDescriptor->bNumberOfPorts)
+    {
+        goto Exit;
+    }
 
     PortData = &HubExtension->PortData[KeyName->ConnectionIndex - 1];
     PortDevice = PortData->DeviceObject;
@@ -1682,6 +1784,16 @@ USBH_DeviceControl(IN PUSBHUB_FDO_EXTENSION HubExtension,
             if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPED))
             {
                 Status = USBH_IoctlGetHubCapabilities(HubExtension, Irp);
+                break;
+            }
+
+            USBH_CompleteIrp(Irp, Status);
+            break;
+
+        case IOCTL_USB_GET_HUB_CAPABILITIES_EX:
+            if (!(HubExtension->HubFlags & USBHUB_FDO_FLAG_DEVICE_STOPPED))
+            {
+                Status = USBH_IoctlGetHubCapabilitiesEx(HubExtension, Irp);
                 break;
             }
 
@@ -1911,6 +2023,14 @@ USBH_PdoInternalControl(IN PUSBHUB_PORT_PDO_EXTENSION PortExtension,
 
         case IOCTL_INTERNAL_REACTOS_USB_GET_KEYBOARD_INTERFACE:
             Status = USBH_GetKeyboardInterface(PortExtension, IoStack->Parameters.Others.Argument1);
+            break;
+
+        case IOCTL_INTERNAL_REACTOS_USB_QUERY_CAPABILITY:
+            Status = USBH_QueryUsbCapability(PortExtension, IoStack->Parameters.Others.Argument1);
+            break;
+
+        case IOCTL_INTERNAL_REACTOS_USB_GET_MSOS20_DESCRIPTOR_SET:
+            Status = USBH_GetMsOs20DescriptorSet(PortExtension, IoStack->Parameters.Others.Argument1);
             break;
 
         case IOCTL_INTERNAL_USB_SUBMIT_URB:

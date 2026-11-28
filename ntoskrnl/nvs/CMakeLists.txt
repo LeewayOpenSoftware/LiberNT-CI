@@ -15,7 +15,7 @@ endif()
 
 file(GLOB NVS_CORE_SOURCES
     core/*.c vad/*.c fault/*.c section/*.c ws/*.c pagefile/*.c vm/*.c sys/*.c proc/*.c
-    pool/va/*.c pool/heap/*.c pool/track/*.c)
+    pool/va/*.c pool/heap/*.c pool/track/*.c pool/special/*.c)
 
 file(GLOB NVS_NT_SOURCES nt/*.c pool/backing/mmbacking.c)
 file(GLOB NVS_ARCH_SOURCES ${NVS_ARCH_DIR}/*.c)

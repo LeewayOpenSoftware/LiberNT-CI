@@ -966,6 +966,17 @@ IopInitializeDriverModuleImpl(
     ASSERT(ModuleObject->SizeOfImage == ROUND_TO_PAGES(NtHeaders->OptionalHeader.SizeOfImage));
     ASSERT(ModuleObject->EntryPoint == RVA(ModuleObject->DllBase, NtHeaders->OptionalHeader.AddressOfEntryPoint));
 
+    /* A driver image linked without an entry point would have the kernel
+     * execute its own PE header; refuse it here as an invalid driver image. */
+    if (NtHeaders->OptionalHeader.AddressOfEntryPoint == 0)
+    {
+        DPRINT1("Driver '%wZ' has no entry point; refusing to start it\n", &DriverName);
+        RtlFreeUnicodeString(&ServiceName);
+        RtlFreeUnicodeString(&DriverName);
+        MmUnloadSystemImage(ModuleObject);
+        return STATUS_INVALID_IMAGE_FORMAT;
+    }
+
     /* Obtain the registry path for the DriverInit routine */
     ULONG infoLength;
     Status = ZwQueryKey(ServiceHandle, KeyNameInformation, NULL, 0, &infoLength);
@@ -2196,7 +2207,7 @@ IopUnloadDriver(PUNICODE_STRING DriverServiceName, BOOLEAN UnloadPnpDrivers)
         {
             /* Set the unload pending flag for the device */
             DeviceExtension = IoGetDevObjExtension(DeviceObject);
-            DeviceExtension->ExtensionFlags |= DOE_UNLOAD_PENDING;
+            InterlockedOr((PLONG)&DeviceExtension->ExtensionFlags, DOE_UNLOAD_PENDING);
 
             /* Make sure there are no attached devices or no reference counts */
             if ((DeviceObject->ReferenceCount) || (DeviceObject->AttachedDevice))

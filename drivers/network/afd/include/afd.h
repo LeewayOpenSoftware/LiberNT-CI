@@ -130,11 +130,8 @@ typedef struct IPADDR_ENTRY {
 
 #define AFD_RECV_CONTROL_SIZE           256
 
-/* XXX This is a hack we should clean up later
- * We do this in order to get some storage for the locked handle table
- * Maybe I'll use some tail item in the irp instead */
-#define AFD_HANDLES(x) ((PAFD_HANDLE)(x)->Exclusive)
-#define SET_AFD_HANDLES(x,y) (((x)->Exclusive) = (ULONG_PTR)(y))
+#define AFD_HANDLES(Irp) ((PAFD_HANDLE)(Irp)->Tail.Overlay.DriverContext[1])
+#define SET_AFD_HANDLES(Irp,y) ((Irp)->Tail.Overlay.DriverContext[1] = (y))
 
 typedef struct _AFD_HANDLE32 {
     ULONG Handle;
@@ -178,6 +175,7 @@ typedef struct _AFD_TDI_HANDLE_DATA32 {
     ULONG TdiConnectionHandle;
 } AFD_TDI_HANDLE_DATA32, *PAFD_TDI_HANDLE_DATA32;
 
+C_ASSERT(FIELD_OFFSET(AFD_POLL_INFO, Handles) == 16);
 C_ASSERT(FIELD_OFFSET(AFD_POLL_INFO32, Handles) == 16);
 C_ASSERT(sizeof(AFD_HANDLE32) == 12);
 C_ASSERT(sizeof(AFD_ACCEPT_DATA32) == 12);
@@ -241,6 +239,7 @@ typedef struct _AFD_DATA_WINDOW {
 
 typedef struct _AFD_STORED_DATAGRAM {
     LIST_ENTRY ListEntry;
+    NTSTATUS Status;
     UINT Len;
     PTRANSPORT_ADDRESS Address;
     PVOID Control;
@@ -277,6 +276,7 @@ typedef struct _AFD_FCB {
     PVOID SendDatagramBuffer;
     AFD_TDI_OBJECT AddressFile, Connection;
     AFD_IN_FLIGHT_REQUEST ConnectIrp, ListenIrp, ReceiveIrp, SendIrp, DisconnectIrp;
+    PIO_WORKITEM ReceiveWorkItem;
     AFD_DATA_WINDOW Send, Recv;
     UINT ReceiveWindowAllocationSize, PendingReceiveWindowSize, ReportedReceiveWindowSize;
     KMUTEX Mutex;
@@ -406,6 +406,7 @@ PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
                         BOOLEAN Write, BOOLEAN LockAddress,
                         KPROCESSOR_MODE LockMode, BOOLEAN Is32Bit );
 VOID UnlockBuffers( PAFD_WSABUF Buf, UINT Count, BOOL Address );
+BOOLEAN AfdTransportAddressFits(PTRANSPORT_ADDRESS Address, ULONG Available);
 BOOLEAN AfdIsRecvMsgRequest(PIRP Irp, PIO_STACK_LOCATION IrpSp);
 BOOLEAN AfdLockMessageBuffers(PAFD_WSABUF Buf, UINT Count, PAFD_RECV_MSG_INFO Message, KPROCESSOR_MODE LockMode);
 BOOLEAN SocketAcquireStateLock( PAFD_FCB FCB );
@@ -415,10 +416,13 @@ NTSTATUS NTAPI UnlockAndMaybeComplete
 VOID SocketStateUnlock( PAFD_FCB FCB );
 VOID AfdSignalTdiRundown(PAFD_FCB FCB);
 NTSTATUS LostSocket( PIRP Irp );
-PAFD_HANDLE LockHandles( PAFD_HANDLE HandleArray, UINT HandleCount, PDEVICE_OBJECT DeviceObject );
+PAFD_HANDLE LockHandles( PAFD_HANDLE HandleArray, UINT HandleCount, PDEVICE_OBJECT DeviceObject, KPROCESSOR_MODE RequestorMode );
 VOID UnlockHandles( PAFD_HANDLE HandleArray, UINT HandleCount );
 PVOID LockRequest( PIRP Irp, PIO_STACK_LOCATION IrpSp, BOOLEAN Output, KPROCESSOR_MODE *LockMode );
 VOID UnlockRequest( PIRP Irp, PIO_STACK_LOCATION IrpSp );
+NTSTATUS AfdCopyToCaller( PIRP Irp, const VOID *Source, ULONG Length );
+NTSTATUS AfdCopyFromCaller( PIRP Irp, PVOID Destination, ULONG Length );
+NTSTATUS AfdCopyToCallerAndComplete( PAFD_FCB FCB, PIRP Irp, const VOID *Source, ULONG Length );
 PVOID GetLockedData( PIRP Irp, PIO_STACK_LOCATION IrpSp );
 BOOLEAN AfdCaptureRecvRequest(PVOID InputBuffer, ULONG InputBufferLength, KPROCESSOR_MODE Mode, BOOLEAN Is32Bit, PAFD_RECV_INFO Request);
 VOID AfdReadUserWsaBuf(PAFD_WSABUF Array, UINT Index, KPROCESSOR_MODE Mode, BOOLEAN Is32Bit, PAFD_WSABUF Buffer);

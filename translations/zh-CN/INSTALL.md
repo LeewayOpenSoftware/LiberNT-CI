@@ -1,6 +1,6 @@
 # 安装 LiberNT
 
-> [English](../../INSTALL.md) | **中文** | [Français](../fr-FR/INSTALL.md) | [Español](../es-ES/INSTALL.md) | [日本語](../ja-JP/INSTALL.md) | [العربية](../ar-MA/INSTALL.md)
+> [English](../../INSTALL.md) | **中文** | [Français](../fr-FR/INSTALL.md) | [Español](../es-ES/INSTALL.md) | [日本語](../ja-JP/INSTALL.md) | [العربية](../ar-MA/INSTALL.md) | [Українська](../uk-UA/INSTALL.md)
 >
 > 翻译说明：本译文由 AI 初译并排版；术语、代码块、链接与锚点已与英文原版核对，中文术语已经人工核对。如有纰漏，请提交 issue 指出；表述以英文版为准。
 
@@ -24,7 +24,7 @@
 
 `LiberNT.img` 无需安装，开箱即用。把它放进 QEMU 等虚拟机中启动，或写入 U 盘、SD 卡，再从该设备启动。使用 VHD 磁盘的虚拟机请选 `LiberNT.vhd`；Hyper-V 第二代虚拟机请用 `LiberNT.vhdx`，并关闭安全启动。
 
-预装盘中也带有 LiberNT 安装程序。在运行中的系统里执行 `C:\<architecture>\libernt.exe`，例如 `C:\arm64\libernt.exe`，即可把 LiberNT 装到另一块磁盘。
+预装盘中也带有 LiberNT 安装程序。在运行中的系统里执行 `C:\<architecture>\system32\oobe\oros.exe`，例如 `C:\arm64\system32\oobe\oros.exe`，即可把 LiberNT 装到另一块磁盘。
 
 ## 求助
 

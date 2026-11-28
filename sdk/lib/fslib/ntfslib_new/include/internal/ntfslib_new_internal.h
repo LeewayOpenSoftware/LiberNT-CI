@@ -586,7 +586,10 @@ NtfsFlushVolumeRangeContext(_In_opt_ void* Context,
                             _In_ ULONG Length);
 
 /* Puts any write the environment still holds for [Offset, Offset + Length)
- * on the disk before returning, without flushing the device's own cache.
+ * on the disk before returning. In the kernel environment the bytes are on
+ * the medium: when the device reports a write cache, its cache is flushed
+ * past every write completed so far (one flush per edge that needs it), so
+ * a pointer written after this cannot overtake the range on power loss.
  * Environments that write through at once return STATUS_SUCCESS. */
 NTSTATUS
 NtfsCommitRangeContext(_In_opt_ void* Context,
@@ -594,7 +597,10 @@ NtfsCommitRangeContext(_In_opt_ void* Context,
                        _In_ ULONG Length);
 
 /* Write-ordering barrier: the Later range must not reach the device until the
- * Earlier range is durable. Called BEFORE the write that dirties the Later
+ * Earlier range is durable. In the kernel environment durable means on the
+ * medium: an Earlier range already on a device that holds writes stamps the
+ * Later block, whose write-back then flushes the device's cache first.
+ * Called BEFORE the write that dirties the Later
  * range. Success means the ordering is guaranteed (or the Earlier range is
  * already durable). Any failure (the Later block is not cached, the range is
  * not one the cache holds back, the constraint would close a dependency
@@ -675,6 +681,10 @@ public:
      * valid: the volume must stay dirty so the next boot checks it. Readers
      * may set it without the metadata lock, so it is only ever stored TRUE. */
     volatile BOOLEAN CorruptionNoted = FALSE;
+    /* Set (never cleared) when a metadata write of THIS instance failed: the
+     * instance then holds an update the medium never got, so a check of the
+     * medium says nothing about the instance (see MarkCleanAfterCheck). */
+    volatile BOOLEAN LostWriteNoted = FALSE;
     /* Set once CommitCorruptionDirtyOnce has made its single attempt. */
     BOOLEAN CorruptionCommitTried = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
@@ -693,6 +703,10 @@ public:
     ULONGLONG AllocationLimit = 0;
     ULONGLONG ReservedClusters = 0;
     BOOLEAN ReservedClustersKnown = FALSE;
+
+    /* Clear bits of $Bitmap, counted once and kept by every allocation and release */
+    ULONGLONG FreeClusterCount = 0;
+    BOOLEAN FreeClusterCountKnown = FALSE;
 
     /* Parsed $Bitmap record, built once: its layout never changes and its
      * data is served through the block cache, so re-parsing it for every
@@ -747,9 +761,19 @@ public:
 
     FAST_MUTEX SecurityCacheMutex;
     ULONG SecurityCacheId[NTFS_SECURITY_CACHE_ENTRIES] = {};
+    ULONG SecurityCacheHash[NTFS_SECURITY_CACHE_ENTRIES] = {};
     ULONG SecurityCacheLength[NTFS_SECURITY_CACHE_ENTRIES] = {};
     PUCHAR SecurityCacheData[NTFS_SECURITY_CACHE_ENTRIES] = {};
     ULONG SecurityCacheNext = 0;
+    /* Records that keep their descriptor in an attribute of their own, rather
+     * than behind a SecurityId, reach no cache through $Secure. A directory
+     * answers an access check for every open below it, so re-reading its
+     * descriptor costs one disk read per open. */
+    ULONG RecordCacheNumber[NTFS_SECURITY_CACHE_ENTRIES] = {};
+    ULONG RecordCacheLength[NTFS_SECURITY_CACHE_ENTRIES] = {};
+    PUCHAR RecordCacheData[NTFS_SECURITY_CACHE_ENTRIES] = {};
+    ULONGLONG RecordCacheStamp[NTFS_SECURITY_CACHE_ENTRIES] = {};
+    ULONG RecordCacheNext = 0;
 
     ~Volume();
 
@@ -919,11 +943,22 @@ public:
     void
     RetainDirty(_In_ BOOLEAN Retain);
 
+    /* After a check that wrote nothing: clear the flag, retained or not, and
+     * the corruption note. Caller holds the metadata lock. */
+    NTSTATUS
+    MarkCleanAfterCheck();
+
     /* Records that a read met corrupt on-disk structure. No I/O: callable
      * from any read path. The next metadata write, or the clean dismount,
      * makes the dirty flag durable and keeps it (see CorruptionNoted). */
     void
     NoteCorruption();
+
+    void
+    NoteLostWrite(_In_ NTSTATUS Status);
+
+    BOOLEAN
+    ReportsDirty(_In_ USHORT Flags);
 
     /* Writes and retains the dirty flag for a noted corruption (no-op when
      * none is noted, on a read-only mount, or without dirty tracking). The
@@ -1053,7 +1088,38 @@ public:
     CacheSecurityDescriptor(
         _In_ ULONG SecurityId,
         _In_reads_bytes_(Length) const UCHAR* Descriptor,
-        _In_ ULONG Length);
+        _In_ ULONG Length,
+        _In_ ULONG Hash);
+
+    BOOLEAN
+    FindCachedSecurityId(
+        _In_reads_bytes_(Length) const UCHAR* Descriptor,
+        _In_ ULONG Length,
+        _In_ ULONG Hash,
+        _Out_ PULONG SecurityId);
+
+    BOOLEAN
+    ReadCachedRecordDescriptor(
+        _In_ ULONG RecordNumber,
+        _In_opt_ PUCHAR Buffer,
+        _Inout_ PULONG BufferLength,
+        _Out_ NTSTATUS* Status);
+
+    void
+    CacheRecordDescriptor(
+        _In_ ULONG RecordNumber,
+        _In_reads_bytes_(Length) const UCHAR* Descriptor,
+        _In_ ULONG Length,
+        _In_ ULONGLONG Stamp);
+
+    void
+    InvalidateRecordDescriptor(
+        _In_ ULONG RecordNumber);
+
+    void
+    ReviseRecordDescriptor(
+        _In_ ULONG RecordNumber,
+        _In_ ULONGLONG Stamp);
 
     NTSTATUS
     AssignSecurityId(
@@ -1114,6 +1180,8 @@ public:
     NTSTATUS RefreshFrom(_In_ const FileRecord& Record);
 
     // ./find.cpp
+    ULONGLONG SecurityAttributeStamp();
+
     PAttribute GetAttribute(_In_     AttributeType Type,
                             _In_opt_ PWSTR Name);
     NTSTATUS GetAttributeData(_In_     AttributeType Type,
@@ -1146,6 +1214,11 @@ public:
             const UCHAR* Buffer,
         _In_ ULONG BufferLength);
     NTSTATUS DeleteExternalBacking();
+    NTSTATUS ReadObjectId(_Out_ PObjectIdEx ObjectId);
+    NTSTATUS SetObjectId(_In_ const ObjectIdEx* ObjectId);
+    NTSTATUS SetObjectIdExtended(_In_reads_bytes_(48) const UCHAR* ExtendedInfo);
+    NTSTATUS DeleteObjectId();
+    NTSTATUS RenameDataStream(_In_opt_ PWSTR OldName, _In_opt_ PWSTR NewName, _In_ BOOLEAN ReplaceIfExists);
     NTSTATUS ReadExtendedAttributes(
         _In_opt_ PUCHAR Buffer,
         _Inout_ PULONG BufferLength,
@@ -1242,6 +1315,12 @@ public:
 
     NTSTATUS
     TouchDirectory();
+
+    NTSTATUS
+    SetUpdateSequenceNumber(_In_ LONGLONG Usn);
+
+    NTSTATUS
+    GetUsnInformation(_Out_ LONGLONG* Usn, _Out_ ULONG* SecurityId);
 
     NTSTATUS
     StampChangeTime();
@@ -1679,6 +1758,15 @@ private:
         _In_ ULONG BufferLength,
         _In_ BOOLEAN Delete);
 
+    NTSTATUS
+    MakeObjectIdSpace(_In_ ULONG Required);
+
+    NTSTATUS
+    InsertObjectIdAttribute(_In_ const ObjectIdEx* ObjectId);
+
+    NTSTATUS
+    RemoveObjectIdAttribute();
+
     // ./write.cpp
     NTSTATUS
     UpdateNonResidentData(_In_ PAttribute TargetAttribute,
@@ -1741,6 +1829,17 @@ NtfsUpdateReparseIndex(
     _In_ BOOLEAN Remove);
 
 NTSTATUS
+NtfsCheckObjectIdSupport(
+    _In_ PVolume DiskVolume);
+
+NTSTATUS
+NtfsUpdateObjectIdIndex(
+    _In_ PVolume DiskVolume,
+    _In_ const ObjectIdEx* ObjectId,
+    _In_ ULONGLONG FileReference,
+    _In_ BOOLEAN Remove);
+
+NTSTATUS
 NtfsNextReparseIndexEntry(
     _In_ PVolume DiskVolume,
     _In_ ULONG StartTag,
@@ -1757,6 +1856,17 @@ typedef struct IndexSearchKey
     ULONG ValueLength;
     BOOLEAN CaseSensitive;
 } IndexSearchKey, *PIndexSearchKey;
+
+NTSTATUS
+NtfsFindIndexInsertionPoint(
+    _In_ PVolume DiskVolume,
+    _In_ PIndexNodeHeader Header,
+    _In_ ULONG HeaderBytes,
+    _In_ const IndexSearchKey* Key,
+    _Out_ PULONG InsertionOffset,
+    _Out_ PULONGLONG ChildVcn,
+    _Out_ PBOOLEAN Descend,
+    _Out_opt_ PBOOLEAN FoundExact = NULL);
 
 typedef class Directory : BTree
 {
@@ -2203,6 +2313,13 @@ public:
         _Out_ PUNICODE_STRING ShortName);
 
     NTSTATUS
+    EnumerateLinks(
+        _In_ PFileRecord File,
+        _Inout_ PULONG Context,
+        _Out_ PULONGLONG ParentReference,
+        _Out_ PUNICODE_STRING LinkName);
+
+    NTSTATUS
     IsDescendantDirectory(
         _In_ ULONGLONG FileReference,
         _In_ ULONGLONG AncestorReference,
@@ -2484,6 +2601,9 @@ NtfsGenerateShortName(
      UINT16 LogPageDataOffset;          // Offset 0x26, Size 2
      UINT32 RevisionNumber;             // Offset 0x28, Size 4
  } *PLfsRestartArea;
+
+ /* LfsRestartArea.Flags: the volume was closed cleanly */
+ #define LFS_RESTART_AREA_CLEAN 0x0002
 
  /* Note: Client Version is stored in MajorVersion and MinorVersion
   * for the various versions of RestartArea/

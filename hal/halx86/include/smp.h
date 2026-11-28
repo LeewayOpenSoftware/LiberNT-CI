@@ -11,11 +11,14 @@
 typedef struct _PROCESSOR_IDENTITY
 {
     ULONG ProcessorId;
-    UCHAR LapicId;
+    ULONG LapicId; /* 32-bit x2APIC ID; at most HALP_XAPIC_MAX_ID in xAPIC mode */
     BOOLEAN ProcessorStarted;
     BOOLEAN BSPCheck;
     PKPRCB ProcessorPrcb;
 } PROCESSOR_IDENTITY, *PPROCESSOR_IDENTITY;
+
+/* Highest local APIC ID that xAPIC mode, I/O APIC and MSI destinations can address */
+#define HALP_XAPIC_MAX_ID 0xFE
 
 /* This table is counter of the overall APIC constants acquired from madt */
 #define HALP_APIC_INFO_TABLE_IOAPIC_NUMBER 256 // ACPI_MADT_IO_APIC.Id is a UINT8.
@@ -25,6 +28,7 @@ typedef struct _HALP_APIC_INFO_TABLE
     ULONG ProcessorCount; /* Count of all physical cores, This includes BSP */
     ULONG IOAPICCount;
     ULONG LocalApicPA;                // The 32-bit physical address at which each processor can access its local interrupt controller
+    BOOLEAN X2ApicRequired;           // A registered processor has an APIC ID above HALP_XAPIC_MAX_ID
     ULONG IoApicVA[HALP_APIC_INFO_TABLE_IOAPIC_NUMBER];
     ULONG IoApicPA[HALP_APIC_INFO_TABLE_IOAPIC_NUMBER];
     ULONG IoApicIrqBase[HALP_APIC_INFO_TABLE_IOAPIC_NUMBER]; // Global system interrupt base
@@ -87,6 +91,17 @@ VOID
 NTAPI
 HalpSendSoftwareInterrupt(
     _In_ KAFFINITY TargetSet,
+    _In_ KIRQL Irql);
+
+VOID
+NTAPI
+HalpRequestIpiEx(
+    _In_ PKAFFINITY_EX TargetSet);
+
+VOID
+NTAPI
+HalpSendSoftwareInterruptProcessor(
+    _In_ ULONG ProcessorIndex,
     _In_ KIRQL Irql);
 
 #endif // _M_AMD64

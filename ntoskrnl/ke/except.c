@@ -107,6 +107,9 @@ KiRaiseException(
     /* Check if we need to probe */
     if (PreviousMode != KernelMode)
     {
+        /* The record copied in is shorter than the local; the rest of the local is defined too */
+        RtlZeroMemory(&LocalExceptionRecord, sizeof(LocalExceptionRecord));
+
         /* Set up SEH */
         _SEH2_TRY
         {
@@ -127,9 +130,9 @@ KiRaiseException(
                 _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
             }
 
-            /* Probe the entire parameters now*/
+            /* Probe the record up to its last parameter: the parameters are pointer-sized */
             Size = (sizeof(EXCEPTION_RECORD) -
-                    ((EXCEPTION_MAXIMUM_PARAMETERS - ParameterCount) * sizeof(ULONG)));
+                    ((EXCEPTION_MAXIMUM_PARAMETERS - ParameterCount) * sizeof(ULONG_PTR)));
             ProbeForRead(ExceptionRecord, Size, sizeof(ULONG));
 
             /* Now make copies in the stack */

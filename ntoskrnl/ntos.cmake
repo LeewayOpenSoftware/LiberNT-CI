@@ -92,6 +92,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/zone.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/dbcsname.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/fastio.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/kfsctl.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/faulttol.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/bytelock.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/cancelwait.c
@@ -142,6 +143,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/ramdisk.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/rawfs.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/remlock.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/reparse.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/symlink.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/util.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/volume.c
@@ -149,6 +151,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/dif.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/devaction.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/devnode.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/devprop.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/plugplay.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/pnpdma.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/pnpinit.c
@@ -212,6 +215,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heaplarge.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heapdebug.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/track/tagtable.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/special/special.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exinit.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exalloc.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exfree.c
@@ -256,6 +260,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/query.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/quota.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/security.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/silo.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/state.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/thread.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/tls.c
@@ -267,11 +272,16 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/libsupp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/locale.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/misc.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/capability.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/state.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/nvmemory.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/qsort.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/security.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/system.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/time.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/unicode.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/wddm.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/modern.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/access.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/accesschk.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/se/acl.c
@@ -295,7 +305,13 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/tm.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/tx.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/driver.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfdeadlock.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfio.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfirql.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfpool.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/whea/whea.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwlog.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwprov.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwreg.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/guidobj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/pcw.c
@@ -337,6 +353,7 @@ if(ARCH STREQUAL "i386")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/i386/kdx86.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/abios.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/cpu.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/specctrl.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/context.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/exp.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/i386/freeze.c
@@ -357,6 +374,7 @@ elseif(ARCH STREQUAL "amd64")
     list(APPEND ASM_SOURCE
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/boot.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/ctxswitch.S
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/specstub.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/trap.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/usercall_asm.S
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/zeropage.S)
@@ -366,6 +384,7 @@ elseif(ARCH STREQUAL "amd64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/kd64/amd64/kdx64.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/context.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/cpu.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/specctrl.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/except.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/freeze.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/interrupt.c
@@ -379,6 +398,7 @@ elseif(ARCH STREQUAL "amd64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/stubs.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/traphandler.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/usercall.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/whea/amd64/mca.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/xstate.c)
 elseif(ARCH STREQUAL "arm")
     list(APPEND ASM_SOURCE

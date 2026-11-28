@@ -13,11 +13,6 @@
 #include <wingdi.h>
 #include <winuser.h>
 
-#if (WINVER < 0x0602)
-typedef struct tagPOINTER_DEVICE_INFO POINTER_DEVICE_INFO;
-typedef struct tagPOINTER_TOUCH_INFO POINTER_TOUCH_INFO;
-typedef struct tagPOINTER_PEN_INFO POINTER_PEN_INFO;
-#endif
 
 #define NDEBUG
 #include <debug.h>
@@ -27,6 +22,16 @@ NtUserGetPointerDeviceRects(
     _In_ HANDLE device,
     _Out_ RECT *deviceRect,
     _Out_ RECT *displayRect);
+
+BOOL APIENTRY
+NtUserInitializeTouchInjection(
+    _In_ UINT32 MaxCount,
+    _In_ DWORD Mode);
+
+BOOL APIENTRY
+NtUserInjectTouchInput(
+    _In_ UINT32 Count,
+    _In_reads_(Count) const POINTER_TOUCH_INFO *Contacts);
 
 BOOL APIENTRY
 NtUserGetPointerInfoList(
@@ -325,14 +330,7 @@ InitializeTouchInjection(
     _In_ UINT32 maxCount,
     _In_ DWORD dwMode)
 {
-    if (maxCount == 0 || maxCount > MAX_TOUCH_COUNT ||
-        (dwMode != TOUCH_FEEDBACK_DEFAULT && dwMode != TOUCH_FEEDBACK_INDIRECT && dwMode != TOUCH_FEEDBACK_NONE))
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-
-    return TRUE;
+    return NtUserInitializeTouchInjection(maxCount, dwMode);
 }
 
 BOOL
@@ -341,14 +339,7 @@ InjectTouchInput(
     _In_ UINT32 count,
     _In_reads_(count) const POINTER_TOUCH_INFO *contacts)
 {
-    if (count == 0 || count > MAX_TOUCH_COUNT || contacts == NULL)
-    {
-        SetLastError(ERROR_INVALID_PARAMETER);
-        return FALSE;
-    }
-
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    return NtUserInjectTouchInput(count, contacts);
 }
 
 BOOL

@@ -9,6 +9,9 @@
 
 #include "ccnt.h"
 
+#define NDEBUG
+#include <debug.h>
+
 static
 ULONG64
 CcNtSectionSize(_In_ PCC_FILE_SIZES FileSizes)
@@ -107,6 +110,12 @@ CcInitializeCacheMap(
     CcNtDereferenceMap(NtMap);
 }
 
+static
+VOID
+CcNtShrinkMap(
+    _Inout_ PCC_NT_MAP NtMap,
+    _In_ ULONG64 NewFileSize);
+
 BOOLEAN
 NTAPI
 CcUninitializeCacheMap(
@@ -131,7 +140,7 @@ CcUninitializeCacheMap(
 
         if (NewSize < NtMap->Map.FileSize)
         {
-            CcDirtyDiscard(&NtMap->Map, NewSize, (ULONG64)-1);
+            CcNtShrinkMap(NtMap, NewSize);
             CcMapSetSizes(&NtMap->Map, NtMap->Map.SectionSize, NewSize, min(NtMap->Map.ValidDataLength, NewSize));
         }
     }
@@ -164,6 +173,122 @@ CcUninitializeCacheMap(
     return TRUE;
 }
 
+static
+NTSTATUS
+CcNtZeroMove(
+    _In_opt_ PVOID Context,
+    _In_ PVOID CacheAddress,
+    _In_ ULONG64 FileOffset,
+    _In_ ULONG Length)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(FileOffset);
+
+    _SEH2_TRY
+    {
+        RtlZeroMemory(CacheAddress, Length);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+static
+VOID
+CcNtZeroTailOfLastPage(
+    _Inout_ PCC_NT_MAP NtMap,
+    _In_ ULONG64 NewFileSize,
+    _In_ ULONG64 End)
+{
+    ULONG64 PageStart = NewFileSize & ~((ULONG64)PAGE_SIZE - 1);
+    NTSTATUS Status;
+
+    if (NewFileSize >= End || PageStart == NewFileSize)
+        return;
+    if (!NtMap->Map.Ops.IsResident(NtMap->Map.Context, PageStart, PAGE_SIZE))
+        return;
+
+    Status = CcCopyRange(&NtMap->Map, NewFileSize, End - NewFileSize, TRUE, CcNtZeroMove, NULL, NULL);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("CcNtShrinkMap: zeroing [%I64x, %I64x) beyond the new end failed 0x%lx\n", NewFileSize, End, Status);
+}
+
+static
+VOID
+CcNtZeroResidentRuns(
+    _Inout_ PCC_NT_MAP NtMap,
+    _In_ ULONG64 Start,
+    _In_ ULONG64 End)
+{
+    ULONG64 Offset = Start;
+    ULONG64 ViewEnd;
+    ULONG64 NextOffset;
+    ULONG64 RunStart;
+    NTSTATUS Status;
+
+    while (Offset < End)
+    {
+        ViewEnd = (Offset | CC_VIEW_MASK) + 1;
+        if (ViewEnd > End)
+            ViewEnd = End;
+
+        /* Only a view still attached can keep cache pages resident past the purge */
+        if (!CcMapViewAttached(&NtMap->Map, Offset, &NextOffset))
+        {
+            Offset = NextOffset;
+            continue;
+        }
+        if (!NtMap->Map.Ops.IsResident(NtMap->Map.Context, Offset, PAGE_SIZE))
+        {
+            Offset += PAGE_SIZE;
+            continue;
+        }
+
+        RunStart = Offset;
+        while (Offset < ViewEnd && NtMap->Map.Ops.IsResident(NtMap->Map.Context, Offset, PAGE_SIZE))
+            Offset += PAGE_SIZE;
+
+        /* A failed zeroing leaves the stale bytes; nothing better can be done here */
+        Status = CcCopyRange(&NtMap->Map, RunStart, Offset - RunStart, TRUE, CcNtZeroMove, NULL, NULL);
+        if (NT_SUCCESS(Status))
+            DPRINT("CcNtShrinkMap: zeroed resident [%I64x, %I64x) beyond the new end\n", RunStart, Offset);
+        else
+            DPRINT1("CcNtShrinkMap: zeroing resident [%I64x, %I64x) beyond the new end failed 0x%lx\n",
+                    RunStart, Offset, Status);
+    }
+}
+
+/* Caller holds the file exclusively and has not lowered Map.FileSize yet */
+static
+VOID
+CcNtShrinkMap(
+    _Inout_ PCC_NT_MAP NtMap,
+    _In_ ULONG64 NewFileSize)
+{
+    ULONG64 Boundary = ROUND_TO_PAGES(NewFileSize);
+    ULONG64 OldEnd = ROUND_TO_PAGES(NtMap->Map.FileSize);
+    BOOLEAN Detached;
+    BOOLEAN Purged;
+
+    CcNtZeroTailOfLastPage(NtMap, NewFileSize, Boundary);
+    CcDirtyDiscard(&NtMap->Map, Boundary, (ULONG64)-1);
+    Detached = CcMapDetachViews(&NtMap->Map, NewFileSize, (ULONG64)-1);
+    Purged = MiSegmentPurge(NtMap->Control->Segment, Boundary, 0, MiPurgeTruncate);
+
+    /* A view still referenced keeps its pages beyond the cut resident */
+    if (!Detached || !Purged)
+    {
+        CcNtZeroResidentRuns(NtMap, Boundary, OldEnd);
+        CcDirtyDiscard(&NtMap->Map, Boundary, (ULONG64)-1);
+    }
+}
+
 VOID
 NTAPI
 CcSetFileSizes(
@@ -193,17 +318,22 @@ CcSetFileSizes(
     }
 
     if (NewFileSize < NtMap->Map.FileSize)
-    {
-        ULONG64 Boundary = ROUND_TO_PAGES(NewFileSize);
-
-        CcDirtyDiscard(&NtMap->Map, Boundary, (ULONG64)-1);
-        CcMapDetachViews(&NtMap->Map, ROUND_UP(NewFileSize, CC_VIEW_SIZE), (ULONG64)-1);
-        MiSegmentPurge(NtMap->Control->Segment, Boundary, 0);
-    }
+        CcNtShrinkMap(NtMap, NewFileSize);
 
     NtMap->AllocationSize = FileSizes->AllocationSize;
     CcMapSetSizes(&NtMap->Map, SectionSize, NewFileSize, (ULONG64)FileSizes->ValidDataLength.QuadPart);
     CcNtDereferenceMap(NtMap);
+}
+
+NTSTATUS
+NTAPI
+CcSetFileSizesEx(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ PCC_FILE_SIZES FileSizes)
+{
+    /* A failed section extension raises, as documented; a shrink zeroes what it cannot purge, so it cannot fail */
+    CcSetFileSizes(FileObject, FileSizes);
+    return STATUS_SUCCESS;
 }
 
 PFILE_OBJECT
@@ -221,6 +351,47 @@ CcGetFileObjectFromSectionPtrs(
     }
 
     return FileObject;
+}
+
+PFILE_OBJECT
+NTAPI
+CcGetFileObjectFromSectionPtrsRef(
+    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer)
+{
+    PCC_NT_MAP NtMap = CcNtReferenceMap(SectionObjectPointer);
+    PFILE_OBJECT FileObject = NULL;
+
+    /* The reference is taken while the map still holds the file object */
+    if (NtMap != NULL)
+    {
+        FileObject = NtMap->FileObject;
+        if (FileObject != NULL)
+            ObReferenceObject(FileObject);
+        CcNtDereferenceMap(NtMap);
+    }
+
+    return FileObject;
+}
+
+NTSTATUS
+NTAPI
+FsRtlQueryCachedVdl(
+    _In_ PFILE_OBJECT FileObject,
+    _Out_ PLONGLONG Vdl)
+{
+    PCC_NT_MAP NtMap;
+
+    if (FileObject == NULL || Vdl == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* A file without a cache map has no cached valid data length */
+    NtMap = CcNtReferenceFileMap(FileObject);
+    if (NtMap == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *Vdl = (LONGLONG)CC_ATOMIC_READ64(&NtMap->Map.ValidDataLength);
+    CcNtDereferenceMap(NtMap);
+    return STATUS_SUCCESS;
 }
 
 PFILE_OBJECT
@@ -373,6 +544,44 @@ CcIsThereDirtyData(
     }
 
     return Dirty;
+}
+
+BOOLEAN
+NTAPI
+CcIsThereDirtyDataEx(
+    _In_ PVPB Vpb,
+    _In_opt_ PULONG NumberOfDirtyPages)
+{
+    KIRQL OldIrql;
+    ULONG64 DirtyPages = 0;
+    BOOLEAN Writing = FALSE;
+    PLIST_ENTRY Entry;
+    ULONG Index;
+
+    /* Unlike CcIsThereDirtyData, temporary files count too */
+    for (Index = 0; Index < CC_NT_MAP_BUCKETS; Index++)
+    {
+        PCC_NT_MAP_BUCKET Bucket = &CcNtMapBuckets[Index];
+
+        KeAcquireSpinLock(&Bucket->Lock, &OldIrql);
+        for (Entry = Bucket->List.Flink; Entry != &Bucket->List; Entry = Entry->Flink)
+        {
+            PCC_NT_MAP NtMap = CONTAINING_RECORD(Entry, CC_NT_MAP, Link);
+
+            if (NtMap->FileObject->Vpb == Vpb)
+            {
+                DirtyPages += CC_ATOMIC_READ64(&NtMap->Map.DirtyPages);
+                /* A flush takes pages off the dirty count before writing them: that data is queued to the volume */
+                if (NtMap->Map.FlushesInProgress != 0)
+                    Writing = TRUE;
+            }
+        }
+        KeReleaseSpinLock(&Bucket->Lock, OldIrql);
+    }
+
+    if (NumberOfDirtyPages != NULL)
+        *NumberOfDirtyPages = (ULONG)min(DirtyPages, (ULONG64)MAXULONG);
+    return (DirtyPages != 0) || Writing;
 }
 
 VOID

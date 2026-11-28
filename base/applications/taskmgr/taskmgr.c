@@ -128,12 +128,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance,
     if (hMutex && GetLastError() == ERROR_ALREADY_EXISTS)
     {
         /* Restore existing taskmanager and bring window to front */
-        /* Relies on the fact that the application title string and window title are the same */
+        /* Relies on the application title string and window title being the same;
+           the dialog class keeps this from matching the new Task Manager's frame. */
         HWND hTaskMgr;
         TCHAR szTaskmgr[128];
 
         LoadString(hInst, IDS_APP_TITLE, szTaskmgr, _countof(szTaskmgr));
-        hTaskMgr = FindWindow(NULL, szTaskmgr);
+        hTaskMgr = FindWindowW(L"#32770", szTaskmgr);
 
         if (hTaskMgr != NULL)
         {
@@ -523,6 +524,19 @@ void FillSolidRect(HDC hDC, LPCRECT lpRect, COLORREF clr)
 {
     SetBkColor(hDC, clr);
     ExtTextOutW(hDC, 0, 0, ETO_OPAQUE, lpRect, NULL, 0, NULL);
+}
+
+int TaskManager_GetDpi(void)
+{
+    HDC hDC = GetDC(NULL);
+    int nDpi = 96;
+
+    if (hDC)
+    {
+        nDpi = GetDeviceCaps(hDC, LOGPIXELSX);
+        ReleaseDC(NULL, hDC);
+    }
+    return nDpi ? nDpi : 96;
 }
 
 static void SetUpdateSpeed(HWND hWnd)

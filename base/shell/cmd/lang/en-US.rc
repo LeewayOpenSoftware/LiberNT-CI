@@ -26,7 +26,7 @@ Windows and is kept for DOS batch files.\n"
     WCMD_COPY, "COPY <filename> copies a file.\n"
     WCMD_DATE, "DATE shows or changes the system date.\n"
     WCMD_DEL, "DEL <filename> deletes a file or set of files.\n"
-    WCMD_DIR, "DIR lists the contents of a directory.\n"
+    WCMD_DIR, "DIR lists the contents of a directory.\n\n/R also displays the alternate data streams of each file and directory.\n"
     WCMD_ECHO, "ECHO <string> displays <string> on the current terminal device.\n\
 \n\
 ECHO ON causes all subsequent commands in a batch file to be displayed on\n\
@@ -287,9 +287,9 @@ Enter HELP <command> for further information on any of the above commands.\n"
     WCMD_VOLUMEPROMPT, "Volume label (11 characters, <Enter> for none)?"
     WCMD_ANYKEY, "Press any key to continue... "
     WCMD_CONSTITLE, "Wine Command Prompt"
-    WCMD_VERSION, "Microsoft Windows [Version %1!S!]\n"
-    WCMD_BANNER, "LiberNT [Version %1!S! %2!S!]\n\
-(C) Copyright %3!S! LiberNT Team.\n"
+    WCMD_VERSION, "Orosi OS [Version %1!S!]\n"
+    WCMD_BANNER, "Orosi [Version %1!S! (%2!S!)]\n\
+(c) Leeway Open Software. All rights reserved.\n"
     WCMD_MOREPROMPT, "More? "
     WCMD_LINETOOLONG, "The input line is too long.\n"
     WCMD_VOLUMELABEL, "Volume in drive %1!c! is %2\n"

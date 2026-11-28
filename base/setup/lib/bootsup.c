@@ -76,7 +76,7 @@ CreateFreeLoaderReactOSEntries(
 
     /* ReactOS */
     // BootEntry->BootEntryKey = MAKESTRKEY(L"ReactOS");
-    BootEntry->FriendlyName = L"\"LiberNT\"";
+    BootEntry->FriendlyName = L"\"Orosi\"";
     Options->OsLoadOptions  = L"/FASTDETECT";
     AddBootStoreEntry(BootStoreHandle, BootEntry, MAKESTRKEY(L"ReactOS"));
 
@@ -324,7 +324,7 @@ SkipThisEntry:
         RtlStringCchPrintfW(Data->SectionName, ARRAYSIZE(Data->SectionName),
                             L"ReactOS_%lu", Data->i);
         RtlStringCchPrintfW(Data->OsName, ARRAYSIZE(Data->OsName),
-                            L"\"LiberNT %lu\"", Data->i);
+                            L"\"Orosi %lu\"", Data->i);
         Data->i++;
     }
     return STATUS_SUCCESS;
@@ -354,7 +354,7 @@ UpdateFreeLoaderIni(
     Data.i = 1;
     Data.ArcPath = ArcPath;
     RtlStringCchCopyW(Data.SectionName, ARRAYSIZE(Data.SectionName), L"ReactOS");
-    RtlStringCchCopyW(Data.OsName, ARRAYSIZE(Data.OsName), L"\"LiberNT\"");
+    RtlStringCchCopyW(Data.OsName, ARRAYSIZE(Data.OsName), L"\"Orosi\"");
 
     //
     // FIXME: We temporarily use EnumerateBootStoreEntries, until
@@ -416,7 +416,7 @@ UpdateBootIni(
     // Data.i = 1;
     Data.ArcPath = EntryName;
     // RtlStringCchCopyW(Data.SectionName, ARRAYSIZE(Data.SectionName), L"ReactOS");
-    RtlStringCchCopyW(Data.OsName, ARRAYSIZE(Data.OsName), L"\"LiberNT\"");
+    RtlStringCchCopyW(Data.OsName, ARRAYSIZE(Data.OsName), L"\"Orosi\"");
 
     //
     // FIXME: We temporarily use EnumerateBootStoreEntries, until
@@ -844,6 +844,7 @@ InstallBootloaderFiles(
     WCHAR SrcPath[MAX_PATH];
     WCHAR DstPath[MAX_PATH];
 
+    /* FIXME: A preinstalled image has no \loader directory, so Setup started from it cannot write the BIOS boot code. */
     /* Copy FreeLoader to the system partition, always overwriting the older version */
     CombinePaths(SrcPath, ARRAYSIZE(SrcPath), 2, SourceRootPath->Buffer, L"\\loader\\freeldr.sys");
     CombinePaths(DstPath, ARRAYSIZE(DstPath), 2, SystemRootPath->Buffer, L"freeldr.sys");
@@ -894,7 +895,7 @@ InstallBootloaderFiles(
 #define EFI_LOAD_OPTION_MAX             4096
 #define EFI_BOOT_ORDER_MAX              512
 #define EFI_BOOT_OPTION_SEARCH_MAX      0x1000
-#define EFI_BOOT_MANAGER_DESCRIPTION    L"LiberNT Boot Manager"
+#define EFI_BOOT_MANAGER_DESCRIPTION    L"Orosi Boot Manager"
 #define EFI_BOOT_MANAGER_FILE           L"\\EFI\\LiberNT\\Boot\\bootmgfw.efi"
 #define EFI_WINDOWS_BOOT_MANAGER_FILE   L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi"
 #define GPT_HEADER_ENTRIES_LBA_OFFSET   72
@@ -1679,8 +1680,9 @@ static
 NTSTATUS
 InstallFirmwareBootEntry(
     _In_ PCUNICODE_STRING SystemRootPath,
-    _In_ BOOLEAN AfterWindows)
+    _In_ ULONG_PTR Options)
 {
+    BOOLEAN AfterWindows = !!(Options & BOOT_OPTION_AFTER_WINDOWS);
     STORAGE_DEVICE_NUMBER DeviceNumber;
     UCHAR Option[EFI_LOAD_OPTION_MAX];
     UCHAR Existing[EFI_LOAD_OPTION_MAX];
@@ -1768,7 +1770,7 @@ InstallFirmwareBootEntry(
         Status = SetFirmwareVariable(Name, Option, OptionSize);
     }
 
-    if (NT_SUCCESS(Status))
+    if (NT_SUCCESS(Status) && !(Found && (Options & BOOT_OPTION_KEEP_ORDER)))
     {
         for (i = 0, j = 0; i < OrderCount; i++)
         {
@@ -1801,7 +1803,7 @@ InstallBcdFromTemplate(
     _In_ PCUNICODE_STRING SystemRootPath,
     _In_ PCUNICODE_STRING SourceRootPath,
     _In_ PCUNICODE_STRING DestinationArcPath,
-    _In_ BOOLEAN AfterWindows,
+    _In_ ULONG_PTR Options,
     _Out_opt_ PBOOLEAN FirmwareEntry,
     _Out_ PNTSTATUS Status)
 {
@@ -1860,7 +1862,7 @@ InstallBcdFromTemplate(
         return TRUE;
     }
 
-    EntryStatus = InstallFirmwareBootEntry(SystemRootPath, AfterWindows);
+    EntryStatus = InstallFirmwareBootEntry(SystemRootPath, Options);
     if (!NT_SUCCESS(EntryStatus))
         DPRINT1("Writing the firmware boot entry failed (Status %lx)\n", EntryStatus);
     else if (FirmwareEntry)
@@ -1874,7 +1876,7 @@ InstallEfiSystemPartition(
     _In_ PCUNICODE_STRING SystemRootPath,
     _In_ PCUNICODE_STRING SourceRootPath,
     _In_ PCUNICODE_STRING DestinationArcPath,
-    _In_ BOOLEAN AfterWindows)
+    _In_ ULONG_PTR Options)
 {
     NTSTATUS Status;
     WCHAR SrcDir[MAX_PATH];
@@ -1897,7 +1899,7 @@ InstallEfiSystemPartition(
         return Status;
     }
 
-    if (InstallBcdFromTemplate(SystemRootPath, SourceRootPath, DestinationArcPath, AfterWindows,
+    if (InstallBcdFromTemplate(SystemRootPath, SourceRootPath, DestinationArcPath, Options,
                                &FirmwareEntry, &Status))
     {
         if (NT_SUCCESS(Status) && FallbackKept && !FirmwareEntry)
@@ -1951,7 +1953,7 @@ InstallFatBootcodeToPartition(
         return Status;
     }
 
-    InstallBcdFromTemplate(SystemRootPath, SourceRootPath, DestinationArcPath, FALSE, NULL, &Status);
+    InstallBcdFromTemplate(SystemRootPath, SourceRootPath, DestinationArcPath, 0, NULL, &Status);
 
     /* Prepare for possibly updating 'freeldr.ini' */
     DoesFreeLdrExist = DoesFileExist_2(SystemRootPath->Buffer, L"freeldr.ini");
@@ -2031,7 +2033,7 @@ InstallFatBootcodeToPartition(
         DPRINT1("Update 'boot.ini'\n");
         Status = UpdateBootIni(SystemRootPath->Buffer,
                                L"C:\\bootsect.ros",
-                               L"\"LiberNT\"");
+                               L"\"Orosi\"");
         if (!NT_SUCCESS(Status))
         {
             DPRINT1("UpdateBootIni() failed (Status %lx)\n", Status);
@@ -2507,9 +2509,8 @@ InstallBootManagerAndBootEntriesWorker(
     BOOLEAN IsBIOS = ((ArchType == ARCH_PcAT) || (ArchType == ARCH_NEC98x86));
     UCHAR InstallType = (Options & 0x03);
 
-    if (DiskStyle == PARTITION_STYLE_GPT)
-        return InstallEfiSystemPartition(SystemRootPath, SourceRootPath, DestinationArcPath,
-                                         !!(Options & BOOT_OPTION_AFTER_WINDOWS));
+    if (DiskStyle == PARTITION_STYLE_GPT || IsUefiFirmware())
+        return InstallEfiSystemPartition(SystemRootPath, SourceRootPath, DestinationArcPath, Options);
 
     // FIXME: We currently only support BIOS-based PCs
     // TODO: Support other platforms

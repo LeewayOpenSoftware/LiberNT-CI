@@ -384,6 +384,7 @@ SETUPAPI_StageDriverPackage(
 #define PACKAGE_SIG_SIGNED_VALID    1
 #define PACKAGE_SIG_HASH_MISMATCH   2
 #define PACKAGE_SIG_CATALOG_INVALID 3
+#define PACKAGE_SIG_UNTRUSTED       4
 
 DWORD
 SetupapiGetVerifyPolicy(VOID);
@@ -438,6 +439,20 @@ SETUPAPI_RecordDriverDatabasePackage(
     IN PCWSTR PublishedName,
     IN PCWSTR InfName,
     IN PCWSTR OemPath OPTIONAL);
+
+BOOL
+SETUPAPI_GetInfCatalogFile(
+    IN HINF hInf,
+    OUT PWSTR CatalogFileName OPTIONAL,
+    IN DWORD CatalogFileNameSize);
+
+BOOL
+SETUPAPI_IsSystemInfDirectory(
+    IN PCWSTR Directory);
+
+DWORD
+SETUPAPI_GetCatalogSignerScore(
+    IN PCWSTR CatalogPath);
 
 VOID
 SETUPAPI_DeleteDriverDatabasePackage(

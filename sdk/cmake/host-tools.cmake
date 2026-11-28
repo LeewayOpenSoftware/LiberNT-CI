@@ -3,9 +3,9 @@ include(ExternalProject)
 
 function(setup_host_tools)
     list(APPEND HOST_TOOLS asmpp bin2c gas2armasm widl gendib cabman fatten hpp isohybrid mkdiskimg mkdrvdb mkhive mkisofs obj2bin spec2def geninc mkshelllink txt2nls utf16le xml2sdb windmc wimage)
-    if(NOT CMAKE_HOST_WIN32)
-        list(APPEND HOST_TOOLS ntfsimg)
-    endif()
+    # ntfsimg's backing-store env is portable (stdio), so it builds on Windows
+    # hosts too; the MSVC lab's liberntimg/liberntvhd need native-ntfsimg.
+    list(APPEND HOST_TOOLS ntfsimg)
     if(NOT MSVC)
         list(APPEND HOST_TOOLS pefixup symz)
     endif()
@@ -54,7 +54,7 @@ function(setup_host_tools)
     if(ARCH STREQUAL HOST_ARCH)
         set(HOST_TOOLS_CMAKE_COMMAND "${CMAKE_COMMAND}")
         message("Not cross-compiling, no special host-tools cmake command")
-    elseif(MSVC)
+    elseif(MSVC AND CMAKE_HOST_WIN32)
         message("Compiling on ${HOST_ARCH} for ${ARCH} (MSVC)")
         set(HOST_TOOLS_CMAKE_COMMAND "${REACTOS_BINARY_DIR}/host-tools/cmake_shim.cmd")
         if(MSVC_VERSION EQUAL 1900)
@@ -79,8 +79,9 @@ function(setup_host_tools)
         message("Cross-compiling on non-msvc, no special host-tools cmake command")
     endif()
 
-    # CMake might choose clang if it finds it in the PATH. Always prefer cl for host tools
-    if (MSVC)
+    # On Windows hosts CMake might choose clang if it finds it in the PATH, so prefer cl there.
+    # Elsewhere the host tools are built with the native compiler.
+    if (MSVC AND CMAKE_HOST_WIN32)
         list(APPEND CMAKE_HOST_TOOLS_EXTRA_ARGS
             -DCMAKE_C_COMPILER=cl
             -DCMAKE_CXX_COMPILER=cl)
@@ -154,6 +155,7 @@ function(setup_host_tools)
                 -DCMAKE_BUILD_TYPE=${HOST_BUILD_TYPE}
                 -DUSE_DUMMY_PSEH:BOOL=${USE_DUMMY_PSEH}
                 -DREACTOS_TARGET_NT:STRING=0x502
+                -DLIBERNT_LEGACY_HIVE_FORMAT:BOOL=${LIBERNT_LEGACY_HIVE_FORMAT}
                 ${CMAKE_HOST_TOOLS_EXTRA_ARGS}
             BUILD_ALWAYS TRUE
             INSTALL_COMMAND ${CMAKE_COMMAND} -E true

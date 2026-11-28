@@ -1,4 +1,4 @@
-> [English](../../README.md) | **中文** | [Français](../fr-FR/README.md) | [Español](../es-ES/README.md) | [日本語](../ja-JP/README.md) | [العربية](../ar-MA/README.md)
+> [English](../../README.md) | **中文** | [Français](../fr-FR/README.md) | [Español](../es-ES/README.md) | [日本語](../ja-JP/README.md) | [العربية](../ar-MA/README.md) | [Українська](../uk-UA/README.md)
 >
 > 翻译说明：本译文由 AI 初译并排版；术语、代码块、链接与锚点已与英文原版核对，中文术语已经人工核对。如有纰漏，请提交 issue 指出；表述以英文版为准。
 
@@ -144,7 +144,7 @@ LiberNT 将现代硬件与平台引入 NT 架构。
 
 在虚拟机或 PC 上启动 `bootcd.iso`，按 **LiberNT 安装程序**的提示操作。
 
-预装盘里同样带有 LiberNT 安装程序。在运行中的系统里执行 `C:\<architecture>\libernt.exe`，例如 `C:\arm64\libernt.exe`，就能把 LiberNT 装到另一块磁盘。
+预装盘里同样带有 LiberNT 安装程序。在运行中的系统里执行 `C:\<architecture>\system32\oobe\oros.exe`，例如 `C:\arm64\system32\oobe\oros.exe`，就能把 LiberNT 装到另一块磁盘。
 
 > [!CAUTION]
 > 安装程序会删除并格式化分区。安装前请备份目标磁盘上的重要数据。

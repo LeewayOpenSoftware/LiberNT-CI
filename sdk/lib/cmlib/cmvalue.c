@@ -28,8 +28,35 @@ CmpMarkValueDataDirty(IN PHHIVE Hive,
         /* If this is a small key, there's no need to have it dirty */
         if (CmpIsKeyValueSmall(&KeySize, Value->DataLength)) return TRUE;
 
-        /* Check if this is a big key */
-        ASSERT_VALUE_BIG(Hive, KeySize);
+        /* A big value is written back through its whole record */
+        if (CmpIsKeyValueBig(Hive, KeySize))
+        {
+            PCM_BIG_DATA BigData;
+            PHCELL_INDEX SegmentList;
+            ULONG Needed, i;
+
+            Needed = (KeySize + CM_KEY_VALUE_BIG - 1) / CM_KEY_VALUE_BIG;
+            BigData = (PCM_BIG_DATA)HvGetCell(Hive, Value->Data);
+            if (!BigData) return FALSE;
+            if (HvGetCellSize(Hive, BigData) >= (LONG)sizeof(CM_BIG_DATA) &&
+                BigData->Signature == CM_BIG_DATA_SIGNATURE &&
+                BigData->Count >= Needed &&
+                BigData->List != HCELL_NIL)
+            {
+                SegmentList = (PHCELL_INDEX)HvGetCell(Hive, BigData->List);
+                if (SegmentList)
+                {
+                    if (HvGetCellSize(Hive, SegmentList) >= (LONG)(Needed * sizeof(HCELL_INDEX)))
+                    {
+                        for (i = 0; i < Needed; i++)
+                            HvMarkCellDirty(Hive, SegmentList[i], FALSE);
+                    }
+                    HvReleaseCell(Hive, BigData->List);
+                }
+                HvMarkCellDirty(Hive, BigData->List, FALSE);
+            }
+            HvReleaseCell(Hive, Value->Data);
+        }
 
         /* Normal value, just mark it dirty */
         HvMarkCellDirty(Hive, Value->Data, FALSE);
@@ -54,11 +81,41 @@ CmpFreeValueData(IN PHHIVE Hive,
         /* If there's no data cell, there's nothing to do */
         if (DataCell == HCELL_NIL) return TRUE;
 
-        /* Make sure the data cell is allocated */
-        //ASSERT(HvIsCellAllocated(Hive, DataCell));
+        /* A big value frees its whole record */
+        if (CmpIsKeyValueBig(Hive, KeySize))
+        {
+            PCM_BIG_DATA BigData;
+            PHCELL_INDEX SegmentList;
+            ULONG Needed, i;
 
-        /* Unsupported value type */
-        ASSERT_VALUE_BIG(Hive, KeySize);
+            Needed = (KeySize + CM_KEY_VALUE_BIG - 1) / CM_KEY_VALUE_BIG;
+            BigData = (PCM_BIG_DATA)HvGetCell(Hive, DataCell);
+            if (BigData)
+            {
+                if (HvGetCellSize(Hive, BigData) >= (LONG)sizeof(CM_BIG_DATA) &&
+                    BigData->Signature == CM_BIG_DATA_SIGNATURE &&
+                    BigData->Count >= Needed &&
+                    BigData->List != HCELL_NIL)
+                {
+                    SegmentList = (PHCELL_INDEX)HvGetCell(Hive, BigData->List);
+                    if (SegmentList)
+                    {
+                        if (HvGetCellSize(Hive, SegmentList) >= (LONG)(Needed * sizeof(HCELL_INDEX)))
+                        {
+                            for (i = 0; i < Needed; i++)
+                                HvFreeCell(Hive, SegmentList[i]);
+                        }
+                        HvReleaseCell(Hive, BigData->List);
+                    }
+                    HvFreeCell(Hive, BigData->List);
+                }
+                HvReleaseCell(Hive, DataCell);
+            }
+
+            /* The record (or the plain cell) itself */
+            HvFreeCell(Hive, DataCell);
+            return TRUE;
+        }
 
         /* Normal value, just free the data cell */
         HvFreeCell(Hive, DataCell);
@@ -151,10 +208,98 @@ CmpGetValueData(IN PHHIVE Hive,
         return TRUE;
     }
 
-    /* Unsupported at the moment */
-    ASSERT_VALUE_BIG(Hive, *Length);
+    /* A big value (hive format 1.4 and later) stores its data in segments
+       referenced by a big data record */
+    if (CmpIsKeyValueBig(Hive, *Length))
+    {
+        PCM_BIG_DATA BigData;
+        PVOID SegmentList;
+        PUCHAR Output;
+        ULONG Needed, Remaining, Copy, i;
+        LONG CellSize;
 
-    /* Get the data from the cell */
+        Needed = (*Length + CM_KEY_VALUE_BIG - 1) / CM_KEY_VALUE_BIG;
+
+        BigData = (PCM_BIG_DATA)HvGetCell(Hive, Value->Data);
+        if (!BigData) return FALSE;
+        if (HvGetCellSize(Hive, BigData) < (LONG)sizeof(CM_BIG_DATA) ||
+            BigData->Signature != CM_BIG_DATA_SIGNATURE)
+        {
+            HvReleaseCell(Hive, Value->Data);
+            return FALSE;
+        }
+        if (BigData->Count < Needed || BigData->List == HCELL_NIL)
+        {
+            HvReleaseCell(Hive, Value->Data);
+            return FALSE;
+        }
+
+        SegmentList = HvGetCell(Hive, BigData->List);
+        if (!SegmentList)
+        {
+            HvReleaseCell(Hive, Value->Data);
+            return FALSE;
+        }
+        if (HvGetCellSize(Hive, SegmentList) < (LONG)(Needed * sizeof(HCELL_INDEX)))
+        {
+            HvReleaseCell(Hive, BigData->List);
+            HvReleaseCell(Hive, Value->Data);
+            return FALSE;
+        }
+
+        *Buffer = Hive->Allocate(*Length, TRUE, TAG_CM);
+        if (!*Buffer)
+        {
+            HvReleaseCell(Hive, BigData->List);
+            HvReleaseCell(Hive, Value->Data);
+            return FALSE;
+        }
+
+        Output = (PUCHAR)*Buffer;
+        Remaining = *Length;
+        for (i = 0; i < Needed; i++)
+        {
+            HCELL_INDEX SegmentIndex;
+            PUCHAR Segment;
+
+            SegmentIndex = ((PHCELL_INDEX)SegmentList)[i];
+            if (!HvIsCellAllocated(Hive, SegmentIndex)) break;
+
+            Segment = (PUCHAR)HvGetCell(Hive, SegmentIndex);
+            if (!Segment) break;
+            if (!IsUsedCell((PHCELL)Segment - 1)) break;
+
+            /* All segments but the last hold exactly CM_KEY_VALUE_BIG
+               bytes, regardless of the cell padding */
+            Copy = min((ULONG)CM_KEY_VALUE_BIG, Remaining);
+
+            CellSize = HvGetCellSize(Hive, Segment);
+            if (CellSize < (LONG)Copy)
+            {
+                HvReleaseCell(Hive, SegmentIndex);
+                break;
+            }
+            RtlCopyMemory(Output, Segment, Copy);
+            Output += Copy;
+            Remaining -= Copy;
+            HvReleaseCell(Hive, SegmentIndex);
+        }
+
+        HvReleaseCell(Hive, BigData->List);
+        HvReleaseCell(Hive, Value->Data);
+
+        if (Remaining)
+        {
+            Hive->Free(*Buffer, *Length);
+            *Buffer = NULL;
+            return FALSE;
+        }
+
+        *BufferAllocated = TRUE;
+        return TRUE;
+    }
+
+    /* Normal value, stored in a single cell */
     *Buffer = HvGetCell(Hive, Value->Data);
     if (!(*Buffer)) return FALSE;
 
@@ -301,8 +446,89 @@ CmpSetValueDataNew(IN PHHIVE Hive,
     PAGED_CODE();
     ASSERT(DataSize > CM_KEY_VALUE_SMALL);
 
-    /* Check if this is a big key */
-    ASSERT_VALUE_BIG(Hive, DataSize);
+    /* A big value is stored as a big data record: segment cells of at most
+       CM_KEY_VALUE_BIG bytes, a segment list cell, then the record itself */
+    if (CmpIsKeyValueBig(Hive, DataSize))
+    {
+        ULONG Needed, i, Remaining, SegSize;
+        HCELL_INDEX SegCell, ListCell, DbCell;
+        PHCELL_INDEX ListData;
+        PCM_BIG_DATA BigData;
+
+        Needed = (DataSize + CM_KEY_VALUE_BIG - 1) / CM_KEY_VALUE_BIG;
+        if (Needed > 0xFFFF)
+            return STATUS_INVALID_PARAMETER;
+
+        /* The list cell keeps its indices across the allocations below;
+           in this cmlib bins never move, so the pointer stays valid */
+        ListCell = HvAllocateCell(Hive, Needed * sizeof(HCELL_INDEX),
+                                  StorageType, HCELL_NIL);
+        if (ListCell == HCELL_NIL) return STATUS_INSUFFICIENT_RESOURCES;
+        ListData = (PHCELL_INDEX)HvGetCell(Hive, ListCell);
+        if (!ListData)
+        {
+            HvFreeCell(Hive, ListCell);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        for (i = 0, Remaining = DataSize; i < Needed; i++, Remaining -= SegSize)
+        {
+            PUCHAR Segment;
+
+            SegSize = min(Remaining, (ULONG)CM_KEY_VALUE_BIG);
+            SegCell = HvAllocateCell(Hive, SegSize, StorageType, ListCell);
+            if (SegCell == HCELL_NIL)
+            {
+                while (i--)
+                {
+                    HvFreeCell(Hive, ListData[i]);
+                }
+                HvFreeCell(Hive, ListCell);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+            Segment = (PUCHAR)HvGetCell(Hive, SegCell);
+            if (!Segment)
+            {
+                HvFreeCell(Hive, SegCell);
+                while (i--)
+                {
+                    HvFreeCell(Hive, ListData[i]);
+                }
+                HvFreeCell(Hive, ListCell);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+            RtlCopyMemory(Segment, (PUCHAR)Data + i * CM_KEY_VALUE_BIG, SegSize);
+            HvReleaseCell(Hive, SegCell);
+            ListData[i] = SegCell;
+        }
+
+        DbCell = HvAllocateCell(Hive, sizeof(CM_BIG_DATA), StorageType, ListCell);
+        if (DbCell == HCELL_NIL)
+        {
+            for (i = 0; i < Needed; i++)
+                HvFreeCell(Hive, ListData[i]);
+            HvFreeCell(Hive, ListCell);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        HvReleaseCell(Hive, ListCell);
+
+        BigData = (PCM_BIG_DATA)HvGetCell(Hive, DbCell);
+        if (!BigData)
+        {
+            for (i = 0; i < Needed; i++)
+                HvFreeCell(Hive, ListData[i]);
+            HvFreeCell(Hive, ListCell);
+            HvFreeCell(Hive, DbCell);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        BigData->Signature = CM_BIG_DATA_SIGNATURE;
+        BigData->Count = (USHORT)Needed;
+        BigData->List = ListCell;
+        HvReleaseCell(Hive, DbCell);
+
+        *DataCell = DbCell;
+        return STATUS_SUCCESS;
+    }
 
     /* Allocate a data cell */
     *DataCell = HvAllocateCell(Hive, DataSize, StorageType, HCELL_NIL);
@@ -494,9 +720,14 @@ CmpCopyValue(IN PHHIVE SourceHive,
     }
     else
     {
-        /* Big keys are currently unsupported */
-        ASSERT_VALUE_BIG(SourceHive, DataSize);
-        // Should use CmpGetValueData and CmpSetValueDataNew for big values!
+        /* Big values cannot be represented on the destination until a
+           1.4 writer exists; fail the copy cleanly */
+        if (CmpIsKeyValueBig(SourceHive, DataSize))
+        {
+            HvFreeCell(DestinationHive, NewValueCell);
+            NewValueCell = HCELL_NIL;
+            goto Quit;
+        }
 
         /* Regular value */
 

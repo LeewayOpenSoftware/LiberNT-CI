@@ -217,6 +217,7 @@ UserProcessDestroy(PEPROCESS Process)
     UserDestroyObjectsForOwner(gHandleTable, ppiCurrent);
     IntUipiFreeProcessFilters(ppiCurrent);
     RawInputCleanupProcess(ppiCurrent);
+    PointerCleanupProcess(ppiCurrent);
     UserCleanupPowerSettingNotifications(ppiCurrent);
 
     TRACE_CH(UserProcess, "Freeing ppi 0x%p\n", ppiCurrent);
@@ -374,11 +375,14 @@ ExitProcessCallback(PEPROCESS Process)
     IntCompositionCleanupProcess(Process);
     IntDCompositionCleanupProcess(ppiCurrent);
 
+    /* A dying font driver host fails its queued requests now */
+    UmfdProcessCleanup(Process);
+
+    /* Cleanup USER info, which still uses the GDI objects of its windows */
+    UserProcessDestroy(Process);
+
     /* Cleanup GDI info */
     GdiProcessDestroy(Process);
-
-    /* Cleanup USER info */
-    UserProcessDestroy(Process);
 
     /* The process is dying */
     PsSetProcessWin32Process(Process, NULL, ppiCurrent);
@@ -587,6 +591,32 @@ IntIsGuiImage(
     _SEH2_END;
 
     return bGui;
+}
+
+/* KiUserCallbackDispatcher calls through this table: no table means user32 is not loaded */
+static
+BOOL
+IntHasUserCallbackTable(
+    _In_ PEPROCESS Process)
+{
+    PPEB Peb = PsGetProcessPeb(Process);
+    BOOL bPresent = FALSE;
+
+    if (!Peb)
+        return FALSE;
+
+    _SEH2_TRY
+    {
+        ProbeForRead(&Peb->KernelCallbackTable, sizeof(PVOID), sizeof(PVOID));
+        bPresent = (Peb->KernelCallbackTable != NULL);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        bPresent = FALSE;
+    }
+    _SEH2_END;
+
+    return bPresent;
 }
 
 NTSTATUS NTAPI
@@ -847,15 +877,16 @@ InitThreadCallback(PETHREAD Thread)
         (VOID)UserCreateInputContext(0);
     }
 
-    /* Last things to do only if we are not a SYSTEM or CSRSS thread */
-    if (!(ptiCurrent->TIF_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD)))
+    /* Last things to do only if we are not a SYSTEM or CSRSS thread, and user32 is there to call */
+    if (!(ptiCurrent->TIF_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD)) &&
+        IntHasUserCallbackTable(Process))
     {
         /* Callback to User32 Client Thread Setup */
         TRACE_CH(UserThread, "Call co_IntClientThreadSetup...\n");
         Status = co_IntClientThreadSetup();
         if (!NT_SUCCESS(Status))
         {
-            ERR_CH(UserThread, "ClientThreadSetup failed with Status 0x%08lx\n", Status);
+            WARN_CH(UserThread, "ClientThreadSetup failed with Status 0x%08lx\n", Status);
             goto error;
         }
         TRACE_CH(UserThread, "co_IntClientThreadSetup succeeded!\n");
@@ -869,7 +900,7 @@ InitThreadCallback(PETHREAD Thread)
     return STATUS_SUCCESS;
 
 error:
-    ERR_CH(UserThread, "InitThreadCallback failed! Freeing pti 0x%p for TID:0x%lx\n",
+    WARN_CH(UserThread, "InitThreadCallback failed! Freeing pti 0x%p for TID:0x%lx\n",
            ptiCurrent, HandleToUlong(Thread->Cid.UniqueThread));
     ExitThreadCallback(Thread);
     return Status;
@@ -1109,6 +1140,7 @@ DriverUnload(IN PDRIVER_OBJECT DriverObject)
     // TODO: Do more cleanup!
 
     FreeFontSupport();
+    IntCompositionUnload();
     if (gpDisplaySession)
     {
         ResetCsrApiPort(gpDisplaySession);

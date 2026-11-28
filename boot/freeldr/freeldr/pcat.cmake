@@ -200,6 +200,7 @@ list(APPEND PCATLDR_BASE_SOURCE
 
 add_executable(freeldr_pe ${PCATLDR_BASE_SOURCE})
 target_compile_definitions(freeldr_pe PRIVATE _FRLDRLIB_)
+set_bootloader_optimization(freeldr_common freeldr_pe)
 
 set_target_properties(freeldr_pe
     PROPERTIES
@@ -247,7 +248,7 @@ if(STACK_PROTECTOR)
 endif()
 
 if(RUNTIME_CHECKS)
-    target_link_libraries(freeldr_pe runtmchk)
+    target_link_libraries(freeldr_pe runtmchk_boot)
     target_link_options(freeldr_pe PRIVATE "/MERGE:.rtc=.text")
 endif()
 

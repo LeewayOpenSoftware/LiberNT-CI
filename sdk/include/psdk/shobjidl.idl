@@ -4910,6 +4910,66 @@ interface IApplicationActivationManager : IUnknown
 }
 
 /*****************************************************************************
+ * IDesktopWallpaper interface
+ */
+cpp_quote("#if (NTDDI_VERSION >= NTDDI_WIN8) || defined(__REACTOS__)")
+typedef [v1_enum] enum DESKTOP_SLIDESHOW_OPTIONS
+{
+    DSO_SHUFFLEIMAGES = 0x01
+} DESKTOP_SLIDESHOW_OPTIONS;
+cpp_quote("DEFINE_ENUM_FLAG_OPERATORS(DESKTOP_SLIDESHOW_OPTIONS)")
+
+typedef [v1_enum] enum DESKTOP_SLIDESHOW_STATE
+{
+    DSS_ENABLED = 0x01,
+    DSS_SLIDESHOW = 0x02,
+    DSS_DISABLED_BY_REMOTE_SESSION = 0x04
+} DESKTOP_SLIDESHOW_STATE;
+cpp_quote("DEFINE_ENUM_FLAG_OPERATORS(DESKTOP_SLIDESHOW_STATE)")
+
+typedef [v1_enum] enum DESKTOP_SLIDESHOW_DIRECTION
+{
+    DSD_FORWARD = 0,
+    DSD_BACKWARD = 1
+} DESKTOP_SLIDESHOW_DIRECTION;
+
+typedef [v1_enum] enum DESKTOP_WALLPAPER_POSITION
+{
+    DWPOS_CENTER = 0,
+    DWPOS_TILE = 1,
+    DWPOS_STRETCH = 2,
+    DWPOS_FIT = 3,
+    DWPOS_FILL = 4,
+    DWPOS_SPAN = 5
+} DESKTOP_WALLPAPER_POSITION;
+
+[
+    object,
+    uuid(b92b56a9-8b55-4e14-9a89-0199bbb6f93b),
+    pointer_default(unique)
+]
+interface IDesktopWallpaper : IUnknown
+{
+    HRESULT SetWallpaper([in, unique] LPCWSTR monitorID, [in] LPCWSTR wallpaper);
+    HRESULT GetWallpaper([in, unique] LPCWSTR monitorID, [out, string] LPWSTR *wallpaper);
+    HRESULT GetMonitorDevicePathAt([in] UINT monitorIndex, [out, string] LPWSTR *monitorID);
+    HRESULT GetMonitorDevicePathCount([out] UINT *count);
+    HRESULT GetMonitorRECT([in] LPCWSTR monitorID, [out] RECT *displayRect);
+    HRESULT SetBackgroundColor([in] COLORREF color);
+    HRESULT GetBackgroundColor([out] COLORREF *color);
+    HRESULT SetPosition([in] DESKTOP_WALLPAPER_POSITION position);
+    HRESULT GetPosition([out] DESKTOP_WALLPAPER_POSITION *position);
+    HRESULT SetSlideshow([in] IShellItemArray *items);
+    HRESULT GetSlideshow([out] IShellItemArray **items);
+    HRESULT SetSlideshowOptions([in] DESKTOP_SLIDESHOW_OPTIONS options, [in] UINT slideshowTick);
+    HRESULT GetSlideshowOptions([out] DESKTOP_SLIDESHOW_OPTIONS *options, [out] UINT *slideshowTick);
+    HRESULT AdvanceSlideshow([in, unique] LPCWSTR monitorID, [in] DESKTOP_SLIDESHOW_DIRECTION direction);
+    HRESULT GetStatus([out] DESKTOP_SLIDESHOW_STATE *state);
+    HRESULT Enable([in] BOOL enable);
+}
+cpp_quote("#endif")
+
+/*****************************************************************************
  * ShellObjects typelibrary
  */
 [
@@ -5091,6 +5151,14 @@ library ShellObjects
     coclass FileOperation
     {
         interface IFileOperation;
+    }
+
+    [
+        uuid(c2cf3110-460e-4fc1-b9d0-8a1c0c9cc4bd)
+    ]
+    coclass DesktopWallpaper
+    {
+        interface IDesktopWallpaper;
     }
 
 #ifdef __REACTOS__

@@ -98,6 +98,12 @@ CcNtKickLazyWriter(VOID)
 {
 }
 
+BOOLEAN
+CcNtLazyIsStalled(VOID)
+{
+    return FALSE;
+}
+
 PCC_NT_MAP
 CcNtReferenceMap(PSECTION_OBJECT_POINTERS Pointers)
 {
@@ -253,7 +259,7 @@ TestNtPin(void)
     CC_NT_MAP Map = { 0 };
     TEST_FILE Backing;
     CC_CACHE Cache;
-    SECTION_OBJECT_POINTERS Pointers = { &Map };
+    SECTION_OBJECT_POINTERS Pointers = { .SharedCacheMap = &Map };
     FILE_OBJECT File = { .SectionObjectPointer = &Pointers };
     LARGE_INTEGER Offset = { .QuadPart = PAGE_SIZE };
     PVOID Bcb = (PVOID)(ULONG_PTR)1, Buffer = (PVOID)(ULONG_PTR)1;

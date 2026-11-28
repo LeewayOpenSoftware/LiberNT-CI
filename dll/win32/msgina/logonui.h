@@ -33,6 +33,9 @@ BOOL
 LogonUiCoverShown(VOID);
 
 BOOL
+LogonUiCoverSetStatus(_In_opt_ PCWSTR Message);
+
+BOOL
 LogonUiEverShown(VOID);
 
 DWORD

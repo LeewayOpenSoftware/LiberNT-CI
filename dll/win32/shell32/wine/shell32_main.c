@@ -38,6 +38,7 @@
 #include "shlobj.h"
 #include "rpcproxy.h"
 #include "shlwapi.h"
+#include "shlwapi_undoc.h"
 #include "propsys.h"
 #include "commoncontrols.h"
 
@@ -120,14 +121,44 @@ static DWORD shgfi_get_exe_type(LPCWSTR szFullPath)
  *
  * Decide if an item id list points to a shell shortcut
  */
+#define SHORTCUT_EXT_CACHE_SIZE 32
+
+typedef struct tagSHORTCUT_EXT
+{
+    char Ext[32];
+    LONG Generation;
+    BOOL IsShortcut;
+} SHORTCUT_EXT;
+
+static SHORTCUT_EXT s_ShortcutExts[SHORTCUT_EXT_CACHE_SIZE];
+static UINT s_ShortcutExtCount, s_ShortcutExtNext;
+static SRWLOCK s_ShortcutExtLock = SRWLOCK_INIT;
+
 BOOL SHELL_IsShortcut(LPCITEMIDLIST pidlLast)
 {
-    char szTemp[MAX_PATH];
+    char szExt[MAX_PATH], szTemp[MAX_PATH];
     HKEY keyCls;
     BOOL ret = FALSE;
+    LONG generation;
+    UINT i;
 
-    if (_ILGetExtension(pidlLast, szTemp, MAX_PATH) &&
-          HCR_MapTypeToValueA(szTemp, szTemp, MAX_PATH, TRUE))
+    if (!_ILGetExtension(pidlLast, szExt, MAX_PATH))
+        return FALSE;
+
+    generation = SHELL_AssocGenerationGet();
+    AcquireSRWLockShared(&s_ShortcutExtLock);
+    for (i = 0; i < s_ShortcutExtCount; i++)
+    {
+        if (s_ShortcutExts[i].Generation == generation && !lstrcmpiA(s_ShortcutExts[i].Ext, szExt))
+        {
+            ret = s_ShortcutExts[i].IsShortcut;
+            ReleaseSRWLockShared(&s_ShortcutExtLock);
+            return ret;
+        }
+    }
+    ReleaseSRWLockShared(&s_ShortcutExtLock);
+
+    if (HCR_MapTypeToValueA(szExt, szTemp, MAX_PATH, TRUE))
     {
         if (ERROR_SUCCESS == RegOpenKeyExA(HKEY_CLASSES_ROOT, szTemp, 0, KEY_QUERY_VALUE, &keyCls))
         {
@@ -136,6 +167,32 @@ BOOL SHELL_IsShortcut(LPCITEMIDLIST pidlLast)
 
           RegCloseKey(keyCls);
         }
+    }
+
+    if (strlen(szExt) < sizeof(s_ShortcutExts[0].Ext))
+    {
+        AcquireSRWLockExclusive(&s_ShortcutExtLock);
+        for (i = 0; i < s_ShortcutExtCount; i++)
+        {
+            if (!lstrcmpiA(s_ShortcutExts[i].Ext, szExt))
+                break;
+        }
+        if (i == s_ShortcutExtCount)
+        {
+            if (s_ShortcutExtCount < SHORTCUT_EXT_CACHE_SIZE)
+            {
+                i = s_ShortcutExtCount++;
+            }
+            else
+            {
+                i = s_ShortcutExtNext;
+                s_ShortcutExtNext = (s_ShortcutExtNext + 1) % SHORTCUT_EXT_CACHE_SIZE;
+            }
+        }
+        strcpy(s_ShortcutExts[i].Ext, szExt);
+        s_ShortcutExts[i].Generation = generation;
+        s_ShortcutExts[i].IsShortcut = ret;
+        ReleaseSRWLockExclusive(&s_ShortcutExtLock);
     }
 
     return ret;
@@ -1271,7 +1328,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
 const char * const SHELL_Authors[] =
 {
-    "Copyright 2026 LiberNT Team",
+    "Copyright 2026 Leeway Open Software",
     "Copyright 1993-"COPYRIGHT_YEAR" WINE team",
     "Copyright 1998-"COPYRIGHT_YEAR" ReactOS Team",
 #ifdef ENABLE_FEX_ARM64EC
@@ -2284,6 +2341,173 @@ static VOID SetRegTextData(HWND hWnd, HKEY hKey, LPCWSTR Value, UINT uID)
     }
 }
 
+/*************************************************************************
+ * About dialog (internal)
+ *
+ * The header shows the Orosi wordmark with plain GDI on the window colour,
+ * so it needs neither a theme nor DWM and follows the classic and the
+ * high-contrast schemes. Everything below the separator is ordinary dialog
+ * text, laid out like the Windows 11 About box.
+ */
+#define ABOUT_WORDMARK_CX 261   /* the 96 dpi bitmap */
+#define ABOUT_WORDMARK_CY 48
+
+typedef struct _ABOUT_STATE
+{
+    HBITMAP hbmWordmark;
+    int cxWordmark, cyWordmark;   /* bitmap size */
+    int cxDest, cyDest;           /* drawn size at the dialog's dpi */
+    int cyHeader;                 /* client top .. separator, in pixels */
+    HFONT hFontSecondary;
+    HWND hWndAuthors;
+    BOOL bShowingAuthors;
+} ABOUT_STATE;
+
+static BOOL SHELL_IsDarkSysColor(int nIndex)
+{
+    COLORREF c = GetSysColor(nIndex);
+    return (GetRValue(c) * 299 + GetGValue(c) * 587 + GetBValue(c) * 114) / 1000 < 128;
+}
+
+static BOOL SHELL_GetAboutWordmarkTint(COLORREF *pcrTint)
+{
+    HIGHCONTRASTW hc = { sizeof(hc) };
+
+    if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(hc), &hc, 0) && (hc.dwFlags & HCF_HIGHCONTRASTON))
+    {
+        *pcrTint = GetSysColor(COLOR_WINDOWTEXT);
+        return TRUE;
+    }
+    if (SHELL_IsDarkSysColor(COLOR_WINDOW))
+    {
+        *pcrTint = RGB(255, 255, 255);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static void SHELL_LoadAboutWordmark(ABOUT_STATE *state, int dpi)
+{
+    UINT id = dpi >= 192 ? IDB_OROSI_WORDMARK_200 : dpi >= 144 ? IDB_OROSI_WORDMARK_150 : IDB_OROSI_WORDMARK;
+    DIBSECTION ds;
+    COLORREF crTint;
+
+    state->hbmWordmark = (HBITMAP)LoadImageW(shell32_hInstance, MAKEINTRESOURCEW(id), IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
+    if (!state->hbmWordmark)
+        return;
+
+    if (GetObjectW(state->hbmWordmark, sizeof(ds), &ds) != sizeof(ds) ||
+        ds.dsBm.bmBitsPixel != 32 || !ds.dsBm.bmBits)
+    {
+        DeleteObject(state->hbmWordmark);
+        state->hbmWordmark = NULL;
+        return;
+    }
+
+    state->cxWordmark = ds.dsBm.bmWidth;
+    state->cyWordmark = ds.dsBm.bmHeight;
+    state->cxDest = MulDiv(ABOUT_WORDMARK_CX, dpi, 96);
+    state->cyDest = MulDiv(ABOUT_WORDMARK_CY, dpi, 96);
+
+    /* The art is brand blue with premultiplied alpha. High contrast draws
+       in system colours, so tint it to the window text colour there; on any
+       other dark window colour make it white. The alpha is kept. */
+    if (SHELL_GetAboutWordmarkTint(&crTint))
+    {
+        BYTE *p = ds.dsBm.bmBits;
+        LONG n = (LONG)ds.dsBm.bmWidthBytes * ds.dsBm.bmHeight / 4;
+
+        for (; n > 0; n--, p += 4)
+        {
+            p[0] = (BYTE)(GetBValue(crTint) * p[3] / 255);
+            p[1] = (BYTE)(GetGValue(crTint) * p[3] / 255);
+            p[2] = (BYTE)(GetRValue(crTint) * p[3] / 255);
+        }
+    }
+}
+
+static void SHELL_PaintAboutHeader(HWND hWnd, HDC hdc, ABOUT_STATE *state)
+{
+    RECT rc;
+    BOOL bDrawn = FALSE;
+
+    GetClientRect(hWnd, &rc);
+    rc.bottom = state->cyHeader;
+    FillRect(hdc, &rc, GetSysColorBrush(COLOR_WINDOW));
+
+    if (state->hbmWordmark)
+    {
+        HDC hdcMem = CreateCompatibleDC(hdc);
+
+        if (hdcMem)
+        {
+            BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+            HGDIOBJ hOld = SelectObject(hdcMem, state->hbmWordmark);
+
+            bDrawn = GdiAlphaBlend(hdc, (rc.right - state->cxDest) / 2, (state->cyHeader - state->cyDest) / 2,
+                                   state->cxDest, state->cyDest,
+                                   hdcMem, 0, 0, state->cxWordmark, state->cyWordmark, bf);
+            SelectObject(hdcMem, hOld);
+            DeleteDC(hdcMem);
+        }
+    }
+
+    if (!bDrawn)
+    {
+        /* No alpha blending on this display: name the system in the dialog font, three times its size */
+        LOGFONTW lf;
+        HFONT hFont = (HFONT)SendMessageW(hWnd, WM_GETFONT, 0, 0);
+
+        if (hFont && GetObjectW(hFont, sizeof(lf), &lf) == sizeof(lf))
+        {
+            lf.lfHeight *= 3;
+            lf.lfWidth = 0;
+            lf.lfWeight = FW_SEMIBOLD;
+            hFont = CreateFontIndirectW(&lf);
+            if (hFont)
+            {
+                HGDIOBJ hOldFont = SelectObject(hdc, hFont);
+
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+                DrawTextW(hdc, L"Orosi", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                SelectObject(hdc, hOldFont);
+                DeleteObject(hFont);
+            }
+        }
+    }
+}
+
+/* Dialog, statics and the link paint on the window colour; szOtherStuff is secondary */
+static INT_PTR SHELL_AboutCtlColor(HDC hdc, HWND hCtl)
+{
+    COLORREF crWindow = GetSysColor(COLOR_WINDOW);
+    COLORREF crText = GetSysColor(COLOR_WINDOWTEXT);
+
+    if (hCtl && GetDlgCtrlID(hCtl) == IDC_ABOUT_OTHERSTUFF && GetSysColor(COLOR_GRAYTEXT) != crWindow)
+        crText = GetSysColor(COLOR_GRAYTEXT);
+
+    SetBkColor(hdc, crWindow);
+    SetTextColor(hdc, crText);
+    return (INT_PTR)GetSysColorBrush(COLOR_WINDOW);
+}
+
+static void SHELL_OpenAboutLicense(HWND hWnd)
+{
+    WCHAR szPath[MAX_PATH];
+    UINT len = GetSystemWindowsDirectoryW(szPath, _countof(szPath));
+
+    if (len && len < _countof(szPath) && PathAppendW(szPath, L"LICENSE.txt") &&
+        GetFileAttributesW(szPath) != INVALID_FILE_ATTRIBUTES)
+    {
+        ShellExecuteW(hWnd, NULL, szPath, NULL, NULL, SW_SHOWNORMAL);
+    }
+    else
+    {
+        ShellExecuteW(hWnd, NULL, L"https://www.gnu.org/licenses/gpl-3.0.html", NULL, NULL, SW_SHOWNORMAL);
+    }
+}
+
 INT_PTR CALLBACK AboutAuthorsDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam )
 {
     switch(msg)
@@ -2309,10 +2533,15 @@ INT_PTR CALLBACK AboutAuthorsDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
 
             return TRUE;
         }
+
+        case WM_CTLCOLORDLG:
+        case WM_CTLCOLORSTATIC:
+            return SHELL_AboutCtlColor((HDC)wParam, (HWND)lParam);
     }
 
     return FALSE;
 }
+
 /*************************************************************************
  * AboutDlgProc            (internal)
  */
@@ -2320,10 +2549,7 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
 {
 #ifdef __REACTOS__
 
-    static DWORD   cxLogoBmp;
-    static DWORD   cyLogoBmp, cyLineBmp;
-    static HBITMAP hLogoBmp, hLineBmp;
-    static HWND    hWndAuthors;
+    ABOUT_STATE *state = (ABOUT_STATE *)GetWindowLongPtrW(hWnd, DWLP_USER);
 
     switch (msg)
     {
@@ -2331,33 +2557,56 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
         {
             ABOUT_INFO *info = (ABOUT_INFO *)lParam;
 
+            state = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*state));
+            SetWindowLongPtrW(hWnd, DWLP_USER, (LONG_PTR)state);
+
+            if (state)
+            {
+                HDC hdc = GetDC(hWnd);
+                int dpi = hdc ? GetDeviceCaps(hdc, LOGPIXELSX) : 96;
+                HWND hSeparator = GetDlgItem(hWnd, IDC_ABOUT_SEPARATOR);
+                RECT rcSeparator;
+                LOGFONTW lf;
+                HFONT hFont;
+
+                if (hdc)
+                    ReleaseDC(hWnd, hdc);
+
+                SHELL_LoadAboutWordmark(state, dpi);
+
+                if (hSeparator && GetWindowRect(hSeparator, &rcSeparator))
+                {
+                    MapWindowPoints(NULL, hWnd, (LPPOINT)&rcSeparator, 2);
+                    state->cyHeader = rcSeparator.top;
+                }
+                else
+                {
+                    state->cyHeader = MulDiv(ABOUT_WORDMARK_CY * 7 / 4, dpi, 96);
+                }
+
+                /* szOtherStuff ("Reporting NT ...") is secondary: one point smaller, grey */
+                hFont = (HFONT)SendMessageW(hWnd, WM_GETFONT, 0, 0);
+                if (hFont && GetObjectW(hFont, sizeof(lf), &lf) == sizeof(lf))
+                {
+                    lf.lfHeight = MulDiv(lf.lfHeight, 8, 9);
+                    state->hFontSecondary = CreateFontIndirectW(&lf);
+                    if (state->hFontSecondary)
+                        SendDlgItemMessageW(hWnd, IDC_ABOUT_OTHERSTUFF, WM_SETFONT, (WPARAM)state->hFontSecondary, FALSE);
+                }
+            }
+
             if (info)
             {
                 HKEY hRegKey;
-                MEMORYSTATUSEX MemStat;
                 WCHAR szAppTitle[512];
                 WCHAR szAppTitleTemplate[512];
                 WCHAR szAuthorsText[20];
 
-                // Preload the ROS bitmap
-                hLogoBmp = (HBITMAP)LoadImage(shell32_hInstance, MAKEINTRESOURCE(IDB_REACTOS), IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
-                hLineBmp = (HBITMAP)LoadImage(shell32_hInstance, MAKEINTRESOURCE(IDB_LINEBAR), IMAGE_BITMAP, 0, 0, LR_DEFAULTCOLOR);
-
-                if (hLogoBmp && hLineBmp)
-                {
-                    BITMAP bmpLogo;
-
-                    GetObject(hLogoBmp, sizeof(BITMAP), &bmpLogo);
-
-                    cxLogoBmp = bmpLogo.bmWidth;
-                    cyLogoBmp = bmpLogo.bmHeight;
-
-                    GetObject(hLineBmp, sizeof(BITMAP), &bmpLogo);
-                    cyLineBmp = bmpLogo.bmHeight;
-                }
-
                 // Set App-specific stuff (icon, app name, szOtherStuff string)
-                SendDlgItemMessageW(hWnd, IDC_ABOUT_ICON, STM_SETICON, (WPARAM)info->hIcon, 0);
+                if (info->hIcon)
+                    SendDlgItemMessageW(hWnd, IDC_ABOUT_ICON, STM_SETICON, (WPARAM)info->hIcon, 0);
+                else
+                    ShowWindow(GetDlgItem(hWnd, IDC_ABOUT_ICON), SW_HIDE);
 
                 GetWindowTextW(hWnd, szAppTitleTemplate, ARRAY_SIZE(szAppTitleTemplate));
                 swprintf(szAppTitle, _countof(szAppTitle), szAppTitleTemplate, info->szApp);
@@ -2383,104 +2632,85 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
                     RegCloseKey(hRegKey);
                 }
 
-                // Set the value for the installed physical memory
-                MemStat.dwLength = sizeof(MemStat);
-                if (GlobalMemoryStatusEx(&MemStat))
+                if (!GetParent(hWnd))
                 {
-                    WCHAR szBuf[12];
+                    RECT rcWork, rcDlg;
 
-                    if (MemStat.ullTotalPhys > 1024 * 1024 * 1024)
+                    if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0) && GetWindowRect(hWnd, &rcDlg))
                     {
-                        double dTotalPhys;
-                        WCHAR szDecimalSeparator[4];
-                        WCHAR szUnits[3];
-
-                        // We're dealing with GBs or more
-                        MemStat.ullTotalPhys /= 1024 * 1024;
-
-                        if (MemStat.ullTotalPhys > 1024 * 1024)
-                        {
-                            // We're dealing with TBs or more
-                            MemStat.ullTotalPhys /= 1024;
-
-                            if (MemStat.ullTotalPhys > 1024 * 1024)
-                            {
-                                // We're dealing with PBs or more
-                                MemStat.ullTotalPhys /= 1024;
-
-                                dTotalPhys = (double)MemStat.ullTotalPhys / 1024;
-                                wcscpy(szUnits, L"PB");
-                            }
-                            else
-                            {
-                                dTotalPhys = (double)MemStat.ullTotalPhys / 1024;
-                                wcscpy(szUnits, L"TB");
-                            }
-                        }
-                        else
-                        {
-                            dTotalPhys = (double)MemStat.ullTotalPhys / 1024;
-                            wcscpy(szUnits, L"GB");
-                        }
-
-                        // We need the decimal point of the current locale to display the RAM size correctly
-                        if (GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_SDECIMAL,
-                            szDecimalSeparator,
-                            ARRAY_SIZE(szDecimalSeparator)) > 0)
-                        {
-                            UCHAR uDecimals;
-                            UINT uIntegral;
-
-                            uIntegral = (UINT)dTotalPhys;
-                            uDecimals = (UCHAR)((UINT)(dTotalPhys * 100) - uIntegral * 100);
-
-                            // Display the RAM size with 2 decimals
-                            swprintf(szBuf, _countof(szBuf), L"%u%s%02u %s", uIntegral, szDecimalSeparator, uDecimals, szUnits);
-                        }
+                        SetWindowPos(hWnd, NULL,
+                                     rcWork.left + ((rcWork.right - rcWork.left) - (rcDlg.right - rcDlg.left)) / 2,
+                                     rcWork.top + ((rcWork.bottom - rcWork.top) - (rcDlg.bottom - rcDlg.top)) / 2,
+                                     0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
                     }
-                    else
-                    {
-                        // We're dealing with MBs, don't show any decimals
-                        swprintf(szBuf, _countof(szBuf), L"%u MB", (UINT)MemStat.ullTotalPhys / 1024 / 1024);
-                    }
-
-                    SetDlgItemTextW(hWnd, IDC_ABOUT_PHYSMEM, szBuf);
                 }
 
                 // Add the Authors dialog
-                hWndAuthors = CreateDialogW(shell32_hInstance, MAKEINTRESOURCEW(IDD_ABOUT_AUTHORS), hWnd, AboutAuthorsDlgProc);
+                if (state)
+                    state->hWndAuthors = CreateDialogW(shell32_hInstance, MAKEINTRESOURCEW(IDD_ABOUT_AUTHORS), hWnd, AboutAuthorsDlgProc);
                 LoadStringW(shell32_hInstance, IDS_SHELL_ABOUT_AUTHORS, szAuthorsText, ARRAY_SIZE(szAuthorsText));
                 SetDlgItemTextW(hWnd, IDC_ABOUT_AUTHORS, szAuthorsText);
             }
 
-            return TRUE;
+            /* OK is the default button and takes the focus, not the licence link */
+            SetFocus(GetDlgItem(hWnd, IDOK));
+            return FALSE;
         }
+
+        case WM_CTLCOLORDLG:
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN:
+            return SHELL_AboutCtlColor((HDC)wParam, (HWND)lParam);
 
         case WM_PAINT:
         {
-            if (hLogoBmp && hLineBmp)
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hWnd, &ps);
+
+            if (hdc && state)
+                SHELL_PaintAboutHeader(hWnd, hdc, state);
+
+            EndPaint(hWnd, &ps);
+            return TRUE;
+        }
+
+        case WM_SYSCOLORCHANGE:
+        {
+            /* Let the children (the SysLink especially) pick up the new system
+               colours, and re-tint the wordmark for the new scheme. */
+            HWND hChild = GetWindow(hWnd, GW_CHILD);
+
+            while (hChild)
             {
-                PAINTSTRUCT ps;
-                HDC hdc;
-                HDC hdcMem;
-                HGDIOBJ hOldObj;
+                SendMessageW(hChild, WM_SYSCOLORCHANGE, 0, 0);
+                hChild = GetWindow(hChild, GW_HWNDNEXT);
+            }
 
-                hdc = BeginPaint(hWnd, &ps);
-                hdcMem = CreateCompatibleDC(hdc);
+            if (state)
+            {
+                HDC hdc = GetDC(hWnd);
+                int dpi = hdc ? GetDeviceCaps(hdc, LOGPIXELSX) : 96;
 
-                if (hdcMem)
-                {
-                    hOldObj = SelectObject(hdcMem, hLogoBmp);
-                    BitBlt(hdc, 0, 0, cxLogoBmp, cyLogoBmp, hdcMem, 0, 0, SRCCOPY);
+                if (hdc)
+                    ReleaseDC(hWnd, hdc);
+                if (state->hbmWordmark)
+                    DeleteObject(state->hbmWordmark);
+                state->hbmWordmark = NULL;
+                SHELL_LoadAboutWordmark(state, dpi);
+            }
 
-                    SelectObject(hdcMem, hLineBmp);
-                    BitBlt(hdc, 0, cyLogoBmp, cxLogoBmp, cyLineBmp, hdcMem, 0, 0, SRCCOPY);
+            InvalidateRect(hWnd, NULL, TRUE);
+            return TRUE;
+        }
 
-                    SelectObject(hdcMem, hOldObj);
-                    DeleteDC(hdcMem);
-                }
+        case WM_NOTIFY:
+        {
+            NMHDR *hdr = (NMHDR *)lParam;
 
-                EndPaint(hWnd, &ps);
+            if (hdr && hdr->idFrom == IDC_ABOUT_LICENSE && (hdr->code == NM_CLICK || hdr->code == NM_RETURN))
+            {
+                SHELL_OpenAboutLicense(hWnd);
+                return TRUE;
             }
             break;
         }
@@ -2496,22 +2726,24 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
 
                 case IDC_ABOUT_AUTHORS:
                 {
-                    static BOOL bShowingAuthors = FALSE;
                     WCHAR szAuthorsText[20];
 
-                    if (bShowingAuthors)
+                    if (!state)
+                        return TRUE;
+
+                    if (state->bShowingAuthors)
                     {
                         LoadStringW(shell32_hInstance, IDS_SHELL_ABOUT_AUTHORS, szAuthorsText, ARRAY_SIZE(szAuthorsText));
-                        ShowWindow(hWndAuthors, SW_HIDE);
+                        ShowWindow(state->hWndAuthors, SW_HIDE);
                     }
                     else
                     {
                         LoadStringW(shell32_hInstance, IDS_SHELL_ABOUT_BACK, szAuthorsText, ARRAY_SIZE(szAuthorsText));
-                        ShowWindow(hWndAuthors, SW_SHOW);
+                        ShowWindow(state->hWndAuthors, SW_SHOW);
                     }
 
                     SetDlgItemTextW(hWnd, IDC_ABOUT_AUTHORS, szAuthorsText);
-                    bShowingAuthors = !bShowingAuthors;
+                    state->bShowingAuthors = !state->bShowingAuthors;
                     return TRUE;
                 }
             }
@@ -2521,13 +2753,24 @@ static INT_PTR CALLBACK AboutDlgProc( HWND hWnd, UINT msg, WPARAM wParam, LPARAM
         case WM_CLOSE:
             EndDialog(hWnd, TRUE);
             break;
+
+        case WM_DESTROY:
+            if (state)
+            {
+                if (state->hbmWordmark)
+                    DeleteObject(state->hbmWordmark);
+                if (state->hFontSecondary)
+                    DeleteObject(state->hFontSecondary);
+                HeapFree(GetProcessHeap(), 0, state);
+                SetWindowLongPtrW(hWnd, DWLP_USER, 0);
+            }
+            break;
     }
 
 #endif // __REACTOS__
 
     return 0;
 }
-
 
 /*************************************************************************
  * ShellAboutA                [SHELL32.288]
@@ -2572,6 +2815,11 @@ BOOL WINAPI ShellAboutW( HWND hWnd, LPCWSTR szApp, LPCWSTR szOtherStuff,
 #ifdef __REACTOS__
     WCHAR szVersionString[256];
     WCHAR szFormat[256];
+    ACTCTXW actctx = { sizeof(actctx) };
+    HANDLE hActCtx;
+    ULONG_PTR cookie = 0;
+    BOOL bActivated;
+    HMODULE hComCtl;
 #endif
 
     TRACE("\n");
@@ -2588,18 +2836,54 @@ BOOL WINAPI ShellAboutW( HWND hWnd, LPCWSTR szApp, LPCWSTR szOtherStuff,
 #ifdef __REACTOS__
     /* Output the version OS kernel strings */
     LoadStringW(shell32_hInstance, IDS_ABOUT_VERSION_STRING, szFormat, _countof(szFormat));
-    StringCchPrintfW(szVersionString, _countof(szVersionString), szFormat, KERNEL_VERSION_STR, KERNEL_VERSION_BUILD_STR);
+    /* "<Orosi version> (<arch-channel>)" plus the OS build; the LBI is part of
+       the Orosi version now (5.0.<LBI>), not a separate suffix. */
+    StringCchPrintfW(szVersionString, _countof(szVersionString), szFormat, OROSI_VERSION_FULL_STR, KERNEL_VERSION_BUILD_STR);
 #endif
 
     info.szApp        = szApp;
 #ifdef __REACTOS__
     info.szOSVersion  = szVersionString;
+    /* No icon means no icon: the header already names the system */
+    info.hIcon        = hIcon;
+#else
+    info.hIcon        = hIcon ? hIcon : LoadIconW( 0, (LPWSTR)IDI_WINLOGO );
 #endif
     info.szOtherStuff = szOtherStuff;
-    info.hIcon        = hIcon ? hIcon : LoadIconW( 0, (LPWSTR)IDI_WINLOGO );
+
+#ifdef __REACTOS__
+    /* The licence link is a SysLink, which only common controls v6 has.
+       A caller need not opt into v6, so the dialog runs under shell32's
+       own manifest, as the operations progress dialog does. */
+    actctx.dwFlags = ACTCTX_FLAG_RESOURCE_NAME_VALID | ACTCTX_FLAG_HMODULE_VALID;
+    actctx.hModule = shell32_hInstance;
+    actctx.lpResourceName = MAKEINTRESOURCEW(ISOLATIONAWARE_MANIFEST_RESOURCE_ID);
+    hActCtx = CreateActCtxW(&actctx);
+    bActivated = hActCtx != INVALID_HANDLE_VALUE && ActivateActCtx(hActCtx, &cookie);
+    hComCtl = LoadLibraryW(L"comctl32.dll");
+    if (hComCtl)
+    {
+        typedef BOOL (WINAPI *INITCOMMONCONTROLSEX_FN)(const INITCOMMONCONTROLSEX *);
+        INITCOMMONCONTROLSEX_FN pInit = (INITCOMMONCONTROLSEX_FN)GetProcAddress(hComCtl, "InitCommonControlsEx");
+        INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_LINK_CLASS | ICC_STANDARD_CLASSES };
+
+        if (pInit)
+            pInit(&icc);
+    }
+#endif
 
     bRet = DialogBoxIndirectParamW((HINSTANCE)GetWindowLongPtrW( hWnd, GWLP_HINSTANCE ),
                                    DlgTemplate, hWnd, AboutDlgProc, (LPARAM)&info );
+
+#ifdef __REACTOS__
+    if (hComCtl)
+        FreeLibrary(hComCtl);
+    if (bActivated)
+        DeactivateActCtx(0, cookie);
+    if (hActCtx != INVALID_HANDLE_VALUE)
+        ReleaseActCtx(hActCtx);
+#endif
+
     return bRet;
 }
 

@@ -13,6 +13,7 @@ add_library(ntfslib_host STATIC
     ${NTFSLIB_ROOT}/src/capi/lfs.cpp
     ${NTFSLIB_ROOT}/src/capi/mft.cpp
     ${NTFSLIB_ROOT}/src/capi/volume.cpp
+    ${NTFSLIB_ROOT}/src/usn/journal.cpp
     ${NTFSLIB_ROOT}/src/filerecord/attributes/addattr.cpp
     ${NTFSLIB_ROOT}/src/filerecord/attributes/findattr.cpp
     ${NTFSLIB_ROOT}/src/filerecord/read/allocation.cpp
@@ -29,7 +30,9 @@ add_library(ntfslib_host STATIC
     ${NTFSLIB_ROOT}/src/filerecord/write/filedata.cpp
     ${NTFSLIB_ROOT}/src/filerecord/write/filename.cpp
     ${NTFSLIB_ROOT}/src/filerecord/write/move.cpp
+    ${NTFSLIB_ROOT}/src/filerecord/write/objectid.cpp
     ${NTFSLIB_ROOT}/src/filerecord/write/reparse.cpp
+    ${NTFSLIB_ROOT}/src/filerecord/write/streamrename.cpp
     ${NTFSLIB_ROOT}/src/filerecord/filerecord.cpp
     ${NTFSLIB_ROOT}/src/filerecord/fixup.cpp
     ${NTFSLIB_ROOT}/src/lfs/lfs.cpp
@@ -52,9 +55,12 @@ target_compile_features(ntfslib_host PUBLIC cxx_std_17)
 target_compile_definitions(ntfslib_host PUBLIC
     NTFSLIB_PORTABLE=1
     _FILE_OFFSET_BITS=64)
-target_compile_options(ntfslib_host PUBLIC
-    -fshort-wchar
-    -Wno-multichar)
+if(NOT MSVC)
+    # MSVC's wchar_t is already 16-bit; these are GCC/Clang spellings.
+    target_compile_options(ntfslib_host PUBLIC
+        -fshort-wchar
+        -Wno-multichar)
+endif()
 target_include_directories(ntfslib_host
     PUBLIC
         ${NTFSLIB_ROOT}/include/public
@@ -72,9 +78,11 @@ target_compile_features(ntfslib_format_host PUBLIC cxx_std_17)
 target_compile_definitions(ntfslib_format_host PUBLIC
     NTFSLIB_PORTABLE=1
     _FILE_OFFSET_BITS=64)
-target_compile_options(ntfslib_format_host PUBLIC
-    -fshort-wchar
-    -Wno-multichar)
+if(NOT MSVC)
+    target_compile_options(ntfslib_format_host PUBLIC
+        -fshort-wchar
+        -Wno-multichar)
+endif()
 target_include_directories(ntfslib_format_host
     PUBLIC ${NTFSLIB_ROOT}/include/public
     PRIVATE ${NTFSLIB_ROOT}/src/format)

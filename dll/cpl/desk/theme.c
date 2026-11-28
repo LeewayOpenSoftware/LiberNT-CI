@@ -124,9 +124,7 @@ LoadCurrentScheme(OUT COLOR_SCHEME *scheme)
     INT i, Result;
     HKEY hKey;
     BOOL ret;
-#if (WINVER >= 0x0600)
     OSVERSIONINFO osvi;
-#endif
 
     /* Load colors */
     for (i = 0; i < NUM_COLORS; i++)
@@ -137,7 +135,6 @@ LoadCurrentScheme(OUT COLOR_SCHEME *scheme)
     /* Load non client metrics */
     scheme->ncMetrics.cbSize = sizeof(NONCLIENTMETRICSW);
 
-#if (WINVER >= 0x0600)
     /* Size of NONCLIENTMETRICSA/W depends on current version of the OS.
      * see:
      *  https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-nonclientmetricsa
@@ -148,7 +145,6 @@ LoadCurrentScheme(OUT COLOR_SCHEME *scheme)
         if (osvi.dwMajorVersion <= 5)
             scheme->ncMetrics.cbSize -= sizeof(scheme->ncMetrics.iPaddedBorderWidth);
     }
-#endif
 
     ret = SystemParametersInfoW(SPI_GETNONCLIENTMETRICS,
                                 sizeof(NONCLIENTMETRICSW),
@@ -1062,10 +1058,29 @@ BOOL ActivateThemeFile(LPCWSTR pwszFile)
     if (pwszFile)
     {
         WCHAR szColor[100] = {0};
-        LPCWSTR pColor = NULL;
+        WCHAR styleBuf[MAX_PATH], rawPath[MAX_PATH], themeColor[100] = {0}, themeSize[100] = {0};
+        LPCWSTR styleFile = pwszFile;
+        LPCWSTR pColor = NULL, pSize = NULL;
         HKEY hKey;
+        size_t len = wcslen(pwszFile);
 
-        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\ThemeManager", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+        /* A .theme file is an INI that names the real .msstyles in [VisualStyles] Path (with its ColorStyle and
+         * Size). The theme loader and the trust gate work on a store .msstyles path, not on the .theme file, so
+         * read the style the .theme points at and apply that, expanding %SystemRoot% and the like. */
+        if (len >= 6 && !_wcsicmp(pwszFile + len - 6, L".theme"))
+        {
+            GetPrivateProfileStringW(L"VisualStyles", L"Path", L"", rawPath, ARRAYSIZE(rawPath), pwszFile);
+            GetPrivateProfileStringW(L"VisualStyles", L"ColorStyle", L"", themeColor, ARRAYSIZE(themeColor), pwszFile);
+            GetPrivateProfileStringW(L"VisualStyles", L"Size", L"", themeSize, ARRAYSIZE(themeSize), pwszFile);
+            if (rawPath[0] && ExpandEnvironmentStringsW(rawPath, styleBuf, ARRAYSIZE(styleBuf)))
+                styleFile = styleBuf;
+            if (themeColor[0]) pColor = themeColor;
+            if (themeSize[0])  pSize = themeSize;
+        }
+
+        /* When the .theme named no colour (or this was a plain .msstyles path), keep the user's current colour. */
+        if (!pColor &&
+            RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\ThemeManager", 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
         {
             DWORD dwType = 0;
             DWORD cbData = sizeof(szColor);
@@ -1080,9 +1095,9 @@ BOOL ActivateThemeFile(LPCWSTR pwszFile)
             RegCloseKey(hKey);
         }
 
-        ret = FindOrAppendTheme(pThemes, pwszFile, pColor, NULL, &selection);
+        ret = FindOrAppendTheme(pThemes, styleFile, pColor, pSize, &selection);
         if (!ret && pColor)
-            ret = FindOrAppendTheme(pThemes, pwszFile, NULL, NULL, &selection);
+            ret = FindOrAppendTheme(pThemes, styleFile, NULL, pSize, &selection);
         if (!ret)
             goto cleanup;
 

@@ -5,6 +5,31 @@
  * COPYRIGHT:   Copyright 2011-2024 Timo Kreuzer (timo.kreuzer@reactos.org)
  */
 
+/*
+ * Speculation control site: a marked 7-byte nop whose address goes into the .spsites table.
+ * KiApplySpeculationPolicy rewrites the listed sites at boot when a policy asks for them;
+ * the last byte names the kind (see KSPEC_SITE_* in ntoskrnl/ke/specctrl.c).
+ */
+#ifdef _USE_ML
+MACRO(SPEC_SITE, Kind)
+    LOCAL SpecSite
+SpecSite:
+    db 0Fh, 1Fh, 80h, 4Ch, 4Eh, 54h, Kind
+SPSITES SEGMENT READONLY ALIGN(4) ALIAS(".spsites") 'CONST'
+    DD IMAGEREL SpecSite
+SPSITES ENDS
+ENDM
+#else
+MACRO(SPEC_SITE, Kind)
+.Lspsite\@:
+    .byte 0x0F, 0x1F, 0x80, 0x4C, 0x4E, 0x54, Kind
+    .pushsection .spsites, "dr"
+    .p2align 2
+    .rva .Lspsite\@
+    .popsection
+ENDM
+#endif
+
 #ifdef _USE_ML
 
 MACRO(ASSERT_TRAP_FRAME_INTS_ENABLED, Register)
@@ -238,6 +263,7 @@ TF_HAS_ERROR_CODE       = HEX(40)
 TF_SEND_EOI             = HEX(80)
 //TF_SYSTEMSERVICE        = (TRAPFLAG_VOLATILES or TRAPFLAG_DEBUG)
 TF_CHECKUSERAPC         = HEX(100)
+TF_SPEC_PARANOID        = HEX(200)  /* NMI, #MC, #DF: may interrupt the kernel exit after SPEC_CTRL went back to user */
 
 /*
  * Stack Layout:
@@ -334,6 +360,8 @@ MACRO(EnterTrap, Flags)
     mov ds, ax
     mov es, ax
     swapgs
+    SPEC_SITE HEX(46) /* fence */
+    SPEC_SITE HEX(49) /* kernel entry */
 
     SAVE_USER_DEBUG_REGISTERS rbp
 
@@ -352,9 +380,23 @@ kernel_mode_entry:
 #else
 2:
 #endif
+    SPEC_SITE HEX(46) /* fence */
+    if ((Flags) AND TF_SPEC_PARANOID)
+        /* Saves SPEC_CTRL in the frame and sets IBRS without trusting gs */
+        SPEC_SITE HEX(50) /* paranoid entry */
+    endif
 
     if ((Flags) AND TF_DEBUG)
         SAVE_DEBUG_REGISTERS rbp, rax
+    else
+        /* Not saved on this path: a context must not report stack contents as debug registers */
+        xor eax, eax
+        mov [rbp + KTRAP_FRAME_Dr0], rax
+        mov [rbp + KTRAP_FRAME_Dr1], rax
+        mov [rbp + KTRAP_FRAME_Dr2], rax
+        mov [rbp + KTRAP_FRAME_Dr3], rax
+        mov [rbp + KTRAP_FRAME_Dr6], rax
+        mov [rbp + KTRAP_FRAME_Dr7], rax
     endif
 #ifdef _USE_ML
 debug_registers_saved:
@@ -376,6 +418,9 @@ ENDM
  *  ExitTrap - Restore registers and free stack space
  */
 MACRO(ExitTrap, Flags)
+#ifdef _USE_ML
+    LOCAL BuffersCleared
+#endif
 
     ASSERT_TRAP_FRAME_IRQL_VALID rbp
 
@@ -412,6 +457,9 @@ MACRO(ExitTrap, Flags)
     RESTORE_PICO_FS_BASE
     RESTORE_USER_DEBUG_REGISTERS rbp
 
+    /* The exit stub finds this processor through gs, so it runs before the swap */
+    SPEC_SITE HEX(58) /* kernel exit */
+
     /* Swap gs to user mode */
     swapgs
 #ifdef _USE_ML
@@ -425,6 +473,9 @@ kernel_mode_return:
 #else
 2:
 #endif
+    if ((Flags) AND TF_SPEC_PARANOID)
+        SPEC_SITE HEX(70) /* paranoid exit */
+    endif
 
     if ((Flags) AND TF_DEBUG)
         RESTORE_DEBUG_REGISTERS rbp, rdx
@@ -466,10 +517,43 @@ debug_registers_restored:
         mov dword ptr [APIC_EOI], 0
     endif
 
+    /* Clear CPU buffers as the last step of a return to user mode */
+    test byte ptr [rsp + 8], 1
+#ifdef _USE_ML
+    jz BuffersCleared
+#else
+    jz 5f
+#endif
+    SPEC_SITE HEX(4D) /* verw */
+#ifdef _USE_ML
+BuffersCleared:
+#else
+5:
+#endif
+
     /* Return from the trap */
     iretq
 ENDM
 
+
+/* rsp = rbp = the trap frame, interrupts disabled: continue on the processor's ISR stack unless
+   already on it (nested interrupt) or it does not exist yet. Clobbers rax, rcx, rdx. */
+MACRO(SwitchToIsrStack)
+    mov rax, gs:[PcIsrStack]
+    mov rcx, rax
+    sub rcx, rsp
+    lea rdx, [rax - 32]
+    cmp rcx, ISR_STACK_SIZE
+    cmovbe rdx, rsp
+    test rax, rax
+    cmovz rdx, rsp
+    mov rsp, rdx
+ENDM
+
+/* Interrupts disabled: back to the trap frame */
+MACRO(SwitchFromIsrStack)
+    mov rsp, rbp
+ENDM
 
 #ifdef _USE_ML
 MACRO(TRAP_ENTRY, Trap, Flags)
@@ -479,9 +563,11 @@ MACRO(TRAP_ENTRY, Trap, Flags)
         /* Common code to create the trap frame */
         EnterTrap Flags
 
-        /* Call the C handler */
+        /* Call the C handler on the ISR stack */
+        SwitchToIsrStack
         mov rcx, rbp
         call Trap&Handler
+        SwitchFromIsrStack
 
         /* Leave */
         ExitTrap Flags
@@ -495,9 +581,11 @@ MACRO(TRAP_ENTRY, Trap, Flags)
         /* Common code to create the trap frame */
         EnterTrap Flags
 
-        /* Call the C handler */
+        /* Call the C handler on the ISR stack */
+        SwitchToIsrStack
         mov rcx, rbp
         call \Trap\()Handler
+        SwitchFromIsrStack
 
         /* Leave */
         ExitTrap Flags

@@ -15,7 +15,9 @@ class CFontExt :
     public IPersistFolder2,
     public IDropTarget
 {
-    CComHeapPtr<ITEMIDLIST> m_Folder;
+    CComHeapPtr<ITEMIDLIST> m_Folder;   // the Fonts folder (data objects, notifications)
+    CComHeapPtr<ITEMIDLIST> m_Self;     // this folder: m_Folder, or m_Folder + family stack
+    CStringW m_FamilyKey;               // empty for the root, the family grouping key for a stack
     BOOL m_bDragAccepted = FALSE;
     HWND m_hwndView = nullptr;
 
@@ -24,12 +26,21 @@ class CFontExt :
         UINT uMsg, WPARAM wParam, LPARAM lParam);
     HRESULT PreviewItems(IDataObject* pDataObj);
     HRESULT DeleteItems(IDataObject* pDataObj);
+    HRESULT ToggleHidden(IDataObject* pDataObj);
+    HRESULT OpenFamily(IDataObject* pDataObj);
+    CStringW ColumnText(PCUITEMID_CHILD pidl, UINT iColumn);
+    HRESULT ExpandedDataObject(UINT cidl, PCUITEMID_CHILD_ARRAY apidl, REFIID riid, LPVOID* ppvOut);
+    static HRESULT CALLBACK FamilyMenuCallback(
+        IShellFolder *psf, HWND hwnd, IDataObject *pdtobj,
+        UINT uMsg, WPARAM wParam, LPARAM lParam);
 
 public:
     CFontExt();
     ~CFontExt();
 
     void SetViewWindow(HWND hwndView);
+    const CStringW& GetFamilyKey() const { return m_FamilyKey; }
+    HRESULT InitFamily(PCIDLIST_ABSOLUTE rootFolder, PCIDLIST_ABSOLUTE self, PCWSTR familyKey);
 
     // *** IShellFolder2 methods ***
     STDMETHODIMP GetDefaultSearchGUID(GUID *lpguid) override;

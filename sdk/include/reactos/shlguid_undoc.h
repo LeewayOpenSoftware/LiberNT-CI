@@ -262,6 +262,15 @@ DEFINE_GUID(CLSID_TextPreviewHandler,               0x1531D583, 0x8375, 0x4D3F, 
 #define CGID_IDeskBand IID_IDeskBand
 #define CGID_MenuBand CLSID_MenuBand
 
+/* LiberNT: the Explorer file window (cabinet) hosting a view or the navigation
+ * pane. QueryService gives an IOleCommandTarget, and the same GUID is its command
+ * group: CABINETFRAME_CMD_* with pvaIn = VT_UNKNOWN IShellItem. Its presence is
+ * what "OnlyInBrowserWindow" verbs require. */
+DEFINE_GUID(SID_SCabinetFrame,             0xD8D516EC, 0x323F, 0x4FBD, 0xBB, 0x7C, 0x62, 0x96, 0xDB, 0x01, 0x65, 0x27);
+#define CGID_CabinetFrame SID_SCabinetFrame
+#define CABINETFRAME_CMD_OPENNEWTAB    1
+#define CABINETFRAME_CMD_OPENNEWWINDOW 2
+
 #define SID_STravelLogCursor IID_ITravelLogStg
 #define SID_IBandSite IID_IBandSite
 #define SID_IShellBrowser IID_IShellBrowser

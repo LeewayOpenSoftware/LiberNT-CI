@@ -6,6 +6,7 @@
  */
 
 #include <rtcapi.h>
+#include <stdarg.h>
 
 #if defined(_M_IX86)
 #pragma comment(linker, "/alternatename:__CRT_RTC_INITW=__CRT_RTC_INITW0")
@@ -32,6 +33,32 @@ void* __cdecl memset_fallback(void* src, int val, size_t count)
 #pragma comment(linker, "/alternatename:__RTC_memset=memset_fallback")
 #endif
 
+/* Boot-time consumers (FreeLdr, the EFI boot applications) link the
+ * runtmchk_boot flavour, built with RTC_NO_DBGPRINT: their support libraries
+ * define DbgPrint themselves, and letting the linker satisfy this reference
+ * from those libraries drags the generic firmware entry object (with its
+ * unresolved BlMain) into applications that have their own entry point. */
+#ifndef RTC_NO_DBGPRINT
+/* DbgPrint is provided by ntdll in user mode, the kernel, and FreeLdr, but a
+ * few ultra-minimal modules link runtmchk without importing it (keyboard
+ * layout DLLs import nothing). Provide a no-op fallback via /alternatename,
+ * the same mechanism used for memset above, so those modules stay linkable
+ * while everything else gets the real DbgPrint. Declared here to avoid
+ * pulling a debug header into this low-level support file. */
+unsigned long __cdecl DbgPrint(const char *Format, ...);
+
+unsigned long __cdecl DbgPrint_fallback(const char *Format, ...)
+{
+    (void)Format;
+    return 0;
+}
+#if defined(_M_IX86)
+#pragma comment(linker, "/alternatename:_DbgPrint=_DbgPrint_fallback")
+#else
+#pragma comment(linker, "/alternatename:DbgPrint=DbgPrint_fallback")
+#endif
+#endif /* RTC_NO_DBGPRINT */
+
 int
 __cdecl
 _RTC_DefaultErrorFuncW(
@@ -42,7 +69,37 @@ _RTC_DefaultErrorFuncW(
     const wchar_t *format,
     ...)
 {
-    /* Simple fallback function */
+    static const char *const _RtcErrNames[] =
+    {
+        "stack check", "value truncation", "stack corruption",
+        "uninitialized local use", "corrupted alloca", "illegal"
+    };
+    const char *name = ((errType >= 0) && (errType <= _RTC_ILLEGAL)) ?
+                       _RtcErrNames[errType] : "unknown";
+
+    /* Report the failure before breaking, so a /RTC trip is self-describing
+     * in the debug log instead of a bare int3 (STATUS_BREAKPOINT). For a use
+     * of an uninitialized local, the caller's wide format carries the variable
+     * name as a narrow string (%S), so pull it and name it. */
+#ifndef RTC_NO_DBGPRINT
+    if (errType == _RTC_UNINIT_LOCAL_USE)
+    {
+        va_list args;
+        const char *var;
+        va_start(args, format);
+        var = va_arg(args, const char *);
+        va_end(args);
+        DbgPrint("RTC failure %d (%s): uninitialized local '%s' used\n",
+                 errType, name, var ? var : "?");
+    }
+    else
+    {
+        DbgPrint("RTC failure %d (%s)\n", errType, name);
+    }
+#else
+    (void)name;
+#endif
+
     __debugbreak();
     return 0;
 }

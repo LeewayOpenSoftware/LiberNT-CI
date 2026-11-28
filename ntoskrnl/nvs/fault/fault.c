@@ -58,8 +58,10 @@ MiReleaseBackingStore(
     _Inout_ PMI_SYSTEM System,
     _In_ MI_PTE SoftPte)
 {
-    if (System->PageFile != NULL && MiSoftKind(SoftPte) == MiSoftPageFile)
-        MiPageFileReleaseSlot(System->PageFile, MiSoftValue(SoftPte));
+    PMI_PAGEFILE PageFile = MiSystemGetPageFile(System);
+
+    if (PageFile != NULL && MiSoftKind(SoftPte) == MiSoftPageFile)
+        MiPageFileReleaseSlot(PageFile, MiSoftValue(SoftPte));
 }
 
 VOID
@@ -202,6 +204,7 @@ MiResolveValidFault(
     ULONG Frame = (ULONG)MiArchPteFrame(Pte);
     MI_PTE Updated = Pte;
 
+    MI_ASSERT(MiArchPteIsValid(Pte));
     if (UserMode && !MiArchPteIsUser(Pte))
         return STATUS_ACCESS_VIOLATION;
 
@@ -255,6 +258,13 @@ MiMakePageValid(
 {
     ULONG Flags = (Space->IsSystem ? MI_LEAF_GLOBAL : MI_LEAF_USER) | (Dirty ? MI_LEAF_DIRTY : 0);
 
+    MI_ASSERT(Slot != NULL);
+    MI_ASSERT((VirtualAddress & (PAGE_SIZE - 1)) == 0);
+    MI_ASSERT(TableFrame < Space->System->Pfn.FrameCount);
+    MI_ASSERT(Frame < Space->System->Pfn.FrameCount);
+    MI_ASSERT(MI_ATOMIC_READ32(&Space->System->Pfn.Pfn[Frame].ShareCount) > 0);
+    MI_ASSERT(MI_PROT_IS_ACCESSIBLE(Protection));
+    MI_ASSERT(!MiArchPteIsValid(MiArchPteRead(Slot)));
     if (Dirty)
         MiPfnSetModified(&Space->System->Pfn, Frame);
     if (MI_PROT_IS_EXECUTE(Protection) && Space->System->Arch->RequiresExplicitIcacheSync &&
@@ -271,6 +281,8 @@ MiMakePageValid(
 
     MiPtWrite(Space, VirtualAddress, Slot, TableFrame,
               MiArchPteMakeLeaf(Frame, MI_PROT_IS_GUARD(Protection) ? Protection & ~MI_PROT_GUARD : Protection, Flags));
+    MI_ASSERT(MiArchPteIsValid(MiArchPteRead(Slot)));
+    MI_ASSERT(MiArchPteFrame(MiArchPteRead(Slot)) == Frame);
     MI_ATOMIC_ADD64(&Space->ResidentPages, 1);
     return STATUS_SUCCESS;
 }
@@ -303,6 +315,7 @@ MiFaultWorker(
     KIRQL OldIrql;
     BOOLEAN ManagedWrite;
     BOOLEAN WasValid = FALSE;
+    BOOLEAN CopyCharged = FALSE;
 
     if (VirtualAddress < Space->LowestVa || VirtualAddress > Space->HighestVa ||
         MiArchIsSelfMapAddress(VirtualAddress))
@@ -385,7 +398,35 @@ RetryPage:
         if (Status == STATUS_PENDING_COPY)
         {
             WasValid = FALSE;
+            if (Vad->Type == MiVadPrivate)
+            {
+                Status = STATUS_ACCESS_VIOLATION;
+                goto Complete;
+            }
+
+            /* The owner-commit callback runs at the caller's IRQL, so charge the
+             * private copy with the PFN lock dropped and re-validate the PTE. A
+             * concurrent accessed-bit update costs one extra return and retry. */
+            MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
+            CopyCharged = MiChargeCommit(Space, 1);
+            OldIrql = MiPfnLock(&System->Pfn, TableFrame);
+            if (!CopyCharged)
+            {
+                Status = STATUS_COMMITMENT_LIMIT;
+                goto Complete;
+            }
+            if (MiArchPteRead(Slot) != RawPte)
+            {
+                MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
+                MiReturnCommit(Space, 1);
+                OldIrql = MiPfnLock(&System->Pfn, TableFrame);
+                CopyCharged = FALSE;
+                goto RetryPage;
+            }
+
             Status = MiCopyOnWrite(Space, Vad, PageVa, Slot, TableFrame, Pte);
+            if (NT_SUCCESS(Status))
+                CopyCharged = FALSE;
         }
         goto Complete;
     }
@@ -530,10 +571,11 @@ RetryPage:
 
         case MiSoftPageFile:
         {
+            PMI_PAGEFILE PageFile = MiSystemGetPageFile(System);
             LONG64 Generation;
             PVOID Mapping;
 
-            if (System->PageFile == NULL)
+            if (PageFile == NULL)
             {
                 Status = STATUS_IN_PAGE_ERROR;
                 break;
@@ -559,7 +601,7 @@ RetryPage:
             MI_RW_RELEASE_SHARED(&Space->Lock);
 
             Mapping = MiPfnMapFrame(&System->Pfn, Frame);
-            Status = System->PageFile->Ops.Read(System->PageFile->Context, MiSoftValue(Pte), Mapping);
+            Status = PageFile->Ops.Read(PageFile->Context, MiSoftValue(Pte), Mapping);
             MiPfnUnmapFrame(&System->Pfn, Mapping);
             if (!NT_SUCCESS(Status))
             {
@@ -606,13 +648,13 @@ RetryPage:
 
             SlotAddress = MiPtSlotAddress(Slot, TableFrame, PageVa);
             MI_ATOMIC_ADD64(&Space->PageFileGeneration, 1);
-            MI_ATOMIC_ADD64(&System->PageFile->PagesRead, 1);
+            MI_ATOMIC_ADD64(&PageFile->PagesRead, 1);
             MiPfnInitializePage(&System->Pfn, Frame, SlotAddress, TableFrame, Pte, 0);
             Status = MiMakePageValid(Space, PageVa, Slot, TableFrame, Frame, Protection,
                                      (BOOLEAN)(Access == MiFaultWrite));
             if (Access == MiFaultWrite)
             {
-                MiPageFileReleaseSlot(System->PageFile, MiSoftValue(Pte));
+                MiPageFileReleaseSlot(PageFile, MiSoftValue(Pte));
                 System->Pfn.Pfn[Frame].OriginalPte = MiSoftMake(MiSoftDemandZero, Protection, 0);
             }
             MI_ATOMIC_ADD64(&Space->PageFileFaults, 1);
@@ -640,6 +682,8 @@ Complete:
         }
     }
     MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
+    if (CopyCharged)
+        MiReturnCommit(Space, 1);
     MI_RW_RELEASE_SHARED(&Space->Lock);
     if (NT_SUCCESS(Status) || Status == STATUS_GUARD_PAGE_VIOLATION ||
         Status == STATUS_EXECUTABLE_MEMORY_WRITE)

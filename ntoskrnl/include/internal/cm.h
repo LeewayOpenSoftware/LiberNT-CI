@@ -128,6 +128,11 @@
 // Cache Lookup & KCB Array constructs
 //
 #define CMP_SUBKEY_LEVELS_DEPTH_LIMIT   32
+
+//
+// Deepest key, counting \Registry as the first level
+//
+#define CMP_KEY_DEPTH_MAX               512
 #define CMP_KCBS_IN_ARRAY_LIMIT         (CMP_SUBKEY_LEVELS_DEPTH_LIMIT + 2)
 
 //
@@ -985,6 +990,7 @@ CmpInitializeHive(
     _In_opt_ PVOID HiveData,
     _In_ HANDLE Primary,
     _In_ HANDLE Log,
+    _In_opt_ HANDLE Log2,
     _In_ HANDLE External,
     _In_ HANDLE Alternate,
     _In_opt_ PCUNICODE_STRING FileName,
@@ -1026,6 +1032,15 @@ CmpOpenHiveFiles(
     IN BOOLEAN MarkAsSystemHive,
     IN BOOLEAN NoBuffering,
     OUT PULONG ClusterSize OPTIONAL
+);
+
+NTSTATUS
+NTAPI
+CmpOpenHiveLog2(
+    IN POBJECT_ATTRIBUTES Base,
+    IN PCUNICODE_STRING BaseName,
+    IN BOOLEAN NewHive,
+    OUT PHANDLE Log2
 );
 
 VOID
@@ -1796,6 +1811,13 @@ CmSaveKey(
     IN HANDLE FileHandle,
     IN ULONG Flags
 );
+
+NTSTATUS
+NTAPI
+CmRestoreKey(
+    _In_ PCM_KEY_CONTROL_BLOCK Kcb,
+    _In_ HANDLE FileHandle,
+    _In_ ULONG Flags);
 
 NTSTATUS
 NTAPI

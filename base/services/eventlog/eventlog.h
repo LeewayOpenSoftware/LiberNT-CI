@@ -76,6 +76,7 @@ typedef struct _LOGHANDLE
     PLOGFILE LogFile;
     ULONG CurrentRecord;
     ULONG Flags;
+    HANDLE ChangeEvent;     /* ElfrChangeNotify: the client's event, duplicated into the service */
     WCHAR szName[1];
 } LOGHANDLE, *PLOGHANDLE;
 
@@ -136,6 +137,10 @@ LogfReadEvents(PLOGFILE LogFile,
                PULONG   BytesRead,
                PULONG   BytesNeeded,
                BOOLEAN  Ansi);
+
+/* rpc.c */
+VOID
+ElfNotifyLogChange(PLOGFILE LogFile);
 
 NTSTATUS
 LogfWriteRecord(PLOGFILE LogFile,

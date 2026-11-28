@@ -23,6 +23,17 @@ struct TEST_TIP_STATE
     ULONG cEnumDisplayAttributes;
     ULONG cGetDisplayAttribute;
     BOOL fCancelInSession;
+    HRESULT hrAdviseKeySink;
+    HRESULT hrUnadviseKeySink;
+    HRESULT hrPreserveKey;
+    HRESULT hrUnpreserveKey;
+    DWORD dwActivateThreadId;
+    BOOL fSetAttribute;
+    GUID guidAttribute;
+    TF_DISPLAYATTRIBUTE da;
+    ULONG cchFirstClause;
+    GUID guidAttribute2;
+    TF_DISPLAYATTRIBUTE da2;
 };
 
 extern const GUID GUID_TestDisplayAttribute;

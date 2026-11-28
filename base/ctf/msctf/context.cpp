@@ -50,6 +50,14 @@ public:
     void AddRange(struct list *entry) { list_add_tail(&m_ranges, entry); }
     HRESULT CheckLock(TfEditCookie ec, BOOL fWrite);
     ITextStoreACP *TextStore() const { return m_pITextStoreACP; }
+    BOOL GetCompositionExtent(ULONG index, LONG *start, LONG *end) const
+    {
+        if (index >= m_cCompositions)
+            return FALSE;
+        *start = m_compositions[index]->Range()->Start();
+        *end = m_compositions[index]->Range()->End();
+        return TRUE;
+    }
     HRESULT ReplaceText(DWORD dwFlags, LONG start, LONG end, const WCHAR *text, LONG cch, TS_TEXTCHANGE *change);
     HRESULT OnCompositionUpdated(CComposition *composition);
     HRESULT OnCompositionEnded(CComposition *composition);
@@ -205,7 +213,8 @@ protected:
     HRESULT RequestQueuedLock();
     void ScheduleQueuedLock();
     static VOID CALLBACK QueuedLockTimerProc(HWND hwnd, UINT uMsg, UINT_PTR idEvent, DWORD dwTime);
-    HRESULT TerminateOne(CComposition *composition);
+    HRESULT TerminateOne(CComposition *composition, BOOL fInternal = FALSE);
+    HRESULT StartImplicitComposition(LONG start, LONG end, CComposition **ppComposition);
     void ReleaseCompositions();
     void ReleaseProperties();
 
@@ -290,6 +299,8 @@ CContext::CContext()
     , m_cPropertiesMax(0)
     , m_ownerCookie(0)
     , m_CompartmentMgr(NULL)
+    , m_tidOwner(0)
+    , m_defaultCookie(0)
     , m_manager(NULL)
     , m_pITextStoreACP(NULL)
     , m_pITfContextOwnerCompositionSink(NULL)
@@ -802,8 +813,25 @@ STDMETHODIMP CContext::TrackProperties(
     _In_ ULONG cAppProp,
     _Out_ ITfReadOnlyProperty **ppProperty)
 {
-    FIXME("STUB:(%p)\n", this);
-    return E_NOTIMPL;
+    TRACE("(%p) %p %lu %p %lu %p\n", this, prgProp, cProp, prgAppProp, cAppProp, ppProperty);
+
+    if (!ppProperty)
+        return E_INVALIDARG;
+    *ppProperty = NULL;
+    if ((cProp && !prgProp) || (cAppProp && !prgAppProp))
+        return E_INVALIDARG;
+
+    CTrackProperty *property = new(cicNoThrow) CTrackProperty(static_cast<ITfContext *>(this));
+    if (!property)
+        return E_OUTOFMEMORY;
+    HRESULT hr = property->Initialize(prgProp, cProp, prgAppProp, cAppProp);
+    if (FAILED(hr))
+    {
+        property->Release();
+        return hr;
+    }
+    *ppProperty = property;
+    return S_OK;
 }
 
 STDMETHODIMP CContext::EnumProperties(_Out_ IEnumTfProperties **ppEnum)
@@ -938,7 +966,7 @@ STDMETHODIMP CContext::StartComposition(
         return hr;
 
     CComposition *composition =
-        new(cicNoThrow) CComposition(static_cast<ITfContext *>(this), compositionRange, pSink, clsid);
+        new(cicNoThrow) CComposition(static_cast<ITfContext *>(this), compositionRange, pSink, clsid, cookie->tid);
     if (!composition)
     {
         compositionRange->Release();
@@ -1589,15 +1617,92 @@ HRESULT CContext::ReplaceText(DWORD dwFlags, LONG start, LONG end, const WCHAR *
 {
     if (!m_pITextStoreACP)
         return E_FAIL;
-    HRESULT hr = m_pITextStoreACP->SetText(dwFlags, start, end, text, cch, change);
+
+    CComposition *composition = NULL;
+    BOOL fOwner = FALSE;
+    for (ULONG i = 0; i < m_cCompositions && !composition; ++i)
+    {
+        if (m_compositions[i]->Owner() != m_runningTid)
+            continue;
+        fOwner = TRUE;
+        CRange *range = m_compositions[i]->Range();
+        if (range->Start() <= start && end <= range->End())
+            composition = m_compositions[i];
+    }
+    if (fOwner && !composition)
+        return TF_E_RANGE_NOT_COVERED;
+
+    HRESULT hr;
+    BOOL fImplicit = !fOwner && m_pITfContextOwnerCompositionSink;
+    if (fImplicit)
+    {
+        hr = StartImplicitComposition(start, end, &composition);
+        if (FAILED(hr))
+            return hr;
+    }
+    else if (composition)
+    {
+        composition->AddRef();
+    }
+
+    hr = m_pITextStoreACP->SetText(dwFlags, start, end, text, cch, change);
+    if (SUCCEEDED(hr))
+    {
+        if (!(dwFlags & TS_ST_CORRECTION))
+        {
+            for (ULONG i = 0; i < m_cProperties; ++i)
+                m_properties[i]->ClearSpan(change->acpStart, change->acpOldEnd);
+        }
+        OnTextChange(0, change);
+        if (composition)
+            OnCompositionUpdated(composition);
+    }
+    if (fImplicit)
+    {
+        composition->MarkEnded();
+        if (m_pITfContextOwnerCompositionSink)
+            m_pITfContextOwnerCompositionSink->OnEndComposition(static_cast<ITfCompositionView *>(composition));
+    }
+    if (composition)
+        composition->Release();
+    return hr;
+}
+
+HRESULT CContext::StartImplicitComposition(LONG start, LONG end, CComposition **ppComposition)
+{
+    *ppComposition = NULL;
+    CRange *range = NULL;
+    HRESULT hr = Range_CreateInternal(static_cast<ITfContext *>(this), start, end,
+                                      TF_GRAVITY_BACKWARD, TF_GRAVITY_FORWARD, TRUE, &range);
     if (FAILED(hr))
         return hr;
-    if (!(dwFlags & TS_ST_CORRECTION))
+    CComposition *composition = new(cicNoThrow) CComposition(static_cast<ITfContext *>(this), range, NULL,
+                                                               get_textservice_clsid(m_runningTid), m_runningTid);
+    if (!composition)
     {
-        for (ULONG i = 0; i < m_cProperties; ++i)
-            m_properties[i]->ClearSpan(change->acpStart, change->acpOldEnd);
+        range->Release();
+        return E_OUTOFMEMORY;
     }
-    OnTextChange(0, change);
+
+    BOOL fOk = TRUE;
+    hr = m_pITfContextOwnerCompositionSink->OnStartComposition(static_cast<ITfCompositionView *>(composition), &fOk);
+    if (SUCCEEDED(hr) && !fOk && m_cCompositions)
+    {
+        while (m_cCompositions && SUCCEEDED(hr))
+            hr = TerminateOne(m_compositions[0], TRUE);
+        if (SUCCEEDED(hr) && m_pITfContextOwnerCompositionSink)
+        {
+            fOk = TRUE;
+            hr = m_pITfContextOwnerCompositionSink->OnStartComposition(static_cast<ITfCompositionView *>(composition), &fOk);
+        }
+    }
+    if (FAILED(hr) || !fOk || !m_pITfContextOwnerCompositionSink)
+    {
+        composition->MarkEnded();
+        composition->Release();
+        return TF_E_COMPOSITION_REJECTED;
+    }
+    *ppComposition = composition;
     return S_OK;
 }
 
@@ -1746,7 +1851,7 @@ HRESULT CContext::OnCompositionEnded(CComposition *composition)
     return S_OK;
 }
 
-HRESULT CContext::TerminateOne(CComposition *composition)
+HRESULT CContext::TerminateOne(CComposition *composition, BOOL fInternal)
 {
     composition->AddRef();
     HRESULT hr = S_OK;
@@ -1759,7 +1864,7 @@ HRESULT CContext::TerminateOne(CComposition *composition)
             return E_OUTOFMEMORY;
         }
         HRESULT hrSession = S_OK;
-        if (m_lockFlags == TS_LF_READWRITE && m_runningTid != m_tidOwner)
+        if (!fInternal && m_lockFlags == TS_LF_READWRITE && m_runningTid != m_tidOwner)
             hr = TS_E_NOLOCK;
         else if (m_lockFlags == TS_LF_READWRITE)
             hr = RunSession(session, m_runningTid, m_lockFlags);
@@ -1857,6 +1962,11 @@ EXTERN_C HRESULT Context_CheckLock(ITfContext *context, TfEditCookie ec, BOOL fW
 EXTERN_C ITextStoreACP *Context_GetTextStore(ITfContext *context)
 {
     return static_cast<CContext *>(context)->TextStore();
+}
+
+EXTERN_C BOOL Context_GetCompositionExtent(ITfContext *context, ULONG index, LONG *start, LONG *end)
+{
+    return static_cast<CContext *>(context)->GetCompositionExtent(index, start, end);
 }
 
 EXTERN_C HRESULT Context_ReplaceText(ITfContext *context, DWORD dwFlags, LONG start, LONG end,

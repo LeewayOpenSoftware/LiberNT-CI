@@ -1,0 +1,5 @@
+add_executable(wallpaperhost wallpaperhost.cpp version.rc)
+set_module_type(wallpaperhost win32gui UNICODE)
+target_link_libraries(wallpaperhost uuid cpprt wine)
+add_importlibs(wallpaperhost ole32 user32 msvcrt kernel32 ntdll)
+add_cd_file(TARGET wallpaperhost DESTINATION reactos/system32 FOR all)

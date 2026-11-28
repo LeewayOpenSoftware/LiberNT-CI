@@ -36,6 +36,13 @@ VOID IPSendComplete
 	 ("Called. Context (0x%X)  NdisPacket (0x%X)  NdisStatus (0x%X)\n",
 	  Context, NdisPacket, NdisStatus));
 
+    if (IFC->Detached)
+    {
+        FreeNdisPacket(NdisPacket);
+        ExFreePoolWithTag(IFC, IFC_TAG);
+        return;
+    }
+
 	IFC->Status = NdisStatus;
 	KeSetEvent(&IFC->Event, 0, FALSE);
 }
@@ -58,7 +65,7 @@ NTSTATUS IPSendFragment(
     TI_DbgPrint(MAX_TRACE, ("Called. NdisPacket (0x%X)  NCE (0x%X).\n", NdisPacket, NCE));
 
     TI_DbgPrint(MAX_TRACE, ("NCE->State = %d.\n", NCE->State));
-    return NBQueuePacket(NCE, NdisPacket, IPSendComplete, IFC);
+    return NBQueuePacket(NCE, NdisPacket, IPSendComplete, IFC) ? NDIS_STATUS_SUCCESS : NDIS_STATUS_RESOURCES;
 }
 
 BOOLEAN PrepareNextFragment(
@@ -151,6 +158,7 @@ NTSTATUS SendFragments(
     PVOID Data;
     UINT BufferSize = PathMTU, InSize;
     PCHAR InData;
+    ULONG Fragments = 0;
 
     TI_DbgPrint(MAX_TRACE, ("Called. IPPacket (0x%X)  NCE (0x%X)  PathMTU (%d).\n",
         IPPacket, NCE, PathMTU));
@@ -160,6 +168,7 @@ NTSTATUS SendFragments(
     if (PathMTU <= IPPacket->HeaderSize || PathMTU - IPPacket->HeaderSize < 8 ||
         ((WN2H(((PIPv4_HEADER)IPPacket->Header)->FlagsFragOfs) & IPv4_DF_MASK) && IPPacket->TotalSize > PathMTU))
     {
+        IP_STAT_INC(FragFails);
         IPPacket->Free(IPPacket);
         return STATUS_INVALID_BUFFER_SIZE;
     }
@@ -173,6 +182,7 @@ NTSTATUS SendFragments(
     IFC = ExAllocatePoolWithTag(NonPagedPool, sizeof(IPFRAGMENT_CONTEXT), IFC_TAG);
     if (IFC == NULL)
     {
+        IP_STAT_INC(OutDiscards);
         IPPacket->Free(IPPacket);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -182,6 +192,7 @@ NTSTATUS SendFragments(
 	( &IFC->NdisPacket, NULL, BufferSize );
 
     if( !NT_SUCCESS(NdisStatus) ) {
+        IP_STAT_INC(OutDiscards);
         IPPacket->Free(IPPacket);
         ExFreePoolWithTag( IFC, IFC_TAG );
         return NdisStatus;
@@ -200,6 +211,7 @@ NTSTATUS SendFragments(
     IFC->Position     = 0;
     IFC->BytesLeft    = IPPacket->TotalSize - IPPacket->HeaderSize;
     IFC->Data         = (PVOID)((ULONG_PTR)IFC->Header + IPPacket->HeaderSize);
+    IFC->Detached     = FALSE;
     KeInitializeEvent(&IFC->Event, NotificationEvent, FALSE);
 
     TI_DbgPrint(MID_TRACE,("Copying header from %x to %x (%d)\n",
@@ -207,6 +219,24 @@ NTSTATUS SendFragments(
 			   IPPacket->HeaderSize));
 
     RtlCopyMemory( IFC->Header, IPPacket->Header, IPPacket->HeaderSize );
+
+    /* A datagram sent whole is owned by its fragment buffer: the sender does not wait for the neighbor to resolve */
+    if (PrepareNextFragment(IFC) && IFC->BytesLeft == 0)
+    {
+        IPPacket->Free(IPPacket);
+        IFC->Detached = TRUE;
+        NdisStatus = IPSendFragment(IFC->NdisPacket, NCE, IFC);
+        if (!NT_SUCCESS(NdisStatus))
+        {
+            IP_STAT_INC(OutDiscards);
+            FreeNdisPacket(IFC->NdisPacket);
+            ExFreePoolWithTag(IFC, IFC_TAG);
+        }
+        return NdisStatus;
+    }
+    IFC->Position = 0;
+    IFC->BytesLeft = IPPacket->TotalSize - IPPacket->HeaderSize;
+    IFC->DatagramData = ((PCHAR)IPPacket->Header) + IPPacket->HeaderSize;
 
     while (PrepareNextFragment(IFC))
     {
@@ -223,6 +253,18 @@ NTSTATUS SendFragments(
 
         if (!NT_SUCCESS(NdisStatus))
             break;
+        Fragments++;
+    }
+
+    /* The datagram did not fit the path MTU and was cut */
+    if (NT_SUCCESS(NdisStatus))
+    {
+        IP_STAT_INC(FragOks);
+        IP_STAT_ADD(FragCreates, Fragments);
+    }
+    else
+    {
+        IP_STAT_INC(FragFails);
     }
 
     FreeNdisPacket(IFC->NdisPacket);
@@ -252,6 +294,13 @@ NTSTATUS IPSendDatagram(PIP_PACKET IPPacket, PNEIGHBOR_CACHE_ENTRY NCE)
 
     /* Fetch path MTU now, because it may change */
     TI_DbgPrint(MID_TRACE,("PathMTU: %d\n", NCE->Interface->MTU));
+
+    if (IPPacket->Type == IP_ADDRESS_V4)
+    {
+        if (!(IPPacket->Flags & IP_PACKET_FLAG_NOREQUEST))
+            IP_STAT_INC64(OutRequests);
+        IP_STAT_ADD64(OutOctets, IPPacket->TotalSize);
+    }
 
     if (IPPacket->Type == IP_ADDRESS_V4 && IPPacket->HeaderSize >= sizeof(IPv4_HEADER))
         PathTouch(NCE->Interface, ((PIPv4_HEADER)IPPacket->Header)->SrcAddr,

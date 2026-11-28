@@ -160,8 +160,8 @@ CompareIndexKey(
  * FoundExact NULL and receive STATUS_OBJECT_NAME_COLLISION for an exact
  * match; removal callers receive the matched entry's offset instead.
  */
-static NTSTATUS
-FindIndexInsertionPoint(
+NTSTATUS
+NtfsFindIndexInsertionPoint(
     _In_ PVolume DiskVolume,
     _In_ PIndexNodeHeader Header,
     _In_ ULONG HeaderBytes,
@@ -169,7 +169,7 @@ FindIndexInsertionPoint(
     _Out_ PULONG InsertionOffset,
     _Out_ PULONGLONG ChildVcn,
     _Out_ PBOOLEAN Descend,
-    _Out_opt_ PBOOLEAN FoundExact = NULL)
+    _Out_opt_ PBOOLEAN FoundExact)
 {
     PIndexEntry Entry;
     ULONG_PTR End;
@@ -3254,7 +3254,7 @@ Directory::AddIndexEntryInner(
         goto Done;
     }
 
-    Status = FindIndexInsertionPoint(
+    Status = NtfsFindIndexInsertionPoint(
         DiskVolume,
         &IndexRoot->Header,
         IndexRootAttribute->
@@ -3419,7 +3419,7 @@ Directory::AddIndexEntryInner(
                 IndexBufferData);
 
         Descend = FALSE;
-        Status = FindIndexInsertionPoint(
+        Status = NtfsFindIndexInsertionPoint(
             DiskVolume,
             &NodeBuffer->IndexHeader,
             IndexRecordSize -
@@ -4109,7 +4109,7 @@ Directory::ReleaseEmptyIndexNode(
     IndexRoot =
         reinterpret_cast<PIndexRootEx>(
             GetResidentDataPointer(RootAttribute));
-    Status = FindIndexInsertionPoint(
+    Status = NtfsFindIndexInsertionPoint(
         DiskVolume,
         &IndexRoot->Header,
         RootAttribute->Resident.DataLength -
@@ -4193,7 +4193,7 @@ Directory::ReleaseEmptyIndexNode(
             ChildVcn = *GetSubnodeVCN(EndEntry);
             continue;
         }
-        Status = FindIndexInsertionPoint(
+        Status = NtfsFindIndexInsertionPoint(
             DiskVolume,
             Header,
             IndexRecordSize - NodePrefix,
@@ -4577,7 +4577,7 @@ Directory::RemoveIndexEntryInner(
         return STATUS_FILE_CORRUPT_ERROR;
     }
 
-    Status = FindIndexInsertionPoint(
+    Status = NtfsFindIndexInsertionPoint(
         DiskVolume,
         &IndexRoot->Header,
         IndexRootAttribute->
@@ -4648,7 +4648,7 @@ Directory::RemoveIndexEntryInner(
             reinterpret_cast<PIndexBuffer>(
                 NodeImage);
         Descend = FALSE;
-        Status = FindIndexInsertionPoint(
+        Status = NtfsFindIndexInsertionPoint(
             DiskVolume,
             &NodeBuffer->IndexHeader,
             IndexRecordSize -

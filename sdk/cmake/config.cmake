@@ -59,7 +59,7 @@ endif()
 
 set(OPTIMIZE "4" CACHE STRING
 "What level of optimization to use.
- 0 = Off
+ 0 = Off (-O0)
  1 = Optimize for size (-Os) with some additional options
  2 = Optimize for size (-Os)
  3 = Optimize debugging experience (-Og)
@@ -124,6 +124,34 @@ endif()
 
 set(WITH_DEBUG_SYMBOLS ${_REACTOS_DEFAULT_DEBUG_SYMBOLS} CACHE BOOL
 "Whether to compile debug information.")
+
+option(ENABLE_REMOTE_ASSISTANCE
+"Whether to build remote assistance: the relay mode of the network debugger, the published
+assistance key on the desktop, netassist.exe and the relay boot entries. Debug builds only;
+turn it on by hand for a build given to someone who needs help." OFF)
+if(ENABLE_REMOTE_ASSISTANCE AND NOT DBG)
+    message(FATAL_ERROR "ENABLE_REMOTE_ASSISTANCE needs a debug build (DBG)")
+endif()
+option(LIBERNT_ENABLE_KD_BROADCAST
+"Whether to build the cable mode of the network debugger (LOCAL_BROADCAST=1: the keyed session
+carried by broadcasts, for a machine without an address) and its \"network debugging on this
+cable\" boot entry. Debug builds in a controlled lab only." OFF)
+if(LIBERNT_ENABLE_KD_BROADCAST AND NOT DBG)
+    message(FATAL_ERROR "LIBERNT_ENABLE_KD_BROADCAST needs a debug build (DBG)")
+endif()
+option(LIBERNT_ENABLE_BOOT_UDP_LOG
+"Whether the UEFI boot manager and OS loader also broadcast their debug log in clear text
+(UDP 6665 to 255.255.255.255:6666), for a machine without a serial port. Debug builds in a
+controlled lab only; the serial port and boot.log logs do not depend on it." OFF)
+if(LIBERNT_ENABLE_BOOT_UDP_LOG AND NOT DBG)
+    message(FATAL_ERROR "LIBERNT_ENABLE_BOOT_UDP_LOG needs a debug build (DBG)")
+endif()
+set(LIBERNT_ASSIST_RELAY_HOST "" CACHE STRING
+"Host name of the remote assistance relay. Empty: the network debugger offers cable and LAN
+debugging only and no boot entry reaches a relay. Only used with ENABLE_REMOTE_ASSISTANCE.")
+if(LIBERNT_ASSIST_RELAY_HOST AND NOT LIBERNT_ASSIST_RELAY_HOST MATCHES "^[A-Za-z0-9][A-Za-z0-9.-]*$")
+    message(FATAL_ERROR "LIBERNT_ASSIST_RELAY_HOST must be a plain host name")
+endif()
 
 if(MSVC)
     set(KDBG FALSE CACHE BOOL
@@ -208,10 +236,19 @@ set(GENERATE_DEPENDENCY_GRAPH FALSE CACHE BOOL
 cmake_dependent_option(ENABLE_ROSTESTS "Whether to build the ReactOS test suite." OFF
                        "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
 
+option(UMFD_TEST_HOOKS "Build fontdrvhost with the UMFD channel fault hooks its tests drive (test images only)." OFF)
+
+option(LIBERNT_ACCEPTANCE_HOOKS "Compile the acceptance-test provocation hooks into system setup (acceptance image builds only)." OFF)
+
 option(ENABLE_MESA_LLVMPIPE "Package the LLVMpipe OpenGL and Lavapipe Vulkan software ICDs." OFF)
 cmake_dependent_option(MESA_LLVMPIPE_FROM_SOURCE
                        "Build LLVM and LLVMpipe into mesa_gallium.dll instead of using the LiberNT release payload." OFF
                        "ENABLE_MESA_LLVMPIPE" OFF)
+
+# TODO: build the Linux GPU renderer for riscv64
+cmake_dependent_option(ENABLE_LXGPU
+                       "Whether to build the Linux subsystem GPU renderer (virglrenderer on WGL)." ON
+                       "ARCH STREQUAL amd64 OR ARCH STREQUAL arm64" OFF)
 
 cmake_dependent_option(ENABLE_FEX_ARM64EC
                        "Whether to build the optional FEX ARM64EC emulator for running AMD64 binaries on ARM64." ON
@@ -257,7 +294,7 @@ cmake_dependent_option(FFMPEG_FROM_SOURCE
                        "ENABLE_FFMPEG" OFF)
 
 cmake_dependent_option(ENABLE_DXILCONV
-                       "Build dxilconv.dll, the DXBC to DXIL converter of the Direct3D 12 runtime, from the dxc feed" OFF
+                       "Build dxilconv.dll, the DXBC to DXIL converter of the Direct3D 12 runtime, from the dxc feed" ON
                        "ARCH STREQUAL i386 OR ARCH STREQUAL amd64 OR ARCH STREQUAL arm64;CMAKE_C_COMPILER_ID STREQUAL Clang;NOT MSVC" OFF)
 
 set(_wow64_default OFF)
@@ -344,6 +381,11 @@ endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     option(STACK_PROTECTOR "Whether to enable the GCC stack checker while compiling" OFF)
+endif()
+
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    cmake_dependent_option(ENABLE_KERNEL_UBSAN "Whether to report undefined behavior in kernel-mode modules at run time" OFF
+                           "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
 endif()
 
 set(USE_DUMMY_PSEH FALSE CACHE BOOL

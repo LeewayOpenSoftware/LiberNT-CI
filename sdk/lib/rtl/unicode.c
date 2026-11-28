@@ -615,6 +615,19 @@ RtlInitAnsiStringEx(IN OUT PANSI_STRING DestinationString,
     return STATUS_SUCCESS;
 
 }
+
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+RtlInitStringEx(
+    _Out_ PSTRING DestinationString,
+    _In_opt_z_ __drv_aliasesMem PCSZ SourceString)
+{
+    return RtlInitAnsiStringEx(DestinationString, SourceString);
+}
 /*
  * @implemented
  *
@@ -1077,6 +1090,92 @@ RtlUnicodeStringToInteger(
     }
 
     *value = bMinus ? (0 - RunningTotal) : RunningTotal;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+RtlUnicodeStringToInt64(
+    _In_ PCUNICODE_STRING String,
+    _In_opt_ ULONG Base,
+    _Out_ PLONG64 Number,
+    _Out_opt_ PWSTR *EndPointer)
+{
+    PWSTR Current = String->Buffer;
+    USHORT CharsRemaining = String->Length / sizeof(WCHAR);
+    ULONG64 RunningTotal = 0;
+    BOOLEAN Minus = FALSE;
+    ULONG Digit;
+    WCHAR Char;
+
+    /* Same syntax as RtlUnicodeStringToInteger, with a 64-bit result */
+    while (CharsRemaining >= 1 && *Current <= L' ')
+    {
+        Current++;
+        CharsRemaining--;
+    }
+
+    if (CharsRemaining >= 1 && (*Current == L'+' || *Current == L'-'))
+    {
+        Minus = (*Current == L'-');
+        Current++;
+        CharsRemaining--;
+    }
+
+    if (Base == 0)
+    {
+        Base = 10;
+        if (CharsRemaining >= 2 && Current[0] == L'0')
+        {
+            if (Current[1] == L'b')
+                Base = 2;
+            else if (Current[1] == L'o')
+                Base = 8;
+            else if (Current[1] == L'x')
+                Base = 16;
+
+            if (Base != 10)
+            {
+                Current += 2;
+                CharsRemaining -= 2;
+            }
+        }
+    }
+    else if (Base != 2 && Base != 8 && Base != 10 && Base != 16)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Number == NULL)
+        return STATUS_ACCESS_VIOLATION;
+
+    while (CharsRemaining >= 1)
+    {
+        Char = *Current;
+        if (Char >= L'0' && Char <= L'9')
+            Digit = Char - L'0';
+        else if (Char >= L'A' && Char <= L'Z')
+            Digit = Char - L'A' + 10;
+        else if (Char >= L'a' && Char <= L'z')
+            Digit = Char - L'a' + 10;
+        else
+            break;
+
+        if (Digit >= Base)
+            break;
+
+        RunningTotal = RunningTotal * Base + Digit;
+        Current++;
+        CharsRemaining--;
+    }
+
+    *Number = (LONG64)(Minus ? (0 - RunningTotal) : RunningTotal);
+    if (EndPointer != NULL)
+        *EndPointer = Current;
+
     return STATUS_SUCCESS;
 }
 

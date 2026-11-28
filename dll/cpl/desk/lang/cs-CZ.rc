@@ -177,9 +177,8 @@ CAPTION "Obecné"
 FONT 8, "MS Shell Dlg"
 BEGIN
     GROUPBOX "Obrazovka", -1, 7, 6, 237, 56, WS_GROUP
-    LTEXT "Nastavení &DPI:", -1, 14, 20, 222, 9
-    COMBOBOX IDC_FONTSIZE_COMBO, 14, 30, 223, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT "", IDC_FONTSIZE_CUSTOM, 14, 46, 223, 12
+    LTEXT "", IDC_SCALE_CURRENT, 14, 20, 222, 9
+    PUSHBUTTON "Change in Settings...", IDC_SCALE_SETTINGS, 14, 34, 110, 14, WS_TABSTOP
     GROUPBOX "Kompatibilita", -1, 7, 67, 237, 97
     LTEXT "Některé programy nefungují správně, pokud není počítač restartován po změně nastavení barev.\n\nPo změně nastavení barev:", -1, 12, 78, 228, 34
     AUTORADIOBUTTON "&Restartovat počítač před aplikováním nového nastavení barev", IDC_RESTART_RB, 14, 116, 228, 10
@@ -308,4 +307,9 @@ BEGIN
     IDS_APPLY_FAILED "Nepodařilo se aplikovat nová nastavení..."
     IDS_APPLY_NEEDS_RESTART "Aby se změny projevily, je třeba restartovat počítač."
     IDS_TIMEOUTTEXT "Původní nastavení se obnoví za %d sekund."
+END
+
+STRINGTABLE
+BEGIN
+    IDS_SCALE_CURRENT "Scale: %u%%"
 END

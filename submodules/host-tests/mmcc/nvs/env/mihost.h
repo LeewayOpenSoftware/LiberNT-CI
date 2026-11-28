@@ -162,7 +162,31 @@ VOID MiHostQueueDpc(MI_HOST_DPC_ROUTINE Routine, PVOID Context);
 #define MI_MUTEX_ACQUIRE(m)             do { MI_ASSERT(MiHostIrql <= 1); MiHostSpinAcquire(m); } while (0)
 #define MI_MUTEX_TRY_ACQUIRE(m)         __sync_bool_compare_and_swap(&(m)->Held, 0, 1)
 #define MI_MUTEX_RELEASE(m)             __sync_lock_release(&(m)->Held)
+#ifdef MM_HOST_ALLOC_TEST
+extern _Thread_local SIZE_T MiHostFailAllocationSize;
+extern _Thread_local SIZE_T MiHostPauseAllocationSize;
+extern _Thread_local volatile LONG *MiHostAllocationEntered;
+extern _Thread_local volatile LONG *MiHostAllocationResume;
+static inline PVOID MiHostAllocate(SIZE_T Bytes)
+{
+    if (MiHostPauseAllocationSize != 0 && Bytes == MiHostPauseAllocationSize)
+    {
+        MiHostPauseAllocationSize = 0;
+        __atomic_store_n(MiHostAllocationEntered, 1, __ATOMIC_RELEASE);
+        while (!__atomic_load_n(MiHostAllocationResume, __ATOMIC_ACQUIRE))
+            sched_yield();
+    }
+    if (MiHostFailAllocationSize != 0 && Bytes == MiHostFailAllocationSize)
+    {
+        MiHostFailAllocationSize = 0;
+        return NULL;
+    }
+    return malloc(Bytes);
+}
+#define MI_ALLOCATE(b)                  MiHostAllocate(b)
+#else
 #define MI_ALLOCATE(b)                  malloc(b)
+#endif
 #define MI_FREE(p)                      free(p)
 #define MI_ATOMIC_ADD32(v, d)           __sync_fetch_and_add((v), (d))
 #define MI_ATOMIC_ADD64(v, d)           __sync_fetch_and_add((v), (d))
@@ -178,7 +202,13 @@ VOID MiHostQueueDpc(MI_HOST_DPC_ROUTINE Routine, PVOID Context);
 #define MI_ATOMIC_AND32(v, m)           __sync_fetch_and_and((v), (LONG)(m))
 static inline __attribute__((no_sanitize("thread"))) ULONG64 MiHostPeek(const void *Value, SIZE_T Size)
 {
-    return (Size == 8) ? *(const volatile ULONG64 *)Value : *(const volatile ULONG *)Value;
+    if (Size == 8)
+        return *(const volatile ULONG64 *)Value;
+    if (Size == 4)
+        return *(const volatile ULONG *)Value;
+    if (Size == 2)
+        return *(const volatile USHORT *)Value;
+    return *(const volatile UCHAR *)Value;
 }
 
 #define MI_PEEK(v)                      MiHostPeek(&(v), sizeof(v))
@@ -192,6 +222,7 @@ VOID MiHostWindowRelease(PVOID Window, ULONG Slot);
 #define MI_WINDOW_SLOT(w, p)            MiHostWindowSlot((w), (p))
 #define MI_WINDOW_RELEASE(w, s)         MiHostWindowRelease((w), (s))
 #define MI_ASSERT(e)                    do { if (!(e)) { fprintf(stderr, "MI_ASSERT %s:%d %s\n", __FILE__, __LINE__, #e); abort(); } } while (0)
+#define ASSERT(e)                       MI_ASSERT(e)
 #define MI_FAULT_READ_AHEAD()           MiHostReadClusterSize
 
 static inline void MiHostAcquireShared(PMI_RWLOCK Lock)

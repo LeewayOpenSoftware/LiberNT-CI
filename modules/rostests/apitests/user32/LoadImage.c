@@ -1,5 +1,6 @@
 
 #include "precomp.h"
+#include <winreg.h>
 #include "resource_1bpp.h"
 
 #define ROS_HGDI_ERROR (HANDLE)~(ULONG_PTR)0 // This makes MSVC compiler happy
@@ -204,6 +205,9 @@ static void test_LoadIcon_SystemIds(void)
     };
     HINSTANCE hInst = GetModuleHandleW(L"USER32");
     typedef BOOL (WINAPI*SHAIE)(HICON, HICON);
+    typedef DPI_AWARENESS_CONTEXT (WINAPI *PSETTHREADDPIAWARENESSCONTEXT)(DPI_AWARENESS_CONTEXT);
+    PSETTHREADDPIAWARENESSCONTEXT pSetThreadDpiAwarenessContext;
+    DPI_AWARENESS_CONTEXT OldContext = NULL;
     SHAIE pfnSHAreIconsEqual;
     HMODULE hSHLWAPI = LoadLibraryA("SHLWAPI");
     if (!hSHLWAPI)
@@ -219,13 +223,265 @@ static void test_LoadIcon_SystemIds(void)
         return;
     }
 
+    pSetThreadDpiAwarenessContext = (PSETTHREADDPIAWARENESSCONTEXT)GetProcAddress(GetModuleHandleW(L"user32.dll"),
+                                                                                "SetThreadDpiAwarenessContext");
+    if (pSetThreadDpiAwarenessContext)
+        OldContext = pSetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
     for (UINT i = 0; i < _countof(icomap); i++)
     {
         HICON hIcoRes = LoadIconW(hInst, MAKEINTRESOURCEW(icomap[i][0]));
         HICON hIcoSys = LoadIconW(NULL, MAKEINTRESOURCEW(icomap[i][1]));
         ok(hIcoRes && pfnSHAreIconsEqual(hIcoRes, hIcoSys), "SysIcon %d must be resource %d\n", icomap[i][1], icomap[i][0]);
     }
+    if (pSetThreadDpiAwarenessContext && OldContext)
+        pSetThreadDpiAwarenessContext(OldContext);
     FreeLibrary(hSHLWAPI);
+}
+
+static void test_LoadImage_OemShared(void)
+{
+    HANDLE Image;
+
+    SetLastError(0xdeadbeef);
+    Image = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 0, 0, 0);
+    ok(Image == NULL, "OEM cursor without LR_SHARED loaded\n");
+    ok(GetLastError() == ERROR_RESOURCE_NAME_NOT_FOUND, "OEM cursor error %lu\n", GetLastError());
+    SetLastError(0xdeadbeef);
+    Image = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 32, 32, LR_DEFAULTSIZE);
+    ok(Image == NULL, "sized OEM cursor without LR_SHARED loaded\n");
+    ok(GetLastError() == ERROR_RESOURCE_NAME_NOT_FOUND, "sized OEM cursor error %lu\n", GetLastError());
+    SetLastError(0xdeadbeef);
+    Image = LoadImageW(NULL, (LPCWSTR)IDI_APPLICATION, IMAGE_ICON, 0, 0, 0);
+    ok(Image == NULL, "OEM icon without LR_SHARED loaded\n");
+    ok(GetLastError() == ERROR_RESOURCE_TYPE_NOT_FOUND, "OEM icon error %lu\n", GetLastError());
+    ok(LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 0, 0, LR_SHARED) != NULL, "shared OEM cursor failed\n");
+    ok(LoadImageW(NULL, (LPCWSTR)IDI_APPLICATION, IMAGE_ICON, 0, 0, LR_SHARED) != NULL, "shared OEM icon failed\n");
+    Image = LoadImageW(NULL, MAKEINTRESOURCEW(32754), IMAGE_BITMAP, 0, 0, 0);
+    ok(Image != NULL, "OEM bitmap without LR_SHARED failed\n");
+    if (Image)
+        DeleteObject(Image);
+}
+
+static void check_SharedCursorSize(const char *label, HCURSOR cursor, LONG expected)
+{
+    ICONINFO ii;
+    BITMAP bm;
+
+    ok(cursor != NULL, "%s: LoadImage failed, error %lu\n", label, GetLastError());
+    if (!cursor)
+        return;
+    memset(&ii, 0, sizeof(ii));
+    ok(GetIconInfo(cursor, &ii), "%s: GetIconInfo failed, error %lu\n", label, GetLastError());
+    if (ii.hbmMask && GetObjectW(ii.hbmMask, sizeof(bm), &bm))
+        ok(bm.bmWidth == expected, "%s: mask width %ld, expected %ld\n", label, bm.bmWidth, expected);
+    else
+        ok(0, "%s: no mask bitmap\n", label);
+    if (ii.hbmMask) DeleteObject(ii.hbmMask);
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+}
+
+/* LR_SHARED caches one image per requested size: a 48 px request must not return the 32 px cursor. */
+static void test_LoadImage_SharedCursorSize(void)
+{
+    HCURSOR h32, h48, h32b, h48b;
+
+    h32 = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 32, 32, LR_SHARED);
+    h48 = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 48, 48, LR_SHARED);
+    h32b = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 32, 32, LR_SHARED);
+    h48b = LoadImageW(NULL, (LPCWSTR)IDC_ARROW, IMAGE_CURSOR, 48, 48, LR_SHARED);
+
+    check_SharedCursorSize("arrow 32", h32, 32);
+    check_SharedCursorSize("arrow 48", h48, 48);
+    ok(h32 == h32b, "the same 32 px shared request gave another handle (%p, %p)\n", h32, h32b);
+    ok(h48 == h48b, "the same 48 px shared request gave another handle (%p, %p)\n", h48, h48b);
+    ok(h32 != h48, "the 48 px shared request returned the 32 px cursor %p\n", h32);
+}
+
+/* The live system cursor after a reload: SetCursor on our own window, then the object GetCursorInfo reports. */
+static LONG LiveArrowWidth(HWND hwnd, HCURSOR *phLive)
+{
+    CURSORINFO ci;
+    ICONINFO ii;
+    BITMAP bm;
+    RECT rc;
+    MSG msg;
+    LONG width = -1;
+
+    GetWindowRect(hwnd, &rc);
+    SetCursorPos((rc.left + rc.right) / 2, (rc.top + rc.bottom) / 2);
+    while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+        DispatchMessageW(&msg);
+    SetCursor(LoadCursorW(NULL, (LPCWSTR)IDC_ARROW));
+    ci.cbSize = sizeof(ci);
+    if (!GetCursorInfo(&ci) || !ci.hCursor)
+        return -1;
+    if (phLive)
+        *phLive = ci.hCursor;
+    memset(&ii, 0, sizeof(ii));
+    if (!GetIconInfo(ci.hCursor, &ii))
+        return -1;
+    if (ii.hbmMask && GetObjectW(ii.hbmMask, sizeof(bm), &bm))
+        width = bm.bmWidth;
+    if (ii.hbmMask) DeleteObject(ii.hbmMask);
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+    return width;
+}
+
+/* SystemParametersInfoA(SPI_SETCURSORS) must reload the system cursors at CursorBaseSize like the W entry point. */
+static void test_SystemParametersInfoA_SetCursors(void)
+{
+    HKEY key;
+    DWORD old = 0, size = sizeof(old), type = 0, base = 48;
+    BOOL hadOld;
+    HWND hwnd;
+    HCURSOR live = NULL, shared;
+    LONG width;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, "Control Panel\\Cursors", 0, NULL, 0,
+                        KEY_QUERY_VALUE | KEY_SET_VALUE, NULL, &key, NULL) != ERROR_SUCCESS)
+    {
+        skip("Cannot open HKCU\\Control Panel\\Cursors\n");
+        return;
+    }
+    hadOld = RegQueryValueExA(key, "CursorBaseSize", NULL, &type, (BYTE *)&old, &size) == ERROR_SUCCESS &&
+             type == REG_DWORD;
+    hwnd = CreateWindowExA(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, "STATIC", "SPI_SETCURSORS", WS_POPUP | WS_VISIBLE,
+                           0, 0, 160, 160, NULL, NULL, GetModuleHandleA(NULL), NULL);
+    ok(hwnd != NULL, "CreateWindowEx failed, error %lu\n", GetLastError());
+    if (hwnd)
+    {
+        width = LiveArrowWidth(hwnd, NULL);
+        if (width < 0)
+        {
+            skip("No live cursor to measure (GetCursorInfo gave none)\n");
+        }
+        else
+        {
+            if (!hadOld || old == 32)
+                ok(width == GetSystemMetrics(SM_CXCURSOR), "live arrow before: %ld, expected %d\n",
+                   width, GetSystemMetrics(SM_CXCURSOR));
+            else
+                trace("CursorBaseSize is %lu here, live arrow before: %ld\n", old, width);
+            RegSetValueExA(key, "CursorBaseSize", 0, REG_DWORD, (const BYTE *)&base, sizeof(base));
+            ok(SystemParametersInfoA(SPI_SETCURSORS, 0, NULL, 0), "SystemParametersInfoA failed, error %lu\n", GetLastError());
+            width = LiveArrowWidth(hwnd, &live);
+            ok(width == 48, "live arrow after SPI_SETCURSORS at base 48: %ld\n", width);
+            /* An app loading the default arrow gets the resized system cursor, as on Windows */
+            shared = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+            ok(shared == live, "LoadCursor(IDC_ARROW) %p is not the live system cursor %p\n", shared, live);
+            check_SharedCursorSize("arrow via LoadCursor after reload", shared, 48);
+        }
+        DestroyWindow(hwnd);
+    }
+    if (hadOld)
+        RegSetValueExA(key, "CursorBaseSize", 0, REG_DWORD, (const BYTE *)&old, sizeof(old));
+    else
+        RegDeleteValueA(key, "CursorBaseSize");
+    RegCloseKey(key);
+    ok(SystemParametersInfoA(SPI_SETCURSORS, 0, NULL, 0), "restore SystemParametersInfoA failed, error %lu\n", GetLastError());
+}
+
+static const BYTE PngCursorImage[] =
+{
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x20, 0x08, 0x06, 0x00, 0x00, 0x00, 0x73, 0x7a, 0x7a,
+    0xf4, 0x00, 0x00, 0x00, 0x35, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0xed, 0xd6, 0xb1, 0x09, 0x00,
+    0x30, 0x0c, 0x03, 0x41, 0xef, 0xbf, 0x74, 0x32, 0x80, 0x0b, 0x57, 0x22, 0x98, 0xdc, 0x83, 0xfa,
+    0x2b, 0x55, 0x25, 0xf5, 0x4e, 0x78, 0x33, 0x20, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0xc0, 0x1e, 0xc0, 0xeb, 0x5b, 0xae, 0xbf, 0xba, 0x22, 0x68, 0xe4, 0x7e, 0x14, 0xce,
+    0xe2, 0x6d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82
+};
+
+static DWORD BuildPngCursorFile(BYTE *Buffer, WORD xHotspot, WORD yHotspot)
+{
+    WORD *Header = (WORD *)Buffer;
+    BYTE *Entry = Buffer + 3 * sizeof(WORD);
+    DWORD Size = sizeof(PngCursorImage), Offset = 3 * sizeof(WORD) + 16;
+
+    Header[0] = 0;
+    Header[1] = 2;
+    Header[2] = 1;
+    Entry[0] = 32;
+    Entry[1] = 32;
+    Entry[2] = 0;
+    Entry[3] = 0;
+    memcpy(Entry + 4, &xHotspot, sizeof(WORD));
+    memcpy(Entry + 6, &yHotspot, sizeof(WORD));
+    memcpy(Entry + 8, &Size, sizeof(DWORD));
+    memcpy(Entry + 12, &Offset, sizeof(DWORD));
+    memcpy(Buffer + Offset, PngCursorImage, Size);
+    return Offset + Size;
+}
+
+static DWORD AppendChunk(BYTE *Buffer, DWORD Position, const char *Id, const void *Data, DWORD Size)
+{
+    memcpy(Buffer + Position, Id, 4);
+    memcpy(Buffer + Position + 4, &Size, sizeof(DWORD));
+    memcpy(Buffer + Position + 8, Data, Size);
+    Position += 8 + Size;
+    if (Size & 1)
+        Buffer[Position++] = 0;
+    return Position;
+}
+
+static HANDLE LoadCursorFileData(const BYTE *Data, DWORD Size)
+{
+    WCHAR Directory[MAX_PATH], Path[MAX_PATH];
+    HANDLE File, Cursor = NULL;
+    DWORD Written;
+
+    GetTempPathW(ARRAYSIZE(Directory), Directory);
+    if (!GetTempFileNameW(Directory, L"cur", 0, Path))
+        return NULL;
+    File = CreateFileW(Path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (File != INVALID_HANDLE_VALUE)
+    {
+        WriteFile(File, Data, Size, &Written, NULL);
+        CloseHandle(File);
+        Cursor = LoadImageW(NULL, Path, IMAGE_CURSOR, 32, 32, LR_LOADFROMFILE);
+    }
+    DeleteFileW(Path);
+    return Cursor;
+}
+
+static void CheckPngCursor(const char *Name, HANDLE Cursor)
+{
+    ICONINFO Info;
+
+    ok(Cursor != NULL, "%s with PNG frames failed to load: %lu\n", Name, GetLastError());
+    if (!Cursor)
+        return;
+    ok(GetIconInfo(Cursor, &Info), "GetIconInfo failed for the %s\n", Name);
+    ok(!Info.fIcon, "%s loaded as an icon\n", Name);
+    ok(Info.xHotspot == 5 && Info.yHotspot == 7, "%s hotspot %lu,%lu, expected 5,7\n", Name, Info.xHotspot,
+       Info.yHotspot);
+    if (Info.hbmColor)
+        DeleteObject(Info.hbmColor);
+    if (Info.hbmMask)
+        DeleteObject(Info.hbmMask);
+    DestroyCursor(Cursor);
+}
+
+static void test_LoadImage_PngCursorFiles(void)
+{
+    static const DWORD Header[9] = { 36, 2, 2, 0, 0, 0, 0, 2, 1 };
+    BYTE Cursor[256], Animated[1024], List[600];
+    DWORD CursorSize, ListSize, AnimatedSize, RiffSize;
+
+    CursorSize = BuildPngCursorFile(Cursor, 5, 7);
+    CheckPngCursor("cursor file", LoadCursorFileData(Cursor, CursorSize));
+
+    Cursor[CursorSize] = 0;
+    memcpy(List, "fram", 4);
+    ListSize = AppendChunk(List, 4, "icon", Cursor, CursorSize + 1);
+    ListSize = AppendChunk(List, ListSize, "icon", Cursor, CursorSize + 1);
+    memcpy(Animated, "RIFF", 4);
+    memcpy(Animated + 8, "ACON", 4);
+    AnimatedSize = AppendChunk(Animated, 12, "anih", Header, sizeof(Header));
+    AnimatedSize = AppendChunk(Animated, AnimatedSize, "LIST", List, ListSize);
+    RiffSize = AnimatedSize - 8;
+    memcpy(Animated + 4, &RiffSize, sizeof(DWORD));
+    CheckPngCursor("animated cursor file", LoadCursorFileData(Animated, AnimatedSize));
 }
 
 START_TEST(LoadImage)
@@ -311,7 +567,7 @@ START_TEST(LoadImage)
     }
 
     /* Start child process */
-    sprintf( path, "%s LoadImage %Iu", test_argv[0], (ULONG_PTR)handle );
+    sprintf( path, "%s LoadImage %Iu", test_argv[0], (size_t)(ULONG_PTR)handle );
     memset( &si, 0, sizeof(si) );
     si.cb = sizeof(si);
     CreateProcessA( NULL, path, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi );
@@ -319,4 +575,8 @@ START_TEST(LoadImage)
 
     test_LoadIcon_SystemIds();
     test_LoadImage_1bpp();
+    test_LoadImage_OemShared();
+    test_LoadImage_SharedCursorSize();
+    test_SystemParametersInfoA_SetCursors();
+    test_LoadImage_PngCursorFiles();
 }

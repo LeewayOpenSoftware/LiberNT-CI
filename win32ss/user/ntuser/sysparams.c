@@ -14,30 +14,13 @@
 
 #include <win32k.h>
 #include <ndk/inbvfuncs.h>
+#include <dpiscale.h>
 DBG_DEFAULT_CHANNEL(UserSysparams);
 
 SPIVALUES gspv;
 BOOL gbSpiInitialized = FALSE;
 BOOL g_PaintDesktopVersion = FALSE;
 BOOL g_bWindowSnapEnabled = TRUE;
-
-#define REQ_INTERACTIVE_WINSTA(err) \
-do { \
-    if (GetW32ProcessInfo()->prpwinsta != UserGetInputWindowStation(PsGetCurrentProcess())) \
-    { \
-        if (GetW32ProcessInfo()->prpwinsta == NULL) \
-        { \
-            ERR("NtUserSystemParametersInfo called without active window station, and it requires an interactive one\n"); \
-        } \
-        else \
-        { \
-            ERR("NtUserSystemParametersInfo requires interactive window station (current is '%wZ')\n", \
-                &(OBJECT_HEADER_TO_NAME_INFO(OBJECT_TO_OBJECT_HEADER(GetW32ProcessInfo()->prpwinsta))->Name)); \
-        } \
-        EngSetLastError(err); \
-        return 0; \
-    } \
-} while (0)
 
 static const WCHAR* KEY_MOUSE = L"Control Panel\\Mouse";
 static const WCHAR* VAL_MOUSE1 = L"MouseThreshold1";
@@ -71,9 +54,7 @@ static const WCHAR* VAL_CLICKLOCKTIME = L"ClickLockTime";
 static const WCHAR* VAL_PAINTDESKVER = L"PaintDesktopVersion";
 static const WCHAR* VAL_CARETRATE = L"CursorBlinkRate";
 static const WCHAR* VAL_CARETWIDTH = L"CaretWidth";
-#if (_WIN32_WINNT >= 0x0600)
 static const WCHAR* VAL_SCRLLCHARS = L"WheelScrollChars";
-#endif
 static const WCHAR* VAL_USERPREFMASK = L"UserPreferencesMask";
 static const WCHAR* VAL_SNAP_ENABLED = L"WindowArrangementActive";
 static const WCHAR* VAL_SNAP_DOCKMOVING = L"DockMoving";
@@ -83,8 +64,14 @@ static const WCHAR* VAL_MDALIGN = L"MenuDropAlignment";
 
 static const WCHAR* KEY_SYSTEM_DPI =
     L"\\Registry\\Machine\\System\\CurrentControlSet\\Hardware Profiles\\Current\\Software\\Fonts";
+static const WCHAR* VAL_LOGPIXELS = L"LogPixels";
+/* Set next to LogPixels once a scale was chosen or recommended; a value without it predates this and is migrated once */
+static const WCHAR* VAL_LOGPIXELS_CHOSEN = L"LogPixelsChosen";
+extern HDC hSystemBM;
+static const WCHAR* VAL_WIN8DPISCALING = L"Win8DpiScaling";
 static const WCHAR* KEY_METRIC = L"Control Panel\\Desktop\\WindowMetrics";
 static const WCHAR* VAL_BORDER = L"BorderWidth";
+static const WCHAR* VAL_CAPTIONALIGN = L"CaptionAlignment";
 static const WCHAR* VAL_ICONSPC = L"IconSpacing";
 static const WCHAR* VAL_ICONVSPC = L"IconVerticalspacing";
 static const WCHAR* VAL_ITWRAP = L"IconTitleWrap";
@@ -163,31 +150,174 @@ SpiUnscaleFromSystemDpi(INT Value)
     return -(INT)((Magnitude * USER_SYSTEM_DPI_DEFAULT + Dpi / 2) / Dpi);
 }
 
+#define SPI_RAW_SMBIOS_HEADER       8
+#define SPI_MAX_SMBIOS_TABLE        (1024 * 1024)
+
+static
+BOOLEAN
+SpiIsPortableChassis(VOID)
+{
+    SYSTEM_FIRMWARE_TABLE_INFORMATION Query;
+    PSYSTEM_FIRMWARE_TABLE_INFORMATION Info;
+    PUCHAR Structure, End, Next;
+    ULONG Length = 0;
+    BOOLEAN Portable = FALSE;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&Query, sizeof(Query));
+    Query.ProviderSignature = 'RSMB';
+    Query.Action = SystemFirmwareTable_Get;
+    Status = ZwQuerySystemInformation(SystemFirmwareTableInformation, &Query, sizeof(Query), &Length);
+    if (Status != STATUS_BUFFER_TOO_SMALL ||
+        Length <= FIELD_OFFSET(SYSTEM_FIRMWARE_TABLE_INFORMATION, TableBuffer) + SPI_RAW_SMBIOS_HEADER ||
+        Length > SPI_MAX_SMBIOS_TABLE)
+        return FALSE;
+    Info = ExAllocatePoolWithTag(PagedPool, Length, USERTAG_SYSTEM);
+    if (!Info)
+        return FALSE;
+    RtlZeroMemory(Info, Length);
+    Info->ProviderSignature = 'RSMB';
+    Info->Action = SystemFirmwareTable_Get;
+    Status = ZwQuerySystemInformation(SystemFirmwareTableInformation, Info, Length, &Length);
+    if (NT_SUCCESS(Status) && Info->TableBufferLength > SPI_RAW_SMBIOS_HEADER &&
+        Info->TableBufferLength <= Length - FIELD_OFFSET(SYSTEM_FIRMWARE_TABLE_INFORMATION, TableBuffer))
+    {
+        Structure = Info->TableBuffer + SPI_RAW_SMBIOS_HEADER;
+        End = Info->TableBuffer + Info->TableBufferLength;
+        while (Structure + 4 <= End && Structure[1] >= 4 && Structure + Structure[1] <= End && Structure[0] != 127)
+        {
+            if (Structure[0] == 3 && Structure[1] > 5)
+            {
+                Portable = (BOOLEAN)DpiScaleIsPortableChassis(Structure[5]);
+                break;
+            }
+            Next = Structure + Structure[1];
+            while (Next + 1 < End && (Next[0] || Next[1]))
+                ++Next;
+            if (Next + 1 >= End)
+                break;
+            Structure = Next + 2;
+        }
+    }
+    ExFreePoolWithTag(Info, USERTAG_SYSTEM);
+    return Portable;
+}
+
+static
+UINT
+SpiRecommendedSystemDpi(VOID)
+{
+    static UINT Recommended;
+    ULONG Width = 0, Height = 0;
+    UINT Scale;
+
+    if (Recommended)
+        return Recommended;
+    Recommended = USER_SYSTEM_DPI_DEFAULT;
+    if (InbvQueryBootScreen(NULL, 0, &Width, &Height) != STATUS_BUFFER_TOO_SMALL || !Width || !Height ||
+        !SpiIsPortableChassis())
+        return Recommended;
+    Scale = DpiScaleRecommended(Width, Height, TRUE);
+    TRACE("Recommended scale for the %lux%lu portable panel: %u%%\n", Width, Height, Scale);
+    Recommended = USER_SYSTEM_DPI_DEFAULT * Scale / 100;
+    return Recommended;
+}
+
+static
+VOID
+SpiStoreSystemDpi(DWORD Dpi)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING ustrKey;
+    HANDLE hKey;
+
+    RtlInitUnicodeString(&ustrKey, KEY_SYSTEM_DPI);
+    InitializeObjectAttributes(&ObjectAttributes, &ustrKey, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    if (NT_SUCCESS(ZwOpenKey(&hKey, KEY_SET_VALUE, &ObjectAttributes)))
+    {
+        RegWriteDWORD((HKEY)hKey, VAL_LOGPIXELS, Dpi);
+        RegWriteDWORD((HKEY)hKey, VAL_LOGPIXELS_CHOSEN, 1);
+        ZwClose(hKey);
+    }
+}
+
+static
+UINT
+SpiLoadMachineDpi(VOID)
+{
+    HKEY hKey;
+    DWORD Dpi = 0, Chosen = 0;
+    BOOLEAN Stored = FALSE;
+
+    if (NT_SUCCESS(RegOpenKey(KEY_SYSTEM_DPI, &hKey)))
+    {
+        Stored = RegReadDWORD(hKey, VAL_LOGPIXELS, &Dpi);
+        if (!RegReadDWORD(hKey, VAL_LOGPIXELS_CHOSEN, &Chosen))
+            Chosen = 0;
+        ZwClose(hKey);
+    }
+
+    /* An explicit value, 96 included, is what the user chose; 0 or garbage means nothing was chosen yet.
+     * Installs made before this stored 96 as "recommend": without the marker that 96 is migrated once to the
+     * recommendation (and marked), so an upgraded portable panel keeps its scale and 100% stays selectable. */
+    if (Stored && Dpi >= USER_SYSTEM_DPI_MIN && Dpi <= USER_SYSTEM_DPI_MAX)
+    {
+        if (Dpi != USER_SYSTEM_DPI_DEFAULT || Chosen)
+        {
+            if (!Chosen)
+                SpiStoreSystemDpi(Dpi);
+            return Dpi;
+        }
+    }
+    if (Stored && Dpi == USER_SYSTEM_DPI_DEFAULT)
+        TRACE("Migrating a pre-F1 LogPixels of 96 to the recommended scale\n");
+    else if (Stored && Dpi != 0)
+        WARN("Ignoring invalid system DPI %lu\n", Dpi);
+
+    /* Nothing chosen: recommend a scale for this panel and keep it, so Settings shows it and 100% stays selectable */
+    Dpi = min(SpiRecommendedSystemDpi(), USER_SYSTEM_DPI_MAX);
+    SpiStoreSystemDpi(Dpi);
+    return Dpi;
+}
+
 static
 UINT
 SpiLoadSystemDpi(VOID)
 {
-    HKEY hKey;
-    DWORD Dpi;
+    DWORD Custom = 0, Dpi = 0;
 
-    if (NT_SUCCESS(RegOpenKey(KEY_SYSTEM_DPI, &hKey)))
+    /* The per-user custom scale of Windows (Control Panel\Desktop LogPixels, armed by Win8DpiScaling = 1)
+     * wins over the machine value; it is read at sign-in, which is when Windows applies it too */
+    if (RegReadUserSetting(KEY_DESKTOP, VAL_WIN8DPISCALING, REG_DWORD, &Custom, sizeof(Custom)) && Custom == 1 &&
+        RegReadUserSetting(KEY_DESKTOP, VAL_LOGPIXELS, REG_DWORD, &Dpi, sizeof(Dpi)) &&
+        Dpi >= USER_SYSTEM_DPI_MIN && Dpi <= USER_SYSTEM_DPI_MAX)
     {
-        if (!RegReadDWORD(hKey, L"LogPixels", &Dpi))
-            Dpi = USER_SYSTEM_DPI_DEFAULT;
-        ZwClose(hKey);
-    }
-    else
-    {
-        Dpi = USER_SYSTEM_DPI_DEFAULT;
+        return Dpi;
     }
 
-    if (Dpi < USER_SYSTEM_DPI_MIN || Dpi > USER_SYSTEM_DPI_MAX)
-    {
-        WARN("Ignoring invalid system DPI %lu\n", Dpi);
-        Dpi = USER_SYSTEM_DPI_DEFAULT;
-    }
+    return SpiLoadMachineDpi();
+}
 
-    return Dpi;
+/* The DPI loaded at this sign-in may differ from the one the session runs with (another user, or a
+ * setting changed since boot): the display caps, the stock fonts and the virtualization follow it */
+static
+VOID
+SpiApplySystemDpi(VOID)
+{
+    UINT Dpi = UserGetSystemDpi();
+
+    PDEVOBJ_vSetLogPixels(Dpi);
+    GreSetStockFontDpi(Dpi);
+    UserDpiUpdateVirtualization();
+
+    /* Dialog base units come from SYSTEM_FONT, which may have changed size (see display.c on a mode change) */
+    if (gpsi && hSystemBM)
+    {
+        TEXTMETRICW tmw;
+
+        gpsi->cxSysFontChar = IntGetCharDimensions(hSystemBM, &tmw, (DWORD*)&gpsi->cySysFontChar);
+        gpsi->tmSysFont = tmw;
+    }
 }
 
 static
@@ -437,6 +567,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.uiSystemDpi = SpiLoadSystemDpi();
     if (gpsi)
         gpsi->dmLogPixels = (USHORT)gspv.uiSystemDpi;
+    SpiApplySystemDpi();
 
     /* Load mouse settings */
     gspv.caiMouse.FirstThreshold = SpiLoadMouse(VAL_MOUSE1, 6);
@@ -470,9 +601,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.ncm.iSmCaptionHeight = SpiLoadMetric(L"SmCaptionHeight", 15);
     gspv.ncm.iMenuWidth = SpiLoadMetric(L"MenuWidth", 18);
     gspv.ncm.iMenuHeight = SpiLoadMetric(L"MenuHeight", 18);
-#if (WINVER >= 0x0600)
     gspv.ncm.iPaddedBorderWidth = SpiLoadMetric(L"PaddedBorderWidth", 4);
-#endif
     SpiLoadFont(&gspv.ncm.lfCaptionFont, L"CaptionFont", &lf1);
     SpiLoadFont(&gspv.ncm.lfSmCaptionFont, L"SmCaptionFont", &lf1);
     SpiLoadFont(&gspv.ncm.lfMenuFont, L"MenuFont", &lf1);
@@ -481,7 +610,7 @@ SpiUpdatePerUserSystemParameters(VOID)
 
     /* Load MINIMIZEDMETRICS */
     gspv.mm.cbSize = sizeof(MINIMIZEDMETRICS);
-    gspv.mm.iWidth = SpiLoadMetric(L"MinWidth", 160);
+    gspv.mm.iWidth = SpiLoadMetric(L"MinWidth", 154);
     gspv.mm.iHorzGap = SpiLoadMetric(L"MinHorzGap", 0);
     gspv.mm.iVertGap = SpiLoadMetric(L"MinVertGap", 0);
     gspv.mm.iArrange = SpiLoadInt(KEY_METRIC, L"MinArrange", ARW_HIDE);
@@ -511,11 +640,12 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.bMouseCursorShadow = (gspv.dwUserPrefMask & UPM_CURSORSHADOW) != 0;
     gspv.bFontSmoothing = SpiLoadInt(KEY_DESKTOP, VAL_FONTSMOOTHING, 0) == 2;
     gspv.uiFontSmoothingType = SpiLoadDWord(KEY_DESKTOP, VAL_FONTSMOOTHINGTYPE, 1);
-    gspv.uiFontSmoothingContrast = SpiLoadDWord(KEY_DESKTOP, VAL_FONTSMOOTHINGCONTRAST, 1400);
+    /* Windows stores FontSmoothingGamma 0 for "default" and reports 1200. */
+    gspv.uiFontSmoothingContrast = SpiLoadDWord(KEY_DESKTOP, VAL_FONTSMOOTHINGCONTRAST, 1200);
+    if (gspv.uiFontSmoothingContrast == 0)
+        gspv.uiFontSmoothingContrast = 1200;
     gspv.uiFontSmoothingOrientation = SpiLoadDWord(KEY_DESKTOP, VAL_FONTSMOOTHINGORIENTATION, 1);
-#if (_WIN32_WINNT >= 0x0600)
     gspv.uiWheelScrollChars = SpiLoadInt(KEY_DESKTOP, VAL_SCRLLCHARS, 3);
-#endif
 
     /* Some hardcoded values for now */
 
@@ -523,6 +653,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.bBeep = TRUE;
     gspv.uiFocusBorderWidth = SpiLoadDWord(KEY_DESKTOP, L"FocusBorderWidth", 1);
     gspv.uiFocusBorderHeight = SpiLoadDWord(KEY_DESKTOP, L"FocusBorderHeight", 1);
+    gspv.uiCaptionAlignment = SpiLoadInt(KEY_METRIC, VAL_CAPTIONALIGN, CAPTIONALIGN_LEFT);
     gspv.bMenuDropAlign = 0;
     gspv.dwMenuShowDelay = SpiLoadInt(KEY_DESKTOP, L"MenuShowDelay", 400);
     gspv.dwForegroundFlashCount = 3;
@@ -530,9 +661,7 @@ SpiUpdatePerUserSystemParameters(VOID)
     gspv.iScrSaverTimeout = SpiLoadInt(KEY_DESKTOP, VAL_SCRTO, 600);
     gspv.bScrSaverActive = SpiLoadScreenSaverActive();
     gspv.bScrSaverRunning = FALSE;
-#if(WINVER >= 0x0600)
     gspv.bScrSaverSecure = SpiLoadInt(KEY_DESKTOP, L"ScreenSaverIsSecure", 0) != 0;
-#endif
 
     gspv.bFastTaskSwitch = TRUE;
 
@@ -716,11 +845,28 @@ SpiMemCopy(PVOID pvDst, PVOID pvSrc, ULONG cbSize, BOOL bProtect)
     return NT_SUCCESS(Status);
 }
 
+/* A call that came through the system service is held to its window station access; win32k's own calls are not */
+static inline
+BOOL
+SpiCallerMayRead(FLONG fl)
+{
+    return !(fl & SPIF_PROTECT) || CheckWinstaAttributeAccess(WINSTA_READATTRIBUTES, ERROR_SUCCESS);
+}
+
+static inline
+BOOL
+SpiCallerMayWrite(FLONG fl)
+{
+    return !(fl & SPIF_PROTECT) ||
+           CheckWinstaAttributeAccess(WINSTA_WRITEATTRIBUTES, ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION);
+}
+
 static inline
 UINT_PTR
 SpiGet(PVOID pvParam, PVOID pvData, ULONG cbSize, FLONG fl)
 {
-    REQ_INTERACTIVE_WINSTA(ERROR_ACCESS_DENIED);
+    if (!SpiCallerMayRead(fl))
+        return 0;
     return SpiMemCopy(pvParam, pvData, cbSize, fl & SPIF_PROTECT);
 }
 
@@ -752,7 +898,8 @@ static inline
 UINT_PTR
 SpiSet(PVOID pvData, PVOID pvParam, ULONG cbSize, FLONG fl)
 {
-    REQ_INTERACTIVE_WINSTA(ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION);
+    if (!SpiCallerMayWrite(fl))
+        return 0;
     return SpiMemCopy(pvData, pvParam, cbSize, fl & SPIF_PROTECT);
 }
 
@@ -835,8 +982,11 @@ SpiGetNonClientMetrics(PVOID pvParam, FLONG fl)
      * against older headers still pass the structure size that ends before
      * that member, and Windows continues to accept that form.
      */
-    if (!SpiSet(&cbSize, pvParam, sizeof(cbSize), fl))
+    if (!SpiCallerMayRead(fl) ||
+        !SpiMemCopy(&cbSize, pvParam, sizeof(cbSize), fl & SPIF_PROTECT))
+    {
         return 0;
+    }
 
     if (cbSize != sizeof(Metrics) &&
         cbSize != FIELD_OFFSET(NONCLIENTMETRICSW, iPaddedBorderWidth))
@@ -867,7 +1017,8 @@ static inline
 UINT_PTR
 SpiSetYesNo(BOOL *pbData, BOOL bValue, PCWSTR pwszKey, PCWSTR pwszValue, FLONG fl)
 {
-    REQ_INTERACTIVE_WINSTA(ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION);
+    if (!SpiCallerMayWrite(fl))
+        return 0;
     *pbData = bValue ? TRUE : FALSE;
     if (fl & SPIF_UPDATEINIFILE)
     {
@@ -880,7 +1031,8 @@ static inline
 UINT_PTR
 SpiSetBool(BOOL *pbData, INT iValue, PCWSTR pwszKey, PCWSTR pwszValue, FLONG fl)
 {
-    REQ_INTERACTIVE_WINSTA(ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION);
+    if (!SpiCallerMayWrite(fl))
+        return 0;
     *pbData = iValue ? TRUE : FALSE;
     if (fl & SPIF_UPDATEINIFILE)
     {
@@ -893,7 +1045,8 @@ static inline
 UINT_PTR
 SpiSetDWord(PVOID pvData, INT iValue, PCWSTR pwszKey, PCWSTR pwszValue, FLONG fl)
 {
-    REQ_INTERACTIVE_WINSTA(ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION);
+    if (!SpiCallerMayWrite(fl))
+        return 0;
     *(INT*)pvData = iValue;
     if (fl & SPIF_UPDATEINIFILE)
     {
@@ -906,7 +1059,8 @@ static inline
 UINT_PTR
 SpiSetInt(PVOID pvData, INT iValue, PCWSTR pwszKey, PCWSTR pwszValue, FLONG fl)
 {
-    REQ_INTERACTIVE_WINSTA(ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION);
+    if (!SpiCallerMayWrite(fl))
+        return 0;
     *(INT*)pvData = iValue;
     if (fl & SPIF_UPDATEINIFILE)
     {
@@ -919,7 +1073,8 @@ static inline
 UINT_PTR
 SpiSetMetric(PVOID pvData, INT iValue, PCWSTR pwszValue, FLONG fl)
 {
-    REQ_INTERACTIVE_WINSTA(ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION);
+    if (!SpiCallerMayWrite(fl))
+        return 0;
     *(INT*)pvData = iValue;
     if (fl & SPIF_UPDATEINIFILE)
     {
@@ -935,7 +1090,8 @@ SpiSetUserPref(DWORD dwMask, PVOID pvValue, FLONG fl)
     DWORD dwRegMask;
     BOOL bValue = PtrToUlong(pvValue);
 
-    REQ_INTERACTIVE_WINSTA(ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION);
+    if (!SpiCallerMayWrite(fl))
+        return 0;
 
     /* Set or clear bit according to bValue */
     gspv.dwUserPrefMask = bValue ? gspv.dwUserPrefMask | dwMask :
@@ -992,6 +1148,8 @@ SpiLoadWallpaperMode(VOID)
         return wmFit;
     if (!ulTile && ulStyle == 10)
         return wmFill;
+    if (!ulTile && ulStyle == 22)
+        return wmSpan;
     return wmCenter;
 }
 
@@ -1002,11 +1160,13 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
     UNICODE_STRING ustr;
     WCHAR awc[MAX_PATH];
     WCHAR awcCaptured[MAX_PATH + 1];
+    USHORT usCapturedLength;
     BOOL bResult;
     HBITMAP hbmp, hOldBitmap;
     SURFACE *psurfBmp;
 
-    REQ_INTERACTIVE_WINSTA(ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION);
+    if (!SpiCallerMayWrite(fl))
+        return 0;
 
     if (!pvParam)
     {
@@ -1032,6 +1192,7 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
         return 0;
     }
     awcCaptured[ustr.Length / sizeof(WCHAR)] = UNICODE_NULL;
+    usCapturedLength = ustr.Length;
 
     if (hbmSupplied)
     {
@@ -1056,29 +1217,17 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
         }
     }
 
-    RtlCopyMemory(gspv.awcWallpaper, awcCaptured, ustr.Length + sizeof(WCHAR));
-
-    /* Update the UNICODE_STRING */
-    gspv.ustrWallpaper.Buffer = gspv.awcWallpaper;
-    gspv.ustrWallpaper.MaximumLength = sizeof(gspv.awcWallpaper);
-    gspv.ustrWallpaper.Length = ustr.Length;
-
-    TRACE("SpiSetWallpaper, name=%S\n", gspv.awcWallpaper);
-
-    /* Update registry */
-    if (fl & SPIF_UPDATEINIFILE)
-    {
-        SpiStoreSz(KEY_DESKTOP, L"Wallpaper", gspv.awcWallpaper);
-    }
-
-    /* Got a filename? */
-    if (gspv.awcWallpaper[0] != 0)
+    /* Load the new wallpaper first. A file that does not exist or does not
+     * decode keeps the current wallpaper on screen (verified on Windows 11:
+     * the previous image stays and TranscodedWallpaper is untouched); the
+     * attempted name is still committed below and the call succeeds. */
+    if (awcCaptured[0] != 0)
     {
         /* Convert file name to nt file name */
         ustr.Buffer = awc;
         ustr.MaximumLength = MAX_PATH * sizeof(WCHAR);
         ustr.Length = 0;
-        if (!W32kDosPathNameToNtPathName(gspv.awcWallpaper, &ustr))
+        if (!W32kDosPathNameToNtPathName(awcCaptured, &ustr))
         {
             ERR("W32kDosPathNameToNtPathName failed\n");
             return 0;
@@ -1086,29 +1235,28 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
 
         /* Load the Bitmap */
         hbmp = hbmSupplied ? hbmSupplied : UserLoadImage(ustr.Buffer);
-        if (!hbmp)
+        if (hbmp)
         {
-            gspv.cxWallpaper = 0;
-            gspv.cyWallpaper = 0;
-            goto ReplaceWallpaper;
-        }
+            /* Try to get the size of the wallpaper */
+            if (!(psurfBmp = SURFACE_ShareLockSurface(hbmp)))
+            {
+                GreDeleteObject(hbmp);
+                return 0;
+            }
 
-        /* Try to get the size of the wallpaper */
-        if (!(psurfBmp = SURFACE_ShareLockSurface(hbmp)))
+            gspv.cxWallpaper = psurfBmp->SurfObj.sizlBitmap.cx;
+            gspv.cyWallpaper = psurfBmp->SurfObj.sizlBitmap.cy;
+            SURFACE_ShareUnlockSurface(psurfBmp);
+
+            /* Change the bitmap's ownership */
+            GreSetObjectOwner(hbmp, GDI_OBJ_HMGR_PUBLIC);
+        }
+        else
         {
-            GreDeleteObject(hbmp);
-            return 0;
+            /* Keep the current bitmap, size and mode; the name committed
+             * below records what was attempted. */
+            WARN("Failed to load wallpaper %S; keeping the current one\n", awcCaptured);
         }
-
-        gspv.cxWallpaper = psurfBmp->SurfObj.sizlBitmap.cx;
-        gspv.cyWallpaper = psurfBmp->SurfObj.sizlBitmap.cy;
-        SURFACE_ShareUnlockSurface(psurfBmp);
-
-        /* Change the bitmap's ownership */
-        GreSetObjectOwner(hbmp, GDI_OBJ_HMGR_PUBLIC);
-
-        /* Yes, Windows really loads the current setting from the registry. */
-        gspv.WallpaperMode = SpiLoadWallpaperMode();
     }
     else
     {
@@ -1118,24 +1266,48 @@ SpiSetWallpaper(PVOID pvParam, FLONG fl, HBITMAP hbmSupplied)
         hbmp = 0;
     }
 
-ReplaceWallpaper:
-    /* Take care of the old wallpaper, if any */
-    hOldBitmap = gspv.hbmWallpaper;
-    if(hOldBitmap != NULL)
+    /* Commit the attempted name; on a load failure the previous bitmap stays. */
+    RtlCopyMemory(gspv.awcWallpaper, awcCaptured, usCapturedLength + sizeof(WCHAR));
+
+    /* Update the UNICODE_STRING */
+    gspv.ustrWallpaper.Buffer = gspv.awcWallpaper;
+    gspv.ustrWallpaper.MaximumLength = sizeof(gspv.awcWallpaper);
+    gspv.ustrWallpaper.Length = usCapturedLength;
+
+    TRACE("SpiSetWallpaper, name=%S\n", gspv.awcWallpaper);
+
+    /* Update registry */
+    if (fl & SPIF_UPDATEINIFILE)
     {
-        /* Delete the old wallpaper */
-        GreSetObjectOwner(hOldBitmap, GDI_OBJ_HMGR_POWNED);
-        GreDeleteObject(hOldBitmap);
+        SpiStoreSz(KEY_DESKTOP, L"Wallpaper", gspv.awcWallpaper);
     }
 
-    /* Set the new wallpaper */
-    gspv.hbmWallpaper = hbmp;
-    gspv.bBootScreenWallpaper = FALSE;
-    gspv.bWallpaperApplied = TRUE;
+    /* Yes, Windows really loads the current setting from the registry. */
+    if (hbmp)
+        gspv.WallpaperMode = SpiLoadWallpaperMode();
 
-    NtUserRedrawWindow(UserGetShellWindow(), NULL, NULL, RDW_INVALIDATE | RDW_ERASE);
-    IntCompositionDamageWindow(UserGetDesktopWindow());
+    /* Install the new bitmap, or remove the wallpaper on an empty name.
+     * On a load failure (hbmp == NULL with a non-empty name) the previous
+     * bitmap stays installed, so nothing is replaced. */
+    if (hbmp || awcCaptured[0] == 0)
+    {
+        /* Take care of the old wallpaper, if any */
+        hOldBitmap = gspv.hbmWallpaper;
+        if(hOldBitmap != NULL)
+        {
+            /* Delete the old wallpaper */
+            GreSetObjectOwner(hOldBitmap, GDI_OBJ_HMGR_POWNED);
+            GreDeleteObject(hOldBitmap);
+        }
 
+        /* Set the new wallpaper */
+        gspv.hbmWallpaper = hbmp;
+        gspv.bBootScreenWallpaper = FALSE;
+        gspv.bWallpaperApplied = TRUE;
+
+        NtUserRedrawWindow(UserGetShellWindow(), NULL, NULL, RDW_INVALIDATE | RDW_ERASE);
+        IntCompositionDamageWindow(UserGetDesktopWindow());
+    }
 
     return (UINT_PTR)KEY_DESKTOP;
 }
@@ -1182,6 +1354,38 @@ SpiSetBootScreenWallpaper(VOID)
         GreSetObjectOwner(OldBitmap, GDI_OBJ_HMGR_POWNED);
         GreDeleteObject(OldBitmap);
     }
+}
+
+static BOOL
+SpiRedrawAllFrames(VOID)
+{
+    PWND pwndDesktop, pwndCurrent;
+    HWND *ahwnd;
+    USER_REFERENCE_ENTRY Ref;
+    int i;
+
+    pwndDesktop = UserGetDesktopWindow();
+    if (!pwndDesktop)
+        return FALSE;
+
+    ahwnd = IntWinListChildren(pwndDesktop);
+    if (!ahwnd)
+        return FALSE;
+
+    for (i = 0; ahwnd[i]; i++)
+    {
+        pwndCurrent = UserGetWindowObject(ahwnd[i]);
+        if (!pwndCurrent)
+            continue;
+
+        UserRefObjectCo(pwndCurrent, &Ref);
+        co_UserRedrawWindow(pwndCurrent, NULL, NULL,
+                            RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
+        UserDerefObjectCo(pwndCurrent);
+    }
+
+    ExFreePoolWithTag(ahwnd, USERTAG_WINDOWLIST);
+    return TRUE;
 }
 
 static BOOL
@@ -1290,8 +1494,17 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             return SpiSetInt(&gspv.uiGridGranularity, uiParam, KEY_DESKTOP, VAL_GRID, fl);
 
         case SPI_GETDESKWALLPAPER:
-            uiParam = min(uiParam, gspv.ustrWallpaper.Length + 1UL);
-            return SpiGet(pvParam, gspv.awcWallpaper, uiParam, fl);
+        {
+            /* uiParam is the buffer size in characters; the copy always ends with a NUL, as lstrcpynW does */
+            ULONG cch = min(uiParam, gspv.ustrWallpaper.Length / sizeof(WCHAR) + 1UL);
+            static const WCHAR Nul = UNICODE_NULL;
+
+            if (!cch)
+                return FALSE;
+            if (cch > 1 && !SpiGet(pvParam, gspv.awcWallpaper, (cch - 1) * sizeof(WCHAR), fl))
+                return 0;
+            return SpiGet((PWCHAR)pvParam + cch - 1, (PVOID)&Nul, sizeof(WCHAR), fl);
+        }
 
         case SPI_SETDESKWALLPAPER:
             return SpiSetWallpaper(pvParam, fl, NULL);
@@ -1407,9 +1620,7 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
                 SpiStoreMetric(L"SmCaptionHeight", gspv.ncm.iSmCaptionHeight);
                 SpiStoreMetric(L"MenuWidth", gspv.ncm.iMenuWidth);
                 SpiStoreMetric(L"MenuHeight", gspv.ncm.iMenuHeight);
-#if (WINVER >= 0x0600)
                 SpiStoreMetric(L"PaddedBorderWidth", gspv.ncm.iPaddedBorderWidth);
-#endif
                 SpiStoreFont(L"CaptionFont", &gspv.ncm.lfCaptionFont);
                 SpiStoreFont(L"SmCaptionFont", &gspv.ncm.lfSmCaptionFont);
                 SpiStoreFont(L"MenuFont", &gspv.ncm.lfMenuFont);
@@ -2000,13 +2211,11 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
         case SPI_SETMENUSHOWDELAY:
             return SpiSetInt(&gspv.dwMenuShowDelay, uiParam, KEY_DESKTOP, L"MenuShowDelay", fl);
 
-#if (_WIN32_WINNT >= 0x0600)
         case SPI_GETWHEELSCROLLCHARS:
             return SpiGetInt(pvParam, &gspv.uiWheelScrollChars, fl);
 
         case SPI_SETWHEELSCROLLCHARS:
             return SpiSetInt(&gspv.uiWheelScrollChars, uiParam, KEY_DESKTOP, VAL_SCRLLCHARS, fl);
-#endif
         case SPI_GETSHOWIMEUI:
             return SpiGetInt(pvParam, &gspv.bShowImeUi, fl);
 
@@ -2021,8 +2230,15 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             /* Allowed range is [1:20] */
             if ((INT_PTR)pvParam < 1 || (INT_PTR)pvParam > 20)
                 return 0;
-            else
-                return SpiSetInt(&gspv.iMouseSpeed, (INT_PTR)pvParam, KEY_MOUSE, VAL_SENSITIVITY, fl);
+
+            /* Windows 11 serves this set like a read: read access is enough, on any window station */
+            if (!SpiCallerMayRead(fl))
+                return 0;
+
+            gspv.iMouseSpeed = (INT)(INT_PTR)pvParam;
+            if (fl & SPIF_UPDATEINIFILE)
+                SpiStoreSzInt(KEY_MOUSE, VAL_SENSITIVITY, (INT)(INT_PTR)pvParam);
+            return (UINT_PTR)KEY_MOUSE;
         }
 
         case SPI_GETSCREENSAVERRUNNING:
@@ -2032,7 +2248,6 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             // FIXME: also return value?
             return SpiSetBool(&gspv.bScrSaverRunning, uiParam, KEY_MOUSE, L"", fl);
 
-#if(WINVER >= 0x0600)
         case SPI_GETAUDIODESCRIPTION:
             return SpiGet(pvParam, &gspv.audiodescription, sizeof(AUDIODESCRIPTION), fl);
 
@@ -2045,7 +2260,6 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
 
         case SPI_SETSCREENSAVESECURE:
             return SpiSetBool(&gspv.bScrSaverSecure, uiParam, KEY_DESKTOP, L"ScreenSaverIsSecure", fl);
-#endif
 
         case SPI_GETACTIVEWINDOWTRACKING:
             return SpiGetUserPref(UPM_ACTIVEWINDOWTRACKING, pvParam, fl);
@@ -2179,7 +2393,6 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
         case SPI_SETBLOCKSENDINPUTRESETS:
             return SpiSetBool(&gspv.bBlockSendInputResets, uiParam, KEY_MOUSE, L"", fl);
 
-#if(_WIN32_WINNT >= 0x0600)
         case SPI_GETDISABLEOVERLAPPEDCONTENT:
             return SpiGetInt(pvParam, &gspv.bDisableOverlappedContent, fl);
 
@@ -2203,7 +2416,6 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
 
         case SPI_SETSPEECHRECOGNITION:
             return SpiSetBool(&gspv.bSpeechRecognition, uiParam, KEY_MOUSE, L"", fl);
-#endif
 
         case SPI_GETFOREGROUNDLOCKTIMEOUT:
             return SpiGetInt(pvParam, &gspv.dwForegroundLockTimeout, fl);
@@ -2258,7 +2470,16 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             return SpiGetInt(pvParam, &gspv.uiFontSmoothingContrast, fl);
 
         case SPI_SETFONTSMOOTHINGCONTRAST:
-            return SpiSetDWord(&gspv.uiFontSmoothingContrast, PtrToUlong(pvParam), KEY_DESKTOP, VAL_FONTSMOOTHINGCONTRAST, fl);
+        {
+            UINT uiContrast = PtrToUlong(pvParam);
+            /* Windows rejects contrast outside 1000-2200 and leaves the value unchanged. */
+            if (uiContrast < 1000 || uiContrast > 2200)
+            {
+                EngSetLastError(ERROR_INVALID_PARAMETER);
+                return 0;
+            }
+            return SpiSetDWord(&gspv.uiFontSmoothingContrast, uiContrast, KEY_DESKTOP, VAL_FONTSMOOTHINGCONTRAST, fl);
+        }
 
         case SPI_GETFOCUSBORDERWIDTH:
             return SpiGetInt(pvParam, &gspv.uiFocusBorderWidth, fl);
@@ -2271,6 +2492,24 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
 
         case SPI_SETFOCUSBORDERHEIGHT:
             return SpiSetDWord(&gspv.uiFocusBorderHeight, uiParam, KEY_DESKTOP, L"FocusBorderHeight", fl);
+
+        case SPI_GETCAPTIONALIGNMENT:
+            return SpiGetInt(pvParam, &gspv.uiCaptionAlignment, fl);
+
+        case SPI_SETCAPTIONALIGNMENT:
+        {
+            UINT_PTR ret = SpiSetInt(&gspv.uiCaptionAlignment,
+                                     uiParam ? CAPTIONALIGN_CENTER : CAPTIONALIGN_LEFT,
+                                     KEY_METRIC, VAL_CAPTIONALIGN, fl);
+            if (ret)
+            {
+                SpiNotifyNCMetricsChanged();
+                /* Caption alignment is paint-only (frame geometry unchanged), so the SWP_NOREDRAW
+                   frame-change above never repaints; force an NC redraw so it shows live. */
+                SpiRedrawAllFrames();
+            }
+            return ret;
+        }
 
         case SPI_GETFONTSMOOTHINGORIENTATION:
             return SpiGetInt(pvParam, &gspv.uiFontSmoothingOrientation, fl);
@@ -2359,15 +2598,11 @@ SpiGetSetProbeBuffer(UINT uiAction, UINT uiParam, PVOID pvParam)
         case SPI_GETMOUSEHOVERTIME:
         case SPI_GETWHEELSCROLLLINES:
         case SPI_GETMENUSHOWDELAY:
-#if (_WIN32_WINNT >= 0x0600)
         case SPI_GETWHEELSCROLLCHARS:
-#endif
         case SPI_GETSHOWIMEUI:
         case SPI_GETMOUSESPEED:
         case SPI_GETSCREENSAVERRUNNING:
-#if(WINVER >= 0x0600)
         case SPI_GETSCREENSAVESECURE:
-#endif
         case SPI_GETACTIVEWINDOWTRACKING:
         case SPI_GETMENUANIMATION:
         case SPI_GETCOMBOBOXANIMATION:
@@ -2388,12 +2623,10 @@ SpiGetSetProbeBuffer(UINT uiAction, UINT uiParam, PVOID pvParam)
         case SPI_GETFLATMENU:
         case SPI_GETDROPSHADOW:
         case SPI_GETBLOCKSENDINPUTRESETS:
-#if(_WIN32_WINNT >= 0x0600)
         case SPI_GETDISABLEOVERLAPPEDCONTENT:
         case SPI_GETCLIENTAREAANIMATION:
         case SPI_GETCLEARTYPE:
         case SPI_GETSPEECHRECOGNITION:
-#endif
         case SPI_GETFOREGROUNDLOCKTIMEOUT:
         case SPI_GETACTIVEWNDTRKTIMEOUT:
         case SPI_GETFOREGROUNDFLASHCOUNT:
@@ -2405,7 +2638,10 @@ SpiGetSetProbeBuffer(UINT uiAction, UINT uiParam, PVOID pvParam)
         case SPI_GETFONTSMOOTHINGCONTRAST:
         case SPI_GETFOCUSBORDERWIDTH:
         case SPI_GETFOCUSBORDERHEIGHT:
+        case SPI_GETCAPTIONALIGNMENT:
         case SPI_GETFONTSMOOTHINGORIENTATION:
+        case SPI_GETWINARRANGING:
+        case SPI_GETDOCKMOVING:
             cbSize = sizeof(INT);
             break;
 
@@ -2419,7 +2655,7 @@ SpiGetSetProbeBuffer(UINT uiAction, UINT uiParam, PVOID pvParam)
             break;
 
         case SPI_GETDESKWALLPAPER:
-            cbSize = min(uiParam, gspv.ustrWallpaper.Length + 1UL);
+            cbSize = min(uiParam, gspv.ustrWallpaper.Length / sizeof(WCHAR) + 1UL) * sizeof(WCHAR);
             break;
 
         case SPI_GETICONTITLELOGFONT:
@@ -2503,11 +2739,9 @@ SpiGetSetProbeBuffer(UINT uiAction, UINT uiParam, PVOID pvParam)
             cbSize = sizeof(HKL);
             break;
 
-#if(WINVER >= 0x0600)
         case SPI_GETAUDIODESCRIPTION:
             cbSize = sizeof(AUDIODESCRIPTION);
             break;
-#endif
 
         case SPI_SETMOUSE:
             cbSize = 3 * sizeof(INT);
@@ -2646,6 +2880,10 @@ UserSystemParametersInfo(
         //return FALSE;
     }
 
+    /* Windows 11 fails these without setting a last error (SPI-DESKWALLPAPER-WIN11-REF) */
+    if (uiAction == SPI_GETDESKWALLPAPER && (!pvParam || !uiParam))
+        return FALSE;
+
     if ((fWinIni & SPIF_PROTECT) && !SpiGetSetProbeBuffer(uiAction, uiParam, pvParam))
     {
         EngSetLastError(ERROR_NOACCESS);
@@ -2668,6 +2906,9 @@ UserSystemParametersInfo(
 
         /* Update system metrics */
         InitMetrics();
+
+        if (uiAction == SPI_SETWORKAREA)
+            co_WinPosRefitMaximizedWindows();
 
         /* Send notification to toplevel windows, if requested */
         if (fWinIni & SPIF_SENDCHANGE)

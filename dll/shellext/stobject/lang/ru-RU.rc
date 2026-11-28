@@ -50,7 +50,7 @@ BEGIN
     IDS_VOL_VOLUME "Громкость"
     IDS_VOL_ADJUST "&Настройка параметров аудио"
     IDS_VOL_OPEN "&Открыть управление громкостью"
-    IDS_VOL_RUN "SNDVOL32.EXE"
+    IDS_VOL_RUN "SNDVOL.EXE"
     IDS_VOL_MUTED "Громкость (выключено)"
     IDS_VOL_NODEVICE "No Audio Output Device is installed."
 

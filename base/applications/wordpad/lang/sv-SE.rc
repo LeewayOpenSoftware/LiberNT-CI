@@ -87,7 +87,7 @@ BEGIN
     END
     POPUP "&Hjälp"
     BEGIN
-        MENUITEM "&Om Wine Wordpad",         ID_ABOUT
+        MENUITEM "&Om WordPad",         ID_ABOUT
     END
 END
 

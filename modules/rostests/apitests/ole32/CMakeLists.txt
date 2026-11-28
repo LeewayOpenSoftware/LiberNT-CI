@@ -1,6 +1,7 @@
+add_subdirectory(neutral)
 
-add_executable(ole32_apitest globaloptions.c initializespy.cpp localserver.c testlist.c)
+add_executable(ole32_apitest callcontrol.c globaloptions.c initializespy.cpp localserver.c neutral.c security.c storagestat.c surrogate.c testlist.c uninitquit.c)
 target_link_libraries(ole32_apitest wine uuid cpprt)
 set_module_type(ole32_apitest win32cui)
-add_importlibs(ole32_apitest user32 gdi32 shell32 ole32 shlwapi msvcrt kernel32)
+add_importlibs(ole32_apitest advapi32 user32 gdi32 shell32 ole32 oleaut32 shlwapi msvcrt kernel32)
 add_rostests_file(TARGET ole32_apitest)

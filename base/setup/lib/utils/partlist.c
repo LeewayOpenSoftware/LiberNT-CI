@@ -138,7 +138,7 @@ IsDriveLetterAllowed(
     _In_ PPARTENTRY PartEntry)
 {
     if (PartEntry->DiskEntry->DiskStyle != PARTITION_STYLE_GPT)
-        return TRUE;
+        return PartEntry->PartitionType != PARTITION_SYSTEM;
 
     if (IsEqualGUID(&PartEntry->PartitionTypeGuid, &PARTITION_SYSTEM_GUID))
         return FALSE;
@@ -1236,6 +1236,7 @@ AddVolume:
     }
     else if (IsRecognizedPartition(PartEntry->PartitionType) || // PartitionInfo->RecognizedPartition
              IsOEMPartition(PartEntry->PartitionType) ||
+             PartEntry->PartitionType == PARTITION_SYSTEM ||
              IsEqualGUID(&PartEntry->PartitionTypeGuid, &PARTITION_SYSTEM_GUID))
     {
         PVOLENTRY Volume;
@@ -1323,7 +1324,13 @@ ScanForUnpartitionedDiskSpace(
             StartSector = 2048ULL;
         else
             StartSector = (ULONGLONG)DiskEntry->SectorAlignment;
-        SectorCount = AlignDown(GetUsableSectorLimit(DiskEntry), DiskEntry->SectorAlignment) - StartSector;
+        SectorCount = AlignDown(GetUsableSectorLimit(DiskEntry), DiskEntry->SectorAlignment);
+        if (SectorCount <= StartSector)
+        {
+            DPRINT1("Disk %lu has no room for a partition after sector %I64u\n", DiskEntry->DiskNumber, StartSector);
+            return;
+        }
+        SectorCount -= StartSector;
 
         NewPartEntry = CreateInsertBlankRegion(DiskEntry,
                                                &DiskEntry->PrimaryPartListHead,
@@ -2167,6 +2174,10 @@ AddDiskToList(
     /* Keep looping while the drive layout buffer is too small */
     for (;;)
     {
+        /* A disk with neither MBR nor GPT has no layout: it is set up below like an empty table */
+        if (DiskEntry->DiskStyle == PARTITION_STYLE_RAW)
+            break;
+
         DPRINT1("Buffer size: %lu\n", LayoutBufferSize);
         Status = NtDeviceIoControlFile(FileHandle,
                                        NULL,

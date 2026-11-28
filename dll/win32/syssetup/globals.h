@@ -83,6 +83,13 @@ DWORD
 SaveDefaultUserHive(VOID);
 
 VOID
+CreateMachineGuid(VOID);
+
+VOID
+CreateSystemIdSeed(
+    _In_ BOOL AllowFirmwareWrite);
+
+VOID
 StartWow64Registration(VOID);
 
 VOID
@@ -97,7 +104,8 @@ RegisterTypeLibraries(
 
 VOID
 InstallStartMenuItems(
-    _In_ PITEMSDATA pItemsData);
+    _In_ PITEMSDATA pItemsData,
+    _In_ BOOL bUpgrade);
 
 /* netinstall.c */
 

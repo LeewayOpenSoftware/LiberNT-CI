@@ -25,7 +25,7 @@
 @ stub CoDeactivateObject
 @ stdcall CoDecrementMTAUsage(ptr) combase.CoDecrementMTAUsage
 @ stdcall CoDisableCallCancellation(ptr) combase.CoDisableCallCancellation
-@ stdcall -stub CoDisconnectContext(long) combase.CoDisconnectContext
+@ stdcall CoDisconnectContext(long) combase.CoDisconnectContext
 @ stdcall CoDisconnectObject(ptr long) combase.CoDisconnectObject
 @ stdcall CoDosDateTimeToFileTime(long long ptr) kernel32.DosDateTimeToFileTime
 @ stdcall CoEnableCallCancellation(ptr) combase.CoEnableCallCancellation
@@ -84,7 +84,7 @@
 @ stdcall CoMarshalInterface(ptr ptr ptr long ptr long) combase.CoMarshalInterface
 @ stub CoPopServiceDomain
 @ stub CoPushServiceDomain
-@ stub CoQueryAuthenticationServices
+@ stdcall CoQueryAuthenticationServices(ptr ptr) combase.CoQueryAuthenticationServices
 @ stdcall CoQueryClientBlanket(ptr ptr ptr ptr ptr ptr ptr) combase.CoQueryClientBlanket
 @ stdcall CoQueryProxyBlanket(ptr ptr ptr ptr ptr ptr ptr ptr) combase.CoQueryProxyBlanket
 @ stub CoQueryReleaseObject
@@ -106,7 +106,7 @@
 @ stdcall CoRevokeClassObject(long) combase.CoRevokeClassObject
 @ stdcall CoRevokeInitializeSpy(int64) combase.CoRevokeInitializeSpy
 @ stdcall CoRevokeMallocSpy() combase.CoRevokeMallocSpy
-@ stub CoSetCancelObject
+@ stdcall CoSetCancelObject(ptr) combase.CoSetCancelObject
 @ stdcall CoSetProxyBlanket(ptr long long ptr long long ptr long) combase.CoSetProxyBlanket
 @ stdcall CoSetState(ptr)
 @ stdcall CoSuspendClassObjects() combase.CoSuspendClassObjects
@@ -114,7 +114,7 @@
 @ stdcall CoTaskMemAlloc(long) combase.CoTaskMemAlloc
 @ stdcall CoTaskMemFree(ptr) combase.CoTaskMemFree
 @ stdcall CoTaskMemRealloc(ptr long) combase.CoTaskMemRealloc
-@ stub CoTestCancel
+@ stdcall CoTestCancel() combase.CoTestCancel
 @ stdcall CoTreatAsClass(ptr ptr) combase.CoTreatAsClass
 @ stdcall CoUninitialize() combase.CoUninitialize
 @ stub CoUnloadingWOW
@@ -124,7 +124,7 @@
 @ stub CoVrfGetThreadState
 @ stub CoVrfReleaseThreadState
 @ stdcall CoWaitForMultipleHandles(long long long ptr ptr) combase.CoWaitForMultipleHandles
-@ stub CoWaitForMultipleObjects
+@ stdcall CoWaitForMultipleObjects(long long long ptr ptr) combase.CoWaitForMultipleObjects
 @ stub ComPs_NdrDllCanUnloadNow
 @ stub ComPs_NdrDllGetClassObject
 @ stub ComPs_NdrDllRegisterProxy

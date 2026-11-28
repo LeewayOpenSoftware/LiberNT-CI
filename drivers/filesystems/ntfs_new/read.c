@@ -430,14 +430,27 @@ NtfsFinishDirectRead(
     _In_ ULONG Length)
 {
     NTSTATUS Status;
+    BOOLEAN Overlay;
+    PUCHAR Buffer = NULL;
+    ULONG Valid;
 
-    /* Small file writes may still be in the library's block cache. Paging
-     * and unbuffered reads bypass it, so commit only the overlapping blocks
-     * before sending this IRP directly to the storage device. */
-    Status = NtfsDiskFlushRangeKm(VolCB->StorageDevice, DiskOffset, Length);
+    /* Small file writes may still be in the library's block cache, which
+     * this IRP bypasses. A page-in cannot write them back at APC_LEVEL, so
+     * it gets them laid over the bytes the device returned instead. */
+    Status = NtfsDiskBeginDirectReadKm(VolCB->StorageDevice, DiskOffset, Length, &Overlay);
     if (!NT_SUCCESS(Status))
         return Status;
-    return NtfsSubmitDirectRead(VolCB, Irp, DiskOffset, Length);
+    Status = NtfsSubmitDirectRead(VolCB, Irp, DiskOffset, Length);
+    Valid = (ULONG)min(Irp->IoStatus.Information, (ULONG_PTR)Length);
+    if (Overlay && NT_SUCCESS(Status) && Valid)
+    {
+        Buffer = (PUCHAR)GetBuffer(Irp);
+        if (!Buffer)
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+    }
+    NtfsDiskEndDirectReadKm(VolCB->StorageDevice, DiskOffset, Valid,
+                            NT_SUCCESS(Status) ? Buffer : NULL, Overlay);
+    return Status;
 }
 
 #define NTFS_POSTED_READ ((PVOID)(ULONG_PTR)0x4E524450)
@@ -514,13 +527,17 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
        VPB_MOUNTED; only the old VCB reaches this check.  The CCB that
        issued the dismount (a locked volume DASD handle) is exempt, exactly
        as in the block-I/O path, so format/chkdsk-style raw volume I/O on
-       that handle keeps working. */
+       that handle keeps working.  So are paging reads after autochk
+       dismounted the boot volume in the BootExecute window: the images
+       already running page in from it until autochk restarts. */
     if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject &&
         ((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension)->Dismounted)
     {
         PFileContextBlock FileCB =
             NtfsGetFileContext(IoGetCurrentIrpStackLocation(Irp)->FileObject);
-        if (FileCB == NULL || !FileCB->DismountedVolume)
+        if ((FileCB == NULL || !FileCB->DismountedVolume) &&
+            !NtfsServesPagingAfterDismount(
+                (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension, Irp))
         {
             Irp->IoStatus.Status = STATUS_VOLUME_DISMOUNTED;
             Irp->IoStatus.Information = 0;

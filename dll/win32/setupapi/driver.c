@@ -278,6 +278,28 @@ IsManufacturerCompatible(
     return FALSE;
 }
 
+static DWORD
+GetInfFeatureScore(
+    IN HINF hInf,
+    IN PCWSTR Section)
+{
+    INFCONTEXT Context;
+    WCHAR Text[16];
+    PWSTR End;
+    ULONG FeatureScore;
+
+    /* The directive is a single hexadecimal byte, written without a 0x prefix */
+    if (SetupFindFirstLineW(hInf, Section, L"FeatureScore", &Context) &&
+        SetupGetStringFieldW(&Context, 1, Text, ARRAY_SIZE(Text), NULL) &&
+        Text[0] != UNICODE_NULL)
+    {
+        FeatureScore = wcstoul(Text, &End, 16);
+        if (*End == UNICODE_NULL && FeatureScore <= 0xFF)
+            return FeatureScore;
+    }
+    return 0xFF;
+}
+
 static BOOL
 AddKnownDriverToList(
     IN PLIST_ENTRY DriverListHead,
@@ -348,6 +370,19 @@ AddKnownDriverToList(
     }
     else
         driverInfo->MatchingId = NULL;
+
+    if (DriverType == SPDIT_COMPATDRIVER)
+    {
+        WCHAR ActualSection[LINE_LEN];
+
+        if (!SetupDiGetActualSectionToInstallW(InfFileDetails->hInf, SectionName, ActualSection,
+                                               ARRAY_SIZE(ActualSection), NULL, NULL))
+        {
+            lstrcpynW(ActualSection, SectionName, ARRAY_SIZE(ActualSection));
+        }
+        /* TODO: the signature score, the top byte of a Windows driver rank, is not computed */
+        Rank |= GetInfFeatureScore(InfFileDetails->hInf, ActualSection) << 16;
+    }
 
     TRACE("Adding driver '%s' [%s/%s] (Rank 0x%lx)\n",
         debugstr_w(driverInfo->Details.DrvDescription), debugstr_w(InfFile),
@@ -516,7 +551,7 @@ GetVersionInformationFromInfFile(
         NULL, /* Context */
         hInf,
         Version, ClassGUID,
-        guidW, sizeof(guidW),
+        guidW, ARRAYSIZE(guidW),
         NULL /* Required size */))
     {
         goto cleanup;
@@ -953,7 +988,7 @@ SetupDiBuildDriverInfoList(
             }
         }
 
-         if (InstallParams.FlagsEx & DI_FLAGSEX_INSTALLEDDRIVER)
+         if (DeviceInfoData && (InstallParams.FlagsEx & DI_FLAGSEX_INSTALLEDDRIVER))
         {
             HKEY hDriverKey;
             WCHAR InfFileName[MAX_PATH];
@@ -2685,16 +2720,7 @@ DriverDatabaseGetFeatureScore(
     IN HINF hInf,
     IN PCWSTR Section)
 {
-    INFCONTEXT Context;
-    INT FeatureScore;
-
-    if (SetupFindFirstLineW(hInf, Section, L"FeatureScore", &Context) &&
-        SetupGetIntField(&Context, 1, &FeatureScore) &&
-        FeatureScore >= 0 && FeatureScore <= 0xFF)
-    {
-        return FeatureScore;
-    }
-    return 0xFF;
+    return GetInfFeatureScore(hInf, Section);
 }
 
 static VOID
@@ -2726,19 +2752,17 @@ DriverDatabaseRecordText(
 
 static VOID
 DriverDatabaseRecordDescriptor(
-    IN HKEY Package,
+    IN HKEY Descriptors,
     IN HKEY Strings,
     IN PCWSTR DeviceId,
     IN PCWSTR Section,
     IN PINFCONTEXT Manufacturer,
     IN PINFCONTEXT Model)
 {
-    WCHAR Path[MAX_DEVICE_ID_LEN + 16];
     DWORD Disposition;
     HKEY Key;
 
-    swprintf(Path, ARRAY_SIZE(Path), L"Descriptors\\%s", DeviceId);
-    if (RegCreateKeyExW(Package, Path, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &Key, &Disposition) != ERROR_SUCCESS)
+    if (RegCreateKeyExW(Descriptors, DeviceId, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &Key, &Disposition) != ERROR_SUCCESS)
         return;
 
     if (Disposition == REG_CREATED_NEW_KEY)
@@ -2752,21 +2776,19 @@ DriverDatabaseRecordDescriptor(
 
 static VOID
 DriverDatabaseRecordDeviceId(
-    IN HKEY Database,
+    IN HKEY DeviceIds,
     IN PCWSTR DeviceId,
     IN PCWSTR PublishedName,
     IN BYTE Flags,
     IN BYTE FeatureScore,
     IN WORD Position)
 {
-    WCHAR Path[MAX_DEVICE_ID_LEN + 16];
     BYTE Data[4], Current[4];
     DWORD Size = sizeof(Current), Type;
     WORD CurrentPosition;
     HKEY Key;
 
-    swprintf(Path, ARRAY_SIZE(Path), L"DeviceIds\\%s", DeviceId);
-    if (RegCreateKeyExW(Database, Path, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &Key, NULL) != ERROR_SUCCESS)
+    if (RegCreateKeyExW(DeviceIds, DeviceId, 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &Key, NULL) != ERROR_SUCCESS)
         return;
 
     Data[0] = Flags;
@@ -2798,7 +2820,7 @@ SETUPAPI_RecordDriverDatabasePackage(
     DWORD ConfigurationsLength = 0, Field, FieldCount, FeatureScore;
     INFCONTEXT Manufacturer, Model;
     BYTE VersionData[48];
-    HKEY Database = NULL, Package = NULL, Strings = NULL, Key;
+    HKEY Database = NULL, Package = NULL, Strings = NULL, Descriptors = NULL, DeviceIds = NULL, Key;
     LPWSTR Provider = NULL;
     SYSTEM_INFO SystemInfo;
     FILETIME DriverDate;
@@ -2835,6 +2857,15 @@ SETUPAPI_RecordDriverDatabasePackage(
         goto cleanup;
     }
 
+    /* Open the Descriptors and DeviceIds containers once; an INF with thousands
+     * of hardware IDs otherwise re-resolves these parents on every ID. A failed
+     * open leaves the container NULL and its per-ID records are skipped, never
+     * written through a NULL root. */
+    if (RegCreateKeyExW(Package, L"Descriptors", 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &Descriptors, NULL) != ERROR_SUCCESS)
+        Descriptors = NULL;
+    if (RegCreateKeyExW(Database, L"DeviceIds", 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &DeviceIds, NULL) != ERROR_SUCCESS)
+        DeviceIds = NULL;
+
     GetNativeSystemInfo(&SystemInfo);
     memset(VersionData, 0, sizeof(VersionData));
     VersionData[0] = OemPath ? 0x00 : 0xFF;
@@ -2849,8 +2880,17 @@ SETUPAPI_RecordDriverDatabasePackage(
         DriverDatabaseSetString(Package, L"Provider", Provider);
     if (OemPath)
     {
+        WCHAR Catalog[MAX_PATH], CatalogPath[2 * MAX_PATH];
+        DWORD SignerScore = SIGNERSCORE_UNSIGNED;
+
         DriverDatabaseSetString(Package, L"InfName", InfName);
         DriverDatabaseSetString(Package, L"OemPath", OemPath);
+        if (SETUPAPI_GetInfCatalogFile(hInf, Catalog, ARRAY_SIZE(Catalog)))
+        {
+            swprintf(CatalogPath, ARRAY_SIZE(CatalogPath), L"%s\\%s", OemPath, Catalog);
+            SignerScore = SETUPAPI_GetCatalogSignerScore(CatalogPath);
+        }
+        DriverDatabaseSetDword(Package, L"SignerScore", SignerScore);
     }
     else
     {
@@ -2891,13 +2931,15 @@ SETUPAPI_RecordDriverDatabasePackage(
                 if (!SetupGetStringFieldW(&Model, Field, DeviceId, ARRAY_SIZE(DeviceId), NULL) || !DeviceId[0])
                     continue;
 
-                DriverDatabaseRecordDescriptor(Package, Strings, DeviceId, Section, &Manufacturer, &Model);
-                DriverDatabaseRecordDeviceId(Database,
-                                             DeviceId,
-                                             PublishedName,
-                                             Field == 2 ? 1 : 2,
-                                             (BYTE)FeatureScore,
-                                             (WORD)(Field == 2 ? 0 : Field - 3));
+                if (Descriptors)
+                    DriverDatabaseRecordDescriptor(Descriptors, Strings, DeviceId, Section, &Manufacturer, &Model);
+                if (DeviceIds)
+                    DriverDatabaseRecordDeviceId(DeviceIds,
+                                                 DeviceId,
+                                                 PublishedName,
+                                                 Field == 2 ? 1 : 2,
+                                                 (BYTE)FeatureScore,
+                                                 (WORD)(Field == 2 ? 0 : Field - 3));
             }
         }
     }
@@ -2921,6 +2963,10 @@ SETUPAPI_RecordDriverDatabasePackage(
     DriverDatabaseTouch(Database);
 
 cleanup:
+    if (DeviceIds)
+        DriverDatabaseCloseKey(Database, L"DeviceIds", DeviceIds);
+    if (Descriptors)
+        DriverDatabaseCloseKey(Package, L"Descriptors", Descriptors);
     if (Strings)
         DriverDatabaseCloseKey(Package, L"Strings", Strings);
     if (Package)

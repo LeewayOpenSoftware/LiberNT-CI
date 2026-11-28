@@ -8,5 +8,4 @@ media/graphics/user-folders/oxygen for the sources. Frames of 16, 32, 48, 64,
 128 and 256 pixels are the Oxygen PNGs of those sizes; the other frames are
 rendered from the scalable Oxygen SVG.
 
-computer.ico devices/computer
 root.bmp     devices/computer (16 pixel PNG)

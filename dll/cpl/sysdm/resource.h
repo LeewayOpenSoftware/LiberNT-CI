@@ -85,6 +85,7 @@
 #define IDC_UPTIME           111
 #define IDC_ROSTARGET        117
 #define IDC_ROSBUILD         118
+#define IDC_ROSREVISION      119
 
 /* Propsheet - hardware */
 #define IDD_PROPPAGEHARDWARE        300

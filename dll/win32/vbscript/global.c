@@ -483,12 +483,23 @@ static HRESULT to_system_time(LCID lcid, VARIANT *v, SYSTEMTIME *st)
 static HRESULT set_object_site(script_ctx_t *ctx, IUnknown *obj)
 {
     IObjectWithSite *obj_site;
+    IServiceProvider *sp;
     IUnknown *ax_site;
     HRESULT hres;
 
     hres = IUnknown_QueryInterface(obj, &IID_IObjectWithSite, (void**)&obj_site);
     if(FAILED(hres))
         return S_OK;
+
+    /* A host without IServiceProvider (a plain script host) has no site to give:
+       the object is created without one, as it would be by the host itself */
+    hres = IActiveScriptSite_QueryInterface(ctx->site, &IID_IServiceProvider, (void**)&sp);
+    if(FAILED(hres)) {
+        TRACE("host has no IServiceProvider, no site for the object\n");
+        IObjectWithSite_Release(obj_site);
+        return S_OK;
+    }
+    IServiceProvider_Release(sp);
 
     ax_site = create_ax_site(ctx);
     if(ax_site) {

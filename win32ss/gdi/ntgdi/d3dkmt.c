@@ -117,7 +117,9 @@ C_ASSERT(FIELD_OFFSET(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET, GlobalShareHand
             return Status;                                               \
         if (DxgAdapterCallbacks.CallbackField == NULL)                   \
             return STATUS_PROCEDURE_NOT_FOUND;                           \
-        return DxgAdapterCallbacks.CallbackField(Argument);              \
+        return D3dkmtCallCaptured((PVOID)(Argument), sizeof(*(Argument)), \
+                                  (PD3DKMT_ARGUMENT_CALLBACK)DxgAdapterCallbacks.CallbackField, \
+                                  FALSE);                                \
     } while (0)
 
 #define D3DKMT_CALL_HANDLE_CALLBACK(CallbackField, HandleArgument)        \
@@ -141,6 +143,11 @@ C_ASSERT(FIELD_OFFSET(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET, GlobalShareHand
 
 #define D3DKMT_PRESENT_MAX_SUBRECTS 64U
 #define TAG_D3DKMT_PRESENT_SUBRECTS 'rPmD'
+#define TAG_D3DKMT_CAPTURE 'aCmD'
+
+/* Same convention as the NTAPI DXGADAPTER_* function types: on i386 a mismatch
+ * shifts ESP by the argument size at every call through the table. */
+typedef NTSTATUS (APIENTRY *PD3DKMT_ARGUMENT_CALLBACK)(PVOID Argument);
 
 NTSTATUS
 APIENTRY
@@ -403,6 +410,121 @@ D3dkmtCaptureUserStructure(
     return Status;
 }
 
+BOOLEAN
+NTAPI
+D3dkmtGetUserCallCapture(
+    _Out_ PVOID *Base,
+    _Out_ SIZE_T *Size)
+{
+    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+
+    *Base = NULL;
+    *Size = 0;
+    if (pti == NULL || pti->pvD3dkmtCapture == NULL)
+        return FALSE;
+
+    *Base = pti->pvD3dkmtCapture;
+    *Size = pti->cbD3dkmtCapture;
+    return TRUE;
+}
+
+/* Runs the bridge on the kernel copy of a caller's structure, telling it which
+ * memory that copy is: anything else it is handed comes from the caller. */
+/* Recorded as the capture of a call from user mode that has no kernel copy
+ * of its own: nothing lies inside it, so every buffer is probed */
+static UCHAR D3dkmtNoCapture;
+
+static NTSTATUS
+D3dkmtCallWithCapture(
+    _In_ PD3DKMT_ARGUMENT_CALLBACK Callback,
+    _In_ PVOID Argument,
+    _In_ PVOID Captured,
+    _In_ SIZE_T Size)
+{
+    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+    PVOID PreviousBase;
+    SIZE_T PreviousSize;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
+
+    if (pti == NULL)
+        return (ExGetPreviousMode() == KernelMode) ? Callback(Argument) : STATUS_INVALID_PARAMETER;
+
+    PreviousBase = pti->pvD3dkmtCapture;
+    PreviousSize = pti->cbD3dkmtCapture;
+    pti->pvD3dkmtCapture = Captured;
+    pti->cbD3dkmtCapture = Size;
+    _SEH2_TRY
+    {
+        Status = Callback(Argument);
+    }
+    _SEH2_FINALLY
+    {
+        pti->pvD3dkmtCapture = PreviousBase;
+        pti->cbD3dkmtCapture = PreviousSize;
+    }
+    _SEH2_END;
+    return Status;
+}
+
+/* A service that hands the caller's own pointer to the bridge: the call is
+ * marked as coming from user mode, with no kernel copy, so the bridge probes
+ * that pointer and every pointer inside the structure */
+static NTSTATUS
+D3dkmtCallDirect(
+    _In_ PD3DKMT_ARGUMENT_CALLBACK Callback,
+    _In_opt_ PVOID Argument)
+{
+    if (ExGetPreviousMode() == KernelMode)
+        return Callback(Argument);
+    return D3dkmtCallWithCapture(Callback, Argument, &D3dkmtNoCapture, 0);
+}
+
+static NTSTATUS
+D3dkmtCallCaptured(
+    _In_opt_ PVOID Argument,
+    _In_ SIZE_T Size,
+    _In_ PD3DKMT_ARGUMENT_CALLBACK Callback,
+    _In_ BOOLEAN ZeroOnBadArgument)
+{
+    UCHAR StackBuffer[2 * 512];
+    PUCHAR Captured = StackBuffer;
+    NTSTATUS Status;
+
+    if (ExGetPreviousMode() == KernelMode)
+        return Callback(Argument);
+    if (Size > sizeof(StackBuffer) / 2)
+    {
+        Captured = ExAllocatePoolWithTag(PagedPool, 2 * Size, TAG_D3DKMT_CAPTURE);
+        if (Captured == NULL)
+            return STATUS_NO_MEMORY;
+    }
+    if (Argument == NULL || !NT_SUCCESS(D3dkmtCaptureUserStructure(Argument, Size, Captured)))
+    {
+        RtlZeroMemory(Captured, Size);
+        Status = ZeroOnBadArgument ? D3dkmtCallWithCapture(Callback, Captured, Captured, Size) : STATUS_INVALID_PARAMETER;
+        goto Done;
+    }
+    RtlCopyMemory(Captured + Size, Captured, Size);
+    Status = D3dkmtCallWithCapture(Callback, Captured, Captured, Size);
+    if (RtlCompareMemory(Captured, Captured + Size, Size) != Size)
+    {
+        _SEH2_TRY
+        {
+            ProbeForWrite(Argument, Size, 1);
+            RtlCopyMemory(Argument, Captured, Size);
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+        }
+        _SEH2_END;
+    }
+Done:
+    if (Captured != StackBuffer)
+        ExFreePoolWithTag(Captured, TAG_D3DKMT_CAPTURE);
+    return Status;
+}
+
 static NTSTATUS
 D3dkmtValidateWddmHandleThunk(
     _In_opt_ HANDLE Handle)
@@ -496,7 +618,32 @@ APIENTRY
 NtGdiDdDDIGetProcessSchedulingPriorityClass(_In_  HANDLE unnamedParam1,
                                             _Out_ D3DKMT_SCHEDULINGPRIORITYCLASS *unnamedParam2)
 {
-    return D3DKMTGetProcessSchedulingPriorityClass(unnamedParam1, unnamedParam2);
+    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+    PVOID PreviousBase;
+    SIZE_T PreviousSize;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
+
+    if (ExGetPreviousMode() == KernelMode)
+        return D3DKMTGetProcessSchedulingPriorityClass(unnamedParam1, unnamedParam2);
+    if (pti == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* The output pointer is the caller's: mark the call (see D3dkmtCallDirect) */
+    PreviousBase = pti->pvD3dkmtCapture;
+    PreviousSize = pti->cbD3dkmtCapture;
+    pti->pvD3dkmtCapture = &D3dkmtNoCapture;
+    pti->cbD3dkmtCapture = 0;
+    _SEH2_TRY
+    {
+        Status = D3DKMTGetProcessSchedulingPriorityClass(unnamedParam1, unnamedParam2);
+    }
+    _SEH2_FINALLY
+    {
+        pti->pvD3dkmtCapture = PreviousBase;
+        pti->cbD3dkmtCapture = PreviousSize;
+    }
+    _SEH2_END;
+    return Status;
 }
 
 NTSTATUS
@@ -523,7 +670,7 @@ APIENTRY
 NtGdiDdDDISharedPrimaryUnLockNotification(_In_ const D3DKMT_SHAREDPRIMARYUNLOCKNOTIFICATION* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTSharedPrimaryUnLockNotification(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSharedPrimaryUnLockNotification, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -679,7 +826,7 @@ NtGdiDdDDIOpenAdapterFromDeviceName(_Inout_ D3DKMT_OPENADAPTERFROMDEVICENAME* un
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTOpenAdapterFromDeviceName(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenAdapterFromDeviceName, (PVOID)unnamedParam1);
 }
 
 
@@ -877,9 +1024,14 @@ NTSTATUS
 APIENTRY
 NtGdiDdDDIGetPresentHistory(_Inout_ D3DKMT_GETPRESENTHISTORY* unnamedParam1)
 {
-    /* FIXME: Windows 11 refuses a non-DWM caller with STATUS_ACCESS_DENIED before looking at a NULL argument */
-    RETURN_STATUS_IF_NULL(unnamedParam1);
-    D3DKMT_CALL_CALLBACK(RxgkIntPfnGetPresentHistory, unnamedParam1);
+    NTSTATUS Status = WddmBridgeRequireReady();
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (DxgAdapterCallbacks.RxgkIntPfnGetPresentHistory == NULL)
+        return STATUS_PROCEDURE_NOT_FOUND;
+    return D3dkmtCallCaptured(unnamedParam1, sizeof(*unnamedParam1),
+                              (PD3DKMT_ARGUMENT_CALLBACK)DxgAdapterCallbacks.RxgkIntPfnGetPresentHistory, TRUE);
 }
 
 NTSTATUS
@@ -1180,7 +1332,7 @@ NtGdiDdDDICheckVidPnExclusiveOwnership(_In_ const D3DKMT_CHECKVIDPNEXCLUSIVEOWNE
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTCheckVidPnExclusiveOwnership(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTCheckVidPnExclusiveOwnership, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1243,7 +1395,7 @@ NtGdiDdDDICreateKeyedMutex(_Inout_ D3DKMT_CREATEKEYEDMUTEX* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTCreateKeyedMutex(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTCreateKeyedMutex, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1254,7 +1406,7 @@ NtGdiDdDDIOpenKeyedMutex(_Inout_ D3DKMT_OPENKEYEDMUTEX* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTOpenKeyedMutex(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenKeyedMutex, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1265,7 +1417,7 @@ NtGdiDdDDIDestroyKeyedMutex(_In_ const D3DKMT_DESTROYKEYEDMUTEX* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTDestroyKeyedMutex(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTDestroyKeyedMutex, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1276,7 +1428,7 @@ NtGdiDdDDIAcquireKeyedMutex(_Inout_ D3DKMT_ACQUIREKEYEDMUTEX* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTAcquireKeyedMutex(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTAcquireKeyedMutex, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1287,7 +1439,7 @@ NtGdiDdDDIReleaseKeyedMutex(_Inout_ D3DKMT_RELEASEKEYEDMUTEX* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTReleaseKeyedMutex(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTReleaseKeyedMutex, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1295,7 +1447,7 @@ APIENTRY
 NtGdiDdDDIGetOverlayState(_Inout_ D3DKMT_GETOVERLAYSTATE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTGetOverlayState(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTGetOverlayState, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1303,14 +1455,14 @@ APIENTRY
 NtGdiDdDDICheckSharedResourceAccess(_In_ const D3DKMT_CHECKSHAREDRESOURCEACCESS* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTCheckSharedResourceAccess(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTCheckSharedResourceAccess, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIConfigureSharedResource(_In_ const D3DKMT_CONFIGURESHAREDRESOURCE* unnamedParam1)
 {
-    return D3DKMTConfigureSharedResource(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTConfigureSharedResource, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1376,7 +1528,7 @@ NtGdiDdDDIEnumAdapters(_Inout_ D3DKMT_ENUMADAPTERS* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTEnumAdapters(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTEnumAdapters, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1387,7 +1539,7 @@ NtGdiDdDDIEnumAdapters2(_Inout_ D3DKMT_ENUMADAPTERS2* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTEnumAdapters2(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTEnumAdapters2, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1398,7 +1550,7 @@ NtGdiDdDDIOpenAdapterFromLuid(_Inout_ D3DKMT_OPENADAPTERFROMLUID* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTOpenAdapterFromLuid(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenAdapterFromLuid, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1432,7 +1584,7 @@ NtGdiDdDDIReclaimAllocations2(
         if (!NT_SUCCESS(Status))
             return Status;
     }
-    return D3DKMTReclaimAllocations2(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTReclaimAllocations2, (PVOID)unnamedParam1);
 #else
     return STATUS_NOT_SUPPORTED;
 #endif
@@ -1534,7 +1686,7 @@ NtGdiDdDDIGetResourcePresentPrivateDriverData(
         if (!NT_SUCCESS(Status))
             return Status;
     }
-    return D3DKMTGetResourcePresentPrivateDriverData(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTGetResourcePresentPrivateDriverData, (PVOID)unnamedParam1);
 #else
     return STATUS_NOT_SUPPORTED;
 #endif
@@ -1565,7 +1717,7 @@ NtGdiDdDDIDestroyAllocation2(_In_ const struct _D3DKMT_DESTROYALLOCATION2* unnam
     Status = D3dkmtValidateWddmThunk(unnamedParam1);
     if (!NT_SUCCESS(Status))
         return Status;
-    return D3DKMTDestroyAllocation2(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTDestroyAllocation2, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1577,7 +1729,7 @@ NtGdiDdDDILock2(_Inout_ struct _D3DKMT_LOCK2* unnamedParam1)
     Status = D3dkmtValidateWddmThunk(unnamedParam1);
     if (!NT_SUCCESS(Status))
         return Status;
-    return D3DKMTLock2(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTLock2, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1589,7 +1741,7 @@ NtGdiDdDDIUnlock2(_In_ const struct _D3DKMT_UNLOCK2* unnamedParam1)
     Status = D3dkmtValidateWddmThunk(unnamedParam1);
     if (!NT_SUCCESS(Status))
         return Status;
-    return D3DKMTUnlock2(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTUnlock2, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1600,7 +1752,7 @@ NtGdiDdDDICreateHwQueue(_Inout_ struct _D3DKMT_CREATEHWQUEUE* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTCreateHwQueue(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTCreateHwQueue, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1611,7 +1763,7 @@ NtGdiDdDDIDestroyHwQueue(_In_ const struct _D3DKMT_DESTROYHWQUEUE* unnamedParam1
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTDestroyHwQueue(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTDestroyHwQueue, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1622,7 +1774,7 @@ NtGdiDdDDISubmitCommandToHwQueue(_In_ const struct _D3DKMT_SUBMITCOMMANDTOHWQUEU
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTSubmitCommandToHwQueue(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSubmitCommandToHwQueue, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1634,7 +1786,7 @@ NtGdiDdDDISubmitWaitForSyncObjectsToHwQueue(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTSubmitWaitForSyncObjectsToHwQueue(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSubmitWaitForSyncObjectsToHwQueue, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1646,7 +1798,7 @@ NtGdiDdDDISubmitSignalSyncObjectsToHwQueue(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTSubmitSignalSyncObjectsToHwQueue(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSubmitSignalSyncObjectsToHwQueue, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1658,7 +1810,7 @@ NtGdiDdDDISubmitPresentBltToHwQueue(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTSubmitPresentBltToHwQueue(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSubmitPresentBltToHwQueue, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1670,7 +1822,7 @@ NtGdiDdDDISubmitPresentToHwQueue(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTSubmitPresentToHwQueue(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSubmitPresentToHwQueue, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1701,7 +1853,7 @@ NtGdiDdDDIUpdateAllocationProperty(_Inout_ struct D3DDDI_UPDATEALLOCPROPERTY* un
         if (!NT_SUCCESS(Status))
             return Status;
     }
-    return D3DKMTUpdateAllocationProperty(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTUpdateAllocationProperty, (PVOID)unnamedParam1);
 #else
     return STATUS_NOT_SUPPORTED;
 #endif
@@ -1715,7 +1867,7 @@ NtGdiDdDDIChangeVideoMemoryReservation(_In_ const struct _D3DKMT_CHANGEVIDEOMMEM
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTChangeVideoMemoryReservation(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTChangeVideoMemoryReservation, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1726,7 +1878,7 @@ NtGdiDdDDISetStablePowerState(_In_ const struct _D3DKMT_SETSTABLEPOWERSTATE* unn
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTSetStablePowerState(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSetStablePowerState, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1737,7 +1889,7 @@ NtGdiDdDDIQueryClockCalibration(_Inout_ struct _D3DKMT_QUERYCLOCKCALIBRATION* un
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTQueryClockCalibration(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTQueryClockCalibration, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1749,7 +1901,7 @@ NtGdiDdDDISetContextInProcessSchedulingPriority(_In_ const struct _D3DKMT_SETCON
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTSetContextInProcessSchedulingPriority(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSetContextInProcessSchedulingPriority, (PVOID)unnamedParam1);
 #else
     RETURN_STATUS_IF_NULL(unnamedParam1);
     return STATUS_NOT_SUPPORTED;
@@ -1765,7 +1917,7 @@ NtGdiDdDDIGetContextInProcessSchedulingPriority(_Inout_ struct _D3DKMT_GETCONTEX
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTGetContextInProcessSchedulingPriority(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTGetContextInProcessSchedulingPriority, (PVOID)unnamedParam1);
 #else
     RETURN_STATUS_IF_NULL(unnamedParam1);
     return STATUS_NOT_SUPPORTED;
@@ -1780,7 +1932,7 @@ NtGdiDdDDIRegisterTrimNotification(_Inout_ struct _D3DKMT_REGISTERTRIMNOTIFICATI
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTRegisterTrimNotification(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTRegisterTrimNotification, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1791,7 +1943,7 @@ NtGdiDdDDIUnregisterTrimNotification(_Inout_ struct _D3DKMT_UNREGISTERTRIMNOTIFI
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTUnregisterTrimNotification(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTUnregisterTrimNotification, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1822,7 +1974,7 @@ NtGdiDdDDIInvalidateCache(_In_ const struct _D3DKMT_INVALIDATECACHE* unnamedPara
         if (!NT_SUCCESS(Status))
             return Status;
     }
-    return D3DKMTInvalidateCache(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTInvalidateCache, (PVOID)unnamedParam1);
 #else
     return STATUS_NOT_SUPPORTED;
 #endif
@@ -1837,7 +1989,7 @@ NtGdiDdDDIGetSharedResourceAdapterLuid(_Inout_ struct _D3DKMT_GETSHAREDRESOURCEA
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTGetSharedResourceAdapterLuid(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTGetSharedResourceAdapterLuid, (PVOID)unnamedParam1);
 #else
     RETURN_STATUS_IF_NULL(unnamedParam1);
     return STATUS_NOT_SUPPORTED;
@@ -1901,7 +2053,8 @@ NtGdiDdDDIOpenResourceFromNtHandle(_Inout_ struct _D3DKMT_OPENRESOURCEFROMNTHAND
     OpenResource.TotalPrivateDriverDataBufferSize =
         Captured.TotalPrivateDriverDataBufferSize;
 
-    Status = D3DKMTOpenResource(&OpenResource);
+    Status = D3dkmtCallWithCapture((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenResource,
+                                   &OpenResource, &OpenResource, sizeof(OpenResource));
     if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_TOO_SMALL)
         return Status;
 
@@ -1959,7 +2112,8 @@ NtGdiDdDDIQueryResourceInfoFromNtHandle(_Inout_ struct _D3DKMT_QUERYRESOURCEINFO
     QueryResourceInfo.PrivateRuntimeDataSize =
         Captured.PrivateRuntimeDataSize;
 
-    Status = D3DKMTQueryResourceInfo(&QueryResourceInfo);
+    Status = D3dkmtCallWithCapture((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTQueryResourceInfo,
+                                   &QueryResourceInfo, &QueryResourceInfo, sizeof(QueryResourceInfo));
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -1991,7 +2145,7 @@ APIENTRY
 NtGdiDdDDIOpenSyncObjectFromNtHandle(_Inout_ struct _D3DKMT_OPENSYNCOBJECTFROMNTHANDLE* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTOpenSyncObjectFromNtHandle(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenSyncObjectFromNtHandle, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -1999,7 +2153,7 @@ APIENTRY
 NtGdiDdDDIOpenSyncObjectFromNtHandle2(_Inout_ struct _D3DKMT_OPENSYNCOBJECTFROMNTHANDLE2* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTOpenSyncObjectFromNtHandle2(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenSyncObjectFromNtHandle2, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2007,7 +2161,7 @@ APIENTRY
 NtGdiDdDDIOpenSyncObjectNtHandleFromName(_Inout_ struct _D3DKMT_OPENSYNCOBJECTNTHANDLEFROMNAME* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTOpenSyncObjectNtHandleFromName(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenSyncObjectNtHandleFromName, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2015,7 +2169,7 @@ APIENTRY
 NtGdiDdDDIOpenNtHandleFromName(_Inout_ struct _D3DKMT_OPENNTHANDLEFROMNAME* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTOpenNtHandleFromName(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenNtHandleFromName, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2023,7 +2177,7 @@ APIENTRY
 NtGdiDdDDICreateOutputDupl(_In_ const struct _D3DKMT_CREATE_OUTPUTDUPL* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTCreateOutputDupl(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTCreateOutputDupl, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2031,7 +2185,7 @@ APIENTRY
 NtGdiDdDDIDestroyOutputDupl(_In_ const struct _D3DKMT_DESTROY_OUTPUTDUPL* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTDestroyOutputDupl(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTDestroyOutputDupl, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2039,7 +2193,7 @@ APIENTRY
 NtGdiDdDDIOutputDuplGetFrameInfo(_Inout_ struct _D3DKMT_OUTPUTDUPL_GET_FRAMEINFO* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTOutputDuplGetFrameInfo(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOutputDuplGetFrameInfo, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2047,7 +2201,7 @@ APIENTRY
 NtGdiDdDDIOutputDuplGetMetaData(_Inout_ struct _D3DKMT_OUTPUTDUPL_METADATA* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTOutputDuplGetMetaData(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOutputDuplGetMetaData, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2055,7 +2209,7 @@ APIENTRY
 NtGdiDdDDIOutputDuplGetPointerShapeData(_Inout_ struct _D3DKMT_OUTPUTDUPL_GET_POINTER_SHAPE_DATA* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTOutputDuplGetPointerShapeData(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOutputDuplGetPointerShapeData, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2071,7 +2225,7 @@ APIENTRY
 NtGdiDdDDIOutputDuplReleaseFrame(_In_ const struct _D3DKMT_OUTPUTDUPL_RELEASE_FRAME* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTOutputDuplReleaseFrame((D3DKMT_OUTPUTDUPL_RELEASE_FRAME *)unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOutputDuplReleaseFrame, (PVOID)unnamedParam1);
 }
 
 /* ---- Multi-plane overlays ------------------------------------------------- */
@@ -2413,7 +2567,7 @@ NtGdiDdDDIEnumAdapters3(_Inout_ struct _D3DKMT_ENUMADAPTERS3* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTEnumAdapters3(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTEnumAdapters3, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2424,7 +2578,7 @@ NtGdiDdDDIAcquireKeyedMutex2(_Inout_ struct _D3DKMT_ACQUIREKEYEDMUTEX2* unnamedP
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTAcquireKeyedMutex2(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTAcquireKeyedMutex2, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2435,7 +2589,7 @@ NtGdiDdDDICreateKeyedMutex2(_Inout_ struct _D3DKMT_CREATEKEYEDMUTEX2* unnamedPar
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTCreateKeyedMutex2(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTCreateKeyedMutex2, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2446,7 +2600,7 @@ NtGdiDdDDIOpenKeyedMutex2(_Inout_ struct _D3DKMT_OPENKEYEDMUTEX2* unnamedParam1)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTOpenKeyedMutex2(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenKeyedMutex2, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2457,7 +2611,7 @@ NtGdiDdDDIReleaseKeyedMutex2(_Inout_ struct _D3DKMT_RELEASEKEYEDMUTEX2* unnamedP
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return D3DKMTReleaseKeyedMutex2(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTReleaseKeyedMutex2, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2465,7 +2619,7 @@ APIENTRY
 NtGdiDdDDICancelPresents(_In_ const struct _D3DKMT_CANCEL_PRESENTS* unnamedParam1)
 {
     RETURN_STATUS_IF_NULL(unnamedParam1);
-    return D3DKMTCancelPresents((D3DKMT_CANCEL_PRESENTS *)unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTCancelPresents, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -2719,7 +2873,7 @@ NtGdiDdDDISetVidPnSourceOwner2(_In_ const struct _D3DKMT_SETVIDPNSOURCEOWNER2* u
     NTSTATUS Status = D3dkmtValidateWddmThunk(unnamedParam1);
     if (!NT_SUCCESS(Status))
         return Status;
-    return D3DKMTSetVidPnSourceOwner2(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSetVidPnSourceOwner2, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
@@ -3145,224 +3299,224 @@ NtGdiDdDDIIsFeatureEnabled(
 
     if (!NT_SUCCESS(Status))
         return Status;
-    return D3DKMTIsFeatureEnabled(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTIsFeatureEnabled, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDISetFSEBlock(_In_ const struct _D3DKMT_SETFSEBLOCK* unnamedParam1)
 {
-    return D3DKMTSetFSEBlock(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSetFSEBlock, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryFSEBlock(_Inout_ struct _D3DKMT_QUERYFSEBLOCK* unnamedParam1)
 {
-    return D3DKMTQueryFSEBlock(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTQueryFSEBlock, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDICreateHwContext(_Inout_ struct _D3DKMT_CREATEHWCONTEXT* unnamedParam1)
 {
-    return D3DKMTCreateHwContext(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTCreateHwContext, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroyHwContext(_In_ const struct _D3DKMT_DESTROYHWCONTEXT* unnamedParam1)
 {
-    return D3DKMTDestroyHwContext(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTDestroyHwContext, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDISetMonitorColorSpaceTransform(_In_ struct _D3DKMT_SET_COLORSPACE_TRANSFORM* unnamedParam1)
 {
-    return D3DKMTSetMonitorColorSpaceTransform(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSetMonitorColorSpaceTransform, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIAdjustFullscreenGamma(_In_ D3DKMT_ADJUSTFULLSCREENGAMMA *unnamedParam1)
 {
-    return D3DKMTAdjustFullscreenGamma(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTAdjustFullscreenGamma, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDICreateProtectedSession(_Inout_ D3DKMT_CREATEPROTECTEDSESSION *unnamedParam1)
 {
-    return D3DKMTCreateProtectedSession(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTCreateProtectedSession, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroyProtectedSession(_Inout_ D3DKMT_DESTROYPROTECTEDSESSION *unnamedParam1)
 {
-    return D3DKMTDestroyProtectedSession(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTDestroyProtectedSession, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIFlushHeapTransitions(_In_ D3DKMT_FLUSHHEAPTRANSITIONS *unnamedParam1)
 {
-    return D3DKMTFlushHeapTransitions(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTFlushHeapTransitions, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIGetPostCompositionCaps(_Inout_ D3DKMT_GET_POST_COMPOSITION_CAPS *unnamedParam1)
 {
-    return D3DKMTGetPostCompositionCaps(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTGetPostCompositionCaps, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIGetProcessDeviceRemovalSupport(_Inout_ D3DKMT_GETPROCESSDEVICEREMOVALSUPPORT *unnamedParam1)
 {
-    return D3DKMTGetProcessDeviceRemovalSupport(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTGetProcessDeviceRemovalSupport, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIMarkDeviceAsError(_In_ D3DKMT_MARKDEVICEASERROR *unnamedParam1)
 {
-    return D3DKMTMarkDeviceAsError(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTMarkDeviceAsError, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenKeyedMutexFromNtHandle(_Inout_ D3DKMT_OPENKEYEDMUTEXFROMNTHANDLE *unnamedParam1)
 {
-    return D3DKMTOpenKeyedMutexFromNtHandle(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenKeyedMutexFromNtHandle, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenProtectedSessionFromNtHandle(_Inout_ D3DKMT_OPENPROTECTEDSESSIONFROMNTHANDLE *unnamedParam1)
 {
-    return D3DKMTOpenProtectedSessionFromNtHandle(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenProtectedSessionFromNtHandle, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIPresentRedirected(_In_ D3DKMT_PRESENT_REDIRECTED *unnamedParam1)
 {
-    return D3DKMTPresentRedirected(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTPresentRedirected, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryProcessOfferInfo(_Inout_ D3DKMT_QUERYPROCESSOFFERINFO *unnamedParam1)
 {
-    return D3DKMTQueryProcessOfferInfo(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTQueryProcessOfferInfo, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryProtectedSessionInfoFromNtHandle(_Inout_ D3DKMT_QUERYPROTECTEDSESSIONINFOFROMNTHANDLE *unnamedParam1)
 {
-    return D3DKMTQueryProtectedSessionInfoFromNtHandle(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTQueryProtectedSessionInfoFromNtHandle, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryProtectedSessionStatus(_Inout_ D3DKMT_QUERYPROTECTEDSESSIONSTATUS *unnamedParam1)
 {
-    return D3DKMTQueryProtectedSessionStatus(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTQueryProtectedSessionStatus, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIQueryRemoteVidPnSourceFromGdiDisplayName(_Inout_ D3DKMT_QUERYREMOTEVIDPNSOURCEFROMGDIDISPLAYNAME *unnamedParam1)
 {
-    return D3DKMTQueryRemoteVidPnSourceFromGdiDisplayName(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTQueryRemoteVidPnSourceFromGdiDisplayName, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDISetHwProtectionTeardownRecovery(_In_ D3DKMT_SETHWPROTECTIONTEARDOWNRECOVERY *unnamedParam1)
 {
-    return D3DKMTSetHwProtectionTeardownRecovery(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSetHwProtectionTeardownRecovery, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDISetVidPnSourceHwProtection(_In_ D3DKMT_SETVIDPNSOURCEHWPROTECTION *unnamedParam1)
 {
-    return D3DKMTSetVidPnSourceHwProtection(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTSetVidPnSourceHwProtection, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDITrimProcessCommitment(_Inout_ D3DKMT_TRIMPROCESSCOMMITMENT *unnamedParam1)
 {
-    return D3DKMTTrimProcessCommitment(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTTrimProcessCommitment, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIConnectDoorbell(_In_ D3DKMT_CONNECT_DOORBELL *unnamedParam1)
 {
-    return D3DKMTConnectDoorbell(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTConnectDoorbell, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDICreateDoorbell(_In_ D3DKMT_CREATE_DOORBELL *unnamedParam1)
 {
-    return D3DKMTCreateDoorbell(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTCreateDoorbell, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDICreateNativeFence(_Inout_ D3DKMT_CREATENATIVEFENCE *unnamedParam1)
 {
-    return D3DKMTCreateNativeFence(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTCreateNativeFence, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIDestroyDoorbell(_In_ D3DKMT_DESTROY_DOORBELL *unnamedParam1)
 {
-    return D3DKMTDestroyDoorbell(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTDestroyDoorbell, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIGetNativeFenceLogDetail(_Inout_ D3DKMT_GETNATIVEFENCELOGDETAIL *unnamedParam1)
 {
-    return D3DKMTGetNativeFenceLogDetail(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTGetNativeFenceLogDetail, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDINotifyWorkSubmission(_In_ D3DKMT_NOTIFY_WORK_SUBMISSION *unnamedParam1)
 {
-    return D3DKMTNotifyWorkSubmission(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTNotifyWorkSubmission, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIOpenNativeFenceFromNtHandle(_Inout_ D3DKMT_OPENNATIVEFENCEFROMNTHANDLE *unnamedParam1)
 {
-    return D3DKMTOpenNativeFenceFromNtHandle(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOpenNativeFenceFromNtHandle, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIOutputDuplPresentToHwQueue(_In_ const D3DKMT_OUTPUTDUPLPRESENTTOHWQUEUE *unnamedParam1)
 {
-    return D3DKMTOutputDuplPresentToHwQueue(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTOutputDuplPresentToHwQueue, (PVOID)unnamedParam1);
 }
 
 NTSTATUS
 APIENTRY
 NtGdiDdDDIRegisterVailProcess(_In_ GUID *unnamedParam1)
 {
-    return D3DKMTRegisterVailProcess(unnamedParam1);
+    return D3dkmtCallDirect((PD3DKMT_ARGUMENT_CALLBACK)D3DKMTRegisterVailProcess, (PVOID)unnamedParam1);
 }
 
 /*
@@ -3401,6 +3555,15 @@ NtGdiDdDDIShareObjects(_In_ UINT cObjects,
     RtlZeroMemory(&ObjectAttributes, sizeof(ObjectAttributes));
     _SEH2_TRY
     {
+        /* The three addresses are the caller's: each one is checked to be
+         * a user address first. cObjects was bounded above. */
+        if (ExGetPreviousMode() != KernelMode)
+        {
+            ProbeForRead(hObjects, cObjects * sizeof(*hObjects), 1);
+            ProbeForRead(pObjectAttributes, sizeof(OBJECT_ATTRIBUTES), 1);
+            ProbeForWrite(phSharedNtHandle, sizeof(*phSharedNtHandle), 1);
+        }
+
         for (Index = 0; Index < cObjects; ++Index)
             Packet.ObjectHandles[Index] = hObjects[Index];
         ObjectAttributes = *(POBJECT_ATTRIBUTES)pObjectAttributes;

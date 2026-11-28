@@ -58,7 +58,7 @@ AddressPushLockWakeThread(
             break;
         }
 
-        Processor = KeGetCurrentProcessorNumber();
+        Processor = KeGetCurrentProcessorIndex();
         Priority = KeQueryPriorityThread(KeGetCurrentThread());
         if (Priority < Context->WakerPriorityMin) Context->WakerPriorityMin = Priority;
         if (Priority > Context->WakerPriorityMax) Context->WakerPriorityMax = Priority;
@@ -149,7 +149,7 @@ TestAddressPushLockRoundTrips(
     for (Round = 0; Round < Context.Rounds; Round++)
     {
         InterlockedExchange64(&Context.Address, 0);
-        MainProcessor = KeGetCurrentProcessorNumber();
+        MainProcessor = KeGetCurrentProcessorIndex();
         if ((PreviousProcessor != MAXULONG) && (PreviousProcessor != MainProcessor)) MainMigrations++;
         PreviousProcessor = MainProcessor;
         if (MainProcessor < sizeof(KAFFINITY) * CHAR_BIT) MainProcessorMask |= (KAFFINITY)1 << MainProcessor;
@@ -166,7 +166,7 @@ TestAddressPushLockRoundTrips(
         MainPriority = KeQueryPriorityThread(KeGetCurrentThread());
         if (MainPriority < MainPriorityMin) MainPriorityMin = MainPriority;
         if (MainPriority > MainPriorityMax) MainPriorityMax = MainPriority;
-        MainProcessor = KeGetCurrentProcessorNumber();
+        MainProcessor = KeGetCurrentProcessorIndex();
         if ((ULONG)Context.WakerProcessor != MainProcessor) ReturnRemoteRounds++;
     }
 

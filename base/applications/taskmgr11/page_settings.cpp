@@ -6,6 +6,7 @@
  */
 
 #include "app.h"
+#include "wheel_scroll.h"
 
 #define PGO_CLASS L"TM11PageSettings"
 
@@ -25,7 +26,7 @@ enum
     SID_HDR_START = 1, SID_STARTPAGE,
     SID_HDR_SPEED, SID_SPEED,
     SID_HDR_WINDOW, SID_ONTOP, SID_MINONUSE, SID_HIDEMIN,
-    SID_HDR_OTHER, SID_FULLACCT,
+    SID_HDR_OTHER, SID_FULLACCT, SID_NOBLUR,
 };
 
 static SetRow s_rows[] =
@@ -40,6 +41,7 @@ static SetRow s_rows[] =
     { RW_TOGGLE,   L"Hide when minimized", SID_HIDEMIN },
     { RW_HEADER,   L"Other options", SID_HDR_OTHER },
     { RW_TOGGLE,   L"Show full account name", SID_FULLACCT },
+    { RW_TOGGLE,   L"Transparency effects", SID_NOBLUR },
 };
 
 static const WCHAR* s_speedNames[] = { L"High", L"Normal", L"Low", L"Paused" };
@@ -47,10 +49,11 @@ static const WCHAR* s_speedNames[] = { L"High", L"Normal", L"Low", L"Paused" };
 struct SettingsPage : Page
 {
     int scrollY;
+    int wheelRemainder;
     int hotRow;
     int contentH;
 
-    SettingsPage() : scrollY(0), hotRow(-1), contentH(0) {}
+    SettingsPage() : scrollY(0), wheelRemainder(0), hotRow(-1), contentH(0) {}
 
     const WCHAR* Title() { return L"Settings"; }
 
@@ -62,6 +65,7 @@ struct SettingsPage : Page
         case SID_MINONUSE: return g_app.st.minOnUse;
         case SID_HIDEMIN:  return g_app.st.hideWhenMin;
         case SID_FULLACCT: return g_app.st.fullAcctName;
+        case SID_NOBLUR:   return !g_app.st.noBlur;
         }
         return FALSE;
     }
@@ -249,6 +253,10 @@ struct SettingsPage : Page
             case SID_FULLACCT:
                 g_app.st.fullAcctName = !g_app.st.fullAcctName;
                 break;
+            case SID_NOBLUR:
+                g_app.st.noBlur = !g_app.st.noBlur;
+                App_ApplyTheme();
+                break;
             }
             ApplyChanged();
             break;
@@ -291,7 +299,7 @@ static LRESULT CALLBACK PgSetProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         int page = rc.bottom - rc.top;
         int maxY = pg->contentH - page;
         if (maxY < 0) maxY = 0;
-        pg->scrollY -= GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA * S(48);
+        pg->scrollY += TmWheelScroll(&pg->wheelRemainder, GET_WHEEL_DELTA_WPARAM(wp), S(48));
         if (pg->scrollY < 0) pg->scrollY = 0;
         if (pg->scrollY > maxY) pg->scrollY = maxY;
         InvalidateRect(hwnd, NULL, FALSE);

@@ -300,16 +300,70 @@ BOOL CControlPanelEnum::CreateCPanelEnumList(DWORD dwFlags)
     return TRUE;
 }
 
+struct APPLET_LIST
+{
+    UINT Count;
+    PITEMID_CHILD Items[ANYSIZE_ARRAY];
+};
+
+static VOID FreeAppletList(APPLET_LIST *pList)
+{
+    for (UINT i = 0; i < pList->Count; i++)
+        ILFree(pList->Items[i]);
+    SHFree(pList);
+}
+
 CControlPanelFolder::CControlPanelFolder()
 {
     pidlRoot = NULL;    /* absolute pidl */
     m_cBackReferences = 0;
+    m_pApplets = NULL;
 }
 
 CControlPanelFolder::~CControlPanelFolder()
 {
     TRACE("-- destroying IShellFolder(%p)\n", this);
+    if (m_pApplets)
+        FreeAppletList(m_pApplets);
     SHFree(pidlRoot);
+}
+
+/* Listing the applets loads every one of them, so a folder lists them once for all the names it parses */
+APPLET_LIST *CControlPanelFolder::GetApplets(HWND hwndOwner)
+{
+    CComPtr<IEnumIDList> pEnum;
+    CSimpleArray<PITEMID_CHILD> Items;
+    PITEMID_CHILD pidlChild;
+    APPLET_LIST *pList;
+
+    if (m_pApplets)
+        return m_pApplets;
+
+    if (FAILED(EnumObjects(hwndOwner, SHCONTF_NONFOLDERS, &pEnum)))
+        return NULL;
+
+    while (pEnum->Next(1, &pidlChild, NULL) == S_OK)
+    {
+        if (!_ILGetCPanelPointer(pidlChild) || !Items.Add(pidlChild))
+            ILFree(pidlChild);
+    }
+
+    pList = (APPLET_LIST *)SHAlloc(FIELD_OFFSET(APPLET_LIST, Items) + Items.GetSize() * sizeof(pList->Items[0]));
+    if (!pList)
+    {
+        for (int i = 0; i < Items.GetSize(); i++)
+            ILFree(Items[i]);
+        return NULL;
+    }
+
+    pList->Count = (UINT)Items.GetSize();
+    for (UINT i = 0; i < pList->Count; i++)
+        pList->Items[i] = Items[i];
+
+    if (InterlockedCompareExchangePointer((PVOID *)&m_pApplets, pList, NULL) != NULL)
+        FreeAppletList(pList);
+
+    return m_pApplets;
 }
 
 /**************************************************************************
@@ -323,21 +377,64 @@ HRESULT WINAPI CControlPanelFolder::ParseDisplayName(
     PIDLIST_RELATIVE *ppidl,
     DWORD *pdwAttributes)
 {
+    /* Personalization is reached through its category, so that the address bar shows
+     * Control Panel > Appearance and Personalization > Personalization */
+    if (lpszDisplayName && ppidl && (CplIsPersonalizationParseName(lpszDisplayName) || CplIsCategoryName(lpszDisplayName)))
+    {
+        PITEMID_CHILD pidlCat = CplCategoryCreatePidl();
+        if (!pidlCat)
+            return E_OUTOFMEMORY;
+        PIDLIST_RELATIVE pidlRes = (PIDLIST_RELATIVE)pidlCat;
+        if (CplIsPersonalizationParseName(lpszDisplayName))
+        {
+            CComPtr<IShellFolder> psfCat;
+            PIDLIST_ABSOLUTE pidlAbsCat = ILCombine(pidlRoot, pidlCat);
+            HRESULT hrChild = pidlAbsCat ? CplCategoryBind(pidlAbsCat, IID_PPV_ARG(IShellFolder, &psfCat)) : E_OUTOFMEMORY;
+            if (pidlAbsCat)
+                ILFree(pidlAbsCat);
+            PIDLIST_RELATIVE pidlPers = NULL;
+            if (SUCCEEDED(hrChild))
+                hrChild = psfCat->ParseDisplayName(hwndOwner, pbc, lpszDisplayName, NULL, &pidlPers, NULL);
+            if (SUCCEEDED(hrChild))
+            {
+                pidlRes = ILCombine(pidlCat, pidlPers);
+                ILFree(pidlPers);
+                ILFree(pidlCat);
+                if (!pidlRes)
+                    return E_OUTOFMEMORY;
+            }
+            else
+            {
+                ILFree(pidlCat);
+                return hrChild;
+            }
+        }
+        if (pchEaten)
+            *pchEaten = (DWORD)wcslen(lpszDisplayName);
+        if (pdwAttributes)
+            *pdwAttributes &= SFGAO_FOLDER | SFGAO_BROWSABLE | SFGAO_CANLINK;
+        *ppidl = pidlRes;
+        return S_OK;
+    }
+
     /* We only support parsing guid names */
     HRESULT hr = m_regFolder->ParseDisplayName(hwndOwner, pbc, lpszDisplayName, pchEaten, ppidl, pdwAttributes);
     if (SUCCEEDED(hr) || !lpszDisplayName || !ppidl)
         return hr;
 
-    CComPtr<IEnumIDList> pEnum;
-    if (FAILED(EnumObjects(hwndOwner, SHCONTF_NONFOLDERS, &pEnum)))
+    APPLET_LIST *pApplets = GetApplets(hwndOwner);
+    if (!pApplets)
         return hr;
 
-    PITEMID_CHILD pidlChild;
-    while (pEnum->Next(1, &pidlChild, NULL) == S_OK)
+    for (UINT i = 0; i < pApplets->Count; i++)
     {
+        PITEMID_CHILD pidlChild = pApplets->Items[i];
         PIDLCPanelStruct *pCPanel = _ILGetCPanelPointer(pidlChild);
-        if (pCPanel && !lstrcmpiW(pCPanel->szName + pCPanel->offsDispName, lpszDisplayName))
+        if (!lstrcmpiW(pCPanel->szName + pCPanel->offsDispName, lpszDisplayName))
         {
+            pidlChild = ILClone(pidlChild);
+            if (!pidlChild)
+                return E_OUTOFMEMORY;
             if (pdwAttributes && *pdwAttributes)
             {
                 DWORD dwAttributes = ~0u;
@@ -349,7 +446,6 @@ HRESULT WINAPI CControlPanelFolder::ParseDisplayName(
             *ppidl = pidlChild;
             return S_OK;
         }
-        ILFree(pidlChild);
     }
     return hr;
 }
@@ -374,6 +470,25 @@ HRESULT WINAPI CControlPanelFolder::BindToObject(
     REFIID riid,
     LPVOID *ppvOut)
 {
+    if (pidl && CplIsCategoryPidl(pidl))
+    {
+        PITEMID_CHILD pidlFirst = ILCloneFirst(pidl);
+        if (!pidlFirst)
+            return E_OUTOFMEMORY;
+        PIDLIST_ABSOLUTE pidlAbs = ILCombine(pidlRoot, pidlFirst);
+        ILFree(pidlFirst);
+        if (!pidlAbs)
+            return E_OUTOFMEMORY;
+        CComPtr<IShellFolder> psfCat;
+        HRESULT hrCat = CplCategoryBind(pidlAbs, IID_PPV_ARG(IShellFolder, &psfCat));
+        ILFree(pidlAbs);
+        if (FAILED(hrCat))
+            return hrCat;
+        PCUIDLIST_RELATIVE pidlNext = ILGetNext(pidl);
+        if (ILIsEmpty(pidlNext))
+            return psfCat->QueryInterface(riid, ppvOut);
+        return psfCat->BindToObject(pidlNext, pbcReserved, riid, ppvOut);
+    }
     return m_regFolder->BindToObject(pidl, pbcReserved, riid, ppvOut);
 }
 
@@ -397,6 +512,10 @@ HRESULT WINAPI CControlPanelFolder::BindToStorage(
 */
 HRESULT WINAPI CControlPanelFolder::CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1, PCUIDLIST_RELATIVE pidl2)
 {
+    if (CplIsCategoryPidl(pidl1) && CplIsCategoryPidl(pidl2))
+        return MAKE_COMPARE_HRESULT(PersCompareChain(pidl1, pidl2));
+    if (CplIsCategoryPidl(pidl1) || CplIsCategoryPidl(pidl2))
+        return MAKE_COMPARE_HRESULT((int)CplIsCategoryPidl(pidl1) - (int)CplIsCategoryPidl(pidl2));
     /* Dont use SHELL32_CompareGuidItems because it would cause guid items to come first */
     if (_ILIsSpecialFolder(pidl1) || _ILIsSpecialFolder(pidl2))
     {
@@ -444,6 +563,9 @@ HRESULT WINAPI CControlPanelFolder::CreateViewObject(HWND hwndOwner, REFIID riid
         } else if (IsEqualIID(riid, IID_IContextMenu)) {
             WARN("IContextMenu not implemented\n");
             hr = E_NOTIMPL;
+        } else if (IsEqualIID(riid, IID_IExplorerPaneVisibility)) {
+            /* Control Panel shows no navigation pane by default, as in Windows */
+            hr = CPaneVisibility_CreateInstance(EPS_DEFAULT_OFF, riid, ppvOut);
         } else if (IsEqualIID(riid, IID_IShellView)) {
             CComPtr<CControlPanelFolderViewCB> sfviewcb;
             hr = ShellObjectCreator(sfviewcb);
@@ -467,6 +589,11 @@ HRESULT WINAPI CControlPanelFolder::CreateViewObject(HWND hwndOwner, REFIID riid
 */
 HRESULT WINAPI CControlPanelFolder::GetAttributesOf(UINT cidl, PCUITEMID_CHILD_ARRAY apidl, DWORD * rgfInOut)
 {
+    if (cidl == 1 && apidl && rgfInOut && CplIsCategoryPidl(apidl[0]))
+    {
+        *rgfInOut &= SFGAO_FOLDER | SFGAO_BROWSABLE | SFGAO_CANLINK;
+        return S_OK;
+    }
     HRESULT hr = S_OK;
     BOOL bInvalid = FALSE;
     static const DWORD dwControlPanelAttributes =
@@ -530,6 +657,13 @@ HRESULT WINAPI CControlPanelFolder::GetUIObjectOf(HWND hwndOwner,
     LPVOID pObj = NULL;
     HRESULT hr = E_INVALIDARG;
 
+    if (cidl >= 1 && apidl && apidl[0] && CplIsCategoryPidl(apidl[0]))
+    {
+        if (ppvOut)
+            *ppvOut = NULL;
+        return E_NOINTERFACE;
+    }
+
     TRACE("(%p)->(%p,%u,apidl=%p,%s,%p,%p)\n",
           this, hwndOwner, cidl, apidl, shdebugstr_guid(&riid), prgfInOut, ppvOut);
 
@@ -578,6 +712,12 @@ HRESULT WINAPI CControlPanelFolder::GetDisplayNameOf(PCUITEMID_CHILD pidl, DWORD
 {
     if (!pidl)
         return S_FALSE;
+    if (CplIsCategoryPidl(pidl))
+    {
+        if (!strRet)
+            return E_INVALIDARG;
+        return SHSetStrRet(strRet, PersCategoryName());
+    }
 
     PIDLCPanelStruct *pCPanel = _ILGetCPanelPointer(pidl);
 
@@ -1261,8 +1401,16 @@ HRESULT WINAPI COpenControlPanel::Open(LPCWSTR pszName, LPCWSTR pszPage, IUnknow
             {
                 // NT6 will execute "::{26EE0668-A00A-44D7-9371-BEB064C98683}\0\::{clsid}[\pszPage]"
                 // but we don't support parsing that so we force the class instead.
-                sei.fMask |= SEE_MASK_CLASSNAME;
-                sei.lpClass = clspath;
+                /* A class that is a browsable shell folder (Personalization) opens in Explorer through its parsing path */
+                WCHAR szAttr[MAX_PATH];
+                DWORD dwAttr = 0, cbAttr = sizeof(dwAttr);
+                StringCchPrintfW(szAttr, _countof(szAttr), L"%s\\ShellFolder", clspath);
+                if (SHGetValueW(HKEY_CLASSES_ROOT, szAttr, L"Attributes", NULL, &dwAttr, &cbAttr) != ERROR_SUCCESS ||
+                    !(dwAttr & SFGAO_FOLDER))
+                {
+                    sei.fMask |= SEE_MASK_CLASSNAME;
+                    sei.lpClass = clspath;
+                }
             }
         }
     }

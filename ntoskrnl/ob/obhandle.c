@@ -2267,6 +2267,7 @@ typedef struct _OBP_INHERIT_HANDLE_CONTEXT
     PHANDLE_TABLE HandleTable;
     const HANDLE *HandleList;
     SIZE_T HandleCount;
+    SIZE_T KeptCount;
 } OBP_INHERIT_HANDLE_CONTEXT, *POBP_INHERIT_HANDLE_CONTEXT;
 
 static
@@ -2287,6 +2288,7 @@ ObpFilterInheritedHandleCallback(
     {
         if (FilterContext->HandleList[Index] == Handle)
         {
+            FilterContext->KeptCount++;
             ExUnlockHandleTableEntry(FilterContext->HandleTable, HandleEntry);
             return FALSE;
         }
@@ -2299,6 +2301,29 @@ ObpFilterInheritedHandleCallback(
     ObpDecrementHandleCount(Object, FilterContext->Process, ObjectType);
     ObDereferenceObject(Object);
     return TRUE;
+}
+
+static
+BOOLEAN
+NTAPI
+ObpCountListedHandleCallback(
+    IN PHANDLE_TABLE_ENTRY HandleEntry,
+    IN HANDLE Handle,
+    IN PVOID Context)
+{
+    POBP_INHERIT_HANDLE_CONTEXT FilterContext = Context;
+    SIZE_T Index;
+
+    for (Index = 0; Index < FilterContext->HandleCount; Index++)
+    {
+        if (FilterContext->HandleList[Index] == Handle)
+        {
+            FilterContext->KeptCount++;
+            break;
+        }
+    }
+
+    return FALSE;
 }
 
 /*++
@@ -2387,6 +2412,8 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
 {
     PHANDLE_TABLE ParentTable, ObjectTable;
     OBP_INHERIT_HANDLE_CONTEXT FilterContext;
+    NTSTATUS Status = STATUS_SUCCESS;
+    SIZE_T Index, NullCount = 0;
 
     /* Check for a parent */
     if (Parent)
@@ -2408,6 +2435,25 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
             FilterContext.HandleTable = ObjectTable;
             FilterContext.HandleList = HandleList;
             FilterContext.HandleCount = HandleCount;
+            FilterContext.KeptCount = 0;
+
+            for (Index = 0; Index < HandleCount; Index++)
+            {
+                if (!HandleList[Index])
+                    NullCount++;
+            }
+
+            /* One NULL entry: nothing is inherited, the other entries still have to be handles of the parent */
+            if (NullCount)
+            {
+                ExEnumHandleTable(ParentTable, ObpCountListedHandleCallback, &FilterContext, NULL);
+                if (NullCount != 1 || FilterContext.KeptCount != HandleCount - 1)
+                    Status = STATUS_INVALID_PARAMETER;
+
+                FilterContext.HandleCount = 0;
+                FilterContext.KeptCount = 0;
+            }
+
             ObjectTable->StrictFIFO = TRUE;
             KeEnterCriticalRegion();
             ExSweepHandleTable(ObjectTable,
@@ -2415,6 +2461,9 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
                                &FilterContext);
             KeLeaveCriticalRegion();
             ObjectTable->StrictFIFO = StrictFifo;
+
+            if (FilterContext.KeptCount != FilterContext.HandleCount)
+                Status = STATUS_INVALID_PARAMETER;
         }
         if (ObjectTable)
             ExEnumHandleTable(ObjectTable,
@@ -2446,7 +2495,7 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
         if (ParentTable) ObDereferenceProcessHandleTable(Parent);
 
         /* We are done */
-        return STATUS_SUCCESS;
+        return Status;
     }
     else
     {
@@ -3272,6 +3321,24 @@ ObOpenObjectByPointer(IN PVOID Object,
     return Status;
 }
 
+
+NTSTATUS
+NTAPI
+ObOpenObjectByPointerWithTag(
+    _In_ PVOID Object,
+    _In_ ULONG HandleAttributes,
+    _In_opt_ PACCESS_STATE PassedAccessState,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_TYPE ObjectType,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_ ULONG Tag,
+    _Out_ PHANDLE Handle)
+{
+    UNREFERENCED_PARAMETER(Tag);
+    return ObOpenObjectByPointer(Object, HandleAttributes, PassedAccessState,
+                                 DesiredAccess, ObjectType, AccessMode, Handle);
+}
+
 /*++
 * @name ObFindHandleForObject
 * @implemented NT4
@@ -3450,7 +3517,7 @@ ObInsertObject(IN PVOID Object,
     OB_OPEN_REASON OpenReason;
     KPROCESSOR_MODE PreviousMode;
     NTSTATUS Status = STATUS_SUCCESS, RealStatus;
-    BOOLEAN IsNewObject;
+    BOOLEAN IsNewObject, Unlinked;
     PAGED_CODE();
 
     /* Get the Header */
@@ -3693,16 +3760,33 @@ ObInsertObject(IN PVOID Object,
         /* Check if anything until now failed */
         if (!NT_SUCCESS(Status))
         {
-            /* Check if the directory was added */
-            if (Context.DirectoryLocked)
+            /* The security of the new object could not be set, e.g. the caller named an
+             * owner it may not name (STATUS_INVALID_OWNER) */
+            DPRINT1("OB: new %wZ object not inserted, security status 0x%lx (process %s)\n",
+                    &ObjectType->Name, Status, PsGetCurrentProcess()->ImageFileName);
+
+            /*
+             * A new named object is already in its directory, with no security yet:
+             * take it out while the directory is still locked, so nobody can open it.
+             */
+            Unlinked = FALSE;
+            if ((ObjectNameInfo) && (ObjectNameInfo->Directory) && (Context.DirectoryLocked))
             {
-                /* Weird case where we need to do a manual delete */
-                DPRINT1("Unhandled path\n");
-                ASSERT(FALSE);
+                ObpDeleteEntryDirectory(&Context);
+                if (ObjectType == ObpSymbolicLinkObjectType)
+                    ObpDeleteSymbolicLinkName(Object);
+                Unlinked = TRUE;
             }
 
             /* Cleanup the lookup */
             ObpReleaseLookupContext(&Context);
+
+            if (Unlinked)
+            {
+                /* Drop what the directory entry held: the name (with the directory reference) and the object */
+                ObpDereferenceNameInfo(ObjectNameInfo);
+                ObDereferenceObject(Object);
+            }
 
             /* Remove query reference that we added */
             ObpDereferenceNameInfo(ObjectNameInfo);
@@ -3716,7 +3800,6 @@ ObInsertObject(IN PVOID Object,
             }
 
             /* Return failure code */
-            ASSERT(FALSE);
             return Status;
         }
     }

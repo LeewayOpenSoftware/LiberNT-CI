@@ -276,6 +276,16 @@ NTAPI
 MmFreePagesFromMdl(
   _Inout_ PMDL MemoryDescriptorList);
 
+#define MM_FREE_MDL_PAGES_ZERO 0x1
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+MmFreePagesFromMdlEx(
+  _Inout_ PMDL MemoryDescriptorList,
+  _In_ ULONG Flags);
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTKERNELAPI
 PVOID
@@ -348,6 +358,35 @@ MmMapLockedPagesSpecifyCache(
   _In_opt_ PVOID RequestedAddress,
   _In_ ULONG BugCheckOnFailure,
   _In_ ULONG Priority);
+
+typedef VOID
+(NTAPI MM_MDL_ROUTINE)(
+  _In_opt_ PVOID DriverContext,
+  _In_ PVOID MappedVa);
+typedef MM_MDL_ROUTINE *PMM_MDL_ROUTINE;
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+MmMapMdl(
+  _Inout_ PMDL MemoryDescriptorList,
+  _In_ ULONG Protection,
+  _In_ PMM_MDL_ROUTINE DriverRoutine,
+  _In_opt_ PVOID DriverContext);
+
+
+#define MM_PROTECT_DRIVER_SECTION_ALLOW_UNLOAD 0x1
+#define MM_PROTECT_DRIVER_SECTION_VALID_FLAGS (MM_PROTECT_DRIVER_SECTION_ALLOW_UNLOAD)
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+MmProtectDriverSection(
+  _In_ PVOID AddressWithinSection,
+  _In_ SIZE_T Size,
+  _In_ ULONG Flags);
 
 _IRQL_requires_max_(APC_LEVEL)
 NTKERNELAPI
@@ -688,6 +727,18 @@ NTAPI
 MmForceSectionClosed(
   _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer,
   _In_ BOOLEAN DelayClose);
+
+#define MM_FORCE_CLOSED_DATA     0x1
+#define MM_FORCE_CLOSED_IMAGE    0x2
+#define MM_FORCE_CLOSED_LATER_OK 0x4
+
+_IRQL_requires_max_ (APC_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+MmForceSectionClosedEx(
+  _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer,
+  _In_ ULONG ForceCloseFlags);
 
 _IRQL_requires_max_ (APC_LEVEL)
 NTKERNELAPI

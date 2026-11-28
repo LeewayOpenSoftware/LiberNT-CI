@@ -11,6 +11,7 @@
 #include <hal.h>
 #include "tsc.h"
 #include "apicp.h"
+#include "halstall.h"
 #define NDEBUG
 #include <debug.h>
 
@@ -25,6 +26,10 @@ static UCHAR HalpQpcShift;
 static ULONG64 HalpQpcFrequency;
 static ULONG64 HalpQpcBias;
 static BOOLEAN HalpQpcReady;
+/* Added to the scaled TSC before HalpQpcReady (HalCalibratePerformanceCounter) */
+static ULONG64 HalpEarlyQpcBias;
+/* Incremented by the last processor into HalCalibratePerformanceCounter */
+static volatile LONG HalpCalibrateRelease;
 ULONG64 TscCalibrationArray[NUM_SAMPLES];
 
 #define HALP_PERFORMANCE_FREQUENCY 10000000ULL
@@ -283,7 +288,8 @@ HalpInitializeQpc(VOID)
      * stamp taken before this point never ends up ahead of a later one. */
     Tsc = __rdtsc();
     Current = (Tsc / Frequency) * HALP_PERFORMANCE_FREQUENCY +
-              ((Tsc % Frequency) * HALP_PERFORMANCE_FREQUENCY) / Frequency;
+              ((Tsc % Frequency) * HALP_PERFORMANCE_FREQUENCY) / Frequency +
+              HalpEarlyQpcBias;
 
     HalpQpcShift = Shift;
     HalpQpcFrequency = Frequency >> Shift;
@@ -355,7 +361,8 @@ KeQueryPerformanceCounter(
     Tsc = __rdtsc();
     Seconds = Tsc / Frequency;
     Remainder = Tsc % Frequency;
-    Result.QuadPart = Seconds * HALP_PERFORMANCE_FREQUENCY + (Remainder * HALP_PERFORMANCE_FREQUENCY) / Frequency;
+    Result.QuadPart = Seconds * HALP_PERFORMANCE_FREQUENCY + (Remainder * HALP_PERFORMANCE_FREQUENCY) / Frequency +
+                      HalpEarlyQpcBias;
     return Result;
 }
 
@@ -369,19 +376,80 @@ KeStallExecutionProcessor(ULONG MicroSeconds)
     StartTime = __rdtsc();
 
     /* Calculate the ending time */
-    EndTime = StartTime + KeGetPcr()->StallScaleFactor * MicroSeconds;
+    EndTime = HalpComputeStallEndTime(StartTime,
+                                      KeGetPcr()->StallScaleFactor,
+                                      MicroSeconds);
 
     /* Loop until time is elapsed */
     while (__rdtsc() < EndTime);
 }
 
+/*
+ * Called on every processor at the same time, with *Count initialised by the
+ * caller to the number of processors taking part. The performance counter is
+ * set to NewCount on all of them at one instant.
+ *
+ * The counter is (TSC >> HalpQpcShift) + HalpQpcBias on every processor and
+ * in user mode (KUSER_SHARED_DATA), so it has one base for the whole system:
+ * the bias. Like KeQueryPerformanceCounter, this relies on the processors'
+ * TSCs being synchronised; the TSC itself is not written, because
+ * KeStallExecutionProcessor and the user-mode counter read it directly.
+ *
+ * Each processor disables interrupts and checks in by decrementing *Count.
+ * The last one in rebases the counter on its TSC while all others spin here
+ * with interrupts disabled, so no processor (and no user-mode thread) reads
+ * the counter while the bias changes. It then releases the others.
+ */
 VOID
 NTAPI
 HalCalibratePerformanceCounter(
     IN volatile PLONG Count,
     IN ULONGLONG NewCount)
 {
-    UNIMPLEMENTED;
-    ASSERT(FALSE);
+    ULONG_PTR Flags;
+    LONG Release;
+    ULONG64 Tsc, Frequency;
+
+    Flags = __readeflags();
+    _disable();
+
+    /* Read the release generation before checking in: it cannot change
+     * until every processor, this one included, has decremented Count. */
+    Release = HalpCalibrateRelease;
+    _ReadWriteBarrier();
+
+    if (_InterlockedDecrement(Count) == 0)
+    {
+        Tsc = __rdtsc();
+
+        if (HalpQpcReady)
+        {
+            HalpQpcBias = NewCount - (Tsc >> HalpQpcShift);
+#ifdef _M_AMD64
+            /* One aligned 64-bit store; user mode cannot run on any
+             * processor until they are released below. */
+            ((PKUSER_SHARED_DATA)KI_USER_SHARED_DATA)->QpcBias = HalpQpcBias;
+#endif
+        }
+        else
+        {
+            /* Before HalpInitializeQpc the counter is the TSC scaled to
+             * HALP_PERFORMANCE_FREQUENCY, plus the early bias. */
+            Frequency = HalpCpuClockFrequency.QuadPart;
+            HalpEarlyQpcBias = NewCount -
+                ((Tsc / Frequency) * HALP_PERFORMANCE_FREQUENCY +
+                 ((Tsc % Frequency) * HALP_PERFORMANCE_FREQUENCY) / Frequency);
+        }
+
+        /* Publish the new base, then release the other processors */
+        _InterlockedIncrement(&HalpCalibrateRelease);
+    }
+    else
+    {
+        while (HalpCalibrateRelease == Release)
+            YieldProcessor();
+    }
+
+    __writeeflags(Flags);
 }
 

@@ -120,8 +120,25 @@ BOOL QueryConfig(LPCTSTR ServiceName)
             break;
 
         case SERVICE_AUTO_START:
-            _tprintf(_T("AUTO_START\n"));
+        {
+            SERVICE_DELAYED_AUTO_START_INFO DelayedInfo;
+            DWORD cbDelayed;
+
+            if (QueryServiceConfig2(hService,
+                                    SERVICE_CONFIG_DELAYED_AUTO_START_INFO,
+                                    (LPBYTE)&DelayedInfo,
+                                    sizeof(DelayedInfo),
+                                    &cbDelayed) &&
+                DelayedInfo.fDelayedAutostart)
+            {
+                _tprintf(_T("AUTO_START  (DELAYED)\n"));
+            }
+            else
+            {
+                _tprintf(_T("AUTO_START\n"));
+            }
             break;
+        }
 
         case SERVICE_DEMAND_START:
             _tprintf(_T("DEMAND_START\n"));
@@ -256,6 +273,14 @@ BOOL SetConfig(LPCTSTR *ServiceArgs, INT ArgCount)
                              ServiceInfo.lpDisplayName))
     {
         _tprintf(_T("[SC] ChangeServiceConfig FAILED %lu:\n\n"), GetLastError());
+        bResult = FALSE;
+        goto done;
+    }
+
+    /* An explicit start= also sets or clears the delayed auto-start flag. */
+    if (ServiceInfo.bStartTypeSet &&
+        !ApplyDelayedAutoStart(hService, ServiceInfo.bDelayedAutoStart))
+    {
         bResult = FALSE;
         goto done;
     }

@@ -19,6 +19,17 @@ Author:
 #ifndef _I386_KETYPES_H
 #define _I386_KETYPES_H
 
+#define PROCESSOR_POWER_STATE_LEGACY_AREA_SIZE 0x160
+#include <potypes.h>
+#ifndef NTOS_MODE_USER
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, ArchitecturalEfficiencyClass) == 0x160);
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, PerformanceSchedulingClass) == 0x161);
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, EfficiencySchedulingClass) == 0x162);
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, Reserved) == 0x163);
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, Parked) == 0x164);
+/* FIXME: Win10 i386 has LongPriorQosPeriod at +0x165 and no SoftParked */
+#endif
+
 /* Loader/kernel contract, independent of the NTDDI-selected KPRCB layout.
  * Vista+ PCRs exceed one page. Shared user data must not alias this storage. */
 #define KIPCR_BOOT_SIZE 0x2000
@@ -72,6 +83,18 @@ Author:
 #define KF_SSE4_2               0x0000010000000000ULL
 
 #define KF_FPU_LEAKAGE_BIT              36 // From ks386.inc (0x24 -> 0x1000000000)
+
+//
+// Caching values for the PAT MSR
+//
+#define PAT_UC                  0ULL
+#define PAT_WC                  1ULL
+#define PAT_WT                  4ULL
+#define PAT_WP                  5ULL
+#define PAT_WB                  6ULL
+#define PAT_UCM                 7ULL
+
+#define MSR_PAT                 0x0277
 
 //
 // KPCR Access for non-IA64 builds

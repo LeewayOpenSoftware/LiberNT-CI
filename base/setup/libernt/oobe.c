@@ -11,6 +11,7 @@
 #include <objbase.h>
 #include <lm.h>
 #include <ntsam.h>
+#include <ntsecapi.h>
 #include <userenv.h>
 
 #include "oobe.h"
@@ -103,7 +104,7 @@ LoadLanguageChoices(
     CHOICE_LIST Layouts = { NULL, 0 };
     WCHAR Klid[KL_NAMELENGTH];
     WCHAR Name[128];
-    DWORD cchKlid, cbName, Index;
+    DWORD cchKlid, cbName, cbLoaded, Index;
     HKEY hLayouts, hLayout;
 
     if (pSetupData->Locales)
@@ -127,7 +128,7 @@ LoadLanguageChoices(
         if (RegOpenKeyExW(hLayouts, Klid, 0, KEY_QUERY_VALUE, &hLayout) != ERROR_SUCCESS)
             continue;
         cbName = sizeof(Name);
-        if (RegLoadMUIStringW(hLayout, L"Layout Display Name", Name, sizeof(Name), NULL, 0, NULL) == ERROR_SUCCESS ||
+        if (RegLoadMUIStringW(hLayout, L"Layout Display Name", Name, sizeof(Name), &cbLoaded, 0, NULL) == ERROR_SUCCESS ||
             RegGetValueW(hLayout, NULL, L"Layout Text", RRF_RT_REG_SZ, NULL, Name, &cbName) == ERROR_SUCCESS)
         {
             AddChoice(&Layouts, Klid, Name);
@@ -559,25 +560,230 @@ CreateAccount(
     return NERR_Success;
 }
 
+/* Retire the preinstall setup account (the account-domain RID 500, named
+ * by the SetupAccountRid marker written at install time). The account is
+ * disabled only when the just-created user is an enabled member of the
+ * Administrators alias; every check failure leaves RID 500 enabled and
+ * keeps the marker, so a later boot retries instead of locking out. */
 static DWORD
-DisableSetupAccount(VOID)
+DisableSetupAccount(
+    _In_ PSETUPDATA pSetupData)
 {
-    WCHAR Name[UNLEN + 1];
-    DWORD cchName = ARRAYSIZE(Name);
-    PUSER_INFO_1 Info;
+    LSA_OBJECT_ATTRIBUTES ObjectAttributes;
+    LSA_HANDLE PolicyHandle = NULL;
+    PPOLICY_ACCOUNT_DOMAIN_INFO AccountDomain = NULL;
+    PSID SetupSid = NULL, UserSid = NULL;
+    BYTE SetupSidBuffer[SECURITY_MAX_SID_SIZE];
+    BYTE UserSidBuffer[SECURITY_MAX_SID_SIZE];
+    DWORD cbSetupSid = sizeof(SetupSidBuffer), cbUserSid = sizeof(UserSidBuffer);
+    BYTE AdminSidBuffer[SECURITY_MAX_SID_SIZE];
+    DWORD cbAdminSid = sizeof(AdminSidBuffer);
+    WCHAR SetupName[UNLEN + 1], AdminGroup[GNLEN + 1], Domain[DNLEN + 1];
+    WCHAR DefaultName[UNLEN + 1];
+    DWORD cchName, cchAdmin, cchDomain;
+    DWORD Rid = 0, cbData = sizeof(Rid), dwType, Entries = 0, Total = 0, i;
+    DWORD_PTR Resume = 0;
+    DWORD Error = ERROR_SUCCESS;
+    HKEY hKey = NULL;
+    LONG RegError;
+    SID_NAME_USE Use;
+    PLOCALGROUP_MEMBERS_INFO_0 Members = NULL;
+    PUSER_INFO_1 Info = NULL;
     USER_INFO_1008 Flags;
     NET_API_STATUS Status;
+    NTSTATUS NtStatus;
+    ULONG DomainSubAuthorityCount;
 
-    if (!GetUserNameW(Name, &cchName))
-        return GetLastError();
+    RegError = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\Setup", 0,
+                             KEY_QUERY_VALUE | KEY_SET_VALUE, &hKey);
+    if (RegError != ERROR_SUCCESS)
+        return (DWORD)RegError;
 
-    Status = NetUserGetInfo(NULL, Name, 1, (LPBYTE *)&Info);
+    RegError = RegQueryValueExW(hKey, L"SetupAccountRid", NULL, &dwType,
+                                (PBYTE)&Rid, &cbData);
+    RegCloseKey(hKey);
+    hKey = NULL;
+    if (RegError != ERROR_SUCCESS || dwType != REG_DWORD ||
+        Rid != DOMAIN_USER_RID_ADMIN)
+    {
+        /* Not a preinstall session: nothing to retire. */
+        return ERROR_SUCCESS;
+    }
+
+    /* Identify the setup account by SID, never by a hardcoded name. */
+    memset(&ObjectAttributes, 0, sizeof(ObjectAttributes));
+    NtStatus = LsaOpenPolicy(NULL, &ObjectAttributes,
+                             POLICY_VIEW_LOCAL_INFORMATION, &PolicyHandle);
+    if (NT_SUCCESS(NtStatus))
+        NtStatus = LsaQueryInformationPolicy(PolicyHandle,
+                                             PolicyAccountDomainInformation,
+                                             (PVOID *)&AccountDomain);
+    if (PolicyHandle != NULL)
+        LsaClose(PolicyHandle);
+    if (!NT_SUCCESS(NtStatus) || AccountDomain == NULL)
+    {
+        DPRINT1("DisableSetupAccount: account domain unavailable, setup account left enabled (Status 0x%08lx)\n", NtStatus);
+        return RtlNtStatusToDosError(NtStatus);
+    }
+
+    DomainSubAuthorityCount = *RtlSubAuthorityCountSid(AccountDomain->DomainSid);
+    if (cbSetupSid < RtlLengthRequiredSid(DomainSubAuthorityCount + 1))
+    {
+        Error = ERROR_INSUFFICIENT_BUFFER;
+        goto done;
+    }
+    SetupSid = (PSID)SetupSidBuffer;
+    RtlCopySid(cbSetupSid, SetupSid, AccountDomain->DomainSid);
+    *RtlSubAuthorityCountSid(SetupSid) = DomainSubAuthorityCount + 1;
+    *RtlSubAuthoritySid(SetupSid, DomainSubAuthorityCount) = DOMAIN_USER_RID_ADMIN;
+
+    cchName = ARRAYSIZE(SetupName);
+    cchDomain = ARRAYSIZE(Domain);
+    if (!LookupAccountSidW(NULL, SetupSid, SetupName, &cchName,
+                           Domain, &cchDomain, &Use))
+    {
+        Error = GetLastError();
+        DPRINT1("DisableSetupAccount: setup account name unresolved (%lu), left enabled\n", Error);
+        goto done;
+    }
+
+    cbUserSid = sizeof(UserSidBuffer);
+    cchDomain = ARRAYSIZE(Domain);
+    if (!LookupAccountNameW(NULL, pSetupData->UserName, (PSID)UserSidBuffer,
+                            &cbUserSid, Domain, &cchDomain, &Use))
+    {
+        Error = GetLastError();
+        DPRINT1("DisableSetupAccount: new user SID unresolved (%lu), setup account left enabled\n", Error);
+        goto done;
+    }
+    if (Use != SidTypeUser)
+    {
+        DPRINT1("DisableSetupAccount: %S is not a user, setup account left enabled\n", pSetupData->UserName);
+        Error = ERROR_NONE_MAPPED;
+        goto done;
+    }
+    UserSid = (PSID)UserSidBuffer;
+    if (RtlEqualSid(UserSid, SetupSid))
+    {
+        DPRINT1("DisableSetupAccount: setup account cannot retire itself, left enabled\n");
+        Error = ERROR_NONE_MAPPED;
+        goto done;
+    }
+
+    /* Check (b): the new user must be a member of Administrators. */
+    if (!CreateWellKnownSid(WinBuiltinAdministratorsSid, NULL,
+                            (PSID)AdminSidBuffer, &cbAdminSid))
+    {
+        Error = GetLastError();
+        goto done;
+    }
+    cchAdmin = ARRAYSIZE(AdminGroup);
+    cchDomain = ARRAYSIZE(Domain);
+    if (!LookupAccountSidW(NULL, (PSID)AdminSidBuffer, AdminGroup, &cchAdmin,
+                           Domain, &cchDomain, &Use))
+    {
+        Error = GetLastError();
+        goto done;
+    }
+    Status = NetLocalGroupGetMembers(NULL, AdminGroup, 0, (LPBYTE *)&Members,
+                                     MAX_PREFERRED_LENGTH, &Entries, &Total,
+                                     &Resume);
     if (Status != NERR_Success)
-        return Status;
+    {
+        Error = (DWORD)Status;
+        DPRINT1("DisableSetupAccount: Administrators members unreadable (%lu), setup account left enabled\n", Error);
+        goto done;
+    }
+    for (i = 0; i < Entries; i++)
+    {
+        if (RtlEqualSid(Members[i].lgrmi0_sid, UserSid))
+            break;
+    }
+    NetApiBufferFree(Members);
+    Members = NULL;
+    if (i == Entries)
+    {
+        DPRINT1("DisableSetupAccount: %S is not an administrator, setup account left enabled\n", pSetupData->UserName);
+        Error = ERROR_NONE_MAPPED;
+        goto done;
+    }
+
+    /* Check (c): the new user must be enabled. */
+    Status = NetUserGetInfo(NULL, pSetupData->UserName, 1, (LPBYTE *)&Info);
+    if (Status != NERR_Success || (Info->usri1_flags & UF_ACCOUNTDISABLE))
+    {
+        DPRINT1("DisableSetupAccount: %S is not an enabled user, setup account left enabled\n", pSetupData->UserName);
+        Error = ERROR_NONE_MAPPED;
+        goto done;
+    }
+    NetApiBufferFree(Info);
+    Info = NULL;
+
+    /* All checks hold: disable the setup account by its resolved name.
+     * Level 1008 replaces the whole flags word, so OR the disable bit
+     * into the account's current flags; a bare UF_ACCOUNTDISABLE would
+     * also drop the account type and the password-expiry flags. */
+    Status = NetUserGetInfo(NULL, SetupName, 1, (LPBYTE *)&Info);
+    if (Status != NERR_Success)
+    {
+        Error = (DWORD)Status;
+        DPRINT1("DisableSetupAccount: %S flags unreadable (%lu), left enabled\n", SetupName, Error);
+        goto done;
+    }
     Flags.usri1008_flags = Info->usri1_flags | UF_ACCOUNTDISABLE;
     NetApiBufferFree(Info);
+    Info = NULL;
+    Status = NetUserSetInfo(NULL, SetupName, 1008, (LPBYTE)&Flags, NULL);
+    if (Status != NERR_Success)
+    {
+        Error = (DWORD)Status;
+        DPRINT1("DisableSetupAccount: disabling %S failed (%lu), left enabled\n", SetupName, Error);
+        goto done;
+    }
 
-    return NetUserSetInfo(NULL, Name, 1008, (LPBYTE)&Flags, NULL);
+    /* Clear autologon state that still points at the setup account. */
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                      0, KEY_QUERY_VALUE | KEY_SET_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        DWORD cbDefaultName = sizeof(DefaultName);
+
+        cchDomain = ARRAYSIZE(Domain);
+        cbUserSid = sizeof(UserSidBuffer);
+        if (RegQueryValueExW(hKey, L"DefaultUserName", NULL, &dwType,
+                             (PBYTE)DefaultName, &cbDefaultName) == ERROR_SUCCESS &&
+            dwType == REG_SZ &&
+            LookupAccountNameW(NULL, DefaultName, (PSID)UserSidBuffer,
+                               &cbUserSid, Domain, &cchDomain, &Use) &&
+            RtlEqualSid((PSID)UserSidBuffer, SetupSid))
+        {
+            RegSetValueExW(hKey, L"AutoAdminLogon", 0, REG_SZ,
+                           (PBYTE)L"0", 2 * sizeof(WCHAR));
+            RegDeleteValueW(hKey, L"DefaultPassword");
+        }
+        RegCloseKey(hKey);
+        hKey = NULL;
+    }
+
+    /* The marker goes last: only a fully retired account drops it. */
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\Setup", 0,
+                        KEY_SET_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        RegDeleteValueW(hKey, L"SetupAccountRid");
+        RegCloseKey(hKey);
+        hKey = NULL;
+    }
+
+done:
+    if (Members != NULL)
+        NetApiBufferFree(Members);
+    if (Info != NULL)
+        NetApiBufferFree(Info);
+    if (hKey != NULL)
+        RegCloseKey(hKey);
+    if (AccountDomain != NULL)
+        LsaFreeMemory(AccountDomain);
+    return Error;
 }
 
 static VOID
@@ -621,6 +827,36 @@ typedef struct _FINISH_CONTEXT
     OOBE_PROGRESS Progress;
 } FINISH_CONTEXT, *PFINISH_CONTEXT;
 
+/* The target installer's post-check re-enables the built-in Administrator
+ * when no other enabled administrator exists and records the reason under
+ * SYSTEM\Setup; surface it once and drop the marker. */
+static VOID
+ReportBuiltinAdministratorFallback(
+    _In_ HWND hwndOwner)
+{
+    HKEY hKey;
+    DWORD Reason, cbReason = sizeof(Reason), dwType;
+    WCHAR Text[1024];
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\Setup", 0,
+                      KEY_QUERY_VALUE | KEY_SET_VALUE, &hKey) != ERROR_SUCCESS)
+        return;
+
+    if (RegQueryValueExW(hKey, L"BuiltinAdministratorEnabled", NULL, &dwType,
+                         (PBYTE)&Reason, &cbReason) != ERROR_SUCCESS ||
+        dwType != REG_DWORD)
+    {
+        RegCloseKey(hKey);
+        return;
+    }
+
+    RegDeleteValueW(hKey, L"BuiltinAdministratorEnabled");
+    RegCloseKey(hKey);
+
+    LoadPrintfW(Text, ARRAYSIZE(Text), IDS_OOBE_ADMIN_FALLBACK, Reason);
+    SetupMessage(hwndOwner, TD_WARNING_ICON, TDCBF_OK_BUTTON, IDOK, NULL, Text);
+}
+
 static DWORD
 WINAPI
 FinishThread(
@@ -662,8 +898,9 @@ FinishThread(
     }
     if (FirstBootRun)
     {
-        Error = DisableSetupAccount();
+        Error = DisableSetupAccount(pSetupData);
         DPRINT1("Setup account disabled with result %lu\n", Error);
+        ReportBuiltinAdministratorFallback(GetParent(Context->hwndDlg));
     }
 
 Components:
@@ -674,7 +911,8 @@ Components:
         if (OobeApps[Index].Selected)
             InstallOobeApp(&OobeApps[Index], &Context->Progress);
     }
-    InstallMissingDrivers(&Context->Progress);
+    if (OobeInstallDrivers)
+        InstallMissingDrivers(&Context->Progress);
     if (SUCCEEDED(hrCom))
         CoUninitialize();
 
@@ -815,6 +1053,34 @@ HasAutomationPayload(VOID)
         }
     }
     return FALSE;
+}
+
+/* Volatile, so a postponed first-boot setup is offered again on the next boot only */
+#define OOBE_POSTPONED_KEY L"SYSTEM\\Setup\\OobePostponed"
+
+static BOOL
+IsFirstBootPostponed(VOID)
+{
+    HKEY hKey;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, OOBE_POSTPONED_KEY, 0, KEY_QUERY_VALUE, &hKey) != ERROR_SUCCESS)
+        return FALSE;
+    RegCloseKey(hKey);
+    return TRUE;
+}
+
+static VOID
+PostponeFirstBootSetup(VOID)
+{
+    HKEY hKey;
+    LONG Error;
+
+    Error = RegCreateKeyExW(HKEY_LOCAL_MACHINE, OOBE_POSTPONED_KEY, 0, NULL, REG_OPTION_VOLATILE,
+                            KEY_WRITE, NULL, &hKey, NULL);
+    if (Error == ERROR_SUCCESS)
+        RegCloseKey(hKey);
+    else
+        DPRINT1("Cannot postpone the first-boot setup (error %ld)\n", Error);
 }
 
 static BOOL
@@ -961,6 +1227,51 @@ StoragePageProc(
     return FALSE;
 }
 
+static BOOL
+UpgradeInstalledCopy(VOID)
+{
+    WCHAR SystemDrive[MAX_PATH];
+    WCHAR Architecture[32];
+    WCHAR Path[MAX_PATH];
+    WCHAR CommandLine[MAX_PATH + 16];
+    STARTUPINFOW StartupInfo;
+    PROCESS_INFORMATION ProcessInfo;
+    DWORD ExitCode = ERROR_GEN_FAILURE;
+
+    if (!GetEnvironmentVariableW(L"SystemDrive", SystemDrive, ARRAYSIZE(SystemDrive)) ||
+        !GetEnvironmentVariableW(L"PROCESSOR_ARCHITECTURE", Architecture, ARRAYSIZE(Architecture)) ||
+        FAILED(StringCchPrintfW(Path, ARRAYSIZE(Path), L"%s\\%s\\system32\\oobe\\oros.exe", SystemDrive,
+                                _wcsicmp(Architecture, L"x86") == 0 ? L"I386" : Architecture)) ||
+        GetFileAttributesW(Path) == INVALID_FILE_ATTRIBUTES ||
+        FAILED(StringCchPrintfW(CommandLine, ARRAYSIZE(CommandLine), L"\"%s\" /upgrade", Path)))
+    {
+        return FALSE;
+    }
+
+    ScheduleFirstBootSetup();
+    ZeroMemory(&StartupInfo, sizeof(StartupInfo));
+    StartupInfo.cb = sizeof(StartupInfo);
+    if (CreateProcessW(Path, CommandLine, NULL, NULL, FALSE, 0, NULL, NULL, &StartupInfo, &ProcessInfo))
+    {
+        WaitForSingleObject(ProcessInfo.hProcess, INFINITE);
+        if (!GetExitCodeProcess(ProcessInfo.hProcess, &ExitCode))
+            ExitCode = GetLastError();
+        CloseHandle(ProcessInfo.hThread);
+        CloseHandle(ProcessInfo.hProcess);
+    }
+    else
+    {
+        ExitCode = GetLastError();
+    }
+
+    DPRINT1("Upgrade of the installed copy finished with %lu\n", ExitCode);
+    if (ExitCode == ERROR_SUCCESS)
+        return TRUE;
+
+    EndFirstBootSetup();
+    return FALSE;
+}
+
 static VOID
 InstallUnattendedComponents(VOID)
 {
@@ -992,15 +1303,36 @@ wWinMain(
     INITCOMMONCONTROLSEX iccx;
     HRESULT hrCom;
     ULONG FirstPage;
+    HANDLE hInstanceMutex;
 
     ComponentsOnly = (wcsstr(lpszCmdLine, L"/components") != NULL);
     ProcessHeap = GetProcessHeap();
     SetupData.hInstance = hInst;
 
+    /* One first-boot wizard per session, whoever starts it */
+    if (!ComponentsOnly)
+    {
+        hInstanceMutex = CreateMutexW(NULL, TRUE, L"Local\\OrosiFirstBootSetup");
+        if (hInstanceMutex && GetLastError() == ERROR_ALREADY_EXISTS)
+        {
+            DPRINT1("First-boot setup already running\n");
+            return OOBE_SKIPPED;
+        }
+    }
+
+    /* A postponed launch must not touch the Run value, it brings the wizard back next boot */
+    if (!ComponentsOnly && IsFirstBootPostponed())
+    {
+        DPRINT1("First-boot setup was postponed for this boot\n");
+        return OOBE_SKIPPED;
+    }
     FirstBootRun = EndFirstBootSetup();
     if (!ComponentsOnly)
         DPRINT1("Disk signature check finished with exit code %lu\n", RunExpandStorage(L"/u"));
-    if (!ComponentsOnly && (IsUnattendedFirstBoot() || HasAutomationPayload()))
+    /* An automated session's tests own BITS and the network, so no component is downloaded under them */
+    if (!ComponentsOnly && HasAutomationPayload())
+        return OOBE_SKIPPED;
+    if (!ComponentsOnly && IsUnattendedFirstBoot())
     {
         InstallUnattendedComponents();
         return OOBE_SKIPPED;
@@ -1022,6 +1354,13 @@ wWinMain(
     OobeAppCount = LoadOobeApps(&OobeApps, ComponentsOnly);
     DPRINT1("First-boot setup lists %lu components\n", OobeAppCount);
 
+    if (!ComponentsOnly && UpgradeInstalledCopy())
+    {
+        if (SUCCEEDED(hrCom))
+            CoUninitialize();
+        return OOBE_SKIPPED;
+    }
+
     if (!ComponentsOnly)
     {
         FirstPage = (RunExpandStorage(L"/n") == ERROR_SUCCESS) ? 0 : 1;
@@ -1035,5 +1374,11 @@ wWinMain(
         CoUninitialize();
     if (ComponentsOnly)
         return ERROR_SUCCESS;
+    if (!SetupData.bInstalled)
+    {
+        PostponeFirstBootSetup();
+        if (FirstBootRun)
+            ScheduleFirstBootSetup();
+    }
     return SetupData.bInstalled ? ERROR_SUCCESS : OOBE_SKIPPED;
 }

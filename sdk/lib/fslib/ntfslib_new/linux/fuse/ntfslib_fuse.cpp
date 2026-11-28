@@ -21,10 +21,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <sys/types.h>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <sys/statvfs.h>
 #include <sys/xattr.h>
 #include <unistd.h>
+#endif
 
 #include <memory>
 #include <string>
@@ -40,6 +44,95 @@
 extern "C" {
 #include <expandcore.h>
 }
+
+#ifdef _WIN32
+/*
+ * Host build on Windows (MSVC). open/read/write/close/fstat/stat are available
+ * as NONSTDC aliases (sdk/tools defines _CRT_NONSTDC_NO_DEPRECATE); only the
+ * handful below need shimming for the non-FUSE direct-image commands.
+ */
+#ifndef _SSIZE_T_DEFINED
+typedef long long ssize_t;
+#define _SSIZE_T_DEFINED
+#endif
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+#ifndef STDOUT_FILENO
+#define STDOUT_FILENO 1
+#endif
+#ifndef S_ISDIR
+#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#endif
+#ifndef S_ISREG
+#define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
+#endif
+typedef unsigned int uid_t;
+typedef unsigned int gid_t;
+static inline uid_t getuid(void) { return 0; }
+static inline gid_t getgid(void) { return 0; }
+#define off_t long long
+#define fsync _commit
+static inline ssize_t pread(int Fd, void* Buffer, size_t Length, long long Offset)
+{
+    if (_lseeki64(Fd, Offset, SEEK_SET) < 0)
+        return -1;
+    return _read(Fd, Buffer, (unsigned int)Length);
+}
+static inline ssize_t pwrite(int Fd, const void* Buffer, size_t Length, long long Offset)
+{
+    if (_lseeki64(Fd, Offset, SEEK_SET) < 0)
+        return -1;
+    return _write(Fd, Buffer, (unsigned int)Length);
+}
+static inline int ftruncate(int Fd, long long Length)
+{
+    return _chsize_s(Fd, Length);
+}
+static inline ssize_t getline(char** LinePtr, size_t* Capacity, FILE* Stream)
+{
+    size_t Length = 0;
+    int Ch;
+
+    if (!LinePtr || !Capacity || !Stream)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!*LinePtr || *Capacity == 0)
+    {
+        *Capacity = 128;
+        *LinePtr = (char*)realloc(*LinePtr, *Capacity);
+        if (!*LinePtr)
+            return -1;
+    }
+    while ((Ch = fgetc(Stream)) != EOF)
+    {
+        if (Length + 2 > *Capacity)
+        {
+            size_t NewCap = *Capacity * 2;
+            char* New = (char*)realloc(*LinePtr, NewCap);
+            if (!New)
+                return -1;
+            *LinePtr = New;
+            *Capacity = NewCap;
+        }
+        if (Ch == '\n')
+        {
+            /* normalize CRLF list/policy files to a single LF */
+            if (Length > 0 && (*LinePtr)[Length - 1] == '\r')
+                Length--;
+            (*LinePtr)[Length++] = '\n';
+            break;
+        }
+        (*LinePtr)[Length++] = (char)Ch;
+    }
+    if (Length == 0 && Ch == EOF)
+        return -1;
+    (*LinePtr)[Length] = '\0';
+    return (ssize_t)Length;
+}
+#endif /* _WIN32 */
 
 typedef std::vector<std::string> NtfsDirectoryListing;
 
@@ -1780,9 +1873,9 @@ FormatImage(const char* Path,
             ULONGLONG SectorCount,
             ULONG HiddenSectors,
             ULONG SectorsPerCluster,
-            const char* Label)
+            const char* Label,
+            ULONG BytesPerSector)
 {
-    static const ULONGLONG BytesPerSector = 512;
     static const ULONGLONG NtEpochOffset = 11644473600ULL;
     NtfsFormatHostContext Host = {};
     NtfsFormatParameters Parameters = {};
@@ -1792,6 +1885,8 @@ FormatImage(const char* Path,
     int Result = 1;
 
     if (SectorCount > INT64_MAX / BytesPerSector ||
+        BytesPerSector < 512 || BytesPerSector > 4096 ||
+        (BytesPerSector & (BytesPerSector - 1)) != 0 ||
         !Utf8ToNtfsString(Label, false, true, LabelBuffer) ||
         LabelBuffer.size() > 33)
     {
@@ -1824,6 +1919,8 @@ FormatImage(const char* Path,
 
     Parameters.TotalSectors = SectorCount;
     Parameters.BytesPerSector = BytesPerSector;
+    if (BytesPerSector > NTFS_FORMAT_DEFAULT_MFT_RECORD_SIZE)
+        Parameters.MftRecordSize = BytesPerSector;
     Parameters.SectorsPerCluster = SectorsPerCluster;
     Parameters.SectorsPerTrack = 63;
     Parameters.NumberOfHeads = 255;
@@ -2530,7 +2627,8 @@ ApplySecurityFromPolicy(NtfsFuseState* State, const char* PolicyPath)
 
 static NTSTATUS
 EnsureImageDirectory(NtfsFuseState* State,
-                     const std::string& Directory)
+                     const std::string& Directory,
+                     BOOLEAN CaseSensitive)
 {
     std::string Path = NormalizeImagePath(Directory);
     size_t End = 0;
@@ -2575,6 +2673,8 @@ EnsureImageDirectory(NtfsFuseState* State,
                 TRUE,
                 0,
                 &File);
+            if (NT_SUCCESS(Status) && CaseSensitive)
+                Status = NtfsFileRecordSetCaseSensitiveDirectory(File, TRUE);
             NtfsFileRecordDestroy(File);
             if (!NT_SUCCESS(Status))
                 return Status;
@@ -2951,7 +3051,7 @@ AddLinuxTreeFromList(NtfsFuseState* State,
             std::vector<WCHAR> OldPath, NewPath;
             std::string Existing = NormalizeImagePath(EncodeLinuxName(Fields[8]));
 
-            Status = EnsureImageDirectory(State, Parent);
+            Status = EnsureImageDirectory(State, Parent, TRUE);
             if (NT_SUCCESS(Status) &&
                 (!Utf8ToNtfsPath(Existing.c_str(), OldPath) ||
                  !Utf8ToNtfsPath(Destination.c_str(), NewPath)))
@@ -2995,11 +3095,11 @@ AddLinuxTreeFromList(NtfsFuseState* State,
 
         if (Type == 'd')
         {
-            Status = EnsureImageDirectory(State, Destination);
+            Status = EnsureImageDirectory(State, Destination, TRUE);
         }
         else
         {
-            Status = EnsureImageDirectory(State, Parent);
+            Status = EnsureImageDirectory(State, Parent, TRUE);
             if (NT_SUCCESS(Status))
                 Status = PrepareImageFile(State, Destination);
         }
@@ -3118,7 +3218,7 @@ AddFilesFromList(NtfsFuseState* State,
 
         if (S_ISDIR(SourceStat.st_mode))
         {
-            Status = EnsureImageDirectory(State, Destination);
+            Status = EnsureImageDirectory(State, Destination, FALSE);
         }
         else if (S_ISREG(SourceStat.st_mode))
         {
@@ -3126,7 +3226,7 @@ AddFilesFromList(NtfsFuseState* State,
 
             if (Slash != std::string::npos)
                 Parent = Destination.substr(0, Slash);
-            Status = EnsureImageDirectory(State, Parent);
+            Status = EnsureImageDirectory(State, Parent, FALSE);
             if (NT_SUCCESS(Status))
                 Status = PrepareImageFile(State, Destination);
             if (NT_SUCCESS(Status))
@@ -5037,11 +5137,293 @@ ShrinkImageVolume(const char* Path, ULONGLONG NewVolumeSectors)
 }
 
 static void
+PrintUsage(const char* Program);
+
+/* USN change journal probes (the journal lives in $Extend\$UsnJrnl) */
+static void
+PrintUsnStatus(const char* What, NTSTATUS Status)
+{
+    fprintf(stderr,
+            "%s: ntfslib status 0x%08" PRIx32 " (%s)\n",
+            What,
+            (uint32_t)Status,
+            strerror(NtStatusToErrno(Status)));
+}
+
+static int
+UsnCommand(const char* Program, int Count, char** Args)
+{
+    const char* Command = Args[0];
+    NtfsFuseState State = {};
+    bool Writes;
+    int Expected;
+    int Result = 1;
+    NTSTATUS Status;
+
+    if (strcmp(Command, "--usn-create") == 0)
+        Expected = 4;
+    else if (strcmp(Command, "--usn-query") == 0)
+        Expected = 2;
+    else if (strcmp(Command, "--usn-append") == 0)
+        Expected = 6;
+    else if (strcmp(Command, "--usn-read") == 0)
+        Expected = 3;
+    else if (strcmp(Command, "--set-usn") == 0)
+        Expected = 4;
+    else if (strcmp(Command, "--usn-enum") == 0)
+        Expected = 5;
+    else
+        Expected = -1;
+    if (Expected < 0 || Count != Expected)
+    {
+        PrintUsage(Program);
+        return 2;
+    }
+
+    Writes = strcmp(Command, "--usn-query") != 0 && strcmp(Command, "--usn-read") != 0 &&
+             strcmp(Command, "--usn-enum") != 0;
+    Status = Writes ? OpenImageWritable(Args[1], &State) : OpenImage(Args[1], false, &State);
+    if (!NT_SUCCESS(Status))
+    {
+        PrintUsnStatus(Args[1], Status);
+        return 1;
+    }
+
+    if (strcmp(Command, "--usn-create") == 0)
+    {
+        ULONGLONG MaximumSize, AllocationDelta;
+
+        if (!ParseUnsigned(Args[2], ~0ULL, &MaximumSize) ||
+            !ParseUnsigned(Args[3], ~0ULL, &AllocationDelta))
+        {
+            PrintUsage(Program);
+            Result = 2;
+            goto Done;
+        }
+        /* FILETIME of now: 100 ns units since 1601 */
+        Status = NtfsUsnJournalCreate(State.Volume, MaximumSize, AllocationDelta,
+                                      ((ULONGLONG)time(NULL) + 11644473600ULL) * 10000000ULL);
+        if (!NT_SUCCESS(Status))
+            PrintUsnStatus(Args[1], Status);
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+    else if (strcmp(Command, "--usn-query") == 0)
+    {
+        NtfsUsnJournalData Data;
+
+        Status = NtfsUsnJournalQuery(State.Volume, &Data);
+        if (NT_SUCCESS(Status))
+        {
+            printf("id=0x%016" PRIx64 " first=%" PRId64 " next=%" PRId64 " lowest=%" PRId64
+                   " max=0x%016" PRIx64 " maxsize=%" PRIu64 " delta=%" PRIu64 "\n",
+                   (uint64_t)Data.UsnJournalId, (int64_t)Data.FirstUsn, (int64_t)Data.NextUsn,
+                   (int64_t)Data.LowestValidUsn, (uint64_t)Data.MaxUsn,
+                   (uint64_t)Data.MaximumSize, (uint64_t)Data.AllocationDelta);
+        }
+        else
+        {
+            PrintUsnStatus(Args[1], Status);
+        }
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+    else if (strcmp(Command, "--usn-append") == 0)
+    {
+        NtfsUsnRecordInput Input = {};
+        std::vector<WCHAR> Name;
+        ULONGLONG Frn, Parent, Reason;
+        LONGLONG Usn;
+
+        if (!ParseUnsigned(Args[2], ~0ULL, &Frn) ||
+            !ParseUnsigned(Args[3], ~0ULL, &Parent) ||
+            !ParseUnsigned(Args[4], 0xFFFFFFFFULL, &Reason) ||
+            !Utf8ToNtfsString(Args[5], false, false, Name))
+        {
+            PrintUsage(Program);
+            Result = 2;
+            goto Done;
+        }
+        Input.FileReferenceNumber = Frn;
+        Input.ParentFileReferenceNumber = Parent;
+        Input.TimeStamp = ((ULONGLONG)time(NULL) + 11644473600ULL) * 10000000ULL;
+        Input.Reason = (UINT32)Reason;
+        Input.FileAttributes = 0x20;
+        Input.FileName = Name.data();
+        {
+            size_t Chars = 0;
+
+            while (Chars < Name.size() && Name[Chars] != 0)
+                Chars++;
+            Input.FileNameLength = (UINT16)(Chars * sizeof(WCHAR));
+        }
+        Status = NtfsUsnJournalAppend(State.Volume, &Input, &Usn);
+        if (NT_SUCCESS(Status))
+            printf("usn=%" PRId64 "\n", (int64_t)Usn);
+        else
+            PrintUsnStatus(Args[1], Status);
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+    else if (strcmp(Command, "--usn-read") == 0)
+    {
+        std::vector<UCHAR> Buffer(65536);
+        ULONGLONG Start;
+        LONGLONG Next;
+        ULONG Returned;
+
+        if (!ParseUnsigned(Args[2], 0x7FFFFFFFFFFFFFFFULL, &Start))
+        {
+            PrintUsage(Program);
+            Result = 2;
+            goto Done;
+        }
+        Status = NtfsUsnJournalRead(State.Volume, (LONGLONG)Start, Buffer.data(), (ULONG)Buffer.size(), &Returned, &Next);
+        if (NT_SUCCESS(Status))
+        {
+            ULONG Offset = 0;
+
+            while (Offset + 8 <= Returned)
+            {
+                const UCHAR* R = Buffer.data() + Offset;
+                UINT32 Length, Reason = 0;
+                UINT16 Major, NameLength = 0, NameOffset = 0;
+                UINT64 Frn = 0, Parent = 0;
+                int64_t Usn = 0;
+                std::string Utf8;
+
+                memcpy(&Length, R, 4);
+                memcpy(&Major, R + 4, 2);
+                if (Length < 8 || Offset + Length > Returned)
+                    break;
+                if (Major == 2 && Length >= 0x3C)
+                {
+                    memcpy(&Frn, R + 0x08, 8);
+                    memcpy(&Parent, R + 0x10, 8);
+                    memcpy(&Usn, R + 0x18, 8);
+                    memcpy(&Reason, R + 0x28, 4);
+                    memcpy(&NameLength, R + 0x38, 2);
+                    memcpy(&NameOffset, R + 0x3A, 2);
+                }
+                else if (Major == 3 && Length >= 0x4C)
+                {
+                    /* 128-bit references: print the low 64 bits */
+                    memcpy(&Frn, R + 0x08, 8);
+                    memcpy(&Parent, R + 0x18, 8);
+                    memcpy(&Usn, R + 0x28, 8);
+                    memcpy(&Reason, R + 0x38, 4);
+                    memcpy(&NameLength, R + 0x48, 2);
+                    memcpy(&NameOffset, R + 0x4A, 2);
+                }
+                else if (Length >= 0x30)
+                {
+                    memcpy(&Usn, R + 0x28, 8);
+                }
+                if ((ULONG)NameOffset + NameLength > Length)
+                    NameLength = 0;
+                for (UINT16 i = 0; i + 1 < NameLength; i += 2)
+                {
+                    UINT16 Ch;
+                    memcpy(&Ch, R + NameOffset + i, 2);
+                    Utf8.push_back(Ch < 0x80 ? (char)Ch : '?');
+                }
+                printf("usn=%" PRId64 " len=%" PRIu32 " reason=0x%08" PRIx32 " frn=0x%016" PRIx64
+                       " parent=0x%016" PRIx64 " name=%s ver=%u\n",
+                       (int64_t)Usn, Length, Reason, (uint64_t)Frn, (uint64_t)Parent, Utf8.c_str(), (unsigned)Major);
+                Offset += Length;
+            }
+            printf("next=%" PRId64 "\n", (int64_t)Next);
+        }
+        else
+        {
+            PrintUsnStatus(Args[1], Status);
+        }
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+    else if (strcmp(Command, "--usn-enum") == 0)
+    {
+        std::vector<UCHAR> Buffer(65536);
+        ULONGLONG Start, Low, High, Next;
+        ULONG Returned;
+
+        if (!ParseUnsigned(Args[2], ~0ULL, &Start) ||
+            !ParseUnsigned(Args[3], 0x7FFFFFFFFFFFFFFFULL, &Low) ||
+            !ParseUnsigned(Args[4], 0x7FFFFFFFFFFFFFFFULL, &High))
+        {
+            PrintUsage(Program);
+            Result = 2;
+            goto Done;
+        }
+        Status = NtfsUsnJournalEnumerate(State.Volume, Start, (LONGLONG)Low, (LONGLONG)High,
+                                         Buffer.data(), (ULONG)Buffer.size(), &Returned, &Next);
+        if (NT_SUCCESS(Status))
+        {
+            ULONG Offset = 0;
+
+            while (Offset + 0x3C <= Returned)
+            {
+                const UCHAR* R = Buffer.data() + Offset;
+                UINT32 Length, Attributes;
+                UINT16 NameLength, NameOffset;
+                UINT64 Frn, Parent;
+                int64_t Usn;
+                std::string Utf8;
+
+                memcpy(&Length, R, 4);
+                memcpy(&Frn, R + 0x08, 8);
+                memcpy(&Parent, R + 0x10, 8);
+                memcpy(&Usn, R + 0x18, 8);
+                memcpy(&Attributes, R + 0x34, 4);
+                memcpy(&NameLength, R + 0x38, 2);
+                memcpy(&NameOffset, R + 0x3A, 2);
+                if (Length < 0x3C || Offset + Length > Returned)
+                    break;
+                for (UINT16 i = 0; i + 1 < NameLength; i += 2)
+                {
+                    UINT16 Ch;
+                    memcpy(&Ch, R + NameOffset + i, 2);
+                    Utf8.push_back(Ch < 0x80 ? (char)Ch : '?');
+                }
+                printf("frn=0x%016" PRIx64 " parent=0x%016" PRIx64 " usn=%" PRId64 " attrs=0x%08" PRIx32 " name=%s\n",
+                       (uint64_t)Frn, (uint64_t)Parent, (int64_t)Usn, Attributes, Utf8.c_str());
+                Offset += Length;
+            }
+            printf("next=%" PRIu64 "\n", (uint64_t)Next);
+        }
+        else
+        {
+            PrintUsnStatus(Args[1], Status);
+        }
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+    else
+    {
+        PNtfsFileRecord File = NULL;
+        ULONGLONG Usn;
+
+        if (!ParseUnsigned(Args[3], 0x7FFFFFFFFFFFFFFFULL, &Usn))
+        {
+            PrintUsage(Program);
+            Result = 2;
+            goto Done;
+        }
+        Status = Lookup(State.Volume, Args[2], &File);
+        if (NT_SUCCESS(Status))
+            Status = NtfsFileRecordSetUpdateSequenceNumber(File, (LONGLONG)Usn);
+        if (!NT_SUCCESS(Status))
+            PrintUsnStatus(Args[2], Status);
+        NtfsFileRecordDestroy(File);
+        Result = NT_SUCCESS(Status) ? 0 : 1;
+    }
+
+Done:
+    CloseImage(&State);
+    return Result;
+}
+
+static void
 PrintUsage(const char* Program)
 {
     fprintf(stderr,
             "Usage:\n"
-            "  %s --format IMAGE SECTORS HIDDEN_SECTORS SECTORS_PER_CLUSTER LABEL\n"
+            "  %s --format IMAGE SECTORS HIDDEN_SECTORS SECTORS_PER_CLUSTER LABEL [BYTES_PER_SECTOR]\n"
             "  %s [--show-metadata] --probe IMAGE\n"
             "  %s [--show-metadata] --list IMAGE [PATH]\n"
             "  %s [--show-metadata] --list-info IMAGE [PATH]\n"
@@ -5138,11 +5520,27 @@ PrintUsage(const char* Program)
             Program,
             Program,
             Program);
+    fprintf(stderr,
+            "  %s --usn-create IMAGE MAXIMUM_SIZE ALLOCATION_DELTA\n"
+            "  %s --usn-query IMAGE\n"
+            "  %s --usn-append IMAGE FRN PARENT_FRN REASON NAME\n"
+            "  %s --usn-read IMAGE START_USN\n"
+            "  %s --set-usn IMAGE PATH USN\n"
+            "  %s --usn-enum IMAGE START_FRN LOW_USN HIGH_USN\n",
+            Program,
+            Program,
+            Program,
+            Program,
+            Program,
+            Program);
 }
 
 int
 main(int Argc, char** Argv)
 {
+#ifdef _WIN32
+    _set_fmode(_O_BINARY);
+#endif
     NtfsFuseState State = {};
     bool ShowMetadata = false;
     int First = 1;
@@ -5171,8 +5569,9 @@ main(int Argc, char** Argv)
         ULONGLONG SectorCount;
         ULONGLONG HiddenSectors;
         ULONGLONG SectorsPerCluster;
+        ULONGLONG BytesPerSector = 512;
 
-        if (First + 6 != Argc ||
+        if ((First + 6 != Argc && First + 7 != Argc) ||
             ShowMetadata ||
             !ParseUnsigned(Argv[First + 2],
                            INT64_MAX / 512,
@@ -5182,7 +5581,11 @@ main(int Argc, char** Argv)
                            &HiddenSectors) ||
             !ParseUnsigned(Argv[First + 4],
                            128,
-                           &SectorsPerCluster))
+                           &SectorsPerCluster) ||
+            (First + 7 == Argc &&
+             !ParseUnsigned(Argv[First + 6],
+                            4096,
+                            &BytesPerSector)))
         {
             PrintUsage(Argv[0]);
             return 2;
@@ -5191,7 +5594,8 @@ main(int Argc, char** Argv)
                            SectorCount,
                            static_cast<ULONG>(HiddenSectors),
                            static_cast<ULONG>(SectorsPerCluster),
-                           Argv[First + 5]);
+                           Argv[First + 5],
+                           static_cast<ULONG>(BytesPerSector));
     }
 
     if (strcmp(Argv[First], "--probe") == 0)
@@ -6147,6 +6551,9 @@ main(int Argc, char** Argv)
         }
         return 0;
     }
+
+    if (strncmp(Argv[First], "--usn-", 6) == 0 || strcmp(Argv[First], "--set-usn") == 0)
+        return UsnCommand(Argv[0], Argc - First, Argv + First);
 
     if (strcmp(Argv[First], "--set-sparse") == 0)
     {

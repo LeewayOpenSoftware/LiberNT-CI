@@ -2268,9 +2268,7 @@ VOID WINAPI SHGetSetSettings(LPSHELLSTATE lpss, DWORD dwMask, BOOL bSet)
         return;
     }
 
-    hKeyAdv = SHGetShellKey(SHKEY_Root_HKCU | SHKEY_Key_Explorer, L"Advanced", bSet);
-    if (!hKeyAdv && bSet)
-        return;
+    hKeyAdv = NULL;
 
 #define SSF_STRUCTONLY (SSF_NOCONFIRMRECYCLE | SSF_DOUBLECLICKINWEBVIEW | SSF_DESKTOPHTML | \
                         SSF_WIN95CLASSIC | SSF_SORTCOLUMNS | SSF_STARTPANELON)
@@ -2309,6 +2307,9 @@ VOID WINAPI SHGetSetSettings(LPSHELLSTATE lpss, DWORD dwMask, BOOL bSet)
     if (bSet)
     {
         DWORD changed = 0, notcached = ~g_CachedSSF & SSF_IMPLEMENTED;
+        hKeyAdv = SHGetShellKey(SHKEY_Root_HKCU | SHKEY_Key_Explorer, L"Advanced", TRUE);
+        if (!hKeyAdv)
+            return;
         if (notcached & ~dwMask)
         {
             // All entries in gpss have to be initialized (except the item we are about to set) because we are about to write the whole struct to the registry
@@ -2368,6 +2369,8 @@ VOID WINAPI SHGetSetSettings(LPSHELLSTATE lpss, DWORD dwMask, BOOL bSet)
         DBG_UNREFERENCED_LOCAL_VARIABLE(dummy);
         if (SHELL_GlobalCounterChanged(&g_ShellStateCounter, SHELL_GCOUNTER_SHELLSTATE))
             g_CachedSSF = 0;
+        if (dwMask & ~g_CachedSSF)
+            hKeyAdv = SHGetShellKey(SHKEY_Root_HKCU | SHKEY_Key_Explorer, L"Advanced", FALSE);
 
 #define SHGSS_ReadAdv(name, SSF) ( \
     (g_CachedSSF & (SSF)) != (SSF) && (cb = sizeof(DWORD)) != 0 && \

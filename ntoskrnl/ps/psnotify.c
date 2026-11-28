@@ -19,6 +19,8 @@ BOOLEAN PsImageNotifyEnabled = FALSE;
 ULONG PspThreadNotifyRoutineCount, PspProcessNotifyRoutineCount;
 ULONG PspLoadImageNotifyRoutineCount;
 EX_CALLBACK PspThreadNotifyRoutine[PSP_MAX_CREATE_THREAD_NOTIFY];
+EX_CALLBACK PspNonSystemThreadNotifyRoutine[PSP_MAX_CREATE_THREAD_NOTIFY];
+ULONG PspNonSystemThreadNotifyRoutineCount;
 EX_CALLBACK PspProcessNotifyRoutine[PSP_MAX_CREATE_PROCESS_NOTIFY];
 EX_CALLBACK PspLoadImageNotifyRoutine[PSP_MAX_LOAD_IMAGE_NOTIFY];
 PLEGO_NOTIFY_ROUTINE PspLegoNotifyRoutine;
@@ -265,6 +267,36 @@ PsSetLoadImageNotifyRoutine(IN PLOAD_IMAGE_NOTIFY_ROUTINE NotifyRoutine)
     return STATUS_INSUFFICIENT_RESOURCES;
 }
 
+static
+NTSTATUS
+PspRemoveNonSystemThreadNotifyRoutine(IN PCREATE_THREAD_NOTIFY_ROUTINE NotifyRoutine)
+{
+    ULONG i;
+    PEX_CALLBACK_ROUTINE_BLOCK CallBack;
+
+    for (i = 0; i < PSP_MAX_CREATE_THREAD_NOTIFY; i++)
+    {
+        CallBack = ExReferenceCallBackBlock(&PspNonSystemThreadNotifyRoutine[i]);
+        if (!CallBack) continue;
+
+        if ((ExGetCallBackBlockRoutine(CallBack) == (PVOID)NotifyRoutine) &&
+            ExCompareExchangeCallBack(&PspNonSystemThreadNotifyRoutine[i], NULL, CallBack))
+        {
+            InterlockedDecrement((PLONG)&PspNonSystemThreadNotifyRoutineCount);
+            ExDereferenceCallBackBlock(&PspNonSystemThreadNotifyRoutine[i], CallBack);
+
+            /* Wait for active callbacks */
+            ExWaitForCallBacks(CallBack);
+            ExFreeCallBack(CallBack);
+            return STATUS_SUCCESS;
+        }
+
+        ExDereferenceCallBackBlock(&PspNonSystemThreadNotifyRoutine[i], CallBack);
+    }
+
+    return STATUS_PROCEDURE_NOT_FOUND;
+}
+
 /*
  * @implemented
  */
@@ -310,8 +342,8 @@ PsRemoveCreateThreadNotifyRoutine(IN PCREATE_THREAD_NOTIFY_ROUTINE NotifyRoutine
         }
     }
 
-    /* Nothing found to remove */
-    return STATUS_PROCEDURE_NOT_FOUND;
+    /* The routine may have been registered with PsCreateThreadNotifyNonSystem */
+    return PspRemoveNonSystemThreadNotifyRoutine(NotifyRoutine);
 }
 
 /*
@@ -346,6 +378,64 @@ PsSetCreateThreadNotifyRoutine(IN PCREATE_THREAD_NOTIFY_ROUTINE NotifyRoutine)
     /* No free space found, fail */
     ExFreeCallBack(CallBack);
     return STATUS_INSUFFICIENT_RESOURCES;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+PsSetCreateThreadNotifyRoutineEx(
+    _In_ PSCREATETHREADNOTIFYTYPE NotifyType,
+    _In_ PVOID NotifyInformation)
+{
+    ULONG i;
+    PEX_CALLBACK_ROUTINE_BLOCK CallBack;
+    PAGED_CODE();
+
+    if (NotifyInformation == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* The routines of PsSetCreateThreadNotifyRoutine already see the threads of all subsystems */
+    if (NotifyType == PsCreateThreadNotifySubsystems)
+        return PsSetCreateThreadNotifyRoutine((PCREATE_THREAD_NOTIFY_ROUTINE)NotifyInformation);
+
+    if (NotifyType != PsCreateThreadNotifyNonSystem)
+        return STATUS_INVALID_PARAMETER;
+
+    CallBack = ExAllocateCallBack(NotifyInformation, NULL);
+    if (!CallBack) return STATUS_INSUFFICIENT_RESOURCES;
+
+    for (i = 0; i < PSP_MAX_CREATE_THREAD_NOTIFY; i++)
+    {
+        if (ExCompareExchangeCallBack(&PspNonSystemThreadNotifyRoutine[i], CallBack, NULL))
+        {
+            InterlockedIncrement((PLONG)&PspNonSystemThreadNotifyRoutineCount);
+            return STATUS_SUCCESS;
+        }
+    }
+
+    ExFreeCallBack(CallBack);
+    return STATUS_INSUFFICIENT_RESOURCES;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+PsSetLoadImageNotifyRoutineEx(
+    _In_ PLOAD_IMAGE_NOTIFY_ROUTINE NotifyRoutine,
+    _In_ ULONG_PTR Flags)
+{
+    PAGED_CODE();
+
+    if (Flags & ~PS_IMAGE_NOTIFY_CONFLICTING_ARCHITECTURE)
+        return STATUS_INVALID_PARAMETER_2;
+
+    /* Image notifications carry no architecture filter here, so every
+       routine already sees what PS_IMAGE_NOTIFY_CONFLICTING_ARCHITECTURE asks for */
+    return PsSetLoadImageNotifyRoutine(NotifyRoutine);
 }
 
 /* EOF */

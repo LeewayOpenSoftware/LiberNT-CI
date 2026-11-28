@@ -1239,6 +1239,12 @@ BOOL RpcAuthInfo_IsEqual(const RpcAuthInfo *AuthInfo1, const RpcAuthInfo *AuthIn
         (AuthInfo1->AuthnSvc != AuthInfo2->AuthnSvc))
         return FALSE;
 
+    /* A pooled connection whose server was checked against one principal must not serve another */
+    if (!AuthInfo1->server_principal_name != !AuthInfo2->server_principal_name ||
+        (AuthInfo1->server_principal_name &&
+         wcscmp(AuthInfo1->server_principal_name, AuthInfo2->server_principal_name)))
+        return FALSE;
+
     if (AuthInfo1->identity == AuthInfo2->identity)
         return TRUE;
 
@@ -1270,12 +1276,29 @@ BOOL RpcAuthInfo_IsEqual(const RpcAuthInfo *AuthInfo1, const RpcAuthInfo *AuthIn
 
 static RPC_STATUS RpcQualityOfService_Create(const RPC_SECURITY_QOS *qos_src, BOOL unicode, RpcQualityOfService **qos_dst)
 {
-    RpcQualityOfService *qos = malloc(sizeof(*qos));
+    /* The A and W V3 layouts put Sid at the same place */
+    PSID sid_src = qos_src->Version >= 3 ? ((const RPC_SECURITY_QOS_V3_W *)qos_src)->Sid : NULL;
+    RpcQualityOfService *qos;
 
+    if (sid_src && !IsValidSid(sid_src))
+        return RPC_S_INVALID_ARG;
+
+    qos = malloc(sizeof(*qos));
     if (!qos)
         return RPC_S_OUT_OF_RESOURCES;
 
     qos->refs = 1;
+    qos->sid = NULL;
+    if (sid_src)
+    {
+        qos->sid = malloc(GetLengthSid(sid_src));
+        if (!qos->sid)
+        {
+            free(qos);
+            return RPC_S_OUT_OF_RESOURCES;
+        }
+        CopySid(GetLengthSid(sid_src), qos->sid, sid_src);
+    }
     qos->qos = malloc(sizeof(*qos->qos));
     if (!qos->qos) goto error;
     qos->qos->Version = qos_src->Version;
@@ -1374,6 +1397,7 @@ error:
         }
         free(qos->qos);
     }
+    free(qos->sid);
     free(qos);
     return RPC_S_OUT_OF_RESOURCES;
 }
@@ -1403,6 +1427,7 @@ ULONG RpcQualityOfService_Release(RpcQualityOfService *qos)
             free(qos->qos->u.HttpCredentials);
         }
         free(qos->qos);
+        free(qos->sid);
         free(qos);
     }
     return refs;
@@ -1426,6 +1451,9 @@ BOOL RpcQualityOfService_IsEqual(const RpcQualityOfService *qos1, const RpcQuali
         (qos1->qos->IdentityTracking != qos2->qos->IdentityTracking) ||
         (qos1->qos->ImpersonationType != qos2->qos->ImpersonationType) ||
         (qos1->qos->AdditionalSecurityInfoType != qos2->qos->AdditionalSecurityInfoType))
+        return FALSE;
+
+    if (!qos1->sid != !qos2->sid || (qos1->sid && !EqualSid(qos1->sid, qos2->sid)))
         return FALSE;
 
     if (qos1->qos->AdditionalSecurityInfoType == RPC_C_AUTHN_INFO_TYPE_HTTP)

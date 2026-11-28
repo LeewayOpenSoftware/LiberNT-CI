@@ -179,6 +179,8 @@ extern "C" {
 #define DIGCF_INTERFACEDEVICE	0x00000010
 #define DIOCR_INSTALLER	0x00000001
 #define DIOCR_INTERFACE	0x00000002
+#define DICLASSPROP_INSTALLER	0x00000001
+#define DICLASSPROP_INTERFACE	0x00000002
 #define DIODI_NO_ADD	0x00000001
 #define DIOD_INHERIT_CLASSDRVS	0x00000002
 #define DIOD_CANCEL_REMOVE	0x00000004
@@ -358,6 +360,7 @@ extern "C" {
 #define ERROR_NO_DEFAULT_INTERFACE_DEVICE	ERROR_NO_DEFAULT_DEVICE_INTERFACE
 #define ERROR_NO_SUCH_INTERFACE_DEVICE	ERROR_NO_SUCH_DEVICE_INTERFACE
 #define ERROR_WRONG_INF_TYPE              (APPLICATION_ERROR_MASK|ERROR_SEVERITY_ERROR|0x24A)
+#define ERROR_FILE_HASH_NOT_IN_CATALOG    (APPLICATION_ERROR_MASK|ERROR_SEVERITY_ERROR|0x24B)
 
 #define FILEOP_COPY	0
 #define FILEOP_ABORT	0
@@ -578,7 +581,7 @@ extern "C" {
 #define SPFILENOTIFY_ENDBACKUP	23
 #define SPFILENOTIFY_QUEUESCAN_EX	24
 #define SPFILENOTIFY_STARTREGISTRATION	25
-#define SPFILENOTIFY_ENDREGISTRATION	26
+#define SPFILENOTIFY_ENDREGISTRATION	0x00000020
 #define SPFILENOTIFY_LANGMISMATCH	0x00010000
 #define SPFILENOTIFY_TARGETEXISTS	0x00020000
 #define SPFILENOTIFY_TARGETNEWER	0x00040000
@@ -1970,6 +1973,11 @@ SetupDiSetDevicePropertyW(
   _In_reads_bytes_opt_(PropertyBufferSize) CONST BYTE *PropertyBuffer,
   _In_ DWORD PropertyBufferSize,
   _In_ DWORD Flags);
+
+WINSETUPAPI BOOL WINAPI SetupDiGetClassPropertyW(_In_ CONST GUID *ClassGuid, _In_ CONST DEVPROPKEY *PropertyKey, _Out_ DEVPROPTYPE *PropertyType, _Out_writes_bytes_to_opt_(PropertyBufferSize, *RequiredSize) PBYTE PropertyBuffer, _In_ DWORD PropertyBufferSize, _Out_opt_ PDWORD RequiredSize, _In_ DWORD Flags);
+WINSETUPAPI BOOL WINAPI SetupDiGetClassPropertyExW(_In_ CONST GUID *ClassGuid, _In_ CONST DEVPROPKEY *PropertyKey, _Out_ DEVPROPTYPE *PropertyType, _Out_writes_bytes_to_opt_(PropertyBufferSize, *RequiredSize) PBYTE PropertyBuffer, _In_ DWORD PropertyBufferSize, _Out_opt_ PDWORD RequiredSize, _In_ DWORD Flags, _In_opt_ PCWSTR MachineName, _Reserved_ PVOID Reserved);
+WINSETUPAPI BOOL WINAPI SetupDiSetClassPropertyW(_In_ CONST GUID *ClassGuid, _In_ CONST DEVPROPKEY *PropertyKey, _In_ DEVPROPTYPE PropertyType, _In_reads_bytes_opt_(PropertyBufferSize) CONST BYTE *PropertyBuffer, _In_ DWORD PropertyBufferSize, _In_ DWORD Flags);
+WINSETUPAPI BOOL WINAPI SetupDiSetClassPropertyExW(_In_ CONST GUID *ClassGuid, _In_ CONST DEVPROPKEY *PropertyKey, _In_ DEVPROPTYPE PropertyType, _In_reads_bytes_opt_(PropertyBufferSize) CONST BYTE *PropertyBuffer, _In_ DWORD PropertyBufferSize, _In_ DWORD Flags, _In_opt_ PCWSTR MachineName, _Reserved_ PVOID Reserved);
 
 WINSETUPAPI BOOL WINAPI SetupDiSetDeviceInstallParamsA(_In_ HDEVINFO, _In_opt_ PSP_DEVINFO_DATA, _In_ PSP_DEVINSTALL_PARAMS_A);
 WINSETUPAPI BOOL WINAPI SetupDiSetDeviceInstallParamsW(_In_ HDEVINFO, _In_opt_ PSP_DEVINFO_DATA, _In_ PSP_DEVINSTALL_PARAMS_W);

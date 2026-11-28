@@ -59,7 +59,7 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "FileDescription", "LiberNT MUI test module"
+            VALUE "FileDescription", "Orosi MUI test module"
             VALUE "FileVersion", "1.0.0.0"
         END
     END

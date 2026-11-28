@@ -32,6 +32,8 @@ VOID
 FwFree(
     _In_ PVOID Memory);
 
+extern BOOLEAN FwDebugScreen;
+
 VOID
 FwPrint(
     _In_ PCWSTR Format,
@@ -50,14 +52,42 @@ FwReadDeviceFile(
 
 BOOLEAN
 FwScanFileVolumes(
-    _In_ PCWSTR Path,
+    _In_opt_ PCWSTR Path,
     _Inout_ PFW_VOLUME_SCAN Scan,
     _Out_ PVOID* Device);
 
 BOOLEAN
-FwStartFirmwareApplication(
+FwFileExists(
     _In_ PVOID Device,
     _In_ PCWSTR Path);
+
+BOOLEAN
+FwIsUsbVolume(
+    _In_ PVOID Device);
+
+BOOLEAN
+FwIsBootVolume(
+    _In_ PVOID Device);
+
+BOOLEAN
+FwGetVolumeLabel(
+    _In_ PVOID Device,
+    _Out_writes_z_(Chars) PWSTR Label,
+    _In_ ULONG Chars);
+
+BOOLEAN
+FwGetVolumeDiskNumber(
+    _In_ PVOID Device,
+    _Out_ PULONG Number);
+
+PCWSTR
+FwGetRemovableMediaPath(VOID);
+
+BOOLEAN
+FwStartFirmwareApplication(
+    _In_ PVOID Device,
+    _In_ PCWSTR Path,
+    _In_opt_ PCWSTR LoadOptions);
 
 DECLSPEC_NORETURN
 VOID
@@ -146,6 +176,11 @@ FwPrepareRuntimeServices(
     _Inout_ struct _EFI_FIRMWARE_INFORMATION* Information,
     _Inout_ struct _VIRTUAL_EFI_RUNTIME_SERVICES* Services);
 
+extern BOOLEAN FwDebugEnabled;
+
+VOID
+FwDebugEnable(VOID);
+
 VOID
 FwDebugPrint(
     _In_ PCSTR Text);
@@ -158,6 +193,11 @@ FwDebugAnnounce(
 BOOLEAN
 FwArchDebugPutChar(
     _In_ UCHAR Character);
+
+BOOLEAN
+FwArchMemoryUsable(
+    _In_ ULONGLONG Address,
+    _In_ SIZE_T Size);
 
 extern VOID (*FwLateDebugPutChar)(UCHAR Character);
 
@@ -185,6 +225,11 @@ FwGetFrameBuffer(
 BOOLEAN
 FwGetTime(
     _Out_ PTIME_FIELDS Time);
+
+BOOLEAN
+FwGetRandom(
+    _Out_writes_bytes_(Size) PVOID Buffer,
+    _In_ ULONG Size);
 
 PCWSTR
 FwGetLoadOptions(

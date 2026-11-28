@@ -36,6 +36,11 @@ TODO:
 
 #include "precomp.h"
 
+/* Thumbnail results from CLSID_Thumbnail (defined in precomp.h by the generator side) */
+#ifndef SHV_THUMBNAIL
+#define SHV_THUMBNAIL (WM_USER + 0x1115)
+#endif
+
 #include <atlwin.h>
 #include <ui/rosctrls.h>
 #include <perhist.h>
@@ -92,6 +97,27 @@ struct LISTVIEW_SORT_INFO
 #define CONTEXT_MENU_BASE_ID 1
 #define DEFVIEW_ENUM_BATCH_ITEMS 8
 #define DEFVIEW_ENUM_BATCH_MS 2
+#define DEFVIEW_FILL_TIMER_ID 0x1113
+#define DEFVIEW_FILL_YIELD_MS 50
+#define DEFVIEW_THUMB_TIMER_ID 0x1115
+#define DEFVIEW_THUMB_BATCH 32      /* thumbnail requests per timer tick */
+#define DEFVIEW_THUMB_SIZE 96       /* the Thumbnails view: icons at 96 px */
+#define DEFVIEW_THUMB_SCAN_TIMER_ID 0x1116
+#define DEFVIEW_THUMB_SCAN_MS 100   /* after a paint shows items not asked for yet */
+/* Retained thumbnails: a large folder must not exhaust the GDI handle quota.
+   Off-screen ones above the budget go back to their icons. */
+#define DEFVIEW_THUMB_MAX_BITMAPS 1000
+#define DEFVIEW_THUMB_MAX_BYTES (32 * 1024 * 1024)
+/* Requests still out for items scrolled away: above this the generator queue
+   is restarted so that what is on screen comes first */
+#define DEFVIEW_THUMB_MAX_STALE 64
+/* The request id is the list-view item id with a generation in the top byte:
+   the list view reuses ids, so an old result must not land on a new item */
+#define DEFVIEW_THUMB_ID_MASK 0x00FFFFFF
+#define DEFVIEW_THUMB_GEN_SHIFT 24
+
+/* comctl32 exports it (ordinal 326); the PSDK header lacks it */
+EXTERN_C BOOL WINAPI DSA_DeleteItem(HDSA hdsa, INT nIndex);
 
 struct PERSISTCOLUMNS
 {
@@ -382,6 +408,7 @@ private:
     COLORREF                  m_ExplorerMaterialBack;
     INT                       m_ExplorerMaterialOpacity;
     HWND                      m_ExplorerBackdropWindow;
+    HWND                      m_hWndTasks; // folder task pane (CDefViewTasks.cpp), or NULL
     RECT                      m_ComputerFoldersHeader;
     RECT                      m_ComputerDrivesHeader;
     RECT                      m_ComputerLocationsHeader;
@@ -390,7 +417,9 @@ private:
     BOOL  m_Destroyed;
     BOOL  m_FillListIsRefresh;
     ULONG m_FillListGeneration;
-    BOOL m_ChangeAddedDuringFill;
+    BOOL m_FillListRedrawOff;
+    DWORD m_FillListLastYield;
+    CSimpleArray<PITEMID_CHILD> m_AddedDuringFill;
     DWORD m_dwPositionCookie;
     struct ITEM_POSITION
     {
@@ -402,11 +431,46 @@ private:
 
     HICON                     m_hMyComputerIcon;
     INT                       m_IconSize;
+    INT                       m_cTileColumns;         // -1 until known
+    UINT                      m_TileColumns[2];       // list columns shown under the name in Tiles
     INT                       m_himlViewSize;
     HIMAGELIST                m_himlView;
     BOOL                      m_himlViewOwned;
+    struct SIZED_VIEW_LIST
+    {
+        INT Size;
+        HIMAGELIST List;
+        BYTE *Scaled;
+        INT ScaledCount;
+    };
+    SIZED_VIEW_LIST           m_SizedLists[4];
+    SIZED_VIEW_LIST          *m_SizedCurrent;
+    INT                       m_SizedListCount;
+    INT                       m_SizedListNext;
     WNDPROC                   m_ListViewOrigProc;
     INT                       m_GestureZoomDistance;
+    struct THUMB_ENTRY
+    {
+        DWORD Id;       // list-view unique item id
+        HBITMAP hbm;    // NULL while the request is pending
+        BOOL bAlpha;    // 32 bpp with a (premultiplied) alpha channel
+        BOOL bNone;     // no thumbnail for this item: never ask again
+        DWORD Gen;      // generation of the outstanding request
+        DWORD cb;       // bitmap bytes
+        DWORD Used;     // last drawn (m_ThumbUseClock)
+    };
+    CComPtr<IThumbnail3>      m_pThumbnail;
+    BOOL                      m_ThumbArmed;         // Init(m_hWnd, SHV_THUMBNAIL) done
+    BOOL                      m_ThumbUnavailable;   // no generator: icons only
+    INT                       m_ThumbSize;          // requested size, 0 = no thumbnails
+    INT                       m_ThumbBitmaps;       // entries holding a bitmap
+    HDSA                      m_hdsaThumbs;         // THUMB_ENTRY sorted by Id
+    CSimpleArray<DWORD>       m_ThumbQueue;         // ids still to request
+    INT                       m_ThumbQueuePos;
+    SIZE_T                    m_ThumbBytes;         // bytes held by the retained bitmaps
+    DWORD                     m_ThumbGen;
+    DWORD                     m_ThumbUseClock;
+    BOOL                      m_ThumbScanPending;
 
     HRESULT _MergeToolbar();
     void _MergeMenus();
@@ -425,14 +489,24 @@ private:
     void CaptureItemPositions();
     void ApplySavedItemPositions();
     void MoveItemToFreeSlot(INT nItem);
+    void MoveItemsIntoView();
     HRESULT LoadItemPositions(IStream *pStream);
     HRESULT SaveItemPositions(IStream *pStream);
     void FireFolderViewEvent(DISPID dispid);
     void CancelFillList();
+    void RecordAddedDuringFill(PCUITEMID_CHILD pidl);
+    BOOL IsAddedDuringFill(PCUITEMID_CHILD pidl);
+    void ClearAddedDuringFill();
     bool IsComputerTileView() const;
+    void ApplyListViewMode();
+    void InitTileColumns();
+    void UpdateTileColumns();
     UINT ComputerViewDpi() const;
-    HIMAGELIST CreateSizedViewImageList(INT cx);
-    void SyncViewImageList();
+    SIZED_VIEW_LIST *GetSizedViewImageList(INT cx);
+    BOOL EnsureViewIcon(INT index);
+    void EnsureViewIconForItem(INT iItem);
+    void InvalidateSizedViewIcons();
+    void DestroySizedViewImageLists();
     void ApplyViewIconSize();
     INT GetZoomStep() const;
     void ZoomView(INT iDelta);
@@ -449,6 +523,24 @@ private:
     INT ComputerItemFromPoint(POINT point);
     void DrawComputerHeader(HDC hdc, const RECT &rect, UINT id, UINT count);
     void DrawComputerItem(NMLVCUSTOMDRAW *pDraw);
+    INT GetThumbnailSize();
+    THUMB_ENTRY *FindThumbnail(DWORD Id, INT *pIndex = NULL);
+    BOOL HasThumbnail(INT iItem);
+    void RestoreItemIcon(INT iItem);
+    void FreeThumbnails(BOOL bRestoreIcons);
+    void CancelThumbnailRequests();
+    void ResetThumbnails();
+    void ShutdownThumbnails();
+    void UpdateThumbnailMode();
+    void StartThumbnailRequests();
+    void PumpThumbnailQueue(INT cMax);
+    void RequestThumbnail(INT iItem);
+    void DropThumbnail(INT iItem, BOOL bRestoreIcon);
+    void DrawThumbnail(NMLVCUSTOMDRAW *pDraw);
+    void ScheduleThumbnailScan();
+    void GetThumbnailKeepRect(RECT *prc);
+    void EvictThumbnails();
+    void DropStaleThumbnailRequests();
     BOOL IsDesktop() const { return m_FolderSettings.fFlags & FWF_DESKTOP; }
 
     inline BOOL IsSpecialFolder(int &csidl) const
@@ -512,6 +604,7 @@ public:
     void ApplyFolderFlags(DWORD dwOldFlags);
     LRESULT OnExplorerCommand(UINT uCommand, BOOL bUseSelection);
     FOLDERVIEWMODE GetDefaultViewMode();
+    BOOL GetFolderTypeDefaultView(FOLDERVIEWMODE *pMode, INT *pIconSize);
     HRESULT GetDefaultViewStream(DWORD Stgm, IStream **ppStream);
     HRESULT LoadViewState();
     HRESULT SaveViewState(IStream *pStream);
@@ -532,7 +625,12 @@ public:
 
     static inline bool IsSupportedFolderViewMode(int Mode)
     {
-        return Mode >= FVM_FIRST && Mode <= FVM_DETAILS; // We don't support Tile nor Thumbstrip
+        return Mode >= FVM_FIRST && Mode <= FVM_TILE; // Icons to Tiles, Thumbnails included; no Thumbstrip yet
+    }
+    /* Modes the list view can show (Content is shown as report) */
+    static inline bool IsShowableFolderViewMode(int Mode)
+    {
+        return IsSupportedFolderViewMode(Mode) || Mode == FVM_CONTENT;
     }
 
     // *** IOleWindow methods ***
@@ -699,7 +797,10 @@ public:
     LRESULT OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnUpdateStatusbar(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnFillList(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnArrangeComputer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnThumbnail(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
+    LRESULT OnTaskPaneFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnMenuMessage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
     LRESULT OnInitMenuPopup(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled);
@@ -751,7 +852,10 @@ public:
     MESSAGE_HANDLER(SHV_CHANGE_NOTIFY, OnChangeNotify)
     MESSAGE_HANDLER(SHV_UPDATESTATUSBAR, OnUpdateStatusbar)
     MESSAGE_HANDLER(SHV_FILL_LIST, OnFillList)
+    MESSAGE_HANDLER(WM_TIMER, OnTimer)
     MESSAGE_HANDLER(SHV_ARRANGE_COMPUTER, OnArrangeComputer)
+    MESSAGE_HANDLER(SHV_THUMBNAIL, OnThumbnail)
+    MESSAGE_HANDLER(SHV_TASKPANE_FOCUS, OnTaskPaneFocus)
     MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
     MESSAGE_HANDLER(WM_DRAWITEM, OnMenuMessage)
     MESSAGE_HANDLER(WM_MEASUREITEM, OnMenuMessage)
@@ -792,6 +896,7 @@ public:
 
 #define ID_LISTVIEW     1
 
+
 // windowsx.h
 #define GET_WM_COMMAND_ID(wp, lp)       LOWORD(wp)
 #define GET_WM_COMMAND_HWND(wp, lp)     (HWND)(lp)
@@ -830,19 +935,36 @@ CDefView::CDefView() :
     m_ExplorerMaterialBack(0),
     m_ExplorerMaterialOpacity(255),
     m_ExplorerBackdropWindow(NULL),
+    m_hWndTasks(NULL),
     m_Destroyed(FALSE),
     m_FillListIsRefresh(FALSE),
     m_FillListGeneration(0),
-    m_ChangeAddedDuringFill(FALSE),
+    m_FillListRedrawOff(FALSE),
+    m_FillListLastYield(0),
     m_dwPositionCookie(0),
     m_hMyComputerIcon(NULL),
     m_IconSize(0),
+    m_cTileColumns(-1),
     m_himlViewSize(0),
     m_himlView(NULL),
     m_himlViewOwned(FALSE),
+    m_SizedCurrent(NULL),
+    m_SizedListCount(0),
+    m_SizedListNext(0),
     m_ListViewOrigProc(NULL),
-    m_GestureZoomDistance(0)
+    m_GestureZoomDistance(0),
+    m_ThumbArmed(FALSE),
+    m_ThumbUnavailable(FALSE),
+    m_ThumbSize(0),
+    m_ThumbBitmaps(0),
+    m_hdsaThumbs(NULL),
+    m_ThumbQueuePos(0),
+    m_ThumbBytes(0),
+    m_ThumbGen(0),
+    m_ThumbUseClock(0),
+    m_ThumbScanPending(FALSE)
 {
+    ZeroMemory(m_SizedLists, sizeof(m_SizedLists));
     ZeroMemory(&m_FolderSettings, sizeof(m_FolderSettings));
     m_FolderSettings.ViewMode = FVM_TILE;
     m_FolderSettings.fFlags = FWF_USESEARCHFOLDER;
@@ -865,6 +987,7 @@ CDefView::~CDefView()
     TRACE(" destroying IShellView(%p)\n", this);
 
     ClearSavedItemPositions();
+    ClearAddedDuringFill();
 
     _DoFolderViewCB(SFVM_VIEWRELEASE, 0, 0);
 
@@ -879,9 +1002,10 @@ CDefView::~CDefView()
         DestroyViewWindow();
     }
 
-    if (m_himlView && m_himlViewOwned)
-        ImageList_Destroy(m_himlView);
-    m_himlView = NULL;
+    DestroySizedViewImageLists();
+    ShutdownThumbnails();
+    if (m_hdsaThumbs)
+        DSA_Destroy(m_hdsaThumbs);
 
     SHFree(m_apidl);
     DPA_Destroy(m_LoadColumnsList);
@@ -904,6 +1028,70 @@ HRESULT WINAPI CDefView::Initialize(IShellFolder *shellFolder)
 bool CDefView::IsComputerTileView() const
 {
     return m_IsComputerFolder && m_FolderSettings.ViewMode == FVM_ICON;
+}
+
+/* Puts the list view in the view of m_FolderSettings.ViewMode (the style bits
+   cannot express Tiles, and leaving Tiles needs LVM_SETVIEW too) */
+void CDefView::ApplyListViewMode()
+{
+    DWORD dwView;
+
+    /* This PC draws its own tiles in icon mode */
+    if (m_IsComputerFolder && (m_FolderSettings.ViewMode == FVM_TILE || m_FolderSettings.ViewMode == FVM_THUMBNAIL))
+        m_FolderSettings.ViewMode = FVM_ICON;
+
+    switch (m_FolderSettings.ViewMode)
+    {
+        case FVM_ICON:      dwView = LV_VIEW_ICON;      break;
+        case FVM_THUMBNAIL: dwView = LV_VIEW_ICON;      break;
+        case FVM_SMALLICON: dwView = LV_VIEW_SMALLICON; break;
+        case FVM_LIST:      dwView = LV_VIEW_LIST;      break;
+        case FVM_TILE:      dwView = LV_VIEW_TILE;      break;
+        default:            dwView = LV_VIEW_DETAILS;   break;
+    }
+    if (dwView == LV_VIEW_TILE)
+    {
+        LVTILEVIEWINFO tvi = { sizeof(tvi) };
+        tvi.dwMask = LVTVIM_COLUMNS;
+        tvi.dwFlags = LVTVIF_AUTOSIZE;
+        tvi.cLines = _countof(m_TileColumns);
+        m_ListView.SendMessageW(LVM_SETTILEVIEWINFO, 0, (LPARAM)&tvi);
+    }
+    m_ListView.SendMessageW(LVM_SETVIEW, dwView, 0);
+}
+
+/* Tiles show two detail columns under the name: Type and Size in a file system
+   folder (as Windows), else the first two folder columns. They are folder
+   columns, mapped to the list columns shown now (the user can change those). */
+void CDefView::InitTileColumns()
+{
+    const UINT FolderCols[2] = { m_SpecialFolder == -1 ? 2u : 1u, m_SpecialFolder == -1 ? 1u : 2u };
+    HRESULT hr;
+
+    m_cTileColumns = 0;
+    for (UINT i = 0; i < _countof(FolderCols); ++i)
+    {
+        hr = MapFolderColumnToListColumn(FolderCols[i]);
+        if (SUCCEEDED(hr) && hr > 0)
+            m_TileColumns[m_cTileColumns++] = (UINT)hr;
+    }
+}
+
+/* The list columns changed: point the tiles of every item at the new indices */
+void CDefView::UpdateTileColumns()
+{
+    LVTILEINFO ti = { sizeof(ti) };
+
+    if (m_cTileColumns < 0 || !m_ListView)
+        return;
+    InitTileColumns();
+    ti.cColumns = m_cTileColumns;
+    ti.puColumns = m_TileColumns;
+    for (INT i = 0, count = m_ListView.GetItemCount(); i < count; ++i)
+    {
+        ti.iItem = i;
+        m_ListView.SendMessageW(LVM_SETTILEINFO, 0, (LPARAM)&ti);
+    }
 }
 
 static bool IsComputerDriveItem(PCUITEMID_CHILD pidl)
@@ -1652,6 +1840,7 @@ BOOL CDefView::CreateList()
     switch (m_FolderSettings.ViewMode)
     {
         case FVM_ICON:
+        case FVM_THUMBNAIL:
             dwStyle |= LVS_ICON;
             break;
         case FVM_DETAILS:
@@ -1665,6 +1854,9 @@ BOOL CDefView::CreateList()
             break;
         case FVM_CONTENT:
             dwStyle |= LVS_REPORT;
+            break;
+        case FVM_TILE:
+            dwStyle |= LVS_ICON; /* LVM_SETVIEW below */
             break;
         default:
             dwStyle |= LVS_LIST;
@@ -1690,6 +1882,11 @@ BOOL CDefView::CreateList()
     if (m_FolderSettings.fFlags & FWF_NOCOLUMNHEADER)
         dwStyle |= LVS_NOCOLUMNHEADER;
 
+    /* The desktop (FWF_NOSCROLL) must not grow scroll bars when an icon is
+       placed beyond the work area */
+    if (m_FolderSettings.fFlags & FWF_NOSCROLL)
+        dwStyle |= LVS_NOSCROLL;
+
 #if 0
     // FIXME: Because this is a negative, everyone gets the new flag by default unless they
     // opt out. This code should be enabled when shell looks like Vista instead of 2003
@@ -1714,6 +1911,7 @@ BOOL CDefView::CreateList()
     SetWindowTheme(m_ListView, L"Explorer", NULL);
 
     m_ListView.SetExtendedListViewStyle(ListExStyle);
+    ApplyListViewMode();
 
     /* Enumeration finishes asynchronously, after the desktop can be shown.
      * Make its list view transparent before the first paint instead of
@@ -1999,6 +2197,7 @@ void CDefView::ColumnListChanged()
             break; // Cannot allow holes in the cache, must stop now.
     }
     m_ListToFolderColMap = cache;
+    UpdateTileColumns();
 
     for (;;)
     {
@@ -2206,7 +2405,7 @@ int CDefView::LV_AddItem(PCUITEMID_CHILD pidl)
     /* Image lookup can enter the shell namespace. Keep that work out of the
        first visible paint and inside the bounded enumeration batches. */
     lvItem.iImage = SHMapPIDLToSystemImageListIndex(m_pSFParent, pidl, 0);
-    SyncViewImageList();
+    EnsureViewIcon(lvItem.iImage);
     lvItem.stateMask = LVIS_CUT;
     if (m_HasCutItems)
     {
@@ -2214,7 +2413,21 @@ int CDefView::LV_AddItem(PCUITEMID_CHILD pidl)
         lvItem.state = GetItemAttributes(pidl, SFGAO_HIDDEN | SFGAO_GHOSTED) ? LVIS_CUT : 0;
     }
 
-    return m_ListView.InsertItem(&lvItem);
+    if (m_cTileColumns < 0)
+        InitTileColumns();
+    if (m_cTileColumns > 0)
+    {
+        lvItem.mask |= LVIF_COLUMNS;
+        lvItem.cColumns = m_cTileColumns;
+        lvItem.puColumns = m_TileColumns;
+    }
+
+    int nItem = m_ListView.InsertItem(&lvItem);
+    if (nItem < 0)
+        ILFree(reinterpret_cast<PITEMID_CHILD>(lvItem.lParam)); // the list did not take it
+    else if (m_ThumbSize && !m_pEnumIDList)
+        RequestThumbnail(nItem); // added after the fill (FinishFillList asks for the others)
+    return nItem;
 }
 
 BOOLEAN CDefView::LV_DeleteItem(PCUITEMID_CHILD pidl)
@@ -2261,9 +2474,12 @@ BOOLEAN CDefView::LV_RenameItem(PCUITEMID_CHILD pidlOld, PCUITEMID_CHILD pidlNew
         lvItem.lParam = reinterpret_cast<LPARAM>(ILClone(pidlNew)); // set item's data
         lvItem.pszText = LPSTR_TEXTCALLBACKW;
         lvItem.iImage = SHMapPIDLToSystemImageListIndex(m_pSFParent, pidlNew, 0);
-        SyncViewImageList();
+        EnsureViewIcon(lvItem.iImage);
+        DropThumbnail(nItem, FALSE);
         m_ListView.SetItem(&lvItem);
         m_ListView.Update(nItem);
+        if (m_ThumbSize && !m_pEnumIDList)
+            RequestThumbnail(nItem);
 
         // Now that the new item is in place, we can safely release the old pidl
         SHFree(oldPidl);
@@ -2292,14 +2508,17 @@ BOOL CDefView::LV_UpdateItem(INT nItem, PCUITEMID_CHILD pidl)
             lvItem.mask |= LVIF_STATE;
             lvItem.state = GetItemAttributes(pidl, SFGAO_HIDDEN | SFGAO_GHOSTED) ? LVIS_CUT : 0;
         }
-        SyncViewImageList();
+        EnsureViewIcon(lvItem.iImage);
         PCUITEMID_CHILD pidlOld = _PidlByItem(nItem);
         if (pidlOld && (lvItem.lParam = reinterpret_cast<LPARAM>(ILClone(pidl))) != NULL)
             lvItem.mask |= LVIF_PARAM;
+        DropThumbnail(nItem, FALSE); // the content may have changed
         bResult = m_ListView.SetItem(&lvItem);
         if (bResult && lvItem.lParam && pidlOld)
             ILFree(const_cast<PUITEMID_CHILD>(pidlOld));
         for (UINT i = 0; m_ListView.SetItemText(nItem, i, LPSTR_TEXTCALLBACK); ++i) {} // Update all columns
+        if (m_ThumbSize && !m_pEnumIDList)
+            RequestThumbnail(nItem);
     }
     return bResult;
 }
@@ -2328,6 +2547,7 @@ void CDefView::LV_RefreshItems()
 {
     ASSERT(m_ListView);
 
+    InvalidateSizedViewIcons();
     for (INT iItem = -1;;)
     {
         iItem = ListView_GetNextItem(m_ListView, iItem, LVNI_ALL);
@@ -2342,11 +2562,47 @@ void CDefView::LV_RefreshItems()
 // - gets the objectlist from the shellfolder
 // - sorts the list
 // - fills the list into the view
+void CDefView::RecordAddedDuringFill(PCUITEMID_CHILD pidl)
+{
+    if (!m_pEnumIDList)
+        return;
+    PITEMID_CHILD copy = ILClone(pidl);
+    if (copy && !m_AddedDuringFill.Add(copy))
+        ILFree(copy);
+}
+
+BOOL CDefView::IsAddedDuringFill(PCUITEMID_CHILD pidl)
+{
+    LPARAM lParam = m_pSF2Parent ? SHCIDS_CANONICALONLY : 0;
+    for (int i = 0; i < m_AddedDuringFill.GetSize(); ++i)
+    {
+        if (m_pSFParent->CompareIDs(lParam, pidl, m_AddedDuringFill[i]) == S_EQUAL)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+void CDefView::ClearAddedDuringFill()
+{
+    for (int i = 0; i < m_AddedDuringFill.GetSize(); ++i)
+        ILFree(m_AddedDuringFill[i]);
+    m_AddedDuringFill.RemoveAll();
+}
+
 void CDefView::CancelFillList()
 {
     if (++m_FillListGeneration == 0)
         ++m_FillListGeneration;
+    if (m_hWnd)
+        KillTimer(DEFVIEW_FILL_TIMER_ID);
     m_pEnumIDList.Release();
+    ClearAddedDuringFill();
+    if (m_FillListRedrawOff)
+    {
+        m_FillListRedrawOff = FALSE;
+        if (m_ListView)
+            m_ListView.SetRedraw(TRUE);
+    }
 }
 
 void CDefView::FinishFillList()
@@ -2388,11 +2644,15 @@ void CDefView::FinishFillList()
 
     _DoFolderViewCB(SFVM_LISTREFRESHED, 0, 0);
 
-    SyncViewImageList();
     ApplySavedItemPositions();
+    if (IsDesktop())
+        MoveItemsIntoView();
     ArrangeComputerView();
     if (m_ListView.GetItemCount() > 0 && m_ListView.GetNextItem(-1, LVNI_FOCUSED) < 0)
         m_ListView.SetItemState(0, LVIS_FOCUSED, LVIS_FOCUSED);
+    /* The icons are up as placeholders: now ask for the thumbnails */
+    m_ThumbSize = GetThumbnailSize();
+    StartThumbnailRequests();
     FireFolderViewEvent(DISPID_FILELISTENUMDONE);
 }
 
@@ -2407,6 +2667,9 @@ void CDefView::CaptureItemPositions()
 {
     ClearSavedItemPositions();
     if (!m_ListView || GetAutoArrange() == S_OK || IsComputerTileView())
+        return;
+    if (m_FolderSettings.ViewMode != FVM_ICON && m_FolderSettings.ViewMode != FVM_SMALLICON &&
+        m_FolderSettings.ViewMode != FVM_THUMBNAIL)
         return;
 
     for (int i = 0; i < m_ListView.GetItemCount(); ++i)
@@ -2459,7 +2722,8 @@ void CDefView::MoveItemToFreeSlot(INT nItem)
 {
     if (nItem < 0 || !m_ListView || GetAutoArrange() == S_OK || IsComputerTileView())
         return;
-    if (m_FolderSettings.ViewMode != FVM_ICON && m_FolderSettings.ViewMode != FVM_SMALLICON)
+    if (m_FolderSettings.ViewMode != FVM_ICON && m_FolderSettings.ViewMode != FVM_SMALLICON &&
+        m_FolderSettings.ViewMode != FVM_THUMBNAIL)
         return;
 
     const INT nCount = m_ListView.GetItemCount();
@@ -2513,6 +2777,67 @@ void CDefView::MoveItemToFreeSlot(INT nItem)
             m_ListView.SetItemPosition(nItem, &pt);
             return;
         }
+    }
+}
+
+void CDefView::MoveItemsIntoView()
+{
+    if (!m_ListView || GetAutoArrange() == S_OK || IsComputerTileView())
+        return;
+    if (m_FolderSettings.ViewMode != FVM_ICON && m_FolderSettings.ViewMode != FVM_SMALLICON &&
+        m_FolderSettings.ViewMode != FVM_THUMBNAIL)
+        return;
+
+    RECT rcClient;
+    if (!m_ListView.GetClientRect(&rcClient) || IsRectEmpty(&rcClient))
+        return;
+
+    const INT nCount = m_ListView.GetItemCount();
+    for (INT i = 0; i < nCount; ++i)
+    {
+        RECT rcItem;
+        POINT pt;
+        if (!ListView_GetItemRect(m_ListView, i, &rcItem, LVIR_BOUNDS) ||
+            !ListView_GetItemPosition(m_ListView, i, &pt))
+        {
+            continue;
+        }
+
+        INT dx = 0, dy = 0;
+        if (rcItem.right > rcClient.right)
+            dx = rcClient.right - rcItem.right;
+        if (rcItem.left + dx < rcClient.left)
+            dx = rcClient.left - rcItem.left;
+        if (rcItem.bottom > rcClient.bottom)
+            dy = rcClient.bottom - rcItem.bottom;
+        if (rcItem.top + dy < rcClient.top)
+            dy = rcClient.top - rcItem.top;
+        if (!dx && !dy)
+            continue;
+
+        if (_GetSnapToGrid() == S_OK)
+        {
+            const INT cx = rcItem.right - rcItem.left, cy = rcItem.bottom - rcItem.top;
+            if (cx > 0 && cy > 0)
+            {
+                INT x = ((rcItem.left + dx + cx / 2) / cx) * cx;
+                INT y = ((rcItem.top + dy + cy / 2) / cy) * cy;
+                if (x + cx > rcClient.right)
+                    x -= cx;
+                if (y + cy > rcClient.bottom)
+                    y -= cy;
+                if (x >= rcClient.left && y >= rcClient.top)
+                {
+                    dx = x - rcItem.left;
+                    dy = y - rcItem.top;
+                }
+            }
+        }
+
+        pt.x += dx;
+        pt.y += dy;
+        m_ListView.SetItemPosition(i, &pt);
+        MoveItemToFreeSlot(i);
     }
 }
 
@@ -2609,8 +2934,12 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
         return E_ABORT;
     }
 
+    if (ListView_GetEditControl(m_ListView.m_hWnd) && SetTimer(DEFVIEW_FILL_TIMER_ID, USER_TIMER_MINIMUM))
+        return S_OK;
+
     Enumerator = m_pEnumIDList;
     m_ListView.SetRedraw(FALSE);
+    m_FillListRedrawOff = TRUE;
     BatchStart = GetTickCount();
     do
     {
@@ -2624,7 +2953,7 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
         }
 
         if (IncludeObject(pidl) == S_OK && m_ListView &&
-            !(m_ChangeAddedDuringFill && LV_FindItemByPidl(pidl) >= 0))
+            !(IsAddedDuringFill(pidl) && LV_FindItemByPidl(pidl) >= 0))
         {
             LV_AddItem(pidl);
         }
@@ -2638,12 +2967,21 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
 
     if (m_ListView)
     {
-        m_ListView.SetRedraw(TRUE);
-        m_ListView.InvalidateRect(NULL, FALSE);
         /* Posted continuation messages run before WM_PAINT. Make the first
            batch visible instead of leaving an empty view until enumeration. */
-        if ((ULONG)m_ListView.GetItemCount() <= BatchCount)
+        BOOL FirstBatch = (ULONG)m_ListView.GetItemCount() <= BatchCount;
+        if (FirstBatch || Complete)
+        {
+            m_ListView.SetRedraw(TRUE);
+            m_FillListRedrawOff = FALSE;
+            m_ListView.InvalidateRect(NULL, FALSE);
+        }
+        if (FirstBatch && !Complete)
+        {
             m_ListView.UpdateWindow();
+            m_ListView.SetRedraw(FALSE);
+            m_FillListRedrawOff = TRUE;
+        }
     }
 
     if (Generation != m_FillListGeneration || m_Destroyed || !m_ListView)
@@ -2652,14 +2990,30 @@ HRESULT CDefView::ContinueFillList(ULONG Generation)
     if (Complete)
     {
         m_pEnumIDList.Release();
+        ClearAddedDuringFill();
         FinishFillList();
         return hr == S_FALSE ? S_OK : hr;
     }
 
+    if (GetTickCount() - m_FillListLastYield >= DEFVIEW_FILL_YIELD_MS &&
+        HIWORD(GetQueueStatus(QS_KEY | QS_MOUSEBUTTON | QS_PAINT)))
+    {
+        m_FillListLastYield = GetTickCount();
+        if (m_FillListRedrawOff)
+        {
+            m_ListView.SetRedraw(TRUE);
+            m_FillListRedrawOff = FALSE;
+            m_ListView.InvalidateRect(NULL, FALSE);
+        }
+        if (SetTimer(DEFVIEW_FILL_TIMER_ID, USER_TIMER_MINIMUM))
+            return S_OK;
+    }
+
     if (!PostMessage(SHV_FILL_LIST, 0, Generation))
     {
-        m_pEnumIDList.Release();
-        return HRESULT_FROM_WIN32(GetLastError());
+        DWORD Error = GetLastError();
+        CancelFillList();
+        return HRESULT_FROM_WIN32(Error);
     }
     return S_OK;
 }
@@ -2675,6 +3029,7 @@ HRESULT CDefView::FillList(BOOL IsRefreshCommand)
 
     CancelFillList();
     ClearComputerTiles();
+    ResetThumbnails();
     m_FillListIsRefresh = IsRefreshCommand;
     if (IsComputerTileView())
         m_ComputerNeedsFinalArrange = true;
@@ -2710,7 +3065,6 @@ HRESULT CDefView::FillList(BOOL IsRefreshCommand)
         return E_UNEXPECTED;
 
     m_pEnumIDList = Enumerator;
-    m_ChangeAddedDuringFill = FALSE;
     if (!PostMessage(SHV_FILL_LIST, 0, m_FillListGeneration))
         return ContinueFillList(m_FillListGeneration);
     return S_OK;
@@ -2724,6 +3078,34 @@ LRESULT CDefView::OnFillList(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHan
         ContinueFillList((ULONG)lParam);
     else
         FillList((BOOL)wParam);
+    return 0;
+}
+
+LRESULT CDefView::OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    if (wParam == DEFVIEW_THUMB_TIMER_ID)
+    {
+        bHandled = TRUE;
+        PumpThumbnailQueue(DEFVIEW_THUMB_BATCH);
+        return 0;
+    }
+    if (wParam == DEFVIEW_THUMB_SCAN_TIMER_ID)
+    {
+        bHandled = TRUE;
+        KillTimer(DEFVIEW_THUMB_SCAN_TIMER_ID);
+        m_ThumbScanPending = FALSE;
+        if (m_ThumbSize && !m_pEnumIDList)
+            StartThumbnailRequests();
+        return 0;
+    }
+    if (wParam != DEFVIEW_FILL_TIMER_ID)
+    {
+        bHandled = FALSE;
+        return 0;
+    }
+    bHandled = TRUE;
+    KillTimer(DEFVIEW_FILL_TIMER_ID);
+    ContinueFillList(m_FillListGeneration);
     return 0;
 }
 
@@ -2751,13 +3133,12 @@ LRESULT CDefView::OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHand
             RemovePropW(m_ListView.m_hWnd, L"CDefViewHost");
             m_ListViewOrigProc = NULL;
         }
-        if (m_himlView && m_himlViewOwned)
-            ImageList_Destroy(m_himlView);
-        m_himlView = NULL;
-        m_himlViewOwned = FALSE;
+        DestroySizedViewImageLists();
+        ShutdownThumbnails();
         ClearExplorerContentBackdrop(true);
         CancelFillList();
         ClearComputerTiles();
+        m_hWndTasks = NULL; // a child: destroyed with us
         RevokeDragDrop(m_hWnd);
         SHChangeNotifyDeregister(m_hNotify);
         m_hNotify = NULL;
@@ -2893,6 +3274,15 @@ LRESULT CDefView::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
         }
     }
 
+    /* Folder links (Fonts...): only in an Explorer file window (SID_SCabinetFrame),
+       not on the desktop or in file dialogs */
+    CComPtr<IOleCommandTarget> pCabinet;
+    if (!IsDesktop() &&
+        SUCCEEDED(IUnknown_QueryService(m_pShellBrowser, SID_SCabinetFrame, IID_PPV_ARG(IOleCommandTarget, &pCabinet))))
+    {
+        m_hWndTasks = DefViewTasks_Create(m_hWnd, m_pSFParent, m_hWndParent, static_cast<IShellView *>(this));
+    }
+
     RefreshExplorerContentAppearance();
 
     if (m_FolderSettings.fFlags & FWF_DESKTOP)
@@ -2980,11 +3370,16 @@ HRESULT CDefView::FillFileMenu()
         return hr;
 
     HMENU hmenu = CreatePopupMenu();
+    if (!hmenu)
+        return E_OUTOFMEMORY;
 
     UINT cmf = GetContextMenuFlags(m_pShellBrowser, GetSelectionAttributes(SFGAO_CANRENAME));
     hr = m_pFileMenu->QueryContextMenu(hmenu, 0, DVIDM_CONTEXTMENU_FIRST, DVIDM_CONTEXTMENU_LAST, cmf);
     if (FAILED_UNEXPECTEDLY(hr))
+    {
+        ::DestroyMenu(hmenu);
         return hr;
+    }
 
     // TODO: filter or something
     if (!selcount)
@@ -3046,6 +3441,7 @@ HRESULT CDefView::FillArrangeAsMenu(HMENU hmenuArrange)
         C_ASSERT(DVIDM_ARRANGESORT_FIRST + DEFVIEW_ARRANGESORT_MAXENUM == DVIDM_ARRANGESORT_LAST);
         WCHAR buf[MAX_PATH];
         LVCOLUMN lvc;
+        buf[0] = UNICODE_NULL; // in case the column cannot be read
         lvc.mask = LVCF_TEXT;
         lvc.pszText = buf;
         lvc.cchTextMax = _countof(buf);
@@ -3536,8 +3932,13 @@ LRESULT CDefView::OnSize(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled
     if (!m_ListView)
         return 0;
 
-    /* Resize the ListView to fit our window */
-    ::MoveWindow(m_ListView, 0, 0, wWidth, wHeight, TRUE);
+    /* Resize the ListView to fit our window, right of the task pane if there is one */
+    int xList = DefViewTasks_Layout(m_hWndTasks, wWidth, wHeight);
+    ::MoveWindow(m_ListView, xList, 0, wWidth - xList, wHeight, TRUE);
+    if (!xList && m_hWndTasks && ::GetFocus() == m_hWndTasks) // the pane just hid
+        m_ListView.SetFocus();
+    if (IsDesktop())
+        MoveItemsIntoView();
     ArrangeComputerView();
 
     _DoFolderViewCB(SFVM_SIZE, 0, 0);
@@ -3665,6 +4066,18 @@ LRESULT CDefView::OnSetFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHan
     /* Notify the ICommDlgBrowser interface */
     OnStateChange(CDBOSC_SETFOCUS);
 
+    return 0;
+}
+
+/* A task pane link has the focus: the view is still the active one (menus,
+   accelerator routing), but the list view must not take the focus back */
+LRESULT CDefView::OnTaskPaneFocus(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    if (m_pShellBrowser)
+        m_pShellBrowser->OnViewWindowActive(this);
+    if (!m_bmenuBarInitialized)
+        _MergeMenus();
+    m_uState = SVUIA_ACTIVATE_FOCUS;
     return 0;
 }
 
@@ -3867,12 +4280,14 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
                     return CDRF_SKIPDEFAULT;
                 }
             }
-            else if (lpnmh->hwndFrom == m_ListView && m_ExplorerMaterialActive)
+            else if (lpnmh->hwndFrom == m_ListView && (m_ExplorerMaterialActive || m_SizedCurrent || m_ThumbSize || m_ThumbBitmaps))
             {
                 NMLVCUSTOMDRAW *pDraw = (NMLVCUSTOMDRAW *)lpnmh;
                 if (pDraw->nmcd.dwDrawStage == CDDS_PREPAINT)
                     return CDRF_NOTIFYITEMDRAW;
-                if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT &&
+                if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT && m_SizedCurrent)
+                    EnsureViewIconForItem((INT)pDraw->nmcd.dwItemSpec);
+                if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT && m_ExplorerMaterialActive &&
                     (pDraw->nmcd.uItemState & CDIS_SELECTED) && ::GetFocus() != m_ListView)
                 {
                     const COLORREF Key = m_ExplorerMaterialBack;
@@ -3883,6 +4298,18 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
                                            GetBValue(Key) + (Ink - GetBValue(Key)) * 0x14 / 255);
                     pDraw->clrText = ExplorerContentTextColor();
                 }
+                /* The thumbnail goes over the item, in place of its icon; an item
+                   scrolled into view that was never asked for starts a scan */
+                if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT && (m_ThumbSize || m_ThumbBitmaps))
+                {
+                    THUMB_ENTRY *entry = FindThumbnail(ListView_MapIndexToID(m_ListView.m_hWnd, (INT)pDraw->nmcd.dwItemSpec));
+                    if (entry && entry->hbm)
+                        return CDRF_NOTIFYPOSTPAINT;
+                    if (!entry && m_ThumbSize && !m_ThumbUnavailable && !m_pEnumIDList)
+                        ScheduleThumbnailScan();
+                }
+                if (pDraw->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT)
+                    DrawThumbnail(pDraw);
             }
             return CDRF_DODEFAULT;
         case NM_RELEASEDCAPTURE:
@@ -3933,9 +4360,11 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             TRACE("-- LVN_DELETEITEM %p\n", this);
             /*delete the pidl because we made a copy of it*/
             SHFree(reinterpret_cast<LPVOID>(lpnmlv->lParam));
+            DropThumbnail(lpnmlv->iItem, FALSE);
             break;
         case LVN_DELETEALLITEMS:
             TRACE("-- LVN_DELETEALLITEMS %p\n", this);
+            FreeThumbnails(FALSE);
             return FALSE;
         case LVN_INSERTITEM:
             TRACE("-- LVN_INSERTITEM (STUB)%p\n", this);
@@ -3982,7 +4411,16 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             }
             if (lpdi->item.mask & LVIF_IMAGE)
             {
-                lpdi->item.iImage = SHMapPIDLToSystemImageListIndex(m_pSFParent, pidl, 0);
+                /* An item showing its thumbnail draws no icon under it */
+                if (lpdi->item.iSubItem == 0 && HasThumbnail(lpdi->item.iItem))
+                {
+                    lpdi->item.iImage = I_IMAGENONE;
+                }
+                else
+                {
+                    lpdi->item.iImage = SHMapPIDLToSystemImageListIndex(m_pSFParent, pidl, 0);
+                    EnsureViewIcon(lpdi->item.iImage);
+                }
             }
             if (lpdi->item.mask & LVIF_STATE)
             {
@@ -4125,11 +4563,12 @@ LRESULT CDefView::OnNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             HRESULT hr = m_pSFParent->SetNameOf(0, pidlOld, lpdi->item.pszText, SHGDN_INFOLDER, &pidlNew);
             if (SUCCEEDED(hr) && pidlNew)
             {
+                RecordAddedDuringFill(pidlNew);
                 int iNew = LV_FindItemByPidl(pidlNew);
-                if (iNew != lpdi->item.iItem && iNew >= 0)
-                    ILFree(pidlNew);// A SHCNE has updated the item already
-                else if (!LV_UpdateItem(lpdi->item.iItem, pidlNew))
-                    ILFree(pidlNew);
+                // Otherwise a SHCNE has updated the item already
+                if (iNew == lpdi->item.iItem || iNew < 0)
+                    LV_UpdateItem(lpdi->item.iItem, pidlNew); // stores its own copy
+                ILFree(pidlNew);
                 OnStateChange(CDBOSC_RENAME);
             }
             else
@@ -4225,8 +4664,7 @@ LRESULT CDefView::OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &
                 break;
             if (LV_FindItemByPidl(child0) < 0)
             {
-                if (m_pEnumIDList)
-                    m_ChangeAddedDuringFill = TRUE;
+                RecordAddedDuringFill(child0);
                 MoveItemToFreeSlot(LV_AddItem(child0));
             }
             else
@@ -4248,8 +4686,7 @@ LRESULT CDefView::OnChangeNotify(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &
                 LV_DeleteItem(child0);
             else if (child1)
             {
-                if (m_pEnumIDList)
-                    m_ChangeAddedDuringFill = TRUE;
+                RecordAddedDuringFill(child1);
                 MoveItemToFreeSlot(LV_AddItem(child1));
             }
             break;
@@ -4305,6 +4742,10 @@ LRESULT CDefView::OnSettingChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL 
     if (wParam == SPI_SETDESKWALLPAPER ||
         wParam == SPI_SETHIGHCONTRAST || wParam == 0)
         RefreshExplorerContentAppearance();
+
+    /* "Always show icons, never thumbnails" (SHELLSTATE fIconsOnly) */
+    if (wParam == 0)
+        UpdateThumbnailMode();
 
     UINT ListExMask = LVS_EX_TRACKSELECT | LVS_EX_ONECLICKACTIVATE;
     UINT ListExBits = GetItemActivateFlags();
@@ -4432,7 +4873,9 @@ HRESULT WINAPI CDefView::TranslateAccelerator(LPMSG lpmsg)
     if (m_isEditing)
         return S_FALSE;
 
-    if (lpmsg->message >= WM_KEYFIRST && lpmsg->message <= WM_KEYLAST)
+    /* The view's keys (Del, F2, Ctrl+X...) act on the list's selection: not while a task link has the focus */
+    BOOL bTaskPaneFocus = m_hWndTasks && ::GetFocus() == m_hWndTasks;
+    if (lpmsg->message >= WM_KEYFIRST && lpmsg->message <= WM_KEYLAST && !bTaskPaneFocus)
     {
         if (::TranslateAcceleratorW(m_hWnd, m_hAccel, lpmsg) != 0)
             return S_OK;
@@ -4489,6 +4932,7 @@ HRESULT WINAPI CDefView::Refresh()
 
     m_ListView.DeleteAllItems();
     FillList();
+    DefViewTasks_Refresh(m_hWndTasks);
 
     if (m_bmenuBarInitialized)
     {
@@ -4632,6 +5076,7 @@ HRESULT CDefView::LoadViewState()
     CComPtr<IPropertyBag> pPB;
     bool fallback = false;
     HRESULT hrColumns = E_FAIL;
+    INT savedIconSize = 0;
     HRESULT hr = IUnknown_QueryServicePropertyBag(m_pShellBrowser, SHGVSPB_FOLDER, IID_PPV_ARG(IPropertyBag, &pPB));
     if (SUCCEEDED(hr))
     {
@@ -4639,6 +5084,7 @@ HRESULT CDefView::LoadViewState()
         if (FAILED(hr = SHPropertyBag_ReadDWORD(pPB, L"Mode", &data)))
             goto loadfallback;
         cvs.FolderSettings.ViewMode = data;
+        savedIconSize = (INT)ReadDWORD(pPB, L"IconSize", 0);
         cvs.FolderSettings.fFlags = ReadDWORD(pPB, L"FFlags", FWF_NOGROUPING);
         data = ReadDWORD(pPB, L"Sort", ~0ul);
         cvs.SortColId = data != ~0ul ? (WORD)data : LISTVIEW_SORT_INFO::UNSPECIFIEDCOLUMN;
@@ -4660,7 +5106,16 @@ HRESULT CDefView::LoadViewState()
             return HResultFromWin32(ERROR_INVALID_DATA);
         hrColumns = LoadColumnsStream(cols, pS);
     }
-    m_FolderSettings.ViewMode = cvs.FolderSettings.ViewMode;
+    /* A saved mode we cannot show (Tile or Thumbstrip from an older build) would
+       come up as List: keep the folder type default instead */
+    if (IsShowableFolderViewMode(cvs.FolderSettings.ViewMode))
+    {
+        m_FolderSettings.ViewMode = cvs.FolderSettings.ViewMode;
+        /* The saved view replaces the folder type default, icon size included
+           (a bag saved without IconSize means the standard size) */
+        m_IconSize = (m_FolderSettings.ViewMode == FVM_ICON && savedIconSize >= 16 && savedIconSize <= 256)
+                   ? savedIconSize : 0;
+    }
     m_FolderSettings.fFlags &= ~cvs.VALIDFWF;
     m_FolderSettings.fFlags |= cvs.FolderSettings.fFlags & cvs.VALIDFWF;
     if (pPB && !(m_FolderSettings.fFlags & FWF_AUTOARRANGE))
@@ -4734,6 +5189,10 @@ HRESULT CDefView::SaveViewState(IStream *pStream)
         UINT uViewMode;
         GetCurrentViewMode(&uViewMode);
         hr = SHPropertyBag_WriteDWORD(pPB, L"Mode", uViewMode);
+        if (uViewMode == FVM_ICON && m_IconSize > 0)
+            SHPropertyBag_WriteDWORD(pPB, L"IconSize", m_IconSize);
+        else
+            SHPropertyBag_Delete(pPB, L"IconSize");
         SHPropertyBag_WriteDWORD(pPB, L"FFlags", m_FolderSettings.fFlags);
         SHPropertyBag_WriteDWORD(pPB, L"Sort", cvs.SortColId);
         SHPropertyBag_WriteDWORD(pPB, L"SortDir", cvs.SortDir);
@@ -4929,7 +5388,7 @@ HRESULT WINAPI CDefView::GetItemObject(UINT uItem, REFIID riid, LPVOID *ppvOut)
         case SVGIO_BACKGROUND:
             if (IsEqualIID(riid, IID_IContextMenu))
             {
-                hr = CDefViewBckgrndMenu_CreateInstance(m_pSF2Parent, riid, ppvOut);
+                hr = CDefViewBckgrndMenu_CreateInstance(m_pSFParent, riid, ppvOut);
                 if (FAILED_UNEXPECTEDLY(hr))
                     return hr;
 
@@ -4971,12 +5430,176 @@ HRESULT WINAPI CDefView::GetItemObject(UINT uItem, REFIID riid, LPVOID *ppvOut)
     return hr;
 }
 
+/*
+ * Folder types, as Windows: each file system folder has a type (Generic,
+ * Documents, Pictures, ...) and HKLM\...\Explorer\FolderTypes\{type}\TopViews
+ * gives its default view. The type comes from desktop.ini [ViewState]
+ * FolderType, else from the known folder (FolderDescriptions\{id}\FolderTypeID
+ * overrides the built-in type), else Generic.
+ */
+#define REGSTR_PATH_FOLDERTYPES REGSTR_PATH_EXPLORER L"\\FolderTypes"
+
+static const GUID FOLDERTYPEID_DownloadsLocal =
+    { 0x885a186e, 0xa440, 0x4ada, { 0x81, 0x2b, 0xdb, 0x87, 0x1b, 0x94, 0x22, 0x59 } };
+
+static const struct
+{
+    GUID Folder;
+    const GUID *Type;
+} g_KnownFolderTypes[] =
+{
+    /* FOLDERID_Documents */
+    { { 0xfdd39ad0, 0x238f, 0x46af, { 0xad, 0xb4, 0x6c, 0x85, 0x48, 0x03, 0x69, 0xc7 } }, &FOLDERTYPEID_Documents },
+    /* FOLDERID_Downloads */
+    { { 0x374de290, 0x123f, 0x4565, { 0x91, 0x64, 0x39, 0xc4, 0x92, 0x5e, 0x46, 0x7b } }, &FOLDERTYPEID_DownloadsLocal },
+    /* FOLDERID_Music */
+    { { 0x4bd8d571, 0x6d19, 0x48d3, { 0xbe, 0x97, 0x42, 0x22, 0x20, 0x08, 0x0e, 0x43 } }, &FOLDERTYPEID_Music },
+    /* FOLDERID_Pictures */
+    { { 0x33e28130, 0x4e1e, 0x4676, { 0x83, 0x5a, 0x98, 0x39, 0x5c, 0x3b, 0xc3, 0xbb } }, &FOLDERTYPEID_Pictures },
+    /* FOLDERID_Videos */
+    { { 0x18989b1d, 0x99b5, 0x455b, { 0x84, 0x1c, 0xab, 0x7c, 0x74, 0xe4, 0xdd, 0xfc } }, &FOLDERTYPEID_Videos },
+};
+
+/* desktop.ini FolderType: a GUID or a CanonicalName under FolderTypes */
+static BOOL
+FolderTypeFromName(PCWSTR pszName, GUID *pType)
+{
+    WCHAR szKey[64], szCanonical[64];
+    HKEY hTypes;
+    DWORD i, cch, cb;
+    BOOL bFound = FALSE;
+
+    if (pszName[0] == L'{')
+        return SUCCEEDED(CLSIDFromString(pszName, pType));
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, REGSTR_PATH_FOLDERTYPES, 0, KEY_READ, &hTypes) != ERROR_SUCCESS)
+        return FALSE;
+    for (i = 0; !bFound; ++i)
+    {
+        cch = _countof(szKey);
+        if (RegEnumKeyExW(hTypes, i, szKey, &cch, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+            break;
+        cb = sizeof(szCanonical);
+        if (SHRegGetValueW(hTypes, szKey, L"CanonicalName", SRRF_RT_REG_SZ, NULL, szCanonical, &cb) == ERROR_SUCCESS &&
+            !_wcsicmp(szCanonical, pszName))
+        {
+            bFound = SUCCEEDED(CLSIDFromString(szKey, pType));
+        }
+    }
+    RegCloseKey(hTypes);
+    return bFound;
+}
+
+static BOOL
+GetFolderTypeOfIDList(PCIDLIST_ABSOLUTE pidl, GUID *pType)
+{
+    WCHAR szPath[MAX_PATH], szIni[MAX_PATH], szValue[64], szKey[128], szGuid[40];
+    DWORD cb;
+    UINT i;
+
+    if (!SHGetPathFromIDListW(pidl, szPath))
+        return FALSE; /* not a file system folder: its view callback decides */
+
+    /* desktop.ini is honoured only in read-only or system folders */
+    if (PathIsSystemFolderW(szPath, 0) &&
+        PathCombineW(szIni, szPath, L"desktop.ini") &&
+        GetPrivateProfileStringW(L"ViewState", L"FolderType", NULL, szValue, _countof(szValue), szIni) &&
+        FolderTypeFromName(szValue, pType))
+    {
+        return TRUE;
+    }
+
+    /* Compare targets, not PIDLs: the same folder can be reached through a
+       virtual item (My Documents) or through its path */
+    for (i = 0; i < _countof(g_KnownFolderTypes); ++i)
+    {
+        PWSTR pszKnown = NULL;
+        BOOL bMatch;
+
+        if (FAILED(SHGetKnownFolderPath(g_KnownFolderTypes[i].Folder, KF_FLAG_DONT_VERIFY, NULL, &pszKnown)))
+            continue;
+        bMatch = !lstrcmpiW(pszKnown, szPath);
+        CoTaskMemFree(pszKnown);
+        if (!bMatch)
+            continue;
+
+        *pType = *g_KnownFolderTypes[i].Type;
+        StringFromGUID2(g_KnownFolderTypes[i].Folder, szGuid, _countof(szGuid));
+        StringCchPrintfW(szKey, _countof(szKey), L"%s\\FolderDescriptions\\%s", REGSTR_PATH_EXPLORER, szGuid);
+        cb = sizeof(szValue);
+        if (SHRegGetValueW(HKEY_LOCAL_MACHINE, szKey, L"FolderTypeID", SRRF_RT_REG_SZ, NULL, szValue, &cb) == ERROR_SUCCESS)
+            CLSIDFromString(szValue, pType);
+        return TRUE;
+    }
+
+    *pType = FOLDERTYPEID_Generic;
+    return TRUE;
+}
+
+BOOL CDefView::GetFolderTypeDefaultView(FOLDERVIEWMODE *pMode, INT *pIconSize)
+{
+    PIDLIST_ABSOLUTE pidl = NULL;
+    GUID Type;
+    WCHAR szGuid[40], szKey[200];
+    DWORD dwMode, dwSize, cb;
+    BOOL bFound;
+
+    *pIconSize = 0;
+    if (m_FolderSettings.fFlags & FWF_DESKTOP)
+        return FALSE;
+    if (FAILED(SHGetIDListFromObject(m_pSFParent, &pidl)))
+        return FALSE;
+    bFound = GetFolderTypeOfIDList(pidl, &Type);
+    ILFree(pidl);
+    if (!bFound)
+        return FALSE;
+
+    StringFromGUID2(Type, szGuid, _countof(szGuid));
+    StringCchPrintfW(szKey, _countof(szKey),
+                     L"%s\\%s\\TopViews\\{00000000-0000-0000-0000-000000000000}",
+                     REGSTR_PATH_FOLDERTYPES, szGuid);
+    cb = sizeof(dwMode);
+    if (SHRegGetValueW(HKEY_LOCAL_MACHINE, szKey, L"LogicalViewMode", SRRF_RT_REG_DWORD, NULL, &dwMode, &cb) != ERROR_SUCCESS)
+        return FALSE;
+
+    switch (dwMode)
+    {
+        case FLVM_DETAILS: *pMode = FVM_DETAILS; break;
+        case FLVM_TILES:   *pMode = FVM_TILE;    break;
+        case FLVM_ICONS:   *pMode = FVM_ICON;    break;
+        case FLVM_LIST:    *pMode = FVM_LIST;    break;
+        case FLVM_CONTENT: *pMode = FVM_CONTENT; break;
+        default:           return FALSE;
+    }
+    if (!IsSupportedFolderViewMode(*pMode))
+        return FALSE;
+
+    cb = sizeof(dwSize);
+    if (*pMode == FVM_ICON &&
+        SHRegGetValueW(HKEY_LOCAL_MACHINE, szKey, L"IconSize", SRRF_RT_REG_DWORD, NULL, &dwSize, &cb) == ERROR_SUCCESS &&
+        dwSize >= 16 && dwSize <= 256)
+    {
+        *pIconSize = (INT)dwSize;
+    }
+    return TRUE;
+}
+
 FOLDERVIEWMODE CDefView::GetDefaultViewMode()
 {
     FOLDERVIEWMODE mode = (m_FolderSettings.fFlags & FWF_DESKTOP) ? FVM_ICON : FVM_DETAILS;
-    FOLDERVIEWMODE temp = mode;
+    FOLDERVIEWMODE temp = FVM_AUTO;
+    INT iconSize;
+    /* A folder whose view callback names a mode (Control Panel, Find) keeps it */
     if (SUCCEEDED(_DoFolderViewCB(SFVM_DEFVIEWMODE, 0, (LPARAM)&temp)) && IsSupportedFolderViewMode(temp))
+    {
         mode = temp;
+    }
+    else if (GetFolderTypeDefaultView(&temp, &iconSize))
+    {
+        mode = temp;
+        if (iconSize > 0)
+            m_IconSize = iconSize;
+    }
     return mode;
 }
 
@@ -5001,6 +5624,12 @@ HRESULT STDMETHODCALLTYPE CDefView::SetCurrentViewMode(UINT ViewMode)
         ViewMode = GetDefaultViewMode();
     if ((INT)ViewMode < FVM_FIRST || (INT)ViewMode > FVM_LAST)
         return S_OK;
+    /* Do not show a mode we cannot draw as List, nor save it for the folder */
+    if (!IsShowableFolderViewMode(ViewMode))
+        return E_NOTIMPL;
+    /* This PC draws its own tiles in icon mode */
+    if (m_IsComputerFolder && (ViewMode == FVM_TILE || ViewMode == FVM_THUMBNAIL))
+        ViewMode = FVM_ICON;
 
     /* Windows before Vista uses LVM_SETVIEW and possibly
        LVM_SETEXTENDEDLISTVIEWSTYLE to set the style of the listview,
@@ -5009,10 +5638,12 @@ HRESULT STDMETHODCALLTYPE CDefView::SetCurrentViewMode(UINT ViewMode)
     switch (ViewMode)
     {
         case FVM_ICON:      dwStyle = LVS_ICON;      break;
+        case FVM_THUMBNAIL: dwStyle = LVS_ICON;      break;
         case FVM_SMALLICON: dwStyle = LVS_SMALLICON; break;
         case FVM_LIST:      dwStyle = LVS_LIST;      break;
         case FVM_DETAILS:   dwStyle = LVS_REPORT;    break;
         case FVM_CONTENT:   dwStyle = LVS_REPORT;    break;
+        case FVM_TILE:      dwStyle = LVS_ICON;      break;
         default:
             FIXME("ViewMode %d not implemented\n", ViewMode);
             dwStyle = LVS_LIST;
@@ -5025,6 +5656,7 @@ HRESULT STDMETHODCALLTYPE CDefView::SetCurrentViewMode(UINT ViewMode)
        This mimics the behavior of Windows XP. */
     m_FolderSettings.ViewMode = ViewMode;
     m_ListView.ModifyStyle(LVS_TYPEMASK, dwStyle);
+    ApplyListViewMode();
     if (IsComputerTileView())
     {
         m_ComputerNeedsFinalArrange = true;
@@ -5580,6 +6212,9 @@ HRESULT STDMETHODCALLTYPE CDefView::GetViewModeAndIconSize(FOLDERVIEWMODE *mode,
                 else
                     *size = GetSystemMetrics(SM_CXICON);
                 break;
+            case FVM_THUMBNAIL:
+                *size = DEFVIEW_THUMB_SIZE;
+                break;
             case FVM_TILE:
                 *size = 48;
                 break;
@@ -5618,7 +6253,7 @@ StretchIconBitmap(HBITMAP bitmap, INT srcCx, INT srcCy, INT dstCx, INT dstCy, BO
     {
         oldSource = SelectObject(sourceDC, bitmap);
         oldDest = SelectObject(destDC, result);
-        SetStretchBltMode(destDC, isMask ? BLACKONWHITE : HALFTONE);
+        SetStretchBltMode(destDC, isMask ? BLACKONWHITE : (dstCx > srcCx ? COLORONCOLOR : HALFTONE));
         SetBrushOrgEx(destDC, 0, 0, NULL);
         StretchBlt(destDC, 0, 0, dstCx, dstCy, sourceDC, 0, 0, srcCx, srcCy, SRCCOPY);
         SelectObject(destDC, oldDest);
@@ -5630,14 +6265,14 @@ StretchIconBitmap(HBITMAP bitmap, INT srcCx, INT srcCy, INT dstCx, INT dstCy, BO
     return result;
 }
 
-static INT
-AddIconScaled(HIMAGELIST dest, HIMAGELIST srcList, HIMAGELIST fallback, INT index, INT cx)
+static BOOL
+ReplaceIconScaled(HIMAGELIST dest, INT index, HIMAGELIST srcList, HIMAGELIST fallback, INT cx)
 {
     INT srcCx = 0, srcCy = 0;
     HICON icon;
     ICONINFO info;
     HBITMAP colorBitmap, maskBitmap;
-    INT result = -1;
+    BOOL result = FALSE;
 
     ImageList_GetIconSize(srcList, &srcCx, &srcCy);
     icon = ImageList_GetIcon(srcList, index, ILD_TRANSPARENT);
@@ -5647,13 +6282,13 @@ AddIconScaled(HIMAGELIST dest, HIMAGELIST srcList, HIMAGELIST fallback, INT inde
         ImageList_GetIconSize(fallback, &srcCx, &srcCy);
     }
     if (!icon)
-        return -1;
+        return FALSE;
     if (GetIconInfo(icon, &info))
     {
         colorBitmap = StretchIconBitmap(info.hbmColor, srcCx, srcCy, cx, cx, FALSE);
         maskBitmap = StretchIconBitmap(info.hbmMask, srcCx, srcCy, cx, cx, TRUE);
         if (colorBitmap && maskBitmap)
-            result = ImageList_Add(dest, colorBitmap, maskBitmap);
+            result = ImageList_Replace(dest, index, colorBitmap, maskBitmap);
         if (colorBitmap)
             DeleteObject(colorBitmap);
         if (maskBitmap)
@@ -5665,109 +6300,777 @@ AddIconScaled(HIMAGELIST dest, HIMAGELIST srcList, HIMAGELIST fallback, INT inde
     return result;
 }
 
-HIMAGELIST CDefView::CreateSizedViewImageList(INT cx)
+static HIMAGELIST
+GetScaleSourceList(HIMAGELIST bigList)
 {
-    HIMAGELIST bigList, smallList, srcList, newList;
-    INT srcCx = 0, srcCy = 0, count, i;
+    HIMAGELIST srcList;
+    INT srcCx = 0, srcCy = 0;
 
-    Shell_GetImageLists(&bigList, &smallList);
     srcList = SIC_GetImageList(SHIL_JUMBO);
-    if (srcList && (!ImageList_GetIconSize(srcList, &srcCx, &srcCy) || srcCx < 256))
-    {
-        srcList = NULL;
-        srcCx = 0;
-    }
-    if (!srcList)
-    {
-        srcList = SIC_GetImageList(SHIL_EXTRALARGE);
-        srcCx = 0;
-        if (!srcList || !ImageList_GetIconSize(srcList, &srcCx, &srcCy))
-            srcList = NULL;
-    }
-    if (!srcList)
-    {
-        srcList = bigList;
-        srcCx = 0;
-        ImageList_GetIconSize(bigList, &srcCx, &srcCy);
-    }
-    count = ImageList_GetImageCount(smallList);
-    newList = ImageList_Create(cx, cx, ILC_COLOR32 | ILC_MASK, max(count, 1), 0x20);
-    if (!newList)
-        return NULL;
-    for (i = 0; i < count; i++)
-    {
-        INT index = AddIconScaled(newList, srcList, bigList, i, cx);
-
-        if (index != i)
-        {
-            ImageList_Destroy(newList);
-            return NULL;
-        }
-    }
-    return newList;
+    if (srcList && ImageList_GetIconSize(srcList, &srcCx, &srcCy) && srcCx >= 256)
+        return srcList;
+    srcList = SIC_GetImageList(SHIL_EXTRALARGE);
+    if (srcList && ImageList_GetIconSize(srcList, &srcCx, &srcCy))
+        return srcList;
+    return bigList;
 }
 
-void CDefView::SyncViewImageList()
+CDefView::SIZED_VIEW_LIST *CDefView::GetSizedViewImageList(INT cx)
 {
-    HIMAGELIST smallList, bigList, srcList;
-    INT srcCx = 0, srcCy = 0;
-    INT have, need, i;
+    const INT capacity = (INT)_countof(m_SizedLists);
+    SIZED_VIEW_LIST *entry;
+    BOOL appended = FALSE;
+    INT i;
 
-    if (!m_himlView || !m_himlViewOwned)
-        return;
-    Shell_GetImageLists(&bigList, &smallList);
-    srcList = SIC_GetImageList(SHIL_JUMBO);
-    if (!srcList || !ImageList_GetIconSize(srcList, &srcCx, &srcCy) || srcCx < 256)
-        srcList = bigList;
-    need = ImageList_GetImageCount(smallList);
-    have = ImageList_GetImageCount(m_himlView);
-    for (i = have; i < need; i++)
+    for (i = 0; i < m_SizedListCount; i++)
     {
-        INT index = AddIconScaled(m_himlView, srcList, bigList, i, m_himlViewSize);
-
-        if (index == -1)
-            break;
+        if (m_SizedLists[i].Size == cx && m_SizedLists[i].List)
+            return &m_SizedLists[i];
     }
+    if (m_SizedListCount < capacity)
+    {
+        entry = &m_SizedLists[m_SizedListCount];
+        appended = TRUE;
+    }
+    else
+    {
+        HIMAGELIST inUse = ListView_GetImageList(m_ListView, LVSIL_NORMAL);
+
+        if (m_SizedLists[m_SizedListNext].List == inUse)
+            m_SizedListNext = (m_SizedListNext + 1) % capacity;
+        entry = &m_SizedLists[m_SizedListNext];
+        m_SizedListNext = (m_SizedListNext + 1) % capacity;
+        if (entry->List)
+            ImageList_Destroy(entry->List);
+        if (entry->Scaled)
+            HeapFree(GetProcessHeap(), 0, entry->Scaled);
+    }
+    ZeroMemory(entry, sizeof(*entry));
+    entry->List = ImageList_Create(cx, cx, ILC_COLOR32 | ILC_MASK, 1, 0x20);
+    if (!entry->List)
+        return NULL;
+    entry->Size = cx;
+    if (appended)
+        m_SizedListCount++;
+    return entry;
+}
+
+BOOL CDefView::EnsureViewIcon(INT index)
+{
+    SIZED_VIEW_LIST *entry = m_SizedCurrent;
+    HIMAGELIST bigList, smallList;
+
+    if (!entry || index < 0)
+        return FALSE;
+    Shell_GetImageLists(&bigList, &smallList);
+    if (index >= entry->ScaledCount)
+    {
+        INT count = ImageList_GetImageCount(smallList);
+        BYTE *scaled;
+
+        if (index >= count || !ImageList_SetImageCount(entry->List, count))
+            return FALSE;
+        if (entry->Scaled)
+            scaled = (BYTE *)HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, entry->Scaled, count);
+        else
+            scaled = (BYTE *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, count);
+        if (!scaled)
+            return FALSE;
+        entry->Scaled = scaled;
+        entry->ScaledCount = count;
+    }
+    if (entry->Scaled[index])
+        return TRUE;
+    entry->Scaled[index] = TRUE;
+    return ReplaceIconScaled(entry->List, index, GetScaleSourceList(bigList), bigList, entry->Size);
+}
+
+void CDefView::InvalidateSizedViewIcons()
+{
+    for (INT i = 0; i < m_SizedListCount; i++)
+    {
+        if (m_SizedLists[i].Scaled)
+            ZeroMemory(m_SizedLists[i].Scaled, m_SizedLists[i].ScaledCount);
+    }
+}
+
+void CDefView::EnsureViewIconForItem(INT iItem)
+{
+    LVITEMW item;
+
+    if (!m_SizedCurrent || !m_ListView || iItem < 0)
+        return;
+    item.mask = LVIF_IMAGE;
+    item.iItem = iItem;
+    item.iSubItem = 0;
+    if (m_ListView.GetItem(&item))
+        EnsureViewIcon(item.iImage);
+}
+
+void CDefView::DestroySizedViewImageLists()
+{
+    for (INT i = 0; i < m_SizedListCount; i++)
+    {
+        if (m_SizedLists[i].List)
+            ImageList_Destroy(m_SizedLists[i].List);
+        if (m_SizedLists[i].Scaled)
+            HeapFree(GetProcessHeap(), 0, m_SizedLists[i].Scaled);
+    }
+    ZeroMemory(m_SizedLists, sizeof(m_SizedLists));
+    m_SizedListCount = 0;
+    m_SizedListNext = 0;
+    m_SizedCurrent = NULL;
+    m_himlView = NULL;
+    m_himlViewOwned = FALSE;
+    m_himlViewSize = 0;
+}
+
+/* Thumbnails (Windows 7+): in the large icon views a file shows a picture of
+   its content. The background generator (CLSID_Thumbnail, IThumbnail3) posts
+   SHV_THUMBNAIL with a bitmap the view owns (wParam) for a list-view unique
+   item id (lParam). Until a thumbnail arrives, and when there is none, the item
+   keeps its icon. */
+INT CDefView::GetThumbnailSize()
+{
+    SHELLSTATE ss;
+    INT size;
+
+    /* Not on the desktop, never in This PC */
+    if (m_Destroyed || !m_ListView.m_hWnd || IsDesktop() || m_IsComputerFolder)
+        return 0;
+    switch (m_FolderSettings.ViewMode)
+    {
+        case FVM_ICON:
+            size = m_IconSize > 0 ? m_IconSize : GetSystemMetrics(SM_CXICON);
+            if (size < 48)
+                return 0;
+            break;
+        case FVM_THUMBNAIL:
+            size = DEFVIEW_THUMB_SIZE;
+            break;
+        case FVM_TILE:
+            size = 48;
+            break;
+        default:
+            return 0;
+    }
+    ZeroMemory(&ss, sizeof(ss));
+    SHGetSetSettings(&ss, SSF_ICONSONLY, FALSE);
+    return ss.fIconsOnly ? 0 : size;
+}
+
+CDefView::THUMB_ENTRY *CDefView::FindThumbnail(DWORD Id, INT *pIndex)
+{
+    INT lo = 0, hi = m_hdsaThumbs ? DSA_GetItemCount(m_hdsaThumbs) : 0;
+
+    while (lo < hi)
+    {
+        INT mid = (lo + hi) / 2;
+        THUMB_ENTRY *entry = (THUMB_ENTRY *)DSA_GetItemPtr(m_hdsaThumbs, mid);
+        if (entry->Id == Id)
+        {
+            if (pIndex)
+                *pIndex = mid;
+            return entry;
+        }
+        if (entry->Id < Id)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if (pIndex)
+        *pIndex = lo;
+    return NULL;
+}
+
+BOOL CDefView::HasThumbnail(INT iItem)
+{
+    THUMB_ENTRY *entry;
+
+    if (!m_ThumbBitmaps || iItem < 0 || !m_ListView.m_hWnd)
+        return FALSE;
+    entry = FindThumbnail(ListView_MapIndexToID(m_ListView.m_hWnd, iItem));
+    return entry && entry->hbm;
+}
+
+/* The item draws its icon again (LVN_GETDISPINFO gives it) */
+void CDefView::RestoreItemIcon(INT iItem)
+{
+    LVITEMW item;
+
+    if (iItem < 0 || !m_ListView.m_hWnd)
+        return;
+    item.mask = LVIF_IMAGE;
+    item.iItem = iItem;
+    item.iSubItem = 0;
+    item.iImage = I_IMAGECALLBACK;
+    m_ListView.SetItem(&item);
+}
+
+void CDefView::FreeThumbnails(BOOL bRestoreIcons)
+{
+    INT count = m_hdsaThumbs ? DSA_GetItemCount(m_hdsaThumbs) : 0;
+
+    for (INT i = 0; i < count; i++)
+    {
+        THUMB_ENTRY *entry = (THUMB_ENTRY *)DSA_GetItemPtr(m_hdsaThumbs, i);
+        if (!entry->hbm)
+            continue;
+        ::DeleteObject(entry->hbm);
+        entry->hbm = NULL;
+        if (bRestoreIcons && m_ListView.m_hWnd)
+            RestoreItemIcon((INT)ListView_MapIDToIndex(m_ListView.m_hWnd, entry->Id));
+    }
+    if (m_hdsaThumbs)
+        DSA_DeleteAllItems(m_hdsaThumbs);
+    m_ThumbBitmaps = 0;
+    m_ThumbBytes = 0;
+    m_ThumbQueue.RemoveAll();
+    m_ThumbQueuePos = 0;
+    m_ThumbScanPending = FALSE;
+    if (m_hWnd)
+    {
+        KillTimer(DEFVIEW_THUMB_TIMER_ID);
+        KillTimer(DEFVIEW_THUMB_SCAN_TIMER_ID);
+    }
+}
+
+/* Nothing is posted after Init(NULL, 0); what was posted before is stale */
+void CDefView::CancelThumbnailRequests()
+{
+    MSG msg;
+
+    if (m_pThumbnail && m_ThumbArmed)
+        m_pThumbnail->Init(NULL, 0);
+    m_ThumbArmed = FALSE;
+    if (m_hWnd)
+    {
+        while (PeekMessageW(&msg, m_hWnd, SHV_THUMBNAIL, SHV_THUMBNAIL, PM_REMOVE))
+        {
+            if (msg.wParam)
+                ::DeleteObject((HBITMAP)msg.wParam);
+        }
+    }
+}
+
+/* Drop every thumbnail and pending request; the view stays usable */
+void CDefView::ResetThumbnails()
+{
+    CancelThumbnailRequests();
+    FreeThumbnails(TRUE);
+}
+
+/* Navigation away or destruction: the generator goes too */
+void CDefView::ShutdownThumbnails()
+{
+    CancelThumbnailRequests();
+    m_pThumbnail.Release();
+    FreeThumbnails(FALSE);
+    m_ThumbSize = 0;
+}
+
+/* The view mode, icon size or a setting changed */
+void CDefView::UpdateThumbnailMode()
+{
+    INT size = GetThumbnailSize();
+
+    if (size == m_ThumbSize)
+        return;
+    ResetThumbnails();
+    m_ThumbSize = size;
+    if (size && !m_pEnumIDList)
+        StartThumbnailRequests();
+}
+
+/* Queue the visible items and those one page around them, the visible ones
+   first: those go out now, the others on a timer so the UI thread never
+   stalls. Items further away are asked for when a paint shows them. */
+void CDefView::StartThumbnailRequests()
+{
+    CSimpleArray<DWORD> Near;
+    RECT rcClient, rcKeep, rcItem, rcTmp;
+    INT count, cVisible = 0;
+
+    m_ThumbQueue.RemoveAll();
+    m_ThumbQueuePos = 0;
+    if (m_hWnd)
+        KillTimer(DEFVIEW_THUMB_TIMER_ID);
+    if (!m_ThumbSize || m_ThumbUnavailable || m_Destroyed || !m_ListView.m_hWnd)
+        return;
+    count = m_ListView.GetItemCount();
+    if (count <= 0)
+        return;
+    DropStaleThumbnailRequests();
+    m_ListView.GetClientRect(&rcClient);
+    GetThumbnailKeepRect(&rcKeep);
+    for (INT i = 0; i < count; i++)
+    {
+        DWORD Id = ListView_MapIndexToID(m_ListView.m_hWnd, i);
+        if (FindThumbnail(Id))
+            continue;
+        if (!ListView_GetItemRect(m_ListView.m_hWnd, i, &rcItem, LVIR_BOUNDS))
+            continue;
+        if (IntersectRect(&rcTmp, &rcItem, &rcClient))
+        {
+            m_ThumbQueue.Add(Id);
+            cVisible++;
+        }
+        else if (IntersectRect(&rcTmp, &rcItem, &rcKeep))
+        {
+            Near.Add(Id);
+        }
+    }
+    for (INT i = 0; i < Near.GetSize(); i++)
+        m_ThumbQueue.Add(Near[i]);
+    PumpThumbnailQueue(cVisible);
+    if (m_ThumbQueuePos < m_ThumbQueue.GetSize())
+        SetTimer(DEFVIEW_THUMB_TIMER_ID, USER_TIMER_MINIMUM);
+}
+
+void CDefView::PumpThumbnailQueue(INT cMax)
+{
+    while (cMax-- > 0 && m_ThumbQueuePos < m_ThumbQueue.GetSize() &&
+           m_ThumbSize && !m_ThumbUnavailable && m_ListView.m_hWnd)
+    {
+        INT iItem = (INT)ListView_MapIDToIndex(m_ListView.m_hWnd, m_ThumbQueue[m_ThumbQueuePos++]);
+        if (iItem >= 0)
+            RequestThumbnail(iItem);
+    }
+    if (m_ThumbQueuePos >= m_ThumbQueue.GetSize() || !m_ThumbSize || m_ThumbUnavailable)
+    {
+        m_ThumbQueue.RemoveAll();
+        m_ThumbQueuePos = 0;
+        if (m_hWnd)
+            KillTimer(DEFVIEW_THUMB_TIMER_ID);
+    }
+}
+
+void CDefView::RequestThumbnail(INT iItem)
+{
+    CComPtr<IShellItem> psi;
+    PCUITEMID_CHILD pidl;
+    THUMB_ENTRY entry;
+    INT index;
+    HRESULT hr;
+
+    if (!m_ThumbSize || m_ThumbUnavailable || m_Destroyed || iItem < 0 || !m_ListView.m_hWnd)
+        return;
+    ZeroMemory(&entry, sizeof(entry));
+    entry.Id = ListView_MapIndexToID(m_ListView.m_hWnd, iItem);
+    if (entry.Id > DEFVIEW_THUMB_ID_MASK || FindThumbnail(entry.Id, &index))
+        return;
+    if (!m_hdsaThumbs && !(m_hdsaThumbs = DSA_Create(sizeof(THUMB_ENTRY), 64)))
+        return;
+    /* File system files only (no folder thumbnails yet); the others are
+       remembered so that painting them does not scan again */
+    pidl = _PidlByItem(iItem);
+    if (!pidl || GetItemAttributes(pidl, SFGAO_FILESYSTEM | SFGAO_FOLDER) != SFGAO_FILESYSTEM)
+    {
+        entry.bNone = TRUE;
+        DSA_InsertItem(m_hdsaThumbs, index, &entry);
+        return;
+    }
+    if (!m_pThumbnail &&
+        FAILED(CoCreateInstance(CLSID_Thumbnail, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARG(IThumbnail3, &m_pThumbnail))))
+    {
+        m_ThumbUnavailable = TRUE;
+        return;
+    }
+    if (!m_ThumbArmed)
+    {
+        if (FAILED(m_pThumbnail->Init(m_hWnd, SHV_THUMBNAIL)))
+        {
+            m_pThumbnail.Release();
+            m_ThumbUnavailable = TRUE;
+            return;
+        }
+        m_ThumbArmed = TRUE;
+    }
+    if (FAILED(SHCreateShellItem(NULL, m_pSFParent, pidl, &psi)))
+    {
+        entry.bNone = TRUE; // painting it must not scan again
+        DSA_InsertItem(m_hdsaThumbs, index, &entry);
+        return;
+    }
+    entry.Gen = (++m_ThumbGen) & 0xFF;
+    hr = m_pThumbnail->GetBitmapFromShellItem(psi, entry.Id | (entry.Gen << DEFVIEW_THUMB_GEN_SHIFT),
+                                              m_ThumbSize, m_ThumbSize);
+    if (hr == E_NOTIMPL)
+    {
+        m_ThumbUnavailable = TRUE; // no generator in this build: keep the icons
+        return;
+    }
+    entry.bNone = FAILED(hr);
+    DSA_InsertItem(m_hdsaThumbs, index, &entry);
+}
+
+/* The item is going away or changing: forget its thumbnail and request */
+void CDefView::DropThumbnail(INT iItem, BOOL bRestoreIcon)
+{
+    THUMB_ENTRY *entry;
+    INT index = 0;
+
+    if (iItem < 0 || !m_hdsaThumbs || !m_ListView.m_hWnd || !DSA_GetItemCount(m_hdsaThumbs))
+        return;
+    entry = FindThumbnail(ListView_MapIndexToID(m_ListView.m_hWnd, iItem), &index);
+    if (!entry)
+        return;
+    if (entry->hbm)
+    {
+        ::DeleteObject(entry->hbm);
+        --m_ThumbBitmaps;
+        m_ThumbBytes -= entry->cb;
+        if (bRestoreIcon)
+            RestoreItemIcon(iItem);
+    }
+    DSA_DeleteItem(m_hdsaThumbs, index);
+}
+
+/* The generator works first in, first out: after a long scroll it would
+   extract every page scrolled past before the one on screen. When too many
+   outstanding requests are for items away from the view, cancel them all
+   (Init(NULL, 0)) and forget them; the next requests start with what is
+   visible and the items scrolled past are asked for again when shown. */
+void CDefView::DropStaleThumbnailRequests()
+{
+    RECT rcKeep, rcItem, rcTmp;
+    INT count = m_hdsaThumbs ? DSA_GetItemCount(m_hdsaThumbs) : 0, cStale = 0;
+
+    if (!m_ThumbArmed || !count)
+        return;
+    GetThumbnailKeepRect(&rcKeep);
+    for (INT i = 0; i < count && cStale <= DEFVIEW_THUMB_MAX_STALE; i++)
+    {
+        THUMB_ENTRY *entry = (THUMB_ENTRY *)DSA_GetItemPtr(m_hdsaThumbs, i);
+        INT iItem;
+
+        if (entry->hbm || entry->bNone)
+            continue;
+        iItem = (INT)ListView_MapIDToIndex(m_ListView.m_hWnd, entry->Id);
+        if (iItem < 0 || !ListView_GetItemRect(m_ListView.m_hWnd, iItem, &rcItem, LVIR_BOUNDS) ||
+            !IntersectRect(&rcTmp, &rcItem, &rcKeep))
+        {
+            cStale++;
+        }
+    }
+    if (cStale <= DEFVIEW_THUMB_MAX_STALE)
+        return;
+
+    /* Results already posted are dropped too: their items are asked for again */
+    CancelThumbnailRequests();
+    for (INT i = count - 1; i >= 0; i--)
+    {
+        THUMB_ENTRY *entry = (THUMB_ENTRY *)DSA_GetItemPtr(m_hdsaThumbs, i);
+        if (!entry->hbm && !entry->bNone)
+            DSA_DeleteItem(m_hdsaThumbs, i);
+    }
+}
+
+/* A paint showed an item never asked for (scrolling, resizing, arranging) */
+void CDefView::ScheduleThumbnailScan()
+{
+    if (m_ThumbScanPending || !m_hWnd)
+        return;
+    m_ThumbScanPending = SetTimer(DEFVIEW_THUMB_SCAN_TIMER_ID, DEFVIEW_THUMB_SCAN_MS) != 0;
+}
+
+/* What stays: the client area and one page on each side of it, along the
+   direction the view scrolls (sideways with LVS_ALIGNLEFT) */
+void CDefView::GetThumbnailKeepRect(RECT *prc)
+{
+    m_ListView.GetClientRect(prc);
+    if (m_ListView.GetStyle() & LVS_ALIGNLEFT)
+        InflateRect(prc, prc->right - prc->left, 0);
+    else
+        InflateRect(prc, 0, prc->bottom - prc->top);
+}
+
+static int __cdecl CompareThumbUse(const void *p1, const void *p2)
+{
+    const ULONGLONG a = *(const ULONGLONG *)p1, b = *(const ULONGLONG *)p2;
+    return a < b ? -1 : a > b;
+}
+
+/* Over the budget: drop the least recently drawn thumbnails away from the
+   visible page, down to 7/8 of the budget; their items show icons again and
+   are asked for again when scrolled back into view */
+void CDefView::EvictThumbnails()
+{
+    ULONGLONG *pOrder;
+    RECT rcKeep, rcItem, rcTmp;
+    INT count, cOrder = 0;
+
+    if (m_ThumbBitmaps <= DEFVIEW_THUMB_MAX_BITMAPS && m_ThumbBytes <= DEFVIEW_THUMB_MAX_BYTES)
+        return;
+    count = m_hdsaThumbs ? DSA_GetItemCount(m_hdsaThumbs) : 0;
+    pOrder = count ? (ULONGLONG *)LocalAlloc(LMEM_FIXED, count * sizeof(ULONGLONG)) : NULL;
+    if (!pOrder)
+        return;
+    GetThumbnailKeepRect(&rcKeep);
+    for (INT i = 0; i < count; i++)
+    {
+        THUMB_ENTRY *entry = (THUMB_ENTRY *)DSA_GetItemPtr(m_hdsaThumbs, i);
+        INT iItem;
+
+        if (!entry->hbm)
+            continue;
+        iItem = (INT)ListView_MapIDToIndex(m_ListView.m_hWnd, entry->Id);
+        if (iItem >= 0 && ListView_GetItemRect(m_ListView.m_hWnd, iItem, &rcItem, LVIR_BOUNDS) &&
+            IntersectRect(&rcTmp, &rcItem, &rcKeep))
+        {
+            continue;
+        }
+        pOrder[cOrder++] = ((ULONGLONG)entry->Used << 32) | entry->Id;
+    }
+    qsort(pOrder, cOrder, sizeof(ULONGLONG), CompareThumbUse);
+    for (INT i = 0; i < cOrder; i++)
+    {
+        if (m_ThumbBitmaps <= DEFVIEW_THUMB_MAX_BITMAPS * 7 / 8 && m_ThumbBytes <= DEFVIEW_THUMB_MAX_BYTES / 8 * 7)
+            break;
+        DWORD Id = (DWORD)pOrder[i];
+        INT iItem = (INT)ListView_MapIDToIndex(m_ListView.m_hWnd, Id);
+        INT index;
+        THUMB_ENTRY *entry = FindThumbnail(Id, &index);
+
+        if (!entry || !entry->hbm)
+            continue;
+        ::DeleteObject(entry->hbm);
+        --m_ThumbBitmaps;
+        m_ThumbBytes -= entry->cb;
+        DSA_DeleteItem(m_hdsaThumbs, index);
+        RestoreItemIcon(iItem);
+    }
+    LocalFree(pOrder);
+}
+
+static BOOL ThumbnailHasAlpha(HBITMAP hbm)
+{
+    DIBSECTION ds;
+    const BYTE *row;
+
+    if (::GetObjectW(hbm, sizeof(ds), &ds) != sizeof(ds) || ds.dsBm.bmBitsPixel != 32 || !ds.dsBm.bmBits)
+        return FALSE;
+    row = (const BYTE *)ds.dsBm.bmBits;
+    for (LONG y = 0; y < abs(ds.dsBm.bmHeight); y++, row += ds.dsBm.bmWidthBytes)
+    {
+        for (LONG x = 0; x < ds.dsBm.bmWidth; x++)
+        {
+            if (row[x * 4 + 3])
+                return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+LRESULT CDefView::OnThumbnail(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+{
+    HBITMAP hbm = (HBITMAP)wParam;
+    const DWORD Id = (DWORD)lParam & DEFVIEW_THUMB_ID_MASK;
+    const DWORD Gen = (DWORD)lParam >> DEFVIEW_THUMB_GEN_SHIFT;
+    THUMB_ENTRY *entry = NULL;
+    LVITEMW item;
+    BITMAP bm;
+    INT iItem = -1, index = 0;
+
+    if (!hbm)
+        return 0;
+    if (m_ThumbSize && !m_Destroyed && m_ListView.m_hWnd)
+        entry = FindThumbnail(Id, &index);
+    if (entry && (entry->Gen != Gen || entry->bNone))
+    {
+        /* For an earlier item with the same id: the current request stays */
+        ::DeleteObject(hbm);
+        return 0;
+    }
+    if (entry)
+        iItem = (INT)ListView_MapIDToIndex(m_ListView.m_hWnd, Id);
+    if (iItem < 0)
+    {
+        /* Not asked for (any more), or the item is gone */
+        if (entry)
+        {
+            if (entry->hbm)
+            {
+                ::DeleteObject(entry->hbm);
+                --m_ThumbBitmaps;
+                m_ThumbBytes -= entry->cb;
+            }
+            DSA_DeleteItem(m_hdsaThumbs, index);
+        }
+        ::DeleteObject(hbm);
+        return 0;
+    }
+    if (entry->hbm)
+    {
+        ::DeleteObject(entry->hbm);
+        m_ThumbBytes -= entry->cb;
+    }
+    else
+    {
+        ++m_ThumbBitmaps;
+    }
+    entry->hbm = hbm;
+    entry->bAlpha = ThumbnailHasAlpha(hbm);
+    entry->cb = ::GetObjectW(hbm, sizeof(bm), &bm) ? (DWORD)bm.bmWidthBytes * (DWORD)abs(bm.bmHeight) : 0;
+    entry->Used = ++m_ThumbUseClock;
+    m_ThumbBytes += entry->cb;
+
+    item.mask = LVIF_IMAGE;
+    item.iItem = iItem;
+    item.iSubItem = 0;
+    item.iImage = I_IMAGENONE;
+    m_ListView.SetItem(&item);
+    /* May give this one back its icon if it is already far off-screen */
+    EvictThumbnails();
+    ListView_RedrawItems(m_ListView.m_hWnd, iItem, iItem);
+    return 0;
+}
+
+/* CDDS_ITEMPOSTPAINT: the list view drew the selection and the label but no
+   icon; put the thumbnail in the icon box, aspect kept, never enlarged,
+   centered and standing on the label as in Windows */
+void CDefView::DrawThumbnail(NMLVCUSTOMDRAW *pDraw)
+{
+    const INT iItem = (INT)pDraw->nmcd.dwItemSpec;
+    HDC hdc = pDraw->nmcd.hdc, hdcMem;
+    THUMB_ENTRY *entry;
+    HGDIOBJ hOld;
+    RECT rcIcon;
+    BITMAP bm;
+    INT cx, cy, boxCx, boxCy, x, y;
+    UINT state;
+
+    if (!HasThumbnail(iItem))
+        return;
+    entry = FindThumbnail(ListView_MapIndexToID(m_ListView.m_hWnd, iItem));
+    entry->Used = ++m_ThumbUseClock;
+    if (!ListView_GetItemRect(m_ListView.m_hWnd, iItem, &rcIcon, LVIR_ICON) ||
+        !::GetObjectW(entry->hbm, sizeof(bm), &bm) || bm.bmWidth <= 0 || !bm.bmHeight)
+    {
+        return;
+    }
+    bm.bmHeight = abs(bm.bmHeight);
+    boxCx = rcIcon.right - rcIcon.left;
+    boxCy = rcIcon.bottom - rcIcon.top;
+    if (boxCx <= 0 || boxCy <= 0)
+        return;
+    cx = bm.bmWidth;
+    cy = bm.bmHeight;
+    if (cx > boxCx || cy > boxCy)
+    {
+        if ((LONGLONG)cx * boxCy > (LONGLONG)cy * boxCx)
+        {
+            cy = max(MulDiv(cy, boxCx, cx), 1);
+            cx = boxCx;
+        }
+        else
+        {
+            cx = max(MulDiv(cx, boxCy, cy), 1);
+            cy = boxCy;
+        }
+    }
+    x = rcIcon.left + (boxCx - cx) / 2;
+    y = rcIcon.bottom - cy;
+
+    state = m_ListView.GetItemState(iItem, LVIS_SELECTED | LVIS_CUT);
+    hdcMem = CreateCompatibleDC(hdc);
+    if (!hdcMem)
+        return;
+    hOld = SelectObject(hdcMem, entry->hbm);
+    if (entry->bAlpha || (state & LVIS_CUT))
+    {
+        BLENDFUNCTION bf;
+        bf.BlendOp = AC_SRC_OVER;
+        bf.BlendFlags = 0;
+        bf.SourceConstantAlpha = (state & LVIS_CUT) ? 128 : 255;
+        bf.AlphaFormat = entry->bAlpha ? AC_SRC_ALPHA : 0;
+        GdiAlphaBlend(hdc, x, y, cx, cy, hdcMem, 0, 0, bm.bmWidth, bm.bmHeight, bf);
+    }
+    else
+    {
+        POINT ptOrg;
+        INT oldMode = SetStretchBltMode(hdc, HALFTONE);
+        SetBrushOrgEx(hdc, 0, 0, &ptOrg);
+        StretchBlt(hdc, x, y, cx, cy, hdcMem, 0, 0, bm.bmWidth, bm.bmHeight, SRCCOPY);
+        SetBrushOrgEx(hdc, ptOrg.x, ptOrg.y, NULL);
+        SetStretchBltMode(hdc, oldMode);
+    }
+    SelectObject(hdcMem, hOld);
+
+    /* A themed list item has its selection box around the thumbnail already;
+       the classic look tints the image instead, as ILD_SELECTED does to icons */
+    if ((state & LVIS_SELECTED) && ::GetFocus() == m_ListView.m_hWnd &&
+        !IsThemePartDefined(GetWindowTheme(m_ListView.m_hWnd), LVP_LISTITEM, 0))
+    {
+        HBITMAP hbmTint = CreateCompatibleBitmap(hdc, 1, 1);
+        if (hbmTint)
+        {
+            BLENDFUNCTION bf = { AC_SRC_OVER, 0, 96, 0 };
+            hOld = SelectObject(hdcMem, hbmTint);
+            SetPixel(hdcMem, 0, 0, GetSysColor(COLOR_HIGHLIGHT));
+            GdiAlphaBlend(hdc, x, y, cx, cy, hdcMem, 0, 0, 1, 1, bf);
+            SelectObject(hdcMem, hOld);
+            ::DeleteObject(hbmTint);
+        }
+    }
+    DeleteDC(hdcMem);
 }
 
 void CDefView::ApplyViewIconSize()
 {
     HIMAGELIST bigList, smallList;
     FOLDERVIEWMODE mode;
-    INT bigSize;
+    INT bigSize, iconSize;
     HWND hHeader;
+    LARGE_INTEGER Start, End, Frequency;
 
     if (!m_ListView.m_hWnd)
         return;
+    QueryPerformanceCounter(&Start);
     Shell_GetImageLists(&bigList, &smallList);
     mode = (FOLDERVIEWMODE)m_FolderSettings.ViewMode;
     bigSize = GetSystemMetrics(SM_CXICON);
-    if (mode == FVM_ICON && !IsComputerTileView() && m_IconSize > 0 && m_IconSize != bigSize)
+    /* Thumbnails is the icon view at the thumbnail size; Tiles shows 48 px
+       icons (and 48 px thumbnails) as Windows */
+    iconSize = mode == FVM_THUMBNAIL ? DEFVIEW_THUMB_SIZE : mode == FVM_TILE ? 48 : m_IconSize;
+    if ((mode == FVM_ICON || mode == FVM_THUMBNAIL || mode == FVM_TILE) && !IsComputerTileView() &&
+        iconSize > 0 && iconSize != bigSize)
     {
-        if (!m_himlView || m_himlViewSize != m_IconSize)
+        if (!m_himlView || m_himlViewSize != iconSize)
         {
-            if (m_himlView && m_himlViewOwned)
-                ImageList_Destroy(m_himlView);
-            m_himlView = NULL;
+            HIMAGELIST shared = NULL;
+            INT cx = 0, cy = 0;
+
+            if (iconSize == bigSize * 3 / 2)
+                shared = SIC_GetImageList(SHIL_EXTRALARGE);
+            else if (iconSize == 256)
+                shared = SIC_GetImageList(SHIL_JUMBO);
+            if (shared && (!ImageList_GetIconSize(shared, &cx, &cy) || cx != iconSize))
+                shared = NULL;
+            m_himlView = shared;
             m_himlViewOwned = FALSE;
-            m_himlViewSize = 0;
-            if (m_IconSize == bigSize * 3 / 2)
+            m_SizedCurrent = NULL;
+            if (!shared)
             {
-                m_himlView = SIC_GetImageList(SHIL_EXTRALARGE);
-                m_himlViewOwned = FALSE;
+                SIZED_VIEW_LIST *entry = GetSizedViewImageList(iconSize);
+
+                if (entry)
+                {
+                    m_himlView = entry->List;
+                    m_himlViewOwned = TRUE;
+                    m_SizedCurrent = entry;
+                }
             }
-            else
-            {
-                m_himlView = CreateSizedViewImageList(m_IconSize);
-                m_himlViewOwned = m_himlView != NULL;
-            }
-            m_himlViewSize = m_IconSize;
+            m_himlViewSize = iconSize;
         }
-        SyncViewImageList();
         m_ListView.SetImageList(m_himlView ? m_himlView : bigList, LVSIL_NORMAL);
     }
     else
     {
+        m_himlView = NULL;
+        m_himlViewOwned = FALSE;
+        m_himlViewSize = 0;
+        m_SizedCurrent = NULL;
         m_ListView.SetImageList(bigList, LVSIL_NORMAL);
     }
     if (mode == FVM_CONTENT)
@@ -5777,21 +7080,28 @@ void CDefView::ApplyViewIconSize()
     hHeader = ListView_GetHeader(m_ListView.m_hWnd);
     if (hHeader)
         ::ShowWindow(hHeader, mode == FVM_CONTENT ? SW_HIDE : SW_SHOW);
-    if (mode == FVM_ICON && !IsComputerTileView())
+    if ((mode == FVM_ICON || mode == FVM_THUMBNAIL) && !IsComputerTileView())
     {
         m_ListView.SetTextBkColor(CLR_NONE);
         m_ListView.Arrange(LVA_DEFAULT);
     }
+    UpdateThumbnailMode();
     m_ListView.InvalidateRect(NULL, TRUE);
+    QueryPerformanceCounter(&End);
+    QueryPerformanceFrequency(&Frequency);
+    TRACE("ApplyViewIconSize: mode %d, %d px, %d items, %d system images, %I64d us\n",
+          mode, m_IconSize, m_ListView.GetItemCount(), ImageList_GetImageCount(smallList),
+          (End.QuadPart - Start.QuadPart) * 1000000 / Frequency.QuadPart);
 }
 
 INT CDefView::GetZoomStep() const
 {
     FOLDERVIEWMODE mode = (FOLDERVIEWMODE)m_FolderSettings.ViewMode;
 
-    if (mode == FVM_ICON && !IsComputerTileView())
+    if ((mode == FVM_ICON || mode == FVM_THUMBNAIL) && !IsComputerTileView())
     {
-        INT size = m_IconSize > 0 ? m_IconSize : GetSystemMetrics(SM_CXICON);
+        INT size = mode == FVM_THUMBNAIL ? DEFVIEW_THUMB_SIZE :
+                   m_IconSize > 0 ? m_IconSize : GetSystemMetrics(SM_CXICON);
         INT best = 3, bestDiff = INT_MAX;
         for (INT i = 0; i < (INT)_countof(s_ZoomSteps); i++)
         {
@@ -5849,10 +7159,11 @@ LRESULT CALLBACK CDefView::ListViewInputHook(HWND hwnd, UINT uMsg, WPARAM wParam
             gi.cbSize = sizeof(gi);
             if (GetGestureInfo((HGESTUREINFO)lParam, &gi))
             {
-                BOOL isZoom = gi.dwID == GID_ZOOM;
-                CloseGestureInfoHandle((HGESTUREINFO)lParam);
-                if (isZoom)
+                // Only a gesture handled here is closed here: the list view's own
+                // handling of any other one closes it (DefWindowProc)
+                if (gi.dwID == GID_ZOOM)
                 {
+                    CloseGestureInfoHandle((HGESTUREINFO)lParam);
                     INT dist = (INT)(gi.ullArguments & 0xFFFF);
                     if (gi.dwFlags & GF_BEGIN)
                         pThis->m_GestureZoomDistance = dist;
@@ -5917,11 +7228,16 @@ HRESULT STDMETHODCALLTYPE CDefView::GetView(SHELLVIEWID *pVid, ULONG view_type)
         return S_OK;
     }
     if (view_type == SV2GV_CURRENTVIEW)
-        view_type = m_FolderSettings.ViewMode;
-    if ((int)view_type < 0)
-        return E_UNEXPECTED;
-
-    view_type += FVM_FIRST;
+    {
+        view_type = m_FolderSettings.ViewMode; /* already a FOLDERVIEWMODE */
+    }
+    else
+    {
+        /* A view index: the n-th view mode */
+        if ((int)view_type < 0)
+            return E_UNEXPECTED;
+        view_type += FVM_FIRST;
+    }
     if (!IsSupportedFolderViewMode(view_type))
         return E_INVALIDARG;
     *pVid = *FolderViewModeToShellViewId(view_type);

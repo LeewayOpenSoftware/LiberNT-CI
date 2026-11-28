@@ -47,4 +47,26 @@ HRESULT NetFwOpenPorts_create(IUnknown *, LPVOID *);
 HRESULT NetFwOpenPort_create(IUnknown *, LPVOID *);
 HRESULT NetFwServices_create(IUnknown *, LPVOID *);
 HRESULT NetFwRule_create(IUnknown *, void **);
+
+/* fwstore.c (LiberNT): the policy the firewall service (MpsSvc) applies */
+WCHAR *fw_strdup(const WCHAR *);
+HRESULT fwstore_get_profile_dword(NET_FW_PROFILE_TYPE2, const WCHAR *, DWORD, DWORD *);
+HRESULT fwstore_set_profile_dword(LONG, const WCHAR *, DWORD);
+LONG fwstore_current_profiles(void);
+HRESULT fwstore_restore_defaults(void);
+HRESULT fwrule_get_values(const WCHAR *, const WCHAR *const *, unsigned int, WCHAR *, size_t);
+HRESULT fwrule_get_value(const WCHAR *, const WCHAR *, WCHAR *, size_t);
+HRESULT fwrule_set_values(const WCHAR *, const WCHAR *const *, unsigned int, const WCHAR *, const WCHAR *, BOOL, WCHAR **);
+BOOL fwrule_is_valid(const WCHAR *);
+const WCHAR *fwrule_default_text(void);
+HRESULT fwstore_rule_at(LONG, WCHAR **, WCHAR **);
+LONG fwstore_rule_count(void);
+LONG fwstore_value_count(void);
+BOOL fwstore_rule_exists(const WCHAR *);
+/* a longer name could be added but never found */
+#define FW_MAX_NAME 255
+HRESULT fwstore_rule_find(const WCHAR *, WCHAR **, WCHAR **);
+HRESULT fwstore_rule_write(const WCHAR *, const WCHAR *);
+HRESULT fwstore_rule_remove(const WCHAR *);
+HRESULT fwstore_new_id(WCHAR **);
 HRESULT IUPnPNAT_create(IUnknown *, void **);

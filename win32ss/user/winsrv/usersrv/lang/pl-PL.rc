@@ -27,7 +27,7 @@ BEGIN
     DEFPUSHBUTTON "Anuluj", IDCANCEL, 142, 98, 43, 17
     PUSHBUTTON "&Zakończ teraz", IDC_END_NOW, 74, 98, 63, 17
     LTEXT "Wybrany program nie odpowiada.", IDC_STATIC, 7, 7, 178, 8
-    LTEXT "Aby powrócić do LiberNT i sprawdzić status programu, kliknij Anuluj.", IDC_STATIC, 7, 26, 178, 16
+    LTEXT "Aby powrócić do Orosi i sprawdzić status programu, kliknij Anuluj.", IDC_STATIC, 7, 26, 178, 16
     LTEXT "Jeśli zdecydujesz się zamknąć program natychmiastowo, utracisz wszelkie niezapisane dane. Aby zakończyć program, wciśnij Zakończ teraz.", IDC_STATIC, 7, 53, 178, 33
 END
 
@@ -46,4 +46,22 @@ BEGIN
     IDS_UNKNOWN_SOFTWARE_EXCEPT "nieznany wyjątek programowy"
     IDS_OK_TERMINATE_PROGRAM    "Kliknij OK aby zakończyć pracę programu."
     IDS_CANCEL_DEBUG_PROGRAM    "Kliknij Anuluj aby uzyskać więcej informacji o błędzie."
+END
+
+STRINGTABLE
+BEGIN
+    IDS_BLOCK_RESTART_TITLE_ONE               "Closing 1 app and restarting"
+    IDS_BLOCK_RESTART_TITLE                   "Closing %u apps and restarting"
+    IDS_BLOCK_RESTART_REASON                  "This app is preventing restart."
+    IDS_BLOCK_RESTART_FORCE                   "Restart anyway"
+    IDS_BLOCK_SHUTDOWN_TITLE_ONE              "Closing 1 app and shutting down"
+    IDS_BLOCK_SHUTDOWN_TITLE                  "Closing %u apps and shutting down"
+    IDS_BLOCK_SHUTDOWN_REASON                 "This app is preventing shutdown."
+    IDS_BLOCK_SHUTDOWN_FORCE                  "Shut down anyway"
+    IDS_BLOCK_SIGNOUT_TITLE_ONE               "Closing 1 app and signing out"
+    IDS_BLOCK_SIGNOUT_TITLE                   "Closing %u apps and signing out"
+    IDS_BLOCK_SIGNOUT_REASON                  "This app is preventing you from signing out."
+    IDS_BLOCK_SIGNOUT_FORCE                   "Sign out anyway"
+    IDS_BLOCK_HINT                            "To go back and save your work, click Cancel and finish what you need to."
+    IDS_BLOCK_CANCEL                          "Cancel"
 END

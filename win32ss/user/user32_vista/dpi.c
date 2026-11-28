@@ -17,9 +17,6 @@
 HDC APIENTRY
 NtUserGetDC(HWND hWnd);
 
-INT APIENTRY
-NtGdiGetDeviceCaps(HDC hDC, INT Index);
-
 NTSYSAPI LONG WINAPI
 RtlQueryActivationContextApplicationSettings(
     DWORD Flags,
@@ -36,17 +33,42 @@ NtUserGetProcessDpiAwarenessContext(HANDLE hProcess);
 UINT WINAPI
 GetDpiForSystem(VOID);
 
+INT WINAPI
+User32GetFoldedPaddedBorder(VOID);
+
 ULONG APIENTRY
 NtUserGetThreadDpiAwarenessContext(VOID);
 
 ULONG APIENTRY
 NtUserGetWindowDpiAwarenessContext(HWND hWnd);
 
+UINT APIENTRY
+NtUserGetDpiForWindow(HWND hWnd);
+
+BOOL APIENTRY
+NtUserEnableNonClientDpiScaling(HWND hWnd);
+
 ULONG APIENTRY
 NtUserSetProcessDpiAwarenessContext(ULONG DpiContext, ULONG Flags);
 
 ULONG APIENTRY
 NtUserSetThreadDpiAwarenessContext(ULONG DpiContext);
+
+LONG APIENTRY
+NtUserGetThreadDpiHostingBehavior(VOID);
+
+LONG APIENTRY
+NtUserSetThreadDpiHostingBehavior(LONG Behavior);
+
+LONG APIENTRY
+NtUserGetWindowDpiHostingBehavior(HWND hWnd);
+
+BOOL WINAPI User32IsDpiVirtualizationActive(VOID);
+BOOL WINAPI User32IsDpiVirtualThread(VOID);
+UINT WINAPI User32GetSystemDpi(VOID);
+
+DWORD_PTR APIENTRY
+NtUserCallHwnd(HWND hWnd, DWORD Routine);
 
 static volatile LONG DpiCacheContextSlot = TLS_OUT_OF_INDEXES;
 static volatile LONG DpiCacheGenerationSlot = TLS_OUT_OF_INDEXES;
@@ -258,16 +280,7 @@ User32InitializeDpiAwareness(VOID)
 static UINT
 GetRawSystemDpi(VOID)
 {
-    HDC hDC;
-    UINT Dpi = USER_DEFAULT_SCREEN_DPI;
-
-    hDC = NtUserGetDC(NULL);
-    if (hDC)
-    {
-        /* Bypass the caller-aware GDI32 view and read the physical PDEV cap. */
-        Dpi = NtGdiGetDeviceCaps(hDC, LOGPIXELSY);
-        ReleaseDC(NULL, hDC);
-    }
+    UINT Dpi = User32GetSystemDpi();
 
     return Dpi ? Dpi : USER_DEFAULT_SCREEN_DPI;
 }
@@ -433,7 +446,7 @@ UINT
 WINAPI
 GetDpiForSystem(VOID)
 {
-    if (!IsProcessDPIAware())
+    if (User32IsDpiVirtualThread())
         return USER_DEFAULT_SCREEN_DPI;
 
     return GetRawSystemDpi();
@@ -460,20 +473,33 @@ GetWindowDpiAwarenessContext(_In_ HWND hWnd)
     return Context ? (DPI_AWARENESS_CONTEXT)(ULONG_PTR)Context : NULL;
 }
 
+DPI_HOSTING_BEHAVIOR
+WINAPI
+GetThreadDpiHostingBehavior(VOID)
+{
+    return (DPI_HOSTING_BEHAVIOR)NtUserGetThreadDpiHostingBehavior();
+}
+
+DPI_HOSTING_BEHAVIOR
+WINAPI
+SetThreadDpiHostingBehavior(_In_ DPI_HOSTING_BEHAVIOR Value)
+{
+    return (DPI_HOSTING_BEHAVIOR)NtUserSetThreadDpiHostingBehavior((LONG)Value);
+}
+
+DPI_HOSTING_BEHAVIOR
+WINAPI
+GetWindowDpiHostingBehavior(_In_ HWND hWnd)
+{
+    return (DPI_HOSTING_BEHAVIOR)NtUserGetWindowDpiHostingBehavior(hWnd);
+}
+
 UINT
 WINAPI
 GetDpiForWindow(
     _In_ HWND hWnd)
 {
-    DPI_AWARENESS_CONTEXT Context = GetWindowDpiAwarenessContext(hWnd);
-
-    if (!Context)
-        return 0;
-
-    if (GetAwarenessFromDpiAwarenessContext(Context) == DPI_AWARENESS_UNAWARE)
-        return USER_DEFAULT_SCREEN_DPI;
-
-    return GetRawSystemDpi();
+    return NtUserGetDpiForWindow(hWnd);
 }
 
 BOOL
@@ -555,7 +581,6 @@ WINAPI
 GetDpiForMonitorInternal(_In_ HMONITOR Monitor, _In_ UINT Type, _Out_ UINT *DpiX, _Out_ UINT *DpiY)
 {
     MONITORINFO MonitorInfo = { sizeof(MonitorInfo) };
-    DPI_AWARENESS Awareness;
     UINT Dpi;
 
     if (Type > 2)
@@ -580,8 +605,7 @@ GetDpiForMonitorInternal(_In_ HMONITOR Monitor, _In_ UINT Type, _Out_ UINT *DpiX
      * ReactOS currently has one logical DPI for the desktop. Raw and angular
      * monitor DPI require EDID physical dimensions, which GOP does not expose.
      */
-    Awareness = GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext());
-    Dpi = (Awareness == DPI_AWARENESS_UNAWARE) ? USER_DEFAULT_SCREEN_DPI : GetRawSystemDpi();
+    Dpi = User32IsDpiVirtualThread() ? USER_DEFAULT_SCREEN_DPI : GetRawSystemDpi();
     *DpiX = Dpi;
     *DpiY = Dpi;
     return TRUE;
@@ -613,13 +637,16 @@ BOOL
 WINAPI
 SystemParametersInfoForDpi(_In_ UINT Action, _In_ UINT Param, _Inout_opt_ PVOID Data, _In_ UINT Flags, _In_ UINT Dpi)
 {
-    UINT SystemDpi = GetRawSystemDpi();
+    UINT SystemDpi = User32IsDpiVirtualThread() ? USER_DEFAULT_SCREEN_DPI : GetRawSystemDpi();
+    INT Padded;
 
-    if (!Data || !Dpi)
+    if (!Data)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
+    if (!Dpi)
+        Dpi = SystemDpi;
 
     switch (Action)
     {
@@ -650,6 +677,12 @@ SystemParametersInfoForDpi(_In_ UINT Action, _In_ UINT Param, _Inout_opt_ PVOID 
             {
                 return FALSE;
             }
+            Padded = User32GetFoldedPaddedBorder();
+            if (Padded)
+            {
+                LocalMetrics.iBorderWidth -= Padded;
+                LocalMetrics.iPaddedBorderWidth = Padded;
+            }
 
             LocalMetrics.iBorderWidth = ScaleDpiValue(LocalMetrics.iBorderWidth, SystemDpi, Dpi);
             LocalMetrics.iScrollWidth = ScaleDpiValue(LocalMetrics.iScrollWidth, SystemDpi, Dpi);
@@ -660,9 +693,7 @@ SystemParametersInfoForDpi(_In_ UINT Action, _In_ UINT Param, _Inout_opt_ PVOID 
             LocalMetrics.iSmCaptionHeight = ScaleDpiValue(LocalMetrics.iSmCaptionHeight, SystemDpi, Dpi);
             LocalMetrics.iMenuWidth = ScaleDpiValue(LocalMetrics.iMenuWidth, SystemDpi, Dpi);
             LocalMetrics.iMenuHeight = ScaleDpiValue(LocalMetrics.iMenuHeight, SystemDpi, Dpi);
-#if (WINVER >= 0x0600)
             LocalMetrics.iPaddedBorderWidth = ScaleDpiValue(LocalMetrics.iPaddedBorderWidth, SystemDpi, Dpi);
-#endif
             ScaleLogFontForDpi(&LocalMetrics.lfCaptionFont, SystemDpi, Dpi);
             ScaleLogFontForDpi(&LocalMetrics.lfSmCaptionFont, SystemDpi, Dpi);
             ScaleLogFontForDpi(&LocalMetrics.lfMenuFont, SystemDpi, Dpi);
@@ -700,6 +731,32 @@ SystemParametersInfoForDpi(_In_ UINT Action, _In_ UINT Param, _Inout_opt_ PVOID 
 
     SetLastError(ERROR_INVALID_PARAMETER);
     return FALSE;
+}
+
+static INT
+GetCaptionAverageWidth(_In_ const LOGFONTW *LogFont)
+{
+    TEXTMETRICW TextMetrics;
+    HFONT Font, OldFont;
+    LONG Width = 0;
+    HDC hDC;
+
+    hDC = NtUserGetDC(NULL);
+    Font = CreateFontIndirectW(LogFont);
+    if (hDC && Font)
+    {
+        OldFont = SelectObject(hDC, Font);
+        if (OldFont)
+        {
+            Width = GdiGetCharDimensions(hDC, &TextMetrics, NULL);
+            SelectObject(hDC, OldFont);
+        }
+    }
+    if (Font)
+        DeleteObject(Font);
+    if (hDC)
+        ReleaseDC(NULL, hDC);
+    return Width;
 }
 
 INT
@@ -753,6 +810,8 @@ GetSystemMetricsForDpi(_In_ INT Index, _In_ UINT Dpi)
         case SM_CXCURSOR:
         case SM_CYCURSOR:
             Value = ScaleDpiValue(32, USER_DEFAULT_SCREEN_DPI, Dpi);
+            if (Value >= 96)
+                return 96;
             if (Value >= 64)
                 return 64;
             if (Value >= 48)
@@ -791,6 +850,29 @@ GetSystemMetricsForDpi(_In_ INT Index, _In_ UINT Dpi)
                 return 0;
             }
             return max(Metrics.iBorderWidth, 1) + 3;
+
+        case SM_CXPADDEDBORDER:
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
+            return Metrics.iPaddedBorderWidth;
+
+        case SM_CXMIN:
+        case SM_CXMINTRACK:
+        case SM_CYMIN:
+        case SM_CYMINTRACK:
+            Metrics.cbSize = sizeof(Metrics);
+            if (!SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(Metrics), &Metrics, 0, Dpi))
+            {
+                return 0;
+            }
+            Value = 2 * (max(Metrics.iBorderWidth, 1) + 3 + Metrics.iPaddedBorderWidth);
+            if (Index == SM_CYMIN || Index == SM_CYMINTRACK)
+                return Metrics.iCaptionHeight + 1 + Value;
+            return 4 * Metrics.iCaptionHeight + 4 +
+                   4 * GetCaptionAverageWidth(&Metrics.lfCaptionFont) + Value;
 
         case SM_CXICONSPACING:
         case SM_CYICONSPACING:
@@ -913,7 +995,7 @@ AdjustWindowRectExForDpi(_Inout_ LPRECT Rect, _In_ DWORD Style, _In_ BOOL Menu, 
         Adjust = 2;
     }
 
-    if (Style & WS_THICKFRAME)
+    if ((Style & WS_THICKFRAME) || ((Style & WS_CAPTION) == WS_CAPTION && GetSystemMetrics(SM_CXPADDEDBORDER)))
         Adjust += Metrics.iBorderWidth + Metrics.iPaddedBorderWidth;
 
     if ((Style & (WS_BORDER | WS_DLGFRAME)) || (ExStyle & WS_EX_DLGMODALFRAME))
@@ -943,14 +1025,7 @@ WINAPI
 EnableNonClientDpiScaling(
     _In_ HWND hWnd)
 {
-    if (!IsWindow(hWnd))
-    {
-        SetLastError(ERROR_INVALID_WINDOW_HANDLE);
-        return FALSE;
-    }
-
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
+    return NtUserEnableNonClientDpiScaling(hWnd);
 }
 
 BOOL
@@ -994,24 +1069,65 @@ LogicalToPhysicalPoint(
     return IntValidatePerMonitorDpiPoint(hWnd, Point);
 }
 
-/* ReactOS currently uses physical coordinates for all DPI awareness modes. */
+static BOOL
+IntConvertPerMonitorDpiPoint(
+    _In_ HWND hwnd,
+    _Inout_ POINT *point,
+    _In_ BOOL ToPhysical)
+{
+    RECT Rect;
+    UINT Dpi = User32GetSystemDpi();
+    BOOL Virtual;
+
+    if (!point)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!GetWindowRect(hwnd, &Rect))
+        return FALSE;
+    Virtual = User32IsDpiVirtualizationActive() &&
+              NTUSER_DPI_CONTEXT_GET_AWARENESS(NtUserGetWindowDpiAwarenessContext(hwnd)) == DPI_AWARENESS_UNAWARE;
+    if (User32IsDpiVirtualThread())
+    {
+        Rect.left = MulDiv(Rect.left, Dpi, USER_DEFAULT_SCREEN_DPI);
+        Rect.top = MulDiv(Rect.top, Dpi, USER_DEFAULT_SCREEN_DPI);
+        Rect.right = MulDiv(Rect.right, Dpi, USER_DEFAULT_SCREEN_DPI);
+        Rect.bottom = MulDiv(Rect.bottom, Dpi, USER_DEFAULT_SCREEN_DPI);
+    }
+    if (Virtual && ToPhysical)
+    {
+        Rect.left = MulDiv(Rect.left, USER_DEFAULT_SCREEN_DPI, Dpi);
+        Rect.top = MulDiv(Rect.top, USER_DEFAULT_SCREEN_DPI, Dpi);
+        Rect.right = MulDiv(Rect.right, USER_DEFAULT_SCREEN_DPI, Dpi);
+        Rect.bottom = MulDiv(Rect.bottom, USER_DEFAULT_SCREEN_DPI, Dpi);
+    }
+    if (point->x < Rect.left || point->y < Rect.top || point->x > Rect.right || point->y > Rect.bottom)
+        return FALSE;
+    if (Virtual)
+    {
+        point->x = ToPhysical ? MulDiv(point->x, Dpi, USER_DEFAULT_SCREEN_DPI) : MulDiv(point->x, USER_DEFAULT_SCREEN_DPI, Dpi);
+        point->y = ToPhysical ? MulDiv(point->y, Dpi, USER_DEFAULT_SCREEN_DPI) : MulDiv(point->y, USER_DEFAULT_SCREEN_DPI, Dpi);
+    }
+    return TRUE;
+}
+
 BOOL
 WINAPI
 LogicalToPhysicalPointForPerMonitorDPI(
     _In_ HWND hwnd,
     _Inout_ POINT *point)
 {
-    return IntValidatePerMonitorDpiPoint(hwnd, point);
+    return IntConvertPerMonitorDpiPoint(hwnd, point, TRUE);
 }
 
-/* ReactOS currently uses physical coordinates for all DPI awareness modes. */
 BOOL
 WINAPI
 PhysicalToLogicalPointForPerMonitorDPI(
     _In_ HWND hwnd,
     _Inout_ POINT *point)
 {
-    return IntValidatePerMonitorDpiPoint(hwnd, point);
+    return IntConvertPerMonitorDpiPoint(hwnd, point, FALSE);
 }
 
 BOOL

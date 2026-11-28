@@ -1,7 +1,13 @@
 
 list(APPEND SOURCE
     MissingSecurity.c
+    IndexMetadata.c
     FullBaseGrowth.c
+    FreeClusters.c
+    DismountRemount.c
+    AppendAfterWrite.c
+    ClearDirtyAfterCheck.c
+    NamedStreams.c
     testlist.c)
 
 add_executable(ntfs_apitest ${SOURCE})

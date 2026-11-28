@@ -191,47 +191,204 @@ static HRESULT WINAPI regtask_put_Enabled(IRegisteredTask *iface, VARIANT_BOOL e
 #endif
 }
 
-static HRESULT WINAPI regtask_Run(IRegisteredTask *iface, VARIANT params, IRunningTask **task)
+#define MAX_RUN_PARAMS 32
+
+static void free_run_params(DWORD count, WCHAR **args)
 {
-    FIXME("%p,%s,%p: stub\n", iface, debugstr_variant(&params), task);
-    return E_NOTIMPL;
+    DWORD i;
+
+    for (i = 0; i < count; i++) SysFreeString(args[i]);
+    free(args);
+}
+
+/* IRegisteredTask::Run parameters: empty, one value, or a 1-D SAFEARRAY ($(Arg0)..$(Arg31)). */
+static HRESULT get_run_params(VARIANT *params, DWORD *count, WCHAR ***args)
+{
+    VARIANT *in = params, v;
+    SAFEARRAY *sa;
+    LONG lbound, ubound, i;
+    HRESULT hr;
+
+    *count = 0;
+    *args = NULL;
+
+    if (V_VT(in) == (VT_VARIANT | VT_BYREF)) in = V_VARIANTREF(in);
+    if (V_VT(in) == VT_EMPTY || V_VT(in) == VT_NULL || V_VT(in) == VT_ERROR) return S_OK;
+
+    if (!(V_VT(in) & VT_ARRAY))
+    {
+        VariantInit(&v);
+        if (FAILED(hr = VariantChangeType(&v, in, 0, VT_BSTR))) return E_INVALIDARG;
+        if (!(*args = malloc(sizeof(WCHAR *))))
+        {
+            VariantClear(&v);
+            return E_OUTOFMEMORY;
+        }
+        (*args)[0] = V_BSTR(&v);
+        *count = 1;
+        return S_OK;
+    }
+
+    sa = (V_VT(in) & VT_BYREF) ? *V_ARRAYREF(in) : V_ARRAY(in);
+    if (!sa || SafeArrayGetDim(sa) != 1) return E_INVALIDARG;
+    if (FAILED(SafeArrayGetLBound(sa, 1, &lbound)) || FAILED(SafeArrayGetUBound(sa, 1, &ubound)))
+        return E_INVALIDARG;
+    if (ubound < lbound) return S_OK;
+    if (ubound - lbound + 1 > MAX_RUN_PARAMS) return E_INVALIDARG;
+
+    if (!(*args = calloc(ubound - lbound + 1, sizeof(WCHAR *)))) return E_OUTOFMEMORY;
+
+    for (i = lbound; i <= ubound; i++)
+    {
+        VARTYPE vt = V_VT(in) & VT_TYPEMASK;
+
+        VariantInit(&v);
+        if (vt == VT_VARIANT)
+        {
+            VARIANT elem;
+
+            VariantInit(&elem);
+            hr = SafeArrayGetElement(sa, &i, &elem);
+            if (SUCCEEDED(hr)) hr = VariantChangeType(&v, &elem, 0, VT_BSTR);
+            VariantClear(&elem);
+        }
+        else if (vt == VT_BSTR)
+        {
+            BSTR str = NULL;
+
+            hr = SafeArrayGetElement(sa, &i, &str);
+            if (SUCCEEDED(hr))
+            {
+                V_VT(&v) = VT_BSTR;
+                V_BSTR(&v) = str;
+            }
+        }
+        else
+            hr = E_INVALIDARG;
+
+        if (FAILED(hr))
+        {
+            free_run_params(*count, *args);
+            *count = 0;
+            *args = NULL;
+            return E_INVALIDARG;
+        }
+        (*args)[(*count)++] = V_BSTR(&v);
+    }
+    return S_OK;
 }
 
 static HRESULT WINAPI regtask_RunEx(IRegisteredTask *iface, VARIANT params, LONG flags,
                                     LONG session_id, BSTR user, IRunningTask **task)
 {
-    FIXME("%p,%s,%lx,%lx,%s,%p: stub\n", iface, debugstr_variant(&params), flags, session_id, debugstr_w(user), task);
-    return E_NOTIMPL;
+    RegisteredTask *regtask = impl_from_IRegisteredTask(iface);
+    WCHAR **args;
+    DWORD count;
+    GUID guid;
+    HRESULT hr;
+
+    TRACE("%p,%s,%lx,%lx,%s,%p\n", iface, debugstr_variant(&params), flags, session_id, debugstr_w(user), task);
+
+    if (task) *task = NULL;
+
+    hr = get_run_params(&params, &count, &args);
+    if (FAILED(hr)) return hr;
+
+    hr = SchRpcRun(regtask->path, count, (const WCHAR **)args, flags, session_id,
+                   (user && *user) ? user : NULL, &guid);
+    free_run_params(count, args);
+
+    if (hr == S_OK && task)
+        hr = RunningTask_create(&guid, regtask->path, task);
+    return hr;
+}
+
+static HRESULT WINAPI regtask_Run(IRegisteredTask *iface, VARIANT params, IRunningTask **task)
+{
+    TRACE("%p,%s,%p\n", iface, debugstr_variant(&params), task);
+
+    return regtask_RunEx(iface, params, 0, 0, NULL, task);
 }
 
 static HRESULT WINAPI regtask_GetInstances(IRegisteredTask *iface, LONG flags, IRunningTaskCollection **tasks)
 {
-    FIXME("%p,%lx,%p: stub\n", iface, flags, tasks);
-    return E_NOTIMPL;
+    RegisteredTask *regtask = impl_from_IRegisteredTask(iface);
+
+    TRACE("%p,%lx,%p\n", iface, flags, tasks);
+
+    if (!tasks) return E_POINTER;
+
+    return RunningTaskCollection_create(regtask->path, flags, tasks);
 }
 
 static HRESULT WINAPI regtask_get_LastRunTime(IRegisteredTask *iface, DATE *date)
 {
-    FIXME("%p,%p: stub\n", iface, date);
-    return SCHED_S_TASK_HAS_NOT_RUN;
+    RegisteredTask *regtask = impl_from_IRegisteredTask(iface);
+    SYSTEMTIME st;
+    DWORD code;
+    HRESULT hr;
+
+    TRACE("%p,%p\n", iface, date);
+
+    if (!date) return E_POINTER;
+    *date = 0;
+
+    hr = SchRpcGetLastRunInfo(regtask->path, &st, &code);
+    if (hr != S_OK) return hr;
+
+    /* a task that never ran has no run time */
+    if (!st.wYear) return SCHED_S_TASK_HAS_NOT_RUN;
+    return SystemTimeToVariantTime(&st, date) ? S_OK : E_FAIL;
 }
 
 static HRESULT WINAPI regtask_get_LastTaskResult(IRegisteredTask *iface, LONG *result)
 {
-    FIXME("%p,%p: stub\n", iface, result);
-    return E_NOTIMPL;
+    RegisteredTask *regtask = impl_from_IRegisteredTask(iface);
+    SYSTEMTIME st;
+    DWORD code;
+    HRESULT hr;
+
+    TRACE("%p,%p\n", iface, result);
+
+    if (!result) return E_POINTER;
+
+    hr = SchRpcGetLastRunInfo(regtask->path, &st, &code);
+    if (hr == S_OK) *result = code;
+    return hr;
 }
 
 static HRESULT WINAPI regtask_get_NumberOfMissedRuns(IRegisteredTask *iface, LONG *runs)
 {
-    FIXME("%p,%p: stub\n", iface, runs);
-    return E_NOTIMPL;
+    RegisteredTask *regtask = impl_from_IRegisteredTask(iface);
+    DWORD count = 0;
+    HRESULT hr;
+
+    TRACE("%p,%p\n", iface, runs);
+
+    if (!runs) return E_POINTER;
+
+    hr = SchRpcGetNumberOfMissedRuns(regtask->path, &count);
+    if (hr == S_OK) *runs = count;
+    return hr;
 }
 
 static HRESULT WINAPI regtask_get_NextRunTime(IRegisteredTask *iface, DATE *date)
 {
-    FIXME("%p,%p: stub\n", iface, date);
-    return E_NOTIMPL;
+    RegisteredTask *regtask = impl_from_IRegisteredTask(iface);
+    SYSTEMTIME *times = NULL;
+    DWORD count = 0;
+    HRESULT hr;
+
+    TRACE("%p,%p\n", iface, date);
+
+    if (!date) return E_POINTER;
+    *date = 0;
+
+    hr = SchRpcScheduledRuntimes(regtask->path, NULL, NULL, 0, 1, &count, &times);
+    if (SUCCEEDED(hr) && count && !SystemTimeToVariantTime(&times[0], date)) hr = E_FAIL;
+    MIDL_user_free(times);
+    /* no time or calendar trigger left: DATE 0 */
+    return FAILED(hr) ? hr : S_OK;
 }
 
 static HRESULT WINAPI regtask_get_Definition(IRegisteredTask *iface, ITaskDefinition **task)
@@ -273,15 +430,48 @@ static HRESULT WINAPI regtask_SetSecurityDescriptor(IRegisteredTask *iface, BSTR
 
 static HRESULT WINAPI regtask_Stop(IRegisteredTask *iface, LONG flags)
 {
-    FIXME("%p,%lx: stub\n", iface, flags);
-    return E_NOTIMPL;
+    RegisteredTask *regtask = impl_from_IRegisteredTask(iface);
+
+    TRACE("%p,%lx\n", iface, flags);
+
+    if (flags) FIXME("flags %#lx ignored\n", flags);
+
+    return SchRpcStop(regtask->path, 0);
 }
 
+/* *count: on input the most run times wanted (0 = all), on output how many were returned. */
 static HRESULT WINAPI regtask_GetRunTimes(IRegisteredTask *iface, const LPSYSTEMTIME start, const LPSYSTEMTIME end,
                                           DWORD *count, LPSYSTEMTIME *time)
 {
-    FIXME("%p,%p.%p,%p,%p: stub\n", iface, start, end, count, time);
-    return E_NOTIMPL;
+    RegisteredTask *regtask = impl_from_IRegisteredTask(iface);
+    SYSTEMTIME *times = NULL;
+    DWORD n = 0;
+    HRESULT hr;
+
+    TRACE("%p,%p.%p,%p,%p\n", iface, start, end, count, time);
+
+    if (!count || !time) return E_POINTER;
+    *time = NULL;
+
+    hr = SchRpcScheduledRuntimes(regtask->path, start, end, 0, *count, &n, &times);
+    if (FAILED(hr))
+    {
+        *count = 0;
+        return hr;
+    }
+    if (n)
+    {
+        if (!(*time = CoTaskMemAlloc(n * sizeof(SYSTEMTIME))))
+        {
+            MIDL_user_free(times);
+            *count = 0;
+            return E_OUTOFMEMORY;
+        }
+        memcpy(*time, times, n * sizeof(SYSTEMTIME));
+    }
+    MIDL_user_free(times);
+    *count = n;
+    return n ? S_OK : S_FALSE;
 }
 
 static const IRegisteredTaskVtbl RegisteredTask_vtbl =

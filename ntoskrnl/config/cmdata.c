@@ -45,7 +45,7 @@ HIVE_LIST_ENTRY CmpMachineHiveList[] =
     { L"SECURITY", L"MACHINE\\", NULL, 0                , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
     { L"SOFTWARE", L"MACHINE\\", NULL, 0                , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
     { L"SYSTEM",   L"MACHINE\\", NULL, 0                , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
-    { L"DEFAULT",  L"USER\\S-1-5-18", NULL, 0           , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
+    { L"DEFAULT",  L"USER\\.DEFAULT", NULL, 0           , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
     { L"SAM",      L"MACHINE\\", NULL, HIVE_NOLAZYFLUSH , 0 ,   NULL,   FALSE,  FALSE,  FALSE},
     { NULL,        NULL,         0, 0                   , 0 ,   NULL,   FALSE,  FALSE,  FALSE}
 };
@@ -251,6 +251,29 @@ DATA_SEG("INITDATA") CM_SYSTEM_CONTROL_VECTOR CmControlVector[] =
         NULL,
         NULL
     },
+#if defined(_M_IX86) || defined(_M_AMD64)
+    {
+        L"Session Manager\\Memory Management",
+        L"FeatureSettingsOverride",
+        &KiFeatureSettingsOverride,
+        NULL,
+        NULL
+    },
+    {
+        L"Session Manager\\Memory Management",
+        L"FeatureSettingsOverrideMask",
+        &KiFeatureSettingsOverrideMask,
+        NULL,
+        NULL
+    },
+    {
+        L"Session Manager\\Kernel",
+        L"SpeculationHardening",
+        &KiSpeculationHardening,
+        NULL,
+        NULL
+    },
+#endif
     {
         L"Session Manager\\Memory Management",
         L"Mirroring",
@@ -394,14 +417,14 @@ DATA_SEG("INITDATA") CM_SYSTEM_CONTROL_VECTOR CmControlVector[] =
     {
         L"Session Manager\\Memory Management",
         L"PoolTag",
-        &DummyData,
+        &MmSpecialPoolTag,
         NULL,
         NULL
     },
     {
         L"Session Manager\\Memory Management",
         L"PoolTagOverruns",
-        &DummyData,
+        &MmSpecialPoolCatchOverruns,
         NULL,
         NULL
     },

@@ -27,38 +27,43 @@ C_ASSERT(DWM_ROUTINE_PRESENTED == ONEPARAM_ROUTINE_DWMPRESENTED);
 BOOL FASTCALL
 co_IntRegisterLogonProcess(HANDLE ProcessId, BOOL Register)
 {
-    NTSTATUS Status;
-    PEPROCESS Process;
     PUSER_SESSION Session;
+    HANDLE CurrentProcessId = PsGetCurrentProcessId();
 
-    Status = PsLookupProcessByProcessId(ProcessId, &Process);
-    if (!NT_SUCCESS(Status))
+    /* A process registers and deregisters only itself */
+    if (ProcessId != CurrentProcessId)
     {
-        EngSetLastError(RtlNtStatusToDosError(Status));
+        EngSetLastError(ERROR_ACCESS_DENIED);
         return FALSE;
     }
 
-    ProcessId = PsGetProcessId(Process);
-    Session = UserGetProcessSession(Process);
-
-    ObDereferenceObject(Process);
-
+    Session = UserGetProcessSession(PsGetCurrentProcess());
     if (!Session)
         return FALSE;
 
     if (Register)
     {
-        /* Register the logon process */
-        if (Session->LogonPid != 0)
+        /* The first registrant of the session (winlogon, or wininit in
+         * session 0, at boot) is the logon process for the life of the
+         * session: no other process takes the role, also not after it
+         * deregistered or exited */
+        if (Session->LogonRegistered)
+        {
+            EngSetLastError(ERROR_ACCESS_DENIED);
             return FALSE;
+        }
 
-        Session->LogonPid = ProcessId;
+        Session->LogonRegistered = TRUE;
+        Session->LogonPid = CurrentProcessId;
     }
     else
     {
-        /* Deregister the logon process */
-        if (Session->LogonPid != ProcessId)
+        /* Only the registered logon process deregisters */
+        if (Session->LogonPid != CurrentProcessId)
+        {
+            EngSetLastError(ERROR_ACCESS_DENIED);
             return FALSE;
+        }
 
         Session->LogonPid = 0;
     }
@@ -128,7 +133,11 @@ NtUserCallNoParam(DWORD Routine)
         case NOPARAM_ROUTINE_GETMSESSAGEPOS:
         {
             PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
-            Result = (DWORD_PTR)MAKELONG(pti->ptLast.x, pti->ptLast.y);
+            POINT Last = pti->ptLast;
+
+            if (UserDpiIsVirtualThread(pti))
+                UserDpiPointToLogical(&Last);
+            Result = (DWORD_PTR)MAKELONG(Last.x, Last.y);
             break;
         }
 
@@ -364,7 +373,7 @@ NtUserCallOneParam(
             break;
 
         case ONEPARAM_ROUTINE_ROS_GETSYSTEMMETRICS:
-            Result = UserGetSystemMetrics((ULONG)Param);
+            Result = UserGetCallerSystemMetrics((ULONG)Param);
             break;
 
         case ONEPARAM_ROUTINE_ROS_GETSYSCOLOR:
@@ -408,6 +417,12 @@ NtUserCallOneParam(
                     break;
                 case ROS_SERVERINFO_SRVIFLAGS:
                     Result = gpsi->dwSRVIFlags;
+                    break;
+                case ROS_SERVERINFO_LOGPIXELS:
+                    Result = gpsi->dmLogPixels;
+                    break;
+                case ROS_SERVERINFO_PADDEDBORDER:
+                    Result = gpsi->aiSysMet[SM_CXPADDEDBORDER];
                     break;
                 default:
                     EngSetLastError(ERROR_INVALID_PARAMETER);
@@ -598,9 +613,13 @@ NtUserCallOneParam(
             }
             _SEH2_TRY
             {
+                POINT Cursor = gpsi->ptCursor;
+
+                if (UserDpiIsVirtualThread(pti))
+                    UserDpiPointToLogical(&Cursor);
                 ProbeForWrite((POINT*)Param,sizeof(POINT),1);
                pptl = (PPOINTL)Param;
-               *pptl = gpsi->ptCursor;
+               *pptl = *(PPOINTL)&Cursor;
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
@@ -650,6 +669,8 @@ NtUserCallOneParam(
             _SEH2_TRY
             {
                pdwLayout = (PDWORD)Param;
+               if (ExGetPreviousMode() != KernelMode)
+                   ProbeForWrite(pdwLayout, sizeof(*pdwLayout), sizeof(UCHAR));
                *pdwLayout = ppi->dwLayout;
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -948,6 +969,11 @@ NtUserCallTwoParam(
             break;
 
         case TWOPARAM_ROUTINE_SETCURSORPOS:
+            if (UserDpiIsVirtualCaller())
+            {
+                Param1 = (DWORD_PTR)(INT)UserDpiToPhysical((INT)Param1);
+                Param2 = (DWORD_PTR)(INT)UserDpiToPhysical((INT)Param2);
+            }
             Ret = (DWORD_PTR)UserSetCursorPos((int)Param1, (int)Param2, 0, 0, FALSE);
             break;
 
@@ -1326,13 +1352,18 @@ NtUserCallHwndParam(
             {
                 if (Routine == HWNDPARAM_ROUTINE_ROS_GETCLIENTRECT)
                 {
+                    Rect = Window->rcClient;
+                    if (UserDpiIsVirtualCaller())
+                        UserDpiRectToLogical(&Rect);
+                    Rect.right -= Rect.left;
+                    Rect.bottom -= Rect.top;
                     Rect.left = Rect.top = 0;
-                    Rect.right = Window->rcClient.right - Window->rcClient.left;
-                    Rect.bottom = Window->rcClient.bottom - Window->rcClient.top;
                 }
                 else
                 {
                     Rect = Window->rcWindow;
+                    if (UserDpiIsVirtualCaller())
+                        UserDpiRectToLogical(&Rect);
                 }
                 Ret = TRUE;
             }
@@ -1366,6 +1397,11 @@ NtUserCallHwndParam(
             {
                 Info.rcWindow = Window->rcWindow;
                 Info.rcClient = Window->rcClient;
+                if (UserDpiIsVirtualCaller())
+                {
+                    UserDpiRectToLogical(&Info.rcWindow);
+                    UserDpiRectToLogical(&Info.rcClient);
+                }
                 Info.style = Window->style;
                 Info.ExStyle = Window->ExStyle;
                 Info.state = Window->state;

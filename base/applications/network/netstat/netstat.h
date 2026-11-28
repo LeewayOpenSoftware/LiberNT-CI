@@ -47,6 +47,7 @@ typedef struct {
 /* function declarations */
 VOID ShowIpStatistics(VOID);
 VOID ShowIcmpStatistics(VOID);
+VOID ShowIcmp6Statistics(VOID);
 VOID ShowTcpStatistics(VOID);
 VOID ShowUdpStatistics(VOID);
 VOID ShowEthernetStatistics(VOID);

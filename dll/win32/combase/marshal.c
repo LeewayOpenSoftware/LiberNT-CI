@@ -23,6 +23,7 @@
 
 #define COBJMACROS
 #include "objbase.h"
+#include <strsafe.h>
 
 #include "dcom.h"
 #include "combase_private.h"
@@ -55,6 +56,7 @@ struct ifproxy
     IRpcChannelBuffer *chan; /* channel to object (CS parent->cs) */
 #ifdef __REACTOS__
     DWORD imp_level;
+    DWORD capabilities;
 #endif
 };
 
@@ -79,6 +81,7 @@ struct proxy_manager
     void *dest_context_data;  /* reserved context value (LOCK) */
 #ifdef __REACTOS__
     DWORD imp_level;
+    DWORD capabilities;
     IRpcOptions IRpcOptions_iface;
     ICallFactory ICallFactory_iface;
     IForegroundTransfer IForegroundTransfer_iface;
@@ -503,6 +506,9 @@ HRESULT WINAPI CoMarshalInterface(IStream *stream, REFIID riid, IUnknown *unk,
     if (!unk || !stream)
         return E_INVALIDARG;
 
+#ifdef __REACTOS__
+    com_security_init_default();
+#endif
     hr = IUnknown_QueryInterface(unk, &IID_IMarshal, (void **)&marshal);
     if (hr != S_OK)
         hr = CoGetStandardMarshal(riid, unk, dest_context, pvDestContext, mshlFlags, &marshal);
@@ -931,6 +937,7 @@ HRESULT WINAPI CoUnmarshalInterface(IStream *stream, REFIID riid, void **ppv)
     if (!(apt = apartment_get_current_or_mta()))
         return CO_E_NOTINITIALIZED;
     apartment_release(apt);
+    com_security_init_default();
 #endif
 
 #ifdef __REACTOS__
@@ -1587,6 +1594,47 @@ static DWORD *proxy_manager_get_imp_level(struct proxy_manager *This, IUnknown *
     if (!(ifproxy = proxy_manager_find_ifproxy_by_iface(This, proxy))) return NULL;
     return &ifproxy->imp_level;
 }
+
+static DWORD *proxy_manager_get_capabilities(struct proxy_manager *This, IUnknown *proxy)
+{
+    struct ifproxy *ifproxy;
+
+    if (proxy == (IUnknown *)&This->IMultiQI_iface) return &This->capabilities;
+    if (!(ifproxy = proxy_manager_find_ifproxy_by_iface(This, proxy))) return NULL;
+    return &ifproxy->capabilities;
+}
+#endif
+
+#ifdef __REACTOS__
+WINBASEAPI BOOL WINAPI GetNamedPipeServerProcessId(HANDLE, PULONG);
+
+/* The user of the process serving this proxy's OXID pipe, or NULL. The pid comes from the pipe the system
+ * connected us to (GetNamedPipeServerProcessId), not from marshaled data, and is used at once, so pid reuse
+ * is limited to that window. The name is informational. */
+static WCHAR *proxy_manager_get_server_user(const struct proxy_manager *This)
+{
+    WCHAR name[80], *user = NULL;
+    HANDLE pipe, process, token;
+    ULONG pid;
+
+    StringCchPrintfW(name, ARRAY_SIZE(name), L"\\\\.\\pipe\\lrpc\\\\pipe\\OLE_%016I64x", This->oxid);
+    pipe = CreateFileW(name, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                       SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
+    if (pipe == INVALID_HANDLE_VALUE)
+        return NULL;
+    if (GetNamedPipeServerProcessId(pipe, &pid) && pid && pid != GetCurrentProcessId() &&
+        (process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)))
+    {
+        if (OpenProcessToken(process, TOKEN_QUERY, &token))
+        {
+            user = com_security_token_user(token);
+            CloseHandle(token);
+        }
+        CloseHandle(process);
+    }
+    CloseHandle(pipe);
+    return user;
+}
 #endif
 
 static HRESULT WINAPI ProxyCliSec_QueryBlanket(IClientSecurity *iface,
@@ -1614,8 +1662,16 @@ static HRESULT WINAPI ProxyCliSec_QueryBlanket(IClientSecurity *iface,
         *pAuthnSvc = RPC_C_AUTHN_WINNT;
     if (pAuthzSvc)
         *pAuthzSvc = RPC_C_AUTHZ_NONE;
+    /* An out-of-process proxy reports the user the server process runs as (Windows 11, NTLM); in-process it is NULL.
+     * The OXID resolution gives no pid (rpc_resolve_oxid sets it to 0), and a pid in the OXID or in marshaled
+     * data is the server's own claim. The pipe the proxy talks to is the proof: ask the system which process
+     * serves it. A server that cannot be reached or opened gives no name. */
     if (ppServerPrincName)
+    {
         *ppServerPrincName = NULL;
+        if (com_call_security_enabled() && This->oxid_info.dwPid != GetCurrentProcessId())
+            *ppServerPrincName = proxy_manager_get_server_user(This);
+    }
     if (pAuthnLevel)
         *pAuthnLevel = RPC_C_AUTHN_LEVEL_PKT_PRIVACY;
     if (pImpLevel)
@@ -1623,7 +1679,16 @@ static HRESULT WINAPI ProxyCliSec_QueryBlanket(IClientSecurity *iface,
     if (pAuthInfo)
         *pAuthInfo = NULL;
     if (pCapabilities)
-        *pCapabilities = EOAC_NONE;
+    {
+        DWORD *capabilities = proxy_manager_get_capabilities(This, pProxy);
+
+        if (!com_call_security_enabled())
+            *pCapabilities = EOAC_NONE;
+        else if (capabilities && *capabilities != EOAC_DEFAULT)
+            *pCapabilities = *capabilities;
+        else
+            *pCapabilities = This->oxid_info.dwPid == GetCurrentProcessId() ? EOAC_NONE : EOAC_MUTUAL_AUTH;
+    }
 
     return S_OK;
 #else
@@ -1674,6 +1739,18 @@ static HRESULT WINAPI ProxyCliSec_SetBlanket(IClientSecurity *iface,
         return E_INVALIDARG;
 
     *imp_level = ImpLevel;
+    *proxy_manager_get_capabilities(This, pProxy) = Capabilities;
+    if (pProxy != (IUnknown *)&This->IMultiQI_iface)
+    {
+        struct ifproxy *ifproxy = proxy_manager_find_ifproxy_by_iface(This, pProxy);
+        HRESULT hr = S_OK;
+
+        EnterCriticalSection(&This->cs);
+        if (ifproxy)
+            hr = rpc_channel_set_imp_level(ifproxy->chan, ImpLevel);
+        LeaveCriticalSection(&This->cs);
+        return hr;
+    }
     return S_OK;
 #else
     FIXME("%p, %ld, %ld, %s, %ld, %ld, %p, %#lx: stub\n", pProxy, AuthnSvc, AuthzSvc,
@@ -2084,6 +2161,7 @@ static HRESULT proxy_manager_construct(
     This->dest_context_data = NULL;
 #ifdef __REACTOS__
     This->imp_level = RPC_C_IMP_LEVEL_DEFAULT;
+    This->capabilities = EOAC_DEFAULT;
 #endif
 
     EnterCriticalSection(&apt->cs);
@@ -2243,6 +2321,7 @@ static HRESULT proxy_manager_create_ifproxy(
     ifproxy->proxy = NULL;
 #ifdef __REACTOS__
     ifproxy->imp_level = RPC_C_IMP_LEVEL_DEFAULT;
+    ifproxy->capabilities = EOAC_DEFAULT;
 #endif
 
     assert(channel);

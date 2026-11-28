@@ -62,9 +62,9 @@ ServiceBinary=%12%\uefifb.sys
 LoadOrderGroup=Video Save
 
 [Strings]
-LiberNT="LiberNT"
+LiberNT="Orosi"
 UefiFb.DeviceDesc="UEFI GOP Framebuffer"
-UefiFb.ServiceDesc="LiberNT UEFI GOP Framebuffer Miniport"
+UefiFb.ServiceDesc="Orosi UEFI GOP Framebuffer Miniport"
 REG_MULTI_SZ=0x00010000
 REG_DWORD=0x00010001
 REG_SZ=0x00000000

@@ -268,6 +268,183 @@ NtfsDeleteExternalBacking(
     return Status;
 }
 
+C_ASSERT(sizeof(FILE_OBJECTID_BUFFER) == sizeof(ObjectIdEx));
+
+static
+NTSTATUS
+NtfsReferenceObjectIdFile(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                          _In_ PIO_STACK_LOCATION IrpSp,
+                          _Out_ PFileContextBlock* FileCB,
+                          _Out_ PVolumeContextBlock* VolCB)
+{
+    NTSTATUS Status;
+
+    *FileCB = IrpSp->FileObject ? NtfsGetFileContext(IrpSp->FileObject) : NULL;
+    *VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+    if (!*FileCB || !(*FileCB)->FileRec || (*FileCB)->IsVolumeOpen || !*VolCB || !(*VolCB)->DiskVolume)
+        return STATUS_INVALID_PARAMETER;
+
+    KeEnterCriticalRegion();
+    NtfsAcquireMetadata(*VolCB);
+    Status = NtfsVolumeCheckObjectIdSupport((*VolCB)->DiskVolume);
+    NtfsReleaseMetadata(*VolCB);
+    KeLeaveCriticalRegion();
+    return Status;
+}
+
+static
+NTSTATUS
+NtfsCreateObjectId(_In_ PVolumeContextBlock VolCB,
+                   _In_ PFileContextBlock FileCB,
+                   _Inout_ PObjectIdEx ObjectId)
+{
+    ObjectIdEx VolumeObjectId;
+    GUID Empty = { 0 };
+    ULONG Attempt;
+    NTSTATUS Status;
+
+    if (!NT_SUCCESS(NtfsVolumeReadObjectId(VolCB->DiskVolume, &VolumeObjectId)))
+        VolumeObjectId.ObjectId = Empty;
+
+    for (Attempt = 0; Attempt < 16; Attempt++)
+    {
+        RtlZeroMemory(ObjectId, sizeof(*ObjectId));
+        Status = ExUuidCreate(&ObjectId->ObjectId);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        ObjectId->BirthVolId = VolumeObjectId.ObjectId;
+        ObjectId->BirthObjId = ObjectId->ObjectId;
+        Status = NtfsFileRecordSetObjectId(FileCB->FileRec, ObjectId);
+        if (Status != STATUS_DUPLICATE_NAME)
+            break;
+    }
+    return Status;
+}
+
+static
+NTSTATUS
+NtfsGetObjectId(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                _Inout_ PIRP Irp,
+                _In_ PIO_STACK_LOCATION IrpSp,
+                _In_ BOOLEAN Create)
+{
+    PFileContextBlock FileCB;
+    PVolumeContextBlock VolCB;
+    ObjectIdEx ObjectId;
+    ObjectIdEx VolumeObjectId;
+    GUID Empty = { 0 };
+    NTSTATUS Status;
+
+    Status = NtfsReferenceObjectIdFile(VolumeDeviceObject, IrpSp, &FileCB, &VolCB);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (IrpSp->Parameters.FileSystemControl.OutputBufferLength < sizeof(FILE_OBJECTID_BUFFER))
+        return STATUS_INVALID_PARAMETER;
+    if (!Irp->AssociatedIrp.SystemBuffer)
+        return STATUS_INVALID_USER_BUFFER;
+
+    KeEnterCriticalRegion();
+    if (Create)
+        ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+    else
+        ExAcquireResourceSharedLite(NtfsGetMainResource(FileCB), TRUE);
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+    if (NT_SUCCESS(Status))
+        Status = NtfsFileRecordReadObjectId(FileCB->FileRec, &ObjectId);
+    if (Create && Status == STATUS_OBJECTID_NOT_FOUND)
+    {
+        Status = NtfsVolumeIsReadOnly(VolCB->DiskVolume)
+            ? STATUS_MEDIA_WRITE_PROTECTED
+            : NtfsCreateObjectId(VolCB, FileCB, &ObjectId);
+    }
+    else if (Create && NT_SUCCESS(Status) &&
+             RtlEqualMemory(&ObjectId.BirthVolId, &Empty, sizeof(Empty)) &&
+             RtlEqualMemory(&ObjectId.BirthObjId, &Empty, sizeof(Empty)))
+    {
+        if (NtfsVolumeIsReadOnly(VolCB->DiskVolume))
+        {
+            Status = STATUS_MEDIA_WRITE_PROTECTED;
+        }
+        else
+        {
+            if (!NT_SUCCESS(NtfsVolumeReadObjectId(VolCB->DiskVolume, &VolumeObjectId)))
+                VolumeObjectId.ObjectId = Empty;
+            ObjectId.BirthVolId = VolumeObjectId.ObjectId;
+            ObjectId.BirthObjId = ObjectId.ObjectId;
+            ObjectId.DomainId = Empty;
+            Status = NtfsFileRecordSetObjectIdExtended(FileCB->FileRec, (const UCHAR*)&ObjectId.BirthVolId);
+        }
+    }
+    NtfsReleaseMetadata(VolCB);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+    KeLeaveCriticalRegion();
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* TODO: no USN record or \$Extend\$ObjId change notification is posted for a new object identifier */
+    RtlCopyMemory(Irp->AssociatedIrp.SystemBuffer, &ObjectId, sizeof(FILE_OBJECTID_BUFFER));
+    Irp->IoStatus.Information = sizeof(FILE_OBJECTID_BUFFER);
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NtfsUpdateObjectId(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                   _Inout_ PIRP Irp,
+                   _In_ PIO_STACK_LOCATION IrpSp,
+                   _In_ ULONG FsControlCode)
+{
+    PFileContextBlock FileCB;
+    PVolumeContextBlock VolCB;
+    ULONG InputLength = IrpSp->Parameters.FileSystemControl.InputBufferLength;
+    PUCHAR Input = Irp->AssociatedIrp.SystemBuffer;
+    NTSTATUS Status;
+
+    if (FsControlCode == FSCTL_SET_OBJECT_ID && InputLength != sizeof(FILE_OBJECTID_BUFFER))
+        return STATUS_INVALID_PARAMETER;
+    if (FsControlCode == FSCTL_SET_OBJECT_ID_EXTENDED &&
+        InputLength != RTL_FIELD_SIZE(FILE_OBJECTID_BUFFER, ExtendedInfo))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (FsControlCode != FSCTL_DELETE_OBJECT_ID && !Input)
+        return STATUS_INVALID_USER_BUFFER;
+
+    FileCB = IrpSp->FileObject ? NtfsGetFileContext(IrpSp->FileObject) : NULL;
+    VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+    if (FileCB && FileCB->FileRec && VolCB && VolCB->DiskVolume && NtfsVolumeIsReadOnly(VolCB->DiskVolume))
+        return STATUS_MEDIA_WRITE_PROTECTED;
+    Status = NtfsReferenceObjectIdFile(VolumeDeviceObject, IrpSp, &FileCB, &VolCB);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (FsControlCode == FSCTL_SET_OBJECT_ID && !FileCB->RestoreAccess)
+        return STATUS_ACCESS_DENIED;
+    if (FsControlCode == FSCTL_SET_OBJECT_ID_EXTENDED && Irp->RequestorMode == UserMode &&
+        !(FileCB->DesiredAccess & (FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES)))
+    {
+        return STATUS_ACCESS_DENIED;
+    }
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+    if (NT_SUCCESS(Status))
+    {
+        if (FsControlCode == FSCTL_SET_OBJECT_ID)
+            Status = NtfsFileRecordSetObjectId(FileCB->FileRec, (const ObjectIdEx*)Input);
+        else if (FsControlCode == FSCTL_SET_OBJECT_ID_EXTENDED)
+            Status = NtfsFileRecordSetObjectIdExtended(FileCB->FileRec, Input);
+        else
+            Status = NtfsFileRecordDeleteObjectId(FileCB->FileRec);
+    }
+    NtfsReleaseMetadata(VolCB);
+    ExReleaseResourceLite(NtfsGetMainResource(FileCB));
+    KeLeaveCriticalRegion();
+    return Status;
+}
+
 static
 NTSTATUS
 NtfsSetSparse(_In_ PDEVICE_OBJECT VolumeDeviceObject,
@@ -1484,9 +1661,16 @@ NtfsDismountVolume(
         (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
     KIRQL OldIrql;
     NTSTATUS Status;
+    PVPB Vpb;
+    PVPB SpareVpb;
 
     if (!FileCB || !FileCB->IsVolumeOpen)
         return STATUS_INVALID_PARAMETER;
+
+    /* The device gets a fresh VPB on success; allocate it before any change */
+    SpareVpb = ExAllocatePoolWithTag(NonPagedPool, sizeof(VPB), TAG_NTFS);
+    if (!SpareVpb)
+        return STATUS_INSUFFICIENT_RESOURCES;
 
     ExAcquireFastMutex(&VolCB->VolumeStateMutex);
     if (VolCB->Dismounted)
@@ -1500,7 +1684,10 @@ NtfsDismountVolume(
     }
     ExReleaseFastMutex(&VolCB->VolumeStateMutex);
     if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(SpareVpb, TAG_NTFS);
         return Status;
+    }
 
     FsRtlNotifyVolumeEvent(FileObject,
                            FSRTL_VOLUME_DISMOUNT);
@@ -1536,15 +1723,46 @@ NtfsDismountVolume(
     if (NT_SUCCESS(Status))
     {
         VolCB->Dismounted = TRUE;
+        NtfsUsnWakeWaiters(VolCB);
+        VolCB->BootRepairDismount = NtfsIsBootExecuteWindow(VolumeDeviceObject, VolCB);
         FileCB->DismountedVolume = TRUE;
         IoAcquireVpbSpinLock(&OldIrql);
-        VolumeDeviceObject->Vpb->Flags &= ~VPB_MOUNTED;
-        VolumeDeviceObject->Vpb->Flags |=
-            VPB_DIRECT_WRITES_ALLOWED;
+        Vpb = VolumeDeviceObject->Vpb;
+        Vpb->Flags &= ~VPB_MOUNTED;
+        Vpb->Flags |= VPB_DIRECT_WRITES_ALLOWED;
+        /*
+         * NT semantics: the dismounted volume gives the device up. Handles to
+         * it (at least the caller's) keep the old VPB, which stays with this
+         * volume device and is never freed by the I/O manager (persistent);
+         * the device gets a clean VPB, so the next open mounts a new volume
+         * through the current top of the storage stack, and a lock held on
+         * the old volume no longer blocks it.
+         */
+        if (Vpb->RealDevice && Vpb->RealDevice->Vpb == Vpb)
+        {
+            RtlZeroMemory(SpareVpb, sizeof(VPB));
+            SpareVpb->Type = IO_TYPE_VPB;
+            SpareVpb->Size = sizeof(VPB);
+            SpareVpb->RealDevice = Vpb->RealDevice;
+            SpareVpb->Flags = Vpb->Flags & VPB_REMOVE_PENDING;
+            Vpb->RealDevice->Vpb = SpareVpb;
+            Vpb->Flags |= VPB_PERSISTENT;
+            SpareVpb = NULL;
+        }
         IoReleaseVpbSpinLock(OldIrql);
     }
     VolCB->Dismounting = FALSE;
     ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+
+    if (NT_SUCCESS(Status))
+    {
+        DPRINT1("NTFS: dismounted volume %p (storage %p), device VPB %s\n",
+                VolumeDeviceObject, VolCB->StorageDevice,
+                SpareVpb ? "not swapped" : "swapped for the next mount");
+    }
+
+    if (SpareVpb)
+        ExFreePoolWithTag(SpareVpb, TAG_NTFS);
 
     /* VD2: drop the shutdown-clean callback only after a SUCCESSFUL dismount.
      * A failed dismount leaves the volume mounted, so it must keep its callback
@@ -1726,13 +1944,13 @@ NtfsIsVolumeDirty(
     KeEnterCriticalRegion();
     NtfsAcquireMetadata(VolCB);
     Status = NtfsVolumeQueryFlags(VolCB->DiskVolume, &Flags);
+    if (NT_SUCCESS(Status) && NtfsVolumeReportsDirty(VolCB->DiskVolume, Flags))
+        Result |= VOLUME_IS_DIRTY;
     NtfsReleaseMetadata(VolCB);
     KeLeaveCriticalRegion();
     if (!NT_SUCCESS(Status))
         return Status;
 
-    if (Flags & VOL_DIRTY)
-        Result |= VOLUME_IS_DIRTY;
     if (Flags & VOL_UPGRADE_ON_MNT)
         Result |= VOLUME_UPGRADE_SCHEDULED;
     *(PULONG)Irp->AssociatedIrp.SystemBuffer = Result;
@@ -1775,6 +1993,52 @@ NtfsMarkVolumeDirty(
         NtfsVolumeRetainDirty(VolCB->DiskVolume, TRUE);
     NtfsReleaseMetadata(VolCB);
     KeLeaveCriticalRegion();
+    return Status;
+}
+
+/*
+ * The checker holds the volume lock and its check wrote nothing: this
+ * instance clears the dirty flag it was mounted with and stays mounted, so
+ * the programs started from the volume go on and nothing restarts. Only the
+ * lock owner may ask, so a check that did write (and dismounts) cannot race
+ * it, and a dismounting or dismounted volume refuses.
+ */
+static
+NTSTATUS
+NtfsClearDirtyAfterCheck(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _In_ PIO_STACK_LOCATION IrpSp)
+{
+    PFileContextBlock FileCB = NtfsGetFileContext(IrpSp->FileObject);
+    PVolumeContextBlock VolCB =
+        (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+    NTSTATUS Status;
+
+    if (!FileCB || !FileCB->IsVolumeOpen || !VolCB || !VolCB->DiskVolume)
+        return STATUS_INVALID_PARAMETER;
+
+    ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+    if (VolCB->Dismounted || VolCB->Dismounting)
+        Status = STATUS_VOLUME_DISMOUNTED;
+    else if (VolCB->VolumeLockOwner != IrpSp->FileObject)
+        Status = STATUS_ACCESS_DENIED;
+    else
+        Status = STATUS_SUCCESS;
+    ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    KeEnterCriticalRegion();
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsVolumeMarkCleanAfterCheck(VolCB->DiskVolume);
+    NtfsReleaseMetadata(VolCB);
+    KeLeaveCriticalRegion();
+
+    if (NT_SUCCESS(Status))
+        DPRINT1("NTFS: volume %p checked clean, dirty flag cleared, instance kept\n", VolumeDeviceObject);
+    else
+        DPRINT1("NTFS: volume %p checked clean, but the instance cannot clear the flag (0x%08lx); the checker dismounts it\n",
+                VolumeDeviceObject, Status);
     return Status;
 }
 
@@ -2119,6 +2383,8 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     UNREFERENCED_PARAMETER(VolumeDeviceObject);
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    BOOLEAN UsnPending = FALSE;
+
     Irp->IoStatus.Information = 0;
 
     if ((IrpSp->MajorFunction == IRP_MJ_FILE_SYSTEM_CONTROL) &&
@@ -2183,6 +2449,24 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                 Irp,
                                 IrpSp,
                                 TRUE);
+                        break;
+
+                    case FSCTL_GET_OBJECT_ID:
+                        Irp->IoStatus.Status =
+                            NtfsGetObjectId(VolumeDeviceObject, Irp, IrpSp, FALSE);
+                        break;
+
+                    case FSCTL_CREATE_OR_GET_OBJECT_ID:
+                        Irp->IoStatus.Status =
+                            NtfsGetObjectId(VolumeDeviceObject, Irp, IrpSp, TRUE);
+                        break;
+
+                    case FSCTL_SET_OBJECT_ID:
+                    case FSCTL_SET_OBJECT_ID_EXTENDED:
+                    case FSCTL_DELETE_OBJECT_ID:
+                        Irp->IoStatus.Status =
+                            NtfsUpdateObjectId(VolumeDeviceObject, Irp, IrpSp,
+                                               IrpSp->Parameters.FileSystemControl.FsControlCode);
                         break;
 
                     case FSCTL_DELETE_EXTERNAL_BACKING:
@@ -2287,6 +2571,13 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                 IrpSp);
                         break;
 
+                    case FSCTL_NTFS_CLEAR_DIRTY_AFTER_CHECK:
+                        Irp->IoStatus.Status =
+                            NtfsClearDirtyAfterCheck(
+                                VolumeDeviceObject,
+                                IrpSp);
+                        break;
+
                     case FSCTL_SHRINK_VOLUME:
                         Irp->IoStatus.Status =
                             NtfsShrinkVolume(
@@ -2303,11 +2594,26 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                 IrpSp);
                         break;
 
+                    case FSCTL_CREATE_USN_JOURNAL:
+                    case FSCTL_QUERY_USN_JOURNAL:
+                    case FSCTL_READ_USN_JOURNAL:
+                    case FSCTL_WRITE_USN_CLOSE_RECORD:
+                    case FSCTL_READ_FILE_USN_DATA:
+                    case FSCTL_MARK_HANDLE:
+                    case FSCTL_ENUM_USN_DATA:
+                        /* A queued read belongs to the wait queue: do not touch the IRP again */
+                        Status = NtfsUsnFsControl(VolumeDeviceObject, Irp, IrpSp);
+                        if (Status == STATUS_PENDING)
+                            UsnPending = TRUE;
+                        else
+                            Irp->IoStatus.Status = Status;
+                        break;
+
                     default:
                         Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
                         break;
                 }
-                Status = Irp->IoStatus.Status;
+                Status = UsnPending ? STATUS_PENDING : Irp->IoStatus.Status;
                 break;
 
             case IRP_MN_MOUNT_VOLUME:
@@ -2323,8 +2629,15 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
                 break;
         }
-        Status = Irp->IoStatus.Status;
-        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        if (UsnPending)
+        {
+            Status = STATUS_PENDING;
+        }
+        else
+        {
+            Status = Irp->IoStatus.Status;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        }
     }
     if (TopLevel) { IoSetTopLevelIrp(NULL); }
     FsRtlExitFileSystem();
@@ -2363,7 +2676,8 @@ NtfsFlushFileMetadata(_In_ PVolumeContextBlock VolCB,
         Status = NtfsCommitFileRange(VolCB,
                                      FileCB,
                                      0,
-                                     (ULONGLONG)NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart);
+                                     (ULONGLONG)NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart,
+                                     FALSE); /* the device flush below covers it */
         if (!NT_SUCCESS(Status))
             return Status;
         Status = NtfsDiskFlushRangeKm(VolCB->StorageDevice, Offset, Length);

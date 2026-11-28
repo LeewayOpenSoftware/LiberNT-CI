@@ -52,7 +52,188 @@ NtQueryInformationProcess(
         PVOID ProcessInformation,
     _In_ ULONG ProcessInformationLength,
     _Out_opt_ PULONG ReturnLength);
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsAllocSiloContextSlot(
+  IN ULONG_PTR Reserved,
+  OUT PULONG ReturnedContextSlot);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsCreateSiloContext(
+  IN PESILO Silo,
+  IN ULONG Size,
+  IN POOL_TYPE PoolType,
+  IN SILO_CONTEXT_CLEANUP_CALLBACK ContextCleanupCallback OPTIONAL,
+  OUT PVOID *ReturnedSiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+PsDereferenceSiloContext(
+  IN PVOID SiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+PsFreeSiloContextSlot(
+  IN ULONG ContextSlot);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsGetPermanentSiloContext(
+  IN PESILO Silo,
+  IN ULONG ContextSlot,
+  OUT PVOID *ReturnedSiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsGetSiloContext(
+  IN PESILO Silo,
+  IN ULONG ContextSlot,
+  OUT PVOID *ReturnedSiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+ULONG
+NTAPI
+PsGetSiloMonitorContextSlot(
+  IN PSILO_MONITOR SiloMonitor);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsInsertPermanentSiloContext(
+  IN PESILO Silo,
+  IN ULONG ContextSlot,
+  IN PVOID SiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsInsertSiloContext(
+  IN PESILO Silo,
+  IN ULONG ContextSlot,
+  IN PVOID SiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsMakeSiloContextPermanent(
+  IN PESILO Silo,
+  IN ULONG ContextSlot);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+PsReferenceSiloContext(
+  IN PVOID SiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsRegisterSiloMonitor(
+  IN PSILO_MONITOR_REGISTRATION Registration,
+  OUT PSILO_MONITOR *ReturnedMonitor);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsStartSiloMonitor(
+  IN PSILO_MONITOR SiloMonitor);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+PsUnregisterSiloMonitor(
+  IN PSILO_MONITOR SiloMonitor);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+PESILO
+NTAPI
+PsGetCurrentSilo(
+  VOID);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+PESILO
+NTAPI
+PsGetParentSilo(
+  IN PESILO Job OPTIONAL);
+
+NTKERNELAPI
+PESILO
+NTAPI
+PsGetEffectiveServerSilo(
+  IN PESILO Silo);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+PESILO
+NTAPI
+PsGetThreadServerSilo(
+  IN PETHREAD Thread);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsGetJobSilo(
+  _In_ struct _EJOB *Job,
+  _Out_ PESILO *Silo);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsGetJobServerSilo(
+  _In_opt_ struct _EJOB *Job,
+  _Outptr_ PESILO *ServerSilo);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+GUID*
+NTAPI
+PsGetSiloContainerId(
+  _In_ PESILO Silo);
+
+NTKERNELAPI
+LONGLONG
+NTAPI
+PsGetThreadCreateTime(
+  _In_ PETHREAD Thread);
+
+typedef enum _PSCREATETHREADNOTIFYTYPE {
+  PsCreateThreadNotifyNonSystem = 0,
+  PsCreateThreadNotifySubsystems = 1
+} PSCREATETHREADNOTIFYTYPE;
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsSetCreateThreadNotifyRoutineEx(
+  _In_ PSCREATETHREADNOTIFYTYPE NotifyType,
+  _In_ PVOID NotifyInformation);
+
 $endif (_NTDDK_)
+
 $if (_NTIFS_)
 #if (NTDDI_VERSION >= NTDDI_WIN8)
 NTKERNELAPI
@@ -141,6 +322,40 @@ NTSTATUS
 NTAPI
 PsSetLoadImageNotifyRoutine(
   _In_ PLOAD_IMAGE_NOTIFY_ROUTINE NotifyRoutine);
+
+#define PS_IMAGE_NOTIFY_CONFLICTING_ARCHITECTURE 0x1
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsSetLoadImageNotifyRoutineEx(
+  _In_ PLOAD_IMAGE_NOTIFY_ROUTINE NotifyRoutine,
+  _In_ ULONG_PTR Flags);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsRemoveSiloContext(
+  _In_ PESILO Silo,
+  _In_ ULONG ContextSlot,
+  _Out_opt_ PVOID *RemovedSiloContext);
+
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsReplaceSiloContext(
+  _In_ PESILO Silo,
+  _In_ ULONG ContextSlot,
+  _In_ PVOID NewSiloContext,
+  _Outptr_opt_result_maybenull_ PVOID *OldSiloContext);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsGetThreadExitStatus(
+  _In_ PETHREAD Thread);
 
 NTKERNELAPI
 HANDLE

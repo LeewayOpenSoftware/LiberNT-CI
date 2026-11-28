@@ -24,10 +24,13 @@ LPWSTR pszCom = L"COM";
 LPWSTR pszLpt = L"LPT";
 
 
+static
 BOOL
-GetBootResourceList(HDEVINFO DeviceInfoSet,
-                    PSP_DEVINFO_DATA DeviceInfoData,
-                    PCM_RESOURCE_LIST *ppResourceList)
+GetResourceList(HDEVINFO DeviceInfoSet,
+                PSP_DEVINFO_DATA DeviceInfoData,
+                LPCWSTR pszConfigKey,
+                LPCWSTR pszConfigValue,
+                PCM_RESOURCE_LIST *ppResourceList)
 {
     WCHAR DeviceInstanceIdBuffer[128];
     HKEY hEnumKey = NULL;
@@ -38,7 +41,7 @@ GetBootResourceList(HDEVINFO DeviceInfoSet,
     LONG lError;
     BOOL ret = FALSE;
 
-    TRACE("GetBootResourceList()\n");
+    TRACE("GetResourceList(%S\\%S)\n", pszConfigKey, pszConfigValue);
 
     *ppResourceList = NULL;
 
@@ -75,7 +78,7 @@ GetBootResourceList(HDEVINFO DeviceInfoSet,
     }
 
     lError = RegOpenKeyExW(hDeviceKey,
-                           L"LogConf",
+                           pszConfigKey,
                            0,
                            KEY_QUERY_VALUE,
                            &hConfigKey);
@@ -87,7 +90,7 @@ GetBootResourceList(HDEVINFO DeviceInfoSet,
 
     /* Get the configuration data size */
     lError = RegQueryValueExW(hConfigKey,
-                              L"BootConfig",
+                              pszConfigValue,
                               NULL,
                               NULL,
                               NULL,
@@ -108,7 +111,7 @@ GetBootResourceList(HDEVINFO DeviceInfoSet,
 
     /* Retrieve the configuration data */
     lError = RegQueryValueExW(hConfigKey,
-                              L"BootConfig",
+                              pszConfigValue,
                               NULL,
                               NULL,
                              (LPBYTE)lpBuffer,
@@ -137,6 +140,27 @@ done:
     return ret;
 }
 
+/*
+ * The port's I/O base decides its number (0x3F8 = COM1, 0x2F8 = COM2, ...),
+ * as on Windows. Prefer the resources the PnP manager allocated to the device
+ * (Control\AllocConfig) and fall back to its boot configuration
+ * (LogConf\BootConfig). Without either, the caller takes the next free number,
+ * which depends on the order the devices happen to be installed in.
+ */
+static
+BOOL
+GetPortResourceList(HDEVINFO DeviceInfoSet,
+                    PSP_DEVINFO_DATA DeviceInfoData,
+                    PCM_RESOURCE_LIST *ppResourceList)
+{
+    if (GetResourceList(DeviceInfoSet, DeviceInfoData,
+                        L"Control", L"AllocConfig", ppResourceList))
+        return TRUE;
+
+    return GetResourceList(DeviceInfoSet, DeviceInfoData,
+                           L"LogConf", L"BootConfig", ppResourceList);
+}
+
 
 DWORD
 GetSerialPortNumber(IN HDEVINFO DeviceInfoSet,
@@ -151,7 +175,7 @@ GetSerialPortNumber(IN HDEVINFO DeviceInfoSet,
     TRACE("GetSerialPortNumber(%p, %p)\n",
           DeviceInfoSet, DeviceInfoData);
 
-    if (GetBootResourceList(DeviceInfoSet,
+    if (GetPortResourceList(DeviceInfoSet,
                             DeviceInfoData,
                             &lpResourceList))
     {
@@ -223,7 +247,7 @@ GetParallelPortNumber(IN HDEVINFO DeviceInfoSet,
     TRACE("GetParallelPortNumber(%p, %p)\n",
           DeviceInfoSet, DeviceInfoData);
 
-    if (GetBootResourceList(DeviceInfoSet,
+    if (GetPortResourceList(DeviceInfoSet,
                             DeviceInfoData,
                             &lpResourceList))
     {

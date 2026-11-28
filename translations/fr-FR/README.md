@@ -1,4 +1,4 @@
-> [English](../../README.md) | [中文](../zh-CN/README.md) | **Français** | [Español](../es-ES/README.md) | [日本語](../ja-JP/README.md) | [العربية](../ar-MA/README.md)
+> [English](../../README.md) | [中文](../zh-CN/README.md) | **Français** | [Español](../es-ES/README.md) | [日本語](../ja-JP/README.md) | [العربية](../ar-MA/README.md) | [Українська](../uk-UA/README.md)
 
 <p align="center">
   <img src="../../media/graphics/branding/libernt-banner.png" width="480" alt="LiberNT">
@@ -142,7 +142,7 @@ Le moyen le plus rapide d'essayer LiberNT est le disque préinstallé :
 
 Démarrez `bootcd.iso` dans une machine virtuelle ou sur un PC, et suivez les instructions de l'**installation de LiberNT**.
 
-Le disque préinstallé contient aussi l'installation de LiberNT. Lancez `C:\<architecture>\libernt.exe`, par exemple `C:\arm64\libernt.exe`, pour installer LiberNT sur un autre disque depuis le système en cours d'exécution.
+Le disque préinstallé contient aussi l'installation de LiberNT. Lancez `C:\<architecture>\system32\oobe\oros.exe`, par exemple `C:\arm64\system32\oobe\oros.exe`, pour installer LiberNT sur un autre disque depuis le système en cours d'exécution.
 
 > [!CAUTION]
 > L'installation peut supprimer et formater des partitions. Sauvegardez tout ce qui est important sur le disque cible avant d'installer.

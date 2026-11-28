@@ -145,6 +145,11 @@ NTAPI
 NsiCancelChangeNotificationsKm(
     _In_ PFILE_OBJECT FileObject);
 
+VOID
+NTAPI
+NsiCancelChangeNotificationsByDeviceKm(
+    _In_ PDEVICE_OBJECT DeviceObject);
+
 NTSTATUS
 NTAPI
 NsiQueryTableSizesKm(

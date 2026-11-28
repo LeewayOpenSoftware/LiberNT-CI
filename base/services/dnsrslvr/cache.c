@@ -11,6 +11,9 @@
 #define NDEBUG
 #include <debug.h>
 
+/* Documented default of the DNS client's MaxNegativeCacheTtl value (seconds) */
+#define DNS_NEGATIVE_CACHE_TTL 300
+
 static RESOLVER_CACHE DnsCache;
 static BOOL DnsCacheInitialized = FALSE;
 
@@ -193,6 +196,13 @@ DnsIntCacheGetEntryByName(
     CacheEntry = DnsIntCacheFindEntry(Name, wType);
     if (CacheEntry)
     {
+        if (CacheEntry->Status != ERROR_SUCCESS)
+        {
+            Status = CacheEntry->Status;
+            DnsCacheUnlock();
+            return Status;
+        }
+
         *Record = DnsRecordSetCopyEx(CacheEntry->Record, DnsCharSetUnicode, DnsCharSetUnicode);
         Status = *Record ? ERROR_SUCCESS : ERROR_OUTOFMEMORY;
 
@@ -252,36 +262,51 @@ VOID
 DnsIntCacheAddEntry(
     _In_ LPCWSTR Name,
     _In_ WORD Type,
-    _In_ PDNS_RECORDW Record,
+    _In_opt_ PDNS_RECORDW Record,
+    _In_ DNS_STATUS Status,
     _In_ BOOL bHostsFileEntry)
 {
     PRESOLVER_CACHE_ENTRY Entry;
-    PDNS_RECORDW Copy, Tail;
+    PDNS_RECORDW Copy = NULL, Tail;
     ULONGLONG Expires = MAXULONGLONG;
     DWORD Ttl = MAXDWORD;
     SIZE_T NameSize;
 
-    DPRINT("DnsIntCacheAddEntry(%S %u %p %u)\n", Name, Type, Record, bHostsFileEntry);
+    DPRINT("DnsIntCacheAddEntry(%S %u %p %lu %u)\n", Name, Type, Record, Status, bHostsFileEntry);
 
     if (!bHostsFileEntry)
     {
-        for (Tail = Record; Tail; Tail = Tail->pNext)
-            Ttl = min(Ttl, Tail->dwTtl);
-        if (!Ttl)
-            return;
-        Expires = GetTickCount64() + (ULONGLONG)min(Ttl, 86400) * 1000;
+        if (Status == ERROR_SUCCESS)
+        {
+            for (Tail = Record; Tail; Tail = Tail->pNext)
+                Ttl = min(Ttl, Tail->dwTtl);
+            if (!Ttl)
+                return;
+            Expires = GetTickCount64() + (ULONGLONG)min(Ttl, 86400) * 1000;
+        }
+        else
+        {
+            /* The SOA of the authority section does not reach this layer, so a
+             * negative answer is cached for the documented default
+             * MaxNegativeCacheTtl instead of a record TTL */
+            Expires = GetTickCount64() + (ULONGLONG)DNS_NEGATIVE_CACHE_TTL * 1000;
+        }
     }
 
-    Copy = DnsRecordSetCopyEx(Record, DnsCharSetUnicode, DnsCharSetUnicode);
-    if (!Copy)
-        return;
+    if (Record)
+    {
+        Copy = DnsRecordSetCopyEx(Record, DnsCharSetUnicode, DnsCharSetUnicode);
+        if (!Copy)
+            return;
+    }
 
     DnsCacheLock();
 
     Entry = DnsIntCacheFindEntry(Name, Type);
     if (Entry && Entry->bHostsFileEntry)
     {
-        if (bHostsFileEntry)
+        /* Hosts entries stand until the file changes: extend them, drop anything else */
+        if (bHostsFileEntry && Copy)
         {
             for (Tail = Entry->Record; Tail->pNext; Tail = Tail->pNext);
             Tail->pNext = Copy;
@@ -290,6 +315,13 @@ DnsIntCacheAddEntry(
         {
             DnsRecordListFree(Copy, DnsFreeRecordList);
         }
+        DnsCacheUnlock();
+        return;
+    }
+    if (Entry && Entry->Status == ERROR_SUCCESS && Status != ERROR_SUCCESS)
+    {
+        /* A live answer wins over a new negative */
+        DnsRecordListFree(Copy, DnsFreeRecordList);
         DnsCacheUnlock();
         return;
     }
@@ -308,6 +340,7 @@ DnsIntCacheAddEntry(
     Entry->bHostsFileEntry = bHostsFileEntry;
     Entry->Record = Copy;
     Entry->Type = Type;
+    Entry->Status = Status;
     Entry->Expires = Expires;
     CopyMemory(Entry->Name, Name, NameSize);
     InsertTailList(&DnsCache.RecordList, &Entry->CacheLink);
@@ -334,10 +367,13 @@ DnsIntCacheGetEntries(
         /* Get the Current Entry */
         CacheEntry = CONTAINING_RECORD(NextEntry, RESOLVER_CACHE_ENTRY, CacheLink);
 
-        DPRINT("1 %S %lu\n", CacheEntry->Record->pName, CacheEntry->Record->wType);
-        if (CacheEntry->Record->pNext)
+        if (CacheEntry->Record)
         {
-            DPRINT("2 %S %lu\n", CacheEntry->Record->pNext->pName, CacheEntry->Record->pNext->wType);
+            DPRINT("1 %S %lu\n", CacheEntry->Record->pName, CacheEntry->Record->wType);
+            if (CacheEntry->Record->pNext)
+            {
+                DPRINT("2 %S %lu\n", CacheEntry->Record->pNext->pName, CacheEntry->Record->pNext->wType);
+            }
         }
 
         pNewEntry = midl_user_allocate(sizeof(DNS_CACHE_ENTRY));

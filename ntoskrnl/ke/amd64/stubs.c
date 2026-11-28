@@ -198,14 +198,27 @@ KiIdleLoop(VOID)
 #ifdef CONFIG_SMP
             KfRaiseIrql(SYNCH_LEVEL);
 
-            if (KiIdleSummary & Prcb->SetMember)
+            if (KiIsProcessorIdle(Prcb->Number))
             {
-                InterlockedBitTestAndResetAffinity(&KiIdleSummary,
-                                                   Prcb->Number);
+                KiClearProcessorIdle(Prcb->Number);
             }
 #endif
             Prcb->CurrentThread = NewThread;
             NewThread->State = Running;
+
+#ifdef CONFIG_SMP
+            /* While this processor is marked idle and is not sleeping, another
+             * processor that queues a DPC here sends no interrupt and leaves
+             * the DPC to the poll at the top of this loop. That poll is
+             * behind us. The idle mark is cleared, with a full barrier, so a
+             * DPC queued from now on gets its interrupt; one queued before
+             * is found here and is run when the new thread lowers the IRQL.
+             * Only the normal queue is looked at: threaded DPCs are run by
+             * the DPC thread, which is woken in its own way. */
+            KeMemoryBarrier();
+            if (Prcb->DpcData[0].DpcQueueDepth != 0)
+                KiRequestDispatchInterrupt(Prcb);
+#endif
             KiReleasePrcbLock(Prcb);
 
             _enable();
@@ -214,10 +227,9 @@ KiIdleLoop(VOID)
         else
         {
 #ifdef CONFIG_SMP
-            if (!(KiIdleSummary & Prcb->SetMember))
+            if (!KiIsProcessorIdle(Prcb->Number))
             {
-                InterlockedBitTestAndSetAffinity(&KiIdleSummary,
-                                                 Prcb->Number);
+                KiSetProcessorIdle(Prcb->Number);
             }
 #endif
             Prcb->Sleeping = TRUE;
@@ -262,6 +274,8 @@ KiSwapProcess(IN PKPROCESS NewProcess,
 #else
     __writecr3(NewProcess->DirectoryTableBase[0]);
 #endif
+
+    if (NewProcess != OldProcess) KiSpeculationProcessSwitch(NewProcess);
 
 #ifdef CONFIG_SMP
     if (NewProcess != OldProcess)

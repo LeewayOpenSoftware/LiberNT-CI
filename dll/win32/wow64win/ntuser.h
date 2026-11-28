@@ -910,6 +910,7 @@ W32KAPI HDESK   WINAPI NtUserGetThreadDesktop( DWORD thread, HDESK console_deskt
 W32KAPI HDESK   WINAPI NtUserGetThreadDesktop( DWORD thread );
 #endif
 W32KAPI ULONG   WINAPI NtUserGetThreadDpiAwarenessContext(void);
+W32KAPI LONG    WINAPI NtUserGetThreadDpiHostingBehavior(void);
 W32KAPI ULONG_PTR WINAPI NtUserGetThreadState( USERTHREADSTATECLASS cls );
 W32KAPI BOOL    WINAPI NtUserGetTitleBarInfo( HWND hwnd, TITLEBARINFO *info );
 W32KAPI INT     WINAPI NtUserGetUpdateRgn( HWND hwnd, HRGN hrgn, BOOL erase );
@@ -918,6 +919,7 @@ W32KAPI BOOL    WINAPI NtUserGetUpdateRect( HWND hwnd, RECT *rect, BOOL erase );
 W32KAPI DWORD   WINAPI NtUserGetWindowContextHelpId( HWND hwnd );
 W32KAPI HDC     WINAPI NtUserGetWindowDC( HWND hwnd );
 W32KAPI ULONG   WINAPI NtUserGetWindowDpiAwarenessContext( HWND hwnd );
+W32KAPI LONG    WINAPI NtUserGetWindowDpiHostingBehavior( HWND hwnd );
 W32KAPI BOOL    WINAPI NtUserGetWindowDisplayAffinity( HWND hwnd, DWORD *affinity );
 W32KAPI BOOL    WINAPI NtUserGetWindowPlacement( HWND hwnd, WINDOWPLACEMENT *placement );
 W32KAPI int     WINAPI NtUserGetWindowRgnEx( HWND hwnd, HRGN hrgn, UINT unk );
@@ -927,6 +929,7 @@ W32KAPI NTSTATUS WINAPI NtUserInitializeClientPfnArrays( const ntuser_client_fun
                                                          const ntuser_client_func_ptr *client_procsW,
                                                          const ntuser_client_func_ptr *client_workers, HINSTANCE user_module );
 W32KAPI BOOL    WINAPI NtUserInitializeTouchInjection( UINT max_count, UINT mode );
+W32KAPI BOOL    WINAPI NtUserInjectTouchInput( UINT32 count, const POINTER_TOUCH_INFO *contacts );
 W32KAPI HICON   WINAPI NtUserInternalGetWindowIcon( HWND hwnd, UINT type );
 W32KAPI INT     WINAPI NtUserInternalGetWindowText( HWND hwnd, WCHAR *text, INT count );
 W32KAPI BOOL    WINAPI NtUserIsChildWindowDpiMessageEnabled( HWND hwnd );
@@ -1025,6 +1028,7 @@ W32KAPI UINT_PTR WINAPI NtUserSetSystemTimer( HWND hwnd, UINT_PTR id, UINT timeo
 W32KAPI HWND    WINAPI NtUserSetTaskmanWindow( HWND hwnd );
 W32KAPI BOOL    WINAPI NtUserSetThreadDesktop( HDESK handle );
 W32KAPI ULONG   WINAPI NtUserSetThreadDpiAwarenessContext( ULONG context );
+W32KAPI LONG    WINAPI NtUserSetThreadDpiHostingBehavior( LONG behavior );
 W32KAPI UINT_PTR WINAPI NtUserSetTimer( HWND hwnd, UINT_PTR id, UINT timeout, TIMERPROC proc, ULONG tolerance );
 W32KAPI BOOL    WINAPI NtUserSetWindowContextHelpId( HWND hwnd, DWORD id );
 W32KAPI BOOL    WINAPI NtUserSetWindowFNID( HWND hwnd, WORD fnid );

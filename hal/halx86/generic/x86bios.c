@@ -92,6 +92,7 @@ HalInitializeBios(
         if (!Mdl)
         {
             ASSERT(FALSE);
+            return;
         }
 
         /* Get pointer to the pfn array */
@@ -140,6 +141,11 @@ HalInitializeBios(
         /* Map the MDL to system space */
         x86BiosMemoryMapping = MmGetSystemAddressForMdlSafe(Mdl, HighPagePriority);
         ASSERT(x86BiosMemoryMapping);
+        if (!x86BiosMemoryMapping)
+        {
+            IoFreeMdl(Mdl);
+            return;
+        }
 
         DPRINT1("*x86BiosMemoryMapping: %p, %p\n",
                 *(PVOID*)x86BiosMemoryMapping, *(PVOID*)(x86BiosMemoryMapping + 8));
@@ -505,9 +511,24 @@ BOOLEAN
 NTAPI
 HalpBiosDisplayReset(VOID)
 {
-    X86_BIOS_REGISTERS Registers;
+    X86_BIOS_REGISTERS Registers = {0};
     ULONG OldEflags;
     BOOLEAN Success;
+
+    PVOID Frames[10];
+    USHORT FrameCount, i;
+    static LONG CallCount;
+
+    /* Name the callers: this call reprograms the VGA out of the VBE
+     * framebuffer mode and runs with interrupts disabled, so a call after
+     * a WDDM adapter took the scanout is worth tracing. */
+    FrameCount = RtlCaptureStackBackTrace(0, RTL_NUMBER_OF(Frames), Frames, NULL);
+    for (i = FrameCount; i < RTL_NUMBER_OF(Frames); i++)
+        Frames[i] = NULL;
+    DPRINT1("HalpBiosDisplayReset #%ld irql %u frames %u: %p %p %p %p %p %p %p %p %p %p\n",
+            InterlockedIncrement(&CallCount), (ULONG)KeGetCurrentIrql(), (ULONG)FrameCount,
+            Frames[0], Frames[1], Frames[2], Frames[3], Frames[4],
+            Frames[5], Frames[6], Frames[7], Frames[8], Frames[9]);
 
     /* Save flags and disable interrupts */
     OldEflags = __readeflags();
@@ -519,6 +540,7 @@ HalpBiosDisplayReset(VOID)
 
     /* Restore previous flags */
     __writeeflags(OldEflags);
+    DPRINT1("HalpBiosDisplayReset done success %u\n", (ULONG)Success);
     return Success;
 }
 #endif // _M_AMD64

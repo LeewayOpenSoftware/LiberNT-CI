@@ -132,6 +132,7 @@ typedef struct _USETUP_DATA
     LONG AutoPartition;
     LONG FsType;
     BOOLEAN SelfTest;
+    BOOLEAN Upgrade;
 
 /* Settings lists *****/
     PGENERIC_LIST ComputerList;
@@ -252,6 +253,20 @@ UpdateRegistry(
     /**/IN PCWSTR SelectedLanguageId,    /* HACK HACK! */
     IN PREGISTRY_STATUS_ROUTINE StatusRoutine OPTIONAL,
     IN PFONTSUBSTSETTINGS SubstSettings OPTIONAL);
+
+PVOID
+RegSaveKeptSettings(
+    _In_ HINF SetupInf,
+    _In_ PCWSTR Section);
+
+VOID
+RegRestoreKeptSettings(
+    _In_opt_ PVOID KeptSettings);
+
+VOID
+RegRemoveObsoleteSettings(
+    _In_ HINF SetupInf,
+    _In_ PCWSTR Section);
 
 NTSTATUS
 NTAPI

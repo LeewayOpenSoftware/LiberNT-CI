@@ -326,9 +326,9 @@ co_HOOK_CallLowLevelChain(PHOOK Hook, INT Code, WPARAM wParam, LPARAM lParam)
 
     UserRefObjectCo(Hook, &Ref);
     pti->sphkCurrent = Hook;
-    UserDomainLockExclusive(DLT_HOOK);
+    BOOLEAN bDom0 = UserDomainLockExclusive(DLT_HOOK);
     Hook->phkNext = IntGetNextHook(Hook);
-    UserDomainUnlockExclusive(DLT_HOOK);
+    UserDomainUnlockExclusive(DLT_HOOK, bDom0);
     if (ClientInfo)
     {
        _SEH2_TRY
@@ -365,9 +365,9 @@ co_HOOK_CallLowLevelChain(PHOOK Hook, INT Code, WPARAM wParam, LPARAM lParam)
        _SEH2_END;
     }
     pti->sphkCurrent = SaveHook;
-    UserDomainLockExclusive(DLT_HOOK);
+    BOOLEAN bDom1 = UserDomainLockExclusive(DLT_HOOK);
     Hook->phkNext = NULL;
-    UserDomainUnlockExclusive(DLT_HOOK);
+    UserDomainUnlockExclusive(DLT_HOOK, bDom1);
     UserDerefObjectCo(Hook);
     return Result;
 }
@@ -776,49 +776,43 @@ co_UserCallNextHookEx(PHOOK Hook,
                 case HCBT_CREATEWND:
                 {
                     LPCBT_CREATEWNDW pcbtcww = (LPCBT_CREATEWNDW)lParam;
+                    LPCREATESTRUCTW UserCs = NULL;
+                    struct
+                    {
+                        CBT_CREATEWNDW Cbt;
+                        CREATESTRUCTW Cs;
+                    } *Capture;
 
                     TRACE("HOOK HCBT_CREATEWND\n");
+
+                    /* The ANSI and Unicode structures have the same layout. The
+                       next hook works on a kernel copy of both structures; the
+                       two strings stay the caller's pointers and are only
+                       handed on, never read here. */
+                    C_ASSERT(sizeof(CBT_CREATEWNDA) == sizeof(CBT_CREATEWNDW));
+                    C_ASSERT(sizeof(CREATESTRUCTA) == sizeof(CREATESTRUCTW));
+
+                    Capture = ExAllocatePoolWithTag(PagedPool, sizeof(*Capture), TAG_HOOK);
+                    if (!Capture)
+                    {
+                        break;
+                    }
+
                     _SEH2_TRY
                     {
-                        if (Ansi)
+                        ProbeForWrite(pcbtcww, sizeof(CBT_CREATEWNDW), 1);
+                        Capture->Cbt = *pcbtcww;
+                        UserCs = Capture->Cbt.lpcs;
+                        ProbeForWrite(UserCs, sizeof(CREATESTRUCTW), 1);
+                        Capture->Cs = *UserCs;
+                        ProbeForRead(Capture->Cs.lpszName,
+                                     Ansi ? sizeof(CHAR) : sizeof(WCHAR),
+                                     1);
+                        if (!IS_ATOM(Capture->Cs.lpszClass))
                         {
-                            ProbeForRead( pcbtcww,
-                                          sizeof(CBT_CREATEWNDA),
-                                          1);
-                            ProbeForWrite(pcbtcww->lpcs,
-                                          sizeof(CREATESTRUCTA),
-                                          1);
-                            ProbeForRead( pcbtcww->lpcs->lpszName,
-                                          sizeof(CHAR),
-                                          1);
-
-                            if (!IS_ATOM(pcbtcww->lpcs->lpszClass))
-                            {
-                                _Analysis_assume_(pcbtcww->lpcs->lpszClass != NULL);
-                                ProbeForRead(pcbtcww->lpcs->lpszClass,
-                                             sizeof(CHAR),
-                                             1);
-                            }
-                        }
-                        else
-                        {
-                            ProbeForRead( pcbtcww,
-                                          sizeof(CBT_CREATEWNDW),
-                                          1);
-                            ProbeForWrite(pcbtcww->lpcs,
-                                          sizeof(CREATESTRUCTW),
-                                          1);
-                            ProbeForRead( pcbtcww->lpcs->lpszName,
-                                          sizeof(WCHAR),
-                                          1);
-
-                            if (!IS_ATOM(pcbtcww->lpcs->lpszClass))
-                            {
-                                _Analysis_assume_(pcbtcww->lpcs->lpszClass != NULL);
-                                ProbeForRead(pcbtcww->lpcs->lpszClass,
-                                             sizeof(WCHAR),
-                                             1);
-                            }
+                            ProbeForRead(Capture->Cs.lpszClass,
+                                         Ansi ? sizeof(CHAR) : sizeof(WCHAR),
+                                         1);
                         }
                     }
                     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -831,11 +825,29 @@ co_UserCallNextHookEx(PHOOK Hook,
                     {
                         ERR("HOOK HCBT_CREATEWND write ERROR!\n");
                     }
-                    /* The next call handles the structures. */
                     if (!BadChk && Hook->Proc)
                     {
-                       lResult = co_HOOK_CallHookNext(Hook, Code, wParam, lParam);
+                        Capture->Cbt.lpcs = &Capture->Cs;
+                        lResult = co_HOOK_CallHookNext(Hook, Code, wParam, (LPARAM)&Capture->Cbt);
+
+                        /* The hook may have changed the position, the size and the Z order */
+                        _SEH2_TRY
+                        {
+                            ProbeForWrite(pcbtcww, sizeof(CBT_CREATEWNDW), 1);
+                            pcbtcww->hwndInsertAfter = Capture->Cbt.hwndInsertAfter;
+                            ProbeForWrite(UserCs, sizeof(CREATESTRUCTW), 1);
+                            UserCs->x = Capture->Cs.x;
+                            UserCs->y = Capture->Cs.y;
+                            UserCs->cx = Capture->Cs.cx;
+                            UserCs->cy = Capture->Cs.cy;
+                        }
+                        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                        {
+                            ERR("HOOK HCBT_CREATEWND write ERROR!\n");
+                        }
+                        _SEH2_END;
                     }
+                    ExFreePoolWithTag(Capture, TAG_HOOK);
                     break;
                 }
 
@@ -1253,9 +1265,9 @@ co_HOOK_CallHooks( INT HookId,
 
        /* Load it for the next call. */
        pti->sphkCurrent = Hook;
-       UserDomainLockExclusive(DLT_HOOK);
+       BOOLEAN bDom2 = UserDomainLockExclusive(DLT_HOOK);
        Hook->phkNext = IntGetNextHook(Hook);
-       UserDomainUnlockExclusive(DLT_HOOK);
+       UserDomainUnlockExclusive(DLT_HOOK, bDom2);
        if (ClientInfo)
        {
           _SEH2_TRY
@@ -1291,9 +1303,9 @@ co_HOOK_CallHooks( INT HookId,
           _SEH2_END;
        }
        pti->sphkCurrent = SaveHook;
-       UserDomainLockExclusive(DLT_HOOK);
+       BOOLEAN bDom3 = UserDomainLockExclusive(DLT_HOOK);
        Hook->phkNext = NULL;
-       UserDomainUnlockExclusive(DLT_HOOK);
+       UserDomainUnlockExclusive(DLT_HOOK, bDom3);
        UserDerefObjectCo(Hook);
        IntDereferenceThreadInfo(pti);
        ObDereferenceObject(pti->pEThread);
@@ -1492,9 +1504,9 @@ NtUserCallNextHookEx( int Code,
     /* Now in List run down. */
     if (ClientInfo && NextObj)
     {
-       UserDomainLockExclusive(DLT_HOOK);
+       BOOLEAN bDom4 = UserDomainLockExclusive(DLT_HOOK);
        NextObj->phkNext = IntGetNextHook(NextObj);
-       UserDomainUnlockExclusive(DLT_HOOK);
+       UserDomainUnlockExclusive(DLT_HOOK, bDom4);
        lResult = co_UserCallNextHookEx( NextObj, Code, wParam, lParam, NextObj->Ansi);
     }
 
@@ -1734,6 +1746,17 @@ NtUserSetWindowsHookEx( HINSTANCE Mod,
        {
           IntRemoveHook(Hook);
           SetLastNtError(Status);
+          goto Cleanup; // Return NULL
+       }
+
+       /* The name is copied for Length bytes into the fixed buffer of the
+          hook callback arguments, which has to keep its terminator */
+       if (ModuleName.Length > ModuleName.MaximumLength ||
+           (ModuleName.Length & 1) ||
+           ModuleName.Length > RTL_FIELD_SIZE(HOOKPROC_CALLBACK_ARGUMENTS, ModuleName) - sizeof(WCHAR))
+       {
+          IntRemoveHook(Hook);
+          EngSetLastError(ERROR_INVALID_PARAMETER);
           goto Cleanup; // Return NULL
        }
 

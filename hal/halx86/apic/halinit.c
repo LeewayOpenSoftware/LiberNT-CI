@@ -30,7 +30,7 @@ HalpEnsureBootProcessorFirst(VOID)
     ULONG BootApicId;
     ULONG i;
 
-    BootApicId = ApicRead(APIC_ID) >> 24;
+    BootApicId = ApicGetLocalId();
     for (i = 0; i < HalpApicInfoTable.ProcessorCount; i++)
     {
         if (HalpProcessorIdentity[i].LapicId == BootApicId)
@@ -56,7 +56,7 @@ HalpEnsureBootProcessorFirst(VOID)
 
     RtlZeroMemory(&HalpProcessorIdentity[0], sizeof(HalpProcessorIdentity[0]));
     HalpProcessorIdentity[0].ProcessorId = BootApicId;
-    HalpProcessorIdentity[0].LapicId = (UCHAR)BootApicId;
+    HalpProcessorIdentity[0].LapicId = BootApicId;
     HalpProcessorIdentity[0].BSPCheck = TRUE;
     if (HalpApicInfoTable.ProcessorCount < MAXIMUM_PROCESSORS)
         HalpApicInfoTable.ProcessorCount++;

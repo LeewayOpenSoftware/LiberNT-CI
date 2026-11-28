@@ -3565,7 +3565,20 @@ public:
 
         if (GetClientRect(&rcClient) && !IsRectEmpty(&rcClient))
         {
-            if (m_ButtonCount > 0)
+            /* A propagated garbage client rect (near INT_MAX width) would make
+               the button-width divisions overflow (btnsPerLine ~= width/btn).
+               Clamp the usable width to the virtual screen; reject <= 0. */
+            {
+                LONG cxMax = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                if (cxMax <= 0)
+                    cxMax = GetSystemMetrics(SM_CXSCREEN);
+                if (rcClient.right > cxMax)
+                    rcClient.right = cxMax;
+                if (rcClient.bottom > GetSystemMetrics(SM_CYVIRTUALSCREEN) &&
+                    GetSystemMetrics(SM_CYVIRTUALSCREEN) > 0)
+                    rcClient.bottom = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+            }
+            if (m_ButtonCount > 0 && rcClient.right > 0 && rcClient.bottom > 0)
             {
                 Horizontal = m_Tray->IsHorizontal();
 

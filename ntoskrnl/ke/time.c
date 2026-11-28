@@ -94,11 +94,11 @@ KiCheckClockWatchdog(
         return;
 
     Timeout = KI_CLOCK_WATCHDOG_TIMEOUT / KeMaximumIncrement;
-    for (Number = 0; Number < (ULONG)KeNumberProcessors; Number++)
+    for (Number = 0; Number < KiNumberProcessors; Number++)
     {
         TargetPrcb = KiProcessorBlock[Number];
         if ((TargetPrcb == NULL) || (TargetPrcb == Prcb) ||
-            !(KeActiveProcessors & TargetPrcb->SetMember) ||
+            !KiIsProcessorActive(Number) ||
             KiClockTickSuspended(TargetPrcb))
         {
             continue;
@@ -212,6 +212,8 @@ KeUpdateSystemTime(IN PKTRAP_FRAME TrapFrame,
         /* Break-in requested! */
         DbgBreakPointWithStatus(DBG_STATUS_CONTROL_C);
     }
+
+    ASSERT(KeMaximumIncrement != 0);
 
     /* Check for full tick */
     OldTick = *(ULONGLONG*)&KeTickCount;

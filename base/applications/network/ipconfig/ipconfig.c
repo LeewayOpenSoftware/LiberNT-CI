@@ -455,7 +455,7 @@ PrintAdapterDescription(PSTR lpClass)
                                          (PBYTE)lpConDesc,
                                          &dwDataSize) == ERROR_SUCCESS)
                     {
-                        printf("%s", lpConDesc);
+                        ConPrintf(StdOut, L"%hs", lpConDesc);
                     }
 
                     HeapFree(ProcessHeap, 0, lpConDesc);
@@ -904,7 +904,7 @@ ShowInfo(
         {
             ConResPrintf(StdOut, IDS_DESCRIPTION);
             PrintAdapterDescription(pAdapter->AdapterName);
-            printf("\n");
+            ConPuts(StdOut, L"\n");
 
             ConResPrintf(StdOut, IDS_PHYSICALADDRESS, PrintMacAddr(pAdapter->Address));
 
@@ -1376,7 +1376,7 @@ VOID
 RegisterDns(VOID)
 {
     /* FIXME */
-    printf("\nSorry /registerdns is not implemented yet\n");
+    ConPuts(StdOut, L"\nSorry /registerdns is not implemented yet\n");
 }
 
 static
@@ -1390,6 +1390,7 @@ DisplayDnsRecord(
     IN_ADDR Addr4;
     IN6_ADDR Addr6;
     DNS_STATUS Status;
+    DWORD StringIndex;
 
     ConResPrintf(StdOut, IDS_DNSNAME, pszName);
     ConResPrintf(StdOut, IDS_DNSLINE);
@@ -1499,6 +1500,11 @@ DisplayDnsRecord(
                              pThisRecord->Data.SRV.wWeight,
                              pThisRecord->Data.SRV.wPort);
                 break;
+
+            case DNS_TYPE_TEXT:
+                for (StringIndex = 0; StringIndex < pThisRecord->Data.TXT.dwStringCount; StringIndex++)
+                    ConResPrintf(StdOut, IDS_DNSTYPETXT, pThisRecord->Data.TXT.pStringArray[StringIndex]);
+                break;
         }
         ConPuts(StdOut, L"\n\n");
 
@@ -1547,7 +1553,7 @@ VOID
 ShowClassId(
     PWSTR pszAdapterName)
 {
-    printf("\nSorry /showclassid adapter is not implemented yet\n");
+    ConPuts(StdOut, L"\nSorry /showclassid adapter is not implemented yet\n");
 }
 
 VOID

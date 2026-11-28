@@ -9,10 +9,13 @@ adwaita-icon-theme-legacy, which ships PNGs only; their frames are those PNGs.
 
 import io
 from pathlib import Path
+import runpy
 import struct
 
 from PIL import Image
 import resvg_py
+
+is_owned = runpy.run_path(str(Path(__file__).resolve().parents[1] / "orosi-forma/forma_owned.py"))["is_owned"]
 
 
 SIZES = (16, 20, 24, 32, 40, 48, 256)
@@ -153,8 +156,6 @@ TARGETS = (
     ("devices/input-gaming", "dll/cpl/joy/", ("joy",)),
     ("legacy:legacy/applications-internet", "dll/cpl/inetcpl/", ("inetcpl",)),
     ("legacy:legacy/preferences-system-network", "dll/shellext/netshell/res/", ("netshell",)),
-    ("legacy:legacy/applications-graphics", "dll/cpl/openglcfg/resources/", ("openglcfg",)),
-    ("legacy:legacy/applications-graphics", "dll/cpl/wined3dcfg/resources/", ("wined3dcfg",)),
     ("legacy:legacy/modem", "dll/cpl/telephon/resources/", ("applet",)),
     ("legacy:legacy/ac-adapter", "dll/cpl/powercfg/resources/", ("ac",)),
     ("legacy:legacy/system-software-install", "dll/cpl/appwiz/resources/", ("applet",)),
@@ -478,6 +479,9 @@ def main():
             cache[name] = encode(assets, name)
         for icon in icons:
             target = directory + str(icon) + ".ico"
+            if is_owned(target):
+                print(name + " -> " + target + " skipped (Orosi Forma)")
+                continue
             (root / target).write_bytes(cache[name])
             print(name + " -> " + target)
 

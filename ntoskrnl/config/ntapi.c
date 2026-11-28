@@ -1755,6 +1755,11 @@ NtInitializeRegistry(IN USHORT Flag)
      */
     KdStartBootLog();
 
+    /* Same phase: the BootExecute list (autochk, autoconv) has finished, so
+     * file systems may stop deferring to the volume startup applications.
+     * This is what FsRtlAreVolumeStartupApplicationsComplete reports. */
+    FsRtlSetVolumeStartupApplicationsComplete();
+
     /* The hive list is loaded and the registry lock released: the
      * hibernation-file reserve may start now (it waits for this and for the
      * first paging file, whichever comes last). */
@@ -2178,8 +2183,50 @@ NtRestoreKey(IN HANDLE KeyHandle,
              IN HANDLE FileHandle,
              IN ULONG RestoreFlags)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    NTSTATUS Status;
+    HANDLE KmFileHandle = NULL;
+    PCM_KEY_BODY KeyObject;
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+
+    PAGED_CODE();
+
+    DPRINT("NtRestoreKey(0x%p, 0x%p, %lu)\n", KeyHandle, FileHandle, RestoreFlags);
+
+    if (RestoreFlags & ~(REG_WHOLE_HIVE_VOLATILE | REG_REFRESH_HIVE |
+                         REG_NO_LAZY_FLUSH | REG_FORCE_RESTORE))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!SeSinglePrivilegeCheck(SeRestorePrivilege, PreviousMode))
+        return STATUS_PRIVILEGE_NOT_HELD;
+
+    Status = CmpConvertHandleToKernelHandle(FileHandle,
+                                            IoFileObjectType,
+                                            FILE_READ_DATA,
+                                            PreviousMode,
+                                            &KmFileHandle);
+    if (!NT_SUCCESS(Status))
+        goto Quit;
+
+    Status = ObReferenceObjectByHandle(KeyHandle,
+                                       0,
+                                       CmpKeyObjectType,
+                                       PreviousMode,
+                                       (PVOID*)&KeyObject,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        goto Quit;
+
+    Status = CmRestoreKey(KeyObject->KeyControlBlock, KmFileHandle, RestoreFlags);
+
+    ObDereferenceObject(KeyObject);
+
+Quit:
+    if (KmFileHandle)
+        ObCloseHandle(KmFileHandle, KernelMode);
+
+    return Status;
 }
 
 NTSTATUS

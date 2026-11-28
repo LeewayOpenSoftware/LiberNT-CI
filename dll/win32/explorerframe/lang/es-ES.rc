@@ -81,7 +81,7 @@ BEGIN
     END
     POPUP "&Ayuda", FCIDM_MENU_HELP
     BEGIN
-        MENUITEM "&Acerca de LiberNT", IDM_HELP_ABOUT
+        MENUITEM "&Acerca de Orosi", IDM_HELP_ABOUT
     END
 END
 
@@ -335,11 +335,11 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_PARSE_ADDR_ERR_TITLE "LiberNT Explorer"
-    IDS_PARSE_ADDR_ERR_TEXT "LiberNT Explorer cannot find '%1'. Check the spelling and try again."
+    IDS_PARSE_ADDR_ERR_TITLE "Explorador de archivos"
+    IDS_PARSE_ADDR_ERR_TEXT "El Explorador de archivos no encuentra '%1'. Compruebe la ortografía e inténtelo de nuevo."
 END
 
 STRINGTABLE
 BEGIN
-    IDS_BROWSER_NAME "File Explorer"
+    IDS_BROWSER_NAME "Explorador de archivos"
 END

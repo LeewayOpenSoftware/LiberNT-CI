@@ -2064,7 +2064,7 @@ static LONG SYSLINK_GetIdealSize (const SYSLINK_INFO *infoPtr, int cxMaxWidth, S
     HDC hdc;
 
     rc.left = rc.top = rc.bottom = 0;
-    rc.right = cxMaxWidth;
+    rc.right = cxMaxWidth > 0 ? cxMaxWidth : MAXLONG;
 
     hdc = GetDC(infoPtr->Self);
     if (hdc != NULL)
@@ -2322,8 +2322,14 @@ static LRESULT WINAPI SysLinkWindowProc(HWND hwnd, UINT message,
         infoPtr->HasFocus = FALSE;
         infoPtr->MouseDownID = -1;
         infoPtr->TextColor = comctl32_color.clrWindowText;
+#ifdef __REACTOS__
+        /* COLOR_HOTLIGHT is the link colour; high contrast remaps it, COLOR_HIGHLIGHT can be unreadable on the window */
+        infoPtr->LinkColor = comctl32_color.clrHotTrackingColor;
+        infoPtr->VisitedColor = comctl32_color.clrHotTrackingColor;
+#else
         infoPtr->LinkColor = comctl32_color.clrHighlight;
         infoPtr->VisitedColor = comctl32_color.clrHighlight;
+#endif
         infoPtr->BreakChar = ' ';
         infoPtr->IgnoreReturn = infoPtr->Style & LWS_IGNORERETURN;
         TRACE("SysLink Ctrl creation, hwnd=%p\n", hwnd);
@@ -2353,6 +2359,12 @@ static LRESULT WINAPI SysLinkWindowProc(HWND hwnd, UINT message,
 
     case WM_SYSCOLORCHANGE:
         COMCTL32_RefreshSysColors();
+#ifdef __REACTOS__
+        infoPtr->TextColor = comctl32_color.clrWindowText;
+        infoPtr->LinkColor = comctl32_color.clrHotTrackingColor;
+        infoPtr->VisitedColor = comctl32_color.clrHotTrackingColor;
+        InvalidateRect(infoPtr->Self, NULL, TRUE);
+#endif
         return 0;
 
     default:

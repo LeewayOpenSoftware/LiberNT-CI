@@ -836,6 +836,9 @@ typedef struct _WND
 
     PVOID DialogPointer;
     ULONG DpiContext; /* Awareness context captured from the creating thread. */
+    UINT Dpi; /* Current per-window DPI; defaults to the system DPI. */
+    BOOLEAN NonClientDpiScaling;
+    ULONG DpiHostingBehavior; /* DPI_HOSTING_BEHAVIOR of the creating thread. */
     ULONG DialogDpiChangeBehavior;
     ULONG DialogControlDpiChangeBehavior;
 } WND, *PWND;
@@ -1006,14 +1009,9 @@ typedef LONG_PTR
 #define ICLS_SWITCH       20
 #define ICLS_ICONTITLE    21
 #define ICLS_TOOLTIPS     22
-#if (_WIN32_WINNT <= 0x0501)
-#define ICLS_UNKNOWN      22
-#define ICLS_NOTUSED      23
-#else
 #define ICLS_SYSSHADOW    23
 #define ICLS_HWNDMESSAGE  24
 #define ICLS_NOTUSED      25
-#endif
 #define ICLS_END          31
 
 #define COLOR_LAST COLOR_MENUBAR
@@ -1024,6 +1022,7 @@ typedef LONG_PTR
 #define SRVINFO_APIHOOK     0x0010
 #define SRVINFO_CTFIME_ENABLED 0x0020
 #define SRVINFO_KBDPREF     0x0080
+#define SRVINFO_DPIVIRTUALIZATION 0x0100
 
 #define NUM_SYSCOLORS 31
 
@@ -2871,6 +2870,26 @@ ULONG
 NTAPI
 NtUserGetWindowDpiAwarenessContext(_In_ HWND hWnd);
 
+UINT
+NTAPI
+NtUserGetDpiForWindow(_In_ HWND hWnd);
+
+BOOL
+NTAPI
+NtUserEnableNonClientDpiScaling(_In_ HWND hWnd);
+
+BOOL
+NTAPI
+NtUserForceWindowToDpiForTest(_In_ HWND hWnd, _In_ UINT Dpi);
+
+LONG
+NTAPI
+NtUserGetThreadDpiHostingBehavior(VOID);
+
+LONG
+NTAPI
+NtUserGetWindowDpiHostingBehavior(_In_ HWND hWnd);
+
 HANDLE
 NTAPI
 NtUserGetProp(
@@ -2881,6 +2900,18 @@ BOOL
 NTAPI
 NtUserIsMouseInPointerEnabled(VOID);
 
+BOOL
+NTAPI
+NtUserInitializeTouchInjection(
+    _In_ UINT32 MaxCount,
+    _In_ DWORD Mode);
+
+BOOL
+NTAPI
+NtUserInjectTouchInput(
+    _In_ UINT32 Count,
+    _In_reads_(Count) const POINTER_TOUCH_INFO *Contacts);
+
 ULONG
 NTAPI
 NtUserSetProcessDpiAwarenessContext(
@@ -2890,6 +2921,10 @@ NtUserSetProcessDpiAwarenessContext(
 ULONG
 NTAPI
 NtUserSetThreadDpiAwarenessContext(_In_ ULONG DpiContext);
+
+LONG
+NTAPI
+NtUserSetThreadDpiHostingBehavior(_In_ LONG Behavior);
 
 BOOL
 NTAPI
@@ -3827,6 +3862,8 @@ NtUserYieldTask(VOID);
 #define ROS_SERVERINFO_ATOMICONPROP               6
 #define ROS_SERVERINFO_ATOMICONSMPROP             7
 #define ROS_SERVERINFO_SRVIFLAGS                  8
+#define ROS_SERVERINFO_LOGPIXELS                  9
+#define ROS_SERVERINFO_PADDEDBORDER               10
 #define THUNKED_MENUITEMINFO_ROS_GETW             6
 #define TWOPARAM_ROUTINE_SETMENUBARHEIGHT         0xfffd0050
 #define TWOPARAM_ROUTINE_SETGUITHRDHANDLE         0xfffd0051

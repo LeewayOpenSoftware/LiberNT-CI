@@ -121,7 +121,8 @@ enum internal_event_message
     WM_ASYNC_SHOWWINDOW = 0x80000000,
     WM_ASYNC_SETWINDOWPOS,
     WM_ASYNC_SETACTIVEWINDOW,
-    WM_ASYNC_DESTROYWINDOW
+    WM_ASYNC_DESTROYWINDOW,
+    WM_ASYNC_REFITMAXIMIZED
 };
 
 #define POSTEVENT_DAW 4
@@ -175,6 +176,8 @@ co_MsqWaitForNewMessages(PTHREADINFO pti, PWND WndFilter,
 VOID FASTCALL MsqIncPaintCountQueue(PTHREADINFO);
 VOID FASTCALL MsqDecPaintCountQueue(PTHREADINFO);
 LRESULT FASTCALL co_IntSendMessage(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam);
+LRESULT FASTCALL co_IntSendSystemMessage(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam);
+LRESULT FASTCALL co_IntSendSystemMessageNoWait(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam);
 LRESULT FASTCALL co_IntPostOrSendMessage(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam);
 LRESULT FASTCALL
 co_IntSendMessageTimeout(HWND hWnd,

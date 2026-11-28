@@ -6,4 +6,3 @@ GNU General Public License version 3. Please see
 media/graphics/user-folders/morewaita/LICENSE for details and
 media/graphics/user-folders/morewaita for the SVG source.
 
-1.ico    devices/device_pci (apps/jockey)

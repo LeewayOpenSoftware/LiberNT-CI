@@ -762,6 +762,9 @@
     SVC_(GdiGetFontFileInfo, 5)
     SVC_(UserGetThreadDpiAwarenessContext, 0)
     SVC_(UserGetWindowDpiAwarenessContext, 1)
+    SVC_(UserGetDpiForWindow, 1)
+    SVC_(UserEnableNonClientDpiScaling, 1)
+    SVC_(UserForceWindowToDpiForTest, 2)
     SVC_(UserSetThreadDpiAwarenessContext, 1)
     /* WDDM 2.0 D3DKMT additions (ReactOS) */
     SVC_(GdiDdDDICreateSynchronizationObject2, 1)
@@ -900,3 +903,8 @@
     SVC_(DCompositionProcessChannelBatchBuffer, 4)
     SVC_(DCompositionCommitChannel, 8)
     SVC_(UserGetUpdatedClipboardFormats, 3)
+    SVC_(UserGetThreadDpiHostingBehavior, 0)
+    SVC_(UserSetThreadDpiHostingBehavior, 1)
+    SVC_(UserGetWindowDpiHostingBehavior, 1)
+    SVC_(UserInitializeTouchInjection, 2)
+    SVC_(UserInjectTouchInput, 2)

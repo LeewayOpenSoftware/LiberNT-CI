@@ -1,0 +1,47 @@
+# cargo-fuzz target for the IO-3 name-grafting validator. Differential libFuzzer harness:
+# it runs the kernel validator source (src/reparse_graft.rs, via #[path]) against an
+# independent in-file Rust oracle and asserts equality, so libFuzzer's coverage-guided
+# search hunts for both crashes/panics and behavioural divergence. Runs on the Linux
+# private CI (libFuzzer); not built on the Windows host.
+[package]
+name = "lnrspoc-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.7"
+# The LRM-RS engine under test, built as a host rlib (std feature drops no_std/panic_handler). The
+# C reference engine is compiled by build.rs and linked as the oracle.
+lrm-rs = { path = "../lrm-rs", features = ["std"] }
+
+[build-dependencies]
+# Compiles the vendored C special-pool engine (special.c) for the LRM-RS differential targets.
+cc = "1.0"
+
+[[bin]]
+name = "reparse_graft"
+path = "fuzz_targets/reparse_graft.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lrm_engine_diff"
+path = "fuzz_targets/lrm_engine_diff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lrm_mm_diff"
+path = "fuzz_targets/lrm_mm_diff.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

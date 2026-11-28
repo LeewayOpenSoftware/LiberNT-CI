@@ -38,9 +38,9 @@ ServiceBinary = %12%\acpiplat.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 PowerResource.DeviceDesc = "ACPI Power Resource"
 PowerButton.DeviceDesc = "ACPI Power Button"
 SleepButton.DeviceDesc = "ACPI Sleep Button"
 PlatformResource.DeviceDesc = "ACPI Motherboard Resource"
-AcpiPlat.ServiceDesc = "LiberNT ACPI Platform Device Driver"
+AcpiPlat.ServiceDesc = "Orosi ACPI Platform Device Driver"

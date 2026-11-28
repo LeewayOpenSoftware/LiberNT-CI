@@ -312,6 +312,56 @@ HRESULT WINAPI DwmEnableComposition(UINT uCompositionAction)
 }
 
 #ifdef __REACTOS__
+/*
+ * The visible frame of a top-level window, in physical coordinates (the
+ * caller has set a per-monitor context). A maximized window shows only its
+ * part on the monitor's work area. A themed frame with a transparent band
+ * (DWM_PROP_FRAME_INSETS) shows the window rect less that band, clamped to
+ * the window border and the client offset as win32k does for the compositor.
+ */
+static void dwm_visible_frame(HWND hwnd, RECT *rect)
+{
+    ULONG_PTR packed;
+    LONG insets[4], scale = 96, border_x, border_y;
+    RECT client, region;
+    POINT origin = {0, 0};
+    WINDOWINFO info;
+
+    if (IsZoomed(hwnd))
+    {
+        MONITORINFO info;
+
+        info.cbSize = sizeof(info);
+        if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &info))
+            IntersectRect(rect, rect, &info.rcWork);
+        return;
+    }
+    if (IsIconic(hwnd) || GetWindowRgnBox(hwnd, &region) != ERROR)
+        return;
+    packed = (ULONG_PTR)GetPropW(hwnd, DWM_PROP_FRAME_INSETS);
+    info.cbSize = sizeof(info);
+    if (!packed || !GetWindowInfo(hwnd, &info) || !info.cxWindowBorders ||
+        !GetClientRect(hwnd, &client) || !ClientToScreen(hwnd, &origin))
+        return;
+    OffsetRect(&client, origin.x, origin.y);
+    if (AreDpiAwarenessContextsEqual(GetWindowDpiAwarenessContext(hwnd), DPI_AWARENESS_CONTEXT_UNAWARE))
+        scale = GetDpiForSystem();
+    border_x = MulDiv(info.cxWindowBorders, scale, 96);
+    border_y = MulDiv(info.cyWindowBorders, scale, 96);
+
+    insets[0] = min(MulDiv(packed & 0xFF, scale, 96), min(border_x, max(client.left - rect->left, 0)));
+    insets[1] = min(MulDiv((packed >> 8) & 0xFF, scale, 96), min(border_y, max(client.top - rect->top, 0)));
+    insets[2] = min(MulDiv((packed >> 16) & 0xFF, scale, 96), min(border_x, max(rect->right - client.right, 0)));
+    insets[3] = min(MulDiv((packed >> 24) & 0xFF, scale, 96), min(border_y, max(rect->bottom - client.bottom, 0)));
+    if (insets[0] + insets[2] >= rect->right - rect->left ||
+        insets[1] + insets[3] >= rect->bottom - rect->top)
+        return;
+    rect->left += insets[0];
+    rect->top += insets[1];
+    rect->right -= insets[2];
+    rect->bottom -= insets[3];
+}
+
 static BOOL dwm_get_caption_button_bounds(HWND hwnd, RECT *rect)
 {
     static const WCHAR *const buttons[] =
@@ -699,7 +749,10 @@ HRESULT WINAPI DwmGetWindowAttribute(HWND hwnd, DWORD attribute, PVOID pv_attrib
         /* DWM frame bounds are always in physical coords */
         context = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
         if (GetWindowRect(hwnd, rect))
+        {
+            dwm_visible_frame(hwnd, rect);
             hr = S_OK;
+        }
         else
             hr = HRESULT_FROM_WIN32(GetLastError());
 

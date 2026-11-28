@@ -181,6 +181,157 @@ TestUnlistedStdHandle(
     CloseHandle(Read);
 }
 
+static
+BOOL
+StartWithHandleList(
+    _In_ PCWSTR Application,
+    _In_opt_ HANDLE Parent,
+    _In_ HANDLE Listed,
+    _In_ BOOL NullEntry,
+    _In_ BOOL ListFirst,
+    _Out_ PHANDLE Process)
+{
+    BYTE Buffer[256];
+    LPPROC_THREAD_ATTRIBUTE_LIST Attributes = (LPPROC_THREAD_ATTRIBUTE_LIST)Buffer;
+    PROCESS_INFORMATION ProcessInfo;
+    STARTUPINFOEXW Startup;
+    WCHAR CommandLine[MAX_PATH + 64];
+    HANDLE Entries[2];
+    SIZE_T Size = sizeof(Buffer);
+    DWORD Error, Step;
+    BOOL Success;
+
+    *Process = NULL;
+    Entries[0] = Listed;
+    Entries[1] = NULL;
+    ZeroMemory(&Startup, sizeof(Startup));
+    Startup.StartupInfo.cb = sizeof(Startup);
+    if (!InitializeProcThreadAttributeList(Attributes, 2, 0, &Size))
+        return FALSE;
+
+    for (Step = 0; Step < 2; Step++)
+    {
+        if ((Step == 0) == !ListFirst)
+        {
+            if (Parent)
+                UpdateProcThreadAttribute(Attributes, 0, PROC_THREAD_ATTRIBUTE_PARENT_PROCESS, &Parent, sizeof(Parent), NULL, NULL);
+        }
+        else
+        {
+            UpdateProcThreadAttribute(Attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, Entries,
+                                      (NullEntry ? 2 : 1) * sizeof(HANDLE), NULL, NULL);
+        }
+    }
+
+    Startup.lpAttributeList = Attributes;
+    StringCchPrintfW(CommandLine, ARRAYSIZE(CommandLine), L"\"%s\" StdHandleInheritance signal %Iu", Application, (ULONG_PTR)Listed);
+    Success = CreateProcessW(Application, CommandLine, NULL, NULL, TRUE, EXTENDED_STARTUPINFO_PRESENT, NULL, NULL,
+                             &Startup.StartupInfo, &ProcessInfo);
+    Error = GetLastError();
+    DeleteProcThreadAttributeList(Attributes);
+    if (Success)
+    {
+        CloseHandle(ProcessInfo.hThread);
+        *Process = ProcessInfo.hProcess;
+    }
+
+    SetLastError(Error);
+    return Success;
+}
+
+static
+VOID
+TestHandleListOfParent(
+    _In_ PCWSTR Application)
+{
+    PROCESS_INFORMATION Helper;
+    STARTUPINFOW Startup;
+    WCHAR CommandLine[MAX_PATH + 64];
+    HANDLE Event, Mine, Plain, InParent = NULL, Process;
+    DWORD Flags, Attempt, Order;
+    BOOL Success;
+
+    Event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    ok(Event != NULL, "CreateEventW failed with %lu\n", GetLastError());
+    if (!Event)
+        return;
+
+    Success = DuplicateHandle(GetCurrentProcess(), Event, GetCurrentProcess(), &Mine, 0, TRUE, DUPLICATE_SAME_ACCESS);
+    ok(Success, "DuplicateHandle failed with %lu\n", GetLastError());
+    Success = DuplicateHandle(GetCurrentProcess(), Event, GetCurrentProcess(), &Plain, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    ok(Success, "DuplicateHandle failed with %lu\n", GetLastError());
+
+    Success = StartWithHandleList(Application, NULL, Mine, FALSE, FALSE, &Process);
+    ok(Success, "Own inheritable handle: CreateProcessW failed with %lu\n", GetLastError());
+    if (Success)
+    {
+        ok_eq_ulong(WaitForSingleObject(Process, 60000), WAIT_OBJECT_0);
+        ok_eq_ulong(WaitForSingleObject(Event, 0), WAIT_OBJECT_0);
+        CloseHandle(Process);
+    }
+
+    Success = StartWithHandleList(Application, NULL, Plain, FALSE, FALSE, &Process);
+    ok(!Success && GetLastError() == ERROR_INVALID_PARAMETER, "Own handle that is not inheritable: %d with %lu\n", Success, GetLastError());
+    if (Success)
+        CloseHandle(Process);
+
+    Success = StartWithHandleList(Application, NULL, (HANDLE)(ULONG_PTR)0x7FFF0, FALSE, FALSE, &Process);
+    ok(!Success && GetLastError() == ERROR_INVALID_PARAMETER, "Value that is no handle: %d with %lu\n", Success, GetLastError());
+    if (Success)
+        CloseHandle(Process);
+
+    /* A NULL entry is no error: the process starts (and inherits nothing, which is the kernel's part) */
+    Success = StartWithHandleList(Application, NULL, Mine, TRUE, FALSE, &Process);
+    ok(Success, "List with a NULL entry: CreateProcessW failed with %lu\n", GetLastError());
+    if (Success)
+    {
+        ok_eq_ulong(WaitForSingleObject(Process, 60000), WAIT_OBJECT_0);
+        CloseHandle(Process);
+    }
+
+    ZeroMemory(&Startup, sizeof(Startup));
+    Startup.cb = sizeof(Startup);
+    StringCchPrintfW(CommandLine, ARRAYSIZE(CommandLine), L"\"%s\" StdHandleInheritance wait", Application);
+    Success = CreateProcessW(Application, CommandLine, NULL, NULL, FALSE, 0, NULL, NULL, &Startup, &Helper);
+    ok(Success, "CreateProcessW for the parent failed with %lu\n", GetLastError());
+    if (!Success)
+        goto Cleanup;
+
+    /* A value that this process could not pass as its own inheritable handle */
+    for (Attempt = 0; Attempt < 16; Attempt++)
+    {
+        Success = DuplicateHandle(GetCurrentProcess(), Event, Helper.hProcess, &InParent, 0, TRUE, DUPLICATE_SAME_ACCESS);
+        if (!Success || !GetHandleInformation(InParent, &Flags) || !(Flags & HANDLE_FLAG_INHERIT))
+            break;
+    }
+
+    ok(Success, "DuplicateHandle into the parent failed with %lu\n", GetLastError());
+    if (Success)
+    {
+        for (Order = 0; Order < 2; Order++)
+        {
+            ResetEvent(Event);
+            Success = StartWithHandleList(Application, Helper.hProcess, InParent, FALSE, Order, &Process);
+            ok(Success, "[%lu] Handle of the parent: CreateProcessW failed with %lu\n", Order, GetLastError());
+            if (!Success)
+                continue;
+
+            ok_eq_ulong(WaitForSingleObject(Process, 60000), WAIT_OBJECT_0);
+            ok(WaitForSingleObject(Event, 0) == WAIT_OBJECT_0, "[%lu] The process did not get the handle of its parent\n", Order);
+            CloseHandle(Process);
+        }
+    }
+
+    TerminateProcess(Helper.hProcess, 0);
+    CloseHandle(Helper.hThread);
+    CloseHandle(Helper.hProcess);
+
+Cleanup:
+    CloseHandle(Plain);
+    CloseHandle(Mine);
+    CloseHandle(Event);
+}
+
 START_TEST(StdHandleInheritance)
 {
     WCHAR Application[MAX_PATH];
@@ -190,6 +341,13 @@ START_TEST(StdHandleInheritance)
     ArgumentCount = winetest_get_mainargs(&Arguments);
     if (ArgumentCount >= 3 && !strcmp(Arguments[2], "child"))
         TerminateProcess(GetCurrentProcess(), RunChild());
+    if (ArgumentCount >= 3 && !strcmp(Arguments[2], "wait"))
+    {
+        Sleep(60000);
+        TerminateProcess(GetCurrentProcess(), 0);
+    }
+    if (ArgumentCount >= 4 && !strcmp(Arguments[2], "signal"))
+        TerminateProcess(GetCurrentProcess(), SetEvent((HANDLE)(ULONG_PTR)_strtoui64(Arguments[3], NULL, 10)) ? 0 : 4);
 
     if (!GetModuleFileNameW(NULL, Application, ARRAYSIZE(Application)))
     {
@@ -200,4 +358,5 @@ START_TEST(StdHandleInheritance)
     TestInheritance(Application, FALSE);
     TestInheritance(Application, TRUE);
     TestUnlistedStdHandle(Application);
+    TestHandleListOfParent(Application);
 }

@@ -48,6 +48,8 @@ typedef ULONG64 BITMAP_BUFFER, *PBITMAP_BUFFER;
 #define RtlNumberOfSetBits RtlNumberOfSetBits64
 #define RtlNumberOfClearBits RtlNumberOfClearBits64
 #define RtlNumberOfSetBitsInRange RtlNumberOfSetBitsInRange64
+#define RtlNumberOfClearBitsInRange RtlNumberOfClearBitsInRange64
+#define RtlExtractBitMap RtlExtractBitMap64
 #define RtlCopyBitMap RtlCopyBitMap64
 #define RtlIntersectBitMaps RtlIntersectBitMaps64
 #define RtlFindClearBits RtlFindClearBits64
@@ -549,6 +551,45 @@ RtlNumberOfSetBitsInRange(
         Count += RtlTestBit(BitMapHeader, Index) != 0;
 
     return Count;
+}
+
+BITMAP_INDEX
+NTAPI
+RtlNumberOfClearBitsInRange(
+    _In_ PRTL_BITMAP BitMapHeader,
+    _In_ BITMAP_INDEX StartingIndex,
+    _In_ BITMAP_INDEX Length)
+{
+    BITMAP_INDEX SetBits = RtlNumberOfSetBitsInRange(BitMapHeader, StartingIndex, Length);
+
+    /* An invalid range answers MAXINDEX, like RtlNumberOfSetBitsInRange */
+    return (SetBits == MAXINDEX) ? MAXINDEX : Length - SetBits;
+}
+
+VOID
+NTAPI
+RtlExtractBitMap(
+    _In_ PRTL_BITMAP Source,
+    _In_ PRTL_BITMAP Destination,
+    _In_ BITMAP_INDEX TargetBit,
+    _In_ BITMAP_INDEX NumberOfBits)
+{
+    BITMAP_INDEX Index;
+
+    if (TargetBit >= Source->SizeOfBitMap)
+        return;
+
+    NumberOfBits = min(NumberOfBits, Source->SizeOfBitMap - TargetBit);
+    NumberOfBits = min(NumberOfBits, Destination->SizeOfBitMap);
+
+    /* Ascending order stays correct when Destination aliases Source, as reads lead writes */
+    for (Index = 0; Index < NumberOfBits; ++Index)
+    {
+        if (RtlTestBit(Source, TargetBit + Index))
+            RtlSetBit(Destination, Index);
+        else
+            RtlClearBit(Destination, Index);
+    }
 }
 
 VOID

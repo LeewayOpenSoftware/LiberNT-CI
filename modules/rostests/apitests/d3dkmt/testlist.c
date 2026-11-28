@@ -14,6 +14,7 @@ extern void func_gpuva(void);
 extern void func_gpuva_parallel(void);
 extern void func_softgpu_lifetime(void);
 extern void func_softgpu_occlusion(void);
+extern void func_softgpu_tdr(void);
 extern void func_hwqueue(void);
 extern void func_sync2(void);
 extern void func_fencestorage(void);
@@ -41,6 +42,8 @@ extern void func_presentext(void);
 extern void func_misc(void);
 extern void func_teardown(void);
 extern void func_renderpath(void);
+extern void func_hdgfx_gen(void);
+extern void func_hdgfx_gen_session(void);
 extern void func_capsaudit(void);
 extern void func_umdabi(void);
 extern void func_adapterid(void);
@@ -50,6 +53,7 @@ extern void func_gpuvareserve(void);
 extern void func_gpusync(void);
 extern void func_syncshare(void);
 extern void func_stubparity(void);
+extern void func_badptr(void);
 extern void func_ctxflags(void);
 extern void func_eventcancel(void);
 extern void func_scheduling(void);
@@ -60,6 +64,7 @@ extern void func_abifreeze(void);
 extern void func_procstress(void);
 extern void func_umdload(void);
 extern void func_umd2d(void);
+extern void func_umdflip(void);
 extern void func_renderadapter(void);
 extern void func_luidident(void);
 extern void func_handletype(void);
@@ -106,6 +111,7 @@ const struct test winetest_testlist[] =
     { "gpuva_parallel", func_gpuva_parallel },
     { "softgpu_lifetime", func_softgpu_lifetime },
     { "softgpu_occlusion", func_softgpu_occlusion },
+    { "softgpu_tdr", func_softgpu_tdr },
     { "hwqueue",       func_hwqueue },
     { "sync2",         func_sync2 },
     { "fencestorage",  func_fencestorage },
@@ -133,6 +139,8 @@ const struct test winetest_testlist[] =
     { "misc",          func_misc },
     { "teardown",      func_teardown },
     { "renderpath",    func_renderpath },
+    { "hdgfx_gen",     func_hdgfx_gen },
+    { "hdgfx_gen_session", func_hdgfx_gen_session },
     { "capsaudit",     func_capsaudit },
     { "umdabi",        func_umdabi },
     { "adapterid",     func_adapterid },
@@ -142,6 +150,7 @@ const struct test winetest_testlist[] =
     { "gpusync",       func_gpusync },
     { "syncshare",     func_syncshare },
     { "stubparity",    func_stubparity },
+    { "badptr",        func_badptr },
     { "ctxflags",      func_ctxflags },
     { "eventcancel",   func_eventcancel },
     { "scheduling",    func_scheduling },
@@ -152,6 +161,7 @@ const struct test winetest_testlist[] =
     { "procstress",    func_procstress },
     { "umdload",       func_umdload },
     { "umd2d",         func_umd2d },
+    { "umdflip",       func_umdflip },
     { "renderadapter", func_renderadapter },
     { "luidident",     func_luidident },
     { "handletype",    func_handletype },

@@ -191,8 +191,9 @@
 #define IDC_ICONS_SETDEFAULT 3907
 
 /* Advanced General Dialog */
-#define IDC_FONTSIZE_COMBO   5000
-#define IDC_FONTSIZE_CUSTOM  5001
+#define IDC_SCALE_CURRENT    5000
+#define IDC_SCALE_SETTINGS   5001
+#define IDS_SCALE_CURRENT    4000
 #define IDC_RESTART_RB       5002
 #define IDC_WITHOUTREBOOT_RB 5003
 #define IDC_ASKME_RB         5004

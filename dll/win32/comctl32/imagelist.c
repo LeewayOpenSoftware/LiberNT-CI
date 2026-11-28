@@ -23,7 +23,6 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
  *
  *  TODO:
- *    - Add support for ILD_SCALE, ILD_DPISCALE
  *    - Add support for ILS_GLOW, ILS_SHADOW
  *    - Thread-safe locking
  */
@@ -1354,6 +1353,65 @@ done:
     return ret;
 }
 
+/* ILD_SCALE draws the image into the cx/cy box of the caller, ILD_DPISCALE into its own size scaled to the
+ * DPI of the destination DC. The image is composed at its native size over the shrunk destination background
+ * (so masks, blending and alpha behave as usual) and stretched once with halftoning. */
+static BOOL
+imagelist_draw_scaled (IMAGELISTDRAWPARAMS *pimldp, UINT fStyle)
+{
+    HIMAGELIST himl = pimldp->himl;
+    IMAGELISTDRAWPARAMS copy = *pimldp;
+    HDC hdc;
+    HBITMAP hbmp, hold;
+    INT dcx, dcy, dpi, mode;
+    POINT org;
+    BOOL ret;
+
+    if (fStyle & ILD_SCALE)
+    {
+        dcx = pimldp->cx ? pimldp->cx : himl->cx;
+        dcy = pimldp->cy ? pimldp->cy : himl->cy;
+    }
+    else
+    {
+        dpi = GetDeviceCaps(pimldp->hdcDst, LOGPIXELSX);
+        if (dpi <= 0) dpi = 96;
+        dcx = MulDiv(himl->cx, dpi, 96);
+        dcy = MulDiv(himl->cy, dpi, 96);
+    }
+    copy.fStyle &= ~(ILD_SCALE | ILD_DPISCALE);
+    copy.cx = copy.cy = 0;
+    if ((dcx == himl->cx && dcy == himl->cy) || dcx <= 0 || dcy <= 0)
+        return ImageList_DrawIndirect(&copy);
+
+    hdc = CreateCompatibleDC(pimldp->hdcDst);
+    hbmp = CreateCompatibleBitmap(pimldp->hdcDst, himl->cx, himl->cy);
+    if (!hdc || !hbmp)
+    {
+        if (hbmp) DeleteObject(hbmp);
+        if (hdc) DeleteDC(hdc);
+        return FALSE;
+    }
+    hold = SelectObject(hdc, hbmp);
+    SetStretchBltMode(hdc, HALFTONE);
+    StretchBlt(hdc, 0, 0, himl->cx, himl->cy, pimldp->hdcDst, pimldp->x, pimldp->y, dcx, dcy, SRCCOPY);
+    copy.hdcDst = hdc;
+    copy.x = copy.y = 0;
+    ret = ImageList_DrawIndirect(&copy);
+    if (ret)
+    {
+        mode = SetStretchBltMode(pimldp->hdcDst, HALFTONE);
+        SetBrushOrgEx(pimldp->hdcDst, 0, 0, &org);
+        ret = StretchBlt(pimldp->hdcDst, pimldp->x, pimldp->y, dcx, dcy, hdc, 0, 0, himl->cx, himl->cy, SRCCOPY);
+        SetBrushOrgEx(pimldp->hdcDst, org.x, org.y, NULL);
+        SetStretchBltMode(pimldp->hdcDst, mode);
+    }
+    SelectObject(hdc, hold);
+    DeleteObject(hbmp);
+    DeleteDC(hdc);
+    return ret;
+}
+
 /*************************************************************************
  * ImageList_DrawIndirect [COMCTL32.@]
  *
@@ -1392,6 +1450,8 @@ ImageList_DrawIndirect (IMAGELISTDRAWPARAMS *pimldp)
 
     fState = pimldp->cbSize < sizeof(IMAGELISTDRAWPARAMS) ? ILS_NORMAL : pimldp->fState;
     fStyle = pimldp->fStyle & ~ILD_OVERLAYMASK;
+    if (fStyle & (ILD_SCALE | ILD_DPISCALE))
+        return imagelist_draw_scaled(pimldp, fStyle);
     cx = (pimldp->cx == 0) ? himl->cx : pimldp->cx;
     cy = (pimldp->cy == 0) ? himl->cy : pimldp->cy;
 
@@ -1551,9 +1611,6 @@ ImageList_DrawIndirect (IMAGELISTDRAWPARAMS *pimldp)
 
     if (fState & ILS_GLOW) FIXME("ILS_GLOW: unimplemented!\n");
     if (fState & ILS_SHADOW) FIXME("ILS_SHADOW: unimplemented!\n");
-
-    if (fStyle & ILD_SCALE) FIXME("ILD_SCALE: unimplemented!\n");
-    if (fStyle & ILD_DPISCALE) FIXME("ILD_DPISCALE: unimplemented!\n");
 
     /* now copy the image to the screen */
     dwRop = SRCCOPY;

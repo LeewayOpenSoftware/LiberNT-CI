@@ -146,44 +146,90 @@ static DWORD query_reg_path (HKEY hKey, LPCWSTR lpszValue,
  *
  * Set the current active theme from the registry
  */
+static BOOL UXTHEME_ReadUserText(HKEY hKey, LPCWSTR name, LPWSTR buf, DWORD cch, DWORD maxChars)
+{
+    DWORD type, size = (cch - 1) * sizeof(WCHAR);
+
+    ZeroMemory(buf, cch * sizeof(WCHAR));
+    if (RegQueryValueExW(hKey, name, NULL, &type, (BYTE*)buf, &size) || type != REG_SZ ||
+        lstrlenW(buf) > (int)maxChars)
+    {
+        buf[0] = '\0';
+        return FALSE;
+    }
+    return TRUE;
+}
+
+#ifdef __REACTOS__
+static void UXTHEME_LoadTheme(BOOL bKeepActive)
+#else
 static void UXTHEME_LoadTheme(void)
+#endif
 {
     HKEY hKey;
-    DWORD buffsize;
     HRESULT hr;
     WCHAR tmp[10];
     PTHEME_FILE pt;
 
-    /* Get current theme configuration */
-    if(!RegOpenKeyW(HKEY_CURRENT_USER, szThemeManager, &hKey)) {
+    szCurrentTheme[0] = '\0';
+    szCurrentColor[0] = '\0';
+    szCurrentSize[0] = '\0';
+    bThemeActive = FALSE;
+    if (UXTHEME_TrustUsesMachineDefault())
+    {
+        WCHAR name[40];
+
+        /* T-PRIV-2 / T-PRIV-6: the user key is not read; the machine default is active when it passes the gate */
+        UXTHEME_TrustMachineDefault(name, ARRAY_SIZE(name));
+        bThemeActive = UXTHEME_TrustBuildV3Path(name, szCurrentTheme, ARRAY_SIZE(szCurrentTheme));
+    }
+    else if(!RegOpenKeyW(HKEY_CURRENT_USER, szThemeManager, &hKey)) {
         TRACE("Loading theme config\n");
-        buffsize = sizeof(tmp);
-        if (!RegQueryValueExW(hKey, L"ThemeActive", NULL, NULL, (BYTE*)tmp, &buffsize)) {
-            bThemeActive = (tmp[0] != '0');
+        bThemeActive = UXTHEME_ReadUserText(hKey, L"ThemeActive", tmp, ARRAY_SIZE(tmp), 1) && tmp[0] != '0';
+        UXTHEME_ReadUserText(hKey, L"ColorName", szCurrentColor, ARRAY_SIZE(szCurrentColor), ARRAY_SIZE(szCurrentColor) - 1);
+        UXTHEME_ReadUserText(hKey, L"SizeName", szCurrentSize, ARRAY_SIZE(szCurrentSize), ARRAY_SIZE(szCurrentSize) - 1);
+        if (UXTHEME_TrustV3AnyPathOrdinary())
+        {
+            /* T-GATE-4 rollback, ordinary processes only: the old any-path behaviour */
+            if (query_reg_path (hKey, L"DllName", szCurrentTheme))
+                szCurrentTheme[0] = '\0';
         }
-        else {
+        else
+        {
+            WCHAR stored[MAX_PATH], name[40];
+            DWORD type, buffsize = sizeof(stored) - sizeof(WCHAR);
+
+            ZeroMemory(stored, sizeof(stored));
+            if (!RegQueryValueExW(hKey, L"DllName", NULL, &type, (BYTE*)stored, &buffsize) &&
+                (type == REG_SZ || type == REG_EXPAND_SZ) &&
+                UXTHEME_TrustNameFromStoredPath(stored, name, ARRAY_SIZE(name)) &&
+                !UXTHEME_TrustBuildV3Path(name, szCurrentTheme, ARRAY_SIZE(szCurrentTheme)))
+                szCurrentTheme[0] = '\0';
+        }
+        if (!szCurrentTheme[0])
             bThemeActive = FALSE;
-            TRACE("Failed to get ThemeActive: %ld\n", GetLastError());
-        }
-        buffsize = sizeof(szCurrentColor);
-        if (RegQueryValueExW(hKey, L"ColorName", NULL, NULL, (BYTE*)szCurrentColor, &buffsize))
-            szCurrentColor[0] = '\0';
-        buffsize = sizeof(szCurrentSize);
-        if (RegQueryValueExW(hKey, L"SizeName", NULL, NULL, (BYTE*)szCurrentSize, &buffsize))
-            szCurrentSize[0] = '\0';
-        if (query_reg_path (hKey, L"DllName", szCurrentTheme))
-            szCurrentTheme[0] = '\0';
         RegCloseKey(hKey);
     }
     else
         TRACE("Failed to open theme registry key\n");
 
+#ifdef __REACTOS__
+    if (bThemeActive && bKeepActive &&
+        MSSTYLES_IsActiveTheme(szCurrentTheme,
+                               szCurrentColor[0] ? szCurrentColor : NULL,
+                               szCurrentSize[0] ? szCurrentSize : NULL,
+                               szCurrentColor, ARRAY_SIZE(szCurrentColor),
+                               szCurrentSize, ARRAY_SIZE(szCurrentSize)))
+    {
+        return;
+    }
+#endif
     if(bThemeActive) {
         /* Make sure the theme requested is actually valid */
-        hr = MSSTYLES_OpenThemeFile(szCurrentTheme,
-                                    szCurrentColor[0]?szCurrentColor:NULL,
-                                    szCurrentSize[0]?szCurrentSize:NULL,
-                                    &pt);
+        hr = UXTHEME_TrustOpenThemeFile(szCurrentTheme,
+                                        szCurrentColor[0]?szCurrentColor:NULL,
+                                        szCurrentSize[0]?szCurrentSize:NULL,
+                                        &pt, TRUE);
         if(FAILED(hr)) {
             bThemeActive = FALSE;
             szCurrentTheme[0] = '\0';
@@ -540,7 +586,11 @@ void UXTHEME_InitSystem(HINSTANCE hInst)
     atDialogBrush        = GlobalAddAtomW(L"wine_dialog_brush");
     atDialogHook         = GlobalAddAtomW(L"uxtheme_dlg_hook");
 
+#ifdef __REACTOS__
+    UXTHEME_LoadTheme(FALSE);
+#else
     UXTHEME_LoadTheme();
+#endif
 #ifndef __REACTOS__
     ThemeHooksInstall();
 #endif
@@ -567,12 +617,47 @@ void UXTHEME_UninitSystem(void)
 }
 
 #ifdef __REACTOS__
+void UXTHEME_ReloadTheme(BOOL load);
+static LONG g_reloadPending;
+
+static BOOL CALLBACK UXTHEME_RedrawProcessWindow(HWND hwnd, LPARAM lParam)
+{
+    DWORD pid;
+
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == (DWORD)lParam)
+        RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+    return TRUE;
+}
+
+static VOID CALLBACK UXTHEME_DeferredReload(HWND hwnd, UINT msg, UINT_PTR id, DWORD time)
+{
+    KillTimer(NULL, id);
+    InterlockedExchange(&g_reloadPending, 0);
+    UXTHEME_ReloadTheme(TRUE);
+    EnumWindows(UXTHEME_RedrawProcessWindow, (LPARAM)GetCurrentProcessId());
+}
+
 void UXTHEME_ReloadTheme(BOOL load)
 {
+    if (load && !UXTHEME_TrustReloadAllowed())
+    {
+        /* T-PRIV-5: one deferred reload at the end of the window */
+        /* several threads can get here; the first one arms a timer on its own message loop */
+        if (!InterlockedCompareExchange(&g_reloadPending, 1, 0) &&
+            !SetTimer(NULL, 0, UXTHEME_TrustReloadDelay(), UXTHEME_DeferredReload))
+            InterlockedExchange(&g_reloadPending, 0);
+        return;
+    }
     if (load)
-        UXTHEME_LoadTheme();
+        UXTHEME_LoadTheme(FALSE);
     else
         MSSTYLES_SetActiveTheme(NULL, FALSE);
+}
+
+void UXTHEME_LoadThemeIfChanged(void)
+{
+    UXTHEME_LoadTheme(TRUE);
 }
 #endif
 
@@ -704,6 +789,73 @@ static BOOL UXTHEME_ClassListContains(LPCWSTR classList, LPCWSTR wanted)
     return FALSE;
 }
 
+/* A style may ask for composited materials, but they only exist while the compositor runs; without it the plain
+ * (Basic) look applies. The probe is asked each time: composition can start or stop after the process did. */
+BOOL UXTHEME_CompositionAvailable(void)
+{
+    typedef HRESULT (WINAPI *PFN_DWMISCOMPOSITIONENABLED)(BOOL *);
+    static PFN_DWMISCOMPOSITIONENABLED pfn;
+    BOOL enabled = FALSE;
+
+    if (!pfn)
+    {
+        HMODULE module = LoadLibraryW(L"dwmapi.dll");
+
+        if (!module)
+            return FALSE;
+        pfn = (PFN_DWMISCOMPOSITIONENABLED)GetProcAddress(module, "DwmIsCompositionEnabled");
+        if (!pfn)
+            return FALSE;
+    }
+    return SUCCEEDED(pfn(&enabled)) && enabled;
+}
+
+/* The Aero look needs the compositor, and an administrator can switch it off for the machine. Any doubt about the
+ * switch (a value that cannot be read) means the Basic look. */
+/* Registry-only Mica policy, safe to call at process attach (no dwmapi / LoadLibrary under the loader lock):
+ * TRUE only when an administrator set HKLM ThemeManager\DisableMica = 1. Absent or unreadable counts as not
+ * disabled (the Aero default). The live compositor capability is a separate, paint-time question (MicaCapable). */
+BOOL UXTHEME_MicaDisabledByPolicy(void)
+{
+    HKEY key;
+    DWORD value = 0, size = sizeof(value), type;
+    LONG status;
+
+    status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, szThemeManager, 0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
+    if (status != ERROR_SUCCESS)
+        return FALSE;
+    status = RegQueryValueExW(key, L"DisableMica", NULL, &type, (LPBYTE)&value, &size);
+    RegCloseKey(key);
+    return status == ERROR_SUCCESS && type == REG_DWORD && value == 1;
+}
+
+BOOL UXTHEME_MicaCapable(void)
+{
+    HKEY key;
+    DWORD value = 0, size = sizeof(value), type;
+    LONG status;
+
+    if (!UXTHEME_CompositionAvailable())
+        return FALSE;
+    status = RegOpenKeyExW(HKEY_LOCAL_MACHINE, szThemeManager,
+                           0, KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
+    if (status == ERROR_FILE_NOT_FOUND)
+        return TRUE;
+    if (status != ERROR_SUCCESS)
+        return FALSE;
+    status = RegQueryValueExW(key, L"DisableMica", NULL, &type, (LPBYTE)&value, &size);
+    RegCloseKey(key);
+    if (status == ERROR_FILE_NOT_FOUND)
+        return TRUE;
+    return status == ERROR_SUCCESS && type == REG_DWORD && value == 0;
+}
+
+/* Store names of the two LiberNT version-4 styles: Aero with composited materials, Basic without */
+LPCWSTR UXTHEME_SelectDefaultStyleName(void)
+{
+    return UXTHEME_MicaCapable() ? L"LiberNTAero" : L"LiberNT";
+}
+
 static void UXTHEME_ClearLiquidProperties(HWND hwnd, ULONG region)
 {
     ULONG_PTR currentRegion = (ULONG_PTR)GetPropW(hwnd, DWM_PROP_BACKDROP_REGION);
@@ -798,6 +950,12 @@ static void UXTHEME_ApplyLiquidProperties(HWND hwnd, LPCWSTR classList,
     }
     if (!role)
         return;
+
+    if (!UXTHEME_CompositionAvailable())
+    {
+        UXTHEME_ClearLiquidProperties(hwnd, region);
+        return;
+    }
 
     liquid = NULL;
     if (bThemeActive && !shell && DwmSettingsReadColorScheme() == DWM_COLOR_SCHEME_LIGHT)
@@ -1280,6 +1438,8 @@ HRESULT WINAPI ApplyTheme(HTHEMEFILE hThemeFile, char *unknown, HWND hWnd)
     TRACE("(%p,%s,%p)\n", hThemeFile, unknown, hWnd);
 #endif
     hr = UXTHEME_SetActiveTheme(hThemeFile);
+    if (SUCCEEDED(hr))
+        UXTHEME_TrustClearGuard(hThemeFile);
 #ifdef __REACTOS__
     UXTHEME_broadcast_theme_changed(NULL, hThemeFile != NULL);
 #else

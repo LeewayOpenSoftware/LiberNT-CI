@@ -67,6 +67,11 @@ typedef struct _RpcConnection_np
     IO_STATUS_BLOCK io_status;
     HANDLE event_cache;
     BOOL read_closed;
+#ifdef __REACTOS__
+    PACL label; /* the endpoint's mandatory label, put on every instance of the pipe */
+    PACL dacl;  /* the endpoint's DACL; NULL with has_dacl set is a NULL DACL */
+    BOOL has_dacl;
+#endif
 } RpcConnection_np;
 
 static RpcConnection *rpcrt4_conn_np_alloc(void)
@@ -89,6 +94,82 @@ static void release_np_event(RpcConnection_np *connection, HANDLE event)
 }
 
 #ifdef __REACTOS__
+/* The access an ncalrpc client asks for on Windows, where the endpoint is a port */
+#define RPCRT4_PORT_CONNECT 0x0001
+
+/* The DACL a server gave its endpoint, in pipe rights, after the server user: NPFS checks each further
+ * instance the server creates against this DACL (read, write and create instance), and no one else may
+ * create one. For ncalrpc, an entry that covers connecting covers the client's access. */
+static DWORD
+rpcrt4_build_endpoint_dacl(PACL *Out, PACL CallerDacl, BOOL Lrpc, PSID ServerSid, PSID EveryoneSid, PSID AnonymousSid)
+{
+    static GENERIC_MAPPING PortMapping = { READ_CONTROL | RPCRT4_PORT_CONNECT, DELETE | RPCRT4_PORT_CONNECT, 0,
+                                           STANDARD_RIGHTS_REQUIRED | RPCRT4_PORT_CONNECT };
+    static GENERIC_MAPPING FileMapping = { FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS };
+    const ACCESS_MASK ClientAccess = (FILE_GENERIC_READ | FILE_GENERIC_WRITE) & ~FILE_CREATE_PIPE_INSTANCE;
+    ULONG Size = sizeof(ACL) + 4 * sizeof(ACCESS_ALLOWED_ACE) +
+                 RtlLengthSid(ServerSid) + 2 * RtlLengthSid(EveryoneSid) + RtlLengthSid(AnonymousSid);
+    ACE_HEADER *Ace;
+    PACL Dacl;
+    DWORD i, Pass, Err;
+
+    for (i = 0; CallerDacl && i < CallerDacl->AceCount; i++)
+        if (GetAce(CallerDacl, i, (void **)&Ace))
+            Size += Ace->AceSize;
+
+    if (!(Dacl = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size)))
+        return ERROR_OUTOFMEMORY;
+    if (!InitializeAcl(Dacl, Size, ACL_REVISION) ||
+        !AddAccessAllowedAce(Dacl, ACL_REVISION, FILE_ALL_ACCESS, ServerSid) ||
+        !AddAccessDeniedAce(Dacl, ACL_REVISION, FILE_CREATE_PIPE_INSTANCE, EveryoneSid))
+        goto fail;
+    /* a NULL DACL lets everyone connect */
+    if (!CallerDacl &&
+        (!AddAccessAllowedAce(Dacl, ACL_REVISION, ClientAccess, EveryoneSid) ||
+         !AddAccessAllowedAce(Dacl, ACL_REVISION, ClientAccess, AnonymousSid)))
+        goto fail;
+
+    /* pass 0: the caller's deny entries, pass 1: its allow entries */
+    for (Pass = 0; Pass < 2; Pass++)
+    {
+        for (i = 0; CallerDacl && i < CallerDacl->AceCount; i++)
+        {
+            ACCESS_ALLOWED_ACE *Entry;
+            ACCESS_MASK Mask;
+
+            if (!GetAce(CallerDacl, i, (void **)&Ace))
+                goto fail;
+            /* rpcrt4_np_set_security refused the deny entries that cannot be applied */
+            if (Ace->AceType != (Pass ? ACCESS_ALLOWED_ACE_TYPE : ACCESS_DENIED_ACE_TYPE) ||
+                (Ace->AceFlags & INHERIT_ONLY_ACE))
+                continue;
+            Entry = (ACCESS_ALLOWED_ACE *)Ace;
+            Mask = Entry->Mask;
+            if (Lrpc)
+            {
+                MapGenericMask(&Mask, &PortMapping);
+                Mask = (Mask & RPCRT4_PORT_CONNECT) ? ClientAccess : 0;
+            }
+            else
+                MapGenericMask(&Mask, &FileMapping);
+            Mask &= ~FILE_CREATE_PIPE_INSTANCE;
+            if (!Mask)
+                continue;
+            if (Pass ? !AddAccessAllowedAce(Dacl, ACL_REVISION, Mask, (PSID)&Entry->SidStart) :
+                       !AddAccessDeniedAce(Dacl, ACL_REVISION, Mask, (PSID)&Entry->SidStart))
+                goto fail;
+        }
+    }
+
+    *Out = Dacl;
+    return ERROR_SUCCESS;
+
+fail:
+    Err = GetLastError();
+    HeapFree(GetProcessHeap(), 0, Dacl);
+    return Err ? Err : ERROR_INVALID_ACL;
+}
+
 /**
  * @brief
  * Creates a security descriptor for RPC4 pipe
@@ -102,20 +183,41 @@ static void release_np_event(RpcConnection_np *connection, HANDLE event)
  * otherwise a Win32 error code is returned.
  *
  * @remarks
- * Everyone (aka World SID) and anonynous users
- * are given a subset of rights to access the pipe,
- * whereas admins are given full power.
+ * Everyone (aka World SID) and anonynous users may open, read and write the
+ * pipe but not create instances of it (FILE_CREATE_PIPE_INSTANCE), so that no
+ * other process can serve the endpoint's clients. The server's own user and
+ * admins are given full power; the server's user owns the pipe.
  */
 static DWORD
-rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
+rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc, PACL Label, PACL CallerDacl, BOOL HasCallerDacl, BOOL Lrpc)
 {
     DWORD ErrCode;
     PACL Dacl = NULL;
     ULONG DaclSize, RelSDSize = 0;
-    PSID EveryoneSid = NULL, AnonymousSid = NULL, AdminsSid = NULL;
+    PSID EveryoneSid = NULL, AnonymousSid = NULL, AdminsSid = NULL, ServerSid;
     PSECURITY_DESCRIPTOR AbsSD = NULL, RelSD = NULL;
+    BYTE ServerUser[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    HANDLE Token;
+    DWORD Length;
+    const ACCESS_MASK ClientAccess = (FILE_GENERIC_READ | FILE_GENERIC_WRITE) & ~FILE_CREATE_PIPE_INSTANCE;
     static SID_IDENTIFIER_AUTHORITY WorldAuthority = {SECURITY_WORLD_SID_AUTHORITY};
     static SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &Token))
+    {
+        ErrCode = GetLastError();
+        ERR("rpcrt4_create_pipe_security(): Failed to open the process token (error %lu)\n", ErrCode);
+        return ErrCode;
+    }
+    if (!GetTokenInformation(Token, TokenUser, ServerUser, sizeof(ServerUser), &Length))
+    {
+        ErrCode = GetLastError();
+        CloseHandle(Token);
+        ERR("rpcrt4_create_pipe_security(): Failed to query the process user (error %lu)\n", ErrCode);
+        return ErrCode;
+    }
+    CloseHandle(Token);
+    ServerSid = ((PTOKEN_USER)ServerUser)->User.Sid;
 
     if (!AllocateAndInitializeSid(&WorldAuthority,
                                   1,
@@ -166,10 +268,22 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
         goto Quit;
     }
 
+    if (HasCallerDacl)
+    {
+        ErrCode = rpcrt4_build_endpoint_dacl(&Dacl, CallerDacl, Lrpc, ServerSid, EveryoneSid, AnonymousSid);
+        if (ErrCode != ERROR_SUCCESS)
+        {
+            ERR("rpcrt4_create_pipe_security(): Failed to build the endpoint DACL (error %lu)\n", ErrCode);
+            goto Quit;
+        }
+        goto HaveDacl;
+    }
+
     DaclSize = sizeof(ACL) +
                sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(EveryoneSid) +
                sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(AnonymousSid) +
-               sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(AdminsSid);
+               sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(AdminsSid) +
+               sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(ServerSid);
 
     Dacl = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, DaclSize);
     if (Dacl == NULL)
@@ -188,7 +302,7 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
 
     if (!AddAccessAllowedAce(Dacl,
                              ACL_REVISION,
-                             GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE | READ_CONTROL,
+                             ClientAccess,
                              EveryoneSid))
     {
         ErrCode = GetLastError();
@@ -198,7 +312,7 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
 
     if (!AddAccessAllowedAce(Dacl,
                              ACL_REVISION,
-                             GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE | READ_CONTROL,
+                             ClientAccess,
                              AnonymousSid))
     {
         ErrCode = GetLastError();
@@ -216,6 +330,18 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
         goto Quit;
     }
 
+    /* The server creates the further instances of its own pipe */
+    if (!AddAccessAllowedAce(Dacl,
+                             ACL_REVISION,
+                             GENERIC_ALL,
+                             ServerSid))
+    {
+        ErrCode = GetLastError();
+        ERR("rpcrt4_create_pipe_security(): Failed to set up ACE for the server SID (error %lu)\n", ErrCode);
+        goto Quit;
+    }
+
+HaveDacl:
     if (!SetSecurityDescriptorDacl(AbsSD, TRUE, Dacl, FALSE))
     {
         ErrCode = GetLastError();
@@ -223,17 +349,24 @@ rpcrt4_create_pipe_security(PSECURITY_DESCRIPTOR *SecDesc)
         goto Quit;
     }
 
-    if (!SetSecurityDescriptorOwner(AbsSD, AdminsSid, FALSE))
+    if (!SetSecurityDescriptorOwner(AbsSD, ServerSid, FALSE))
     {
         ErrCode = GetLastError();
         ERR("rpcrt4_create_pipe_security(): Failed to set SD owner (error %lu)\n", ErrCode);
         goto Quit;
     }
 
-    if (!SetSecurityDescriptorGroup(AbsSD, AdminsSid, FALSE))
+    if (!SetSecurityDescriptorGroup(AbsSD, ServerSid, FALSE))
     {
         ErrCode = GetLastError();
         ERR("rpcrt4_create_pipe_security(): Failed to set SD group (error %lu)\n", ErrCode);
+        goto Quit;
+    }
+
+    if (Label && !SetSecurityDescriptorSacl(AbsSD, TRUE, Label, FALSE))
+    {
+        ErrCode = GetLastError();
+        ERR("rpcrt4_create_pipe_security(): Failed to set the label (error %lu)\n", ErrCode);
         goto Quit;
     }
 
@@ -296,7 +429,8 @@ static RPC_STATUS rpcrt4_conn_create_pipe(RpcConnection *conn)
     TRACE("listening on %s\n", connection->listen_pipe);
 
 #ifdef __REACTOS__
-    ErrCode = rpcrt4_create_pipe_security(&PipeSecDesc);
+    ErrCode = rpcrt4_create_pipe_security(&PipeSecDesc, connection->label, connection->dacl, connection->has_dacl,
+                                          !strcmp(conn->ops->name, "ncalrpc"));
     if (ErrCode != ERROR_SUCCESS)
     {
         ERR("rpcrt4_conn_create_pipe(): Pipe security descriptor creation failed\n");
@@ -383,6 +517,10 @@ static RPC_STATUS rpcrt4_conn_open_pipe(RpcConnection *Connection, LPCSTR pname,
     } else if (err == ERROR_BAD_NETPATH) {
       TRACE("connection failed, error=%x\n", err);
       return RPC_S_SERVER_UNAVAILABLE;
+    } else if (err == ERROR_ACCESS_DENIED) {
+      /* the endpoint's security refuses this client: waiting cannot change that */
+      WARN("connection refused, error=%lx\n", err);
+      return RPC_S_ACCESS_DENIED;
 #endif
     }
     if (!wait || !WaitNamedPipeA(pname, NMPWAIT_WAIT_FOREVER)) {
@@ -413,6 +551,52 @@ static char *ncalrpc_pipe_name(const char *endpoint)
   return pipe_name;
 }
 
+/*
+ * The client named the server it expects: the RPC_SECURITY_QOS_V3 Sid, and with
+ * RPC_C_QOS_CAPABILITIES_MUTUAL_AUTH the server principal name. Either must be the
+ * user the server runs as. rpcrt4 servers create their pipes owned by their process
+ * user, and nobody may name an owner it could not be, so the owner stands for the
+ * server. Like Windows, a mismatch is ERROR_ACCESS_DENIED when connecting.
+ */
+static RPC_STATUS rpcrt4_ncalrpc_check_server(RpcConnection *Connection, HANDLE pipe)
+{
+  const RpcQualityOfService *qos = Connection->QOS;
+  const WCHAR *principal = NULL;
+  PSECURITY_DESCRIPTOR sd = NULL;
+  BYTE named[SECURITY_MAX_SID_SIZE];
+  WCHAR domain[256];
+  DWORD size = 0, named_size = sizeof(named), domain_size = sizeof(domain) / sizeof(domain[0]);
+  SID_NAME_USE use;
+  PSID owner = NULL;
+  BOOL defaulted, ok = FALSE;
+
+  if (qos && (qos->qos->Capabilities & RPC_C_QOS_CAPABILITIES_MUTUAL_AUTH) &&
+      Connection->AuthInfo && Connection->AuthInfo->server_principal_name)
+    principal = Connection->AuthInfo->server_principal_name;
+  if (!(qos && qos->sid) && !principal)
+    return RPC_S_OK;
+
+  GetKernelObjectSecurity(pipe, OWNER_SECURITY_INFORMATION, NULL, 0, &size);
+  if (size && (sd = malloc(size)) &&
+      GetKernelObjectSecurity(pipe, OWNER_SECURITY_INFORMATION, sd, size, &size) &&
+      GetSecurityDescriptorOwner(sd, &owner, &defaulted) && owner)
+  {
+    ok = TRUE;
+    if (qos && qos->sid && !EqualSid(owner, qos->sid))
+      ok = FALSE;
+    /* the principal may be DOMAIN\user or a bare user name, in any case */
+    if (ok && principal &&
+        (!LookupAccountNameW(NULL, principal, named, &named_size, domain, &domain_size, &use) ||
+         !EqualSid(owner, named)))
+      ok = FALSE;
+  }
+  free(sd);
+
+  if (!ok)
+    WARN("the server is not the one the client named\n");
+  return ok ? RPC_S_OK : RPC_S_ACCESS_DENIED;
+}
+
 static RPC_STATUS rpcrt4_ncalrpc_open(RpcConnection* Connection)
 {
   RpcConnection_np *npc = (RpcConnection_np *) Connection;
@@ -427,8 +611,75 @@ static RPC_STATUS rpcrt4_ncalrpc_open(RpcConnection* Connection)
   r = rpcrt4_conn_open_pipe(Connection, pname, TRUE);
   I_RpcFree(pname);
 
+  if (r == RPC_S_OK)
+  {
+    r = rpcrt4_ncalrpc_check_server(Connection, npc->pipe);
+    if (r != RPC_S_OK)
+    {
+      CloseHandle(npc->pipe);
+      npc->pipe = NULL;
+    }
+  }
+
   return r;
 }
+
+#ifdef __REACTOS__
+/* The DACL and the mandatory label of an endpoint descriptor, put on every instance of the pipe */
+static RPC_STATUS rpcrt4_np_set_security(RpcConnection_np *npc, PSECURITY_DESCRIPTOR sd)
+{
+    BOOL present, defaulted;
+    PACL dacl, sacl;
+    ACE_HEADER *ace;
+    DWORD i, size;
+
+    if (!sd)
+        return RPC_S_OK;
+    if (!GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted))
+        return RPC_S_INVALID_SECURITY_DESC;
+    if (present)
+    {
+        for (i = 0; dacl && i < dacl->AceCount; i++)
+        {
+            /* a deny entry that cannot be applied would leave the endpoint more open than asked */
+            if (!GetAce(dacl, i, (void **)&ace) ||
+                (ace->AceType != ACCESS_ALLOWED_ACE_TYPE && ace->AceType != ACCESS_DENIED_ACE_TYPE &&
+                 ace->AceType != ACCESS_ALLOWED_OBJECT_ACE_TYPE && ace->AceType != ACCESS_ALLOWED_CALLBACK_ACE_TYPE &&
+                 ace->AceType != ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE))
+                return RPC_S_INVALID_SECURITY_DESC;
+        }
+        if (dacl)
+        {
+            if (!(npc->dacl = HeapAlloc(GetProcessHeap(), 0, dacl->AclSize)))
+                return RPC_S_OUT_OF_RESOURCES;
+            memcpy(npc->dacl, dacl, dacl->AclSize);
+        }
+        npc->has_dacl = TRUE;
+    }
+    if (!GetSecurityDescriptorSacl(sd, &present, &sacl, &defaulted))
+        return RPC_S_INVALID_SECURITY_DESC;
+    if (!present || !sacl)
+        return RPC_S_OK;
+
+    for (i = 0; i < sacl->AceCount; i++)
+    {
+        if (!GetAce(sacl, i, (void **)&ace) || ace->AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE)
+            continue;
+        size = sizeof(ACL) + ace->AceSize;
+        if (!(npc->label = HeapAlloc(GetProcessHeap(), 0, size)))
+            return RPC_S_OUT_OF_RESOURCES;
+        if (!InitializeAcl(npc->label, size, ACL_REVISION) ||
+            !AddAce(npc->label, ACL_REVISION, MAXDWORD, ace, ace->AceSize))
+        {
+            HeapFree(GetProcessHeap(), 0, npc->label);
+            npc->label = NULL;
+            return RPC_S_INVALID_SECURITY_DESC;
+        }
+        break;
+    }
+    return RPC_S_OK;
+}
+#endif
 
 static RPC_STATUS rpcrt4_protseq_ncalrpc_open_endpoint(RpcServerProtseq* protseq, const char *endpoint)
 {
@@ -451,6 +702,14 @@ static RPC_STATUS rpcrt4_protseq_ncalrpc_open_endpoint(RpcServerProtseq* protseq
   if (r != RPC_S_OK)
       return r;
 
+#ifdef __REACTOS__
+  r = rpcrt4_np_set_security((RpcConnection_np *)Connection, protseq->endpoint_sd);
+  if (r != RPC_S_OK)
+  {
+      RPCRT4_ReleaseConnection(Connection);
+      return r;
+  }
+#endif
   ((RpcConnection_np*)Connection)->listen_pipe = ncalrpc_pipe_name(Connection->Endpoint);
   r = rpcrt4_conn_create_pipe(Connection);
 
@@ -512,6 +771,8 @@ static char *ncacn_pipe_name(const char *endpoint)
   return pipe_name;
 }
 
+/* The RPC_SECURITY_QOS_V3 Sid is not checked here: only ncalrpc names a local server (see
+ * rpcrt4_ncalrpc_check_server); Windows could not be compared on ncacn_np. */
 static RPC_STATUS rpcrt4_ncacn_np_open(RpcConnection* Connection)
 {
   RpcConnection_np *npc = (RpcConnection_np *) Connection;
@@ -555,6 +816,12 @@ static RPC_STATUS rpcrt4_protseq_ncacn_np_open_endpoint(RpcServerProtseq *protse
     return r;
 
 #ifdef __REACTOS__
+  r = rpcrt4_np_set_security((RpcConnection_np *)Connection, protseq->endpoint_sd);
+  if (r != RPC_S_OK)
+  {
+      RPCRT4_ReleaseConnection(Connection);
+      return r;
+  }
   ((RpcConnection_np*)Connection)->listen_pipe = ncacn_pipe_name(NULL, Connection->Endpoint);
 #else
   ((RpcConnection_np*)Connection)->listen_pipe = ncacn_pipe_name(Connection->Endpoint);
@@ -875,11 +1142,17 @@ static RPC_STATUS rpcrt4_conn_np_impersonate_client(RpcConnection *conn)
     {
         DWORD error = GetLastError();
         WARN("ImpersonateNamedPipeClient failed with error %lu\n", error);
+#ifdef __REACTOS__
+        /* The server thread did not take the client's identity: a success here would let the
+           caller act with the server's own rights */
+        return error && error != ERROR_CANNOT_IMPERSONATE ? error : RPC_S_NO_CONTEXT_AVAILABLE;
+#else
         switch (error)
         {
         case ERROR_CANNOT_IMPERSONATE:
             return RPC_S_NO_CONTEXT_AVAILABLE;
         }
+#endif
     }
     return RPC_S_OK;
 }
@@ -946,6 +1219,15 @@ static void *rpcrt4_protseq_np_get_wait_array(RpcServerProtseq *protseq, void *p
                 continue;
 
             status = NtFsControlFile(conn->pipe, event, NULL, NULL, &conn->io_status, FSCTL_PIPE_LISTEN, NULL, 0, NULL, 0);
+#ifdef __REACTOS__
+            if (status == STATUS_PIPE_CLOSING || status == STATUS_PIPE_BROKEN)
+            {
+                /* The client of this instance has already gone: free the instance and listen again,
+                 * otherwise nobody listens on the pipe any more */
+                DisconnectNamedPipe(conn->pipe);
+                status = NtFsControlFile(conn->pipe, event, NULL, NULL, &conn->io_status, FSCTL_PIPE_LISTEN, NULL, 0, NULL, 0);
+            }
+#endif
             switch (status)
             {
             case STATUS_SUCCESS:
@@ -997,6 +1279,9 @@ static int rpcrt4_protseq_np_wait_for_new_connection(RpcServerProtseq *protseq, 
     DWORD res;
     RpcConnection *cconn = NULL;
     RpcConnection_np *conn;
+#ifdef __REACTOS__
+    BOOL listen_failed = FALSE;
+#endif
 
     if (!objs)
         return -1;
@@ -1031,11 +1316,22 @@ static int rpcrt4_protseq_np_wait_for_new_connection(RpcServerProtseq *protseq, 
                 if (conn->io_status.Status == STATUS_SUCCESS || conn->io_status.Status == STATUS_PIPE_CONNECTED)
                     cconn = rpcrt4_spawn_connection(&conn->common);
                 else
+                {
                     ERR("listen failed %lx\n", conn->io_status.Status);
+#ifdef __REACTOS__
+                    /* Keep serving: free the instance, the next wait listens on it again */
+                    DisconnectNamedPipe(conn->pipe);
+                    listen_failed = TRUE;
+#endif
+                }
                 break;
             }
         }
         LeaveCriticalSection(&protseq->cs);
+#ifdef __REACTOS__
+        if (listen_failed)
+            return 1;
+#endif
         if (!cconn)
         {
             ERR("failed to locate connection for handle %p\n", b_handle);
@@ -1169,7 +1465,8 @@ static RPC_STATUS rpcrt4_ncalrpc_inquire_auth_client(
     return RPC_S_OK;
 }
 
-static RPC_STATUS rpcrt4_ncalrpc_inquire_client_pid(RpcConnection *conn, ULONG *pid)
+/* Local RPC knows its client's process through the pipe; Windows does not report it for ncacn_np */
+static RPC_STATUS rpcrt4_conn_np_inquire_client_pid(RpcConnection *conn, ULONG *pid)
 {
     RpcConnection_np *connection = (RpcConnection_np *)conn;
 
@@ -1508,6 +1805,10 @@ static RPC_STATUS rpcrt4_protseq_ncacn_ip_tcp_open_endpoint(RpcServerProtseq *pr
     struct addrinfo *ai;
     struct addrinfo *ai_cur;
     struct addrinfo hints;
+#ifdef __REACTOS__
+    USHORT bound_port = 0;
+    BOOL listening = FALSE;
+#endif
 
     TRACE("(%p, %s)\n", protseq, endpoint);
 
@@ -1561,6 +1862,22 @@ static RPC_STATUS rpcrt4_protseq_ncacn_ip_tcp_open_endpoint(RpcServerProtseq *pr
             continue;
         }
 
+#ifdef __REACTOS__
+        /* One listening socket per address family on the same port, as Windows does: the IPv6
+           socket takes IPv6 only, and a dynamic endpoint reuses the port the first socket got */
+        if (ai_cur->ai_family == AF_INET6)
+        {
+            DWORD v6only = 1;
+            setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&v6only, sizeof(v6only));
+        }
+        if (bound_port)
+        {
+            if (ai_cur->ai_family == AF_INET6)
+                ((struct sockaddr_in6 *)ai_cur->ai_addr)->sin6_port = bound_port;
+            else
+                ((struct sockaddr_in *)ai_cur->ai_addr)->sin_port = bound_port;
+        }
+#endif
         ret = bind(sock, ai_cur->ai_addr, ai_cur->ai_addrlen);
         if (ret < 0)
         {
@@ -1631,6 +1948,17 @@ static RPC_STATUS rpcrt4_protseq_ncacn_ip_tcp_open_endpoint(RpcServerProtseq *pr
         tcpc->common.protseq = protseq;
         LeaveCriticalSection(&protseq->cs);
 
+#ifdef __REACTOS__
+        TRACE("listening on %s (family %d)\n", service, ai_cur->ai_family);
+        bound_port = sa.ss_family == AF_INET6 ? ((struct sockaddr_in6 *)&sa)->sin6_port
+                                              : ((struct sockaddr_in *)&sa)->sin_port;
+        listening = TRUE;
+    }
+
+    freeaddrinfo(ai);
+    if (listening)
+        return RPC_S_OK;
+#else
         freeaddrinfo(ai);
 
         /* since IPv4 and IPv6 share the same port space, we only need one
@@ -1640,6 +1968,7 @@ static RPC_STATUS rpcrt4_protseq_ncacn_ip_tcp_open_endpoint(RpcServerProtseq *pr
     }
 
     freeaddrinfo(ai);
+#endif
     ERR("couldn't listen on port %s\n", endpoint);
     return status;
 }
@@ -3452,7 +3781,7 @@ static const struct connection_ops conn_protseq_list[] = {
     rpcrt4_conn_np_impersonate_client,
     rpcrt4_conn_np_revert_to_self,
     rpcrt4_ncalrpc_inquire_auth_client,
-    rpcrt4_ncalrpc_inquire_client_pid
+    rpcrt4_conn_np_inquire_client_pid
   },
   { "ncacn_ip_tcp",
     { EPM_PROTOCOL_NCACN, EPM_PROTOCOL_TCP },

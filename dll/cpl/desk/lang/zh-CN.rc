@@ -87,7 +87,7 @@ CAPTION "高级外观"
 FONT 9, "宋体"
 BEGIN
     CONTROL "", IDC_APPEARANCE_PREVIEW, "PreviewWndClass", WS_VISIBLE | WS_BORDER, 7, 7, 232, 120
-    LTEXT "如果您选择 LiberNT 经典 之外的其他主题，它会覆盖下面的设置，除了在某些老旧的程序内以外。", IDC_ADVAPPEARANCE_DISCLAIMER, 7, 133, 232, 30, BS_MULTILINE
+    LTEXT "如果您选择 Orosi 经典 之外的其他主题，它会覆盖下面的设置，除了在某些老旧的程序内以外。", IDC_ADVAPPEARANCE_DISCLAIMER, 7, 133, 232, 30, BS_MULTILINE
     LTEXT "项目(&E)：", 8, 5, 160, 50, 9
     COMBOBOX IDC_ADVAPPEARANCE_ELEMENT, 5, 170, 130, 90, CBS_DROPDOWNLIST |
              CBS_HASSTRINGS | CBS_SORT | WS_VSCROLL | WS_TABSTOP
@@ -178,9 +178,8 @@ CAPTION "常规"
 FONT 9, "宋体"
 BEGIN
     GROUPBOX "显示", -1, 7, 6, 237, 56, WS_GROUP
-    LTEXT "字体大小：", -1, 14, 20, 222, 9//FIXME: add accel. 2k3sp2 does call this "&DPI setting:" now. Feel free to translate that.
-    COMBOBOX IDC_FONTSIZE_COMBO, 14, 30, 223, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT "", IDC_FONTSIZE_CUSTOM, 14, 46, 223, 12
+    LTEXT "", IDC_SCALE_CURRENT, 14, 20, 222, 9
+    PUSHBUTTON "Change in Settings...", IDC_SCALE_SETTINGS, 14, 34, 110, 14, WS_TABSTOP
     GROUPBOX "兼容性", -1, 7, 67, 237, 97
     LTEXT "如果在更改颜色设置后不立即重新启动计算机，某些程序可能无法正常工作。\n\n更改显示设置后：", -1, 12, 78, 228, 34
     AUTORADIOBUTTON "在应用新的颜色设置之前重新启动计算机(&R)", IDC_RESTART_RB, 14, 116, 228, 10
@@ -309,4 +308,9 @@ BEGIN
     IDS_APPLY_FAILED "应用新设置失败..."
     IDS_APPLY_NEEDS_RESTART "需要重新启动以生效。"
     IDS_TIMEOUTTEXT "%d 秒之内复原"
+END
+
+STRINGTABLE
+BEGIN
+    IDS_SCALE_CURRENT "Scale: %u%%"
 END

@@ -699,6 +699,8 @@ NdisMSetMiniportAttributes(
             RtlZeroMemory(&Ext->RegistrationAttrs, sizeof(Ext->RegistrationAttrs));
             RtlCopyMemory(&Ext->RegistrationAttrs, Reg, Reg->Header.Size);
             Ext->RegistrationAttrsValid = TRUE;
+            if (Reg->CheckForHangTimeInSeconds > 0)
+                Adapter->NdisMiniportBlock.CheckForHangSeconds = Reg->CheckForHangTimeInSeconds;
             Ext->DefaultPortActive =
                 (Reg->AttributeFlags & NDIS_MINIPORT_ATTRIBUTES_CONTROLS_DEFAULT_PORT) == 0;
 
@@ -1017,6 +1019,7 @@ Ndis6FindDriverBlock(_In_ PDRIVER_OBJECT DriverObject)
     PNDIS6_DRIVER_BLOCK block = NULL;
     KIRQL oldIrql;
 
+    Ndis6DriverInit();
     KeAcquireSpinLock(&g_Ndis6DriverListLock, &oldIrql);
     for (entry = g_Ndis6DriverList.Flink;
          entry != &g_Ndis6DriverList;

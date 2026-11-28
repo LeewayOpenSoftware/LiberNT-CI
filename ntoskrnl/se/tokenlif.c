@@ -543,6 +543,7 @@ SepDuplicateToken(
     ULONG VariableLength;
     ULONG DynamicPartSize, TotalSize;
     ULONG PrivilegesIndex, GroupsIndex;
+    UCHAR OwnerSid[SECURITY_MAX_SID_SIZE];
 
     PAGED_CODE();
 
@@ -799,6 +800,10 @@ SepDuplicateToken(
      */
     if (EffectiveOnly)
     {
+        /* The owner is found again by value once the groups have moved */
+        RtlCopySid(sizeof(OwnerSid), (PSID)OwnerSid,
+                   AccessToken->UserAndGroups[AccessToken->DefaultOwnerIndex].Sid);
+
         /*
          * Begin querying the groups and search for disabled ones. Do not touch the
          * user which is at the first position because it cannot be disabled, no
@@ -816,6 +821,13 @@ SepDuplicateToken(
              * group (that is, the group has SE_GROUP_MANDATORY attribute)
              * by standards it's always enabled and no one can disable it.
              */
+            /* The integrity label and a deny-only group are no groups that could be
+             * enabled; both stay as they are */
+            if (AccessToken->UserAndGroups[GroupsIndex].Attributes &
+                (SE_GROUP_INTEGRITY | SE_GROUP_USE_FOR_DENY_ONLY))
+            {
+                continue;
+            }
             if (AccessToken->UserAndGroups[GroupsIndex].Attributes == 0 ||
                 (AccessToken->UserAndGroups[GroupsIndex].Attributes & SE_GROUP_ENABLED) == 0)
             {
@@ -851,6 +863,18 @@ SepDuplicateToken(
                  */
                 SepRemovePrivilegeToken(AccessToken, PrivilegesIndex);
                 PrivilegesIndex--;
+            }
+        }
+
+        /* Removed groups shift the ones after them; a removed owner group leaves the user as owner */
+        AccessToken->IntegrityLevelIndex = SepFindIntegrityGroupIndex(AccessToken);
+        AccessToken->DefaultOwnerIndex = 0;
+        for (GroupsIndex = 1; GroupsIndex < AccessToken->UserAndGroupCount; GroupsIndex++)
+        {
+            if (RtlEqualSid(AccessToken->UserAndGroups[GroupsIndex].Sid, (PSID)OwnerSid))
+            {
+                AccessToken->DefaultOwnerIndex = GroupsIndex;
+                break;
             }
         }
     }
@@ -929,6 +953,70 @@ Quit:
  * of privileges and SIDs present in the token and then afterwards use
  * such obtained information to do any kind of filtering to the token.
  */
+/* The groups a LUA token keeps for deny-only use: the local operator aliases
+ * and the domain administrator groups. */
+static
+BOOLEAN
+SepIsAdminClassSid(
+    _In_ PSID Sid)
+{
+    static const SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
+    static const ULONG DomainAdminRids[] =
+    {
+        DOMAIN_GROUP_RID_ADMINS,
+        DOMAIN_GROUP_RID_SCHEMA_ADMINS,
+        DOMAIN_GROUP_RID_ENTERPRISE_ADMINS,
+        DOMAIN_GROUP_RID_POLICY_ADMINS
+    };
+    PISID Isid = Sid;
+    ULONG i;
+
+    if (RtlEqualSid(Sid, SeAliasAdminsSid) ||
+        RtlEqualSid(Sid, SeAliasPowerUsersSid) ||
+        RtlEqualSid(Sid, SeAliasAccountOpsSid) ||
+        RtlEqualSid(Sid, SeAliasSystemOpsSid) ||
+        RtlEqualSid(Sid, SeAliasPrintOpsSid) ||
+        RtlEqualSid(Sid, SeAliasBackupOpsSid))
+    {
+        return TRUE;
+    }
+
+    if (Isid->SubAuthorityCount == 5 &&
+        Isid->SubAuthority[0] == SECURITY_NT_NON_UNIQUE &&
+        RtlEqualMemory(&Isid->IdentifierAuthority, &NtAuthority, sizeof(NtAuthority)))
+    {
+        for (i = 0; i < RTL_NUMBER_OF(DomainAdminRids); i++)
+        {
+            if (*RtlSubAuthoritySid(Sid, 4) == DomainAdminRids[i])
+                return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+/* The privileges every LUA token keeps. */
+static
+BOOLEAN
+SepIsLuaPrivilege(
+    _In_ PLUID Luid)
+{
+    if (Luid->HighPart != 0)
+        return FALSE;
+
+    switch (Luid->LowPart)
+    {
+        case SE_CHANGE_NOTIFY_PRIVILEGE:
+        case SE_SHUTDOWN_PRIVILEGE:
+        case SE_UNDOCK_PRIVILEGE:
+        case SE_INC_WORKING_SET_PRIVILEGE:
+        case SE_TIME_ZONE_PRIVILEGE:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
 static
 NTSTATUS
 SepPerformTokenFiltering(
@@ -1484,6 +1572,46 @@ SepPerformTokenFiltering(
 
     /* We've finally filtered the token, return it to the caller */
     *FilteredToken = AccessToken;
+    /* A LUA token: the administrator-class groups only deny, the privileges
+     * drop to the five every user keeps, and the integrity level is Medium. */
+    if (PrivilegeFlags & LUA_TOKEN)
+    {
+        for (GroupsInToken = 1; GroupsInToken < AccessToken->UserAndGroupCount; GroupsInToken++)
+        {
+            if (AccessToken->UserAndGroups[GroupsInToken].Attributes & SE_GROUP_INTEGRITY)
+                continue;
+            if (!SepIsAdminClassSid(AccessToken->UserAndGroups[GroupsInToken].Sid))
+                continue;
+
+            if (AccessToken->DefaultOwnerIndex == GroupsInToken)
+                AccessToken->DefaultOwnerIndex = 0;
+            AccessToken->UserAndGroups[GroupsInToken].Attributes &=
+                ~(SE_GROUP_ENABLED | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_OWNER);
+            AccessToken->UserAndGroups[GroupsInToken].Attributes |= SE_GROUP_USE_FOR_DENY_ONLY;
+        }
+
+        for (PrivsInToken = 0; PrivsInToken < AccessToken->PrivilegeCount; PrivsInToken++)
+        {
+            if (SepIsLuaPrivilege(&AccessToken->Privileges[PrivsInToken].Luid))
+                continue;
+
+            AccessToken->Privileges[PrivsInToken].Attributes &= ~SE_PRIVILEGE_ENABLED;
+            SepUpdateSinglePrivilegeFlagToken(AccessToken, PrivsInToken);
+            SepRemovePrivilegeToken(AccessToken, PrivsInToken);
+            PrivsInToken--;
+        }
+
+        if (AccessToken->IntegrityLevelIndex != 0)
+        {
+            PSID Label = AccessToken->UserAndGroups[AccessToken->IntegrityLevelIndex].Sid;
+
+            if (*RtlSubAuthoritySid(Label, 0) > SECURITY_MANDATORY_MEDIUM_RID)
+                RtlCopySid(RtlLengthSid(Label), Label, SeMediumMandatorySid);
+        }
+
+        AccessToken->TokenFlags |= TOKEN_LUA;
+    }
+
     Status = STATUS_SUCCESS;
     DPRINT("SepPerformTokenFiltering(): The token has been filtered!\n");
 

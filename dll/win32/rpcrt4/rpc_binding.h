@@ -58,6 +58,7 @@ typedef struct _RpcQualityOfService
     LONG refs;
 
     RPC_SECURITY_QOS_V2_W *qos;
+    PSID sid; /* RPC_SECURITY_QOS_V3 Sid: the user the server must run as */
 } RpcQualityOfService;
 
 struct connection_ops;
@@ -78,6 +79,9 @@ typedef struct _RpcConnection
   TimeStamp exp;
   ULONG attr;
   RpcAuthInfo *AuthInfo;
+#ifdef __REACTOS__
+  BOOL auth_complete; /* server: the security context is established, not only started */
+#endif
   ULONG auth_context_id;
   ULONG encryption_auth_len;
   ULONG signature_auth_len;
@@ -87,6 +91,7 @@ typedef struct _RpcConnection
   /* client-only */
   struct list conn_pool_entry;
   ULONG assoc_group_id; /* association group returned during binding */
+  LUID token_id; /* token the connection was opened under; the transport may carry it as the caller identity */
   RPC_ASYNC_STATE *async_state;
   struct _RpcAssoc *assoc; /* association this connection is part of */
 
@@ -263,8 +268,14 @@ RPC_STATUS RpcTransport_ParseTopOfTower(const unsigned char *tower_data, size_t 
 void RPCRT4_SetThreadCurrentConnection(RpcConnection *Connection);
 void RPCRT4_SetThreadCurrentCallHandle(RpcBinding *Binding);
 RpcBinding *RPCRT4_GetThreadCurrentCallHandle(void);
+#ifdef __REACTOS__
+void RPCRT4_PushThreadContextHandle(NDR_SCONTEXT SContext, BOOL locked);
+BOOL RPCRT4_RemoveThreadContextHandle(NDR_SCONTEXT SContext);
+NDR_SCONTEXT RPCRT4_PopThreadContextHandle(BOOL *locked);
+#else
 void RPCRT4_PushThreadContextHandle(NDR_SCONTEXT SContext);
 void RPCRT4_RemoveThreadContextHandle(NDR_SCONTEXT SContext);
 NDR_SCONTEXT RPCRT4_PopThreadContextHandle(void);
+#endif
 
 #endif

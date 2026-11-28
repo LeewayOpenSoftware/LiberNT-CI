@@ -155,6 +155,8 @@ PagingWrite(PVOID Context, ULONG64 Slot, PVOID PageBuffer)
         return STATUS_UNEXPECTED_IO_ERROR;
 
     MachineCopyFromRam(MachineCurrent, Paging->Store + Slot * PAGE_SIZE, PageBuffer, PAGE_SIZE);
+    if (Paging->AfterWrite != NULL)
+        Paging->AfterWrite(Paging->AfterWriteContext);
     __sync_fetch_and_add(&Paging->WriteCalls, 1);
     return STATUS_SUCCESS;
 }
@@ -172,7 +174,10 @@ PagingWriteFrames(PVOID Context, ULONG64 Slot, const ULONG *Frames, ULONG PageCo
         return STATUS_UNEXPECTED_IO_ERROR;
 
     for (i = 0; i < PageCount; i++)
-        memcpy(Paging->Store + (Slot + i) * PAGE_SIZE, MachineFrame(MachineCurrent, Frames[i]), PAGE_SIZE);
+        MachineCopyFromRam(MachineCurrent, Paging->Store + (Slot + i) * PAGE_SIZE, MachineFrame(MachineCurrent, Frames[i]),
+                           PAGE_SIZE);
+    if (Paging->AfterWrite != NULL)
+        Paging->AfterWrite(Paging->AfterWriteContext);
     __sync_fetch_and_add(&Paging->WriteCalls, 1);
     return STATUS_SUCCESS;
 }
@@ -186,7 +191,7 @@ WorldAttachPageFile(TEST_WORLD *World, ULONG64 Slots)
     World->Paging.Store = calloc(Slots, PAGE_SIZE);
     if (!NT_SUCCESS(MiPageFileInitialize(&World->Paging.PageFile, &Ops, &World->Paging, Slots)))
         abort();
-    World->System.PageFile = &World->Paging.PageFile;
+    MI_ATOMIC_WRITE_POINTER(&World->System.PageFile, &World->Paging.PageFile);
 }
 
 void
@@ -354,6 +359,7 @@ static const TEST_ENTRY Tests[] =
     { "ntpaging", TestNtPaging, 0 },
     { "async", TestAsync, 0 },
     { "sys", TestSys, 0 },
+    { "guard", TestGuard, 0 },
     { "process", TestProcess, 0 },
     { "highmem", TestHighMem, 0 },
     { "lxmm", TestLxMm, 0 },

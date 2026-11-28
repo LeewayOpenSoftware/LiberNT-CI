@@ -1486,8 +1486,20 @@ STDMETHODIMP CMiniportWaveStreamCMI::SetState(KSSTATE NewState)
 		state = KSSTATE_STOP;
 	}
 
+#ifdef __REACTOS__
+	// Out of range enum values are not constant expressions for newer clang, so
+	// the AC3 stop takes the KSSTATE_STOP case and leaves the state as it was.
+	bool stopAC3 = (NewState == KSSTATE_STOP_AC3);
+	if (stopAC3) {
+		NewState = KSSTATE_STOP;
+	}
+
+	// STOP -> ACQUIRE -> PAUSE -> PLAY -> PAUSE -> ACQUIRE -> STOP
+	if ((state != NewState) || stopAC3) {
+#else
 	// STOP -> ACQUIRE -> PAUSE -> PLAY -> PAUSE -> ACQUIRE -> STOP
 	if (state != NewState) {
+#endif
 		switch (NewState) {
 			case KSSTATE_ACQUIRE:
 				DBGPRINT(("---KSSTATE_ACQUIRE: previous state: %d", state));
@@ -1610,7 +1622,11 @@ STDMETHODIMP CMiniportWaveStreamCMI::SetState(KSSTATE NewState)
 				KeReleaseMutex(&Miniport->mutex, FALSE);
 				break;
 		}
+#ifdef __REACTOS__
+		if (!stopAC3) {
+#else
 		if (NewState != KSSTATE_STOP_AC3) {
+#endif
 			state = NewState;
 		}
 	}

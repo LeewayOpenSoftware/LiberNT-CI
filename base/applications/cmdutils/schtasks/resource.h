@@ -1,0 +1,5 @@
+#pragma once
+
+#define IDS_CREATE_SUCCESS 100
+#define IDS_DELETE_SUCCESS 101
+#define IDS_CHANGE_SUCCESS 102

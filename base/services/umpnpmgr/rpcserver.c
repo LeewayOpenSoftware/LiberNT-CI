@@ -47,10 +47,9 @@ RTL_RESOURCE NotificationListLock;
 DWORD WINAPI
 RpcServerThread(LPVOID lpParameter)
 {
+    HANDLE hReady = lpParameter;
     RPC_STATUS Status;
     BOOLEAN RegisteredProtSeq = FALSE;
-
-    UNREFERENCED_PARAMETER(lpParameter);
 
     DPRINT("RpcServerThread() called\n");
 
@@ -78,7 +77,11 @@ RpcServerThread(LPVOID lpParameter)
 
     /* Make sure there's a usable endpoint */
     if (RegisteredProtSeq == FALSE)
+    {
+        if (hReady)
+            SetEvent(hReady);
         return 0;
+    }
 
     Status = RpcServerRegisterIf(pnp_v1_0_s_ifspec,
                                  NULL,
@@ -86,6 +89,8 @@ RpcServerThread(LPVOID lpParameter)
     if (Status != RPC_S_OK)
     {
         DPRINT1("RpcServerRegisterIf() failed (Status %lx)\n", Status);
+        if (hReady)
+            SetEvent(hReady);
         return 0;
     }
 
@@ -107,12 +112,18 @@ RpcServerThread(LPVOID lpParameter)
 
     Status = RpcServerListen(1,
                              20,
-                             FALSE);
+                             TRUE);
+    if (hReady)
+        SetEvent(hReady);
     if (Status != RPC_S_OK)
     {
         DPRINT1("RpcServerListen() failed (Status %lx)\n", Status);
         return 0;
     }
+
+    Status = RpcMgmtWaitServerListen();
+    if (Status != RPC_S_OK)
+        DPRINT1("RpcMgmtWaitServerListen() failed (Status %lx)\n", Status);
 
     DPRINT("RpcServerThread() done\n");
 
@@ -304,6 +315,194 @@ SetDeviceStatus(
 }
 
 
+/* The devices a removal reaches, children before their parents, as the PnP manager queries them */
+typedef struct _REMOVAL_DEVICES
+{
+    ULONG Count;
+    ULONG Capacity;
+    ULONG Queried;
+    PWSTR *Ids;
+} REMOVAL_DEVICES, *PREMOVAL_DEVICES;
+
+static
+BOOL
+AddRemovalDevice(
+    _Inout_ PREMOVAL_DEVICES Devices,
+    _In_ PCWSTR DeviceId)
+{
+    SIZE_T Size = (wcslen(DeviceId) + 1) * sizeof(WCHAR);
+    PWSTR *Ids;
+    ULONG Capacity;
+
+    if (Devices->Count == Devices->Capacity)
+    {
+        Capacity = Devices->Capacity ? Devices->Capacity * 2 : 8;
+        if (Devices->Ids != NULL)
+            Ids = HeapReAlloc(GetProcessHeap(), 0, Devices->Ids, Capacity * sizeof(PWSTR));
+        else
+            Ids = HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(PWSTR));
+        if (Ids == NULL)
+            return FALSE;
+        Devices->Ids = Ids;
+        Devices->Capacity = Capacity;
+    }
+
+    Devices->Ids[Devices->Count] = HeapAlloc(GetProcessHeap(), 0, Size);
+    if (Devices->Ids[Devices->Count] == NULL)
+        return FALSE;
+    CopyMemory(Devices->Ids[Devices->Count], DeviceId, Size);
+    Devices->Count++;
+    return TRUE;
+}
+
+static
+VOID
+FreeRemovalDevices(
+    _Inout_ PREMOVAL_DEVICES Devices)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < Devices->Count; Index++)
+        HeapFree(GetProcessHeap(), 0, Devices->Ids[Index]);
+    if (Devices->Ids != NULL)
+        HeapFree(GetProcessHeap(), 0, Devices->Ids);
+    ZeroMemory(Devices, sizeof(*Devices));
+}
+
+static
+BOOL
+GetRelatedDevice(
+    _In_ PCWSTR DeviceId,
+    _In_ ULONG Relation,
+    _Out_writes_(Length) PWSTR Related,
+    _In_ ULONG Length)
+{
+    PLUGPLAY_CONTROL_RELATED_DEVICE_DATA PlugPlayData;
+
+    if (Length == 0)
+        return FALSE;
+
+    /* The kernel takes and returns this length in bytes and does not
+     * terminate the name; room for the terminator is kept back */
+    RtlInitUnicodeString(&PlugPlayData.TargetDeviceInstance, DeviceId);
+    PlugPlayData.Relation = Relation;
+    PlugPlayData.RelatedDeviceInstance = Related;
+    PlugPlayData.RelatedDeviceInstanceLength = (Length - 1) * sizeof(WCHAR);
+    if (!NT_SUCCESS(NtPlugPlayControl(PlugPlayControlGetRelatedDevice, &PlugPlayData, sizeof(PlugPlayData))))
+        return FALSE;
+
+    Related[PlugPlayData.RelatedDeviceInstanceLength / sizeof(WCHAR)] = UNICODE_NULL;
+    return TRUE;
+}
+
+static
+BOOL
+CollectRemovalDevices(
+    _In_ PCWSTR DeviceId,
+    _Inout_ PREMOVAL_DEVICES Devices)
+{
+    WCHAR Child[MAX_DEVICE_ID_LEN];
+    WCHAR Next[MAX_DEVICE_ID_LEN];
+
+    if (GetRelatedDevice(DeviceId, PNP_GET_CHILD_DEVICE, Child, ARRAYSIZE(Child)))
+    {
+        for (;;)
+        {
+            if (!CollectRemovalDevices(Child, Devices))
+                return FALSE;
+            if (!GetRelatedDevice(Child, PNP_GET_SIBLING_DEVICE, Next, ARRAYSIZE(Next)))
+                break;
+            wcscpy(Child, Next);
+        }
+    }
+
+    return AddRemovalDevice(Devices, DeviceId);
+}
+
+static
+VOID
+SendRemovalEvent(
+    _In_ PREMOVAL_DEVICES Devices,
+    _In_ ULONG Count,
+    _In_ DWORD Code)
+{
+    DEV_BROADCAST_HANDLE EventData;
+    WCHAR PdoName[MAX_PATH];
+    ULONG Index;
+
+    ZeroMemory(&EventData, sizeof(EventData));
+    EventData.dbch_size = FIELD_OFFSET(DEV_BROADCAST_HANDLE, dbch_data) + 2 * sizeof(WCHAR);
+    EventData.dbch_devicetype = DBT_DEVTYP_HANDLE;
+    EventData.dbch_nameoffset = -1;
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        ZeroMemory(PdoName, sizeof(PdoName));
+        if (GetPhysicalDeviceObjectName(Devices->Ids[Index], PdoName, sizeof(PdoName)) && PdoName[0] != UNICODE_NULL)
+            BroadcastListenerEvent(Code, PdoName, (PBYTE)&EventData, EventData.dbch_size);
+    }
+}
+
+/* Applications that registered on a handle to a device of the removal are asked before the PnP manager asks the
+ * drivers; one that denies keeps the devices, and those already asked hear that the removal failed (dbt.h) */
+static
+CONFIGRET
+QueryRemovalApplications(
+    _In_ PCWSTR DeviceId,
+    _Out_ PREMOVAL_DEVICES Devices,
+    _Out_opt_ PPNP_VETO_TYPE pVetoType,
+    _Out_writes_opt_(ulNameLength) LPWSTR pszVetoName,
+    _In_ DWORD ulNameLength)
+{
+    DEV_BROADCAST_HANDLE EventData;
+    WCHAR PdoName[MAX_PATH];
+    ULONG Index;
+
+    ZeroMemory(Devices, sizeof(*Devices));
+    if (!CollectRemovalDevices(DeviceId, Devices))
+    {
+        FreeRemovalDevices(Devices);
+        return CR_OUT_OF_MEMORY;
+    }
+
+    ZeroMemory(&EventData, sizeof(EventData));
+    EventData.dbch_size = FIELD_OFFSET(DEV_BROADCAST_HANDLE, dbch_data) + 2 * sizeof(WCHAR);
+    EventData.dbch_devicetype = DBT_DEVTYP_HANDLE;
+    EventData.dbch_nameoffset = -1;
+
+    for (Index = 0; Index < Devices->Count; Index++)
+    {
+        ZeroMemory(PdoName, sizeof(PdoName));
+        if (!GetPhysicalDeviceObjectName(Devices->Ids[Index], PdoName, sizeof(PdoName)) || PdoName[0] == UNICODE_NULL)
+            continue;
+
+        Devices->Queried = Index + 1;
+        if (!QueryListeners(DBT_DEVICEQUERYREMOVE, PdoName, (PBYTE)&EventData, EventData.dbch_size))
+        {
+            SendRemovalEvent(Devices, Devices->Queried, DBT_DEVICEQUERYREMOVEFAILED);
+            FreeRemovalDevices(Devices);
+            if (pVetoType != NULL)
+                *pVetoType = PNP_VetoWindowsApp;
+            /* TODO: name the application that denied the removal (format INFO_NEEDED) */
+            if (pszVetoName != NULL && ulNameLength > 0)
+                *pszVetoName = UNICODE_NULL;
+            return CR_REMOVE_VETOED;
+        }
+    }
+
+    return CR_SUCCESS;
+}
+
+/* The drivers kept the devices: the applications asked put them back */
+static
+VOID
+CancelRemovalApplications(
+    _Inout_ PREMOVAL_DEVICES Devices)
+{
+    SendRemovalEvent(Devices, Devices->Queried, DBT_DEVICEQUERYREMOVEFAILED);
+}
+
+
 static
 CONFIGRET
 DisableDeviceInstance(
@@ -313,11 +512,16 @@ DisableDeviceInstance(
     _In_ DWORD ulNameLength)
 {
     PLUGPLAY_CONTROL_QUERY_REMOVE_DATA QueryRemoveData;
+    REMOVAL_DEVICES Devices;
     CONFIGRET ret = CR_SUCCESS;
     NTSTATUS Status;
 
     DPRINT1("DisableDeviceInstance(%S %p %p %lu)\n",
             pszDeviceInstance, pVetoType, pszVetoName, ulNameLength);
+
+    ret = QueryRemovalApplications(pszDeviceInstance, &Devices, pVetoType, pszVetoName, ulNameLength);
+    if (ret != CR_SUCCESS)
+        return ret;
 
     RtlInitUnicodeString(&QueryRemoveData.DeviceInstance,
                          pszDeviceInstance);
@@ -349,6 +553,10 @@ DisableDeviceInstance(
     {
         SetDeviceStatus(pszDeviceInstance, DN_HAS_PROBLEM, CM_PROB_DISABLED);
     }
+
+    if (!NT_SUCCESS(Status))
+        CancelRemovalApplications(&Devices);
+    FreeRemovalDevices(&Devices);
 
     return ret;
 }
@@ -741,6 +949,23 @@ done:
     return bAdmin;
 }
 
+/*
+ * Access policy: read-only PNP_* queries are open to any caller, but a function that
+ * changes device, driver, resource or registry state runs only for administrators (as on Windows),
+ * returning CR_ACCESS_DENIED otherwise. LocalSystem/service callers pass (their token carries the
+ * Administrators alias). In the setup/LiveCD environment (g_IsMiniNT) every caller is already
+ * SYSTEM and the check is not applied (mirrors ReportLogOn).
+ * Placed after the leading declarations in each state-changing function (C89 order).
+ */
+#define PNP_REQUIRE_ADMIN(hBinding) \
+    do { \
+        if ((g_IsMiniNT == FALSE) && (IsCallerAdministrator(hBinding) == FALSE)) \
+        { \
+            DPRINT1("PNP access denied: caller is not an administrator\n"); \
+            return CR_ACCESS_DENIED; \
+        } \
+    } while (0)
+
 
 VOID
 __RPC_USER
@@ -1038,7 +1263,12 @@ PNP_GetRelatedDeviceInstance(
 
     PlugPlayData.Relation = ulRelationship;
 
-    PlugPlayData.RelatedDeviceInstanceLength = *pulLength;
+    if (*pulLength == 0)
+        return CR_BUFFER_SMALL;
+
+    /* The kernel takes and returns this length in bytes and does not
+     * terminate the name; room for the terminator is kept back */
+    PlugPlayData.RelatedDeviceInstanceLength = (*pulLength - 1) * sizeof(WCHAR);
     PlugPlayData.RelatedDeviceInstance = pRelatedDeviceId;
 
     Status = NtPlugPlayControl(PlugPlayControlGetRelatedDevice,
@@ -1048,11 +1278,16 @@ PNP_GetRelatedDeviceInstance(
     {
         ret = NtStatusToCrError(Status);
     }
+    else
+    {
+        pRelatedDeviceId[PlugPlayData.RelatedDeviceInstanceLength / sizeof(WCHAR)] = UNICODE_NULL;
+        *pulLength = PlugPlayData.RelatedDeviceInstanceLength / sizeof(WCHAR) + 1;
+    }
 
     DPRINT("PNP_GetRelatedDeviceInstance() done (returns %lx)\n", ret);
     if (ret == CR_SUCCESS)
     {
-        DPRINT("RelatedDevice: %wZ\n", &PlugPlayData.RelatedDeviceInstance);
+        DPRINT("RelatedDevice: %S\n", pRelatedDeviceId);
     }
 
     return ret;
@@ -2037,6 +2272,7 @@ PNP_GetDeviceRegProp(
             lpValueName = L"Service";
             break;
 
+        /* TODO: derive CM_DRP_CLASS from ClassGUID and the class key; instance keys hold no Class value */
         case CM_DRP_CLASS:
             lpValueName = L"Class";
             break;
@@ -2267,6 +2503,7 @@ PNP_SetDeviceRegProp(
     UNREFERENCED_PARAMETER(hBinding);
     UNREFERENCED_PARAMETER(ulFlags);
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_SetDeviceRegProp(%p %S %lu %lu %p %lu 0x%08lx)\n",
            hBinding, pDeviceId, ulProperty, ulDataType, Buffer,
            ulLength, ulFlags);
@@ -2522,6 +2759,7 @@ PNP_CreateKey(
     UNREFERENCED_PARAMETER(hBinding);
     UNREFERENCED_PARAMETER(samDesired);
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_CreateKey(%p %S 0x%lx 0x%08lx)\n",
            hBinding, pszSubKey, samDesired, ulFlags);
 
@@ -2580,6 +2818,7 @@ PNP_DeleteRegistryKey(
     LPWSTR pszChildKey,
     DWORD ulFlags)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     UNIMPLEMENTED;
     return CR_CALL_NOT_IMPLEMENTED;
 }
@@ -2700,6 +2939,7 @@ PNP_DeleteClassKey(
 
     UNREFERENCED_PARAMETER(hBinding);
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_DeleteClassKey(%p %S 0x%08lx)\n",
            hBinding, pszClassGuid, ulFlags);
 
@@ -2752,14 +2992,16 @@ PNP_GetInterfaceDeviceAlias(
     RtlInitUnicodeString(&PlugPlayData.SymbolicLinkName, pszInterfaceDevice);
     PlugPlayData.AliasInterfaceClassGuid = AliasInterfaceGuid;
     PlugPlayData.AliasSymbolicLinkName = pszAliasInterfaceDevice;
-    PlugPlayData.AliasSymbolicLinkNameLength = *pulTransferLen;
+    /* The kernel takes this length in bytes and returns the bytes of the
+     * alias with its terminator */
+    PlugPlayData.AliasSymbolicLinkNameLength = *pulTransferLen * sizeof(WCHAR);
 
     Status = NtPlugPlayControl(PlugPlayControlGetInterfaceDeviceAlias,
                                &PlugPlayData,
                                sizeof(PLUGPLAY_CONTROL_INTERFACE_ALIAS_DATA));
     if (NT_SUCCESS(Status))
     {
-        *pulLength = PlugPlayData.AliasSymbolicLinkNameLength;
+        *pulLength = PlugPlayData.AliasSymbolicLinkNameLength / sizeof(WCHAR) - 1;
         *pulTransferLen = *pulLength + 1;
     }
     else
@@ -2804,14 +3046,14 @@ PNP_GetInterfaceDeviceList(
     PlugPlayData.Flags = ulFlags;
     PlugPlayData.FilterGuid = InterfaceGuid;
     PlugPlayData.Buffer = Buffer;
-    PlugPlayData.BufferSize = *pulLength;
+    PlugPlayData.BufferSize = *pulLength / sizeof(WCHAR);
 
     Status = NtPlugPlayControl(PlugPlayControlGetInterfaceDeviceList,
                                (PVOID)&PlugPlayData,
                                sizeof(PLUGPLAY_CONTROL_INTERFACE_DEVICE_LIST_DATA));
-    if (NT_SUCCESS(Status) && PlugPlayData.BufferSize <= *pulLength)
+    if (NT_SUCCESS(Status) && PlugPlayData.BufferSize <= *pulLength / sizeof(WCHAR))
     {
-        *pulLength = PlugPlayData.BufferSize;
+        *pulLength = PlugPlayData.BufferSize * sizeof(WCHAR);
     }
     else
     {
@@ -2860,7 +3102,7 @@ PNP_GetInterfaceDeviceListSize(
                                sizeof(PLUGPLAY_CONTROL_INTERFACE_DEVICE_LIST_DATA));
     if (NT_SUCCESS(Status))
     {
-        *pulLen = PlugPlayData.BufferSize;
+        *pulLen = PlugPlayData.BufferSize * sizeof(WCHAR);
     }
     else
     {
@@ -2891,7 +3133,7 @@ PNP_RegisterDeviceClassAssociation(
 
     UNREFERENCED_PARAMETER(hBinding);
 
-    DPRINT1("PNP_RegisterDeviceClassAssociation(%p %S %p %S %S %p %p 0x%08lx)\n",
+    DPRINT1("PNP_RegisterDeviceClassAssociation(%p %S %p %S %p %p %p 0x%08lx)\n",
            hBinding, pszDeviceID, InterfaceGuid, pszReference, pszSymLink,
            pulLength, pulTransferLen, ulFlags);
 
@@ -2900,6 +3142,16 @@ PNP_RegisterDeviceClassAssociation(
         (pulLength == NULL) ||
         (pulTransferLen == NULL))
         return CR_INVALID_POINTER;
+
+    /* The whole [out] buffer travels back to the caller on every path */
+    ZeroMemory(pszSymLink, *pulTransferLen * sizeof(WCHAR));
+
+    /* The call changes the device interfaces of the system */
+    if (!IsCallerAdministrator(hBinding))
+    {
+        *pulLength = 0;
+        return CR_ACCESS_DENIED;
+    }
 
     if (ulFlags != 0)
         return CR_INVALID_FLAG;
@@ -2912,14 +3164,17 @@ PNP_RegisterDeviceClassAssociation(
     RtlInitUnicodeString(&PlugPlayData.Reference, pszReference);
     PlugPlayData.Register = TRUE;
     PlugPlayData.SymbolicLinkName = pszSymLink;
-    PlugPlayData.SymbolicLinkNameLength = *pulLength;
+    /* The buffer for the link name has *pulTransferLen characters, whatever
+     * *pulLength says. The kernel takes its length in bytes and returns the
+     * bytes of the link name with its terminator. */
+    PlugPlayData.SymbolicLinkNameLength = *pulTransferLen * sizeof(WCHAR);
 
     Status = NtPlugPlayControl(PlugPlayControlDeviceClassAssociation,
                                &PlugPlayData,
                                sizeof(PLUGPLAY_CONTROL_CLASS_ASSOCIATION_DATA));
     if (NT_SUCCESS(Status))
     {
-        *pulLength = PlugPlayData.SymbolicLinkNameLength;
+        *pulLength = PlugPlayData.SymbolicLinkNameLength / sizeof(WCHAR);
         *pulTransferLen = *pulLength;
     }
     else
@@ -2955,10 +3210,14 @@ PNP_UnregisterDeviceClassAssociation(
     if (ulFlags != 0)
         return CR_INVALID_FLAG;
 
+    /* The call changes the device interfaces of the system */
+    if (!IsCallerAdministrator(hBinding))
+        return CR_ACCESS_DENIED;
+
     ZeroMemory(&PlugPlayData, sizeof(PlugPlayData));
     PlugPlayData.Register = FALSE;
     PlugPlayData.SymbolicLinkName = pszInterfaceDevice;
-    PlugPlayData.SymbolicLinkNameLength = wcslen(pszInterfaceDevice) + 1;
+    PlugPlayData.SymbolicLinkNameLength = (wcslen(pszInterfaceDevice) + 1) * sizeof(WCHAR);
 
     Status = NtPlugPlayControl(PlugPlayControlDeviceClassAssociation,
                                &PlugPlayData,
@@ -3116,6 +3375,7 @@ PNP_SetClassRegProp(
 
     UNREFERENCED_PARAMETER(hBinding);
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_SetClassRegProp(%p %S %lu %lu %p %lu 0x%08lx)\n",
            hBinding, pszClassGuid, ulProperty, ulDataType,
            Buffer, ulLength, ulFlags);
@@ -3392,6 +3652,7 @@ PNP_CreateDevInst(
     NTSTATUS Status;
     CONFIGRET ret = CR_SUCCESS;
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_CreateDevInst(%p %S %S %lu 0x%08lx)\n",
            hBinding, pszParentDeviceID, pszDeviceID, ulLength, ulFlags);
 
@@ -3721,6 +3982,7 @@ PNP_DeviceInstanceAction(
 
     UNREFERENCED_PARAMETER(hBinding);
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_DeviceInstanceAction(%p %lu 0x%08lx %S %S)\n",
            hBinding, ulMajorAction, ulMinorAction,
            pszDeviceInstance1, pszDeviceInstance2);
@@ -3844,6 +4106,7 @@ PNP_SetDeviceProblem(
 
     UNREFERENCED_PARAMETER(hBinding);
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_SetDeviceProblem(%p %S %lu 0x%08lx)\n",
            hBinding, pDeviceID, ulProblem, ulFlags);
 
@@ -3898,6 +4161,7 @@ PNP_DisableDevInst(
 
     UNREFERENCED_PARAMETER(hBinding);
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT1("PNP_DisableDevInst(%p %S %p %p %lu 0x%08lx)\n",
             hBinding, pDeviceID, pVetoType, pszVetoName, ulNameLength, ulFlags);
 
@@ -3992,6 +4256,7 @@ PNP_UninstallDevInst(
     LONG Error;
     NTSTATUS Status;
 
+    PNP_REQUIRE_ADMIN(hBinding);
     if (ulFlags != 0)
         return CR_INVALID_FLAG;
     if (!IsValidDeviceInstanceID(pDeviceID) || IsRootDeviceInstanceID(pDeviceID))
@@ -4140,6 +4405,7 @@ PNP_AddID(
 
     UNREFERENCED_PARAMETER(hBinding);
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_AddID(%p %S %S 0x%08lx)\n",
            hBinding, pszDeviceID, pszID, ulFlags);
 
@@ -4237,6 +4503,7 @@ PNP_RegisterDriver(
     LPWSTR pszDeviceID,
     DWORD ulFlags)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_RegisterDriver(%p %S 0x%lx)\n",
            hBinding, pszDeviceID, ulFlags);
 
@@ -4264,9 +4531,11 @@ PNP_QueryRemove(
     DWORD ulFlags)
 {
     PLUGPLAY_CONTROL_QUERY_REMOVE_DATA PlugPlayData;
+    REMOVAL_DEVICES Devices;
     NTSTATUS Status;
     DWORD ret = CR_SUCCESS;
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_QueryRemove(%p %S %p %p %lu 0x%lx)\n",
             hBinding, pszDeviceID, pVetoType, pszVetoName,
             ulNameLength, ulFlags);
@@ -4284,6 +4553,10 @@ PNP_QueryRemove(
     if (pszVetoName != NULL && ulNameLength > 0)
         *pszVetoName = UNICODE_NULL;
 
+    ret = QueryRemovalApplications(pszDeviceID, &Devices, pVetoType, pszVetoName, ulNameLength);
+    if (ret != CR_SUCCESS)
+        return ret;
+
     RtlZeroMemory(&PlugPlayData, sizeof(PlugPlayData));
     RtlInitUnicodeString(&PlugPlayData.DeviceInstance,
                          pszDeviceID);
@@ -4297,7 +4570,11 @@ PNP_QueryRemove(
     if (pVetoType != NULL)
         *pVetoType = PlugPlayData.VetoType;
     if (!NT_SUCCESS(Status))
+    {
         ret = NtStatusToCrError(Status);
+        CancelRemovalApplications(&Devices);
+    }
+    FreeRemovalDevices(&Devices);
 
     return ret;
 }
@@ -4315,9 +4592,11 @@ PNP_RequestDeviceEject(
     DWORD ulFlags)
 {
     PLUGPLAY_CONTROL_QUERY_REMOVE_DATA PlugPlayData;
+    REMOVAL_DEVICES Devices;
     NTSTATUS Status;
     DWORD ret = CR_SUCCESS;
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT1("PNP_RequestDeviceEject(%p %S %p %p %lu 0x%lx)\n",
             hBinding, pszDeviceID, pVetoType, pszVetoName,
             ulNameLength, ulFlags);
@@ -4334,6 +4613,10 @@ PNP_RequestDeviceEject(
     if (pszVetoName != NULL && ulNameLength > 0)
         *pszVetoName = UNICODE_NULL;
 
+    ret = QueryRemovalApplications(pszDeviceID, &Devices, pVetoType, pszVetoName, ulNameLength);
+    if (ret != CR_SUCCESS)
+        return ret;
+
     RtlZeroMemory(&PlugPlayData, sizeof(PlugPlayData));
     RtlInitUnicodeString(&PlugPlayData.DeviceInstance,
                          pszDeviceID);
@@ -4347,7 +4630,11 @@ PNP_RequestDeviceEject(
     if (pVetoType != NULL)
         *pVetoType = PlugPlayData.VetoType;
     if (!NT_SUCCESS(Status))
+    {
         ret = NtStatusToCrError(Status);
+        CancelRemovalApplications(&Devices);
+    }
+    FreeRemovalDevices(&Devices);
 
     return ret;
 }
@@ -4419,6 +4706,7 @@ PNP_RequestEjectPC(
     PLUGPLAY_CONTROL_RETRIEVE_DOCK_DATA DockData;
     NTSTATUS Status;
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_RequestEjectPC(%p)\n", hBinding);
 
     /* Retrieve the dock device */
@@ -4467,6 +4755,10 @@ PNP_HwProfFlags(
 
     if (!IsValidDeviceInstanceID(pDeviceID))
         return CR_INVALID_DEVINST;
+
+    /* Only the SET action changes state; the GET action is an open query. */
+    if (ulAction == PNP_SET_HWPROFFLAGS)
+        PNP_REQUIRE_ADMIN(hBinding);
 
     if (ulConfig == 0)
     {
@@ -4677,6 +4969,7 @@ PNP_AddEmptyLogConf(
     WCHAR szValueNameBuffer[LOGCONF_NAME_BUFFER_SIZE];
     CONFIGRET ret = CR_SUCCESS;
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_AddEmptyLogConf(%p %S %lu %p 0x%08lx)\n",
            hBinding, pDeviceID, ulPriority, pulLogConfTag, ulFlags);
 
@@ -4894,6 +5187,7 @@ PNP_FreeLogConf(
     WCHAR szValueNameBuffer[LOGCONF_NAME_BUFFER_SIZE];
     CONFIGRET ret = CR_SUCCESS;
 
+    PNP_REQUIRE_ADMIN(hBinding);
     DPRINT("PNP_FreeLogConf(%p %S %lu %lu 0x%08lx)\n",
            hBinding, pDeviceID, ulLogConfType, ulLogConfTag, ulFlags);
 
@@ -5316,6 +5610,7 @@ PNP_AddResDes(
     PNP_RPC_BUFFER_SIZE ResourceLen,
     DWORD ulFlags)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     UNIMPLEMENTED;
     return CR_CALL_NOT_IMPLEMENTED;
 }
@@ -5335,6 +5630,7 @@ PNP_FreeResDes(
     DWORD *pulPreviousResTag,
     DWORD ulFlags)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     UNIMPLEMENTED;
     return CR_CALL_NOT_IMPLEMENTED;
 }
@@ -6187,6 +6483,7 @@ PNP_ModifyResDes(
     PNP_RPC_BUFFER_SIZE ResourceLen,
     DWORD ulFlags)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     UNIMPLEMENTED;
     return CR_CALL_NOT_IMPLEMENTED;
 }
@@ -6239,6 +6536,7 @@ PNP_SetHwProf(
     DWORD ulHardwareProfile,
     DWORD ulFlags)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     return CR_CALL_NOT_IMPLEMENTED;
 }
 
@@ -6282,6 +6580,7 @@ PNP_RunDetection(
     handle_t hBinding,
     DWORD ulFlags)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     return CR_CALL_NOT_IMPLEMENTED;
 }
 
@@ -6670,6 +6969,7 @@ PNP_SetObjectProp(
     BYTE *PropertyBuffer,
     DWORD Flags)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     UNIMPLEMENTED;
     return CR_CALL_NOT_IMPLEMENTED;
 }
@@ -6681,6 +6981,7 @@ WINAPI
 PNP_InstallDevInst(
     handle_t hBinding)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     UNIMPLEMENTED;
     return CR_CALL_NOT_IMPLEMENTED;
 }
@@ -6692,6 +6993,7 @@ WINAPI
 PNP_ApplyPowerSettings(
     handle_t hBinding)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     UNIMPLEMENTED;
     return CR_CALL_NOT_IMPLEMENTED;
 }
@@ -6782,6 +7084,7 @@ PNP_SetActiveService(
     LPWSTR pszFilter,
     DWORD ulFlags)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     UNIMPLEMENTED;
     return CR_CALL_NOT_IMPLEMENTED;
 }
@@ -6793,6 +7096,7 @@ WINAPI
 PNP_DeleteServiceDevices(
     handle_t hBinding)
 {
+    PNP_REQUIRE_ADMIN(hBinding);
     UNIMPLEMENTED;
     return CR_CALL_NOT_IMPLEMENTED;
 }

@@ -1434,7 +1434,7 @@ MainWndProc(HWND hwnd, UINT Message, WPARAM wParam, LPARAM lParam)
                     break;
 
                 case IDM_VOLUMECTL:
-                    ShellExecute(hwnd, NULL, _T("SNDVOL32.EXE"), NULL, NULL, SW_SHOWNORMAL);
+                    ShellExecute(hwnd, NULL, _T("SNDVOL.EXE"), NULL, NULL, SW_SHOWNORMAL);
                     break;
 
                 case IDM_ABOUT:
@@ -1525,7 +1525,7 @@ _tWinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPTSTR lpCmdLine, INT nCmdShow)
 
     DisableMenuItems();
 
-    dwError = SearchPath(NULL, _T("SNDVOL32.EXE"), NULL, 0, NULL, NULL);
+    dwError = SearchPath(NULL, _T("SNDVOL.EXE"), NULL, 0, NULL, NULL);
     if (dwError == 0)
     {
         EnableMenuItem(hMainMenu, IDM_VOLUMECTL, MF_BYCOMMAND | MF_GRAYED);

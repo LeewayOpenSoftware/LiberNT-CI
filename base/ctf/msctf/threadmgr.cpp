@@ -9,6 +9,7 @@
 
 #include "precomp.h"
 #include "sinksnapshot.h"
+#include <cictf.h>
 
 #include <wine/debug.h>
 WINE_DEFAULT_DEBUG_CHANNEL(msctf);
@@ -60,6 +61,7 @@ protected:
 
 class CThreadMgr
     : public ITfThreadMgrEx
+    , public ITfThreadMgr_P
     , public ITfSource
     , public ITfKeystrokeMgr
     , public ITfMessagePump
@@ -77,6 +79,13 @@ public:
 
     static HRESULT CreateInstance(IUnknown *pUnkOuter, CThreadMgr **ppOut);
     void OnDocumentMgrDestruction(ITfDocumentMgr *mgr);
+
+    // ** ITfThreadMgr_P methods **
+    STDMETHODIMP GetAssociated(HWND hwnd, ITfDocumentMgr **ppDocMgr) override;
+    STDMETHODIMP SetSysHookSink(ITfSysHookSink *pSysHookSink) override;
+    STDMETHODIMP RequestPostponedLock(ITfContext *pContext) override;
+    STDMETHODIMP IsKeystrokeFeedEnabled(int *pfEnabled) override;
+    STDMETHODIMP CallImm32HotkeyHandler(UINT vKey, LPARAM lParam, HRESULT *phrResult) override;
     void CleanupContextSinks(TfClientId tid);
 
     // ** IUnknown methods **
@@ -472,6 +481,94 @@ CThreadMgr::~CThreadMgr()
     m_CompartmentMgr->Release();
 }
 
+class CThreadMgrLangBarItemMgr final : public ITfLangBarItemMgr
+{
+public:
+    static HRESULT Create(IUnknown *pOuter, ITfLangBarItemMgr **ppOut)
+    {
+        ITfLangBarItemMgr *pInner = NULL;
+        HRESULT hr = LangBarItemMgr_Constructor(&pInner);
+        if (FAILED(hr))
+            return hr;
+        CThreadMgrLangBarItemMgr *pThis = new(cicNoThrow) CThreadMgrLangBarItemMgr(pOuter, pInner);
+        pInner->Release();
+        if (!pThis)
+            return E_OUTOFMEMORY;
+        *ppOut = pThis;
+        return S_OK;
+    }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void **ppvObj) override
+    {
+        if (!ppvObj)
+            return E_POINTER;
+        if (riid == IID_ITfLangBarItemMgr)
+        {
+            *ppvObj = static_cast<ITfLangBarItemMgr *>(this);
+            AddRef();
+            return S_OK;
+        }
+        return m_pOuter->QueryInterface(riid, ppvObj);
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_cRefs); }
+    STDMETHODIMP_(ULONG) Release() override
+    {
+        ULONG cRefs = InterlockedDecrement(&m_cRefs);
+        if (!cRefs)
+            delete this;
+        return cRefs;
+    }
+
+    STDMETHODIMP EnumItems(IEnumTfLangBarItems **ppEnum) override { return m_pInner->EnumItems(ppEnum); }
+    STDMETHODIMP GetItem(REFGUID rguid, ITfLangBarItem **ppItem) override { return m_pInner->GetItem(rguid, ppItem); }
+    STDMETHODIMP AddItem(ITfLangBarItem *punk) override { return m_pInner->AddItem(punk); }
+    STDMETHODIMP RemoveItem(ITfLangBarItem *punk) override { return m_pInner->RemoveItem(punk); }
+    STDMETHODIMP AdviseItemSink(ITfLangBarItemSink *punk, DWORD *pdwCookie, REFGUID rguidItem) override
+    {
+        return m_pInner->AdviseItemSink(punk, pdwCookie, rguidItem);
+    }
+    STDMETHODIMP UnadviseItemSink(DWORD dwCookie) override { return m_pInner->UnadviseItemSink(dwCookie); }
+    STDMETHODIMP GetItemFloatingRect(DWORD dwThreadId, REFGUID rguid, RECT *prc) override
+    {
+        return m_pInner->GetItemFloatingRect(dwThreadId, rguid, prc);
+    }
+    STDMETHODIMP GetItemsStatus(ULONG ulCount, const GUID *prgguid, DWORD *pdwStatus) override
+    {
+        return m_pInner->GetItemsStatus(ulCount, prgguid, pdwStatus);
+    }
+    STDMETHODIMP GetItemNum(ULONG *pulCount) override { return m_pInner->GetItemNum(pulCount); }
+    STDMETHODIMP GetItems(ULONG ulCount, ITfLangBarItem **ppItem, TF_LANGBARITEMINFO *pInfo, DWORD *pdwStatus,
+                          ULONG *pcFetched) override
+    {
+        return m_pInner->GetItems(ulCount, ppItem, pInfo, pdwStatus, pcFetched);
+    }
+    STDMETHODIMP AdviseItemsSink(ULONG ulCount, ITfLangBarItemSink **ppunk, const GUID *pguidItem,
+                                 DWORD *pdwCookie) override
+    {
+        return m_pInner->AdviseItemsSink(ulCount, ppunk, pguidItem, pdwCookie);
+    }
+    STDMETHODIMP UnadviseItemsSink(ULONG ulCount, DWORD *pdwCookie) override
+    {
+        return m_pInner->UnadviseItemsSink(ulCount, pdwCookie);
+    }
+
+private:
+    CThreadMgrLangBarItemMgr(IUnknown *pOuter, ITfLangBarItemMgr *pInner) : m_cRefs(1), m_pOuter(pOuter), m_pInner(pInner)
+    {
+        m_pOuter->AddRef();
+        m_pInner->AddRef();
+    }
+    ~CThreadMgrLangBarItemMgr()
+    {
+        m_pInner->Release();
+        m_pOuter->Release();
+    }
+
+    LONG m_cRefs;
+    IUnknown *m_pOuter;
+    ITfLangBarItemMgr *m_pInner;
+};
+
 STDMETHODIMP CThreadMgr::QueryInterface(REFIID iid, LPVOID *ppvObject)
 {
     *ppvObject = NULL;
@@ -479,6 +576,8 @@ STDMETHODIMP CThreadMgr::QueryInterface(REFIID iid, LPVOID *ppvObject)
     IUnknown *pUnk = NULL;
     if (iid == IID_IUnknown || iid == IID_ITfThreadMgr || iid == IID_ITfThreadMgrEx)
         pUnk = static_cast<ITfThreadMgrEx *>(this);
+    else if (iid == IID_ITfThreadMgr_P)
+        pUnk = static_cast<ITfThreadMgr_P *>(this);
     else if (iid == IID_ITfSource)
         pUnk = static_cast<ITfSource *>(this);
     else if (iid == IID_ITfKeystrokeMgr)
@@ -495,6 +594,8 @@ STDMETHODIMP CThreadMgr::QueryInterface(REFIID iid, LPVOID *ppvObject)
         pUnk = static_cast<ITfSourceSingle *>(this);
     else if (iid == IID_ITfFunctionProvider)
         pUnk = static_cast<ITfFunctionProvider *>(this);
+    else if (iid == IID_ITfLangBarItemMgr)
+        return CThreadMgrLangBarItemMgr::Create(static_cast<ITfThreadMgrEx *>(this), (ITfLangBarItemMgr **)ppvObject);
 
     if (pUnk)
     {
@@ -523,7 +624,8 @@ STDMETHODIMP_(ULONG) CThreadMgr::Release()
 STDMETHODIMP CThreadMgr::Activate(_Out_ TfClientId *ptid)
 {
     TRACE("(%p) %p\n", this, ptid);
-    return ActivateEx(ptid, 0);
+    HRESULT hr = ActivateEx(ptid, 0);
+    return (hr == S_FALSE) ? S_OK : hr;
 }
 
 STDMETHODIMP CThreadMgr::Deactivate()
@@ -718,6 +820,50 @@ STDMETHODIMP CThreadMgr::AssociateFocus(
 
     this->SetupWindowsHook();
     return S_OK;
+}
+
+STDMETHODIMP CThreadMgr::GetAssociated(_In_ HWND hwnd, _Out_ ITfDocumentMgr **ppDocMgr)
+{
+    struct list *cursor;
+
+    TRACE("(%p) %p %p\n", this, hwnd, ppDocMgr);
+
+    if (!ppDocMgr)
+        return E_INVALIDARG;
+
+    *ppDocMgr = NULL;
+    LIST_FOR_EACH(cursor, &m_AssociatedFocusWindows)
+    {
+        AssociatedWindow *wnd = LIST_ENTRY(cursor, AssociatedWindow, entry);
+        if (wnd->hwnd == hwnd && wnd->docmgr)
+        {
+            wnd->docmgr->AddRef();
+            *ppDocMgr = wnd->docmgr;
+            return S_OK;
+        }
+    }
+    return S_FALSE;
+}
+
+/* TODO: SetSysHookSink, RequestPostponedLock, IsKeystrokeFeedEnabled and CallImm32HotkeyHandler of ITfThreadMgr_P */
+STDMETHODIMP CThreadMgr::SetSysHookSink(_In_ ITfSysHookSink *pSysHookSink)
+{
+    return E_NOTIMPL;
+}
+
+STDMETHODIMP CThreadMgr::RequestPostponedLock(_In_ ITfContext *pContext)
+{
+    return E_NOTIMPL;
+}
+
+STDMETHODIMP CThreadMgr::IsKeystrokeFeedEnabled(_Out_ int *pfEnabled)
+{
+    return E_NOTIMPL;
+}
+
+STDMETHODIMP CThreadMgr::CallImm32HotkeyHandler(_In_ UINT vKey, _In_ LPARAM lParam, _Out_ HRESULT *phrResult)
+{
+    return E_NOTIMPL;
 }
 
 STDMETHODIMP CThreadMgr::IsThreadFocus(_Out_ BOOL *pfThreadFocus)
@@ -1912,7 +2058,7 @@ HRESULT ThreadMgr_Constructor(IUnknown *pUnkOuter, IUnknown **ppOut)
 EXTERN_C
 void ThreadMgr_OnDocumentMgrDestruction(ITfThreadMgr *iface, ITfDocumentMgr *mgr)
 {
-    CThreadMgr *This = static_cast<CThreadMgr *>(iface);
+    CThreadMgr *This = static_cast<CThreadMgr *>(static_cast<ITfThreadMgrEx *>(iface));
     This->OnDocumentMgrDestruction(mgr);
 }
 

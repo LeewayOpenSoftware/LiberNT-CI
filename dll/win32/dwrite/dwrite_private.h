@@ -536,6 +536,10 @@ extern unsigned int opentype_get_cpal_paletteentrycount(const struct dwrite_font
 extern HRESULT opentype_get_cpal_entries(const struct dwrite_fonttable *table, unsigned int palette,
         unsigned int first_entry_index, unsigned int entry_count, DWRITE_COLOR_F *entries);
 extern UINT32 opentype_get_glyph_image_formats(IDWriteFontFace5 *fontface);
+extern UINT32 opentype_get_glyph_formats(IDWriteFontFace5 *fontface, UINT16 glyph, UINT32 ppem_first, UINT32 ppem_last);
+extern HRESULT opentype_get_glyph_image(IDWriteFontFace5 *fontface, UINT16 glyph, UINT32 ppem,
+        DWRITE_GLYPH_IMAGE_FORMATS format, DWRITE_GLYPH_IMAGE_DATA *data, void **context);
+extern void opentype_release_glyph_image(void *context);
 extern DWRITE_CONTAINER_TYPE opentype_analyze_container_type(void const *, UINT32);
 extern HRESULT opentype_get_kerning_pairs(struct dwrite_fontface *fontface, unsigned int count,
         const UINT16 *glyphs, INT32 *values);

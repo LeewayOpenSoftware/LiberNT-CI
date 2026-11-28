@@ -10,7 +10,7 @@ LANGUAGE LANG_ROMANIAN, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_HEADER "\nConfigurația IP a LiberNT\n\n"
+    IDS_HEADER "\nConfigurația IP a Orosi\n\n"
     IDS_HOSTNAME            "\tNumele gazdei . . . . . . . . . . : %hs\n"
     IDS_PRIMARYDNSSUFFIX    "\tSufixul primar DNS. . . . . . . . : %hs\n"
     IDS_NODETYPEBCAST       "\tTipul nodului . . . . . . . . . . : Difuzare\n"
@@ -89,6 +89,7 @@ BEGIN
     IDS_DNSTYPEAAAA          "\tÎnregistrarea AAAA. . . : %ls\n"
     IDS_DNSTYPEATMA          "\tÎnregistrarea ATMA. . . : \n"
     IDS_DNSTYPESRV           "\tÎnregistrarea SRV . . . : %ls\n\t                        %hu\n\t                        %hu\n\t                        %hu\n"
+    IDS_DNSTYPETXT           "\tTXT Record . . . . . : ""%ls""\n"
 END
 
 STRINGTABLE

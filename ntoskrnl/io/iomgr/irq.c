@@ -166,7 +166,7 @@ IoDisconnectInterrupt(PKINTERRUPT InterruptObject)
     KeDisconnectInterrupt(&IoInterrupt->FirstInterrupt);
 
     /* Now disconnect the others */
-    for (i = 0; i < KeNumberProcessors; i++)
+    for (i = 0; i < KiNumberProcessors; i++)
     {
         /* Make sure one was registered */
         if (!IoInterrupt->Interrupt[i])

@@ -1,0 +1,26 @@
+Source: Microsoft Fluent UI System Icons
+Repository: https://github.com/microsoft/fluentui-system-icons
+Revision: 4d685f77b2cb8f3f412a74ec8d920c8c91149528
+License: MIT (see LICENSE)
+
+Files used, at every native size of 12, 16, 20, 24 and 28 pixels that exists:
+- assets/Dismiss/SVG/ic_fluent_dismiss_<size>_regular.svg (close)
+- assets/Square/SVG/ic_fluent_square_<size>_regular.svg (maximize)
+- assets/Square Multiple/SVG/ic_fluent_square_multiple_<size>_regular.svg (restore)
+- assets/Subtract/SVG/ic_fluent_subtract_<size>_filled.svg (minimize)
+- assets/Question/SVG/ic_fluent_question_<size>_regular.svg (help)
+
+Each SVG is rasterized at its native size (sips -s format png on macOS, or any
+SVG renderer), then capglyphs.py writes every frame with the renderer's alpha
+unchanged and only the state color applied: w, i, d for dark captions and l, li,
+ld for light captions.
+
+
+Small-size frames added 2026-11-22 (capglyphs_small.py): the glyphs above are Microsoft
+Fluent UI System Icons (MIT, see LICENSE); the 2026-11-18 owner commit packaged them at
+their native sizes. Fluent has no native 10 px frame for these glyphs, nor a native 12 px
+for Square Multiple (restore) or Question (help). The 10 px frames (all five) and the 12 px
+frames (restore, help) are therefore NOT Fluent art: they are hand-pixeled on the grid
+(1 px solid strokes) to match the Fluent glyph shapes at those sizes, by capglyphs_small.py.
+The native frames are preserved byte-for-byte; the step is idempotent. These hand-pixeled
+frames await owner sign-off.

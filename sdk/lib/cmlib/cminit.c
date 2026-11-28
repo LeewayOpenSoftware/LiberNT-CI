@@ -11,6 +11,23 @@
 
 ULONG CmlibTraceLevel = 0;
 
+/* Format version for newly created hives: 1.5 unless built with LIBERNT_LEGACY_HIVE_FORMAT;
+ * HvSetHiveFormatVersion(HSYS_MINOR) selects 1.3 at run time. */
+static ULONG HvpHiveFormatMinor = HSYS_MINOR_NEW_DEFAULT;
+
+ULONG CMAPI
+HvGetHiveFormatVersion(VOID)
+{
+    return HvpHiveFormatMinor;
+}
+
+VOID CMAPI
+HvSetHiveFormatVersion(IN ULONG Minor)
+{
+    if (Minor >= HSYS_MINOR && Minor <= HSYS_WHISTLER + 1)
+        HvpHiveFormatMinor = Minor;
+}
+
 // FIXME: This function must be replaced by CmpCreateRootNode from ntoskrnl/config/cmsysini.c
 // (and CmpCreateRootNode be moved there).
 BOOLEAN CMAPI

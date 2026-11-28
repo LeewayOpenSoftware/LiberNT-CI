@@ -1915,9 +1915,10 @@ static HRESULT WINAPI dwritefontface3_AreGlyphsLocal(IDWriteFontFace5 *iface, UI
 static HRESULT WINAPI dwritefontface4_GetGlyphImageFormats_(IDWriteFontFace5 *iface, UINT16 glyph,
     UINT32 ppem_first, UINT32 ppem_last, DWRITE_GLYPH_IMAGE_FORMATS *formats)
 {
-    FIXME("%p, %u, %u, %u, %p: stub\n", iface, glyph, ppem_first, ppem_last, formats);
+    TRACE("%p, %u, %u, %u, %p.\n", iface, glyph, ppem_first, ppem_last, formats);
 
-    return E_NOTIMPL;
+    *formats = opentype_get_glyph_formats(iface, glyph, ppem_first, ppem_last);
+    return S_OK;
 }
 
 static DWRITE_GLYPH_IMAGE_FORMATS WINAPI dwritefontface4_GetGlyphImageFormats(IDWriteFontFace5 *iface)
@@ -1932,14 +1933,16 @@ static DWRITE_GLYPH_IMAGE_FORMATS WINAPI dwritefontface4_GetGlyphImageFormats(ID
 static HRESULT WINAPI dwritefontface4_GetGlyphImageData(IDWriteFontFace5 *iface, UINT16 glyph,
     UINT32 ppem, DWRITE_GLYPH_IMAGE_FORMATS format, DWRITE_GLYPH_IMAGE_DATA *data, void **context)
 {
-    FIXME("%p, %u, %u, %d, %p, %p: stub\n", iface, glyph, ppem, format, data, context);
+    TRACE("%p, %u, %u, %d, %p, %p.\n", iface, glyph, ppem, format, data, context);
 
-    return E_NOTIMPL;
+    return opentype_get_glyph_image(iface, glyph, ppem, format, data, context);
 }
 
 static void WINAPI dwritefontface4_ReleaseGlyphImageData(IDWriteFontFace5 *iface, void *context)
 {
-    FIXME("%p, %p: stub\n", iface, context);
+    TRACE("%p, %p.\n", iface, context);
+
+    opentype_release_glyph_image(context);
 }
 
 static UINT32 WINAPI dwritefontface5_GetFontAxisValueCount(IDWriteFontFace5 *iface)
@@ -3361,10 +3364,84 @@ static UINT32 collection_find_family(struct dwrite_fontcollection *collection, c
 }
 
 #ifdef __REACTOS__
+/* GDI's FontSubstitutes, read once, so a missing family resolves the same way in DirectWrite and in GDI */
+static struct reactos_substitute { WCHAR *from; WCHAR *to; } *reactos_substitutes;
+static unsigned int reactos_substitutes_count;
+static INIT_ONCE reactos_substitutes_once = INIT_ONCE_STATIC_INIT;
+
+static WCHAR *reactos_wcsdup(const WCHAR *str)
+{
+    size_t size = (wcslen(str) + 1) * sizeof(WCHAR);
+    WCHAR *copy = malloc(size);
+    if (copy) memcpy(copy, str, size);
+    return copy;
+}
+
+static BOOL WINAPI reactos_load_substitutes(INIT_ONCE *once, void *param, void **context)
+{
+    DWORD count, max_name, max_data, i, name_len, data_len, type;
+    WCHAR *name = NULL, *data = NULL;
+    HKEY key;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes",
+            0, KEY_READ, &key))
+        return TRUE;
+
+    if (RegQueryInfoKeyW(key, NULL, NULL, NULL, NULL, NULL, NULL, &count, &max_name, &max_data, NULL, NULL) || !count)
+    {
+        RegCloseKey(key);
+        return TRUE;
+    }
+
+    name = malloc((max_name + 1) * sizeof(WCHAR));
+    data = malloc(max_data + sizeof(WCHAR));
+    reactos_substitutes = calloc(count, sizeof(*reactos_substitutes));
+    if (name && data && reactos_substitutes)
+    {
+        for (i = 0; i < count; i++)
+        {
+            struct reactos_substitute *entry = &reactos_substitutes[reactos_substitutes_count];
+
+            LSTATUS status;
+
+            name_len = max_name + 1;
+            data_len = max_data;
+            status = RegEnumValueW(key, i, name, &name_len, NULL, &type, (BYTE *)data, &data_len);
+            if (status == ERROR_MORE_DATA)
+                continue; /* a value grew after the size query; skip it, keep the rest */
+            if (status)
+                break;
+            if (type != REG_SZ || !name_len || data_len < sizeof(WCHAR))
+                continue;
+            data[data_len / sizeof(WCHAR)] = 0;
+            /* Charset-qualified rows ("Arial CYR,204") belong to GDI's charset mapping, not to family lookup */
+            if (wcschr(name, ',') || wcschr(data, ',') || !data[0])
+                continue;
+
+            entry->from = reactos_wcsdup(name);
+            entry->to = reactos_wcsdup(data);
+            if (!entry->from || !entry->to)
+            {
+                free(entry->from);
+                free(entry->to);
+                break;
+            }
+            reactos_substitutes_count++;
+        }
+    }
+
+    free(name);
+    free(data);
+    RegCloseKey(key);
+    return TRUE;
+}
+
 static const WCHAR *reactos_family_substitute(const WCHAR *name)
 {
-    static const struct { const WCHAR *from; const WCHAR *to; } map[] =
+    /* Consulted after the registry: rows the hive does not carry, and the whole set on a system without the key */
+    static const struct { const WCHAR *from; const WCHAR *to; } fallback[] =
     {
+        { L"Twemoji Mozilla", L"Noto Emoji" },
         { L"Segoe UI", L"Selawik" },
         { L"Segoe UI Light", L"Selawik Light" },
         { L"Segoe UI Semilight", L"Selawik Semilight" },
@@ -3374,18 +3451,32 @@ static const WCHAR *reactos_family_substitute(const WCHAR *name)
         { L"Segoe UI Variable Display", L"Selawik" },
         { L"Segoe UI Variable Small", L"Selawik" },
         { L"Segoe Fluent Icons", L"Segoe MDL2 Assets" },
-        { L"Segoe UI Symbol", L"Segoe MDL2 Assets" },
-        { L"Calibri", L"Selawik" },
-        { L"Cambria", L"Georgia" },
-        { L"Consolas", L"Lucida Console" },
-        { L"Cascadia Code", L"Lucida Console" },
-        { L"Cascadia Mono", L"Lucida Console" },
+        { L"Calibri", L"Carlito" },
+        { L"Calibri Light", L"Carlito" },
+        { L"Cambria", L"Caladea" },
+        { L"Constantia", L"Caladea" },
+        { L"Candara", L"Source Sans Pro" },
+        { L"Corbel", L"Source Sans Pro" },
+        { L"Consolas", L"Cascadia Mono" },
+        { L"Cascadia Code", L"Cascadia Mono" },
     };
-    ULONG i;
+    unsigned int i;
 
-    for (i = 0; i < ARRAY_SIZE(map); i++)
+    InitOnceExecuteOnce(&reactos_substitutes_once, reactos_load_substitutes, NULL, NULL);
+
+    /* GDI cannot draw the COLR emoji font, so the registry points Segoe UI Emoji at the monochrome
+       one; DirectWrite draws the colour layers and asks for the colour font first */
+    if (!wcsicmp(name, L"Segoe UI Emoji")) return L"Twemoji Mozilla";
+
+    for (i = 0; i < reactos_substitutes_count; i++)
     {
-        if (!wcsicmp(name, map[i].from)) return map[i].to;
+        if (!wcsicmp(name, reactos_substitutes[i].from)) return reactos_substitutes[i].to;
+    }
+
+    /* Rows the hive does not carry (Cascadia Code, the bare Segoe UI Variable, Fluent Icons) */
+    for (i = 0; i < ARRAY_SIZE(fallback); i++)
+    {
+        if (!wcsicmp(name, fallback[i].from)) return fallback[i].to;
     }
     return NULL;
 }
@@ -3400,10 +3491,17 @@ static HRESULT WINAPI dwritefontcollection_FindFamilyName(IDWriteFontCollection3
 
     *index = collection_find_family(collection, name);
 #ifdef __REACTOS__
+    /* Only a family that is really missing is substituted; the substitutes may chain, as in GDI */
     if (*index == ~0u)
     {
-        const WCHAR *substitute = reactos_family_substitute(name);
-        if (substitute) *index = collection_find_family(collection, substitute);
+        const WCHAR *substitute = name;
+        unsigned int hop;
+
+        for (hop = 0; hop < 4 && *index == ~0u; hop++)
+        {
+            if (!(substitute = reactos_family_substitute(substitute))) break;
+            *index = collection_find_family(collection, substitute);
+        }
     }
 #endif
     *exists = *index != ~0u;

@@ -13,7 +13,7 @@ static const PageInfo Pages[] =
 {
     { PageId::System, IDS_PAGE_SYSTEM, L"desktop_20_regular", PageId::None, BuildSystem, L"system" },
     { PageId::Devices, IDS_PAGE_DEVICES, L"bluetooth_20_regular", PageId::None, BuildDevices, L"devices;connecteddevices" },
-    { PageId::Network, IDS_PAGE_NETWORK, L"wifi_1_20_regular", PageId::None, BuildNetwork, L"network;network-status" },
+    { PageId::Network, IDS_PAGE_NETWORK, L"wifi_1_20_regular", PageId::None, BuildNetwork, L"network;network-status;network-advancedsharing" },
     { PageId::Personalization, IDS_PAGE_PERSONALIZE, L"paint_brush_20_regular", PageId::None, BuildPersonalization,
       L"personalization;themes" },
     { PageId::Apps, IDS_PAGE_APPS, L"apps_20_regular", PageId::None, BuildApps, L"apps" },
@@ -25,7 +25,7 @@ static const PageInfo Pages[] =
     { PageId::Privacy, IDS_PAGE_PRIVACY, L"shield_20_regular", PageId::None, BuildPrivacy, L"privacy;windowsdefender" },
     { PageId::Legacy, IDS_PAGE_LEGACY, L"settings_20_regular", PageId::None, NULL, NULL },
     { PageId::Display, IDS_PAGE_DISPLAY, L"desktop_20_regular", PageId::System, BuildDisplay,
-      L"display;screenrotation;display-advanced" },
+      L"display;screenrotation;display-advanced;easeofaccess-display" },
     { PageId::Sound, IDS_PAGE_SOUND, L"speaker_2_20_regular", PageId::System, BuildSound,
       L"sound;sound-devices;apps-volume" },
     { PageId::Power, IDS_PAGE_POWER, L"power_20_regular", PageId::System, BuildPower, L"powersleep;batterysaver" },
@@ -617,6 +617,15 @@ PromptRestart(HWND owner, const std::wstring &reason)
     EnablePrivilege(SE_SHUTDOWN_NAME);
     if (!ExitWindowsEx(EWX_REBOOT, SHTDN_REASON_MAJOR_OPERATINGSYSTEM | SHTDN_REASON_MINOR_RECONFIG |
                                    SHTDN_REASON_FLAG_PLANNED))
+        ShowError(owner, GetLastError());
+}
+
+void
+PromptSignOut(HWND owner, const std::wstring &reason)
+{
+    if (!AskNow(owner, reason, IDS_SIGNOUT_NOW, IDS_SIGNOUT_LATER))
+        return;
+    if (!ExitWindowsEx(EWX_LOGOFF, SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_RECONFIG | SHTDN_REASON_FLAG_PLANNED))
         ShowError(owner, GetLastError());
 }
 

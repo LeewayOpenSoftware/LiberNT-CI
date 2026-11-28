@@ -15,16 +15,48 @@ typedef struct tcp_keepalive {
   ULONG keepaliveinterval;
 } TCP_KEEPALIVE;
 
+static TDI_STATUS SetConnectionInfoHeld(TDIObjectID *ID,
+                                        PADDRESS_FILE AddressFile,
+                                        PCONNECTION_ENDPOINT Connection,
+                                        BOOLEAN Deferred,
+                                        PVOID Buffer,
+                                        UINT BufferSize);
+
 TDI_STATUS SetConnectionInfo(TDIObjectID *ID,
                              PADDRESS_FILE AddressFile,
                              PVOID Buffer,
                              UINT BufferSize)
 {
     NTSTATUS Status;
-    PCONNECTION_ENDPOINT Connection = AddressFile->Connection;
-    BOOLEAN Deferred = (Connection == NULL) || (Connection->SocketContext == NULL);
+    PCONNECTION_ENDPOINT Connection;
+    BOOLEAN Deferred;
 
     ASSERT(ID->toi_type == INFO_TYPE_CONNECTION);
+
+    /* The connection can be released by its own file while this runs, so
+     * it is taken under the address file's lock and held until the end */
+    LockObject(AddressFile);
+    Connection = AddressFile->Connection;
+    if (Connection)
+        ReferenceObject(Connection);
+    UnlockObject(AddressFile);
+    Deferred = (Connection == NULL) || (Connection->SocketContext == NULL);
+
+    Status = SetConnectionInfoHeld(ID, AddressFile, Connection, Deferred, Buffer, BufferSize);
+    if (Connection)
+        DereferenceObject(Connection);
+    return Status;
+}
+
+static TDI_STATUS SetConnectionInfoHeld(TDIObjectID *ID,
+                                        PADDRESS_FILE AddressFile,
+                                        PCONNECTION_ENDPOINT Connection,
+                                        BOOLEAN Deferred,
+                                        PVOID Buffer,
+                                        UINT BufferSize)
+{
+    NTSTATUS Status;
+
     switch (ID->toi_id)
     {
         case TCP_SOCKET_NODELAY:

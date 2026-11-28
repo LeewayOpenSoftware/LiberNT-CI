@@ -165,6 +165,10 @@ MiArchSetFrameCache(ULONG Frame, ULONG Count, ULONG Flags)
 
     if (Frame >= MachineCurrent->FrameCount || Count > MachineCurrent->FrameCount - Frame)
         return STATUS_INVALID_PARAMETER;
+    if (MachineCurrent->FrameCacheFailureFramePlusOne != 0 &&
+        MachineCurrent->FrameCacheFailureFramePlusOne - 1 >= Frame &&
+        MachineCurrent->FrameCacheFailureFramePlusOne - 1 - Frame < Count)
+        return STATUS_NOT_SUPPORTED;
     for (Index = 0; Index < Count; Index++)
         __atomic_store_n(&MachineCurrent->FrameCache[Frame + Index], Flags, __ATOMIC_RELEASE);
     __atomic_fetch_add(&MachineCurrent->FrameCacheCalls, 1, __ATOMIC_RELAXED);
@@ -310,6 +314,8 @@ MiArchTlbInvalidateAll(_In_ BOOLEAN AllProcessors)
 
     if (Machine->TlbDisabled)
         return;
+    if (Machine->BeforeTlbInvalidate != NULL)
+        Machine->BeforeTlbInvalidate(Machine->BeforeTlbInvalidateContext, 0, ~0ULL);
 
     for (Cpu = 0; Cpu < Machine->CpuCount; Cpu++)
     {
@@ -337,6 +343,8 @@ MachineTlbInvalidateCpus(_In_ ULONG64 VirtualAddress, _In_ ULONG64 PageCount, _I
 
     if (Machine->TlbDisabled)
         return;
+    if (Machine->BeforeTlbInvalidate != NULL)
+        Machine->BeforeTlbInvalidate(Machine->BeforeTlbInvalidateContext, VirtualAddress, PageCount);
 
     for (Cpu = 0; Cpu < Machine->CpuCount; Cpu++)
     {

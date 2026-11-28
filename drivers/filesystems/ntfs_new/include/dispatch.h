@@ -288,11 +288,14 @@ NTSTATUS
 NtfsPersistPendingSize(_In_ struct _VolumeContextBlock* VolCB,
                        _In_ struct _FCB* FileCB);
 
+/* Durable: the bytes are on the medium when this returns (a write-through
+ * write); otherwise they are on the device, which may still hold them. */
 NTSTATUS
 NtfsCommitFileRange(_In_ struct _VolumeContextBlock* VolCB,
                     _In_ struct _FCB* FileCB,
                     _In_ ULONGLONG FileOffset,
-                    _In_ ULONGLONG Length);
+                    _In_ ULONGLONG Length,
+                    _In_ BOOLEAN Durable);
 
 _Function_class_(IRP_MJ_QUERY_INFORMATION)
 _Function_class_(DRIVER_DISPATCH)
@@ -392,3 +395,23 @@ DeviceIoControl(_In_    PDEVICE_OBJECT DeviceObject,
                 _Inout_ PVOID OutputBuffer,
                 _Inout_ PULONG OutputBufferSize,
                 _In_    BOOLEAN Override);
+
+/* usn.c: the USN change journal FSCTLs; STATUS_PENDING means the IRP was queued */
+NTSTATUS
+NtfsUsnFsControl(_In_    PDEVICE_OBJECT VolumeDeviceObject,
+                 _Inout_ PIRP Irp,
+                 _In_    PIO_STACK_LOCATION IrpSp);
+
+VOID
+NtfsUsnInitializeVolume(_In_ struct _VolumeContextBlock* VolCB,
+                        _In_ PDEVICE_OBJECT VolumeDeviceObject);
+
+VOID
+NtfsUsnShutdownVolume(_In_ struct _VolumeContextBlock* VolCB);
+
+VOID
+NtfsUsnWakeWaiters(_In_ struct _VolumeContextBlock* VolCB);
+
+VOID
+NtfsUsnCancelFileWaiters(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                         _In_ PFILE_OBJECT FileObject);

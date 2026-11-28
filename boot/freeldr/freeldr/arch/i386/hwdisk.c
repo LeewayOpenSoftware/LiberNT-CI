@@ -80,6 +80,68 @@ DiskGetFileInformation(ULONG FileId, FILEINFORMATION* Information)
     return ESUCCESS;
 }
 
+/*
+ * The geometry does not change while the loader runs, so the first open of a
+ * drive asks the machine layer and later opens reuse the answer; the OS loader
+ * opens dozens of files and each query used to print a trace line.
+ */
+static BOOLEAN
+DiskOpenGetGeometry(
+    _In_ UCHAR DriveNumber,
+    _In_ CONFIGURATION_TYPE DriveType,
+    _Out_ PULONG SectorSize,
+    _Out_ PULONGLONG Sectors)
+{
+    static struct
+    {
+        UCHAR DriveNumber;
+        BOOLEAN Valid;
+        ULONG SectorSize;
+        ULONGLONG Sectors;
+    } Cache[8];
+    GEOMETRY Geometry;
+    ULONG i;
+
+    for (i = 0; i < _countof(Cache) && Cache[i].Valid; i++)
+    {
+        if (Cache[i].DriveNumber == DriveNumber)
+        {
+            *SectorSize = Cache[i].SectorSize;
+            *Sectors = Cache[i].Sectors;
+            return TRUE;
+        }
+    }
+
+    if (!MachDiskGetDriveGeometry(DriveNumber, &Geometry))
+        return FALSE;
+    if (Geometry.BytesPerSector == 0)
+    {
+        WARN("MachDiskGetDriveGeometry(0x%x) failed, fall back to hardcoded values\n", DriveNumber);
+        if (DriveType == CdromController)
+        {
+            /* This is a CD-ROM device */
+            Geometry.BytesPerSector = 2048;
+        }
+        else
+        {
+            /* This is either a floppy disk or a hard disk device, but it doesn't
+             * matter which one because they both have 512 bytes per sector */
+            Geometry.BytesPerSector = 512;
+        }
+    }
+
+    if (i < _countof(Cache))
+    {
+        Cache[i].DriveNumber = DriveNumber;
+        Cache[i].SectorSize = Geometry.BytesPerSector;
+        Cache[i].Sectors = Geometry.Sectors;
+        Cache[i].Valid = TRUE;
+    }
+    *SectorSize = Geometry.BytesPerSector;
+    *Sectors = Geometry.Sectors;
+    return TRUE;
+}
+
 static ARC_STATUS
 DiskOpen(CHAR* Path, OPENMODE OpenMode, ULONG* FileId)
 {
@@ -87,7 +149,7 @@ DiskOpen(CHAR* Path, OPENMODE OpenMode, ULONG* FileId)
     CONFIGURATION_TYPE DriveType;
     UCHAR DriveNumber;
     ULONG DrivePartition, SectorSize;
-    GEOMETRY Geometry;
+    ULONGLONG DiskSectors;
     ULONGLONG SectorOffset;
     ULONGLONG SectorCount;
     static BOOLEAN PrintForce = FALSE;
@@ -104,24 +166,8 @@ DiskOpen(CHAR* Path, OPENMODE OpenMode, ULONG* FileId)
 
     DriveType = DiskGetConfigType(DriveNumber);
 
-    if (!MachDiskGetDriveGeometry(DriveNumber, &Geometry))
+    if (!DiskOpenGetGeometry(DriveNumber, DriveType, &SectorSize, &DiskSectors))
         return EIO;
-    if (Geometry.BytesPerSector == 0)
-    {
-        WARN("MachDiskGetDriveGeometry(0x%x) failed, fall back to hardcoded values\n", DriveNumber);
-        if (DriveType == CdromController)
-        {
-            /* This is a CD-ROM device */
-            Geometry.BytesPerSector = 2048;
-        }
-        else
-        {
-            /* This is either a floppy disk or a hard disk device, but it doesn't
-             * matter which one because they both have 512 bytes per sector */
-            Geometry.BytesPerSector = 512;
-        }
-    }
-    SectorSize = Geometry.BytesPerSector;
 
     if (DrivePartition != 0xff && DrivePartition != 0)
     {
@@ -135,7 +181,7 @@ DiskOpen(CHAR* Path, OPENMODE OpenMode, ULONG* FileId)
     else
     {
         SectorOffset = 0;
-        SectorCount = Geometry.Sectors;
+        SectorCount = DiskSectors;
     }
 
     Context = FrLdrTempAlloc(sizeof(DISKCONTEXT), TAG_HW_DISK_CONTEXT);

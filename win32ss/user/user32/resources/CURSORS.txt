@@ -4,3 +4,4 @@ ocr_appstarting) are original artwork by the LiberNT project owner, licensed und
 the Aureline icon set. Frames are 32, 48 and 64 pixels, 32-bit with alpha.
 The other cursors in this directory (ocr_up, ocr_size, ocr_icon, ocr_pen, ocr_cdautostart,
 ocr_dragobject) are unchanged.
+History: ocr_appstarting.ani hotspots at 48 px normalised to frame 0 (2026-11-21), so the pointer no longer shifts a pixel between frames.

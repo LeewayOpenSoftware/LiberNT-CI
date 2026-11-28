@@ -28,6 +28,7 @@
 #include "xmllite.h"
 #include "schrpc.h"
 #include "taskschd.h"
+#include "sddl.h"
 #include "wine/debug.h"
 
 #include "schedsvc_private.h"
@@ -122,13 +123,29 @@ static HRESULT write_xml_utf8(const WCHAR *name, DWORD disposition, const WCHAR 
     char *xml;
     HRESULT hr = S_OK;
 
-    hfile = CreateFileW(name, GENERIC_WRITE, 0, NULL, disposition, 0, 0);
+    hfile = CreateFileW(name, GENERIC_WRITE | WRITE_DAC, 0, NULL, disposition, 0, 0);
     if (hfile == INVALID_HANDLE_VALUE)
     {
         if (GetLastError() == ERROR_FILE_EXISTS)
             return HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS);
 
         return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    /*
+     * Task files belong to the service: SYSTEM and Administrators only, not
+     * inherited, whatever the folder grants. The engine refuses a task file
+     * that anyone else could write. (A volume without ACLs refuses the call.)
+     */
+    {
+        PSECURITY_DESCRIPTOR sd;
+
+        if (ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;FA;;;SY)(A;;FA;;;BA)", SDDL_REVISION_1,
+                                                                 &sd, NULL))
+        {
+            SetKernelObjectSecurity(hfile, DACL_SECURITY_INFORMATION, sd);
+            LocalFree(sd);
+        }
     }
 
     size = WideCharToMultiByte(CP_UTF8, 0, xmlW, -1, NULL, 0, NULL, NULL);
@@ -176,8 +193,9 @@ HRESULT __cdecl SchRpcRegisterTask(const WCHAR *path, const WCHAR *xml, DWORD fl
                                    DWORD task_logon_type, DWORD n_creds, const TASK_USER_CRED *creds,
                                    WCHAR **actual_path, TASK_XML_ERROR_INFO **xml_error_info)
 {
-    WCHAR *full_name, *relative_path;
+    WCHAR *full_name, *relative_path, *registrant;
     DWORD disposition;
+    BOOL existed;
     HRESULT hr;
 
     TRACE("%s,%s,%#lx,%s,%lu,%lu,%p,%p,%p\n", debugstr_w(path), debugstr_w(xml), flags,
@@ -186,13 +204,22 @@ HRESULT __cdecl SchRpcRegisterTask(const WCHAR *path, const WCHAR *xml, DWORD fl
     *actual_path = NULL;
     *xml_error_info = NULL;
 
+    if (!engine_valid_path(path)) return E_INVALIDARG;
+
     /* FIXME: assume that validation is performed on the client side */
     if (flags & TASK_VALIDATE_ONLY) return S_OK;
+
+    hr = engine_check_register(path, xml, flags, &registrant);
+    if (FAILED(hr)) return hr;
 
     if (path)
     {
         full_name = get_full_name(path, &relative_path);
-        if (!full_name) return E_OUTOFMEMORY;
+        if (!full_name)
+        {
+            LocalFree(registrant);
+            return E_OUTOFMEMORY;
+        }
 
         if (wcschr(path, '\\') || wcschr(path, '/'))
         {
@@ -203,6 +230,7 @@ HRESULT __cdecl SchRpcRegisterTask(const WCHAR *path, const WCHAR *xml, DWORD fl
             if (hr != S_OK && hr != HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS))
             {
                 free(full_name);
+                LocalFree(registrant);
                 return hr;
             }
             *p = '\\';
@@ -217,7 +245,11 @@ HRESULT __cdecl SchRpcRegisterTask(const WCHAR *path, const WCHAR *xml, DWORD fl
         StringFromGUID2(&iid, uuid_str, 39);
 
         full_name = get_full_name(uuid_str, &relative_path);
-        if (!full_name) return E_OUTOFMEMORY;
+        if (!full_name)
+        {
+            LocalFree(registrant);
+            return E_OUTOFMEMORY;
+        }
         /* skip leading '\' */
         relative_path++;
     }
@@ -238,7 +270,25 @@ HRESULT __cdecl SchRpcRegisterTask(const WCHAR *path, const WCHAR *xml, DWORD fl
         break;
     }
 
+    engine_lock();
+    existed = GetFileAttributesW(full_name) != INVALID_FILE_ATTRIBUTES;
     hr = write_xml_utf8(full_name, disposition, xml);
+    if (hr == S_OK)
+    {
+        /*
+         * Without its record the task must not stay: a replaced file could
+         * otherwise run as a previous registrant whose record survived. A
+         * failed registration, update included, therefore leaves no task.
+         */
+        hr = engine_task_registered(relative_path, registrant);
+        if (FAILED(hr))
+        {
+            DeleteFileW(full_name);
+            if (existed) engine_task_deleted(relative_path);
+        }
+    }
+    engine_unlock();
+    LocalFree(registrant);
     if (hr == S_OK)
     {
         *actual_path = wcsdup(relative_path);
@@ -533,6 +583,9 @@ HRESULT __cdecl SchRpcRetrieveTask(const WCHAR *path, const WCHAR *languages, UL
 
     TRACE("%s,%s,%p,%p\n", debugstr_w(path), debugstr_w(languages), n_languages, xml);
 
+    *xml = NULL;
+    if (!engine_valid_path(path)) return E_INVALIDARG;
+
     full_name = get_full_name(path, NULL);
     if (!full_name) return E_OUTOFMEMORY;
 
@@ -551,6 +604,7 @@ HRESULT __cdecl SchRpcCreateFolder(const WCHAR *path, const WCHAR *sddl, DWORD f
     TRACE("%s,%s,%#lx\n", debugstr_w(path), debugstr_w(sddl), flags);
 
     if (flags) return E_INVALIDARG;
+    if (!engine_valid_path(path)) return E_INVALIDARG;
 
     full_name = get_full_name(path, NULL);
     if (!full_name) return E_OUTOFMEMORY;
@@ -620,6 +674,7 @@ HRESULT __cdecl SchRpcEnumFolders(const WCHAR *path, DWORD flags, DWORD *start_i
     *names = NULL;
 
     if (flags & ~TASK_ENUM_HIDDEN) return E_INVALIDARG;
+    if (!engine_valid_path(path)) return E_INVALIDARG;
 
     if (!n_requested) n_requested = ~0u;
 
@@ -728,6 +783,7 @@ HRESULT __cdecl SchRpcEnumTasks(const WCHAR *path, DWORD flags, DWORD *start_ind
     *names = NULL;
 
     if (flags & ~TASK_ENUM_HIDDEN) return E_INVALIDARG;
+    if (!engine_valid_path(path)) return E_INVALIDARG;
 
     if (!n_requested) n_requested = ~0u;
 
@@ -820,36 +876,49 @@ HRESULT __cdecl SchRpcEnumTasks(const WCHAR *path, DWORD flags, DWORD *start_ind
 
 HRESULT __cdecl SchRpcEnumInstances(const WCHAR *path, DWORD flags, DWORD *n_guids, GUID **guids)
 {
-    FIXME("%s,%#lx,%p,%p: stub\n", debugstr_w(path), flags, n_guids, guids);
-    return E_NOTIMPL;
+    TRACE("%s,%#lx,%p,%p\n", debugstr_w(path), flags, n_guids, guids);
+
+    *n_guids = 0;
+    *guids = NULL;
+    if (flags & ~TASK_ENUM_HIDDEN) return E_INVALIDARG;
+    return engine_enum_instances(path, n_guids, guids);
 }
 
 HRESULT __cdecl SchRpcGetInstanceInfo(GUID guid, WCHAR **path, DWORD *task_state, WCHAR **action,
                                       WCHAR **info, DWORD *n_instances, GUID **instances, DWORD *pid)
 {
-    FIXME("%s,%p,%p,%p,%p,%p,%p,%p: stub\n", wine_dbgstr_guid(&guid), path, task_state, action,
+    TRACE("%s,%p,%p,%p,%p,%p,%p,%p\n", wine_dbgstr_guid(&guid), path, task_state, action,
           info, n_instances, instances, pid);
-    return E_NOTIMPL;
+
+    *info = NULL;
+    *n_instances = 0;
+    *instances = NULL;
+    return engine_instance_info(&guid, path, task_state, action, pid);
 }
 
 HRESULT __cdecl SchRpcStopInstance(GUID guid, DWORD flags)
 {
-    FIXME("%s,%#lx: stub\n", wine_dbgstr_guid(&guid), flags);
-    return E_NOTIMPL;
+    TRACE("%s,%#lx\n", wine_dbgstr_guid(&guid), flags);
+
+    if (flags) return E_INVALIDARG;
+    return engine_stop_instance(&guid);
 }
 
 HRESULT __cdecl SchRpcStop(const WCHAR *path, DWORD flags)
 {
-    FIXME("%s,%#lx: stub\n", debugstr_w(path), flags);
-    return E_NOTIMPL;
+    TRACE("%s,%#lx\n", debugstr_w(path), flags);
+
+    if (flags) return E_INVALIDARG;
+    return engine_stop_task(path);
 }
 
 HRESULT __cdecl SchRpcRun(const WCHAR *path, DWORD n_args, const WCHAR **args, DWORD flags,
                           DWORD session_id, const WCHAR *user, GUID *guid)
 {
-    FIXME("%s,%lu,%p,%#lx,%#lx,%s,%p: stub\n", debugstr_w(path), n_args, args, flags,
+    TRACE("%s,%lu,%p,%#lx,%#lx,%s,%p\n", debugstr_w(path), n_args, args, flags,
           session_id, debugstr_w(user), guid);
-    return E_NOTIMPL;
+
+    return engine_run(path, n_args, args, flags, session_id, user, guid);
 }
 
 HRESULT __cdecl SchRpcDelete(const WCHAR *path, DWORD flags)
@@ -863,6 +932,10 @@ HRESULT __cdecl SchRpcDelete(const WCHAR *path, DWORD flags)
 
     while (*path == '\\' || *path == '/') path++;
     if (!*path) return E_ACCESSDENIED;
+    if (!engine_valid_path(path)) return E_INVALIDARG;
+
+    hr = engine_check_task_access(path);
+    if (FAILED(hr)) return hr;
 
     full_name = get_full_name(path, NULL);
     if (!full_name) return E_OUTOFMEMORY;
@@ -873,6 +946,7 @@ HRESULT __cdecl SchRpcDelete(const WCHAR *path, DWORD flags)
         if (hr == HRESULT_FROM_WIN32(ERROR_DIRECTORY))
             hr = DeleteFileW(full_name) ? S_OK : HRESULT_FROM_WIN32(GetLastError());
     }
+    if (hr == S_OK) engine_task_deleted(path);
 
     free(full_name);
     return hr;
@@ -887,15 +961,17 @@ HRESULT __cdecl SchRpcRename(const WCHAR *path, const WCHAR *name, DWORD flags)
 HRESULT __cdecl SchRpcScheduledRuntimes(const WCHAR *path, SYSTEMTIME *start, SYSTEMTIME *end, DWORD flags,
                                         DWORD n_requested, DWORD *n_runtimes, SYSTEMTIME **runtimes)
 {
-    FIXME("%s,%p,%p,%#lx,%lu,%p,%p: stub\n", debugstr_w(path), start, end, flags,
+    TRACE("%s,%p,%p,%#lx,%lu,%p,%p\n", debugstr_w(path), start, end, flags,
           n_requested, n_runtimes, runtimes);
-    return E_NOTIMPL;
+
+    return engine_runtimes(path, start, end, n_requested, n_runtimes, runtimes);
 }
 
 HRESULT __cdecl SchRpcGetLastRunInfo(const WCHAR *path, SYSTEMTIME *last_runtime, DWORD *last_return_code)
 {
-    FIXME("%s,%p,%p: stub\n", debugstr_w(path), last_runtime, last_return_code);
-    return E_NOTIMPL;
+    TRACE("%s,%p,%p\n", debugstr_w(path), last_runtime, last_return_code);
+
+    return engine_last_run(path, last_runtime, last_return_code);
 }
 
 HRESULT __cdecl SchRpcGetTaskInfo(const WCHAR *path, DWORD flags, DWORD *enabled, DWORD *task_state)
@@ -904,7 +980,9 @@ HRESULT __cdecl SchRpcGetTaskInfo(const WCHAR *path, DWORD flags, DWORD *enabled
     struct task_info info;
     HRESULT hr;
 
-    FIXME("%s,%#lx,%p,%p: stub\n", debugstr_w(path), flags, enabled, task_state);
+    TRACE("%s,%#lx,%p,%p\n", debugstr_w(path), flags, enabled, task_state);
+
+    if (!engine_valid_path(path)) return E_INVALIDARG;
 
     full_name = get_full_name(path, NULL);
     if (!full_name) return E_OUTOFMEMORY;
@@ -918,7 +996,7 @@ HRESULT __cdecl SchRpcGetTaskInfo(const WCHAR *path, DWORD flags, DWORD *enabled
 
     *enabled = info.enabled;
     if (flags & SCH_FLAG_STATE)
-        *task_state = *enabled ? TASK_STATE_READY : TASK_STATE_DISABLED;
+        *task_state = engine_task_state(path, *enabled);
     else
         *task_state = TASK_STATE_UNKNOWN;
     return S_OK;
@@ -926,8 +1004,9 @@ HRESULT __cdecl SchRpcGetTaskInfo(const WCHAR *path, DWORD flags, DWORD *enabled
 
 HRESULT __cdecl SchRpcGetNumberOfMissedRuns(const WCHAR *path, DWORD *runs)
 {
-    FIXME("%s,%p: stub\n", debugstr_w(path), runs);
-    return E_NOTIMPL;
+    TRACE("%s,%p\n", debugstr_w(path), runs);
+
+    return engine_missed_runs(path, runs);
 }
 
 HRESULT __cdecl SchRpcEnableTask(const WCHAR *path, DWORD enabled)
@@ -940,6 +1019,10 @@ HRESULT __cdecl SchRpcEnableTask(const WCHAR *path, DWORD enabled)
     size_t len;
 
     TRACE("%s,%lu\n", debugstr_w(path), enabled);
+
+    if (!engine_valid_path(path)) return E_INVALIDARG;
+    hr = engine_check_task_access(path);
+    if (FAILED(hr)) return hr;
 
     full_name = get_full_name(path, NULL);
     if (!full_name) return E_OUTOFMEMORY;
@@ -1011,7 +1094,11 @@ HRESULT __cdecl SchRpcEnableTask(const WCHAR *path, DWORD enabled)
     wcscat(new_xml, after);
     wcscat(new_xml, suffix);
 
+    /* the engine never reads a half-written file */
+    engine_lock();
     hr = write_xml_utf8(full_name, CREATE_ALWAYS, new_xml);
+    engine_unlock();
+    if (hr == S_OK) engine_notify_changed();
 
     free(new_xml);
     free(xml);

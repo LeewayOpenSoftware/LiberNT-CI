@@ -20,8 +20,10 @@
 #define LLMNR_PORT 5355
 #define LLMNR_RESEND 420
 #define LLMNR_ROUNDS 2
+#define MDNS_PORT 5353
+#define MDNS_RESEND 1000
+#define MDNS_ROUNDS 2
 #define DNS_MAX_ADAPTERS 16
-#define DNS_MAX_SERVERS 32
 #define DNS_MAX_CANDIDATES 8
 #define DNS_UDP_SIZE 1232
 #define DNS_TCP_SIZE 65535
@@ -172,15 +174,15 @@ ResolverLoadStaticServers(PRESOLVER_CONFIG Config)
 
 static
 DNS_STATUS
+ResolverBuildCandidates(PRESOLVER_CONFIG Config, PCWSTR Name);
+
+static
+DNS_STATUS
 ResolverLoadConfig(PRESOLVER_CONFIG Config, PCWSTR Name)
 {
     ULONG Size = 16384, i;
     PIP_ADAPTER_ADDRESSES List, Adapter;
     DWORD Error;
-    WCHAR Domain[MAX_DNS_SUFFIX_STRING_LENGTH], SearchList[1024];
-    SIZE_T Length = wcslen(Name);
-    BOOL Absolute = Length && Name[Length - 1] == L'.';
-    BOOL SingleLabel = !wcschr(Name, L'.');
 
     RtlZeroMemory(Config, sizeof(*Config));
 
@@ -282,7 +284,20 @@ ResolverLoadConfig(PRESOLVER_CONFIG Config, PCWSTR Name)
         }
     }
 
-    if (Absolute)
+    return ResolverBuildCandidates(Config, Name);
+}
+
+static
+DNS_STATUS
+ResolverBuildCandidates(PRESOLVER_CONFIG Config, PCWSTR Name)
+{
+    WCHAR Domain[MAX_DNS_SUFFIX_STRING_LENGTH], SearchList[1024];
+    SIZE_T Length = wcslen(Name);
+    BOOL Absolute = Length && Name[Length - 1] == L'.';
+    BOOL SingleLabel = !wcschr(Name, L'.');
+    ULONG i;
+
+if (Absolute)
     {
         WCHAR Trimmed[DNS_MAX_NAME_BUFFER_LENGTH];
 
@@ -331,6 +346,7 @@ ResolverLoadConfig(PRESOLVER_CONFIG Config, PCWSTR Name)
         ResolverAddCandidate(Config, Name, NULL);
     return ERROR_SUCCESS;
 }
+
 
 static
 INT
@@ -455,7 +471,8 @@ ResolverDword(const UCHAR *P)
 
 static
 PDNS_RECORDW
-ResolverParseRecord(const UCHAR *Packet, INT Length, PCWSTR Owner, WORD Type, DWORD Ttl, INT Data, WORD DataLength)
+ResolverParseRecord(const UCHAR *Packet, INT Length, PCWSTR Owner, WORD Type, DWORD Ttl, INT Data, WORD DataLength,
+                    DWORD Section)
 {
     PDNS_RECORDW Record;
     SIZE_T Size = sizeof(DNS_RECORDW);
@@ -481,7 +498,7 @@ ResolverParseRecord(const UCHAR *Packet, INT Length, PCWSTR Owner, WORD Type, DW
         return NULL;
     Record->pName = ResolverDupName(Owner);
     Record->wType = Type;
-    Record->Flags.S.Section = DnsSectionAnswer;
+    Record->Flags.S.Section = Section;
     Record->Flags.S.CharSet = DnsCharSetUnicode;
     Record->dwTtl = Ttl;
     if (!Record->pName)
@@ -656,9 +673,10 @@ ResolverParseReply(const UCHAR *Packet, INT Length, WORD Id, PCWSTR Name, WORD T
         if (Offset + DataLength > Length)
             break;
 
-        if (Class == 1 && (RecordType == Type || RecordType == DNS_TYPE_CNAME))
+        /* mDNS sets the cache-flush bit (0x8000) in the class of unique records */
+        if ((Class & 0x7FFF) == 1 && (RecordType == Type || RecordType == DNS_TYPE_CNAME))
         {
-            Record = ResolverParseRecord(Packet, Length, Owner, RecordType, Ttl, Offset, DataLength);
+            Record = ResolverParseRecord(Packet, Length, Owner, RecordType, Ttl, Offset, DataLength, DnsSectionAnswer);
             if (Record)
             {
                 *Tail = Record;
@@ -996,37 +1014,52 @@ ResolverLlmnrLinks(PULONG Links4, PULONG Count4, PULONG Links6, PULONG Count6)
 }
 
 static
+BOOL
+ResolverIsMdnsName(PCWSTR Name)
+{
+    SIZE_T Length = wcslen(Name);
+
+    if (Length && Name[Length - 1] == L'.')
+        Length--;
+    /* "x.local": the local domain itself is not a host name */
+    return Length > 6 && Name[Length - 6] == L'.' && !_wcsnicmp(Name + Length - 5, L"local", 5);
+}
+
+static
 DNS_STATUS
-ResolverLlmnrQuery(PCWSTR Name, WORD Type, PDNS_RECORDW *Result)
+ResolverMulticastQuery(PCWSTR Name, WORD Type, BOOL Mdns, PDNS_RECORDW *Result)
 {
     ULONG Links4[DNS_MAX_ADAPTERS], Links6[DNS_MAX_ADAPTERS], Count4, Count6, i;
     UCHAR Query[512], Packet[DNS_UDP_SIZE + 256];
     SOCKADDR_IN Group4;
     SOCKADDR_IN6 Group6;
     SOCKET Sockets[2];
-    DWORD Start, Hops = 1;
-    INT QueryLength, Round;
+    DWORD Start, Hops = Mdns ? 255 : 1, Resend = Mdns ? MDNS_RESEND : LLMNR_RESEND;
+    INT QueryLength, Round, Rounds = Mdns ? MDNS_ROUNDS : LLMNR_ROUNDS;
     WORD Id;
 
     if (!ResolverLlmnrLinks(Links4, &Count4, Links6, &Count6))
         return ERROR_INVALID_NAME;
 
     Id = (WORD)(GetTickCount() ^ (GetCurrentThreadId() << 7) ^ (ULONG_PTR)Name ^ Type);
+    /* Id 0 marks a multicast response in mDNS; a query we expect a unicast answer to needs another one */
+    if (!Id)
+        Id = 1;
     QueryLength = ResolverBuildQuery(Name, Type, Id, FALSE, Query, sizeof(Query));
     if (QueryLength < 0)
         return ERROR_INVALID_NAME;
 
     RtlZeroMemory(&Group4, sizeof(Group4));
     Group4.sin_family = AF_INET;
-    Group4.sin_port = htons(LLMNR_PORT);
-    Group4.sin_addr.s_addr = htonl(0xE00000FC);
+    Group4.sin_port = htons(Mdns ? MDNS_PORT : LLMNR_PORT);
+    Group4.sin_addr.s_addr = htonl(Mdns ? 0xE00000FB : 0xE00000FC);
     RtlZeroMemory(&Group6, sizeof(Group6));
     Group6.sin6_family = AF_INET6;
-    Group6.sin6_port = htons(LLMNR_PORT);
+    Group6.sin6_port = htons(Mdns ? MDNS_PORT : LLMNR_PORT);
     Group6.sin6_addr.s6_addr[0] = 0xFF;
     Group6.sin6_addr.s6_addr[1] = 0x02;
-    Group6.sin6_addr.s6_addr[13] = 0x01;
-    Group6.sin6_addr.s6_addr[15] = 0x03;
+    Group6.sin6_addr.s6_addr[13] = Mdns ? 0x00 : 0x01;
+    Group6.sin6_addr.s6_addr[15] = Mdns ? 0xFB : 0x03;
 
     Sockets[0] = Count4 ? socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP) : INVALID_SOCKET;
     Sockets[1] = Count6 ? socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP) : INVALID_SOCKET;
@@ -1036,9 +1069,9 @@ ResolverLlmnrQuery(PCWSTR Name, WORD Type, PDNS_RECORDW *Result)
         setsockopt(Sockets[1], IPPROTO_IPV6, IPV6_MULTICAST_HOPS, (PCHAR)&Hops, sizeof(Hops));
 
     Start = GetTickCount();
-    for (Round = 0; Round < LLMNR_ROUNDS; Round++)
+    for (Round = 0; Round < Rounds; Round++)
     {
-        DWORD Deadline = Start + (Round + 1) * LLMNR_RESEND;
+        DWORD Deadline = Start + (Round + 1) * Resend;
 
         for (i = 0; i < Count4 && Sockets[0] != INVALID_SOCKET; i++)
         {
@@ -1075,12 +1108,18 @@ ResolverLlmnrQuery(PCWSTR Name, WORD Type, PDNS_RECORDW *Result)
             for (s = 0; s < 2; s++)
             {
                 RESOLVER_REPLY Reply;
-                INT Received;
+                SOCKADDR_STORAGE From;
+                INT Received, FromLength = sizeof(From);
+                USHORT FromPort;
 
                 if (Sockets[s] == INVALID_SOCKET || !FD_ISSET(Sockets[s], &Read))
                     continue;
-                Received = recvfrom(Sockets[s], (PCHAR)Packet, sizeof(Packet), 0, NULL, NULL);
+                Received = recvfrom(Sockets[s], (PCHAR)Packet, sizeof(Packet), 0, (PSOCKADDR)&From, &FromLength);
                 if (Received <= 0)
+                    continue;
+                /* Responders answer from the service port; anything else is not a reply to this query */
+                FromPort = From.ss_family == AF_INET6 ? ((PSOCKADDR_IN6)&From)->sin6_port : ((PSOCKADDR_IN)&From)->sin_port;
+                if (FromPort != htons(Mdns ? MDNS_PORT : LLMNR_PORT))
                     continue;
                 ResolverParseReply(Packet, Received, Id, Name, Type, &Reply);
                 if (Reply.Final && Reply.Status == ERROR_SUCCESS && Reply.Records)
@@ -1104,32 +1143,12 @@ ResolverLlmnrQuery(PCWSTR Name, WORD Type, PDNS_RECORDW *Result)
     return ERROR_INVALID_NAME;
 }
 
+static
 DNS_STATUS
-DnsIntResolve(LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result)
+ResolverQueryCandidates(PRESOLVER_CONFIG Config, LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result)
 {
-    PRESOLVER_CONFIG Config;
     DNS_STATUS Status, First = ERROR_SUCCESS;
     ULONG i;
-
-    *Result = NULL;
-    if (Options & DNS_QUERY_NO_WIRE_QUERY)
-        return DNS_ERROR_RCODE_NAME_ERROR;
-
-    ResolverStartWinsock();
-    if (Options & DNS_QUERY_MULTICAST_ONLY)
-        return wcschr(Name, L'.') ? ERROR_INVALID_NAME : ResolverLlmnrQuery(Name, Type, Result);
-    Config = RtlAllocateHeap(RtlGetProcessHeap(), 0, sizeof(*Config));
-    if (!Config)
-        return ERROR_OUTOFMEMORY;
-
-    Status = ResolverLoadConfig(Config, Name);
-    if (Status != ERROR_SUCCESS && (Status != DNS_ERROR_NO_DNS_SERVERS || wcschr(Name, L'.')))
-    {
-        RtlFreeHeap(RtlGetProcessHeap(), 0, Config);
-        return Status;
-    }
-    if (Status != ERROR_SUCCESS)
-        Config->CandidateCount = 0;
 
     for (i = 0; i < Config->CandidateCount; i++)
     {
@@ -1143,13 +1162,239 @@ DnsIntResolve(LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result)
             break;
     }
 
+    return Status == ERROR_SUCCESS ? Status : First;
+}
+
+DNS_STATUS
+DnsIntResolve(LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result)
+{
+    PRESOLVER_CONFIG Config;
+    DNS_STATUS Status, First = ERROR_SUCCESS;
+
+    *Result = NULL;
+    if (Options & DNS_QUERY_NO_WIRE_QUERY)
+        return DNS_ERROR_RCODE_NAME_ERROR;
+
+    ResolverStartWinsock();
+    if (Options & DNS_QUERY_MULTICAST_ONLY)
+    {
+        if (ResolverIsMdnsName(Name))
+            return ResolverMulticastQuery(Name, Type, TRUE, Result);
+        return wcschr(Name, L'.') ? ERROR_INVALID_NAME : ResolverMulticastQuery(Name, Type, FALSE, Result);
+    }
+
+    /* RFC 6762 section 3: a .local name is asked on the link first; unicast DNS only after that */
+    if (!(Options & DNS_QUERY_NO_MULTICAST) && ResolverIsMdnsName(Name) &&
+        ResolverMulticastQuery(Name, Type, TRUE, Result) == ERROR_SUCCESS)
+        return ERROR_SUCCESS;
+    *Result = NULL;
+
+    Config = RtlAllocateHeap(RtlGetProcessHeap(), 0, sizeof(*Config));
+    if (!Config)
+        return ERROR_OUTOFMEMORY;
+
+    Status = ResolverLoadConfig(Config, Name);
+    if (Status != ERROR_SUCCESS && (Status != DNS_ERROR_NO_DNS_SERVERS || wcschr(Name, L'.')))
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Config);
+        return Status;
+    }
+    if (Status != ERROR_SUCCESS)
+        Config->CandidateCount = 0;
+
+    Status = ResolverQueryCandidates(Config, Name, Type, Options, Result);
+
+
     if (!wcschr(Name, L'.') && (!Config->CandidateCount || Status != ERROR_SUCCESS))
     {
-        Status = (Options & DNS_QUERY_NO_MULTICAST) ? ERROR_INVALID_NAME : ResolverLlmnrQuery(Name, Type, Result);
+        Status = (Options & DNS_QUERY_NO_MULTICAST) ? ERROR_INVALID_NAME : ResolverMulticastQuery(Name, Type, FALSE, Result);
         if (Status != ERROR_SUCCESS && First == ERROR_SUCCESS)
             First = Status;
     }
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, Config);
     return Status == ERROR_SUCCESS ? Status : First;
+}
+
+static
+INT
+ResolverSkipQuestions(const UCHAR *Packet, INT Length, WORD Questions)
+{
+    WCHAR Name[DNS_MAX_NAME_BUFFER_LENGTH];
+    INT Offset = 12;
+    WORD i;
+
+    for (i = 0; i < Questions; i++)
+    {
+        Offset = ResolverReadName(Packet, Length, Offset, Name, ARRAYSIZE(Name));
+        if (Offset < 0 || Offset + 4 > Length)
+            return -1;
+        Offset += 4;
+    }
+    return Offset;
+}
+
+static
+WORD
+ResolverWordHost(const UCHAR *P)
+{
+    return (WORD)(P[0] | (P[1] << 8));
+}
+
+DNS_STATUS
+DnsIntExtractRecordsFromMessage(PDNS_MESSAGE_BUFFER Message, WORD Length, PDNS_RECORDW *Records)
+{
+    const UCHAR *Packet = (const UCHAR *)Message;
+    PDNS_RECORDW List = NULL, *Tail = &List;
+    DWORD Counts[3], Section;
+    WORD i;
+    INT Offset;
+
+    *Records = NULL;
+    if (Message == NULL)
+        return ERROR_INVALID_PARAMETER;
+    if (Length < sizeof(DNS_HEADER))
+        return DNS_ERROR_BAD_PACKET;
+
+    Counts[0] = ResolverWordHost(Packet + 6);
+    Counts[1] = ResolverWordHost(Packet + 8);
+    Counts[2] = ResolverWordHost(Packet + 10);
+
+    Offset = ResolverSkipQuestions(Packet, Length, ResolverWordHost(Packet + 4));
+    if (Offset < 0)
+        return DNS_ERROR_BAD_PACKET;
+
+    for (Section = DnsSectionAnswer; Section <= DnsSectionAdditional; Section++)
+    {
+        for (i = 0; i < Counts[Section - DnsSectionAnswer]; i++)
+        {
+            WCHAR Owner[DNS_MAX_NAME_BUFFER_LENGTH];
+            WORD RecordType, Class, DataLength;
+            DWORD Ttl;
+            PDNS_RECORDW Record;
+
+            Offset = ResolverReadName(Packet, Length, Offset, Owner, ARRAYSIZE(Owner));
+            if (Offset < 0 || Offset + 10 > Length)
+                goto Invalid;
+            RecordType = ResolverWord(Packet + Offset);
+            Class = ResolverWord(Packet + Offset + 2);
+            Ttl = ResolverDword(Packet + Offset + 4);
+            DataLength = ResolverWord(Packet + Offset + 8);
+            Offset += 10;
+            if (Offset + DataLength > Length)
+                goto Invalid;
+            if (Class == 1)
+            {
+                Record = ResolverParseRecord(Packet, Length, Owner, RecordType, Ttl, Offset, DataLength, Section);
+                if (Record)
+                {
+                    *Tail = Record;
+                    Tail = &Record->pNext;
+                }
+            }
+            Offset += DataLength;
+        }
+    }
+
+    if (!List)
+        return DNS_INFO_NO_RECORDS;
+    *Records = List;
+    return ERROR_SUCCESS;
+
+Invalid:
+    DnsIntFreeRecordList((PDNS_RECORD)List);
+    return DNS_ERROR_BAD_PACKET;
+}
+
+DNS_STATUS WINAPI
+DnsExtractRecordsFromMessage_W(PDNS_MESSAGE_BUFFER pDnsBuffer,
+                               WORD wMessageLength,
+                               PDNS_RECORD *ppRecord)
+{
+    if (ppRecord == NULL)
+        return ERROR_INVALID_PARAMETER;
+
+    return DnsIntExtractRecordsFromMessage(pDnsBuffer, wMessageLength, (PDNS_RECORDW *)ppRecord);
+}
+
+DNS_STATUS WINAPI
+DnsExtractRecordsFromMessage_UTF8(PDNS_MESSAGE_BUFFER pDnsBuffer,
+                                  WORD wMessageLength,
+                                  PDNS_RECORD *ppRecord)
+{
+    DNS_STATUS Status;
+    PDNS_RECORDW Wide = NULL;
+
+    if (ppRecord == NULL)
+        return ERROR_INVALID_PARAMETER;
+    *ppRecord = NULL;
+
+    Status = DnsIntExtractRecordsFromMessage(pDnsBuffer, wMessageLength, &Wide);
+    if (Status == ERROR_SUCCESS)
+    {
+        *ppRecord = DnsRecordSetCopyEx((PDNS_RECORD)Wide, DnsCharSetUnicode, DnsCharSetUtf8);
+        DnsRecordListFree((PDNS_RECORD)Wide, DnsFreeRecordList);
+        if (*ppRecord == NULL)
+            Status = ERROR_OUTOFMEMORY;
+    }
+    return Status;
+}
+
+DNS_STATUS
+DnsIntResolveWithServers(LPCWSTR Name, WORD Type, DWORD Options, PDNS_ADDR_ARRAY Servers, PDNS_RECORDW *Result)
+{
+    PRESOLVER_CONFIG Config;
+    DNS_STATUS Status;
+    ULONG i, N;
+
+    *Result = NULL;
+    if (Options & DNS_QUERY_NO_WIRE_QUERY)
+        return DNS_ERROR_RCODE_NAME_ERROR;
+    if ((Servers == NULL) || (Servers->AddrCount == 0))
+        return ERROR_INVALID_PARAMETER;
+
+    ResolverStartWinsock();
+    Config = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Config));
+    if (!Config)
+        return ERROR_OUTOFMEMORY;
+
+    N = min(Servers->AddrCount, DNS_MAX_SERVERS);
+    for (i = 0; i < N; i++)
+    {
+        const SOCKADDR_INET *Address = (const SOCKADDR_INET *)Servers->AddrArray[i].MaxSa;
+
+        if (Address->si_family != AF_INET && Address->si_family != AF_INET6)
+        {
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Config);
+            return ERROR_INVALID_PARAMETER;
+        }
+    }
+    for (i = 0; i < N; i++)
+    {
+        PRESOLVER_SERVER Slot = &Config->Servers[Config->ServerCount];
+        const SOCKADDR_INET *Address = (const SOCKADDR_INET *)Servers->AddrArray[i].MaxSa;
+
+        RtlCopyMemory(&Slot->Address, Address, sizeof(SOCKADDR_INET));
+        if (Slot->Address.si_family == AF_INET6)
+            Slot->Address.Ipv6.sin6_port = htons(DNS_PORT);
+        else
+            Slot->Address.Ipv4.sin_port = htons(DNS_PORT);
+        Slot->Adapter = 0;
+        Config->ServerCount++;
+    }
+    if (!Config->ServerCount)
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Config);
+        return ERROR_INVALID_PARAMETER;
+    }
+    Config->Adapters[0].FirstServer = 0;
+    Config->Adapters[0].ServerCount = Config->ServerCount;
+    Config->AdapterCount = 1;
+
+    Status = ResolverBuildCandidates(Config, Name);
+    if (Status == ERROR_SUCCESS)
+        Status = ResolverQueryCandidates(Config, Name, Type, Options, Result);
+
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Config);
+    return Status;
 }

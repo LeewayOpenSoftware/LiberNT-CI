@@ -9,6 +9,7 @@
 
 #include <commoncontrols.h>
 #include <uxtheme.h>
+#include <vssym32.h>
 
 #define NAMESPACE_TREE_CLASS L"ReactOS Namespace Tree Control"
 
@@ -155,9 +156,11 @@ class CNamespaceTreeControl :
     public CComCoClass<CNamespaceTreeControl, &CLSID_NamespaceTreeControl>,
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
     public INameSpaceTreeControl2,
-    public IOleWindow
+    public IOleWindow,
+    public IObjectWithSite
 {
 private:
+    CComPtr<IUnknown> m_Site; // the host; also the site of the item context menus
     struct RootEntry
     {
         CComPtr<IShellItem> Item;
@@ -200,6 +203,8 @@ private:
     };
 
     HWND m_Tree;
+    HFONT m_TreeFont;
+    BOOL m_TreeFlatFill; // decided once per paint by TreeUsesFlatFill
     CComPtr<IImageList> m_ImageList;
     CComPtr<IContextMenu> m_ContextMenu;
     CAtlList<RootEntry *> m_Roots;
@@ -209,11 +214,14 @@ private:
     NSTCSTYLE2 m_Style2;
     LONG m_SuppressSelection;
     BOOL m_Destroying;
+    BOOL m_RenamePending; // a label edit was asked for by the Rename command
 
     DWORD GetTreeStyle() const
     {
+        // TVS_EDITLABELS: Rename edits the label in place (TVN_BEGINLABELEDITW only
+        // lets it start from that command)
         DWORD Style = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN |
-                      TVS_DISABLEDRAGDROP;
+                      TVS_DISABLEDRAGDROP | TVS_EDITLABELS;
 
         if (m_Style & NSTCS_HASEXPANDOS)
             Style |= TVS_HASBUTTONS;
@@ -449,6 +457,14 @@ private:
         if (FAILED(hr))
             return hr;
 
+        // Through the host the menu finds its window, which shows verbs such as
+        // "Open in new tab" (OnlyInBrowserWindow) and carries them out
+        IUnknown_SetSite(Menu, m_Site);
+
+        // keep the item: the tree may change while the menu is up
+        CComPtr<IShellItem> Item = Data->Item;
+        BOOL IsRoot = Data->IsRoot;
+
         HMENU Popup = CreatePopupMenu();
         if (!Popup)
             return HRESULT_FROM_WIN32(GetLastError());
@@ -464,20 +480,52 @@ private:
 
             if (Command != 0)
             {
-                CMINVOKECOMMANDINFOEX Info;
+                WCHAR Verb[32];
+                SFGAOF Attributes = SFGAO_FOLDER;
 
-                ZeroMemory(&Info, sizeof(Info));
-                Info.cbSize = sizeof(Info);
-                Info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
-                Info.hwnd = m_hWnd;
-                Info.lpVerbW = MAKEINTRESOURCEW(Command - 1);
-                Info.ptInvoke = Point;
-                Info.nShow = SW_SHOWNORMAL;
-                Menu->InvokeCommand((CMINVOKECOMMANDINFO *)&Info);
+                if (FAILED(Menu->GetCommandString(Command - 1, GCS_VERBW, NULL,
+                                                  reinterpret_cast<LPSTR>(Verb), _countof(Verb))))
+                {
+                    Verb[0] = UNICODE_NULL;
+                }
+
+                if (!_wcsicmp(Verb, L"rename") && !IsRoot)
+                {
+                    // The menu has no shell view to rename in: edit the tree label.
+                    // TreeItem may have gone while the menu was up; EditLabel then
+                    // fails and the flag is cleared, so a later slow click is vetoed.
+                    m_RenamePending = TRUE;
+                    if (!TreeView_EditLabel(m_Tree, TreeItem))
+                        m_RenamePending = FALSE;
+                }
+                else if ((!_wcsicmp(Verb, L"open") || !_wcsicmp(Verb, L"explore")) && Item &&
+                         SUCCEEDED(Item->GetAttributes(SFGAO_FOLDER, &Attributes)) &&
+                         (Attributes & SFGAO_FOLDER))
+                {
+                    // Opening a folder from the pane shows it in this window, as a click does
+                    NotifyItemClick(Item, NSTCEHT_ONITEMLABEL, NSTCECT_LBUTTON);
+                }
+                else
+                {
+                    CMINVOKECOMMANDINFOEX Info;
+
+                    ZeroMemory(&Info, sizeof(Info));
+                    Info.cbSize = sizeof(Info);
+                    Info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
+                    Info.hwnd = m_hWnd;
+                    // A command offset goes in lpVerb: IContextMenu implementations read
+                    // lpVerbW only for a string verb (CDefaultContextMenu::InvokeCommand)
+                    Info.lpVerb = MAKEINTRESOURCEA(Command - 1);
+                    Info.lpVerbW = MAKEINTRESOURCEW(Command - 1);
+                    Info.ptInvoke = Point;
+                    Info.nShow = SW_SHOWNORMAL;
+                    Menu->InvokeCommand((CMINVOKECOMMANDINFO *)&Info);
+                }
             }
         }
 
         DestroyMenu(Popup);
+        IUnknown_SetSite(Menu, NULL);
         return hr;
     }
 
@@ -665,6 +713,60 @@ private:
         return FAILED(hr) ? hr : S_OK;
     }
 
+    // Rename the item of a tree label edit. On success the label is set from the
+    // renamed item's display name (which may differ from what was typed, such as a
+    // hidden extension), so the edit control's text is never kept: always FALSE.
+    BOOL RenameTreeItem(HTREEITEM TreeItem, PCWSTR NewName)
+    {
+        TreeItemData *Data = GetTreeItemData(TreeItem);
+        CComPtr<IShellFolder> Folder;
+        PCUITEMID_CHILD Child = NULL;
+        PITEMID_CHILD NewChild = NULL;
+
+        if (!Data || !Data->Pidl || !NewName || !*NewName)
+            return FALSE;
+        if (FAILED(SHBindToParent(Data->Pidl, IID_PPV_ARG(IShellFolder, &Folder), &Child)) || !Child)
+            return FALSE;
+        // SetNameOf reports its own errors to the user
+        if (FAILED(Folder->SetNameOf(m_hWnd, Child, NewName, SHGDN_INFOLDER, &NewChild)))
+            return FALSE;
+
+        if (NewChild)
+        {
+            PIDLIST_ABSOLUTE Parent = ILClone(Data->Pidl);
+            if (Parent && ILRemoveLastID(Parent))
+            {
+                PIDLIST_ABSOLUTE NewPidl = ILCombine(Parent, NewChild);
+                if (NewPidl)
+                {
+                    CComPtr<IShellItem> NewItem;
+                    if (SUCCEEDED(SHCreateItemFromIDList(NewPidl, IID_PPV_ARG(IShellItem, &NewItem))))
+                        Data->Item = NewItem;
+                    Data->Pidl.Free();
+                    Data->Pidl.Attach(NewPidl);
+                }
+            }
+            ILFree(Parent);
+            ILFree(NewChild);
+        }
+
+        // Show the name the folder now reports, as the label was made on insert
+        CComHeapPtr<WCHAR> DisplayName;
+        if (Data->Item && SUCCEEDED(Data->Item->GetDisplayName(SIGDN_NORMALDISPLAY, &DisplayName)))
+        {
+            TVITEMW TreeItemInfo = {};
+            TreeItemInfo.mask = TVIF_TEXT;
+            TreeItemInfo.hItem = TreeItem;
+            TreeItemInfo.pszText = DisplayName;
+            TreeView_SetItem(m_Tree, &TreeItemInfo);
+        }
+
+        // The children were built from the old path: enumerate them again on expand
+        TreeView_Expand(m_Tree, TreeItem, TVE_COLLAPSE | TVE_COLLAPSERESET);
+        Data->Enumerated = FALSE;
+        return FALSE;
+    }
+
     HRESULT PopulateTreeItem(HTREEITEM TreeItem)
     {
         TreeItemData *Data = GetTreeItemData(TreeItem);
@@ -817,11 +919,44 @@ private:
 
         if (SUCCEEDED(SHGetImageList(SHIL_SMALL, IID_PPV_ARG(IImageList, &m_ImageList))))
             TreeView_SetImageList(m_Tree, reinterpret_cast<HIMAGELIST>(m_ImageList.p), TVSIL_NORMAL);
+        UpdateTreeFont();
 
-        HFONT Font = reinterpret_cast<HFONT>(SendMessageW(::GetParent(m_hWnd), WM_GETFONT, 0, 0));
-        if (!Font)
-            Font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-        SendMessageW(m_Tree, WM_SETFONT, reinterpret_cast<WPARAM>(Font), TRUE);
+        return 0;
+    }
+
+    /* The navigation pane of Windows uses the icon title font (Segoe UI 9), not the dialog font */
+    void UpdateTreeFont()
+    {
+        LOGFONTW Font;
+        HFONT NewFont, OldFont = m_TreeFont;
+        HDC Screen;
+        INT SystemDpi = 96;
+
+        if (!m_Tree || !SystemParametersInfoW(SPI_GETICONTITLELOGFONT, sizeof(Font), &Font, 0))
+            return;
+        if ((Screen = ::GetDC(NULL)) != NULL)
+        {
+            SystemDpi = GetDeviceCaps(Screen, LOGPIXELSY);
+            ::ReleaseDC(NULL, Screen);
+        }
+        Font.lfHeight = MulDiv(Font.lfHeight, GetDpiForWindow(m_Tree), SystemDpi);
+        NewFont = CreateFontIndirectW(&Font);
+        if (!NewFont)
+            return;
+        m_TreeFont = NewFont;
+        ::SendMessageW(m_Tree, WM_SETFONT, (WPARAM)m_TreeFont, TRUE);
+        if (OldFont)
+            DeleteObject(OldFont);
+    }
+
+    LRESULT OnFontSettingsChanged(UINT Msg, WPARAM wParam, LPARAM lParam, BOOL &Handled)
+    {
+        if (Msg != WM_SETTINGCHANGE || wParam == SPI_SETICONTITLELOGFONT ||
+            wParam == SPI_SETNONCLIENTMETRICS || wParam == 0)
+            UpdateTreeFont();
+        if (m_Tree)
+            ::SendMessageW(m_Tree, Msg, wParam, lParam);
+        Handled = FALSE;
         return 0;
     }
 
@@ -833,6 +968,11 @@ private:
         {
             ::DestroyWindow(m_Tree);
             m_Tree = NULL;
+            if (m_TreeFont)
+            {
+                DeleteObject(m_TreeFont);
+                m_TreeFont = NULL;
+            }
         }
         m_ImageList.Release();
         m_Destroying = FALSE;
@@ -865,60 +1005,43 @@ private:
         return Color == (COLORREF)-1 ? GetSysColor(COLOR_WINDOWTEXT) : Color;
     }
 
-    UINT TreeHighlightAmount(UINT State) const
+    /* Rows get our flat fill only with a theme that has no tree item states. With TVP_TREEITEM
+     * comctl32 draws them from the theme; unthemed (classic) and high contrast keep its solid
+     * COLOR_HIGHLIGHT selection, as Windows does. */
+    BOOL TreeUsesFlatFill() const
     {
-        BOOL Focus = ::GetFocus() == m_Tree;
+        HIGHCONTRASTW Contrast = { sizeof(Contrast) };
+        HTHEME Theme = GetWindowTheme(m_Tree);
 
-        if ((State & CDIS_SELECTED) && (State & CDIS_HOT))
-            return 0x2C;
-        if (State & CDIS_SELECTED)
-            return Focus ? 0x24 : 0x1C;
-        if (State & CDIS_HOT)
-            return 0x14;
-        return 0;
+        if (!Theme || IsThemePartDefined(Theme, TVP_TREEITEM, 0))
+            return FALSE;
+        if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(Contrast), &Contrast, 0) &&
+            (Contrast.dwFlags & HCF_HIGHCONTRASTON))
+            return FALSE;
+        return TRUE;
     }
 
-    void RoundTreeHighlight(HDC Dc, const RECT &Item, COLORREF Fill, COLORREF Back)
+    /* The Windows 10 navigation pane fills: hot E5F3FF and selected CCE8FF (the highlight colour
+     * at 0x1A and 0x33 over the window colour), a selection without focus in neutral grey D9D9D9 */
+    COLORREF TreeStateFill(UINT State) const
     {
-        UINT Dpi = GetDpiForWindow(m_Tree);
-        INT InsetX = MulDiv(4, Dpi, 96), InsetY = MulDiv(2, Dpi, 96), Radius = MulDiv(4, Dpi, 96);
-        RECT Box = { Item.left + InsetX, Item.top + InsetY, Item.right - InsetX, Item.bottom - InsetY };
-        RECT Strip;
-        HBRUSH Brush = CreateSolidBrush(Back);
+        COLORREF Back = TreeBackColor(), Accent = GetSysColor(COLOR_HIGHLIGHT);
 
-        Strip = Item; Strip.right = Box.left; FillRect(Dc, &Strip, Brush);
-        Strip = Item; Strip.left = Box.right; FillRect(Dc, &Strip, Brush);
-        Strip = Item; Strip.bottom = Box.top; FillRect(Dc, &Strip, Brush);
-        Strip = Item; Strip.top = Box.bottom; FillRect(Dc, &Strip, Brush);
-        DeleteObject(Brush);
-        if (Box.right - Box.left < Radius * 2 || Box.bottom - Box.top < Radius * 2)
-            return;
-        for (INT y = 0; y < Radius; y++)
-        {
-            for (INT x = 0; x < Radius; x++)
-            {
-                UINT Inside = 0;
-                COLORREF Color;
+        if (State & CDIS_SELECTED)
+            return ::GetFocus() == m_Tree ? BlendTreeColor(Back, Accent, 0x33) :
+                                            BlendTreeColor(Back, GetSysColor(COLOR_WINDOWTEXT), 0x26);
+        if (State & CDIS_HOT)
+            return BlendTreeColor(Back, Accent, 0x1A);
+        return CLR_INVALID;
+    }
 
-                for (INT sy = 0; sy < 4; sy++)
-                {
-                    for (INT sx = 0; sx < 4; sx++)
-                    {
-                        INT dx = Radius * 8 - (x * 8 + sx * 2 + 1);
-                        INT dy = Radius * 8 - (y * 8 + sy * 2 + 1);
-                        if (dx * dx + dy * dy <= Radius * 8 * Radius * 8)
-                            Inside++;
-                    }
-                }
-                if (Inside == 16)
-                    continue;
-                Color = BlendTreeColor(Back, Fill, Inside * 255 / 16);
-                SetPixel(Dc, Box.left + x, Box.top + y, Color);
-                SetPixel(Dc, Box.right - 1 - x, Box.top + y, Color);
-                SetPixel(Dc, Box.left + x, Box.bottom - 1 - y, Color);
-                SetPixel(Dc, Box.right - 1 - x, Box.bottom - 1 - y, Color);
-            }
-        }
+    /* A focused selection also gets a 1 px border, 99D1FF over a white window */
+    BOOL TreeStateBorder(UINT State, COLORREF *Border) const
+    {
+        if (!(State & CDIS_SELECTED) || ::GetFocus() != m_Tree)
+            return FALSE;
+        *Border = BlendTreeColor(TreeBackColor(), GetSysColor(COLOR_HIGHLIGHT), 0x66);
+        return TRUE;
     }
 
     BOOL FillCustomDrawItem(NMTVCUSTOMDRAW *Draw, NSTCCUSTOMDRAW *Item, PWSTR Text, UINT TextLength)
@@ -952,8 +1075,7 @@ private:
 
     LRESULT OnTreeCustomDraw(NMTVCUSTOMDRAW *Draw)
     {
-        UINT Amount;
-        COLORREF Fill;
+        COLORREF Fill, Border;
         LRESULT Result;
         NSTCCUSTOMDRAW Item;
         WCHAR Text[MAX_PATH];
@@ -963,6 +1085,7 @@ private:
         switch (Draw->nmcd.dwDrawStage)
         {
             case CDDS_PREPAINT:
+                m_TreeFlatFill = TreeUsesFlatFill();
                 ::GetClientRect(m_Tree, &Bounds);
                 for (Position = m_Events.GetHeadPosition(); Position;)
                 {
@@ -984,13 +1107,14 @@ private:
                 return CDRF_DODEFAULT;
 
             case CDDS_ITEMPREPAINT:
-                Amount = TreeHighlightAmount(Draw->nmcd.uItemState);
                 Result = CDRF_NOTIFYPOSTPAINT;
-                if (Amount)
+                Fill = m_TreeFlatFill ? TreeStateFill(Draw->nmcd.uItemState) : CLR_INVALID;
+                if (Fill != CLR_INVALID)
                 {
+                    /* comctl32 would draw selected text in HIGHLIGHTTEXT, unreadable on a light fill */
                     SelectObject(Draw->nmcd.hdc, (HFONT)::SendMessageW(m_Tree, WM_GETFONT, 0, 0));
                     Draw->clrText = TreeTextColor();
-                    Draw->clrTextBk = BlendTreeColor(TreeBackColor(), Draw->clrText, Amount);
+                    Draw->clrTextBk = Fill;
                     Result |= CDRF_NEWFONT;
                 }
                 for (Position = m_Events.GetHeadPosition(); Position;)
@@ -1007,11 +1131,16 @@ private:
                 return Result;
 
             case CDDS_ITEMPOSTPAINT:
-                Amount = TreeHighlightAmount(Draw->nmcd.uItemState);
-                Fill = Amount && (::GetWindowLongPtrW(m_Tree, GWL_STYLE) & TVS_FULLROWSELECT) ?
-                       BlendTreeColor(TreeBackColor(), TreeTextColor(), Amount) : TreeBackColor();
-                if (Amount && (::GetWindowLongPtrW(m_Tree, GWL_STYLE) & TVS_FULLROWSELECT))
-                    RoundTreeHighlight(Draw->nmcd.hdc, Draw->nmcd.rc, Fill, TreeBackColor());
+                if (m_TreeFlatFill && TreeStateBorder(Draw->nmcd.uItemState, &Border))
+                {
+                    HBRUSH Brush = CreateSolidBrush(Border);
+
+                    if (Brush)
+                    {
+                        FrameRect(Draw->nmcd.hdc, &Draw->nmcd.rc, Brush);
+                        DeleteObject(Brush);
+                    }
+                }
                 for (Position = m_Events.GetHeadPosition(); Position;)
                 {
                     EventEntry &Entry = m_Events.GetNext(Position);
@@ -1054,6 +1183,27 @@ private:
                 if (Data && !m_SuppressSelection)
                     NotifySelectionChanged(Data->Item);
                 break;
+            }
+
+            case TVN_BEGINLABELEDITW:
+            {
+                // Only the Rename command edits a label, and only of an item that can be renamed
+                NMTVDISPINFOW *Info = reinterpret_cast<NMTVDISPINFOW *>(lParam);
+                TreeItemData *Data = GetTreeItemData(Info->item.hItem);
+                SFGAOF Attributes = SFGAO_CANRENAME;
+                BOOL Allow = m_RenamePending && Data && Data->Item && !Data->IsRoot &&
+                             SUCCEEDED(Data->Item->GetAttributes(SFGAO_CANRENAME, &Attributes)) &&
+                             (Attributes & SFGAO_CANRENAME);
+                m_RenamePending = FALSE;
+                return !Allow;
+            }
+
+            case TVN_ENDLABELEDITW:
+            {
+                NMTVDISPINFOW *Info = reinterpret_cast<NMTVDISPINFOW *>(lParam);
+                if (!Info->item.pszText)
+                    return FALSE; // cancelled
+                return RenameTreeItem(Info->item.hItem, Info->item.pszText);
             }
 
             case TVN_DELETEITEMW:
@@ -1143,11 +1293,14 @@ private:
 public:
     CNamespaceTreeControl() :
         m_Tree(NULL),
+        m_TreeFont(NULL),
+        m_TreeFlatFill(FALSE),
         m_NextCookie(0),
         m_Style((NSTCSTYLE)0),
         m_Style2(NSTCS2_DEFAULT),
         m_SuppressSelection(0),
-        m_Destroying(FALSE)
+        m_Destroying(FALSE),
+        m_RenamePending(FALSE)
     {
     }
 
@@ -1166,13 +1319,32 @@ public:
         COM_INTERFACE_ENTRY_IID(IID_INameSpaceTreeControl2, INameSpaceTreeControl2)
         COM_INTERFACE_ENTRY2_IID(IID_INameSpaceTreeControl, INameSpaceTreeControl, INameSpaceTreeControl2)
         COM_INTERFACE_ENTRY_IID(IID_IOleWindow, IOleWindow)
+        COM_INTERFACE_ENTRY_IID(IID_IObjectWithSite, IObjectWithSite)
     END_COM_MAP()
+
+    // IObjectWithSite
+    STDMETHODIMP SetSite(IUnknown *pUnkSite) override
+    {
+        m_Site = pUnkSite;
+        return S_OK;
+    }
+
+    STDMETHODIMP GetSite(REFIID riid, void **ppvSite) override
+    {
+        if (!ppvSite)
+            return E_POINTER;
+        *ppvSite = NULL;
+        return m_Site ? m_Site->QueryInterface(riid, ppvSite) : E_FAIL;
+    }
 
     BEGIN_MSG_MAP(CNamespaceTreeControl)
         MESSAGE_HANDLER(WM_CREATE, OnCreate)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
         MESSAGE_HANDLER(WM_SIZE, OnSize)
         MESSAGE_HANDLER(WM_NOTIFY, OnNotify)
+        MESSAGE_HANDLER(WM_SETTINGCHANGE, OnFontSettingsChanged)
+        MESSAGE_HANDLER(WM_THEMECHANGED, OnFontSettingsChanged)
+        MESSAGE_HANDLER(WM_DPICHANGED_AFTERPARENT, OnFontSettingsChanged)
         MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
         MESSAGE_HANDLER(WM_INITMENUPOPUP, OnMenuMessage)
         MESSAGE_HANDLER(WM_DRAWITEM, OnMenuMessage)

@@ -43,6 +43,14 @@ static EFI_GUID FwGraphicsOutputGuid = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID FwLoadedImageProtocolGuid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
 static EFI_GUID FwDevicePathGuid = EFI_DEVICE_PATH_PROTOCOL_GUID;
 static EFI_GUID FwEdidActiveGuid = EFI_EDID_ACTIVE_PROTOCOL_GUID;
+static EFI_GUID FwRngGuid = {0x3152bca5, 0xeade, 0x433d, {0x86, 0x2e, 0xc0, 0x1c, 0xdc, 0x29, 0x1f, 0x44}};
+
+typedef struct _FW_EFI_RNG_PROTOCOL FW_EFI_RNG_PROTOCOL;
+struct _FW_EFI_RNG_PROTOCOL
+{
+    EFI_STATUS (EFIAPI *GetInfo)(FW_EFI_RNG_PROTOCOL *This, UINTN *Size, EFI_GUID *List);
+    EFI_STATUS (EFIAPI *GetRNG)(FW_EFI_RNG_PROTOCOL *This, EFI_GUID *Algorithm, UINTN Size, UINT8 *Value);
+};
 static EFI_GUID FwSystemResourceTableGuid = EFI_SYSTEM_RESOURCE_TABLE_GUID;
 static EFI_GUID FwGraphicsOutputTransformGuid =
     {0xac775d0f, 0x1199, 0x42e2, {0x92, 0x00, 0x71, 0xdc, 0x78, 0xaa, 0x65, 0xbb}};
@@ -272,6 +280,32 @@ FwGetTime(
     return TRUE;
 }
 
+BOOLEAN
+FwGetRandom(
+    _Out_writes_bytes_(Size) PVOID Buffer,
+    _In_ ULONG Size)
+{
+    FW_EFI_RNG_PROTOCOL *Rng;
+    PUCHAR Output = Buffer;
+    ULONG Chunk;
+
+    if (EFI_ERROR(GlobalSystemTable->BootServices->LocateProtocol(&FwRngGuid, NULL, (VOID**)&Rng)))
+        return FALSE;
+
+    /* Some firmware RNGs refuse large requests */
+    while (Size)
+    {
+        Chunk = min(Size, 64);
+        if (EFI_ERROR(Rng->GetRNG(Rng, NULL, Chunk, Output)))
+            return FALSE;
+
+        Output += Chunk;
+        Size -= Chunk;
+    }
+
+    return TRUE;
+}
+
 PCWSTR
 FwGetLoadOptions(
     _Out_ PULONG Chars)
@@ -372,10 +406,12 @@ FwStartImage(
 BOOLEAN
 FwStartFirmwareApplication(
     _In_ PVOID Device,
-    _In_ PCWSTR Path)
+    _In_ PCWSTR Path,
+    _In_opt_ PCWSTR LoadOptions)
 {
     EFI_BOOT_SERVICES* BootServices = GlobalSystemTable->BootServices;
     EFI_DEVICE_PATH_PROTOCOL *DevicePath, *Node, *FilePath;
+    EFI_LOADED_IMAGE_PROTOCOL* LoadedImage;
     EFI_HANDLE Handle;
     SIZE_T DeviceSize, NodeSize;
     PUCHAR Buffer;
@@ -428,6 +464,19 @@ FwStartFirmwareApplication(
     }
 
     FwFree(Buffer);
+
+    if (LoadOptions)
+    {
+        if (EFI_ERROR(BootServices->HandleProtocol(Handle, &FwLoadedImageProtocolGuid, (VOID**)&LoadedImage)))
+        {
+            BootServices->UnloadImage(Handle);
+            return FALSE;
+        }
+
+        LoadedImage->LoadOptions = (VOID*)LoadOptions;
+        LoadedImage->LoadOptionsSize = (UINT32)((wcslen(LoadOptions) + 1) * sizeof(WCHAR));
+    }
+
     return !EFI_ERROR(BootServices->StartImage(Handle, NULL, NULL));
 }
 

@@ -500,7 +500,8 @@ ReferenceClassVersion(
     if (created || (pClassModule && !pClassModule->ClassLibraryInfo))
     {
 
-        status = ZwLoadDriver(&driverServiceName);
+        NTSTATUS loadStatus = ZwLoadDriver(&driverServiceName);
+        status = loadStatus;
         if (!NT_SUCCESS(status))
         {
 
@@ -512,9 +513,20 @@ ReferenceClassVersion(
                 status = STATUS_SUCCESS;
             }
         }
-        else if (pClassModule && !pClassModule->ClassLibraryInfo)
+
+        /*
+         * Whatever the load reported, a class module that still has no
+         * ClassLibraryInfo was never registered: its DriverEntry failed (a
+         * boot-start class library initialized before Wdf01000 does that), or
+         * the image was in memory without having registered. The bind must
+         * fail here with the loader's status; the caller would otherwise call
+         * through the NULL function table (bugcheck 0x7E in WdfVersionBindClass).
+         */
+        if (pClassModule && !pClassModule->ClassLibraryInfo)
         {
-            status = STATUS_DRIVER_INTERNAL_ERROR;
+            status = NT_SUCCESS(loadStatus) ? STATUS_DRIVER_INTERNAL_ERROR : loadStatus;
+            __DBGPRINT(("class %S: %wZ loaded but did not register as a class library, status 0x%x\n",
+                        ClassBindInfo->ClassName, &driverServiceName, status));
         }
     }
     else

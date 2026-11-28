@@ -64,6 +64,14 @@ BEGIN
     IDS_CAPABILITY_REMOVABLE_STORAGE "Removable storage"
     IDS_CAPABILITY_APPOINTMENTS "Your Appointments"
     IDS_CAPABILITY_CONTACTS "Your Contacts"
+    IDS_MANDATORY_LABEL_AUTHORITY "Mandatory Label"
+    IDS_UNTRUSTED_MANDATORY_LEVEL "Untrusted Mandatory Level"
+    IDS_LOW_MANDATORY_LEVEL "Low Mandatory Level"
+    IDS_MEDIUM_MANDATORY_LEVEL "Medium Mandatory Level"
+    IDS_MEDIUM_PLUS_MANDATORY_LEVEL "Medium Plus Mandatory Level"
+    IDS_HIGH_MANDATORY_LEVEL "High Mandatory Level"
+    IDS_SYSTEM_MANDATORY_LEVEL "System Mandatory Level"
+    IDS_PROTECTED_PROCESS_MANDATORY_LEVEL "Protected Process Mandatory Level"
 END
 
 STRINGTABLE
@@ -101,4 +109,6 @@ BEGIN
     IDS_TIME_ZONE_PRIVILEGE "Change the time zone"
     IDS_CREATE_SYMBOLIC_LINK_PRIVILEGE "Create symbolic links"
     IDS_DELEGATE_SESSION_USER_IMPERSONATE_PRIVILEGE "Obtain an impersonation token for another user in the same session"
+    IDS_TRUSTED_CREDMAN_ACCESS_PRIVILEGE "Access Credential Manager as a trusted caller"
+    IDS_RELABEL_PRIVILEGE "Modify an object label"
 END

@@ -29,8 +29,66 @@
 #define WM_CABINET_STATUS (WM_APP + 1)
 #define WM_CABINET_CHANGED (WM_APP + 2)
 #define WM_CABINET_FOCUSVIEW (WM_APP + 3)
+#define WM_CABINET_DETAILS_START (WM_APP + 4)
+#define WM_CABINET_DETAILS_READY (WM_APP + 5)
 #define IDT_CABINET_STATUS 1
 #define IDT_CABINET_SEARCH 2
+#define IDT_CABINET_SELECTION 3
+#define IDT_CABINET_SELECTION_SIZE 4
+#define CABINET_SELECTION_IDLE_MS 200
+#define CABINET_JOB_DETAILS 1
+#define CABINET_JOB_PREVIEW 2
+
+struct CabinetDetailsJob
+{
+    HWND Window;
+    ULONG DetailsGeneration;
+    ULONG PreviewGeneration;
+    UINT Parts;
+    PIDLIST_ABSOLUTE Pidl;
+    WCHAR Path[MAX_PATH];
+    SIZE DetailsSize;
+    SIZE PreviewSize;
+    COLORREF PreviewBack;
+    int RowIndex;
+    HBITMAP DetailsBitmap;
+    HBITMAP PreviewBitmap;
+    PWSTR PreviewLines;
+    UINT RowCount;
+    struct
+    {
+        PROPERTYKEY Key;
+        WCHAR Text[64];
+    } Rows[9];
+};
+
+static LONG s_CabinetJobSerial;
+
+static void
+FreeDetailsJob(CabinetDetailsJob *job)
+{
+    if (!job)
+        return;
+    if (job->Pidl)
+        ILFree(job->Pidl);
+    if (job->DetailsBitmap)
+        DeleteObject(job->DetailsBitmap);
+    if (job->PreviewBitmap)
+        DeleteObject(job->PreviewBitmap);
+    if (job->PreviewLines)
+        HeapFree(GetProcessHeap(), 0, job->PreviewLines);
+    HeapFree(GetProcessHeap(), 0, job);
+}
+
+static void
+AddJobRow(CabinetDetailsJob *job, REFPROPERTYKEY key, LPCWSTR text)
+{
+    if (job->RowCount >= _countof(job->Rows))
+        return;
+    job->Rows[job->RowCount].Key = key;
+    StringCchCopyW(job->Rows[job->RowCount].Text, _countof(job->Rows[job->RowCount].Text), text);
+    job->RowCount++;
+}
 
 HINSTANCE
 CabinetModule()
@@ -104,6 +162,16 @@ CCabinetWindow::CCabinetWindow() :
     m_DetailsBar(NULL),
     m_ViewBar(NULL),
     m_Status(NULL),
+    m_SelectionMousePosition(),
+    m_SelectionSizeView(NULL),
+    m_SelectionSizeGeneration(0),
+    m_SelectionSizeIndex(0),
+    m_SelectionSizeCount(0),
+    m_SelectionSizeVisited(0),
+    m_SelectionSizeLimit(0),
+    m_SelectionSize(0),
+    m_SelectionSizeReady(FALSE),
+    m_SelectionSizeHaveSize(FALSE),
     m_DetailsIcon(NULL),
     m_DetailsName(NULL),
     m_DetailsList(NULL),
@@ -127,12 +195,18 @@ CCabinetWindow::CCabinetWindow() :
     m_PreviewPidl(NULL),
     m_DetailsIconHandle(NULL),
     m_DetailsBitmap(NULL),
+    m_DetailsGeneration(0),
+    m_PreviewGeneration(0),
+    m_PendingJob(NULL),
+    m_JobRunning(FALSE),
     m_InHistoryNavigation(FALSE),
     m_FocusViewOnNavigate(FALSE),
     m_NavigationDepth(0),
     m_ClosePending(FALSE),
     m_ChangeNotify(0),
     m_NavigationVisible(TRUE),
+    m_FolderNavigationState(EPS_DONTCARE),
+    m_FolderNavigationShown(FALSE),
     m_SearchBrowser(NULL),
     m_SearchPathCount(0),
     m_SearchActive(FALSE)
@@ -148,7 +222,9 @@ CCabinetWindow::CCabinetWindow() :
 
 CCabinetWindow::~CCabinetWindow()
 {
+    CancelSelectionSize();
     ClearPreview();
+    FreeDetailsJob(m_PendingJob);
     if (m_DetailsIconHandle)
         DestroyIcon(m_DetailsIconHandle);
     if (m_DetailsBitmap)
@@ -177,7 +253,7 @@ CCabinetWindow::~CCabinetWindow()
 int
 CCabinetWindow::Scale(int value) const
 {
-    return MulDiv(value, m_hwnd ? GetDpiForWindow(m_hwnd) : 96, 96);
+    return MulDiv(value, m_hwnd ? GetDpiForWindow(m_hwnd) : GetDpiForSystem(), 96);
 }
 
 void
@@ -563,11 +639,13 @@ void
 CCabinetWindow::PaintBackground(HDC dc)
 {
     CabinetPalette palette;
-    RECT client;
+    RECT client, clip, hit;
     struct { int Top; int Bottom; COLORREF Color; } bands[5];
 
     CabinetGetPalette(&palette);
     GetClientRect(m_hwnd, &client);
+    if (GetClipBox(dc, &clip) == ERROR)
+        clip = client;
     {
         RECT glass = { 0, 0, client.right, TabStripHeight() };
         FillRect(dc, &glass, ClientCaption() ? (HBRUSH)GetStockObject(BLACK_BRUSH) : GetSysColorBrush(COLOR_3DFACE));
@@ -580,11 +658,10 @@ CCabinetWindow::PaintBackground(HDC dc)
     for (UINT i = 0; i < _countof(bands); i++)
     {
         RECT rc = { 0, bands[i].Top, client.right, bands[i].Bottom };
-        HBRUSH brush = CreateSolidBrush(bands[i].Color);
-        FillRect(dc, &rc, brush);
-        DeleteObject(brush);
+        SetDCBrushColor(dc, bands[i].Color);
+        FillRect(dc, &rc, (HBRUSH)GetStockObject(DC_BRUSH));
     }
-    if (!IsRectEmpty(&m_PanelRect))
+    if (IntersectRect(&hit, &m_PanelRect, &clip))
     {
         RECT outer = m_PanelRect;
         int radius = Scale(8), saved = SaveDC(dc);
@@ -597,35 +674,40 @@ CCabinetWindow::PaintBackground(HDC dc)
         CabinetFillRound(dc, outer, radius - 1, palette.Window);
         RestoreDC(dc, saved);
     }
-    if (IsAppThemed())
+    SetRect(&hit, 0, TabStripHeight(), client.right, AddressBottom() - 1);
+    if (IsAppThemed() && IntersectRect(&hit, &hit, &clip))
     {
-        Gdiplus::Graphics graphics(dc);
-        Gdiplus::LinearGradientBrush shade(Gdiplus::PointF(0.0f, 0.0f),
-                                           Gdiplus::PointF(0.0f, (float)(AddressBottom() - 1) + 1.0f),
-                                           Gdiplus::Color(255, GetRValue(palette.Band), GetGValue(palette.Band),
-                                                          GetBValue(palette.Band)),
-                                           Gdiplus::Color(255, GetRValue(palette.BandShade),
-                                                          GetGValue(palette.BandShade), GetBValue(palette.BandShade)));
+        TRIVERTEX vertex[2] = {
+            { 0, 0, (COLOR16)(GetRValue(palette.Band) << 8), (COLOR16)(GetGValue(palette.Band) << 8),
+              (COLOR16)(GetBValue(palette.Band) << 8), 0xFF00 },
+            { client.right, AddressBottom(), (COLOR16)(GetRValue(palette.BandShade) << 8),
+              (COLOR16)(GetGValue(palette.BandShade) << 8), (COLOR16)(GetBValue(palette.BandShade) << 8), 0xFF00 } };
+        GRADIENT_RECT mesh = { 0, 1 };
+        int saved = SaveDC(dc);
 
-        graphics.FillRectangle(&shade, 0, TabStripHeight(), (INT)client.right, AddressBottom() - 1 - TabStripHeight());
+        IntersectClipRect(dc, hit.left, hit.top, hit.right, hit.bottom);
+        GdiGradientFill(dc, vertex, _countof(vertex), &mesh, 1, GRADIENT_FILL_RECT_V);
+        RestoreDC(dc, saved);
     }
     if (m_Status && IsWindowVisible(m_Status))
     {
         RECT status;
-        int saved = SaveDC(dc);
         GetWindowRect(m_Status, &status);
         MapWindowPoints(NULL, m_hwnd, (POINT *)&status, 2);
-        OffsetWindowOrgEx(dc, -status.left, -status.top, NULL);
-        IntersectClipRect(dc, 0, 0, status.right - status.left, status.bottom - status.top);
-        SendMessageW(m_Status, WM_PRINTCLIENT, (WPARAM)dc, PRF_CLIENT | PRF_ERASEBKGND);
-        RestoreDC(dc, saved);
+        if (IntersectRect(&hit, &status, &clip))
+        {
+            int saved = SaveDC(dc);
+            OffsetWindowOrgEx(dc, -status.left, -status.top, NULL);
+            IntersectClipRect(dc, 0, 0, status.right - status.left, status.bottom - status.top);
+            SendMessageW(m_Status, WM_PRINTCLIENT, (WPARAM)dc, PRF_CLIENT | PRF_ERASEBKGND);
+            RestoreDC(dc, saved);
+        }
     }
     if ((m_DetailsPane || m_PreviewPane) && !IsRectEmpty(&m_PaneRect))
     {
         RECT line = { m_PaneRect.left, m_PaneRect.top, m_PaneRect.left + 1, m_PaneRect.bottom };
-        HBRUSH brush = CreateSolidBrush(palette.BandLine);
-        FillRect(dc, &line, brush);
-        DeleteObject(brush);
+        SetDCBrushColor(dc, palette.BandLine);
+        FillRect(dc, &line, (HBRUSH)GetStockObject(DC_BRUSH));
     }
     PaintCaptionButtons(dc);
 }
@@ -656,37 +738,46 @@ CCabinetWindow::FitCommandBar(int width)
     InvalidateRect(m_CommandBar, NULL, TRUE);
 }
 
+static void
+PlaceChild(HDWP *hdwp, HWND hwnd, int x, int y, int cx, int cy, HWND insertAfter = NULL)
+{
+    UINT flags = SWP_NOACTIVATE | (insertAfter ? 0 : SWP_NOZORDER);
+
+    if (!hwnd)
+        return;
+    if (*hdwp)
+        *hdwp = DeferWindowPos(*hdwp, hwnd, insertAfter, x, y, cx, cy, flags);
+    if (!*hdwp)
+        SetWindowPos(hwnd, insertAfter, x, y, cx, cy, flags);
+}
+
 void
-CCabinetWindow::OnSize()
+CCabinetWindow::LayoutChildren(HDWP *hdwp)
 {
     RECT client, status;
     SIZE size;
     int top, bottom, left, right, pane, search, row, statusHeight;
 
-    if (!m_TabBand || !m_TabBand->Window())
-        return;
     GetClientRect(m_hwnd, &client);
-    MoveWindow(m_TabBand->Window(), 0, 0, max(0, (int)client.right - CaptionButtonsWidth() - Scale(8)), TabStripHeight(),
-               TRUE);
+    PlaceChild(hdwp, m_TabBand->Window(), 0, 0, max(0, (int)client.right - CaptionButtonsWidth() - Scale(8)),
+               TabStripHeight());
     m_TabBand->SetShadeBottom(AddressBottom() - 1);
     size = ToolbarSize(m_NavBar);
-    MoveWindow(m_NavBar, Scale(3), TabStripHeight() + Scale(8) + (Scale(32) - size.cy) / 2, size.cx, size.cy, TRUE);
+    PlaceChild(hdwp,m_NavBar, Scale(3), TabStripHeight() + Scale(8) + (Scale(32) - size.cy) / 2, size.cx, size.cy);
     left = Scale(3) + size.cx + Scale(6);
     search = min(Scale(300), max(Scale(140), (int)(client.right - Scale(214)) / 3));
-    if (m_SearchBox->Window())
-        MoveWindow(m_SearchBox->Window(), client.right - Scale(13) - search, TabStripHeight() + Scale(8), search,
-                   Scale(32), TRUE);
-    if (m_AddressBand->Window())
-        MoveWindow(m_AddressBand->Window(), left, TabStripHeight() + Scale(8),
-                   max(0, (int)client.right - Scale(13) - search - Scale(10) - left), Scale(32), TRUE);
+    PlaceChild(hdwp,m_SearchBox->Window(), client.right - Scale(13) - search, TabStripHeight() + Scale(8), search,
+               Scale(32));
+    PlaceChild(hdwp,m_AddressBand->Window(), left, TabStripHeight() + Scale(8),
+               max(0, (int)client.right - Scale(13) - search - Scale(10) - left), Scale(32));
     size = ToolbarSize(m_DetailsBar);
     row = AddressBottom() + (CommandBottom() - 1 - AddressBottom() - (int)size.cy) / 2;
-    MoveWindow(m_DetailsBar, client.right - Scale(8) - size.cx, row, size.cx, size.cy, TRUE);
+    PlaceChild(hdwp,m_DetailsBar, client.right - Scale(8) - size.cx, row, size.cx, size.cy);
     right = max(0, (int)client.right - Scale(8) - (int)size.cx - Scale(16) - Scale(8));
     FitCommandBar(right);
     size = ToolbarSize(m_CommandBar);
     row = AddressBottom() + (CommandBottom() - 1 - AddressBottom() - (int)size.cy) / 2;
-    MoveWindow(m_CommandBar, Scale(8), row, right, size.cy, TRUE);
+    PlaceChild(hdwp,m_CommandBar, Scale(8), row, right, size.cy);
 
     SendMessageW(m_Status, WM_SIZE, 0, 0);
     GetWindowRect(m_Status, &status);
@@ -697,18 +788,18 @@ CCabinetWindow::OnSize()
         SendMessageW(m_Status, SB_SETPARTS, _countof(parts), (LPARAM)parts);
     }
     size = ToolbarSize(m_ViewBar);
-    SetWindowPos(m_ViewBar, HWND_TOP, client.right - Scale(8) - size.cx,
-                 client.bottom - statusHeight + (statusHeight - size.cy) / 2, size.cx, size.cy, SWP_NOACTIVATE);
+    PlaceChild(hdwp,m_ViewBar, client.right - Scale(8) - size.cx,
+               client.bottom - statusHeight + (statusHeight - size.cy) / 2, size.cx, size.cy, HWND_TOP);
     top = CommandBottom();
     bottom = client.bottom - statusHeight;
     left = 0;
     if (m_NavigationWindow)
     {
-        ShowWindow(m_NavigationWindow, m_NavigationVisible ? SW_SHOW : SW_HIDE);
-        if (m_NavigationVisible)
+        ShowWindow(m_NavigationWindow, NavigationShown() ? SW_SHOW : SW_HIDE);
+        if (NavigationShown())
         {
             left = Scale(160);
-            MoveWindow(m_NavigationWindow, Scale(2), top, Scale(154), max(0, bottom - top), TRUE);
+            PlaceChild(hdwp,m_NavigationWindow, Scale(2), top, Scale(154), max(0, bottom - top));
         }
     }
     SetRect(&m_PanelRect, left ? left : -Scale(8), top, client.right, bottom);
@@ -719,11 +810,30 @@ CCabinetWindow::OnSize()
     right = client.right - pane;
     SetRect(&m_ViewRect, left, top, max(left, right), bottom);
     SetRect(&m_PaneRect, max(left, right), top, client.right, bottom);
-    PlaceBrowsers();
+    PlaceBrowsers(hdwp);
+}
+
+void
+CCabinetWindow::OnSize()
+{
+    RECT client;
+    HDWP hdwp;
+    BOOL batched;
+
+    if (!m_TabBand || !m_TabBand->Window())
+        return;
+    hdwp = BeginDeferWindowPos(8 + CABINET_MAX_TABS);
+    batched = hdwp != NULL;
+    LayoutChildren(&hdwp);
+    if (hdwp)
+        EndDeferWindowPos(hdwp);
+    else if (batched)
+        LayoutChildren(&hdwp);
     PlacePanes();
+    GetClientRect(m_hwnd, &client);
     {
         RECT chrome = { 0, 0, client.right, CommandBottom() };
-        RECT footer = { 0, bottom, client.right, client.bottom };
+        RECT footer = { 0, m_PanelRect.bottom, client.right, client.bottom };
         RedrawWindow(m_hwnd, &chrome, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
         RedrawWindow(m_hwnd, &footer, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
         RedrawWindow(m_hwnd, &m_PanelRect, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_NOCHILDREN);
@@ -865,7 +975,7 @@ CreateImageBitmap(PCWSTR path, UINT maxWidth, UINT maxHeight, COLORREF back)
 }
 
 static void
-AddDetailsRow(HWND list, LPCWSTR label, LPCWSTR text)
+AddDetailsRow(HWND list, LPCWSTR label, LPCWSTR text, int index = -1)
 {
     LVFINDINFOW find = { LVFI_STRING };
     LVITEMW row = { LVIF_TEXT };
@@ -873,28 +983,28 @@ AddDetailsRow(HWND list, LPCWSTR label, LPCWSTR text)
     find.psz = label;
     if (!label || !label[0] || !text || !text[0] || ListView_FindItem(list, -1, &find) >= 0)
         return;
-    row.iItem = ListView_GetItemCount(list);
+    row.iItem = index < 0 ? ListView_GetItemCount(list) : index;
     row.pszText = (LPWSTR)label;
     row.iItem = ListView_InsertItem(list, &row);
     ListView_SetItemText(list, row.iItem, 1, (LPWSTR)text);
 }
 
 static void
-AddDetailsKeyRow(HWND list, REFPROPERTYKEY key, LPCWSTR text)
+AddDetailsKeyRow(HWND list, REFPROPERTYKEY key, LPCWSTR text, int index = -1)
 {
     IPropertyDescription *desc = NULL;
     PWSTR label = NULL;
 
     if (SUCCEEDED(PSGetPropertyDescription(key, IID_PPV_ARG(IPropertyDescription, &desc))) &&
         SUCCEEDED(desc->GetDisplayName(&label)))
-        AddDetailsRow(list, label, text);
+        AddDetailsRow(list, label, text, index);
     CoTaskMemFree(label);
     if (desc)
         desc->Release();
 }
 
 static void
-AddImageDetails(HWND list, PCWSTR path)
+AddImageDetails(CabinetDetailsJob *job, PCWSTR path)
 {
     IWICImagingFactory *factory = NULL;
     IWICBitmapDecoder *decoder = NULL;
@@ -917,7 +1027,7 @@ AddImageDetails(HWND list, PCWSTR path)
         if (SUCCEEDED(frame->GetSize(&width, &height)) && width && height)
         {
             StringCchPrintfW(text, _countof(text), L"%u x %u", width, height);
-            AddDetailsKeyRow(list, PKEY_Image_Dimensions, text);
+            AddJobRow(job, PKEY_Image_Dimensions, text);
         }
         if (SUCCEEDED(frame->GetPixelFormat(&pixelFormat)) &&
             SUCCEEDED(factory->CreateComponentInfo(pixelFormat, &component)) &&
@@ -925,14 +1035,14 @@ AddImageDetails(HWND list, PCWSTR path)
             SUCCEEDED(format->GetBitsPerPixel(&bits)) && bits)
         {
             StringCchPrintfW(text, _countof(text), L"%u", bits);
-            AddDetailsKeyRow(list, PKEY_Image_BitDepth, text);
+            AddJobRow(job, PKEY_Image_BitDepth, text);
         }
         if (SUCCEEDED(frame->GetResolution(&dpiX, &dpiY)) && dpiX > 0.0 && dpiY > 0.0)
         {
             StringCchPrintfW(text, _countof(text), L"%u dpi", (UINT)(dpiX + 0.5));
-            AddDetailsKeyRow(list, PKEY_Image_HorizontalResolution, text);
+            AddJobRow(job, PKEY_Image_HorizontalResolution, text);
             StringCchPrintfW(text, _countof(text), L"%u dpi", (UINT)(dpiY + 0.5));
-            AddDetailsKeyRow(list, PKEY_Image_VerticalResolution, text);
+            AddJobRow(job, PKEY_Image_VerticalResolution, text);
         }
     }
     if (format)
@@ -947,7 +1057,7 @@ AddImageDetails(HWND list, PCWSTR path)
 }
 
 static void
-AddVersionDetails(HWND list, PCWSTR path)
+AddVersionDetails(CabinetDetailsJob *job, PCWSTR path)
 {
     static const struct { LPCWSTR Name; const PROPERTYKEY *Key; } Strings[] =
     {
@@ -980,7 +1090,7 @@ AddVersionDetails(HWND list, PCWSTR path)
             StringCchPrintfW(query, _countof(query), L"\\StringFileInfo\\%04x%04x\\%s", translation->Language,
                              translation->CodePage, Strings[i].Name);
             if (VerQueryValueW(data, query, (void **)&value, &valueLength) && value && valueLength > 1)
-                AddDetailsKeyRow(list, *Strings[i].Key, value);
+                AddJobRow(job, *Strings[i].Key, value);
         }
     }
     HeapFree(GetProcessHeap(), 0, data);
@@ -1021,6 +1131,32 @@ DetailsPropertyText(IShellItem2 *item, REFPROPERTYKEY key)
     return text;
 }
 
+static BOOL
+GetSelectionItemSize(IShellItem *item, ULONGLONG *size)
+{
+    PWSTR path = NULL;
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    IShellItem2 *item2 = NULL;
+    BOOL found = FALSE;
+
+    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+    {
+        if (GetFileAttributesExW(path, GetFileExInfoStandard, &data) &&
+            !(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            *size = ((ULONGLONG)data.nFileSizeHigh << 32) | data.nFileSizeLow;
+            found = TRUE;
+        }
+        CoTaskMemFree(path);
+    }
+    if (!found && SUCCEEDED(item->QueryInterface(IID_PPV_ARG(IShellItem2, &item2))))
+    {
+        found = SUCCEEDED(item2->GetUInt64(PKEY_Size, size));
+        item2->Release();
+    }
+    return found;
+}
+
 void
 CCabinetWindow::UpdateDetails()
 {
@@ -1040,6 +1176,7 @@ CCabinetWindow::UpdateDetails()
     UINT count = 0;
     WCHAR name[MAX_PATH] = L"", subtitle[MAX_PATH] = L"", format[64];
 
+    m_DetailsGeneration = (ULONG)InterlockedIncrement(&s_CabinetJobSerial);
     ListView_DeleteAllItems(m_DetailsList);
     if (m_DetailsIconHandle)
         DestroyIcon(m_DetailsIconHandle);
@@ -1057,36 +1194,12 @@ CCabinetWindow::UpdateDetails()
     }
     if (selected > 1)
     {
-        IShellItemArray *items = NULL;
-        ULONGLONG size = 0;
-        BOOL haveSize = FALSE;
+        ULONGLONG size = m_SelectionSize;
+        BOOL haveSize = m_SelectionSizeReady && m_SelectionSizeCount == selected && m_SelectionSizeHaveSize;
 
         LoadText(IDS_CAB_SELECTED, format, _countof(format));
         StringCchPrintfW(name, _countof(name), format, selected);
         m_DetailsIconHandle = JumboIcon(tab->Pidl);
-        if (SUCCEEDED(folderView->Items(SVGIO_SELECTION, IID_PPV_ARG(IShellItemArray, &items))))
-        {
-            DWORD itemCount = 0;
-            items->GetCount(&itemCount);
-            for (DWORD i = 0; i < itemCount && i < 4096; i++)
-            {
-                IShellItem *one = NULL;
-                IShellItem2 *one2 = NULL;
-                ULONGLONG oneSize = 0;
-                if (SUCCEEDED(items->GetItemAt(i, &one)) &&
-                    SUCCEEDED(one->QueryInterface(IID_PPV_ARG(IShellItem2, &one2))) &&
-                    SUCCEEDED(one2->GetUInt64(PKEY_Size, &oneSize)))
-                {
-                    size += oneSize;
-                    haveSize = TRUE;
-                }
-                if (one2)
-                    one2->Release();
-                if (one)
-                    one->Release();
-            }
-            items->Release();
-        }
         if (haveSize)
         {
             IPropertyDescription *desc = NULL;
@@ -1139,23 +1252,11 @@ CCabinetWindow::UpdateDetails()
         if (item && selected == 1)
         {
             PWSTR path = NULL;
-            IShellItemImageFactory *factory = NULL;
-            RECT header;
-            GetClientRect(m_DetailsIcon, &header);
-            if (header.right > 0 && header.bottom > 0 &&
-                SUCCEEDED(item->QueryInterface(IID_PPV_ARG(IShellItemImageFactory, &factory))))
-            {
-                SIZE size = { header.right, header.bottom };
-                if (FAILED(factory->GetImage(size, SIIGBF_THUMBNAILONLY, &m_DetailsBitmap)))
-                    m_DetailsBitmap = NULL;
-                factory->Release();
-            }
-            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
-            {
-                AddImageDetails(m_DetailsList, path);
-                AddVersionDetails(m_DetailsList, path);
-                CoTaskMemFree(path);
-            }
+
+            if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+                path = NULL;
+            RequestDetailsJob(item, path, CABINET_JOB_DETAILS, ListView_GetItemCount(m_DetailsList));
+            CoTaskMemFree(path);
         }
         if (item && selected == 1)
         {
@@ -1210,6 +1311,7 @@ CCabinetWindow::SetPane(BOOL details, BOOL preview)
     if (m_DetailsBar)
         SendMessageW(m_DetailsBar, TB_CHECKBUTTON, IDC_COMMAND(CabinetCommand::Details), MAKELONG(details, 0));
     OnSize();
+    UpdateStatus();
     UpdateDetails();
     UpdatePreview();
 }
@@ -1217,6 +1319,7 @@ CCabinetWindow::SetPane(BOOL details, BOOL preview)
 void
 CCabinetWindow::ClearPreview()
 {
+    m_PreviewGeneration = (ULONG)InterlockedIncrement(&s_CabinetJobSerial);
     if (m_PreviewHandler)
     {
         m_PreviewHandler->Unload();
@@ -1323,44 +1426,8 @@ CCabinetWindow::ShowPreviewHandler(IShellItem *item, PCWSTR path)
     return TRUE;
 }
 
-BOOL
-CCabinetWindow::ShowPreviewThumbnail(IShellItem *item)
-{
-    IShellItemImageFactory *factory = NULL;
-    SIZE size;
-    HBITMAP bitmap = NULL;
-    HRESULT hr;
-
-    size.cx = max(m_PaneRect.right - m_PaneRect.left - Scale(20), Scale(64));
-    size.cy = max(m_PaneRect.bottom - m_PaneRect.top - Scale(20), Scale(64));
-    if (FAILED(item->QueryInterface(IID_PPV_ARG(IShellItemImageFactory, &factory))))
-        return FALSE;
-    hr = factory->GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &bitmap);
-    factory->Release();
-    if (FAILED(hr) || !bitmap)
-        return FALSE;
-    SetPreviewBitmap(bitmap);
-    return TRUE;
-}
-
-BOOL
-CCabinetWindow::ShowPreviewImage(PCWSTR path)
-{
-    HBITMAP bitmap;
-
-    if (!IsImageFile(path))
-        return FALSE;
-    bitmap = CreateImageBitmap(path, (UINT)max(m_PaneRect.right - m_PaneRect.left - Scale(20), Scale(64)),
-                               (UINT)max(m_PaneRect.bottom - m_PaneRect.top - Scale(20), Scale(64)),
-                               GetSysColor(COLOR_WINDOW));
-    if (!bitmap)
-        return FALSE;
-    SetPreviewBitmap(bitmap);
-    return TRUE;
-}
-
-BOOL
-CCabinetWindow::ShowPreviewText(PCWSTR path)
+static PWSTR
+ReadPreviewText(PCWSTR path)
 {
     PERCEIVED type = PERCEIVED_TYPE_UNSPECIFIED;
     PERCEIVEDFLAG flags = 0;
@@ -1374,18 +1441,18 @@ CCabinetWindow::ShowPreviewText(PCWSTR path)
 
     if (!extension || !extension[0] || FAILED(AssocGetPerceivedType(extension, &type, &flags, NULL)) ||
         type != PERCEIVED_TYPE_TEXT)
-        return FALSE;
+        return NULL;
     file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
                        OPEN_EXISTING, 0, NULL);
     if (file == INVALID_HANDLE_VALUE)
-        return FALSE;
+        return NULL;
     data = (BYTE *)HeapAlloc(GetProcessHeap(), 0, 65536);
     if (!data || !ReadFile(file, data, 65536, &read, NULL))
     {
         CloseHandle(file);
         if (data)
             HeapFree(GetProcessHeap(), 0, data);
-        return FALSE;
+        return NULL;
     }
     CloseHandle(file);
     if (read >= 2 && data[0] == 0xFF && data[1] == 0xFE)
@@ -1414,12 +1481,12 @@ CCabinetWindow::ShowPreviewText(PCWSTR path)
     }
     HeapFree(GetProcessHeap(), 0, data);
     if (!text)
-        return FALSE;
+        return NULL;
     lines = (PWSTR)HeapAlloc(GetProcessHeap(), 0, (count * 2 + 1) * sizeof(WCHAR));
     if (!lines)
     {
         HeapFree(GetProcessHeap(), 0, text);
-        return FALSE;
+        return NULL;
     }
     for (int i = 0; i < count && text[i]; i++)
     {
@@ -1429,10 +1496,187 @@ CCabinetWindow::ShowPreviewText(PCWSTR path)
     }
     lines[out] = UNICODE_NULL;
     HeapFree(GetProcessHeap(), 0, text);
+    return lines;
+}
+
+BOOL
+CCabinetWindow::ShowPreviewLines(PCWSTR lines)
+{
+    if (!lines || !m_PreviewText)
+        return FALSE;
     SetWindowTextW(m_PreviewText, lines);
-    HeapFree(GetProcessHeap(), 0, lines);
     ShowWindow(m_PreviewText, SW_SHOW);
     return TRUE;
+}
+
+static DWORD WINAPI
+DetailsJobThread(LPVOID parameter)
+{
+    CabinetDetailsJob *job = (CabinetDetailsJob *)parameter;
+    IShellItem *item = NULL;
+    IShellItemImageFactory *factory = NULL;
+    HRESULT hrInit = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+
+    if (job->Pidl && SUCCEEDED(SHCreateItemFromIDList(job->Pidl, IID_PPV_ARG(IShellItem, &item))) &&
+        SUCCEEDED(item->QueryInterface(IID_PPV_ARG(IShellItemImageFactory, &factory))))
+    {
+        if ((job->Parts & CABINET_JOB_DETAILS) && job->DetailsSize.cx > 0 && job->DetailsSize.cy > 0 &&
+            FAILED(factory->GetImage(job->DetailsSize, SIIGBF_THUMBNAILONLY, &job->DetailsBitmap)))
+            job->DetailsBitmap = NULL;
+        if ((job->Parts & CABINET_JOB_PREVIEW) &&
+            FAILED(factory->GetImage(job->PreviewSize, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK,
+                                     &job->PreviewBitmap)))
+            job->PreviewBitmap = NULL;
+    }
+    if (factory)
+        factory->Release();
+    if (item)
+        item->Release();
+    if (job->Path[0])
+    {
+        if (job->Parts & CABINET_JOB_DETAILS)
+        {
+            AddImageDetails(job, job->Path);
+            AddVersionDetails(job, job->Path);
+        }
+        if ((job->Parts & CABINET_JOB_PREVIEW) && !job->PreviewBitmap)
+        {
+            if (IsImageFile(job->Path))
+                job->PreviewBitmap = CreateImageBitmap(job->Path, (UINT)job->PreviewSize.cx,
+                                                       (UINT)job->PreviewSize.cy, job->PreviewBack);
+            if (!job->PreviewBitmap)
+                job->PreviewLines = ReadPreviewText(job->Path);
+        }
+    }
+    if (SUCCEEDED(hrInit))
+        CoUninitialize();
+    if (!PostMessageW(job->Window, WM_CABINET_DETAILS_READY, 0, (LPARAM)job))
+        FreeDetailsJob(job);
+    return 0;
+}
+
+void
+CCabinetWindow::RequestDetailsJob(IShellItem *item, PCWSTR path, UINT parts, int rowIndex)
+{
+    CabinetDetailsJob *job = m_PendingJob;
+    PIDLIST_ABSOLUTE pidl = NULL;
+
+    if (!m_hwnd || !item || FAILED(SHGetIDListFromObject(item, &pidl)) || !pidl)
+        return;
+    if (job && !ILIsEqual(job->Pidl, pidl))
+    {
+        FreeDetailsJob(job);
+        job = NULL;
+        m_PendingJob = NULL;
+    }
+    if (!job)
+    {
+        job = (CabinetDetailsJob *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*job));
+        if (!job)
+        {
+            ILFree(pidl);
+            return;
+        }
+        job->Window = m_hwnd;
+        job->Pidl = pidl;
+        pidl = NULL;
+        if (path)
+            StringCchCopyW(job->Path, _countof(job->Path), path);
+        if (!PostMessageW(m_hwnd, WM_CABINET_DETAILS_START, 0, 0))
+        {
+            FreeDetailsJob(job);
+            return;
+        }
+        m_PendingJob = job;
+    }
+    if (pidl)
+        ILFree(pidl);
+    job->Parts |= parts;
+    if (parts & CABINET_JOB_DETAILS)
+    {
+        RECT header;
+
+        job->DetailsGeneration = m_DetailsGeneration;
+        job->RowIndex = rowIndex;
+        GetClientRect(m_DetailsIcon, &header);
+        job->DetailsSize.cx = header.right;
+        job->DetailsSize.cy = header.bottom;
+    }
+    if (parts & CABINET_JOB_PREVIEW)
+    {
+        job->PreviewGeneration = m_PreviewGeneration;
+        job->PreviewSize.cx = max(m_PaneRect.right - m_PaneRect.left - Scale(20), Scale(64));
+        job->PreviewSize.cy = max(m_PaneRect.bottom - m_PaneRect.top - Scale(20), Scale(64));
+        job->PreviewBack = GetSysColor(COLOR_WINDOW);
+    }
+}
+
+void
+CCabinetWindow::StartDetailsJob()
+{
+    CabinetDetailsJob *job = m_PendingJob;
+    HANDLE thread;
+
+    if (!job || m_JobRunning)
+        return;
+    m_PendingJob = NULL;
+    if (!(((job->Parts & CABINET_JOB_DETAILS) && job->DetailsGeneration == m_DetailsGeneration) ||
+          ((job->Parts & CABINET_JOB_PREVIEW) && job->PreviewGeneration == m_PreviewGeneration)))
+    {
+        FreeDetailsJob(job);
+        return;
+    }
+    thread = CreateThread(NULL, 0, DetailsJobThread, job, 0, NULL);
+    if (!thread)
+    {
+        FreeDetailsJob(job);
+        return;
+    }
+    m_JobRunning = TRUE;
+    CloseHandle(thread);
+}
+
+void
+CCabinetWindow::OnDetailsJobReady(CabinetDetailsJob *job)
+{
+    m_JobRunning = FALSE;
+    if (m_PendingJob)
+        StartDetailsJob();
+    if (!job)
+        return;
+    if ((job->Parts & CABINET_JOB_DETAILS) && job->DetailsGeneration == m_DetailsGeneration && m_DetailsPane)
+    {
+        int index = min(job->RowIndex, ListView_GetItemCount(m_DetailsList));
+
+        if (job->DetailsBitmap)
+        {
+            if (m_DetailsBitmap)
+                DeleteObject(m_DetailsBitmap);
+            m_DetailsBitmap = job->DetailsBitmap;
+            job->DetailsBitmap = NULL;
+            InvalidateRect(m_DetailsIcon, NULL, TRUE);
+        }
+        for (UINT i = 0; i < job->RowCount; i++)
+        {
+            int before = ListView_GetItemCount(m_DetailsList);
+
+            AddDetailsKeyRow(m_DetailsList, job->Rows[i].Key, job->Rows[i].Text, index);
+            if (ListView_GetItemCount(m_DetailsList) > before)
+                index++;
+        }
+    }
+    if ((job->Parts & CABINET_JOB_PREVIEW) && job->PreviewGeneration == m_PreviewGeneration && m_PreviewPane &&
+        !m_PreviewHandler)
+    {
+        if (job->PreviewBitmap)
+        {
+            SetPreviewBitmap(job->PreviewBitmap);
+            job->PreviewBitmap = NULL;
+        }
+        else if (!ShowPreviewLines(job->PreviewLines))
+            ShowPreviewMessage(IDS_CAB_PREVIEW_NONE);
+    }
+    FreeDetailsJob(job);
 }
 
 void
@@ -1492,9 +1736,8 @@ CCabinetWindow::UpdatePreview()
     {
         if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
             path = NULL;
-        if (!ShowPreviewHandler(item, path) && !ShowPreviewThumbnail(item) && !ShowPreviewImage(path) &&
-            !ShowPreviewText(path))
-            ShowPreviewMessage(IDS_CAB_PREVIEW_NONE);
+        if (!ShowPreviewHandler(item, path))
+            RequestDetailsJob(item, path, CABINET_JOB_PREVIEW, 0);
         if (path)
             CoTaskMemFree(path);
     }
@@ -1582,7 +1825,7 @@ CCabinetWindow::CycleFocus()
         m_AddressBand->EndEdit();
         SetFocus(m_SearchEdit);
     }
-    else if (focus == m_SearchEdit && m_NavigationVisible && m_NavigationWindow)
+    else if (focus == m_SearchEdit && NavigationShown() && m_NavigationWindow)
         SetFocus(FindWindowExW(m_NavigationWindow, NULL, WC_TREEVIEWW, NULL) ?
                  FindWindowExW(m_NavigationWindow, NULL, WC_TREEVIEWW, NULL) : m_NavigationWindow);
     else if (view && (focus == m_SearchEdit || (m_NavigationWindow && (focus == m_NavigationWindow ||
@@ -1596,15 +1839,17 @@ void
 CCabinetWindow::SavePlacement()
 {
     WINDOWPLACEMENT placement = { sizeof(placement) };
+    WCHAR name[32];
     HKEY key;
 
     if (!GetWindowPlacement(m_hwnd, &placement))
         return;
+    StringCchPrintfW(name, _countof(name), L"Placement%u", GetDpiForWindow(m_hwnd));
     if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\LiberNT\\Explorer", 0, NULL, 0, KEY_SET_VALUE, NULL, &key,
                         NULL) == ERROR_SUCCESS)
     {
         DWORD pane = m_PreviewPane ? 2 : m_DetailsPane ? 1 : 0;
-        RegSetValueExW(key, L"Placement", 0, REG_BINARY, (const BYTE *)&placement, sizeof(placement));
+        RegSetValueExW(key, name, 0, REG_BINARY, (const BYTE *)&placement, sizeof(placement));
         RegSetValueExW(key, L"Pane", 0, REG_DWORD, (const BYTE *)&pane, sizeof(pane));
         RegCloseKey(key);
     }
@@ -1660,12 +1905,16 @@ CCabinetWindow::StartSearch()
     if (!m_SearchPathCount)
         return;
     StringCchCopyW(m_SearchQuery, _countof(m_SearchQuery), query);
-    m_SearchBrowser = tab->Browser;
-    if (m_SearchActive)
+    if (m_SearchActive && tab->Browser == m_SearchBrowser)
     {
         RunPendingSearch(tab);
         return;
     }
+    // Another tab's search keeps what it found so far (its status timer stops);
+    // this tab gets a search of its own
+    m_SearchActive = FALSE;
+    KillTimer(m_hwnd, IDT_CABINET_SEARCH);
+    m_SearchBrowser = tab->Browser;
     if (SUCCEEDED(SHParseDisplayName(FindFolder, NULL, &find, 0, NULL)))
     {
         Navigate(find);
@@ -1751,6 +2000,7 @@ CCabinetWindow::Open(PCIDLIST_ABSOLUTE pidl, PCUITEMID_CHILD select, int showCmd
     WNDCLASSEXW wc = { sizeof(wc) };
     WINDOWPLACEMENT placement = { sizeof(placement) };
     DWORD size = sizeof(placement);
+    WCHAR name[32];
 
     if (!GetClassInfoExW(g_hInstance, CABINET_CLASS, &wc))
     {
@@ -1764,9 +2014,10 @@ CCabinetWindow::Open(PCIDLIST_ABSOLUTE pidl, PCUITEMID_CHILD select, int showCmd
             return HRESULT_FROM_WIN32(GetLastError());
     }
     if (!CreateWindowExW(WS_EX_WINDOWEDGE, CABINET_CLASS, L"File Explorer", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                         CW_USEDEFAULT, CW_USEDEFAULT, 1000, 680, NULL, NULL, g_hInstance, this))
+                         CW_USEDEFAULT, CW_USEDEFAULT, Scale(1000), Scale(680), NULL, NULL, g_hInstance, this))
         return HRESULT_FROM_WIN32(GetLastError());
-    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\LiberNT\\Explorer", L"Placement", RRF_RT_REG_BINARY, NULL,
+    StringCchPrintfW(name, _countof(name), L"Placement%u", GetDpiForWindow(m_hwnd));
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\LiberNT\\Explorer", name, RRF_RT_REG_BINARY, NULL,
                      &placement, &size) == ERROR_SUCCESS && size == sizeof(placement) &&
         placement.length == sizeof(placement))
     {
@@ -1827,7 +2078,8 @@ CCabinetWindow::WatchFolder()
         return;
     entry.pidl = tab->Pidl;
     entry.fRecursive = FALSE;
-    m_ChangeNotify = SHChangeNotifyRegister(m_hwnd, SHCNRF_ShellLevel | SHCNRF_InterruptLevel,
+    // New delivery: WM_CABINET_CHANGED ignores its parameters, so no broker window is needed
+    m_ChangeNotify = SHChangeNotifyRegister(m_hwnd, SHCNRF_ShellLevel | SHCNRF_InterruptLevel | SHCNRF_NewDelivery,
                                             SHCNE_CREATE | SHCNE_DELETE | SHCNE_MKDIR | SHCNE_RMDIR |
                                             SHCNE_RENAMEITEM | SHCNE_RENAMEFOLDER | SHCNE_UPDATEDIR |
                                             SHCNE_UPDATEITEM, WM_CABINET_CHANGED, 1, &entry);
@@ -1885,6 +2137,8 @@ CCabinetWindow::CreateNavigationPane()
     if (SUCCEEDED(CabinetNavigation_Create(this, &events)))
     {
         m_Navigation->TreeAdvise(events, &cookie);
+        // The pane's context menus reach this window through it (SID_SCabinetFrame)
+        IUnknown_SetSite(m_Navigation, events);
         events->Release();
     }
     if (SUCCEEDED(m_Navigation->QueryInterface(IID_PPV_ARG(IOleWindow, &window))))
@@ -1898,7 +2152,7 @@ CCabinetWindow::CreateNavigationPane()
         CabinetPalette palette;
 
         if (tree)
-            TreeView_SetItemHeight(tree, Scale(26));
+            TreeView_SetItemHeight(tree, max(Scale(26), TreeView_GetItemHeight(tree)));
         CabinetGetPalette(&palette);
         SetNavigationBackground(palette.Body);
     }
@@ -1975,7 +2229,17 @@ CCabinetWindow::CloseTab(int index)
 
     if (index < 0 || index >= m_TabCount)
         return;
+    if (index == m_ActiveTab)
+        CancelSelectionSize();
     tab = &m_Tabs[index];
+    if (tab->Browser && tab->Browser == m_SearchBrowser)
+    {
+        // The browser is released below; do not keep searching on it
+        m_SearchActive = FALSE;
+        m_SearchBrowser = NULL;
+        m_SearchQuery[0] = UNICODE_NULL;
+        KillTimer(m_hwnd, IDT_CABINET_SEARCH);
+    }
     if (tab->ViewEvents)
     {
         tab->ViewEvents->Unadvise(tab->ViewEventsCookie);
@@ -2021,6 +2285,7 @@ CCabinetWindow::ActivateTab(int index)
 {
     if (index < 0 || index >= m_TabCount)
         return;
+    CancelSelectionSize();
     m_ActiveTab = index;
     SyncTabs();
     PlaceBrowsers();
@@ -2030,6 +2295,7 @@ CCabinetWindow::ActivateTab(int index)
     UpdateCommands();
     UpdateDetails();
     UpdatePreview();
+    UpdateFolderPanes();
     SyncNavigationPane();
     WatchFolder();
     if (GetActiveWindow() == m_hwnd)
@@ -2037,14 +2303,14 @@ CCabinetWindow::ActivateTab(int index)
 }
 
 void
-CCabinetWindow::PlaceBrowsers()
+CCabinetWindow::PlaceBrowsers(HDWP *hdwp)
 {
     RECT empty = { 0, 0, 0, 0 };
 
     for (int i = 0; i < m_TabCount; i++)
     {
         if (m_Tabs[i].Browser)
-            m_Tabs[i].Browser->SetRect(NULL, i == m_ActiveTab ? m_ViewRect : empty);
+            m_Tabs[i].Browser->SetRect(hdwp && *hdwp ? hdwp : NULL, i == m_ActiveTab ? m_ViewRect : empty);
     }
 }
 
@@ -2120,6 +2386,7 @@ CCabinetWindow::NavigateUp()
 void
 CCabinetWindow::Refresh()
 {
+    CancelSelectionSize();
     IShellView *view = CurrentView();
 
     if (view)
@@ -2142,6 +2409,8 @@ CCabinetWindow::OnNavigationComplete(IExplorerBrowser *browser, PCIDLIST_ABSOLUT
     }
     if (!tab)
         return;
+    if (tab == ActiveTab())
+        CancelSelectionSize();
     FreeIdList(&tab->Pidl);
     tab->Pidl = ILClone(pidl);
     if (!m_InHistoryNavigation)
@@ -2194,8 +2463,7 @@ CCabinetWindow::OnNavigationComplete(IExplorerBrowser *browser, PCIDLIST_ABSOLUT
         if (!m_SearchActive)
             SetWindowTextW(m_SearchEdit, L"");
         UpdateAddress();
-        UpdateStatus();
-        UpdateCommands();
+        UpdateFolderPanes();
         SyncNavigationPane();
         WatchFolder();
         PostMessageW(m_hwnd, WM_CABINET_STATUS, 0, 0);
@@ -2272,6 +2540,10 @@ CCabinetWindow::OnViewCreated(IExplorerBrowser *browser, IShellView *view)
 void
 CCabinetWindow::OnSelectionChanged()
 {
+    CancelSelectionSize();
+    if (DeferSelectionUpdate())
+        return;
+
     UpdateStatus();
     UpdateCommands();
     UpdateDetails();
@@ -2311,12 +2583,10 @@ CCabinetWindow::PaintNavigationItem(HDC dc, const RECT &rc, const NSTCCUSTOMDRAW
     else if (index == m_PinnedCount && index)
     {
         RECT line = { rc.left + Scale(12), rc.top, rc.right - Scale(12), rc.top + 1 };
-        HBRUSH brush;
 
         CabinetGetPalette(&palette);
-        brush = CreateSolidBrush(palette.BandLine);
-        FillRect(dc, &line, brush);
-        DeleteObject(brush);
+        SetDCBrushColor(dc, palette.BandLine);
+        FillRect(dc, &line, (HBRUSH)GetStockObject(DC_BRUSH));
     }
 }
 
@@ -2502,9 +2772,108 @@ CCabinetWindow::UpdateViewToggles()
                  MAKELONG(mode == FVM_ICON && size >= 96, 0));
 }
 
-void
-CCabinetWindow::UpdateStatus()
+BOOL
+CCabinetWindow::DeferSelectionUpdate()
 {
+    if (!GetCursorPos(&m_SelectionMousePosition))
+        return FALSE;
+    return SetTimer(m_hwnd, IDT_CABINET_SELECTION, CABINET_SELECTION_IDLE_MS, NULL) != 0;
+}
+
+void
+CCabinetWindow::CancelSelectionSize()
+{
+    IShellItemArray *view = m_SelectionSizeView;
+
+    ++m_SelectionSizeGeneration;
+    m_SelectionSizeView = NULL;
+    m_SelectionSizeIndex = 0;
+    m_SelectionSizeCount = 0;
+    m_SelectionSizeVisited = 0;
+    m_SelectionSizeLimit = 0;
+    m_SelectionSize = 0;
+    m_SelectionSizeReady = FALSE;
+    m_SelectionSizeHaveSize = FALSE;
+    if (m_hwnd)
+        KillTimer(m_hwnd, IDT_CABINET_SELECTION_SIZE);
+    if (view)
+        view->Release();
+}
+
+void
+CCabinetWindow::UpdateSelectionSize()
+{
+    IShellItemArray *view = m_SelectionSizeView;
+    ULONG generation = m_SelectionSizeGeneration;
+    int index = m_SelectionSizeIndex, visited = m_SelectionSizeVisited;
+    DWORD limit = m_SelectionSizeLimit;
+    ULONGLONG total = m_SelectionSize;
+    BOOL haveSize = m_SelectionSizeHaveSize, done = FALSE;
+    DWORD start = GetTickCount();
+
+    KillTimer(m_hwnd, IDT_CABINET_SELECTION_SIZE);
+    if (!view)
+        return;
+    view->AddRef();
+    do
+    {
+        IShellItem *item = NULL;
+        ULONGLONG size = 0;
+        HRESULT hr = view->GetItemAt(index, &item);
+        index++;
+        visited++;
+        if (generation != m_SelectionSizeGeneration)
+        {
+            if (item)
+                item->Release();
+            break;
+        }
+        if (SUCCEEDED(hr) && item)
+        {
+            if (GetSelectionItemSize(item, &size))
+            {
+                total += size;
+                haveSize = TRUE;
+            }
+            item->Release();
+        }
+        if (generation != m_SelectionSizeGeneration)
+            break;
+        if ((DWORD)visited >= limit)
+            done = TRUE;
+    } while (!done && GetTickCount() - start < 8);
+    view->Release();
+    if (generation != m_SelectionSizeGeneration)
+        return;
+    m_SelectionSizeIndex = index;
+    m_SelectionSizeVisited = visited;
+    m_SelectionSize = total;
+    m_SelectionSizeHaveSize = haveSize;
+    if (!done)
+    {
+        if (!SetTimer(m_hwnd, IDT_CABINET_SELECTION_SIZE, 1, NULL))
+            CancelSelectionSize();
+        return;
+    }
+    view = m_SelectionSizeView;
+    m_SelectionSizeView = NULL;
+    m_SelectionSizeReady = TRUE;
+    view->Release();
+    if (generation != m_SelectionSizeGeneration || !m_hwnd)
+        return;
+    UpdateStatus(TRUE);
+    if (generation == m_SelectionSizeGeneration && m_DetailsPane)
+        UpdateDetails();
+}
+
+void
+CCabinetWindow::UpdateStatus(BOOL mouseIdle)
+{
+    if (!mouseIdle && (GetAsyncKeyState(VK_LBUTTON) < 0 || GetAsyncKeyState(VK_RBUTTON) < 0) &&
+        DeferSelectionUpdate())
+        return;
+
+    ULONG generation = m_SelectionSizeGeneration;
     IShellView *view = CurrentView();
     IFolderView *folderView = NULL;
     int count = 0, selected = 0;
@@ -2514,38 +2883,71 @@ CCabinetWindow::UpdateStatus()
 
     if (!view)
         return;
+    if (FAILED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))))
+    {
+        /* a page, as the Control Panel ones: no items to count, as in Windows */
+        view->Release();
+        SendMessageW(m_Status, SB_SETTEXTW, 0, (LPARAM)L"");
+        SendMessageW(m_Status, SB_SETTEXTW, 1, (LPARAM)L"");
+        UpdateViewToggles();
+        return;
+    }
+    folderView->Release();
+    folderView = NULL;
     if (SUCCEEDED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))))
     {
-        IShellItemArray *array = NULL;
         folderView->ItemCount(SVGIO_ALLVIEW, &count);
         folderView->ItemCount(SVGIO_SELECTION, &selected);
-        if (selected && selected <= 4096 &&
-            SUCCEEDED(folderView->Items(SVGIO_SELECTION, IID_PPV_ARG(IShellItemArray, &array))))
+        if (generation != m_SelectionSizeGeneration || !m_hwnd)
         {
-            DWORD itemCount = 0;
-            array->GetCount(&itemCount);
-            for (DWORD i = 0; i < itemCount; i++)
+            folderView->Release();
+            view->Release();
+            return;
+        }
+        if ((m_SelectionSizeView || m_SelectionSizeReady) && m_SelectionSizeCount != selected)
+        {
+            CancelSelectionSize();
+            folderView->Release();
+            view->Release();
+            if (m_hwnd)
+                PostMessageW(m_hwnd, WM_CABINET_STATUS, 0, 0);
+            return;
+        }
+        if (selected && (selected <= 4096 || m_DetailsPane) &&
+            !m_SelectionSizeView && !m_SelectionSizeReady)
+        {
+            IShellItemArray *array = NULL;
+            DWORD arrayCount = 0;
+            HRESULT hr = folderView->Items(SVGIO_SELECTION, IID_PPV_ARG(IShellItemArray, &array));
+            if (SUCCEEDED(hr) && array)
+                hr = array->GetCount(&arrayCount);
+            if (generation == m_SelectionSizeGeneration && m_hwnd)
             {
-                IShellItem *item = NULL;
-                IShellItem2 *item2 = NULL;
-                ULONGLONG size = 0;
-                if (SUCCEEDED(array->GetItemAt(i, &item)) &&
-                    SUCCEEDED(item->QueryInterface(IID_PPV_ARG(IShellItem2, &item2))) &&
-                    SUCCEEDED(item2->GetUInt64(PKEY_Size, &size)))
+                m_SelectionSizeCount = selected;
+                m_SelectionSizeLimit = min(arrayCount, 4096);
+                if (SUCCEEDED(hr) && array && m_SelectionSizeLimit)
                 {
-                    selectedSize += size;
-                    haveSize = TRUE;
+                    m_SelectionSizeView = array;
+                    array = NULL;
+                    if (!SetTimer(m_hwnd, IDT_CABINET_SELECTION_SIZE, 1, NULL))
+                        CancelSelectionSize();
                 }
-                if (item2)
-                    item2->Release();
-                if (item)
-                    item->Release();
+                else if (SUCCEEDED(hr))
+                    m_SelectionSizeReady = TRUE;
             }
-            array->Release();
+            if (array)
+                array->Release();
+        }
+        if (selected <= 4096 && m_SelectionSizeReady && m_SelectionSizeCount == selected)
+        {
+            selectedSize = m_SelectionSize;
+            haveSize = m_SelectionSizeHaveSize;
         }
         folderView->Release();
     }
     view->Release();
+    if (generation != m_SelectionSizeGeneration || !m_hwnd)
+        return;
     if (count == 1)
         LoadText(IDS_CAB_ITEM, items, _countof(items));
     else
@@ -2586,20 +2988,38 @@ CCabinetWindow::UpdateCommands()
         CabinetCommand::Copy, CabinetCommand::Paste, CabinetCommand::Rename, CabinetCommand::Delete
     };
 
+    int selected = SelectionCount();
+
     for (UINT i = 0; i < _countof(Commands); i++)
     {
         HWND bar = Commands[i] <= CabinetCommand::Up ? m_NavBar : m_CommandBar;
-        SendMessageW(bar, TB_ENABLEBUTTON, IDC_COMMAND(Commands[i]), MAKELONG(CommandEnabled(Commands[i]), 0));
+        SendMessageW(bar, TB_ENABLEBUTTON, IDC_COMMAND(Commands[i]),
+                     MAKELONG(CommandEnabled(Commands[i], selected), 0));
     }
 }
 
-BOOL
-CCabinetWindow::CommandEnabled(CabinetCommand command)
+int
+CCabinetWindow::SelectionCount()
 {
-    CabinetTab *tab = ActiveTab();
-    IShellView *view;
+    IShellView *view = CurrentView();
     IFolderView *folderView;
     int selected = 0;
+
+    if (view && SUCCEEDED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))))
+    {
+        folderView->ItemCount(SVGIO_SELECTION, &selected);
+        folderView->Release();
+    }
+    if (view)
+        view->Release();
+    return selected;
+}
+
+BOOL
+CCabinetWindow::CommandEnabled(CabinetCommand command, int selected)
+{
+    static UINT s_ShellIdListFormat;
+    CabinetTab *tab = ActiveTab();
 
     switch (command)
     {
@@ -2613,18 +3033,13 @@ CCabinetWindow::CommandEnabled(CabinetCommand command)
         case CabinetCommand::Copy:
         case CabinetCommand::Rename:
         case CabinetCommand::Delete:
-            view = CurrentView();
-            if (view && SUCCEEDED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))))
-            {
-                folderView->ItemCount(SVGIO_SELECTION, &selected);
-                folderView->Release();
-            }
-            if (view)
-                view->Release();
+            if (selected < 0)
+                selected = SelectionCount();
             return command == CabinetCommand::Rename ? selected == 1 : selected > 0;
         case CabinetCommand::Paste:
-            return IsClipboardFormatAvailable(CF_HDROP) ||
-                   IsClipboardFormatAvailable(RegisterClipboardFormatW(CFSTR_SHELLIDLIST));
+            if (!s_ShellIdListFormat)
+                s_ShellIdListFormat = RegisterClipboardFormatW(CFSTR_SHELLIDLIST);
+            return IsClipboardFormatAvailable(CF_HDROP) || IsClipboardFormatAvailable(s_ShellIdListFormat);
         default:
             return TRUE;
     }
@@ -2855,7 +3270,8 @@ CCabinetWindow::ShowViewMenu()
         SHGetSetSettings(&state, SSF_SHOWEXTENSIONS | SSF_SHOWALLOBJECTS, FALSE);
         folderView->GetCurrentFolderFlags(&flags);
         LoadText(IDS_CAB_SHOW_NAVIGATION, text, _countof(text));
-        AppendMenuW(show, MF_STRING | (m_NavigationVisible ? MF_CHECKED : 0), 50, text);
+        AppendMenuW(show, MF_STRING | (NavigationShown() ? MF_CHECKED : 0) |
+                    ((m_FolderNavigationState & EPS_FORCE) ? MF_GRAYED : 0), 50, text);
         LoadText(IDS_CAB_SHOW_DETAILS, text, _countof(text));
         AppendMenuW(show, MF_STRING | (m_DetailsPane ? MF_CHECKED : 0), 51, text);
         LoadText(IDS_CAB_SHOW_PREVIEW, text, _countof(text));
@@ -2880,10 +3296,7 @@ CCabinetWindow::ShowViewMenu()
         UpdateViewToggles();
     }
     else if (command == 50)
-    {
-        m_NavigationVisible = !m_NavigationVisible;
-        OnSize();
-    }
+        ToggleNavigationPane();
     else if (command == 51)
         SetPane(!m_DetailsPane, FALSE);
     else if (command == 55)
@@ -3003,6 +3416,100 @@ CCabinetWindow::ShowMoreMenu()
     if (command >= 100 && command < 100 + (UINT)CabinetCommand::Count)
         ExecuteCommand((CabinetCommand)(command - 100));
     UpdateStatus();
+}
+
+/* The navigation pane is shown when the user wants it, unless the current folder turns
+   it off (IExplorerPaneVisibility EP_NavPane): EPS_DEFAULT_OFF until the user shows it
+   in that folder, EPS_FORCE always. The user's own setting is never changed by a folder. */
+BOOL
+CCabinetWindow::NavigationShown() const
+{
+    DWORD state = m_FolderNavigationState & EPS_STATE_MASK;
+
+    if (m_FolderNavigationState & EPS_FORCE)
+        return state == EPS_DEFAULT_ON || (state != EPS_DEFAULT_OFF && m_NavigationVisible);
+    /* the folder's default (on or off) holds for this visit, until the user changes it */
+    if (state == EPS_DEFAULT_OFF || state == EPS_DEFAULT_ON)
+        return m_FolderNavigationShown;
+    return m_NavigationVisible;
+}
+
+void
+CCabinetWindow::ToggleNavigationPane()
+{
+    DWORD state = m_FolderNavigationState & EPS_STATE_MASK;
+
+    if (m_FolderNavigationState & EPS_FORCE)
+        return;
+    if (state == EPS_DEFAULT_OFF || state == EPS_DEFAULT_ON)
+        m_FolderNavigationShown = !m_FolderNavigationShown; // for this folder only
+    else
+        m_NavigationVisible = !m_NavigationVisible;
+    OnSize();
+}
+
+/* Ask the folder of the active tab which panes it wants, the way Windows does: the
+   folder itself, then its view object, then a service of the view */
+void
+CCabinetWindow::UpdateFolderPanes()
+{
+    CabinetTab *tab = ActiveTab();
+    IShellView *view = NULL;
+    IFolderView *folderView = NULL;
+    IShellFolder *folder = NULL;
+    IExplorerPaneVisibility *visibility = NULL;
+    EXPLORERPANESTATE state = EPS_DONTCARE;
+    BOOL before = NavigationShown();
+
+    if (tab && tab->Browser && SUCCEEDED(tab->Browser->GetCurrentView(IID_PPV_ARG(IShellView, &view))))
+    {
+        if (FAILED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))) ||
+            FAILED(folderView->GetFolder(IID_PPV_ARG(IShellFolder, &folder))))
+        {
+            /* a view of its own (the Control Panel pages) may not be an IFolderView:
+               the folder is then the one the tab shows */
+            folder = NULL;
+            if (!tab->Pidl || FAILED(SHBindToObject(NULL, tab->Pidl, NULL, IID_PPV_ARG(IShellFolder, &folder))))
+                folder = NULL;
+        }
+        if (folder)
+        {
+            /* a failed call may leave the pointer set: it is not ours then */
+            if (FAILED(folder->QueryInterface(IID_PPV_ARG(IExplorerPaneVisibility, &visibility))))
+            {
+                visibility = NULL;
+                if (FAILED(folder->CreateViewObject(m_hwnd, IID_PPV_ARG(IExplorerPaneVisibility, &visibility))))
+                    visibility = NULL;
+            }
+        }
+        if (!visibility &&
+            FAILED(IUnknown_QueryService(view, SID_ExplorerPaneVisibility, IID_PPV_ARG(IExplorerPaneVisibility, &visibility))))
+            visibility = NULL;
+    }
+    if (visibility && FAILED(visibility->GetPaneState((REFEXPLORERPANE)&EP_NavPane, &state)))
+        state = EPS_DONTCARE;
+    if (visibility)
+        visibility->Release();
+    if (folder)
+        folder->Release();
+    if (folderView)
+        folderView->Release();
+    if (view)
+        view->Release();
+
+    m_FolderNavigationState = state;
+    m_FolderNavigationShown = (state & EPS_STATE_MASK) == EPS_DEFAULT_ON;
+    if (NavigationShown() != before)
+    {
+        /* the tree is about to hide with the keyboard in it (Fonts chosen in the tree):
+           the focus goes to the view instead of staying on a hidden window */
+        HWND focus = GetFocus();
+        BOOL treeFocused = before && m_NavigationWindow && focus &&
+                           (focus == m_NavigationWindow || IsChild(m_NavigationWindow, focus));
+        OnSize();
+        if (treeFocused)
+            PostMessageW(m_hwnd, WM_CABINET_FOCUSVIEW, 0, 0);
+    }
 }
 
 void
@@ -3476,12 +3983,41 @@ CCabinetWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
             UpdatePreview();
             return 0;
         case WM_CABINET_CHANGED:
+            CancelSelectionSize();
             SetTimer(m_hwnd, IDT_CABINET_STATUS, 200, NULL);
             return 0;
         case WM_CABINET_FOCUSVIEW:
             FocusView();
             return 0;
+        case WM_CABINET_DETAILS_START:
+            StartDetailsJob();
+            return 0;
+        case WM_CABINET_DETAILS_READY:
+            OnDetailsJobReady((CabinetDetailsJob *)lParam);
+            return 0;
         case WM_TIMER:
+            if (wParam == IDT_CABINET_SELECTION_SIZE)
+            {
+                UpdateSelectionSize();
+                return 0;
+            }
+            if (wParam == IDT_CABINET_SELECTION)
+            {
+                POINT position;
+                if ((GetAsyncKeyState(VK_LBUTTON) < 0 || GetAsyncKeyState(VK_RBUTTON) < 0) &&
+                    GetCursorPos(&position) &&
+                    (position.x != m_SelectionMousePosition.x || position.y != m_SelectionMousePosition.y))
+                {
+                    m_SelectionMousePosition = position;
+                    return 0;
+                }
+                KillTimer(m_hwnd, IDT_CABINET_SELECTION);
+                UpdateStatus(TRUE);
+                UpdateCommands();
+                UpdateDetails();
+                UpdatePreview();
+                return 0;
+            }
             if (wParam == IDT_CABINET_STATUS)
             {
                 KillTimer(m_hwnd, IDT_CABINET_STATUS);
@@ -3556,12 +4092,32 @@ CCabinetWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
             CloseTab(0);
             return 0;
         case WM_DESTROY:
+        {
+            // The stock folder icons set in OnCreate are owned by this window
+            HICON hIcon = (HICON)SendMessageW(m_hwnd, WM_SETICON, ICON_SMALL, 0);
+            if (hIcon)
+                DestroyIcon(hIcon);
+            hIcon = (HICON)SendMessageW(m_hwnd, WM_SETICON, ICON_BIG, 0);
+            if (hIcon)
+                DestroyIcon(hIcon);
+        }
+            CancelSelectionSize();
             ClearPreview();
+            m_DetailsGeneration = (ULONG)InterlockedIncrement(&s_CabinetJobSerial);
+            FreeDetailsJob(m_PendingJob);
+            m_PendingJob = NULL;
+            {
+                MSG ready;
+
+                while (PeekMessageW(&ready, m_hwnd, WM_CABINET_DETAILS_READY, WM_CABINET_DETAILS_READY, PM_REMOVE))
+                    FreeDetailsJob((CabinetDetailsJob *)ready.lParam);
+            }
             if (m_ChangeNotify)
                 SHChangeNotifyDeregister(m_ChangeNotify);
             m_ChangeNotify = 0;
             if (m_Navigation)
             {
+                IUnknown_SetSite(m_Navigation, NULL);
                 m_Navigation->Release();
                 m_Navigation = NULL;
             }

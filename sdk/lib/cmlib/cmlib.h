@@ -283,6 +283,7 @@ typedef ULONG CM_CHECK_REGISTRY_STATUS;
 #define CM_CHECK_REGISTRY_CORRUPT_LEAF_ON_ROOT         37
 #define CM_CHECK_REGISTRY_CORRUPT_LEAF_SIGNATURE       38
 #define CM_CHECK_REGISTRY_CORRUPT_KEY_INDEX_SIGNATURE  39
+#define CM_CHECK_REGISTRY_CORRUPT_BIG_DATA             40
 
 //
 // Check Registry success macro
@@ -582,6 +583,16 @@ VOID CMAPI
 HvFree(
    PHHIVE RegistryHive);
 
+/* Format version written to newly created hives (default HSYS_MINOR_NEW_DEFAULT).
+ * Loaded hives keep the minor they were written with. */
+ULONG CMAPI
+HvGetHiveFormatVersion(
+   VOID);
+
+VOID CMAPI
+HvSetHiveFormatVersion(
+   IN ULONG Minor);
+
 #define HvGetCell(Hive, Cell)   \
     (Hive)->GetCellRoutine(Hive, Cell)
 
@@ -759,6 +770,20 @@ HvpApplyIncrementalLog(
 
 ULONG
 CMAPI
+HvpSelectIncrementalLog(
+    _In_opt_ PHBASE_BLOCK PrimaryBaseBlock,
+    _In_ PVOID *Logs,
+    _In_ PULONG LogSizes,
+    _Out_ PULONG Order);
+
+BOOLEAN
+CMAPI
+HvpWriteLog(
+    _In_ PHHIVE RegistryHive,
+    _In_ BOOLEAN Append);
+
+ULONG
+CMAPI
 HvpClampHiveToValidBins(
     _Inout_ PHBASE_BLOCK BaseBlock,
     _In_ ULONG ImageLength);
@@ -785,7 +810,8 @@ HvpRecoverHiveFromLog(
     _In_opt_ PHBASE_BLOCK PrimaryBaseBlock,
     _Out_ PHBASE_BLOCK *HiveData,
     _Out_ PULONG HiveDataSize,
-    _Out_ PRTL_BITMAP AppliedBlocks);
+    _Out_ PRTL_BITMAP AppliedBlocks,
+    _Out_ PULONG LogType);
 #endif
 
 BOOLEAN CMAPI
@@ -1125,9 +1151,11 @@ CmpDereferenceSecurityCell(
 #if !defined(CMLIB_HOST) && !defined(_BLDR_)
 VOID NTAPI CmpLockHiveSecurity(IN PHHIVE Hive);
 VOID NTAPI CmpUnlockHiveSecurity(IN PHHIVE Hive);
+VOID NTAPI CmpRemoveFromSecurityCache(IN PHHIVE Hive, IN HCELL_INDEX SecurityCell);
 #else
 #define CmpLockHiveSecurity(Hive) ((void)(Hive))
 #define CmpUnlockHiveSecurity(Hive) ((void)(Hive))
+#define CmpRemoveFromSecurityCache(Hive, SecurityCell) ((void)(Hive), (void)(SecurityCell))
 #endif
 
 NTSTATUS

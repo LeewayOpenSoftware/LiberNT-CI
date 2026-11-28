@@ -7,12 +7,14 @@ extern void func_AddCommas(void);
 extern void func_AssocCreateElement(void);
 extern void func_AssocCreateForClasses(void);
 extern void func_DefaultProperties(void);
+extern void func_DesktopWallpaper(void);
 extern void func_ILLoadFromStreamEx(void);
 extern void func_ItemPropertyStores(void);
 extern void func_LocalizedName(void);
 extern void func_SHAssocEnumHandlers(void);
 extern void func_SHGetDriveMedia(void);
 extern void func_Control_RunDLLW(void);
+extern void func_AssocIconChange(void);
 extern void func_CFSFolder(void);
 extern void func_CheckEscapes(void);
 extern void func_CIDLData(void);
@@ -25,10 +27,12 @@ extern void func_CUserNotification(void);
 extern void func_DragDrop(void);
 extern void func_ExtractIconEx(void);
 extern void func_FindExecutable(void);
+extern void func_FontsFolderExtension(void);
 extern void func_GetDisplayNameOf(void);
 extern void func_GUIDFromString(void);
 extern void func_IconPositions(void);
 extern void func_ILCreateFromPath(void);
+extern void func_WindowsFileIDList(void);
 extern void func_ILIsEqual(void);
 extern void func_Int64ToString(void);
 extern void func_IShellFolderViewCB(void);
@@ -41,11 +45,15 @@ extern void func_PathIsTemporary(void);
 extern void func_PathMakeUniqueName(void);
 extern void func_PathProcessCommand(void);
 extern void func_PathResolve(void);
+extern void func_AboutBanner(void);
+extern void func_WinverBrand(void);
 extern void func_ProgramFilesDir(void);
 extern void func_SHGetFolderPathToken(void);
 extern void func_PIDL(void);
 extern void func_RealShellExecuteEx(void);
+extern void func_RegItemDisplayName(void);
 extern void func_RegItemParse(void);
+extern void func_RegenerateUserEnvironment(void);
 extern void func_SHAppBarMessage(void);
 extern void func_SHChangeNotify(void);
 extern void func_SHCreateDataObject(void);
@@ -58,11 +66,13 @@ extern void func_She(void);
 extern void func_ShellExec_RunDLL(void);
 extern void func_ShellExecCmdLine(void);
 extern void func_ShellExecuteEx(void);
+extern void func_ShellExecuteSlash(void);
 extern void func_ShellExecuteLink(void);
 extern void func_ShellExecuteW(void);
 extern void func_ShellHook(void);
 extern void func_Shell_NotifyIconGetRect(void);
 extern void func_ShellState(void);
+extern void func_StockIconShield(void);
 extern void func_SHGetAttributesFromDataObject(void);
 extern void func_SHOpenFolderAndSelectItems(void);
 extern void func_SHGetComputerDisplayNameW(void);
@@ -102,12 +112,14 @@ const struct test winetest_testlist[] =
     { "AssocCreateElement", func_AssocCreateElement },
     { "AssocCreateForClasses", func_AssocCreateForClasses },
     { "DefaultProperties", func_DefaultProperties },
+    { "DesktopWallpaper", func_DesktopWallpaper },
     { "ILLoadFromStreamEx", func_ILLoadFromStreamEx },
     { "ItemPropertyStores", func_ItemPropertyStores },
     { "LocalizedName", func_LocalizedName },
     { "SHAssocEnumHandlers", func_SHAssocEnumHandlers },
     { "SHGetDriveMedia", func_SHGetDriveMedia },
     { "Control_RunDLLW", func_Control_RunDLLW },
+    { "AssocIconChange", func_AssocIconChange },
     { "CFSFolder", func_CFSFolder },
     { "CheckEscapes", func_CheckEscapes },
     { "CIDLData", func_CIDLData },
@@ -120,10 +132,12 @@ const struct test winetest_testlist[] =
     { "DragDrop", func_DragDrop },
     { "ExtractIconEx", func_ExtractIconEx },
     { "FindExecutable", func_FindExecutable },
+    { "FontsFolderExtension", func_FontsFolderExtension },
     { "GetDisplayNameOf", func_GetDisplayNameOf },
     { "GUIDFromString", func_GUIDFromString },
     { "IconPositions", func_IconPositions },
     { "ILCreateFromPath", func_ILCreateFromPath },
+    { "WindowsFileIDList", func_WindowsFileIDList },
     { "ILIsEqual", func_ILIsEqual },
     { "Int64ToString", func_Int64ToString },
     { "IShellFolderViewCB", func_IShellFolderViewCB },
@@ -136,11 +150,15 @@ const struct test winetest_testlist[] =
     { "PathMakeUniqueName", func_PathMakeUniqueName },
     { "PathProcessCommand", func_PathProcessCommand },
     { "PathResolve", func_PathResolve },
+    { "AboutBanner", func_AboutBanner },
+    { "WinverBrand", func_WinverBrand },
     { "ProgramFilesDir", func_ProgramFilesDir },
     { "SHGetFolderPathToken", func_SHGetFolderPathToken },
     { "PIDL", func_PIDL },
     { "RealShellExecuteEx", func_RealShellExecuteEx },
+    { "RegItemDisplayName", func_RegItemDisplayName },
     { "RegItemParse", func_RegItemParse },
+    { "RegenerateUserEnvironment", func_RegenerateUserEnvironment },
     { "SHAppBarMessage", func_SHAppBarMessage },
     { "SHChangeNotify", func_SHChangeNotify },
     { "SHCreateDataObject", func_SHCreateDataObject },
@@ -153,11 +171,13 @@ const struct test winetest_testlist[] =
     //{ "ShellExec_RunDLL", func_ShellExec_RunDLL }, Broke on Windows
     //{ "ShellExecCmdLine", func_ShellExecCmdLine }, Broke on Windows
     { "ShellExecuteEx", func_ShellExecuteEx }, // Mostly broken on Windows, only simple tests enabled
+    { "ShellExecuteSlash", func_ShellExecuteSlash },
     { "ShellExecuteLink", func_ShellExecuteLink },
     //{ "ShellExecuteW", func_ShellExecuteW }, Broke on Windows
     { "ShellHook", func_ShellHook },
     { "Shell_NotifyIconGetRect", func_Shell_NotifyIconGetRect },
     { "ShellState", func_ShellState },
+    { "StockIconShield", func_StockIconShield },
     { "SHGetAttributesFromDataObject", func_SHGetAttributesFromDataObject },
     { "SHOpenFolderAndSelectItems", func_SHOpenFolderAndSelectItems },
     { "SHGetComputerDisplayNameW", func_SHGetComputerDisplayNameW },

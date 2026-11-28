@@ -73,7 +73,8 @@ static const WCHAR* PickFace(void)
 void Theme_Free(void)
 {
     HFONT* fonts[] = { &g_t.fCaption, &g_t.fTitle, &g_t.fBody, &g_t.fBodySemi,
-                       &g_t.fSmall, &g_t.fSmallSemi, &g_t.fMed, &g_t.fMedSemi, &g_t.fBig };
+                       &g_t.fSmall, &g_t.fSmallSemi, &g_t.fMed, &g_t.fMedSemi, &g_t.fBig,
+                       &g_t.fPerfTitle, &g_t.fPerfHardware, &g_t.fPerfValue };
     for (int i = 0; i < (int)_countof(fonts); i++)
     {
         if (*fonts[i]) DeleteObject(*fonts[i]);
@@ -87,7 +88,8 @@ void Theme_Apply(BOOL dark, int dpi)
     Theme_Free();
     ZeroMemory(&g_t, sizeof(g_t));
     g_t.dark = dark;
-    if (!DwmSettingsLoadShellMaterial(dark ? DWM_COLOR_SCHEME_DARK : DWM_COLOR_SCHEME_LIGHT,
+    if (g_app.st.noBlur ||
+        !DwmSettingsLoadShellMaterial(dark ? DWM_COLOR_SCHEME_DARK : DWM_COLOR_SCHEME_LIGHT,
                                       &g_t.material, &g_t.materialOpacity))
         g_t.materialOpacity = -1;
 
@@ -125,7 +127,8 @@ void Theme_Apply(BOOL dark, int dpi)
     }
     else
     {
-        COLORREF base = g_t.materialOpacity >= 0 ? g_t.material : RGB(0x00, 0x00, 0x00);
+        /* No composited material (no visual style in this process): opaque Win11 dark window colour, never black. */
+        COLORREF base = g_t.materialOpacity >= 0 ? g_t.material : RGB(0x20, 0x20, 0x20);
         COLORREF white = RGB(0xFF, 0xFF, 0xFF);
         COLORREF highlight = GetSysColor(COLOR_HIGHLIGHT);
 
@@ -170,6 +173,9 @@ void Theme_Apply(BOOL dark, int dpi)
     g_t.fMed       = MakeFont(12, FW_NORMAL,   face);
     g_t.fMedSemi   = MakeFont(12, FW_SEMIBOLD, face);
     g_t.fBig       = MakeFont(20, FW_LIGHT,    face);
+    g_t.fPerfTitle = MakeFont(24, FW_NORMAL,   face);
+    g_t.fPerfHardware = MakeFont(14, FW_NORMAL, face);
+    g_t.fPerfValue = MakeFont(18, FW_NORMAL, face);
 }
 
 /* ------------------------------------------------------------------ */

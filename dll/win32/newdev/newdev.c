@@ -197,24 +197,26 @@ UpdateDriverForPlugAndPlayDevicesW(
     OUT PBOOL bRebootRequired OPTIONAL)
 {
     DEVINSTDATA DevInstData;
-    DWORD i;
+    DWORD i, LastError;
     LPWSTR Buffer = NULL;
     DWORD BufferSize;
     LPCWSTR CurrentHardwareId; /* Pointer into Buffer */
     DWORD Property;
     BOOL FoundHardwareId, FoundAtLeastOneDevice = FALSE;
     BOOL FoundCurrentDriver = FALSE;
-    BOOL ret = FALSE;
+    BOOL ret = FALSE, Wow64 = FALSE;
     DWORD InstallError = ERROR_SUCCESS; /* Last InstallCurrentDriver failure on a matching device */
-    DWORD LastError;
 
     DevInstData.hDevInfo = INVALID_HANDLE_VALUE;
 
     TRACE("UpdateDriverForPlugAndPlayDevicesW(%p %s %s 0x%x %p)\n",
         hwndParent, debugstr_w(HardwareId), debugstr_w(FullInfPath), InstallFlags, bRebootRequired);
 
-    if (bRebootRequired)
-        *bRebootRequired = FALSE;
+    if (IsWow64Process(GetCurrentProcess(), &Wow64) && Wow64)
+    {
+        SetLastError(ERROR_IN_WOW64);
+        return FALSE;
+    }
 
     if (!HardwareId || !FullInfPath)
     {
@@ -235,6 +237,9 @@ UpdateDriverForPlugAndPlayDevicesW(
         SetLastError(ERROR_FILE_NOT_FOUND);
         goto cleanup;
     }
+
+    if (bRebootRequired)
+        *bRebootRequired = FALSE;
 
     /* Enumerate all devices of the system */
     DevInstData.hDevInfo = SetupDiGetClassDevsW(NULL, NULL, hwndParent, DIGCF_ALLCLASSES | DIGCF_PRESENT);
@@ -371,7 +376,6 @@ UpdateDriverForPlugAndPlayDevicesW(
             InstallError = GetLastError();
             if (InstallError == ERROR_SUCCESS)
                 InstallError = ERROR_GEN_FAILURE;
-            TRACE("InstallCurrentDriver() failed with error 0x%x\n", InstallError);
             continue;
         }
 
@@ -614,6 +618,51 @@ GetDeviceIdRank(
     return MAXDWORD;
 }
 
+static DWORD
+GetInstalledFeatureScore(
+    IN HKEY hKey)
+{
+    WCHAR InfPath[MAX_PATH], Section[2 * LINE_LEN], Extension[LINE_LEN], Text[16];
+    DWORD Size, Type, Score = 0xFF;
+    INFCONTEXT Context;
+    PWSTR End;
+    HINF hInf;
+
+    Size = sizeof(InfPath) - sizeof(WCHAR);
+    if (RegQueryValueExW(hKey, REGSTR_VAL_INFPATH, NULL, &Type, (LPBYTE)InfPath, &Size) != ERROR_SUCCESS || Type != REG_SZ)
+        return Score;
+    InfPath[Size / sizeof(WCHAR)] = UNICODE_NULL;
+
+    Size = sizeof(WCHAR) * (LINE_LEN - 1);
+    if (RegQueryValueExW(hKey, REGSTR_VAL_INFSECTION, NULL, &Type, (LPBYTE)Section, &Size) != ERROR_SUCCESS || Type != REG_SZ)
+        return Score;
+    Section[Size / sizeof(WCHAR)] = UNICODE_NULL;
+
+    Size = sizeof(Extension) - sizeof(WCHAR);
+    if (RegQueryValueExW(hKey, REGSTR_VAL_INFSECTIONEXT, NULL, &Type, (LPBYTE)Extension, &Size) == ERROR_SUCCESS && Type == REG_SZ)
+    {
+        Extension[Size / sizeof(WCHAR)] = UNICODE_NULL;
+        wcscat(Section, Extension);
+    }
+
+    hInf = SetupOpenInfFileW(InfPath, NULL, INF_STYLE_WIN4, NULL);
+    if (hInf == INVALID_HANDLE_VALUE)
+        return Score;
+
+    /* The directive is a single hexadecimal byte, written without a 0x prefix */
+    if (SetupFindFirstLineW(hInf, Section, L"FeatureScore", &Context) &&
+        SetupGetStringFieldW(&Context, 1, Text, ARRAYSIZE(Text), NULL) &&
+        Text[0] != UNICODE_NULL)
+    {
+        Size = wcstoul(Text, &End, 16);
+        if (*End == UNICODE_NULL && Size <= 0xFF)
+            Score = Size;
+    }
+
+    SetupCloseInfFile(hInf);
+    return Score;
+}
+
 static BOOL
 IsSelectedDriverBetter(
     IN PDEVINSTDATA DevInstData)
@@ -663,6 +712,9 @@ IsSelectedDriverBetter(
     InstalledRank = GetDeviceIdRank(HardwareIds, MatchingId, 0);
     if (InstalledRank == MAXDWORD)
         InstalledRank = GetDeviceIdRank(CompatibleIds, MatchingId, 0x2000);
+    /* FIXME: the installed rank ignores whether the INF named the ID as a compatible one */
+    if (InstalledRank != MAXDWORD)
+        InstalledRank |= GetInstalledFeatureScore(hKey) << 16;
 
     Size = sizeof(InstalledDate);
     if (RegQueryValueExW(hKey, L"DriverDateData", NULL, &Type, (LPBYTE)&InstalledDate, &Size) != ERROR_SUCCESS ||
@@ -1799,10 +1851,7 @@ InstallCurrentDriver(
             DevInstData->hDevInfo,
             &DevInstData->devInfoData);
         if (!ret)
-        {
-            TRACE("SetupDiCallClassInstaller(DIF_SELECTBESTCOMPATDRV) failed with error 0x%x\n", GetLastError());
             return FALSE;
-        }
     }
 
     return InstallSelectedDriver(DevInstData);
@@ -1901,7 +1950,6 @@ InstallSelectedDriver(
         &DevInstData->devInfoData);
     if (!ret)
     {
-        TRACE("SetupDiCallClassInstaller(DIF_INSTALLDEVICEFILES) failed with error 0x%x\n", GetLastError());
         return FALSE;
     }
 
@@ -1911,7 +1959,6 @@ InstallSelectedDriver(
         &DevInstData->devInfoData);
     if (!ret)
     {
-        TRACE("SetupDiCallClassInstaller(DIF_REGISTER_COINSTALLERS) failed with error 0x%x\n", GetLastError());
         return FALSE;
     }
 
@@ -1921,7 +1968,6 @@ InstallSelectedDriver(
         &DevInstData->devInfoData);
     if (!ret)
     {
-        TRACE("SetupDiCallClassInstaller(DIF_INSTALLINTERFACES) failed with error 0x%x\n", GetLastError());
         return FALSE;
     }
 
@@ -1931,7 +1977,6 @@ InstallSelectedDriver(
         &DevInstData->devInfoData);
     if (!ret)
     {
-        TRACE("SetupDiCallClassInstaller(DIF_INSTALLDEVICE) failed with error 0x%x\n", GetLastError());
         return FALSE;
     }
 

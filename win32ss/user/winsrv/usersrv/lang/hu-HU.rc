@@ -21,7 +21,7 @@ BEGIN
     DEFPUSHBUTTON "Mégse", IDCANCEL, 142, 98, 43, 17
     PUSHBUTTON "&Bezárás Most", IDC_END_NOW, 74, 98, 63, 17
     LTEXT "Ez a program nem válaszol.", IDC_STATIC, 7, 7, 178, 8
-    LTEXT "Hogy visszatérj LiberNT-ba és ellenőrizd a státuszát a programnak, kattins a Mégsére.", IDC_STATIC, 7, 26, 178, 16
+    LTEXT "Hogy visszatérj Orosi-ba és ellenőrizd a státuszát a programnak, kattins a Mégsére.", IDC_STATIC, 7, 26, 178, 16
     LTEXT "Ha azt választod, hogy azzonal bezársz egy programot, minden nem mentett adatot vesztesz. A program mostani bezárásához, kattints a Bezásás Most-ra.", IDC_STATIC, 7, 53, 178, 33
 END
 
@@ -40,4 +40,22 @@ BEGIN
     IDS_UNKNOWN_SOFTWARE_EXCEPT "unknown software exception"
     IDS_OK_TERMINATE_PROGRAM    "Click on OK to terminate the program."
     IDS_CANCEL_DEBUG_PROGRAM    "Click on CANCEL to debug the program."
+END
+
+STRINGTABLE
+BEGIN
+    IDS_BLOCK_RESTART_TITLE_ONE               "Closing 1 app and restarting"
+    IDS_BLOCK_RESTART_TITLE                   "Closing %u apps and restarting"
+    IDS_BLOCK_RESTART_REASON                  "This app is preventing restart."
+    IDS_BLOCK_RESTART_FORCE                   "Restart anyway"
+    IDS_BLOCK_SHUTDOWN_TITLE_ONE              "Closing 1 app and shutting down"
+    IDS_BLOCK_SHUTDOWN_TITLE                  "Closing %u apps and shutting down"
+    IDS_BLOCK_SHUTDOWN_REASON                 "This app is preventing shutdown."
+    IDS_BLOCK_SHUTDOWN_FORCE                  "Shut down anyway"
+    IDS_BLOCK_SIGNOUT_TITLE_ONE               "Closing 1 app and signing out"
+    IDS_BLOCK_SIGNOUT_TITLE                   "Closing %u apps and signing out"
+    IDS_BLOCK_SIGNOUT_REASON                  "This app is preventing you from signing out."
+    IDS_BLOCK_SIGNOUT_FORCE                   "Sign out anyway"
+    IDS_BLOCK_HINT                            "To go back and save your work, click Cancel and finish what you need to."
+    IDS_BLOCK_CANCEL                          "Cancel"
 END

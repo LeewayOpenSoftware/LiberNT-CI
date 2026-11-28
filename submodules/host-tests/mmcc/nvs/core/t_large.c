@@ -252,7 +252,7 @@ LargeSectionLifecycle(void)
         goto Finish;
     CHECK(World.System.CommittedPages == (LONG64)(2 * Pages));
     CHECK(MiSegmentIsResident(Segment, 0, 2 * Large));
-    CHECK(!MiSegmentPurge(Segment, 0, 0));
+    CHECK(!MiSegmentPurge(Segment, 0, 0, TRUE));
     CHECK(MiSegmentExtend(Segment, 3 * Large) == STATUS_INVALID_PARAMETER);
     Size = 0;
     CHECK(NT_SUCCESS(MiMapView(&Parent, Segment, &Base, 0, &Size, MI_PROT_READWRITE, MI_MEM_LARGE_PAGES)));

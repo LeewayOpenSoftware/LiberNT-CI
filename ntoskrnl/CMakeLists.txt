@@ -31,6 +31,24 @@ endif()
 
 include(ntos.cmake)
 
+# LRM-RS: route the special pool through the Rust orchestration and link lrm_rs into ntoskrnl.
+# DEFAULT ON on amd64 (owner order 2026-11-14, after validation gates G1-G9); also opt-in on i386
+# (MSVC or GNU driver). Other arches unsupported (no LiberNT arm64 ntoskrnl).
+# The C special pool stays compiled as oracle/fallback (ntspecial.c #else branch); a flag-OFF build is
+# byte-identical to a no-LRM-RS kernel (the self-test export is appended only in a flag-ON build via a
+# generated spec). Decoupled from LIBERNT_ENABLE_RUST (the opt-in lnrspoc PoC umbrella, still OFF by
+# default): add_rust_staticlib is always available because sdk/cmake/rust.cmake is included uncondition-
+# ally. An explicit -DLIBERNT_ENABLE_LRM_RS=ON on an arch other than amd64/i386 stays fatal (see the guard below).
+if(ARCH STREQUAL "amd64")
+    option(LIBERNT_ENABLE_LRM_RS "Route the special pool through the Rust LRM-RS path" ON)
+else()
+    option(LIBERNT_ENABLE_LRM_RS "Route the special pool through the Rust LRM-RS path" OFF)
+endif()
+# LAB ONLY: validate the LRM-RS kernel panic policy (handler -> LEEWAY_RUST_PANIC bug check) in a
+# disposable VM. Exposes lrm_rs_force_panic()/LrmRsForcePanic(); since it deliberately panics, this
+# build enables the Rust `panic-test` feature AND drops the FORBID_PANIC gate. Never for ship.
+option(LIBERNT_LRM_RS_FORCE_PANIC_TEST "LAB ONLY: expose LrmRsForcePanic to test the LRM-RS panic policy in a VM" OFF)
+
 option(NVS "Build the kernel with the NT Virtual Memory Subsystem and cache manager" ON)
 
 if(NOT NVS)
@@ -65,17 +83,41 @@ endif()
 set(NTOSKRNL_SOURCE ${SOURCE})
 set(NTOSKRNL_ASM_SOURCE ${ASM_SOURCE})
 
-set(NTKRNLMP_SOURCE ${SOURCE})
-set(NTKRNLMP_ASM_SOURCE ${ASM_SOURCE})
 
-spec2def(ntoskrnl.exe ntoskrnl.spec ADD_IMPORTLIB)
+# Default: the checked-in spec verbatim. Flag-ON (amd64/i386): append the experimental self-test export
+# to a generated copy in the binary dir so the DEFAULT export table stays byte-identical. spec2def()
+# reads ${CMAKE_CURRENT_SOURCE_DIR}/<arg>, so reference the generated file by a relative path.
+set(_NTOSKRNL_SPEC ntoskrnl.spec)
+if(LIBERNT_ENABLE_LRM_RS AND (ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386"))
+    set(_lrmrs_spec_abs ${CMAKE_CURRENT_BINARY_DIR}/ntoskrnl.lrmrs.spec)
+    # Copy the checked-in spec verbatim, then append the one experimental export, so the default
+    # build never sees it. configure_file(COPYONLY)+file(APPEND) avoids pulling the spec text through
+    # a CMake variable (no ${}/;/\ mangling).
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/ntoskrnl.spec ${_lrmrs_spec_abs} COPYONLY)
+    file(APPEND ${_lrmrs_spec_abs} "\n@ stdcall LrmRsSelfTest(ptr)\n")
+    if(LIBERNT_LRM_RS_FORCE_PANIC_TEST)
+        # Lab-only panic-policy trigger, resolved by lnrspoc via MmGetSystemRoutineAddress.
+        file(APPEND ${_lrmrs_spec_abs} "@ stdcall LrmRsForcePanic(long)\n")
+    endif()
+    file(RELATIVE_PATH _NTOSKRNL_SPEC ${CMAKE_CURRENT_SOURCE_DIR} ${_lrmrs_spec_abs})
+endif()
+
+spec2def(ntoskrnl.exe ${_NTOSKRNL_SPEC} ADD_IMPORTLIB)
 
 # Link GCC stack protector lib
 if (STACK_PROTECTOR)
     target_link_libraries(libntoskrnl INTERFACE gcc_ssp_nt)
 endif()
 
+if(MSVC_IDE)
+    set_source_files_properties(${NTOSKRNL_ASM_SOURCE} PROPERTIES COMPILE_DEFINITIONS "CONFIG_SMP")
+endif()
+
 add_asm_files(ntoskrnl_asm ${NTOSKRNL_ASM_SOURCE})
+
+if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64" OR ARCH STREQUAL "riscv64")
+    list(APPEND NTOSKRNL_SOURCE ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/${ARCH}/mproc.c)
+endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     # Clang optimises strcmp calls to memcmp.
@@ -106,6 +148,7 @@ add_executable(ntoskrnl
     ntoskrnl.rc
     ${CMAKE_CURRENT_BINARY_DIR}/ntoskrnl.def)
 set_module_type(ntoskrnl kernel)
+target_compile_definitions(ntoskrnl PRIVATE CONFIG_SMP)
 
 if(ARCH STREQUAL "arm64")
     target_link_libraries(ntoskrnl rtl_kernel_context)
@@ -132,15 +175,56 @@ endif()
 add_dependencies(ntoskrnl psdk asm)
 add_cd_file(TARGET ntoskrnl DESTINATION reactos/system32 NO_CAB FOR all)
 
+# LRM-RS: build the Rust special-pool crate as a reproducible no_std staticlib and link it into
+# ntoskrnl, then define LIBERNT_LRM_RS so ntspecial.c routes through it and lrmrs.c compiles the
+# shim + self-test. Opt-in; amd64 (default ON) plus i386 (opt-in), under either the MSVC or the GNU
+# driver. lrm_rs imports at most one kernel symbol (LrmRsFatalStop on amd64, _LrmRsFatalStop on i386
+# cdecl, the
+# panic-policy target); its runtime helpers resolve from the kernel's own libraries at the ntoskrnl link.
+if(LIBERNT_ENABLE_LRM_RS)
+    if(NOT ARCH STREQUAL "amd64" AND NOT ARCH STREQUAL "i386")
+        message(FATAL_ERROR "LIBERNT_ENABLE_LRM_RS supports amd64 and i386 (MSVC) only; no LiberNT arm64 ntoskrnl exists.")
+    endif()
+    # Decoupled from LIBERNT_ENABLE_RUST (shape B): lrm_rs builds via add_rust_staticlib (always
+    # defined by sdk/cmake/rust.cmake), so the production kernel gets the Rust special pool without
+    # the opt-in lnrspoc PoC. ENABLE_RUST remains a separate opt-in for tools/rust-poc.
+    # lrm_rs imports exactly one kernel symbol: LrmRsFatalStop (the panic-policy target in lrmrs.c).
+    # In the normal panic-free build the handler is dead-stripped and even that import vanishes; the
+    # allow-list entry only matters if a panic path (or the force-panic test) keeps the handler.
+    set(_lrm_rs_features "")
+    set(_lrm_rs_forbid FORBID_PANIC)
+    if(LIBERNT_LRM_RS_FORCE_PANIC_TEST)
+        # Deliberately panics -> enable the feature and DROP FORBID_PANIC (the panic is intentional).
+        set(_lrm_rs_features FEATURES panic-test)
+        set(_lrm_rs_forbid "")
+        target_compile_definitions(ntoskrnl PRIVATE LIBERNT_LRM_RS_FORCE_PANIC_TEST=1)
+        message(WARNING "LRM-RS: FORCE-PANIC TEST build - LrmRsForcePanic exposed, FORBID_PANIC disabled (lab only, never ship).")
+    endif()
+    # The one possible import is the panic-policy target: undecorated LrmRsFatalStop on amd64, cdecl
+    # _LrmRsFatalStop on i386. (A shipped FORBID_PANIC build references neither; only a panic-keeping
+    # or force-panic build does.)
+    set(_lrm_rs_externs LrmRsFatalStop)
+    if(ARCH STREQUAL "i386")
+        set(_lrm_rs_externs _LrmRsFatalStop)
+    endif()
+    add_rust_staticlib(lrm_rs
+        MANIFEST_DIR ${REACTOS_SOURCE_DIR}/tools/rust-poc/lrm-rs
+        CRATE lrm_rs
+        ${_lrm_rs_features}
+        ALLOWED_EXTERNS ${_lrm_rs_externs}
+        ${_lrm_rs_forbid})
+    target_link_libraries(ntoskrnl lrm_rs)
+    target_compile_definitions(ntoskrnl PRIVATE LIBERNT_LRM_RS=1)
+    message(STATUS "LRM-RS: special pool routed through Rust (lrm_rs linked into ntoskrnl)")
+endif()
+
 add_subdirectory(nvs)
 add_subdirectory(cc)
-add_subdirectory(ntkrnlmp)
 
 add_custom_target(nvs_check_standalone
     COMMAND ${CMAKE_COMMAND} -DNVS_KERNEL_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/nvs/check-standalone.cmake)
 add_dependencies(ntoskrnl nvs_check_standalone)
-add_dependencies(ntkrnlmp nvs_check_standalone)
 
 if(WOW64_I386_RUNTIME AND ARCH STREQUAL "i386")
     set_source_files_properties(ntdll.S ntdll_nt6.S PROPERTIES COMPILE_DEFINITIONS WOW64_I386_RUNTIME)

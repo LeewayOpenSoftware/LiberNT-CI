@@ -106,9 +106,7 @@ HRESULT WINAPI SHRegQueryValueW(
 /*************************************************************************
  * SHRegQueryValueExW	[SHELL32.511] NT4.0
  *
- * FIXME
- *  if the datatype REG_EXPAND_SZ then expand the string and change
- *  *pdwType to REG_SZ.
+ * REG_EXPAND_SZ data is expanded and reported as REG_SZ.
  */
 HRESULT WINAPI SHRegQueryValueExW (
 	HKEY hkey,
@@ -118,11 +116,9 @@ HRESULT WINAPI SHRegQueryValueExW (
 	LPVOID pvData,
 	LPDWORD pcbData)
 {
-	DWORD ret;
-	WARN("%p %s %p %p %p %p semi-stub\n",
+	TRACE("%p %s %p %p %p %p\n",
 		hkey, debugstr_w(pszValue), pdwReserved, pdwType, pvData, pcbData);
-	ret = RegQueryValueExW ( hkey, pszValue, pdwReserved, pdwType, pvData, pcbData);
-	return ret;
+	return SHQueryValueExW(hkey, pszValue, pdwReserved, pdwType, pvData, pcbData);
 }
 
 /*************************************************************************

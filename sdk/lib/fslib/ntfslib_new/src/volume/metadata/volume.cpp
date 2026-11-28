@@ -160,6 +160,14 @@ Volume::SetVolumeFlags(_In_ USHORT Set,
     if (IsReadOnly)
         return STATUS_MEDIA_WRITE_PROTECTED;
 
+    /* The record write below would mark the volume dirty under this stale copy */
+    if (DirtyTracking && !DirtyMarked)
+    {
+        Status = MarkDirtyBeforeWrite();
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
     Status = MFT->GetFileAttributeFromFileRecordNumber(TypeVolumeInformation,
                                                        NULL,
                                                        _Volume,
@@ -243,7 +251,10 @@ Volume::MarkDirtyBeforeWrite()
     if (NT_SUCCESS(Status))
         Status = FlushVolume();
     if (!NT_SUCCESS(Status))
+    {
         DirtyMarked = FALSE;
+        NoteLostWrite(Status);
+    }
     return Status;
 }
 
@@ -332,6 +343,28 @@ Volume::NoteCorruption()
 }
 
 void
+Volume::NoteLostWrite(_In_ NTSTATUS Status)
+{
+    LostWriteNoted = TRUE;
+    if (!CorruptionNoted)
+    {
+        DPRINT1("NTFS: a metadata write failed (status %lx); the volume stays dirty\n", Status);
+        CorruptionNoted = TRUE;
+    }
+}
+
+BOOLEAN
+Volume::ReportsDirty(_In_ USHORT Flags)
+{
+    if (CorruptionNoted)
+        return TRUE;
+    if (!(Flags & VOL_DIRTY))
+        return FALSE;
+    /* The flag a read-write mount sets for itself is not a check request */
+    return !DirtyTracking || DirtyRetained;
+}
+
+void
 Volume::RetainDirty(_In_ BOOLEAN Retain)
 {
     if (!DirtyTracking)
@@ -349,5 +382,65 @@ Volume::MarkCleanForShutdown()
      * no write-through (that is the owner-restricted J30 mechanism). */
     if (NT_SUCCESS(Status) && DirtyTracking && !IsReadOnly)
         ShutdownCleaned = TRUE;
+    return Status;
+}
+
+/*
+ * The checker locked the volume, read it whole and wrote nothing: the medium
+ * is consistent and this instance saw the same medium, so the flag the volume
+ * was mounted with (retained, so MarkClean leaves it) and a note from a read
+ * that met a structure the check accepts can go. The flag goes through this
+ * instance, so its own lifecycle agrees with the medium afterwards, which a
+ * raw clear under it would not give.
+ *
+ * Not after a lost write: then this instance holds an update the medium
+ * never got, a clean medium says nothing about it, and later writes would
+ * build on the lost one with no dirty flag to show for it. The checker is
+ * refused and dismounts, which drops this instance.
+ */
+NTSTATUS
+Volume::MarkCleanAfterCheck()
+{
+    NTSTATUS Status;
+    USHORT Flags = 0;
+    BOOLEAN Cleared = FALSE;
+
+    if (IsReadOnly)
+        return STATUS_MEDIA_WRITE_PROTECTED;
+    if (!DirtyTracking)
+        return STATUS_NOT_SUPPORTED;
+    if (LostWriteNoted)
+        return STATUS_LOST_WRITEBEHIND_DATA;
+
+    Status = FlushVolume();
+    if (NT_SUCCESS(Status))
+        Status = QueryVolumeFlags(&Flags);
+    if (NT_SUCCESS(Status) && (Flags & (VOL_DIRTY | VOL_FULL_CHKDSK | VOL_ONLINE_SCAN)))
+    {
+        Status = SetVolumeFlags(0, VOL_DIRTY | VOL_FULL_CHKDSK | VOL_ONLINE_SCAN);
+        Cleared = NT_SUCCESS(Status);
+        if (NT_SUCCESS(Status))
+            Status = FlushVolume();
+    }
+    /* A write lost on the way here keeps its note and the marks stay as they
+     * are, so nothing of this instance is cleared. If the clear had reached
+     * the medium, or may have (the flush after it failed), the flag goes
+     * back on it now, best effort: DirtyMarked stays TRUE, so no later write
+     * would set it, and a dismount that fails after this would otherwise
+     * leave a clean medium under a lost write. */
+    if (Cleared && (LostWriteNoted || !NT_SUCCESS(Status)))
+    {
+        (void)SetVolumeFlags(VOL_DIRTY, 0);
+        (void)FlushVolume();
+    }
+    if (NT_SUCCESS(Status) && LostWriteNoted)
+        Status = STATUS_LOST_WRITEBEHIND_DATA;
+    if (NT_SUCCESS(Status))
+    {
+        DirtyMarked = FALSE;
+        DirtyRetained = FALSE;
+        CorruptionNoted = FALSE;
+        CorruptionCommitTried = FALSE;
+    }
     return Status;
 }

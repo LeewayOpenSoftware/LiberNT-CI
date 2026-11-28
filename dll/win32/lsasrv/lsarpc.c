@@ -57,6 +57,16 @@ LsarStartRpcServer(VOID)
         return I_RpcMapWin32Status(Status);
     }
 
+    /* DPAPI and credential clients bind here: local RPC carries the caller's own token */
+    Status = RpcServerUseProtseqEpW(L"ncalrpc",
+                                    RPC_C_PROTSEQ_MAX_REQS_DEFAULT,
+                                    DPAPI_LOCAL_ENDPOINT,
+                                    NULL);
+    if (Status != RPC_S_OK)
+    {
+        WARN("RpcServerUseProtseqEpW(ncalrpc) failed (Status %lx)\n", Status);
+    }
+
     Status = RpcServerRegisterIf(lsarpc_v0_0_s_ifspec,
                                  NULL,
                                  NULL);
@@ -65,6 +75,17 @@ LsarStartRpcServer(VOID)
         WARN("RpcServerRegisterIf() failed (Status %lx)\n", Status);
         return I_RpcMapWin32Status(Status);
     }
+
+    Status = RpcServerRegisterIf(dpapi_v1_0_s_ifspec,
+                                 NULL,
+                                 NULL);
+    if (Status != RPC_S_OK)
+    {
+        WARN("RpcServerRegisterIf(dpapi) failed (Status %lx)\n", Status);
+        return I_RpcMapWin32Status(Status);
+    }
+
+    DpapiServerInitialize();
 
     DsSetupInit();
 

@@ -3,7 +3,6 @@
 #define NDEBUG
 #include <debug.h>
 
-#if (DLL_EXPORT_VERSION >= 0x602)
 NTSYSAPI
 NTSTATUS
 NTAPI
@@ -12,7 +11,6 @@ RtlWaitOnAddress(
     _In_ const VOID *CompareAddress,
     _In_ SIZE_T AddressSize,
     _In_opt_ const LARGE_INTEGER *Timeout);
-#endif
 
 VOID
 WINAPI
@@ -97,7 +95,6 @@ SleepConditionVariableSRW(PCONDITION_VARIABLE ConditionVariable, PSRWLOCK Lock, 
     return TRUE;
 }
 
-#if (DLL_EXPORT_VERSION >= 0x602)
 BOOL
 WINAPI
 WaitOnAddress(volatile VOID *Address, PVOID CompareAddress, SIZE_T AddressSize, DWORD Timeout)
@@ -114,7 +111,66 @@ WaitOnAddress(volatile VOID *Address, PVOID CompareAddress, SIZE_T AddressSize, 
 
     return TRUE;
 }
-#endif
+
+BOOL
+WINAPI
+InitializeSynchronizationBarrier(
+    _Out_ LPSYNCHRONIZATION_BARRIER lpBarrier,
+    _In_ LONG lTotalThreads,
+    _In_ LONG lSpinCount)
+{
+    NTSTATUS Status;
+
+    if (lTotalThreads <= 0 || lSpinCount < -1)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Status = RtlInitBarrier(lpBarrier, lTotalThreads, lSpinCount);
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+BOOL
+WINAPI
+EnterSynchronizationBarrier(
+    _Inout_ LPSYNCHRONIZATION_BARRIER lpBarrier,
+    _In_ DWORD dwFlags)
+{
+    ULONG Flags;
+
+    if (dwFlags & ~(SYNCHRONIZATION_BARRIER_FLAGS_SPIN_ONLY |
+                    SYNCHRONIZATION_BARRIER_FLAGS_BLOCK_ONLY |
+                    SYNCHRONIZATION_BARRIER_FLAGS_NO_DELETE))
+    {
+        RtlRaiseStatus(STATUS_INVALID_PARAMETER);
+    }
+
+    Flags = 0;
+    if (dwFlags & SYNCHRONIZATION_BARRIER_FLAGS_SPIN_ONLY)
+        Flags |= RTL_BARRIER_FLAGS_SPIN_ONLY;
+    if (dwFlags & SYNCHRONIZATION_BARRIER_FLAGS_BLOCK_ONLY)
+        Flags |= RTL_BARRIER_FLAGS_BLOCK_ONLY;
+    if (!(dwFlags & SYNCHRONIZATION_BARRIER_FLAGS_NO_DELETE))
+        Flags |= RTL_BARRIER_FLAGS_DELETE_SAFE;
+
+    return RtlBarrier(lpBarrier, Flags);
+}
+
+BOOL
+WINAPI
+DeleteSynchronizationBarrier(
+    _Inout_ LPSYNCHRONIZATION_BARRIER lpBarrier)
+{
+    RtlDeleteBarrier(lpBarrier);
+    return TRUE;
+}
 
 VOID
 WINAPI

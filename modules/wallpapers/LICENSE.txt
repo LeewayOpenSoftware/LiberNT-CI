@@ -87,3 +87,23 @@ License: Unsplash License (https://unsplash.com/license), shown on the photo
          photos to replicate a similar or competing service.
 Processing: Lanczos resampling to 1920 x 1248; progressive JPEG quality 82
             with Huffman optimization and metadata stripped
+
+Owner-supplied asset record
+---------------------------
+
+Supplied by the project owner on 2026-11-13 and confirmed by the owner order
+of 2026-11-14. Shipped byte-identical to the supplied files: no resampling,
+re-encoding or metadata change. Each is a 1672 x 941 RGB PNG (16:9).
+Author, license and redistribution clearance: not supplied.
+
+File: Layered Glass 16x9.png (default wallpaper)
+Source: Ondas de vidrio translúcido en tonos vibrantes.png
+SHA-256: d0ba9d8c2971413510d2675a422fb1ac2014fe71b5d8b0a2ceb84e7d0149dc22
+
+File: Layered Glass.png
+Source: Arcos de vidrio en tonos aurora.png
+SHA-256: f215236a03401050eeaf5353c0b74fbbb7a28673379cb63a0f6eacfd4d5025ff
+
+File: Persian Windows.png
+Source: Ventanal de vitrales y sombras de colores.png
+SHA-256: c3099544794bf70605fb89174cca81225f049a4d47ba1f5fe177b77e7b3d64cb

@@ -104,7 +104,7 @@ static void test_shapes(void)
         else
         {
             UINT cmpt = 1;
-            USHORT family = 0;
+            USHORT family = AF_INET; /* the TCP and UDP statistics have one row for each address family */
             const void *keyptr = NULL;
 
             if (s->Table == NSI_IP_COMPARTMENT_TABLE)
@@ -271,7 +271,22 @@ static void test_forward(int family)
             }
             ok(LuidKnown(luid), "route %lu: luid %I64x not in ifinfo\n", i, luid->Value);
             ok(stat[i].if_index != 0, "route %lu: interface index 0\n", i);
-            ok(rw[i].metric != 0 || rw[i].loopback, "route %lu: metric 0 on a non-loopback route\n", i);
+            {
+                /* The row carries the metric of the route itself, which may be 0. Windows 11 (build 26100) shows
+                 * a default route from DHCP as RouteMetric 0, InterfaceMetric 45 in Get-NetRoute and as metric 45
+                 * in "route print". What is never 0 for a route off the loopback is the sum. */
+                MIB_IPINTERFACE_ROW ifrow;
+
+                memset(&ifrow, 0, sizeof(ifrow));
+                ifrow.Family = family;
+                ifrow.InterfaceLuid = *luid;
+                err = GetIpInterfaceEntry(&ifrow);
+                ok(err == NO_ERROR, "route %lu: no interface row: %lu\n", i, err);
+                if (err == NO_ERROR)
+                    ok(rw[i].metric + ifrow.Metric != 0 || rw[i].loopback,
+                       "route %lu: route metric %u and interface metric %lu are both 0 on a non-loopback route\n",
+                       i, rw[i].metric, ifrow.Metric);
+            }
         }
     }
     if (family == AF_INET && keys)

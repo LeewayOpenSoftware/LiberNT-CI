@@ -32,6 +32,15 @@ endforeach()
 target_compile_options(mm_amd64_pte_asan PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
 target_link_options(mm_amd64_pte_asan PRIVATE -fsanitize=address,undefined)
 
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME mm_amd64.tlb_nmi_reentrancy
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tlb-nmi-reentrancy-test.py
+                    --root ${MMCC_KERNEL_ROOT}/.. --cc ${CMAKE_C_COMPILER})
+    endif()
+endif()
+
 find_package(Threads REQUIRED)
 foreach(TARGET mm_amd64_tlb mm_amd64_tlb_asan mm_amd64_tlb_tsan)
     add_executable(${TARGET} t_tlb.c ${MMCC_KERNEL_ROOT}/nvs/arch/amd64/tlb.c)
@@ -46,3 +55,14 @@ target_compile_options(mm_amd64_tlb_asan PRIVATE -fsanitize=address,undefined -f
 target_link_options(mm_amd64_tlb_asan PRIVATE -fsanitize=address,undefined)
 target_compile_options(mm_amd64_tlb_tsan PRIVATE -fsanitize=thread)
 target_link_options(mm_amd64_tlb_tsan PRIVATE -fsanitize=thread)
+
+foreach(TARGET mm_amd64_tlb_groups mm_amd64_tlb_groups_asan)
+    add_executable(${TARGET} t_tlbgroups.c ${MMCC_KERNEL_ROOT}/nvs/arch/amd64/tlb.c)
+    target_compile_definitions(${TARGET} PRIVATE MM_HOST_TEST MI_AMD64_TLB_MAXIMUM_PROCESSORS=128)
+    target_include_directories(${TARGET} PRIVATE ${MMCC_KERNEL_ROOT})
+    target_compile_options(${TARGET} PRIVATE -Wall -Wextra -Werror -g -O1)
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
+    set_tests_properties(${TARGET} PROPERTIES TIMEOUT 60)
+endforeach()
+target_compile_options(mm_amd64_tlb_groups_asan PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+target_link_options(mm_amd64_tlb_groups_asan PRIVATE -fsanitize=address,undefined)

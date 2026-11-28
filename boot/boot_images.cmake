@@ -36,7 +36,7 @@ function(freeldr_ini_add_http_boot SOURCE OUTPUT URL STATIC_IP DEFAULT_OS OPTION
     string(REPLACE "${_os_marker}"
                    "HttpBoot=\"ReactOS HTTP Boot - Debug\""
                    _contents "${_contents}")
-    set(_http_boot_entry "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\Windows\nOptions=/KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /LOADSYMBOLS")
+    set(_http_boot_entry "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\Windows\nOptions=/DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /LOADSYMBOLS")
     if(OPTIONS)
         string(APPEND _http_boot_entry " ${OPTIONS}")
     endif()
@@ -110,28 +110,6 @@ if(FREELDR_PREINSTALL_OPTIONS)
     string(REGEX REPLACE "(Options=[^\r\n]*)" "\\1 ${FREELDR_PREINSTALL_OPTIONS}" _contents "${_contents}")
     set(FREELDR_PREINSTALL_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/preinstall_options.ini")
     file(CONFIGURE OUTPUT "${FREELDR_PREINSTALL_INI}" CONTENT "${_contents}" @ONLY)
-endif()
-
-# On x86 hal.dll is the UP PIC HAL, unlike the SMP HAL named hal.dll on
-# amd64. Pair our SMP media entries explicitly without changing other
-# architectures or overriding a HAL explicitly requested by an entry.
-if(ARCH STREQUAL "i386" AND NOT (SARCH STREQUAL "pc98" OR SARCH STREQUAL "xbox"))
-    foreach(_media BOOTCD PREINSTALL)
-        set(_source "${FREELDR_${_media}_INI}")
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_source}")
-        file(READ "${_source}" _contents)
-        string(REGEX MATCHALL "Options=[^\r\n]*" _options "${_contents}")
-        foreach(_option IN LISTS _options)
-            if(_option MATCHES "/KERNEL=ntkrnlmp\\.exe([ /]|$)" AND
-               NOT _option MATCHES "/HAL=")
-                string(REPLACE "/KERNEL=ntkrnlmp.exe"
-                    "/KERNEL=ntkrnlmp.exe /HAL=halmacpi.dll" _paired "${_option}")
-                string(REPLACE "${_option}" "${_paired}" _contents "${_contents}")
-            endif()
-        endforeach()
-        set(FREELDR_${_media}_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/${_media}_i386.ini")
-        file(CONFIGURE OUTPUT "${FREELDR_${_media}_INI}" CONTENT "${_contents}" @ONLY)
-    endforeach()
 endif()
 
 if(SPACEMIT_K1_SUPPORT)
@@ -288,7 +266,7 @@ endif()
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/bootfiles.sort ${ISO_SORT_FILE_DATA})
 
 # ISO image identifier names
-set(ISO_MANUFACTURER "LiberNT Project") # For both the publisher and the preparer
+set(ISO_MANUFACTURER "Leeway Open Software") # For both the publisher and the preparer
 set(ISO_VOLNAME      "ReactOS")         # For both the Volume ID and the Volume set ID
 
 # ISO image options
@@ -396,6 +374,10 @@ function(image_list_command _image _var)
         -DOPTIONAL=${CMAKE_CURRENT_BINARY_DIR}/${_image}.optional.$<CONFIG>.lst
         -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/${_image}.effective.lst
         -DSYSTEM_DIR=Windows
+        -DINVENTORY=${CMAKE_CURRENT_BINARY_DIR}/${_image}.files
+        "-DINVENTORY_HEADER=Orosi ${OROSI_VERSION_STR} (${KERNEL_VERSION} ${KERNEL_VERSION_BUILD}-${REVISION})"
+        -DINVENTORY_BUILD=${LIBERNT_BUILD_NUMBER}
+        -DINVENTORY_IMAGE=${_image}
         -P ${REACTOS_SOURCE_DIR}/sdk/cmake/optional_files.cmake PARENT_SCOPE)
 endfunction()
 
@@ -910,6 +892,41 @@ if(DEFINED EFI_PLATFORM_ID)
     endif()
 endif()
 
+# Windows cmd.exe caps a command line near 8191 chars. The boot file list can be
+# tens of KB (RPi firmware/overlays and friends), overflowing that limit so the
+# generated batch cannot even launch native-fatten ("The system cannot execute
+# the specified program"). On Windows hosts, hand the list to fatten through its
+# -addfiles list file instead of inline -add arguments. POSIX hosts (large
+# ARG_MAX) keep the inline form, so their validated behaviour is unchanged.
+set(_preinstall_boot_fatten_fileargs ${_preinstall_boot_partition_files})
+if(CMAKE_HOST_WIN32)
+    set(_fatten_boot_list "")
+    list(LENGTH _preinstall_boot_partition_files _fbp_count)
+    set(_fbp_i 0)
+    while(_fbp_i LESS _fbp_count)
+        list(GET _preinstall_boot_partition_files ${_fbp_i} _fbp_flag)
+        if(_fbp_flag STREQUAL "-add")
+            math(EXPR _fbp_src_i "${_fbp_i} + 1")
+            math(EXPR _fbp_dst_i "${_fbp_i} + 2")
+            list(GET _preinstall_boot_partition_files ${_fbp_src_i} _fbp_src)
+            list(GET _preinstall_boot_partition_files ${_fbp_dst_i} _fbp_dst)
+            string(APPEND _fatten_boot_list "${_fbp_dst} = ${_fbp_src}
+")
+            math(EXPR _fbp_i "${_fbp_i} + 3")
+        elseif(_fbp_flag STREQUAL "-mkdir")
+            math(EXPR _fbp_dir_i "${_fbp_i} + 1")
+            list(GET _preinstall_boot_partition_files ${_fbp_dir_i} _fbp_dir)
+            string(APPEND _fatten_boot_list "${_fbp_dir}
+")
+            math(EXPR _fbp_i "${_fbp_i} + 2")
+        else()
+            message(FATAL_ERROR "preinstall boot file list: unexpected token '${_fbp_flag}'")
+        endif()
+    endwhile()
+    set(_preinstall_boot_list_file ${CMAKE_CURRENT_BINARY_DIR}/preinstall.boot.files.lst)
+    file(GENERATE OUTPUT ${_preinstall_boot_list_file} CONTENT "${_fatten_boot_list}")
+    set(_preinstall_boot_fatten_fileargs -addfiles ${_preinstall_boot_list_file})
+endif()
 image_list_command(preinstall _preinstall_list_command)
 add_custom_target(preinstall_partition
     COMMAND ${_preinstall_list_command}
@@ -929,7 +946,7 @@ add_custom_target(preinstall_partition
     COMMAND native-fatten ${_preinstall_boot_partition_file}
         -format ${_preinstall_boot_partition_sectors} ${_preinstall_boot_partition_fs} LIBERNTBOOT
         ${_preinstall_boot_partition_options}
-        ${_preinstall_boot_partition_files}
+        ${_preinstall_boot_fatten_fileargs}
     COMMAND native-ntfsimg
         --format
         ${_preinstall_system_partition_file}
@@ -1052,6 +1069,44 @@ if(STARFIVE_JH7110_SUPPORT)
             ${STARFIVE_JH7110_BOOT_SCRIPT} ${STARFIVE_JH7110_BOOT_SCRIPT_SOURCE}
         VERBATIM)
     add_dependencies(liberntimg jh7110sdimg)
+endif()
+
+if(NINTENDO_SWITCH_SUPPORT)
+    set(_switch_media_dir ${REACTOS_BINARY_DIR}/bootloader/image/mediawim)
+    set(_switch_partition_file ${CMAKE_CURRENT_BINARY_DIR}/switch-sd.fat)
+    set(_switch_sd_image_file ${REACTOS_BINARY_DIR}/LiberNT-switch-sd.img)
+    add_custom_target(switchsdimg
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${_switch_partition_file} ${_switch_sd_image_file}
+        COMMAND native-fatten ${_switch_partition_file}
+            -format ${NINTENDO_SWITCH_SD_SECTORS} fat32 LIBERNT
+            -mkdir bootloader
+            -mkdir bootloader/ini
+            -mkdir switchroot
+            -mkdir switchroot/libernt
+            -mkdir EFI
+            -mkdir EFI/BOOT
+            -mkdir EFI/LiberNT
+            -mkdir EFI/LiberNT/Boot
+            -add ${NINTENDO_SWITCH_HEKATE_INI} bootloader/ini/libernt.ini
+            -add ${NINTENDO_SWITCH_BL33} switchroot/libernt/bl33.bin
+            -add ${NINTENDO_SWITCH_BOOT_SCRIPT} switchroot/libernt/boot.scr
+            -add ${NINTENDO_SWITCH_BOOT_SCRIPT_SOURCE} switchroot/libernt/boot.cmd
+            -add ${NINTENDO_SWITCH_README} switchroot/libernt/README.txt
+            -add $<TARGET_FILE:bootmgfw> EFI/BOOT/BOOTAA64.EFI
+            -add $<TARGET_FILE:winload> EFI/LiberNT/Boot/winload.efi
+            -add ${_switch_media_dir}/BCD EFI/LiberNT/Boot/BCD
+            -add ${_switch_media_dir}/boot.wim boot.wim
+        COMMAND native-mkdiskimg
+            -o ${_switch_sd_image_file}
+            -partition ${_switch_partition_file}
+            -start ${NINTENDO_SWITCH_SD_START}
+            -type 0c
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${_switch_partition_file}
+        DEPENDS native-fatten native-mkdiskimg
+            ${NINTENDO_SWITCH_BL33} ${NINTENDO_SWITCH_BOOT_SCRIPT} ${NINTENDO_SWITCH_BOOT_SCRIPT_SOURCE}
+            ${NINTENDO_SWITCH_HEKATE_INI} ${NINTENDO_SWITCH_README}
+        VERBATIM)
+    add_dependencies(switchsdimg bootloaderwimcd)
 endif()
 
 set(_liberntvhd_layout_args

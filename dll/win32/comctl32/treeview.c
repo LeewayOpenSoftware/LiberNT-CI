@@ -3160,7 +3160,13 @@ static BOOL TREEVIEW_InitThemedCheckboxes(TREEVIEW_INFO *info)
 
     hdc_screen = GetDC(0);
     hdc = CreateCompatibleDC(hdc_screen);
-    GetThemePartSize(theme, hdc, BP_CHECKBOX, 0, NULL, TS_DRAW, &size);
+    if (FAILED(GetThemePartSize(theme, hdc, BP_CHECKBOX, 0, NULL, TS_DRAW, &size)))
+    {
+        DeleteDC(hdc);
+        ReleaseDC(0, hdc_screen);
+        CloseThemeData(theme);
+        return FALSE;
+    }
     bitmap = CreateCompatibleBitmap(hdc_screen, size.cx * 3, size.cy);
     old_bitmap = SelectObject(hdc, bitmap);
 

@@ -17,6 +17,13 @@ typedef struct _SECL_REQUEST
     DWORD dwLogonFlags;
     DWORD dwCreationFlags;
     DWORD dwProcessId;
+    [string] WCHAR *Desktop;
+    DWORD_PTR hToken;
+    DWORD dwStartupFlags;
+    DWORD_PTR hStdInput;
+    DWORD_PTR hStdOutput;
+    DWORD_PTR hStdError;
+    DWORD dwDesktopInherited;
 } SECL_REQUEST, *PSECL_REQUEST;
 
 typedef struct _SECL_RESPONSE
@@ -27,6 +34,20 @@ typedef struct _SECL_RESPONSE
     DWORD dwThreadId;
     DWORD dwError;
 } SECL_RESPONSE, *PSECL_RESPONSE;
+
+/* An elevation request carries no credentials, no token and no process id: the
+ * broker takes the caller from the call itself. */
+typedef struct _SECL_ELEVATE_REQUEST
+{
+    [string] WCHAR *ApplicationName;
+    [string] WCHAR *CommandLine;
+    [string] WCHAR *CurrentDirectory;
+    [string] WCHAR *Desktop;
+    DWORD dwCreationFlags;
+    DWORD dwShowCmd;
+    DWORD_PTR hwndOwner;
+    DWORD dwDesktopInherited;
+} SECL_ELEVATE_REQUEST, *PSECL_ELEVATE_REQUEST;
 
 [
     uuid(12b81e99-f207-4a4c-85d3-77b42f76fd14),
@@ -53,4 +74,12 @@ interface ISeclogon
         [in, ref] SECL_REQUEST *pRequest,
         [out, ref] SECL_RESPONSE *pResponse);
 */
+
+    /* Function 1 */
+    void
+    __stdcall
+    SeclCreateProcessElevatedW(
+        [in] handle_t hBinding,
+        [in, ref] SECL_ELEVATE_REQUEST *pRequest,
+        [out, ref] SECL_RESPONSE *pResponse);
 }

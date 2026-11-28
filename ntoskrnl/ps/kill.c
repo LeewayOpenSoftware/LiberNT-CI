@@ -579,6 +579,7 @@ PspExitThread(IN NTSTATUS ExitStatus)
 
     /* Run Thread Notify Routines before we desintegrate the thread */
     PspRunCreateThreadNotifyRoutines(Thread, FALSE);
+    PspRunNonSystemThreadNotifyRoutines(Thread, FALSE);
 
     if (Thread->Tcb.Header.Minimal)
         PspPicoThreadExit(Thread);
@@ -900,6 +901,9 @@ PspExitThread(IN NTSTATUS ExitStatus)
 
         /* Exit the process */
         PspExitProcess(TRUE, CurrentProcess);
+
+        /* Free any temporary WNF state names the process created */
+        ExpWnfCleanupProcess(CurrentProcess);
 
         /* Get the process token and check if we need to audit */
         PrimaryToken = PsReferencePrimaryToken(CurrentProcess);

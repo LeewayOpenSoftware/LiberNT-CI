@@ -269,6 +269,13 @@ IopMountInitializeVpb(IN PDEVICE_OBJECT DeviceObject,
     IoAcquireVpbSpinLock(&OldIrql);
     Vpb = DeviceObject->Vpb;
 
+    /* The file system claimed the volume without setting its VPB */
+    if ((Vpb == NULL) || (Vpb->DeviceObject == NULL))
+    {
+        IoReleaseVpbSpinLock(OldIrql);
+        return NULL;
+    }
+
     /* Set the VPB as mounted and possibly raw */
     Vpb->Flags |= VPB_MOUNTED | (Raw ? VPB_RAW_MOUNT : 0);
 
@@ -658,6 +665,15 @@ IopMountVolume(IN PDEVICE_OBJECT DeviceObject,
                                              AttachedDeviceObject,
                                              (DeviceObject->Vpb->Flags &
                                               VPB_RAW_MOUNT));
+                if (*Vpb == NULL)
+                {
+                    DPRINT1("File system %wZ returned success for the mount of "
+                            "device %p without setting up its VPB\n",
+                            &ParentFsDeviceObject->DriverObject->DriverName,
+                            DeviceObject);
+                    Status = STATUS_DRIVER_INTERNAL_ERROR;
+                    break;
+                }
             }
             else
             {
@@ -1129,6 +1145,7 @@ IoRegisterFsRegistrationChange(IN PDRIVER_OBJECT DriverObject,
         {
             /* Release the lock */
             ExReleaseResourceLite(&IopDatabaseResource);
+            KeLeaveCriticalRegion();
 
             return STATUS_DEVICE_ALREADY_ATTACHED;
         }
@@ -1142,6 +1159,7 @@ IoRegisterFsRegistrationChange(IN PDRIVER_OBJECT DriverObject,
     {
         /* Release the lock */
         ExReleaseResourceLite(&IopDatabaseResource);
+        KeLeaveCriticalRegion();
 
         return STATUS_INSUFFICIENT_RESOURCES;
     }

@@ -37,6 +37,7 @@ NtConnectPort 8
 NtContinue 2
 NtCreateDebugObject 4
 NtCreateDirectoryObject 3
+NtCreateDirectoryObjectEx 5
 NtCreateEvent 5
 NtCreateEventPair 3
 NtCreateFile 11
@@ -238,6 +239,7 @@ NtSetInformationJobObject 4
 NtSetInformationKey 4
 NtSetInformationObject 4
 NtSetInformationProcess 4
+NtSetInformationSymbolicLink 4
 NtSetInformationThread 4
 NtSetInformationToken 4
 NtSetIntervalProfile 2

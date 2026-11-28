@@ -1,6 +1,6 @@
 # Installing LiberNT
 
-> **English** | [中文](translations/zh-CN/INSTALL.md) | [Français](translations/fr-FR/INSTALL.md) | [Español](translations/es-ES/INSTALL.md) | [日本語](translations/ja-JP/INSTALL.md) | [العربية](translations/ar-MA/INSTALL.md)
+> **English** | [中文](translations/zh-CN/INSTALL.md) | [Français](translations/fr-FR/INSTALL.md) | [Español](translations/es-ES/INSTALL.md) | [日本語](translations/ja-JP/INSTALL.md) | [العربية](translations/ar-MA/INSTALL.md) | [Українська](translations/uk-UA/INSTALL.md)
 
 ## Building the images
 
@@ -22,7 +22,7 @@ Boot `bootcd.iso` in a virtual machine or on a PC, and follow the instructions o
 
 `LiberNT.img` needs no setup. Start it in a virtual machine such as QEMU, or write it to a USB drive or an SD card and boot the machine from it. Use `LiberNT.vhd` for virtual machines that take VHD disks, and `LiberNT.vhdx` for Hyper-V Generation 2 virtual machines, with Secure Boot turned off.
 
-The preinstalled disk also carries LiberNT Setup. Run `C:\<architecture>\libernt.exe`, for example `C:\arm64\libernt.exe`, to install LiberNT on another disk from the running system.
+The preinstalled disk also carries LiberNT Setup. Run `C:\<architecture>\system32\oobe\oros.exe`, for example `C:\arm64\system32\oobe\oros.exe`, to install LiberNT on another disk from the running system.
 
 ## Help
 

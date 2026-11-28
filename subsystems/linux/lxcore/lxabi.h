@@ -371,6 +371,7 @@ typedef struct _LX_SCHED_ATTR
 #define LX_TIOCGWINSZ       0x5413
 #define LX_TIOCSWINSZ       0x5414
 #define LX_FIONREAD         0x541B
+#define LX_SIOCATMARK       0x8905
 #define LX_TIOCNOTTY        0x5422
 #define LX_TIOCGSID         0x5429
 #define LX_TIOCGPTN         0x80045430
@@ -835,6 +836,7 @@ typedef struct _LX_MSGINFO
 #define LX_CAP_SYS_ADMIN        21
 #define LX_CAP_SYS_BOOT         22
 #define LX_CAP_SYS_NICE         23
+#define LX_CAP_WAKE_ALARM       35
 #define LX_CAP_SYS_RESOURCE     24
 #define LX_CAP_SYS_TIME         25
 #define LX_CAP_MKNOD            27
@@ -849,6 +851,16 @@ typedef struct _LX_MSGINFO
 #define LX_CAP_FS_SET           ((1ULL << LX_CAP_CHOWN) | (1ULL << LX_CAP_MKNOD) | (1ULL << LX_CAP_DAC_OVERRIDE) | \
                                  (1ULL << LX_CAP_DAC_READ_SEARCH) | (1ULL << LX_CAP_FOWNER) | (1ULL << LX_CAP_FSETID) | \
                                  (1ULL << LX_CAP_MAC_OVERRIDE) | (1ULL << LX_CAP_LINUX_IMMUTABLE))
+
+#define LX_VFS_CAP_REVISION_MASK        0xFF000000
+#define LX_VFS_CAP_FLAGS_EFFECTIVE      0x000001
+#define LX_VFS_CAP_REVISION_1           0x01000000
+#define LX_VFS_CAP_REVISION_2           0x02000000
+#define LX_VFS_CAP_REVISION_3           0x03000000
+#define LX_XATTR_CAPS_SZ_1              12
+#define LX_XATTR_CAPS_SZ_2              20
+#define LX_XATTR_CAPS_SZ_3              24
+#define LX_XATTR_NAME_CAPS              "security.capability"
 
 #define LX_SECBIT_NOROOT                0x001
 #define LX_SECBIT_NO_SETUID_FIXUP       0x004
@@ -986,6 +998,8 @@ typedef struct _LX_ROBUST_LIST_HEAD
 #define LX_RLIMIT_CORE      4
 #define LX_RLIMIT_NOFILE    7
 #define LX_RLIMIT_MEMLOCK   8
+#define LX_RLIMIT_NICE      13
+#define LX_RLIMIT_RTPRIO    14
 #define LX_RLIM_INFINITY    (~0ULL)
 
 typedef struct _LX_TIMESPEC
@@ -1221,6 +1235,7 @@ typedef struct _LX_SOCKADDR_IN6
 #define LX_SO_TIMESTAMPNS   35
 #define LX_SO_MARK          36
 #define LX_SO_BINDTOIFINDEX 62
+#define LX_SO_BINDTODEVICE  25
 #define LX_SO_ACCEPTCONN    30
 #define LX_SO_PEERSEC       31
 #define LX_SO_SNDBUFFORCE   32
@@ -1524,6 +1539,7 @@ typedef struct _LX_PTRACE_PEEKSIGINFO_ARGS
 #define LX_PER_ADDR_NO_RANDOMIZE    0x00040000
 #define LX_PER_READ_IMPLIES_EXEC    0x00400000
 #define LX_PER_CLEAR_ON_SETID       0x00740000
+#define LX_PER_STICKY_TIMEOUTS      0x04000000
 #define LX_PR_GET_KEEPCAPS          7
 #define LX_PR_SET_KEEPCAPS          8
 #define LX_PR_SET_NAME              15

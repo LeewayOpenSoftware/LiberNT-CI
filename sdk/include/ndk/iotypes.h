@@ -53,6 +53,7 @@ extern POBJECT_TYPE NTSYSAPI IoDriverObjectType;
 // Symbolic Link Access Rights
 //
 #define SYMBOLIC_LINK_QUERY                     0x0001
+#define SYMBOLIC_LINK_SET                       0x0002
 #define SYMBOLIC_LINK_ALL_ACCESS                STANDARD_RIGHTS_REQUIRED | 0x0001
 #endif
 
@@ -164,6 +165,7 @@ extern POBJECT_TYPE NTSYSAPI IoDriverObjectType;
 #define DOE_REMOVE_PROCESSED                    0x8
 #define DOE_START_PENDING                       0x10
 #define DOE_DEFAULT_SD_PRESENT                  0x800
+// 0x80000000 is used by the I/O manager itself (ntoskrnl/io/iomgr/device.c)
 
 //
 // Device Object StartIo Flags
@@ -960,6 +962,27 @@ typedef struct _FILE_NUMA_NODE_INFORMATION
 {
     USHORT NodeNumber;
 } FILE_NUMA_NODE_INFORMATION, *PFILE_NUMA_NODE_INFORMATION;
+
+typedef struct _FILE_LINK_ENTRY_INFORMATION
+{
+    ULONG NextEntryOffset;
+    LONGLONG ParentFileId;
+    ULONG FileNameLength;
+    WCHAR FileName[1];
+} FILE_LINK_ENTRY_INFORMATION, *PFILE_LINK_ENTRY_INFORMATION;
+
+typedef struct _FILE_LINKS_INFORMATION
+{
+    ULONG BytesNeeded;
+    ULONG EntriesReturned;
+    FILE_LINK_ENTRY_INFORMATION Entry;
+} FILE_LINKS_INFORMATION, *PFILE_LINKS_INFORMATION;
+
+typedef struct _FILE_IOSTATUSBLOCK_RANGE_INFORMATION
+{
+    PUCHAR IoStatusBlockRange;
+    ULONG Length;
+} FILE_IOSTATUSBLOCK_RANGE_INFORMATION, *PFILE_IOSTATUSBLOCK_RANGE_INFORMATION;
 
 //
 // I/O Error Log Structures

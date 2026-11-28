@@ -79,7 +79,7 @@ CAPTION "Apparence avancée"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL "", IDC_APPEARANCE_PREVIEW, "PreviewWndClass", WS_VISIBLE | WS_BORDER, 7, 7, 232, 120
-    LTEXT "Si vous sélectionnez un paramètre de boutons et de fenêtres autre que LiberNT classique, celui-ci va remplacer les paramètres suivants exception faite de certains programmes plus anciens.", IDC_ADVAPPEARANCE_DISCLAIMER, 7, 133, 232, 30, BS_MULTILINE
+    LTEXT "Si vous sélectionnez un paramètre de boutons et de fenêtres autre qu'Orosi classique, celui-ci va remplacer les paramètres suivants exception faite de certains programmes plus anciens.", IDC_ADVAPPEARANCE_DISCLAIMER, 7, 133, 232, 30, BS_MULTILINE
     LTEXT "Élém&ent :", 8, 5, 160, 50, 9
     COMBOBOX IDC_ADVAPPEARANCE_ELEMENT, 5, 170, 130, 90, CBS_DROPDOWNLIST |
              CBS_HASSTRINGS | CBS_SORT | WS_VSCROLL | WS_TABSTOP
@@ -170,9 +170,8 @@ CAPTION "Général"
 FONT 8, "MS Shell Dlg"
 BEGIN
     GROUPBOX "Affichage", -1, 7, 6, 285, 56, WS_GROUP
-    LTEXT "&Paramètre PPP :", -1, 14, 20, 222, 9
-    COMBOBOX IDC_FONTSIZE_COMBO, 14, 30, 223, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    LTEXT "", IDC_FONTSIZE_CUSTOM, 14, 46, 223, 12
+    LTEXT "", IDC_SCALE_CURRENT, 14, 20, 222, 9
+    PUSHBUTTON "Change in Settings...", IDC_SCALE_SETTINGS, 14, 34, 110, 14, WS_TABSTOP
     GROUPBOX "Compatibilité", -1, 7, 67, 285, 97
     LTEXT "Quelques programmes peuvent mal fonctionner si vous ne redémarrez pas votre ordinateur après que vous ayiez changé les paramètres.\n\nAprès que j'ai changé les paramètres", -1, 12, 78, 270, 40
     AUTORADIOBUTTON "&Redémarrer l'ordinateur avant d'appliquer les nouveaux paramètres", IDC_RESTART_RB, 14, 116, 273, 10
@@ -301,4 +300,9 @@ BEGIN
     IDS_APPLY_FAILED "Échec lors de l'application des nouveaux paramètres..."
     IDS_APPLY_NEEDS_RESTART "Vous devez redémarrer votre ordinateur pour appliquer les modifications."
     IDS_TIMEOUTTEXT "Rétablissement des précédents paramètres dans %d secondes."
+END
+
+STRINGTABLE
+BEGIN
+    IDS_SCALE_CURRENT "Scale: %u%%"
 END

@@ -23,6 +23,12 @@ endif()
 
 if(ARCH STREQUAL "arm64")
     add_registry_inf(hivesys_arm64.inf)
+    if(RPI3_SUPPORT OR RPI5_SUPPORT OR APPLE_SILICON_SUPPORT)
+        add_registry_inf(hivesys_cyw43455.inf)
+    endif()
+    if(APPLE_SILICON_SUPPORT)
+        add_registry_inf(hivesys_apple.inf)
+    endif()
     if(RPI3_SUPPORT)
         add_registry_inf(hivesys_rpi3.inf)
     endif()
@@ -71,11 +77,18 @@ add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/readme.txt DESTINATION reactos FOR 
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/system.ini DESTINATION reactos FOR all)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/win.ini DESTINATION reactos FOR all)
 
+# The licence text, opened by the About dialog
+add_cd_file(FILE ${REACTOS_SOURCE_DIR}/COPYING DESTINATION reactos NAME_ON_CD LICENSE.txt NO_CAB FOR all)
+# The Orosi Forma icon licence that LICENSE.txt refers to
+foreach(_forma LICENSE-FORMA.md COMPAT-GPL.md TRADEMARK-OROSI.md)
+    add_cd_file(FILE ${REACTOS_SOURCE_DIR}/media/graphics/orosi-forma/${_forma} DESTINATION reactos NO_CAB FOR all)
+endforeach()
+
 ## NOTE: The root setup.exe file is a renamed welcome.exe for BootCD purposes.
 # welcome.exe optional custom configuration (only for LiveImage)
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/)
     # Copy the main configuration file
-    add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/welcome.ini DESTINATION reactos NO_CAB FOR livecd)
+    add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/welcome.ini DESTINATION reactos/system32/oobe NO_CAB FOR livecd)
 
     # Convert the translation files (name format: xx-YY.ini) into UTF-16
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/welcome_config)
@@ -84,7 +97,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/)
         set(_converted_file ${CMAKE_CURRENT_BINARY_DIR}/welcome_config/${_file})
         set(_source_file ${CMAKE_CURRENT_SOURCE_DIR}/welcome_config/${_file})
         utf16le_convert(${_source_file} ${_converted_file})
-        add_cd_file(TARGET converted_welcome_i18n_files FILE ${_converted_file} DESTINATION reactos/welcome NO_CAB NAME_ON_CD ${_file} FOR livecd)
+        add_cd_file(TARGET converted_welcome_i18n_files FILE ${_converted_file} DESTINATION reactos/system32/oobe/welcome NO_CAB NAME_ON_CD ${_file} FOR livecd)
         list(APPEND _converted_welcome_i18n_files ${_converted_file})
     endforeach(_file)
     add_custom_target(converted_welcome_i18n_files DEPENDS ${_converted_welcome_i18n_files})
@@ -158,22 +171,26 @@ set(dir_quicklaunch             "reactos/system32/config/systemprofile/AppData/R
 
 cmdenvvar(envvar_systemdrive "SystemDrive" TRUE)
 cmdenvvar(envvar_archdir     "PROCESSOR_ARCHITECTURE:x86=I386" TRUE)
-add_livecd_shortcut("Install LiberNT"
+add_livecd_shortcut("Install Orosi"
     "shell:system\\cmd.exe"
-    CMDLINE_ARGS "/D /E:ON /C \"start ${envvar_systemdrive}\\${envvar_archdir}\\libernt.exe\""
-    ICON "${envvar_systemdrive}\\${ARCH}\\libernt.exe"
+    CMDLINE_ARGS "/D /E:ON /C \"start ${envvar_systemdrive}\\${envvar_archdir}\\system32\\oobe\\oros.exe\""
+    ICON "${envvar_systemdrive}\\${ARCH}\\system32\\oobe\\oros.exe"
     MINIMIZE
     DESTINATION "${dir_allusers_desktop}")
-add_cd_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/Install LiberNT.lnk"
+add_cd_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/Install Orosi.lnk"
             TARGET livecd_links
             DESTINATION "${dir_startmenu_programs}"
             FOR preinstall)
+add_livecd_shortcut("Finish Setup"
+    "shell:system\\oobe\\msoobe.exe" ICON_INDEX 0
+    DESTINATION "${dir_startmenu_programs}"
+    FOR preinstall)
 
 add_livecd_shortcut("Read Me"
     "shell:windows\\readme.txt"
     ICON "${envvar_systemroot}\\system32\\shell32.dll" ICON_INDEX -152
     DESTINATION "${dir_allusers_desktop}")
-add_livecd_shortcut("LiberNT Explorer"
+add_livecd_shortcut("Orosi Explorer"
     "shell:windows\\explorer.exe" ICON_INDEX 1
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_programs}" "${dir_quicklaunch}")
@@ -203,6 +220,14 @@ add_livecd_shortcut("Service Manager"
 add_livecd_shortcut("System Configuration"
     "shell:system\\msconfig.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_admintools}")
+add_livecd_shortcut("Registry Editor"
+    "shell:windows\\regedit.exe" ICON_INDEX 0
+    DESTINATION "${dir_startmenu_admintools}")
+add_livecd_shortcut("NT Object Namespace Explorer"
+    "shell:windows\\explorer.exe"
+    CMDLINE_ARGS "shell:::{845B0FB2-66E0-416B-8F91-314E23F7C12D}"
+    ICON "${envvar_systemroot}\\system32\\ntobjshex.dll" ICON_INDEX 0
+    DESTINATION "${dir_startmenu_admintools}")
 add_livecd_shortcut("Magnify"
     "shell:system\\magnify.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_accessibility}")
@@ -214,18 +239,18 @@ add_livecd_shortcut("Remote Desktop Connection"
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_comms}")
 add_livecd_shortcut("Multimedia Player"
-    "shell:system\\mplay32.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\mplay32.exe" ICON_INDEX 0
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_entertainment}")
 add_livecd_shortcut("Sound Recorder"
-    "shell:system\\sndrec32.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\sndrec32.exe" ICON_INDEX 0
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_entertainment}")
 add_livecd_shortcut("Character Map"
     "shell:system\\charmap.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Clipboard Viewer"
-    "shell:system\\clipbrd.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\clipbrd.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Keyboard Layout Switcher"
     "shell:system\\kbswitch.exe" ICON_INDEX 0
@@ -233,23 +258,20 @@ add_livecd_shortcut("Keyboard Layout Switcher"
 add_livecd_shortcut("ReactX Diagnostic"
     "shell:system\\dxdiag.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
-add_livecd_shortcut("Registry Editor"
-    "shell:windows\\regedit.exe" ICON_INDEX 0
-    DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Task Manager"
     "shell:system\\taskmgr.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
-add_livecd_shortcut("Task Manager 11"
-    "shell:system\\taskmgr11.exe" ICON_INDEX 0
+add_livecd_shortcut("Task Manager (Classic)"
+    "shell:system\\orosi_platform\\taskmgr_classic.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("LntGet"
     "shell:system\\lntget.exe" ICON_INDEX 0 CMDLINE_ARGS "gui"
     DESTINATION "${dir_startmenu_systemtools}")
-add_livecd_shortcut("LiberNT Driver Installer"
+add_livecd_shortcut("Driver Installer"
     "shell:system\\lntdrv.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Optional Components"
-    "shell:system\\oobe\\oobe.exe" ICON_INDEX 0 CMDLINE_ARGS "/components"
+    "shell:system\\oobe\\msoobe.exe" ICON_INDEX 0 CMDLINE_ARGS "/components"
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Calculator"
     "shell:system\\calc.exe" ICON_INDEX 0
@@ -268,12 +290,12 @@ add_livecd_shortcut("WordPad"
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_accessories}")
 add_livecd_shortcut("Solitaire"
-    "shell:system\\sol.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\sol.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_games}")
 add_livecd_shortcut("Spider Solitaire"
-    "shell:system\\spider.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\spider.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_games}")
 add_livecd_shortcut("WineMine"
-    "shell:system\\winmine.exe" ICON_INDEX 0
+    "shell:system\\orosi_platform\\winmine.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_games}")
 

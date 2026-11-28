@@ -62,6 +62,7 @@ typedef struct _MI_SECTION_OBJECT
 extern SIZE_T MmtotalCommitLimitMaximum;
 
 extern MI_SYSTEM MiSystem;
+extern ULONG64 MiSoftPageFileSlotLimit;
 extern MI_PROCESS_MANAGER MiProcessManager;
 
 typedef struct _MI_PROCESS_REFERENCE
@@ -161,6 +162,9 @@ NTSTATUS MiControlWrite(_In_opt_ PVOID Context, _In_ ULONG64 Offset, _In_ ULONG 
 NTSTATUS MiControlWriteFrames(_In_opt_ PVOID Context, _In_ ULONG64 Offset, _In_ ULONG Length,
                               _In_ const ULONG *Frames, _In_ ULONG PageCount);
 VOID MiMemoryEventInitialize(VOID);
+VOID MiMemoryNotificationInitialize(VOID);
+VOID MiUpdateMemoryNotification(_In_ ULONG64 AvailablePages);
+VOID MiPageFileCreationInitialize(VOID);
 PMI_CONTROL_AREA MiReferenceDataControlArea(_In_ PSECTION_OBJECT_POINTERS Pointers);
 VOID MiDereferenceControlArea(_Inout_ PMI_CONTROL_AREA Control);
 BOOLEAN MiCanFileBeDeleted(_In_ PSECTION_OBJECT_POINTERS SectionPointer);

@@ -87,6 +87,12 @@ SeCreateAccessStateEx(
         AccessState->Flags = TOKEN_HAS_TRAVERSE_PRIVILEGE;
     }
 
+    /* The access check reads this back to apply the restricting SIDs */
+    if (Token->TokenFlags & TOKEN_IS_RESTRICTED)
+    {
+        AccessState->Flags |= TOKEN_IS_RESTRICTED;
+    }
+
     /* Set the Auxiliary Data */
     AuxData->PrivilegesUsed = (PPRIVILEGE_SET)((ULONG_PTR)AccessState +
                                              FIELD_OFFSET(ACCESS_STATE,

@@ -46,10 +46,75 @@ KiRequestDispatchInterrupt(
 #ifdef KTHREAD_GROUP_AFFINITY
 #define KiThreadAffinityMask(Thread) ((Thread)->Affinity.Mask)
 #define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity.Mask)
+#define KiThreadAffinityGroup(Thread) ((Thread)->Affinity.Group)
 #else
 #define KiThreadAffinityMask(Thread) ((Thread)->Affinity)
 #define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity)
+#if defined(_M_AMD64)
+#define KiThreadAffinityGroup(Thread) ((Thread)->AffinityPrimaryGroup)
+#else
+#define KiThreadAffinityGroup(Thread) ((USHORT)0)
 #endif
+#endif
+
+#if defined(KTHREAD_GROUP_AFFINITY)
+#define KiThreadUserAffinityGroup(Thread) ((Thread)->UserAffinity.Group)
+#elif defined(_M_AMD64)
+#define KiThreadUserAffinityGroup(Thread) ((Thread)->UserAffinityPrimaryGroup)
+#else
+#define KiThreadUserAffinityGroup(Thread) ((USHORT)0)
+#endif
+
+/* Sets the group of the thread's user affinity mask */
+FORCEINLINE
+VOID
+KiSetThreadUserAffinityGroup(
+    _Inout_ PKTHREAD Thread,
+    _In_ USHORT Group)
+{
+#if defined(KTHREAD_GROUP_AFFINITY)
+    Thread->UserAffinity.Group = Group;
+#elif defined(_M_AMD64)
+    Thread->UserAffinityPrimaryGroup = Group;
+#else
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(Group);
+    ASSERT(Group == 0);
+#endif
+}
+
+/* Sets the group of the thread's (current) affinity mask */
+FORCEINLINE
+VOID
+KiSetThreadAffinityGroup(
+    _Inout_ PKTHREAD Thread,
+    _In_ USHORT Group)
+{
+#if defined(KTHREAD_GROUP_AFFINITY)
+    Thread->Affinity.Group = Group;
+#elif defined(_M_AMD64)
+    Thread->AffinityPrimaryGroup = Group;
+#else
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(Group);
+    ASSERT(Group == 0);
+#endif
+}
+
+/*
+ * A thread's affinity is a mask within one processor group. Processor Index
+ * is allowed when it is in that group and its bit is in the mask.
+ */
+FORCEINLINE
+BOOLEAN
+KiIsProcessorInThreadAffinity(
+    _In_ PKTHREAD Thread,
+    _In_ ULONG Index)
+{
+    return ((Index / KI_PROCESSORS_PER_GROUP) == KiThreadAffinityGroup(Thread)) &&
+           ((KiThreadAffinityMask(Thread) &
+             KiAffinityForProcessorIndex(Index % KI_PROCESSORS_PER_GROUP)) != 0);
+}
 
 /* Convert legacy quantum units to execution-time deadlines. */
 #ifdef KI_CYCLE_QUANTUM
@@ -1011,8 +1076,8 @@ KiRecalculateDueTime(IN PLARGE_INTEGER OriginalDueTime,
     if (OriginalDueTime->QuadPart >= 0) return OriginalDueTime;
 
     /* Otherwise, query the interrupt time and recalculate */
-    NewDueTime->QuadPart = KiQueryInterruptTimePrecise(NULL, FALSE);
-    NewDueTime->QuadPart -= DueTime->QuadPart;
+    NewDueTime->QuadPart = (LONGLONG)((ULONGLONG)KiQueryInterruptTimePrecise(NULL, FALSE) -
+                                      (ULONGLONG)DueTime->QuadPart);
     return NewDueTime;
 }
 
@@ -1130,8 +1195,13 @@ KiRemoveEntryTimer(IN PKTIMER Timer)
     ULONG Hand;
     PKTIMER_TABLE_ENTRY TableEntry;
 
-    /* Remove the timer from the timer list and check if it's empty */
-    Hand = Timer->Header.Hand;
+    /* Header.Hand keeps only the low byte of the 512-bucket index */
+    Hand = KiComputeTimerTableIndex(Timer->DueTime.QuadPart);
+    ASSERT(Hand < TIMER_TABLE_SIZE);
+    ASSERT(Timer->Header.Hand == (UCHAR)Hand);
+    ASSERT(Timer->TimerListEntry.Flink != NULL && Timer->TimerListEntry.Blink != NULL);
+    ASSERT(Timer->TimerListEntry.Flink->Blink == &Timer->TimerListEntry);
+    ASSERT(Timer->TimerListEntry.Blink->Flink == &Timer->TimerListEntry);
     if (RemoveEntryList(&Timer->TimerListEntry))
     {
         /* Get the respective timer table entry */
@@ -1258,7 +1328,7 @@ KiComputeDueTime(IN PKTIMER Timer,
     InterruptTime.QuadPart = KiQueryInterruptTimePrecise(NULL, FALSE);
 
     /* Recalculate due time */
-    Timer->DueTime.QuadPart = InterruptTime.QuadPart - DueTime.QuadPart;
+    Timer->DueTime.QuadPart = (ULONGLONG)InterruptTime.QuadPart - (ULONGLONG)DueTime.QuadPart;
 
     /* Get the handle */
     *Hand = KiComputeTimerTableIndex(Timer->DueTime.QuadPart);
@@ -1302,6 +1372,12 @@ KxRemoveTreeTimer(IN PKTIMER Timer)
         Removed = TRUE;
 
         /* Remove it from the timer list */
+        ASSERT((Timer->TimerListEntry.Flink == NULL) == (Timer->TimerListEntry.Blink == NULL));
+        if (Timer->TimerListEntry.Flink != NULL)
+        {
+            ASSERT(Timer->TimerListEntry.Flink->Blink == &Timer->TimerListEntry);
+            ASSERT(Timer->TimerListEntry.Blink->Flink == &Timer->TimerListEntry);
+        }
         if (Timer->TimerListEntry.Flink && RemoveEntryList(&Timer->TimerListEntry))
         {
             /* Get the entry and check if it's empty */
@@ -1373,7 +1449,7 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
 
     /* Calculate the due time */
     InterruptTime.QuadPart = KiQueryInterruptTimePrecise(NULL, FALSE);
-    DueTime = InterruptTime.QuadPart - Interval.QuadPart;
+    DueTime = (ULONGLONG)InterruptTime.QuadPart - (ULONGLONG)Interval.QuadPart;
     if ((WaitMode == UserMode) &&
         !((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->SetTimerResolution)
     {
@@ -1424,13 +1500,16 @@ FORCEINLINE
 VOID
 KxActivateWaiterQueue(IN PKTHREAD Thread)
 {
-    PKQUEUE Queue = Thread->Queue;
+    PKQUEUE Queue = KiPinThreadQueue(Thread);
 
     if (Queue)
     {
+        /* The queue counts this thread only while the association lasts */
         KiAcquireDispatcherObject(&Queue->Header);
-        KiActivateWaiterQueue(Queue);
+        if (Thread->Queue == Queue)
+            KiActivateWaiterQueue(Queue);
         KiReleaseDispatcherObject(&Queue->Header);
+        KiUnpinThreadQueue();
     }
 }
 
@@ -1744,107 +1823,6 @@ KxCommitThreadWait(IN PKTHREAD Thread,
     Thread->WaitTime = KeTickCount.LowPart;
 
 //
-// Unwaits a Thread
-//
-FORCEINLINE
-VOID
-KxUnwaitThread(IN DISPATCHER_HEADER *Object,
-               IN KPRIORITY Increment)
-{
-    PLIST_ENTRY WaitEntry, WaitList;
-    PKWAIT_BLOCK WaitBlock;
-    PKTHREAD WaitThread;
-    ULONG WaitKey;
-
-    /* Loop the Wait Entries */
-    WaitList = &Object->WaitListHead;
-    ASSERT(IsListEmpty(&Object->WaitListHead) == FALSE);
-    WaitEntry = WaitList->Flink;
-    do
-    {
-        /* Get the current wait block */
-        WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
-
-        if (WaitBlock->WaitType == WaitDpc)
-        {
-            IopSignalWaitCompletionPacket(WaitBlock);
-            WaitEntry = WaitList->Flink;
-            continue;
-        }
-
-        /* Get the waiting thread */
-        WaitThread = WaitBlock->Thread;
-
-        /* Check the current Wait Mode */
-        if (WaitBlock->WaitType == WaitAny)
-        {
-            /* Use the actual wait key */
-            WaitKey = WaitBlock->WaitKey;
-        }
-        else
-        {
-            /* Otherwise, use STATUS_KERNEL_APC */
-            WaitKey = STATUS_KERNEL_APC;
-        }
-
-        /* Unwait the thread */
-        KiUnwaitThread(WaitThread, WaitKey, Increment);
-
-        /* Next entry */
-        WaitEntry = WaitList->Flink;
-    } while (WaitEntry != WaitList);
-}
-
-//
-// Unwaits a Thread waiting on an event
-//
-FORCEINLINE
-VOID
-KxUnwaitThreadForEvent(IN PKEVENT Event,
-                       IN KPRIORITY Increment)
-{
-    PLIST_ENTRY WaitEntry, WaitList;
-    PKWAIT_BLOCK WaitBlock;
-    PKTHREAD WaitThread;
-
-    /* Loop the Wait Entries */
-    WaitList = &Event->Header.WaitListHead;
-    ASSERT(IsListEmpty(&Event->Header.WaitListHead) == FALSE);
-    WaitEntry = WaitList->Flink;
-    do
-    {
-        /* Get the current wait block */
-        WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
-
-        if (WaitBlock->WaitType == WaitDpc)
-        {
-            IopSignalWaitCompletionPacket(WaitBlock);
-            break;
-        }
-
-        /* Get the waiting thread */
-        WaitThread = WaitBlock->Thread;
-
-        /* Check the current Wait Mode */
-        if (WaitBlock->WaitType == WaitAny)
-        {
-            /* Un-signal it */
-            Event->Header.SignalState = 0;
-
-            /* Un-signal the event and unwait the thread */
-            KiUnwaitThread(WaitThread, WaitBlock->WaitKey, Increment);
-            break;
-        }
-
-        /* Unwait the thread with STATUS_KERNEL_APC */
-        KiUnwaitThread(WaitThread, STATUS_KERNEL_APC, Increment);
-
-        /* Next entry */
-        WaitEntry = WaitList->Flink;
-    } while (WaitEntry != WaitList);
-}
-
-//
 // Consume a stale placement of the currently running thread. Call with the
 // PRCB lock held.
 //
@@ -1915,6 +1893,20 @@ KiCompleteThreadSwitch(
 // This routine must be entered with the PRCB lock held and it will exit
 // with the PRCB lock released!
 //
+FORCEINLINE
+VOID
+KiAssertReadyQueue(IN PKPRCB Prcb,
+                   IN KPRIORITY Priority)
+{
+    UNREFERENCED_PARAMETER(Prcb);
+    UNREFERENCED_PARAMETER(Priority);
+    ASSERT(Priority >= 0 && Priority <= HIGH_PRIORITY);
+    ASSERT(((Prcb->ReadySummary & PRIORITY_MASK(Priority)) == 0) ==
+           IsListEmpty(&Prcb->DispatcherReadyListHead[Priority]));
+    ASSERT(Prcb->DispatcherReadyListHead[Priority].Flink->Blink == &Prcb->DispatcherReadyListHead[Priority]);
+    ASSERT(Prcb->DispatcherReadyListHead[Priority].Blink->Flink == &Prcb->DispatcherReadyListHead[Priority]);
+}
+
 _Requires_lock_held_(Prcb->PrcbLock)
 _Releases_lock_(Prcb->PrcbLock)
 FORCEINLINE
@@ -1963,6 +1955,7 @@ KxQueueReadyThread(IN PKTHREAD Thread,
 
         /* Sanity check */
         ASSERT((Priority >= 0) && (Priority <= HIGH_PRIORITY));
+        KiAssertReadyQueue(Prcb, Priority);
 
         /* Insert this thread in the appropriate order */
         Preempted ? InsertHeadList(&Prcb->DispatcherReadyListHead[Priority],
@@ -1972,6 +1965,7 @@ KxQueueReadyThread(IN PKTHREAD Thread,
 
         /* Update the ready summary */
         Prcb->ReadySummary |= PRIORITY_MASK(Priority);
+        KiAssertReadyQueue(Prcb, Priority);
 
         /* Sanity check */
         ASSERT(Priority == Thread->Priority);
@@ -2015,12 +2009,16 @@ KiSelectReadyThread(IN KPRIORITY Priority,
 
     /* Make sure the list isn't empty at the highest priority */
     ASSERT(IsListEmpty(&Prcb->DispatcherReadyListHead[HighPriority]) == FALSE);
+    KiAssertReadyQueue(Prcb, HighPriority);
 
     /* Get the first thread on the list */
     ListEntry = Prcb->DispatcherReadyListHead[HighPriority].Flink;
     Thread = CONTAINING_RECORD(ListEntry, KTHREAD, WaitListEntry);
 
     /* Make sure this thread is here for a reason */
+    ASSERT(Thread != Prcb->IdleThread);
+    ASSERT(Thread->State == Ready && !Thread->ProcessReadyQueue);
+    ASSERT(ListEntry->Flink->Blink == ListEntry && ListEntry->Blink->Flink == ListEntry);
     ASSERT(HighPriority == Thread->Priority);
     ASSERT(KiThreadAffinityMask(Thread) & AFFINITY_MASK(Prcb->Number));
     ASSERT(Thread->NextProcessor == Prcb->Number);
@@ -2031,6 +2029,7 @@ KiSelectReadyThread(IN KPRIORITY Priority,
         /* The list is empty now, reset the ready summary */
         Prcb->ReadySummary ^= PRIORITY_MASK(HighPriority);
     }
+    KiAssertReadyQueue(Prcb, HighPriority);
 
     /* Sanity check and return the thread */
 Quickie:
@@ -2186,6 +2185,9 @@ _KeAcquireGuardedMutexUnsafe(IN OUT PKGUARDED_MUTEX GuardedMutex)
         KiAcquireGuardedMutex(GuardedMutex);
     }
 
+    ASSERT((GuardedMutex->Count & GM_LOCK_BIT) == 0);
+    ASSERT(GuardedMutex->Owner == NULL);
+
     /* Set the Owner */
     GuardedMutex->Owner = Thread;
 }
@@ -2250,6 +2252,9 @@ _KeAcquireGuardedMutex(IN PKGUARDED_MUTEX GuardedMutex)
         /* The Guarded Mutex was already locked, enter contented case */
         KiAcquireGuardedMutex(GuardedMutex);
     }
+
+    ASSERT((GuardedMutex->Count & GM_LOCK_BIT) == 0);
+    ASSERT(GuardedMutex->Owner == NULL);
 
     /* Set the Owner and Special APC Disable state */
     GuardedMutex->Owner = Thread;
@@ -2318,6 +2323,9 @@ _KeTryToAcquireGuardedMutex(IN OUT PKGUARDED_MUTEX GuardedMutex)
         /* Return failure */
         return FALSE;
     }
+
+    ASSERT((GuardedMutex->Count & GM_LOCK_BIT) == 0);
+    ASSERT(GuardedMutex->Owner == NULL);
 
     /* Set the Owner and APC State */
     GuardedMutex->Owner = Thread;

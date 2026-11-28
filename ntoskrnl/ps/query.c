@@ -3881,6 +3881,51 @@ NtSetInformationProcess(
     return Status;
 }
 
+/* Copies the ideal processor of a thread to its TEB. The TEB is memory of the
+ * thread's process: it is written in that process, and it may be gone or
+ * read-only, in which case the copy is skipped. */
+static
+VOID
+PspSaveIdealProcessorInTeb(
+    _In_ PETHREAD Thread)
+{
+    PEPROCESS Process = (PEPROCESS)Thread->ThreadsProcess;
+    KAPC_STATE ApcState;
+    BOOLEAN Attached = FALSE;
+    PTEB Teb;
+
+    PAGED_CODE();
+
+    /* The TEB stays the thread's until the thread is run down */
+    if (!ExAcquireRundownProtection(&Thread->RundownProtect))
+        return;
+
+    Teb = Thread->Tcb.Teb;
+    if (Teb != NULL)
+    {
+        if (Process != PsGetCurrentProcess())
+        {
+            KeStackAttachProcess(&Process->Pcb, &ApcState);
+            Attached = TRUE;
+        }
+
+        _SEH2_TRY
+        {
+            Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            /* The scheduler has the value; only the copy is lost */
+        }
+        _SEH2_END;
+
+        if (Attached)
+            KeUnstackDetachProcess(&ApcState);
+    }
+
+    ExReleaseRundownProtection(&Thread->RundownProtect);
+}
+
 /*
  * @implemented
  */
@@ -4087,6 +4132,9 @@ NtSetInformationThread(
             }
             _SEH2_END;
 
+            /* Bits naming processors the machine lacks are dropped: an all-ones mask means every processor */
+            Affinity &= KeActiveProcessors;
+
             /* Validate it */
             if (!Affinity)
             {
@@ -4166,7 +4214,9 @@ NtSetInformationThread(
             }
             _SEH2_END;
 
-            if (GroupAffinity.Group != 0 || !GroupAffinity.Mask ||
+            /* The mask must name active processors of an existing group */
+            if (!GroupAffinity.Mask ||
+                (GroupAffinity.Mask & ~KiQueryActiveGroupAffinity(GroupAffinity.Group)) ||
                 GroupAffinity.Reserved[0] || GroupAffinity.Reserved[1] || GroupAffinity.Reserved[2])
             {
                 Status = STATUS_INVALID_PARAMETER;
@@ -4188,11 +4238,14 @@ NtSetInformationThread(
                 KeEnterCriticalRegion();
                 ExAcquirePushLockShared(&Process->ProcessLock);
 
-                CombinedAffinity = GroupAffinity.Mask & Process->Pcb.Affinity;
+                /* The process affinity describes group 0 */
+                CombinedAffinity = GroupAffinity.Mask;
+                if (GroupAffinity.Group == 0)
+                    CombinedAffinity &= Process->Pcb.Affinity;
                 if (CombinedAffinity != GroupAffinity.Mask)
                     Status = STATUS_INVALID_PARAMETER;
                 else
-                    KeSetAffinityThread(&Thread->Tcb, CombinedAffinity);
+                    KeSetGroupAffinityThread(&Thread->Tcb, &GroupAffinity, NULL);
 
                 ExReleasePushLockShared(&Process->ProcessLock);
                 KeLeaveCriticalRegion();
@@ -4340,16 +4393,8 @@ NtSetInformationThread(
             Status = KeSetIdealProcessorThread(&Thread->Tcb,
                                                (CCHAR)IdealProcessor);
 
-            /* Get the TEB and protect the thread */
-            Teb = Thread->Tcb.Teb;
-            if (Teb && ExAcquireRundownProtection(&Thread->RundownProtect))
-            {
-                /* Save the ideal processor */
-                Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
-
-                /* Release rundown protection */
-                ExReleaseRundownProtection(&Thread->RundownProtect);
-            }
+            /* Save the ideal processor in the TEB */
+            PspSaveIdealProcessorInTeb(Thread);
 
             /* Dereference the thread */
             ObDereferenceObject(Thread);
@@ -4531,26 +4576,40 @@ NtSetInformationThread(
 #endif
                     if (Teb)
                     {
-                        /* Check if we're in the expansion range */
-                        if (TlsIndex > TLS_MINIMUM_AVAILABLE - 1)
+                        /* The TEB is the thread's own memory: it can be gone,
+                         * and the address of the expansion slots in it is
+                         * whatever the process put there */
+                        _SEH2_TRY
                         {
-                            if (TlsIndex < (TLS_MINIMUM_AVAILABLE +
-                                            TLS_EXPANSION_SLOTS) - 1)
+                            /* Check if we're in the expansion range */
+                            if (TlsIndex > TLS_MINIMUM_AVAILABLE - 1)
                             {
-                                /* Check if we have expansion slots */
-                                PVOID* ExpansionSlots = Teb->TlsExpansionSlots;
-                                if (ExpansionSlots)
+                                if (TlsIndex < (TLS_MINIMUM_AVAILABLE +
+                                                TLS_EXPANSION_SLOTS) - 1)
                                 {
-                                    /* Clear the index */
-                                    ExpansionSlots[TlsIndex - TLS_MINIMUM_AVAILABLE] = 0;
+                                    /* Check if we have expansion slots */
+                                    PVOID* ExpansionSlots = Teb->TlsExpansionSlots;
+                                    if (ExpansionSlots)
+                                    {
+                                        PVOID* Slot = &ExpansionSlots[TlsIndex - TLS_MINIMUM_AVAILABLE];
+
+                                        /* Clear the index, in user memory only */
+                                        ProbeForWrite(Slot, sizeof(PVOID), sizeof(PVOID));
+                                        *Slot = NULL;
+                                    }
                                 }
                             }
+                            else
+                            {
+                                /* Clear the index */
+                                Teb->TlsSlots[TlsIndex] = NULL;
+                            }
                         }
-                        else
+                        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                         {
-                            /* Clear the index */
-                            Teb->TlsSlots[TlsIndex] = NULL;
+                            /* This thread keeps its slot: go on with the next */
                         }
+                        _SEH2_END;
                     }
 
                     /* Release rundown */
@@ -4941,16 +5000,8 @@ NtSetInformationThread(
             PreviousIdealProcessor = KeSetIdealProcessorThread(&Thread->Tcb,
                                                                ProcessorNumber.Number);
 
-            /* Get the TEB and protect the thread */
-            Teb = Thread->Tcb.Teb;
-            if (Teb && ExAcquireRundownProtection(&Thread->RundownProtect))
-            {
-                /* Save the ideal processor */
-                Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
-
-                /* Release rundown protection */
-                ExReleaseRundownProtection(&Thread->RundownProtect);
-            }
+            /* Save the ideal processor in the TEB */
+            PspSaveIdealProcessorInTeb(Thread);
 
             /* On success Windows returns the previous ideal processor
              * through the same buffer */
@@ -5147,7 +5198,14 @@ NtSetInformationThread(
 
             if (NT_SUCCESS(Status))
             {
-                OldThread = InterlockedExchangePointer(&Thread->WorkOnBehalfThread, TicketThread);
+                /* The query reads this field and references the thread it
+                 * names with the lock held shared, so the thread it found
+                 * can lose its reference only after the lock is released */
+                PspLockThreadSecurityExclusive(Thread);
+                OldThread = Thread->WorkOnBehalfThread;
+                Thread->WorkOnBehalfThread = TicketThread;
+                PspUnlockThreadSecurityExclusive(Thread);
+
                 if (OldThread != NULL)
                     ObDereferenceObject(OldThread);
             }
@@ -5321,7 +5379,6 @@ NtQueryInformationThread(
     PETHREAD Thread;
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     NTSTATUS Status;
-    ULONG Access;
     ULONG Length = 0;
 
     PAGED_CODE();
@@ -5356,9 +5413,6 @@ NtQueryInformationThread(
 #endif
         return Status;
     }
-
-    /* Check what class this is */
-    Access = THREAD_QUERY_INFORMATION;
 
     /* Check what kind of information class this is */
     switch (ThreadInformationClass)
@@ -5478,7 +5532,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5517,7 +5571,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5554,15 +5608,8 @@ NtQueryInformationThread(
                 break;
             }
 
-            /* Reference the thread */
-            Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               THREAD_QUERY_LIMITED_INFORMATION,
-                                               PsThreadType,
-                                               PreviousMode,
-                                               (PVOID*)&Thread,
-                                               NULL);
-            if (!NT_SUCCESS(Status))
-                break;
+            /* This info class always refers to the current thread */
+            Thread = PsGetCurrentThread();
 
             /* Protect write with SEH */
             _SEH2_TRY
@@ -5579,8 +5626,6 @@ NtQueryInformationThread(
             }
             _SEH2_END;
 
-            /* Dereference the thread */
-            ObDereferenceObject(Thread);
             break;
         }
 
@@ -5599,7 +5644,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5637,7 +5682,7 @@ NtQueryInformationThread(
 #if defined(_X86_)
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5710,7 +5755,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5749,7 +5794,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5787,7 +5832,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5897,8 +5942,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-            // FIXME: Use THREAD_QUERY_LIMITED_INFORMATION when implemented
-                                               Access,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5940,7 +5984,7 @@ NtQueryInformationThread(
                 break;
             }
 
-            Status = ObReferenceObjectByHandle(ThreadHandle, Access, PsThreadType, PreviousMode, (PVOID*)&Thread, NULL);
+            Status = ObReferenceObjectByHandle(ThreadHandle, THREAD_QUERY_INFORMATION, PsThreadType, PreviousMode, (PVOID*)&Thread, NULL);
             if (!NT_SUCCESS(Status))
                 break;
 
@@ -5967,6 +6011,7 @@ NtQueryInformationThread(
         {
             PGROUP_AFFINITY GroupAffinity = (PGROUP_AFFINITY)ThreadInformation;
             KAFFINITY AffinityMask;
+            USHORT AffinityGroup;
 
             /* Set the return length */
             Length = sizeof(GROUP_AFFINITY);
@@ -5979,8 +6024,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-            // FIXME: Use THREAD_QUERY_LIMITED_INFORMATION when implemented
-                                               Access,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -5990,18 +6034,24 @@ NtQueryInformationThread(
 
             /* ThreadGroupInformation reports the user-requested affinity,
              * ThreadActualGroupAffinity the affinity the scheduler actually
-             * uses. ReactOS supports a single processor group (group 0). */
+             * uses. */
             if (ThreadInformationClass == ThreadGroupInformation)
+            {
                 AffinityMask = KiThreadUserAffinityMask(&Thread->Tcb);
+                AffinityGroup = KiThreadUserAffinityGroup(&Thread->Tcb);
+            }
             else
+            {
                 AffinityMask = KiThreadAffinityMask(&Thread->Tcb);
+                AffinityGroup = KiThreadAffinityGroup(&Thread->Tcb);
+            }
 
             /* Protect writes with SEH */
             _SEH2_TRY
             {
                 RtlZeroMemory(GroupAffinity, sizeof(GROUP_AFFINITY));
                 GroupAffinity->Mask = AffinityMask;
-                GroupAffinity->Group = 0;
+                GroupAffinity->Group = AffinityGroup;
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {
@@ -6081,8 +6131,7 @@ NtQueryInformationThread(
 
             /* Reference the thread */
             Status = ObReferenceObjectByHandle(ThreadHandle,
-            // FIXME: Use THREAD_QUERY_LIMITED_INFORMATION when implemented
-                                               Access,
+                                               THREAD_QUERY_LIMITED_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,
@@ -6386,7 +6435,7 @@ NtQueryInformationThread(
             }
 
             Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               Access,
+                                               THREAD_QUERY_INFORMATION,
                                                PsThreadType,
                                                PreviousMode,
                                                (PVOID*)&Thread,

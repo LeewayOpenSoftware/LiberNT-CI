@@ -634,6 +634,7 @@ OFFSET(PcDeferredReadyListHead, KIPCR, Prcb.DeferredReadyListHead),
 OFFSET(PcSystemCalls, KIPCR, Prcb.KeSystemCalls),
 OFFSET(PcDpcRoutineActive, KIPCR, Prcb.DpcRoutineActive),
 OFFSET(PcInterruptCount, KIPCR, Prcb.InterruptCount),
+OFFSET(PcIsrStack, KIPCR, Prcb.IsrStack),
 OFFSET(PcDebuggerSavedIRQL, KIPCR, Prcb.DebuggerSavedIRQL),
 OFFSET(PcTickOffset, KIPCR, Prcb.TickOffset), // not Win 10
 OFFSET(PcMasterOffset, KIPCR, Prcb.MasterOffset),
@@ -1056,11 +1057,22 @@ OFFSET(KTHREAD_WAIT_IRQL, KTHREAD, WaitIrql),
 OFFSET(KTHREAD_TrapFrame, KTHREAD, TrapFrame),
 OFFSET(KTHREAD_PreviousMode, KTHREAD, PreviousMode),
 OFFSET(KTHREAD_KernelStack, KTHREAD, KernelStack),
+OFFSET(KTHREAD_InitialStack, KTHREAD, InitialStack),
+OFFSET(KTHREAD_StackLimit, KTHREAD, StackLimit),
+OFFSET(KTHREAD_StackBase, KTHREAD, StackBase),
 OFFSET(KTHREAD_UserApcPending, KTHREAD, ApcState.UserApcPending),
 // LargeStack: Win11 spare (Spare6) at >= WIN10, legacy KTHREAD at < WIN8; gone in the upstream WIN8..WIN10 variant.
 #if (NTDDI_VERSION < NTDDI_WIN8) || (NTDDI_VERSION >= NTDDI_WIN10)
 OFFSET(KTHREAD_LargeStack, KTHREAD, LargeStack),
 #endif
+
+HEADER("KSTACK_CONTROL"),
+OFFSET(KSTACK_CONTROL_StackBase, KSTACK_CONTROL, StackBase),
+OFFSET(KSTACK_CONTROL_ActualLimit, KSTACK_CONTROL, ActualLimit),
+OFFSET(KSTACK_CONTROL_PreviousStackBase, KSTACK_CONTROL, Previous.StackBase),
+OFFSET(KSTACK_CONTROL_PreviousStackLimit, KSTACK_CONTROL, Previous.StackLimit),
+OFFSET(KSTACK_CONTROL_PreviousKernelStack, KSTACK_CONTROL, Previous.KernelStack),
+OFFSET(KSTACK_CONTROL_PreviousInitialStack, KSTACK_CONTROL, Previous.InitialStack),
 
 HEADER("ETHREAD"),
 OFFSET(ETHREAD_UserFsBase, ETHREAD, UserFsBase),

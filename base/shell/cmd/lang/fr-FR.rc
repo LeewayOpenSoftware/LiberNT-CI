@@ -306,8 +306,8 @@ Entrez HELP <commande> pour plus d'informations sur les commandes ci-dessus.\n"
     WCMD_ANYKEY, "Appuyez sur une touche pour continuer... "
     WCMD_CONSTITLE, "Invite de commande Wine"
     WCMD_VERSION, "Microsoft Windows [version %1!S!]\n"
-    WCMD_BANNER, "LiberNT [version %1!S! %2!S!]\n\
-(C) Copyright %3!S! L'équipe LiberNT.\n"
+    WCMD_BANNER, "Orosi [version %1!S! %2!S!]\n\
+(C) Copyright %3!S! Leeway Open Software.\n"
     WCMD_MOREPROMPT, "Plus ? "
     WCMD_LINETOOLONG, "La ligne d'entrée est trop longue.\n"
     WCMD_VOLUMELABEL, "Le volume dans le lecteur %1!c! est %2\n"

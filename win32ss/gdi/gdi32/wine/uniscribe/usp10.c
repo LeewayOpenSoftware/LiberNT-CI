@@ -332,19 +332,19 @@ const scriptData scriptInformation[] = {
      0x00000000, L"Microsoft Sans Serif"},
     {{Script_Arabic, 1, 1, 0, 0, 0, 0, { 1,0,0,0,0,0,0,0,0,0,0}},
      {LANG_ARABIC, 0, 1, 0, 0, ARABIC_CHARSET, 0, 0, 0, 0, 0, 0, 1, 1, 0},
-     MS_MAKE_TAG('a','r','a','b'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('a','r','a','b'), L"Tahoma"},
     {{Script_Arabic_Numeric, 0, 1, 0, 0, 0, 0, { 2,0,0,0,0,0,0,0,0,0,0}},
      {LANG_ARABIC, 1, 1, 0, 0, ARABIC_CHARSET, 0, 0, 0, 0, 0, 0, 1, 0, 0},
-     MS_MAKE_TAG('a','r','a','b'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('a','r','a','b'), L"Tahoma"},
     {{Script_Hebrew, 1, 1, 0, 0, 0, 0, { 1,0,0,0,0,0,0,0,0,0,0}},
      {LANG_HEBREW, 0, 1, 0, 1, HEBREW_CHARSET, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-     MS_MAKE_TAG('h','e','b','r'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('h','e','b','r'), L"Tahoma"},
     {{Script_Syriac, 1, 1, 0, 0, 0, 0, { 1,0,0,0,0,0,0,0,0,0,0}},
      {LANG_SYRIAC, 0, 1, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, 1, 0, 0, 1, 0},
      MS_MAKE_TAG('s','y','r','c'), L"Estrangelo Edessa"},
     {{Script_Persian, 0, 1, 0, 0, 0, 0, { 2,0,0,0,0,0,0,0,0,0,0}},
      {LANG_PERSIAN, 1, 1, 0, 0, ARABIC_CHARSET, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-     MS_MAKE_TAG('a','r','a','b'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('a','r','a','b'), L"Tahoma"},
     {{Script_Thaana, 1, 1, 0, 0, 0, 0, { 1,0,0,0,0,0,0,0,0,0,0}},
      {LANG_DIVEHI, 0, 1, 0, 1, DEFAULT_CHARSET, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      MS_MAKE_TAG('t','h','a','a'), L"MV Boli"},
@@ -374,10 +374,10 @@ const scriptData scriptInformation[] = {
      MS_MAKE_TAG('p','h','a','g'), L"Microsoft PhagsPa"},
     {{Script_Thai, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_THAI, 0, 1, 1, 1, THAI_CHARSET, 0, 0, 1, 0, 1, 0, 0, 0, 1},
-     MS_MAKE_TAG('t','h','a','i'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('t','h','a','i'), L"Noto Sans Thai"},
     {{Script_Thai_Numeric, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_THAI, 1, 1, 0, 0, THAI_CHARSET, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-     MS_MAKE_TAG('t','h','a','i'), L"Microsoft Sans Serif"},
+     MS_MAKE_TAG('t','h','a','i'), L"Noto Sans Thai"},
     {{Script_Lao, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_LAO, 0, 1, 1, 1, DEFAULT_CHARSET, 0, 0, 1, 0, 1, 0, 0, 0, 0},
      MS_MAKE_TAG('l','a','o',' '), L"DokChampa"},
@@ -386,10 +386,10 @@ const scriptData scriptInformation[] = {
      MS_MAKE_TAG('l','a','o',' '), L"DokChampa"},
     {{Script_Devanagari, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_HINDI, 0, 1, 0, 1, DEFAULT_CHARSET, 0, 0, 0, 0, 1, 0, 0, 0, 0},
-     MS_MAKE_TAG('d','e','v','a'), L"Mangal"},
+     MS_MAKE_TAG('d','e','v','a'), L"Noto Sans Devanagari"},
     {{Script_Devanagari_Numeric, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_HINDI, 1, 1, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-     MS_MAKE_TAG('d','e','v','a'), L"Mangal"},
+     MS_MAKE_TAG('d','e','v','a'), L"Noto Sans Devanagari"},
     {{Script_Bengali, 0, 0, 0, 0, 0, 0, { 0,0,0,0,0,0,0,0,0,0,0}},
      {LANG_BENGALI, 0, 1, 0, 1, DEFAULT_CHARSET, 0, 0, 0, 0, 1, 0, 0, 0, 0},
      MS_MAKE_TAG('b','e','n','g'), L"Vrinda"},
@@ -747,44 +747,48 @@ static inline BYTE get_cache_pitch_family(SCRIPT_CACHE *psc)
     return ((ScriptCache *)*psc)->tm.tmPitchAndFamily;
 }
 
-static inline WORD get_cache_glyph(SCRIPT_CACHE *psc, DWORD c)
+static inline BOOL get_cache_glyph(SCRIPT_CACHE *psc, DWORD c, WORD *glyph)
 {
     CacheGlyphPage *page = ((ScriptCache *)*psc)->page[c / 0x10000];
-    WORD *block;
+    DWORD *block, entry;
 
-    if (!page) return 0;
+    *glyph = 0;
+    if (!page) return FALSE;
     block = page->glyphs[(c % 0x10000) >> GLYPH_BLOCK_SHIFT];
-    if (!block) return 0;
-    return block[(c % 0x10000) & GLYPH_BLOCK_MASK];
+    if (!block) return FALSE;
+    entry = block[(c % 0x10000) & GLYPH_BLOCK_MASK];
+    *glyph = LOWORD(entry);
+    return (entry & CACHE_GLYPH_KNOWN) != 0;
 }
 
 static inline WORD set_cache_glyph(SCRIPT_CACHE *psc, WCHAR c, WORD glyph)
 {
     CacheGlyphPage **page = &((ScriptCache *)*psc)->page[c / 0x10000];
-    WORD **block;
+    DWORD **block;
     if (!*page && !(*page = calloc(1, sizeof(CacheGlyphPage)))) return 0;
 
     block = &(*page)->glyphs[(c % 0x10000) >> GLYPH_BLOCK_SHIFT];
-    if (!*block && !(*block = calloc(GLYPH_BLOCK_SIZE, sizeof(WORD)))) return 0;
-    return ((*block)[(c % 0x10000) & GLYPH_BLOCK_MASK] = glyph);
+    if (!*block && !(*block = calloc(GLYPH_BLOCK_SIZE, sizeof(DWORD)))) return 0;
+    (*block)[(c % 0x10000) & GLYPH_BLOCK_MASK] = glyph | CACHE_GLYPH_KNOWN;
+    return glyph;
 }
 
 static inline BOOL get_cache_glyph_widths(SCRIPT_CACHE *psc, WORD glyph, ABC *abc)
 {
-    static const ABC nil;
-    ABC *block = ((ScriptCache *)*psc)->widths[glyph >> GLYPH_BLOCK_SHIFT];
+    CacheGlyphWidth *block = ((ScriptCache *)*psc)->widths[glyph >> GLYPH_BLOCK_SHIFT];
 
-    if (!block || !memcmp(&block[glyph & GLYPH_BLOCK_MASK], &nil, sizeof(ABC))) return FALSE;
-    memcpy(abc, &block[glyph & GLYPH_BLOCK_MASK], sizeof(ABC));
+    if (!block || !block[glyph & GLYPH_BLOCK_MASK].known) return FALSE;
+    *abc = block[glyph & GLYPH_BLOCK_MASK].abc;
     return TRUE;
 }
 
 static inline BOOL set_cache_glyph_widths(SCRIPT_CACHE *psc, WORD glyph, ABC *abc)
 {
-    ABC **block = &((ScriptCache *)*psc)->widths[glyph >> GLYPH_BLOCK_SHIFT];
+    CacheGlyphWidth **block = &((ScriptCache *)*psc)->widths[glyph >> GLYPH_BLOCK_SHIFT];
 
-    if (!*block && !(*block = calloc(GLYPH_BLOCK_SIZE, sizeof(ABC)))) return FALSE;
-    memcpy(&(*block)[glyph & GLYPH_BLOCK_MASK], abc, sizeof(ABC));
+    if (!*block && !(*block = calloc(GLYPH_BLOCK_SIZE, sizeof(CacheGlyphWidth)))) return FALSE;
+    (*block)[glyph & GLYPH_BLOCK_MASK].abc = *abc;
+    (*block)[glyph & GLYPH_BLOCK_MASK].known = TRUE;
     return TRUE;
 }
 
@@ -2249,7 +2253,24 @@ static HRESULT SS_ItemOut( SCRIPT_STRING_ANALYSIS ssa,
         }
     }
     if (analysis->glyphs[iItem].fallbackFont)
+    {
+#ifdef __REACTOS__
+        TEXTMETRICW tmBase, tmFallback;
+        BOOL fBase = GetTextMetricsW(analysis->hdc, &tmBase);
+#endif
         oldFont = SelectObject(analysis->hdc, analysis->glyphs[iItem].fallbackFont);
+#ifdef __REACTOS__
+        if (fBase && GetTextMetricsW(analysis->hdc, &tmFallback))
+        {
+            UINT uAlign = GetTextAlign(analysis->hdc) & (TA_TOP | TA_BASELINE | TA_BOTTOM);
+
+            if (uAlign == TA_TOP)
+                iY += tmBase.tmAscent - tmFallback.tmAscent;
+            else if (uAlign == TA_BOTTOM)
+                iY += tmFallback.tmDescent - tmBase.tmDescent;
+        }
+#endif
+    }
 
     if (cStart >= 0 && analysis->pItem[iItem+1].iCharPos > cStart && analysis->pItem[iItem].iCharPos <= cStart)
         runStart = cStart - analysis->pItem[iItem].iCharPos;
@@ -3130,6 +3151,48 @@ HRESULT WINAPI ScriptIsComplex(const WCHAR *chars, int len, DWORD flag)
  *  Success: S_OK
  *  Failure: Non-zero HRESULT value.
  */
+/* LiberNT: TRUE when the selected font has no glyph at all for at least one
+ * character of the run (surrogate halves excluded; the shaper decodes pairs).
+ * Used to report USP_E_SCRIPT_NOT_IN_FONT so callers fall back to a covering
+ * font instead of drawing .notdef boxes. */
+static BOOL
+usp10_char_is_default_ignorable(WCHAR ch)
+{
+    /* Format characters that must not decide whether a font "has" a script:
+       soft hyphen, BOM/ZWNBSP, ZWNJ/ZWJ, LRM/RLM, the embedding/override
+       controls, and the invisible operators. Missing glyphs for these are
+       not a coverage failure (Dwight review SHOULD). */
+    return ch == 0x00AD || ch == 0xFEFF ||
+           (ch >= 0x200C && ch <= 0x200F) ||
+           (ch >= 0x202A && ch <= 0x202E) ||
+           (ch >= 0x2060 && ch <= 0x2064);
+}
+
+static BOOL
+usp10_run_has_missing_glyphs(HDC hdc, SCRIPT_CACHE *psc, const WCHAR *pwcChars, int cChars)
+{
+    WORD glyph;
+    int i;
+    int considered = 0, covered = 0;
+
+    /* Windows parity (Win11 probe, Consolas vs Nirmala UI): ScriptShape fails
+       with USP_E_SCRIPT_NOT_IN_FONT only when the font covers NO character of
+       the run at all; partial coverage returns S_OK and the missing characters
+       map to .notdef. Default-ignorable format characters do not count. */
+    for (i = 0; i < cChars; i++)
+    {
+        WCHAR ch = pwcChars[i];
+        if (ch >= 0xD800 && ch <= 0xDFFF)
+            continue;   /* surrogate halves are decoded by the shaper */
+        if (usp10_char_is_default_ignorable(ch))
+            continue;
+        considered++;
+        if (ScriptGetCMap(hdc, psc, &ch, 1, 0, &glyph) != S_FALSE)
+            covered++;
+    }
+    return considered > 0 && covered == 0;
+}
+
 HRESULT WINAPI ScriptShapeOpenType( HDC hdc, SCRIPT_CACHE *psc,
                                     SCRIPT_ANALYSIS *psa, OPENTYPE_TAG tagScript,
                                     OPENTYPE_TAG tagLangSys, int *rcRangeChars,
@@ -3194,6 +3257,13 @@ HRESULT WINAPI ScriptShapeOpenType( HDC hdc, SCRIPT_CACHE *psc,
         WCHAR *rChars;
         if ((hr = SHAPE_CheckFontForRequiredFeatures(hdc, (ScriptCache *)*psc, psa)) != S_OK) return hr;
 
+        /* LiberNT: no glyphs at all for the run -> not-in-font, let the caller
+           fall back to a covering face (Windows behaviour). */
+        if (psa->eScript != Script_Control && psa->eScript != Script_CR &&
+            psa->eScript != SCRIPT_UNDEFINED &&
+            usp10_run_has_missing_glyphs(hdc, psc, pwcChars, cChars))
+            return USP_E_SCRIPT_NOT_IN_FONT;
+
         if (!(rChars = calloc(cChars, sizeof(*rChars))))
             return E_OUTOFMEMORY;
 
@@ -3220,7 +3290,7 @@ HRESULT WINAPI ScriptShapeOpenType( HDC hdc, SCRIPT_CACHE *psc,
                     rChars[i+1] = pwcChars[(rtl)?idx-1:idx+1];
                     cluster = 1;
                 }
-                if (!(pwOutGlyphs[g] = get_cache_glyph(psc, chInput)))
+                if (!get_cache_glyph(psc, chInput, &pwOutGlyphs[g]))
                 {
                     WORD glyph;
                     if (!hdc)
@@ -3594,7 +3664,7 @@ HRESULT WINAPI ScriptGetCMap(HDC hdc, SCRIPT_CACHE *psc, const WCHAR *pwcInChars
             inChar = mirror_char(pwcInChars[i]);
         else
             inChar = pwcInChars[i];
-        if (!(pwOutGlyphs[i] = get_cache_glyph(psc, inChar)))
+        if (!get_cache_glyph(psc, inChar, &pwOutGlyphs[i]) || !pwOutGlyphs[i])
         {
             WORD glyph;
             if (!hdc) return E_PENDING;

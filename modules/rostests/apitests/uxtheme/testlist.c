@@ -2,34 +2,60 @@
 #define STANDALONE
 #include <apitest.h>
 
+extern void func_CaptionGlyphs(void);
+extern void func_ScrollGlyphKey(void);
 extern void func_CloseThemeData(void);
 extern void func_ColorPreference(void);
 extern void func_DrawThemeParentBackground(void);
+extern void func_DwmCaptionButton(void);
 extern void func_GetThemeParseErrorInfo(void);
 extern void func_CustomCaptionInset(void);
+extern void func_MenuTheme(void);
 extern void func_NonClientActivate(void);
+extern void func_NonClientBorder(void);
 extern void func_NonClientCaption(void);
 extern void func_NonClientHitTest(void);
+extern void func_PartSize(void);
 extern void func_SetThemeAppProperties(void);
 extern void func_SetWindowTheme(void);
 extern void func_TextScaling(void);
+extern void func_ThemeDpi(void);
+extern void func_ThemeReload(void);
+extern void func_ThemeRegion(void);
 extern void func_ThemeRendering(void);
 extern void func_ThemeShellTransition(void);
+extern void func_ThemeSysSize(void);
+extern void func_UxIni(void);
+extern void func_TrustDefer(void);
+extern void func_TrustGate(void);
 
 const struct test winetest_testlist[] =
 {
+    { "CaptionGlyphs", func_CaptionGlyphs },
+    { "ScrollGlyphKey", func_ScrollGlyphKey },
     { "CloseThemeData", func_CloseThemeData },
     { "ColorPreference", func_ColorPreference },
     { "DrawThemeParentBackground", func_DrawThemeParentBackground },
+    { "DwmCaptionButton", func_DwmCaptionButton },
     { "GetThemeParseErrorInfo", func_GetThemeParseErrorInfo },
     { "CustomCaptionInset", func_CustomCaptionInset },
+    { "MenuTheme", func_MenuTheme },
     { "NonClientActivate", func_NonClientActivate },
+    { "NonClientBorder", func_NonClientBorder },
     { "NonClientCaption", func_NonClientCaption },
     { "NonClientHitTest", func_NonClientHitTest },
+    { "PartSize", func_PartSize },
     { "SetWindowTheme", func_SetWindowTheme },
     { "TextScaling",    func_TextScaling },
     { "SetThemeAppProperties", func_SetThemeAppProperties },
-    { "ThemeRendering", func_ThemeRendering },
+    { "ThemeDpi", func_ThemeDpi },
+    { "ThemeReload", func_ThemeReload },
+    { "ThemeRegion", func_ThemeRegion },
+{ "ThemeRendering", func_ThemeRendering },
     { "ThemeShellTransition", func_ThemeShellTransition },
+    { "ThemeSysSize", func_ThemeSysSize },
+    { "UxIni", func_UxIni },
+    { "TrustDefer", func_TrustDefer },
+    { "TrustGate", func_TrustGate },
     { 0, 0 }
 };

@@ -124,6 +124,26 @@ DeviceRead(void* Context, uint64_t Offset, uint32_t Length, void* Buffer)
     return 1;
 }
 
+static int
+DeviceWrite(void* Context, uint64_t Offset, uint32_t Length, const void* Buffer)
+{
+    DISK_CONTEXT* Disk = (DISK_CONTEXT*)Context;
+    LARGE_INTEGER Position;
+    DWORD Transferred;
+
+    if ((Offset % Disk->SectorSize) != 0 || (Length % Disk->SectorSize) != 0 || Length > SCRATCH_SIZE)
+        return 0;
+
+    memcpy(Disk->Scratch, Buffer, Length);
+    Position.QuadPart = (LONGLONG)Offset;
+    if (!SetFilePointerEx(Disk->Handle, Position, NULL, FILE_BEGIN))
+        return 0;
+    if (!WriteFile(Disk->Handle, Disk->Scratch, Length, &Transferred, NULL))
+        return 0;
+
+    return Transferred == Length;
+}
+
 static HANDLE
 OpenPartition(ULONG DriveNumber, ULONG PartitionNumber, DWORD Access)
 {
@@ -398,6 +418,9 @@ IsSignatureInUse(ULONG DriveNumber, ULONG Signature)
             continue;
 
         _snwprintf(DevicePath, sizeof(DevicePath) / sizeof(DevicePath[0]), L"\\\\.\\PhysicalDrive%lu", Number);
+        /* No access, so a standard user can scan too; the size comes from the
+         * any-access geometry codes, the length fallback is for drivers that
+         * answer only that one on a handle with read access */
         Handle = CreateFileW(DevicePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
         if (Handle == INVALID_HANDLE_VALUE)
             continue;
@@ -1024,6 +1047,12 @@ main(int argc, char* argv[])
           (unsigned long long)Plan.OldClusters,
           (unsigned long long)Plan.NewClusters,
           Plan.ClusterSize);
+    for (Index = 0; Index < (int)Plan.StaleGptCount; Index++)
+    {
+        Print("  %-22s sector %llu (outside every partition, erased first)\n",
+              "leftover GPT header",
+              (unsigned long long)Plan.StaleGptLba[Index]);
+    }
 
     if (DryRun)
     {
@@ -1056,6 +1085,22 @@ main(int argc, char* argv[])
         VirtualFree(Disk.Scratch, 0, MEM_RELEASE);
         CloseHandle(Disk.Handle);
         return 1;
+    }
+
+    if (Plan.StaleGptCount != 0)
+    {
+        Device.Write = DeviceWrite;
+        Status = ExpandEraseStaleGpt(&Device, &Plan);
+        Device.Write = NULL;
+        if (Status != EXPAND_OK)
+        {
+            Print("lntexpandstorage: cannot erase the leftover GPT header: %s (error %lu)\n",
+                  ExpandStatusText(Status),
+                  GetLastError());
+            VirtualFree(Disk.Scratch, 0, MEM_RELEASE);
+            CloseHandle(Disk.Handle);
+            return 1;
+        }
     }
 
     if (Plan.RewritePartitionTable)

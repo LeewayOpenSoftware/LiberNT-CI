@@ -976,6 +976,10 @@ RPC_STATUS RPCRT4_default_authorize(RpcConnection *conn, BOOL first_time,
       }
       conn->signature_auth_len = secctx_sizes.cbMaxSignature;
       conn->encryption_auth_len = secctx_sizes.cbSecurityTrailer;
+#ifdef __REACTOS__
+      if (conn->server)
+          conn->auth_complete = TRUE;
+#endif
   }
 
   *out_size = out.cbBuffer;
@@ -1035,6 +1039,9 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
 
     if (start)
     {
+#ifdef __REACTOS__
+        conn->auth_complete = FALSE;
+#endif
         /* remove any existing authentication information */
         if (conn->AuthInfo)
         {
@@ -1046,7 +1053,12 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
             DeleteSecurityContext(&conn->ctx);
             SecInvalidateHandle(&conn->ctx);
         }
+#ifdef __REACTOS__
+        /* auth_length_in is the header's auth_len: the token, without the verifier in front of it */
+        if (auth_length_in)
+#else
         if (auth_length_in >= sizeof(RpcAuthVerifier))
+#endif
         {
             CredHandle cred;
             TimeStamp exp;
@@ -1074,7 +1086,11 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
         }
     }
 
+#ifdef __REACTOS__
+    if (!auth_length_in)
+#else
     if (auth_length_in < sizeof(RpcAuthVerifier))
+#endif
         return RPC_S_OK;
 
     if (!conn->AuthInfo)
@@ -1083,7 +1099,11 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
 
     status = rpcrt4_conn_authorize(
         conn, start, (unsigned char *)(auth_data_in + 1),
+#ifdef __REACTOS__
+        auth_length_in, NULL, &out_size);
+#else
         auth_length_in - sizeof(RpcAuthVerifier), NULL, &out_size);
+#endif
     if (status) return status;
 
     out_buffer = malloc(out_size);
@@ -1091,7 +1111,11 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
 
     status = rpcrt4_conn_authorize(
         conn, start, (unsigned char *)(auth_data_in + 1),
+#ifdef __REACTOS__
+        auth_length_in, out_buffer, &out_size);
+#else
         auth_length_in - sizeof(RpcAuthVerifier), out_buffer, &out_size);
+#endif
     if (status != RPC_S_OK)
     {
         free(out_buffer);
@@ -1105,6 +1129,11 @@ RPC_STATUS RPCRT4_ServerConnectionAuth(RpcConnection* conn,
         free(out_buffer);
         return RPC_S_SEC_PKG_ERROR;
     }
+#ifdef __REACTOS__
+    /* AUTH3 expects no reply and passes no output pointers */
+    else if (!auth_data_out)
+        free(out_buffer);
+#endif
     else
     {
         *auth_data_out = out_buffer;
@@ -1472,6 +1501,22 @@ RPC_STATUS RPCRT4_ReceiveWithAuth(RpcConnection *Connection, RpcPktHdr **Header,
 
     memcpy((unsigned char *)pMsg->Buffer + buffer_length, payload, data_length);
 
+#ifdef __REACTOS__
+    /* A connection bound at integrity or privacy takes requests only with that protection, and only
+       after its handshake finished; the level a packet claims is not enough */
+    if (Connection->server && CurrentHeader->common.ptype == PKT_REQUEST &&
+        rpcrt4_conn_is_authorized(Connection) &&
+        Connection->AuthInfo->AuthnLevel >= RPC_C_AUTHN_LEVEL_PKT_INTEGRITY &&
+        (!Connection->auth_complete || header_auth_len < sizeof(RpcAuthVerifier) ||
+         ((const RpcAuthVerifier *)((unsigned char *)payload + data_length))->auth_level !=
+             Connection->AuthInfo->AuthnLevel))
+    {
+      WARN("request without the protection level of its connection\n");
+      status = RPC_S_ACCESS_DENIED;
+      goto fail;
+    }
+#endif
+
     if (header_auth_len) {
       if (header_auth_len < sizeof(RpcAuthVerifier) ||
           header_auth_len > RPC_AUTH_VERIFIER_LEN(&(*Header)->common)) {
@@ -1491,6 +1536,15 @@ RPC_STATUS RPCRT4_ReceiveWithAuth(RpcConnection *Connection, RpcPktHdr **Header,
        * function */
       if (!packet_does_auth_negotiation(*Header) && rpcrt4_conn_is_authorized(Connection))
       {
+#ifdef __REACTOS__
+        /* the context exists after the first leg; it has keys only once auth3 has been accepted */
+        if (Connection->server && !Connection->auth_complete)
+        {
+            WARN("authenticated packet before the security context was established\n");
+            status = RPC_S_ACCESS_DENIED;
+            goto fail;
+        }
+#endif
         status = rpcrt4_conn_secure_packet(Connection, SECURE_PACKET_RECEIVE,
             CurrentHeader, hdr_length,
             (unsigned char *)pMsg->Buffer + buffer_length, data_length,
@@ -1820,7 +1874,15 @@ RPC_STATUS WINAPI I_RpcSend(PRPC_MESSAGE pMsg)
       RPCRT4_ReleaseConnection(conn);
       pMsg->ReservedForRuntime = NULL;
       status = RPCRT4_OpenBinding(bind, &conn, &cif->TransferSyntax, &cif->InterfaceId, &from_cache);
+#ifdef __REACTOS__
+      if (status != RPC_S_OK)
+      {
+          RPCRT4_ReleaseBinding(bind);
+          break;
+      }
+#else
       if (status != RPC_S_OK) break;
+#endif
       pMsg->ReservedForRuntime = conn;
   }
 
@@ -1894,6 +1956,9 @@ fail:
   free(hdr);
   RPCRT4_ReleaseConnection(conn);
   pMsg->ReservedForRuntime = NULL;
+#ifdef __REACTOS__
+  RPCRT4_ReleaseBinding(bind);
+#endif
   return status;
 }
 

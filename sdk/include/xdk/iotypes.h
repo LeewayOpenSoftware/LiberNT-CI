@@ -5702,7 +5702,8 @@ typedef union _PCI_EXPRESS_DEVICE_CAPABILITIES_REGISTER {
     ULONG Rsvd1:2;
     ULONG CapturedSlotPowerLimit:8;
     ULONG CapturedSlotPowerLimitScale:2;
-    ULONG Rsvd2:4;
+    ULONG FunctionLevelResetCapability:1;
+    ULONG Rsvd2:3;
   } DUMMYSTRUCTNAME;
   ULONG AsULONG;
 } PCI_EXPRESS_DEVICE_CAPABILITIES_REGISTER, *PPCI_EXPRESS_DEVICE_CAPABILITIES_REGISTER;
@@ -5724,6 +5725,10 @@ typedef union _PCI_EXPRESS_DEVICE_CONTROL_REGISTER {
     USHORT MaxReadRequestSize:3;
     USHORT BridgeConfigRetryEnable:1;
   } DUMMYSTRUCTNAME;
+  _ANONYMOUS_STRUCT struct {
+    USHORT :15;
+    USHORT InitiateFunctionLevelReset:1;
+  } DUMMYSTRUCTNAME2;
   USHORT AsUSHORT;
 } PCI_EXPRESS_DEVICE_CONTROL_REGISTER, *PPCI_EXPRESS_DEVICE_CONTROL_REGISTER;
 
@@ -6346,6 +6351,20 @@ typedef struct _PCI_PME_INTERFACE {
 
 $endif (_NTDDK_)
 $if (_NTIFS_)
+
+typedef struct _LINK_SHARE_ACCESS {
+  ULONG OpenCount;
+  ULONG Deleters;
+  ULONG SharedDelete;
+} LINK_SHARE_ACCESS, *PLINK_SHARE_ACCESS;
+
+#define IO_CHECK_SHARE_ACCESS_UPDATE_SHARE_ACCESS     0x00000001
+#define IO_CHECK_SHARE_ACCESS_DONT_UPDATE_FILE_OBJECT 0x00000002
+#define IO_CHECK_SHARE_ACCESS_DONT_CHECK_READ         0x00000004
+#define IO_CHECK_SHARE_ACCESS_DONT_CHECK_WRITE        0x00000008
+#define IO_CHECK_SHARE_ACCESS_DONT_CHECK_DELETE       0x00000010
+#define IO_CHECK_SHARE_ACCESS_FORCE_CHECK             0x00000020
+#define IO_CHECK_SHARE_ACCESS_FORCE_USING_SCB         0x00000040
 
 #define FILE_OPLOCK_BROKEN_TO_LEVEL_2   0x00000007
 #define FILE_OPLOCK_BROKEN_TO_NONE      0x00000008
@@ -7112,6 +7131,16 @@ typedef struct _MFT_ENUM_DATA {
   USN HighUsn;
 } MFT_ENUM_DATA, *PMFT_ENUM_DATA;
 
+typedef MFT_ENUM_DATA MFT_ENUM_DATA_V0, *PMFT_ENUM_DATA_V0;
+
+typedef struct _MFT_ENUM_DATA_V1 {
+  ULONGLONG StartFileReferenceNumber;
+  USN LowUsn;
+  USN HighUsn;
+  USHORT MinMajorVersion;
+  USHORT MaxMajorVersion;
+} MFT_ENUM_DATA_V1, *PMFT_ENUM_DATA_V1;
+
 typedef struct _CREATE_USN_JOURNAL_DATA {
   ULONGLONG MaximumSize;
   ULONGLONG AllocationDelta;
@@ -7125,6 +7154,24 @@ typedef struct _READ_USN_JOURNAL_DATA {
   ULONGLONG BytesToWaitFor;
   ULONGLONG UsnJournalID;
 } READ_USN_JOURNAL_DATA, *PREAD_USN_JOURNAL_DATA;
+
+typedef READ_USN_JOURNAL_DATA READ_USN_JOURNAL_DATA_V0, *PREAD_USN_JOURNAL_DATA_V0;
+
+typedef struct _READ_USN_JOURNAL_DATA_V1 {
+  USN StartUsn;
+  ULONG ReasonMask;
+  ULONG ReturnOnlyOnClose;
+  ULONGLONG Timeout;
+  ULONGLONG BytesToWaitFor;
+  ULONGLONG UsnJournalID;
+  USHORT MinMajorVersion;
+  USHORT MaxMajorVersion;
+} READ_USN_JOURNAL_DATA_V1, *PREAD_USN_JOURNAL_DATA_V1;
+
+typedef struct _READ_FILE_USN_DATA {
+  USHORT MinMajorVersion;
+  USHORT MaxMajorVersion;
+} READ_FILE_USN_DATA, *PREAD_FILE_USN_DATA;
 
 typedef struct _USN_RECORD {
   ULONG RecordLength;
@@ -7142,6 +7189,14 @@ typedef struct _USN_RECORD {
   USHORT FileNameOffset;
   WCHAR FileName[1];
 } USN_RECORD, *PUSN_RECORD;
+
+typedef USN_RECORD USN_RECORD_V2, *PUSN_RECORD_V2;
+
+typedef struct _USN_RECORD_COMMON_HEADER {
+  ULONG RecordLength;
+  USHORT MajorVersion;
+  USHORT MinorVersion;
+} USN_RECORD_COMMON_HEADER, *PUSN_RECORD_COMMON_HEADER;
 
 #define USN_PAGE_SIZE                    (0x1000)
 
@@ -7166,6 +7221,8 @@ typedef struct _USN_RECORD {
 #define USN_REASON_REPARSE_POINT_CHANGE  (0x00100000)
 #define USN_REASON_STREAM_CHANGE         (0x00200000)
 #define USN_REASON_TRANSACTED_CHANGE     (0x00400000)
+#define USN_REASON_INTEGRITY_CHANGE      (0x00800000)
+#define USN_REASON_DESIRED_STORAGE_CLASS_CHANGE (0x01000000)
 #define USN_REASON_CLOSE                 (0x80000000)
 
 typedef struct _USN_JOURNAL_DATA {
@@ -7177,6 +7234,35 @@ typedef struct _USN_JOURNAL_DATA {
   ULONGLONG MaximumSize;
   ULONGLONG AllocationDelta;
 } USN_JOURNAL_DATA, *PUSN_JOURNAL_DATA;
+
+typedef USN_JOURNAL_DATA USN_JOURNAL_DATA_V0, *PUSN_JOURNAL_DATA_V0;
+
+typedef struct _USN_JOURNAL_DATA_V1 {
+  ULONGLONG UsnJournalID;
+  USN FirstUsn;
+  USN NextUsn;
+  USN LowestValidUsn;
+  USN MaxUsn;
+  ULONGLONG MaximumSize;
+  ULONGLONG AllocationDelta;
+  USHORT MinSupportedMajorVersion;
+  USHORT MaxSupportedMajorVersion;
+} USN_JOURNAL_DATA_V1, *PUSN_JOURNAL_DATA_V1;
+
+typedef struct _USN_JOURNAL_DATA_V2 {
+  ULONGLONG UsnJournalID;
+  USN FirstUsn;
+  USN NextUsn;
+  USN LowestValidUsn;
+  USN MaxUsn;
+  ULONGLONG MaximumSize;
+  ULONGLONG AllocationDelta;
+  USHORT MinSupportedMajorVersion;
+  USHORT MaxSupportedMajorVersion;
+  ULONG Flags;
+  ULONGLONG RangeTrackChunkSize;
+  LONGLONG RangeTrackFileSizeThreshold;
+} USN_JOURNAL_DATA_V2, *PUSN_JOURNAL_DATA_V2;
 
 typedef struct _DELETE_USN_JOURNAL_DATA {
   ULONGLONG UsnJournalID;
@@ -7204,6 +7290,7 @@ typedef struct _MARK_HANDLE_INFO32 {
 #define USN_SOURCE_DATA_MANAGEMENT          (0x00000001)
 #define USN_SOURCE_AUXILIARY_DATA           (0x00000002)
 #define USN_SOURCE_REPLICATION_MANAGEMENT   (0x00000004)
+#define USN_SOURCE_CLIENT_REPLICATION_MANAGEMENT (0x00000008)
 
 #define MARK_HANDLE_PROTECT_CLUSTERS        (0x00000001)
 #define MARK_HANDLE_TXF_SYSTEM_LOG          (0x00000004)
@@ -8027,6 +8114,11 @@ typedef struct _REPARSE_GUID_DATA_BUFFER {
 #define IO_REPARSE_TAG_SYMLINK                  (0xA000000CL)
 #define IO_REPARSE_TAG_IIS_CACHE                (0xA0000010L)
 #define IO_REPARSE_TAG_DFSR                     (0x80000012L)
+#define IO_REPARSE_TAG_LX_SYMLINK               (0xA000001DL)
+#define IO_REPARSE_TAG_AF_UNIX                  (0x80000023L)
+#define IO_REPARSE_TAG_LX_FIFO                  (0x80000024L)
+#define IO_REPARSE_TAG_LX_CHR                   (0x80000025L)
+#define IO_REPARSE_TAG_LX_BLK                   (0x80000026L)
 
 #pragma pack(4)
 typedef struct _REPARSE_INDEX_KEY {

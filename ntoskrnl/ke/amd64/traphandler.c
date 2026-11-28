@@ -95,7 +95,7 @@ KiDpcInterruptHandler(VOID)
             NewThread = Prcb->NextThread;
             Prcb->NextThread = NULL;
 #ifdef CONFIG_SMP
-            InterlockedBitTestAndResetAffinity(&KiIdleSummary, Prcb->Number);
+            KiClearProcessorIdle(Prcb->Number);
 #endif
             Prcb->CurrentThread = NewThread;
 
@@ -171,19 +171,19 @@ Exit:
 
 #define MAX_SYSCALL_PARAMS 16
 
-NTSTATUS
+ULONG64
 NtSyscallFailure(void)
 {
     /* This is the failure function */
-    return (NTSTATUS)KeGetCurrentThread()->TrapFrame->Rax;
+    return (ULONG)KeGetCurrentThread()->TrapFrame->Rax;
 }
 
-NTSTATUS
+ULONG64
 KiConvertToGuiThreadFailure(VOID)
 {
     ULONG ServiceNumber = (ULONG)KeGetCurrentThread()->TrapFrame->Rax & SERVICE_NUMBER_MASK;
 
-    return KiGetGuiServiceFailureStatus(ServiceNumber);
+    return (ULONG)KiGetGuiServiceFailureStatus(ServiceNumber);
 }
 
 VOID
@@ -354,6 +354,9 @@ KiSystemCallHandler(
         TrapFrame->Rax = STATUS_INVALID_SYSTEM_SERVICE;
         return (PVOID)NtSyscallFailure;
     }
+
+    /* A mispredicted bound check must not index the tables */
+    ServiceNumber &= KiSpeculationIndexMask(ServiceNumber, DescriptorTable->Limit);
 
     /* Get stack bytes and calculate argument count */
     Count = DescriptorTable->Number[ServiceNumber] / 8;

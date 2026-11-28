@@ -109,8 +109,12 @@ GUIDisplayStatusMessage(
     TRACE("GUIDisplayStatusMessage(%ws)\n", pMessage);
     UNREFERENCED_PARAMETER(pTitle);
 
+    /* The LogonUI cover owns the screen after sign-in; draw the text on it. */
     if (LogonUiCoverShown())
+    {
+        LogonUiCoverSetStatus(pMessage);
         return TRUE;
+    }
 
     /* Until a window is shown, the boot screen owns the display and draws this
      * text in its status band. Once the LogonUI or a user shell has been shown,

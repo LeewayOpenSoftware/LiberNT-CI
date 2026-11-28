@@ -685,4 +685,8 @@ BOOLEAN
 NTAPI
 LdrpFlushAlternateResourceModules(VOID);
 
+VOID
+NTAPI
+RtlpFreeThreadPreferredUILanguages(VOID);
+
 /* EOF */

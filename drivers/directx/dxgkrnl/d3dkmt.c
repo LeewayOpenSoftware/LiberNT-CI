@@ -34,6 +34,7 @@
 #include "present.h"
 #include "pnp.h"
 #include <reactos/rddm/rxgkadvcolor.h>
+#include <reactos/rddm/rxgktarget.h>
 #include <reactos/rddm/rxgkmonitor.h>
 #include "caps_core.h"
 #include "paging_core.h"
@@ -269,34 +270,42 @@ DxgkUnInitialize(
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 static NTSTATUS
+NTAPI
 DxgkpDirectMakeResident(
     _Inout_ D3DDDI_MAKERESIDENT *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectEvict(
     _Inout_ D3DKMT_EVICT *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectReserveGpuVirtualAddress(
     _Inout_ D3DDDI_RESERVEGPUVIRTUALADDRESS *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectMapGpuVirtualAddress(
     _Inout_ D3DDDI_MAPGPUVIRTUALADDRESS *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectFreeGpuVirtualAddress(
     _In_ const D3DKMT_FREEGPUVIRTUALADDRESS *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectUpdateGpuVirtualAddress(
     _In_ const D3DKMT_UPDATEGPUVIRTUALADDRESS *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectWaitForSynchronizationObjectFromCpu(
     _In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectSignalSynchronizationObjectFromCpu(
     _In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *Data);
 #endif
@@ -457,10 +466,13 @@ DxgkpShareObjects(
         return STATUS_INVALID_PARAMETER;
     }
 
+    /* The attributes are already captured (kernel copies), but the name, the root
+     * directory and the descriptor are the user's: look them up and check them as
+     * the user's (UserMode ownership). */
     Status = ObCreateObject(KernelMode,
                             DxgkSharedResourceObjectType,
                             &ObjectAttributes,
-                            KernelMode,
+                            UserMode,
                             NULL,
                             sizeof(*SharedObject),
                             0,
@@ -547,7 +559,8 @@ DxgkpResolveSharedResourceNtHandle(
  * else (display, presentation, protected content, native comparison), and
  * DxgkpGetReportedDriverVersion takes the minimum of the two.
  */
-#define DXGKP_OS_COMPLETED_WDDM_LEVEL KMT_DRIVERVERSION_WDDM_1_3
+/* FIXME: display, presentation and protected content are not yet compared with Windows 11 at this level; it is reported because an adapter that runs the WDDM 2.0 memory manager and scheduler is refused by vendor compute runtimes below it */
+#define DXGKP_OS_COMPLETED_WDDM_LEVEL KMT_DRIVERVERSION_WDDM_2_0
 
 #ifndef REACTOS_WDDM_TARGET_LEVEL
 #define REACTOS_WDDM_TARGET_LEVEL KMT_DRIVERVERSION_WDDM_2_0
@@ -5941,7 +5954,7 @@ DxgkpBeginSynchronizedLock(
                 return Status;
         }
 
-        if (!DxgkBeginKmdTransaction(Adapter))
+        if (!DxgkBeginKmdTransactionPastMonitorPower(Adapter))
             return STATUS_DELETE_PENDING;
         if (!DxgkpDeviceExecutionActive(Device))
         {
@@ -6221,12 +6234,14 @@ DxgkpEscapeCaptured(
         }
     }
 
-    /* The advanced colour state of an output is dxgkrnl's own; it never
-     * reaches the miniport. */
-    if ((UINT)pEscape->Type == RXGK_ESCAPE_ADVANCED_COLOR)
+    /* The advanced colour state and the target of an output are dxgkrnl's
+     * own; they never reach the miniport. */
+    if ((UINT)pEscape->Type == RXGK_ESCAPE_ADVANCED_COLOR ||
+        (UINT)pEscape->Type == RXGK_ESCAPE_TARGET_INFO)
     {
-        Status = DxgkAdvancedColorEscape(Adapter, pEscape->pPrivateDriverData,
-                                         pEscape->PrivateDriverDataSize);
+        Status = ((UINT)pEscape->Type == RXGK_ESCAPE_ADVANCED_COLOR) ?
+            DxgkAdvancedColorEscape(Adapter, pEscape->pPrivateDriverData, pEscape->PrivateDriverDataSize) :
+            DxgkTargetInfoEscape(Adapter, pEscape->pPrivateDriverData, pEscape->PrivateDriverDataSize);
         goto Cleanup;
     }
 
@@ -6582,6 +6597,10 @@ DxgkCheckOcclusion(
      * matching Win11 for a shown top-level window. (Was STATUS_NOT_SUPPORTED,
      * which failed the displayext occlusion parity test.)
      */
+    /* TODO: with more than one display output Windows 11 reports a window unoccluded while one output is exclusively owned (gdi32 driver test) */
+    if (DxgkVidPnAnySourceExclusivelyOwned())
+        return STATUS_GRAPHICS_PRESENT_OCCLUDED;
+
     return STATUS_SUCCESS;
 }
 
@@ -9610,30 +9629,6 @@ DxgkSignalSynchronizationObject2(
     }
     PayloadValue = (SignalFlags & DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT) != 0 ? (UINT64)(ULONG_PTR)pData->CpuEventHandle : pData->Fence.FenceValue;
     Status = DxgkContextOrderAdmitSignal(Contexts, ContextCount, DxgkContextSyncOperationSignal2, pData->ObjectHandleArray, pData->ObjectCount, SignalFlags, PayloadValue, NULL, UserMode);
-    if (Status == STATUS_DEVICE_BUSY &&
-        (SignalFlags & DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT) != 0)
-    {
-        ULONGLONG Deadline = KeQueryInterruptTime() +
-            (ULONGLONG)VIDSCH_CONTEXT_BACKPRESSURE_MS * 10000ULL;
-
-        /* A full stream must not turn a completion notification into a
-         * permanent polling fallback. Failed broadcast admission publishes
-         * no markers. Wait with no admission/miniport lock held, then retry
-         * the entire broadcast atomically, retaining the referenced contexts.
-         * Another submitter can consume the room, so share one deadline. */
-        do
-        {
-            for (CompareIndex = 0; CompareIndex < ContextCount; ++CompareIndex)
-            {
-                Status = DxgkContextOrderWaitForRoom(Contexts[CompareIndex], Deadline);
-                if (!NT_SUCCESS(Status))
-                    goto Cleanup;
-            }
-            Status = DxgkContextOrderAdmitSignal(Contexts, ContextCount,
-                DxgkContextSyncOperationSignal2, pData->ObjectHandleArray,
-                pData->ObjectCount, SignalFlags, PayloadValue, NULL, UserMode);
-        } while (Status == STATUS_DEVICE_BUSY && KeQueryInterruptTime() < Deadline);
-    }
 
 Cleanup:
     while (ContextCount != 0)
@@ -11189,7 +11184,7 @@ DxgkSubmitCommand(
      * through VidMm. The scheduler pins an existing command mapping when
      * present, but an absent mapping must not reject that driver contract. */
 
-    if (!DxgkBeginKmdTransaction(Adapter))
+    if (!DxgkBeginKmdTransactionPastMonitorPower(Adapter))
     {
         DxgkDereferenceContext(Context);
         return STATUS_DELETE_PENDING;
@@ -11961,6 +11956,19 @@ DxgkpKmtEnterInFlight(
         return Slot;
     }
     return NULL;
+}
+
+BOOLEAN
+DxgkKmtIoctlsInFlight(VOID)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < DXGKP_KMT_INFLIGHT_SLOTS; Index++)
+    {
+        if (DxgkpKmtInFlight[Index].Thread != NULL)
+            return TRUE;
+    }
+    return FALSE;
 }
 
 /* DISPATCH_LEVEL, from the TDR tick. */
@@ -15076,6 +15084,7 @@ DxgkpInvokeDirectBufferedThunk(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectMakeResident(
     _Inout_ D3DDDI_MAKERESIDENT *Data)
 {
@@ -15105,6 +15114,7 @@ DxgkpDirectMakeResident(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectEvict(
     _Inout_ D3DKMT_EVICT *Data)
 {
@@ -15126,6 +15136,7 @@ DxgkpDirectEvict(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectReserveGpuVirtualAddress(
     _Inout_ D3DDDI_RESERVEGPUVIRTUALADDRESS *Data)
 {
@@ -15166,6 +15177,7 @@ DxgkpDirectReserveGpuVirtualAddress(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectMapGpuVirtualAddress(
     _Inout_ D3DDDI_MAPGPUVIRTUALADDRESS *Data)
 {
@@ -15191,6 +15203,7 @@ DxgkpDirectMapGpuVirtualAddress(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectFreeGpuVirtualAddress(
     _In_ const D3DKMT_FREEGPUVIRTUALADDRESS *Data)
 {
@@ -15208,6 +15221,7 @@ DxgkpDirectFreeGpuVirtualAddress(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectUpdateGpuVirtualAddress(
     _In_ const D3DKMT_UPDATEGPUVIRTUALADDRESS *Data)
 {
@@ -15225,6 +15239,7 @@ DxgkpDirectUpdateGpuVirtualAddress(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectWaitForSynchronizationObjectFromCpu(
     _In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *Data)
 {
@@ -15242,6 +15257,7 @@ DxgkpDirectWaitForSynchronizationObjectFromCpu(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectSignalSynchronizationObjectFromCpu(
     _In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *Data)
 {
@@ -15548,8 +15564,8 @@ DxgkDispatchDeviceControl(
      * Route \Device\Video0 IOCTLs (IOCTL_VIDEO_*) to the display handler.
      * The display handler completes the IRP and returns TRUE.
      */
-    if (DxgkDisplayDispatchIoctl(DeviceObject, Irp))
-        return STATUS_SUCCESS;
+    if (DxgkDisplayDispatchIoctl(DeviceObject, Irp, &Status))
+        return Status;
 
     if (Stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_RXGK_QUERY_MONITOR_DESCRIPTOR)
         return DxgkpChildQueryMonitorDescriptor(DeviceObject, Irp);

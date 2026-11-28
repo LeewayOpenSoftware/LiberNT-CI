@@ -533,6 +533,20 @@ ExpWorkerThreadBalanceManager(IN PVOID Context)
     }
 }
 
+CODE_SEG("INIT")
+VOID
+NTAPI
+ExpInitializeWorkerQueues(VOID)
+{
+    ULONG WorkQueueType;
+
+    for (WorkQueueType = 0; WorkQueueType < MaximumWorkQueue; WorkQueueType++)
+        KeInitializeQueue(&ExWorkerQueue[WorkQueueType].WorkerQueue, 0);
+
+    KeInitializeEvent(&ExpThreadSetManagerEvent, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&ExpThreadSetManagerShutdownEvent, NotificationEvent, FALSE);
+}
+
 /*++
  * @name ExpInitializeWorkerThreads
  *
@@ -564,7 +578,7 @@ ExpInitializeWorkerThreads(VOID)
     ExpWorkersCanSwap = TRUE;
 
     /* Size the delayed pool to the concurrency limit plus a blocking reserve */
-    DelayedThreads = (ULONG)KeNumberProcessors + EX_DELAYED_WORK_RESERVE;
+    DelayedThreads = KiNumberProcessors + EX_DELAYED_WORK_RESERVE;
     DelayedThreads = min(DelayedThreads, EX_MAX_DELAYED_WORK_THREADS);
     CriticalThreads = EX_CRITICAL_WORK_THREADS;
 
@@ -582,22 +596,14 @@ ExpInitializeWorkerThreads(VOID)
     ExpStaticWorkerCounts[DelayedWorkQueue] = DelayedThreads;
     ExpStaticWorkerCounts[HyperCriticalWorkQueue] = EX_HYPERCRITICAL_WORK_THREADS;
 
-    /* Initialize the Array */
     for (WorkQueueType = 0; WorkQueueType < MaximumWorkQueue; WorkQueueType++)
     {
-        /* Clear the structure and initialize the queue */
-        RtlZeroMemory(&ExWorkerQueue[WorkQueueType], sizeof(EX_WORK_QUEUE));
-        KeInitializeQueue(&ExWorkerQueue[WorkQueueType].WorkerQueue, 0);
+        InterlockedExchange((PLONG)&ExWorkerQueue[WorkQueueType].WorkerQueue.MaximumCount,
+                            (LONG)KeNumberProcessors);
     }
 
     /* Only the critical queue uses dynamic threads for load scaling */
     ExWorkerQueue[CriticalWorkQueue].Info.MakeThreadsAsNecessary = TRUE;
-
-    /* Initialize the balance set manager events */
-    KeInitializeEvent(&ExpThreadSetManagerEvent, SynchronizationEvent, FALSE);
-    KeInitializeEvent(&ExpThreadSetManagerShutdownEvent,
-                      NotificationEvent,
-                      FALSE);
 
     /* Create the built-in worker threads for the critical queue */
     for (i = 0; i < CriticalThreads; i++)

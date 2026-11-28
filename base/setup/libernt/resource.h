@@ -10,9 +10,11 @@
 #pragma once
 
 /* Bitmaps */
-#define IDB_WATERMARK       100
 #define IDB_LOGO            102
 #define IDB_LOGOMASK        103
+
+/* Data */
+#define IDR_FILESECURITY    120
 
 /* Icons */
 #define IDI_MAIN            3000
@@ -71,6 +73,7 @@
 #define IDD_APPSPAGE         2260
 #define IDC_APPLIST          2261
 #define IDC_APPSPACE         2262
+#define IDC_APPDRIVERS       2263
 
 #define IDD_STORAGEPAGE      2270
 #define IDC_STORAGEINFO      2271
@@ -90,6 +93,12 @@
 #define IDC_TYPE_WARNICON        2290
 #define IDC_TYPE_WARNING         2291
 #define IDC_TYPE_NOTE            2292
+
+#define IDD_UPGRADEPAGE      2300
+#define IDC_UPGRADE_KEEP     2301
+#define IDC_UPGRADE_NEW      2302
+#define IDC_UPGRADE_LIST     2303
+#define IDC_UPGRADE_NOTE     2304
 
 #define IDD_READYPAGE        2240
 #define IDC_READY_SUMMARY    2241
@@ -298,6 +307,7 @@
 #define IDS_OOBE_APP_FAILED         5614
 #define IDS_OOBE_APPS_FAILED        5615
 #define IDS_OOBE_ACCOUNT_FAILED     5616
+#define IDS_OOBE_ADMIN_FALLBACK     5816
 #define IDS_OOBE_UNKNOWN_ERROR      5617
 #define IDS_OOBE_STORAGETITLE       5618
 #define IDS_OOBE_STORAGESUBTITLE    5619
@@ -310,6 +320,8 @@
 #define IDS_OOBE_APPS_NOSPACE_TEXT  5626
 #define IDS_OOBE_INSTALL_DRIVERS    5627
 #define IDS_APPS_INSTALLED          5628
+#define IDS_APPS_DRIVERS            5629
+#define IDS_APPS_DRIVERS_NOTE       5630
 
 #define IDS_TYPETITLE               5700
 #define IDS_TYPESUBTITLE            5701
@@ -329,3 +341,20 @@
 #define IDS_TYPE_WINDOWS            5715
 #define IDS_READY_DEFAULTOS         5716
 #define IDS_TYPE_LIBERNT            5717
+
+#define IDS_UPGRADETITLE            5800
+#define IDS_UPGRADESUBTITLE         5801
+#define IDS_UPGRADE_NEW_INSTALL     5802
+#define IDS_UPGRADE_NEW_COPY        5803
+#define IDS_UPGRADE_ENTRY           5804
+#define IDS_UPGRADE_EARLIER         5805
+#define IDS_UPGRADE_NOTE            5806
+#define IDS_UPGRADE_HIBERNATED      5807
+#define IDS_UPGRADE_READYTITLE      5808
+#define IDS_UPGRADE_READYSUBTITLE   5809
+#define IDS_UPGRADEBTN              5810
+#define IDS_READY_UPGRADE           5811
+#define IDS_READY_UPGRADE_KEEP      5812
+#define IDS_UPGRADE_PROCESSTITLE    5813
+#define IDS_UPGRADE_PROCESSSUBTITLE 5814
+#define IDS_UPGRADE_DONETITLE       5815

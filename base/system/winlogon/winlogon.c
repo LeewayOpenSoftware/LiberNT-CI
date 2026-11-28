@@ -454,6 +454,21 @@ WaitForBootDeviceInstallThread(
 }
 
 
+static
+VOID
+PublishThemeTrustFact(VOID)
+{
+    BOOL (WINAPI *Publish)(VOID);
+    HMODULE UxTheme = LoadLibraryW(L"uxtheme.dll");
+
+    if (!UxTheme)
+        return;
+    Publish = (BOOL (WINAPI *)(VOID))GetProcAddress(UxTheme, "ThemeTrustPublishBootFact");
+    if (!Publish || !Publish())
+        WARN("WL: the theme trust fact was not published\n");
+    /* uxtheme stays loaded: the theme load inside LoadLibrary can queue a work item and arm a timer that run its code later */
+}
+
 int
 WINAPI
 WinMain(
@@ -535,6 +550,8 @@ WinMain(
 
     /* Wait for the LSA server */
     WaitForLsass();
+
+    PublishThemeTrustFact();
 
     /* Init Notifications */
     InitNotifications();
@@ -624,10 +641,6 @@ WinMain(
             PostMessageW(WLSession->SASWindow, WLX_WM_SAS, WLX_SAS_TYPE_CTRL_ALT_DEL, 0);
     }
 
-    /* Tell kernel that CurrentControlSet is good (needed
-     * to support Last good known configuration boot) */
-    NtInitializeRegistry(CM_BOOT_FLAG_ACCEPTED | 1);
-    LogonStage("boot-accepted");
 
     /* Message loop for the SAS window */
     while (GetMessageW(&Msg, WLSession->SASWindow, 0, 0))

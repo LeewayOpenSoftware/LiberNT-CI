@@ -181,4 +181,7 @@ NTSTATUS LibIP6GetBestRoute(struct _IP6_BEST_ROUTE *Request);
 void LibIPShutdown(void);
 LONGLONG LibSysNowToSystemTime(u32_t Tick);
 
+/* Failed opens and resets of established connections (tcp.c) */
+void LibTCPGetFailureStats(unsigned long *AttemptFails, unsigned long *EstabResets);
+
 #endif

@@ -16,7 +16,7 @@
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 
 #define REACTOS_VERSION_DLL
-#define REACTOS_STR_FILE_DESCRIPTION  "LiberNT Power Management Control Panel"
+#define REACTOS_STR_FILE_DESCRIPTION  "Orosi Power Management Control Panel"
 #define REACTOS_STR_INTERNAL_NAME     "powercfg"
 #define REACTOS_STR_ORIGINAL_FILENAME "powercfg.cpl"
 #include <reactos/version.rc>
@@ -31,7 +31,7 @@ IDI_BAT_CHARGE_CRIT ICON "resources/batterychargingcritical.ico"
 IDI_BAT_CHARGE_LOW  ICON "resources/batterycharginglow.ico"
 IDI_BAT_CHARGE_HALF ICON "resources/batterycharginghalf.ico"
 IDI_BAT_CHARGE_HIGH ICON "resources/batterycharginghigh.ico"
-IDI_BAT_CHARGE_FULL ICON "resources/batterycharginghigh.ico"
+IDI_BAT_CHARGE_FULL ICON "resources/batterychargingfull.ico"
 
 IDI_BAT_DISCHRG_CRIT ICON "resources/batterycritical.ico"
 IDI_BAT_DISCHRG_LOW  ICON "resources/batterylow.ico"

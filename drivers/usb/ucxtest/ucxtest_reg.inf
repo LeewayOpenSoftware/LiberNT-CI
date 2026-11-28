@@ -1,0 +1,11 @@
+; PROJECT:     LiberNT
+; LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+; PURPOSE:     Register the UCX M1 smoke test client service (demand-start, depends on Ucx01000)
+; COPYRIGHT:   Copyright 2026 LeewayOpenSoftware
+
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\ucxclient_test","ErrorControl",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\ucxclient_test","ImagePath",0x00020000,"system32\drivers\ucxclient_test.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\ucxclient_test","Start",0x00010001,3
+HKLM,"SYSTEM\CurrentControlSet\Services\ucxclient_test","Type",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\ucxclient_test","DependOnService",0x00010000,"Ucx01000"

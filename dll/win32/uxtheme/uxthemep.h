@@ -73,7 +73,9 @@ typedef struct _WND_DATA
     RECT rcCaptionButtons[4];
     BOOL CaptionButtonLeft[4];
     ULONG DwmCaption[DWM_CAPTION_BUTTONS + 2];
+    ULONG DwmFrameInsets;
     UINT lastHitTest;
+    SIZE CaptionCalcSize;   /* window size rcCaptionButtons were computed at */
     BOOL HasAppDefinedRgn;
     BOOL HasThemeRgn;
     BOOL UpdatingRgn;
@@ -104,6 +106,7 @@ typedef struct _DRAW_CONTEXT
     BOOL DarkMode;
     HRGN hRgn;
     int CaptionHeight;
+    RECT FrameInsets; /* transparent outer band of the NC area: nothing is painted there */
 
     /* for double buffering */
     HDC hDCScreen;
@@ -169,6 +172,7 @@ LRESULT CALLBACK ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam,
 void ThemeCalculateCaptionButtonsPos(HWND hWnd, HTHEME htheme);
 void ThemeDwmRepaintCaptionButtons(HWND hWnd);
 void ThemeDwmUpdateCaptionButtons(HWND hWnd);
+void ThemeDwmUpdateFrameInsets(HWND hWnd);
 LONG SCROLL_getObjectId(INT nBar);
 void ThemeDrawScrollBarEx(PDRAW_CONTEXT pcontext, INT nBar, PSCROLLBARINFO psbi, POINT* pt);
 void ThemeDrawScrollBar(PDRAW_CONTEXT pcontext, INT Bar, POINT* pt);
@@ -180,6 +184,10 @@ HBRUSH UXTHEME_GetDialogBackgroundBrush(HWND hwnd, BOOL create);
 void UXTHEME_DestroyDialogBrush(HWND hwnd);
 HTHEME UXTHEME_OpenNcThemeData(HWND hWnd, LPCWSTR pszClassList, DWORD flags);
 void UXTHEME_ClearNonClientLiquidProperties(HWND hwnd);
+BOOL UXTHEME_CompositionAvailable(void);
+BOOL UXTHEME_MicaCapable(void);
+BOOL UXTHEME_MicaDisabledByPolicy(void);
+LPCWSTR UXTHEME_SelectDefaultStyleName(void);
 HTHEME GetNCCaptionTheme(HWND hWnd, DWORD style);
 HTHEME GetNCScrollbarTheme(HWND hWnd, DWORD style);
 
@@ -189,6 +197,7 @@ extern BOOL g_bThemeHooksActive;
 void UXTHEME_InitSystem(HINSTANCE hInst);
 BOOL UXTHEME_IsAppThemed(void);
 void UXTHEME_ReloadTheme(BOOL load);
+void UXTHEME_LoadThemeIfChanged(void);
 BOOL CALLBACK UXTHEME_broadcast_theme_changed (HWND hWnd, LPARAM enable);
 
 /* No alpha blending */

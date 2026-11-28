@@ -26,7 +26,51 @@ if(NOT KERNEL_VERSION_BUILD_TYPE STREQUAL "")
     set(DLL_VERSION_STR "${DLL_VERSION_STR}-${KERNEL_VERSION_BUILD_TYPE}")
 endif()
 
-# Get Git revision through "git describe"
+# Leeway cut number, shown in the About boxes as "LBI <number>" (1060, 1060.10, ...).
+# One source of truth: -DLIBERNT_LBI_BUILD=<number> wins; otherwise the one-line file
+# LBI_BUILD at the tree root (each cut branch carries its own); otherwise "dev".
+# The LBI ledger sequence (sdk/cmake/lbi.cmake) stays the per-attempt identity and is
+# not derived from this number; the NT identity (VER_PRODUCTBUILD) is untouched.
+set(LIBERNT_LBI_BUILD "" CACHE STRING "Leeway cut number shown as 'LBI <number>' in About boxes (empty: LBI_BUILD file, else dev)")
+set(LIBERNT_LBI_BUILD_EFFECTIVE "${LIBERNT_LBI_BUILD}")
+if(LIBERNT_LBI_BUILD_EFFECTIVE STREQUAL "" AND EXISTS "${REACTOS_SOURCE_DIR}/LBI_BUILD")
+    file(STRINGS "${REACTOS_SOURCE_DIR}/LBI_BUILD" _lbi_build_lines LIMIT_COUNT 1)
+    if(_lbi_build_lines)
+        list(GET _lbi_build_lines 0 LIBERNT_LBI_BUILD_EFFECTIVE)
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${REACTOS_SOURCE_DIR}/LBI_BUILD")
+endif()
+string(STRIP "${LIBERNT_LBI_BUILD_EFFECTIVE}" LIBERNT_LBI_BUILD_EFFECTIVE)
+if(LIBERNT_LBI_BUILD_EFFECTIVE STREQUAL "")
+    set(LIBERNT_LBI_BUILD_EFFECTIVE "dev")
+endif()
+if(NOT LIBERNT_LBI_BUILD_EFFECTIVE MATCHES "^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    message(FATAL_ERROR "LIBERNT_LBI_BUILD '${LIBERNT_LBI_BUILD_EFFECTIVE}' must be letters, digits, '.', '_' or '-' (e.g. 1060.10)")
+endif()
+message(STATUS "LBI build number: ${LIBERNT_LBI_BUILD_EFFECTIVE}")
+
+# Orosi product version shown to users: 5.0.<full LBI> (e.g. 5.0.1061.1), with the
+# architecture and channel as complementary info "(amd64-dev)". This is a display
+# version only: the NT compatibility version (10.0 / 26100), the PE ProductVersion
+# value ("6.00") and the numeric FileVersion are separate and unchanged.
+set(OROSI_VERSION_MAJOR "5")
+set(OROSI_VERSION_MINOR "0")
+set(OROSI_VERSION_STR "${OROSI_VERSION_MAJOR}.${OROSI_VERSION_MINOR}.${LIBERNT_LBI_BUILD_EFFECTIVE}")
+set(OROSI_ARCH_CHANNEL "${WINARCH}")
+if(NOT KERNEL_VERSION_BUILD_TYPE STREQUAL "")
+    set(OROSI_ARCH_CHANNEL "${OROSI_ARCH_CHANNEL}-${KERNEL_VERSION_BUILD_TYPE}")
+endif()
+set(OROSI_VERSION_FULL "${OROSI_VERSION_STR} (${OROSI_ARCH_CHANNEL})")
+
+if(NOT LIBERNT_BUILD_NUMBER)
+    set(LIBERNT_BUILD_NUMBER "$ENV{GITHUB_RUN_NUMBER}")
+endif()
+if(NOT LIBERNT_BUILD_NUMBER MATCHES "^[0-9]+$")
+    set(LIBERNT_BUILD_NUMBER 0)
+endif()
+
+# Build id: the short commit hash of HEAD. Deterministic and independent of
+# tags (git describe would prepend a reachable tag, e.g. integration-1061-...).
 set(COMMIT_HASH "unknown-hash")
 set(REVISION "unknown-revision")
 
@@ -45,7 +89,7 @@ if((EXISTS "${REACTOS_SOURCE_DIR}/.git") AND (NOT NO_REACTOS_BUILDNO))
         endif()
 
         execute_process(
-            COMMAND "${GIT_EXECUTABLE}" describe --abbrev=7 --long --always
+            COMMAND "${GIT_EXECUTABLE}" rev-parse --short=7 HEAD
             WORKING_DIRECTORY ${REACTOS_SOURCE_DIR}
             OUTPUT_VARIABLE GIT_DESCRIBE_REVISION
             RESULT_VARIABLE GIT_CALL_RESULT

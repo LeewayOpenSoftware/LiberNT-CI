@@ -180,7 +180,7 @@ IUnknown * com_get_registered_class_object(const struct apartment *apt, REFCLSID
             }
             if (!include_suspended && (clscontext & CLSCTX_LOCAL_SERVER) &&
                 (cur->clscontext & CLSCTX_LOCAL_SERVER) &&
-                !(cur->flags & (REGCLS_MULTIPLEUSE | REGCLS_MULTI_SEPARATE)))
+                !(cur->flags & (REGCLS_MULTIPLEUSE | REGCLS_MULTI_SEPARATE | REGCLS_SURROGATE)))
             {
                 cur->used = TRUE;
                 revoke = TRUE;
@@ -343,6 +343,72 @@ static HKEY get_classes_root_hkey(HKEY hkey, REGSAM access)
 }
 
 #ifdef __REACTOS__
+static BOOL token_is_above_medium(HANDLE token)
+{
+    union
+    {
+        TOKEN_MANDATORY_LABEL label;
+        BYTE buffer[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+    } il;
+    DWORD length, rid = SECURITY_MANDATORY_MEDIUM_RID;
+    PUCHAR count;
+
+    if (GetTokenInformation(token, TokenIntegrityLevel, &il, sizeof(il), &length))
+    {
+        count = GetSidSubAuthorityCount(il.label.Label.Sid);
+        if (count != NULL && *count != 0)
+            rid = *GetSidSubAuthority(il.label.Label.Sid, *count - 1);
+    }
+    return rid > SECURITY_MANDATORY_MEDIUM_RID;
+}
+
+/*
+ * A caller above Medium integrity (elevated, High, or SYSTEM) must not read the
+ * per-user HKCU\Software\Classes COM registrations: a standard-user process
+ * could otherwise plant a class that the privileged process loads. This matches
+ * the Windows COM runtime, which drops per-user classes above Medium integrity.
+ * (The HKCR *registry* merged view keeps HKCU at every level, as on Windows;
+ * only this COM lookup is guarded.) The process-token integrity is read once and
+ * cached; only the thread (impersonation) token is consulted per call, so
+ * impersonation is honoured.
+ */
+static BOOL should_ignore_peruser_classes(void)
+{
+    static volatile LONG cached_process = -1; /* -1 unknown, 0 <= Medium, 1 above */
+    HANDLE token;
+    LONG cached = cached_process;
+
+    /* The PROCESS integrity decides first and is cached: a privileged process
+       never takes the per-user path, even while it impersonates a lower-integrity
+       client (otherwise a SYSTEM/High service impersonating a Medium caller would
+       load that caller's per-user InprocServer32). */
+    if (cached == -1)
+    {
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        {
+            cached = token_is_above_medium(token) ? 1 : 0;
+            CloseHandle(token);
+            InterlockedExchange(&cached_process, cached);
+        }
+        /* else: leave the cache at -1 and retry on the next call */
+    }
+    if (cached == 1)
+        return TRUE;
+
+    /* Process is at/below Medium (or still unknown): also honour a higher
+       effective identity, e.g. a Medium process impersonating a High client. */
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
+    {
+        BOOL above = token_is_above_medium(token);
+        CloseHandle(token);
+        return above;
+    }
+
+    return FALSE;
+}
+#endif
+
+#ifdef __REACTOS__
 LSTATUS open_classes_key(HKEY hkey, const WCHAR *name, REGSAM access, HKEY *retkey)
 #else
 static LSTATUS open_classes_key(HKEY hkey, const WCHAR *name, REGSAM access, HKEY *retkey)
@@ -352,7 +418,7 @@ static LSTATUS open_classes_key(HKEY hkey, const WCHAR *name, REGSAM access, HKE
     UNICODE_STRING nameW;
 
 #ifdef __REACTOS__
-    if (!(access & (KEY_WOW64_32KEY | KEY_WOW64_64KEY)))
+    if (!(access & (KEY_WOW64_32KEY | KEY_WOW64_64KEY)) && !should_ignore_peruser_classes())
     {
         WCHAR *user_name;
         SIZE_T length;
@@ -1117,9 +1183,204 @@ HRESULT WINAPI CoCreateGuid(GUID *guid)
 }
 
 #ifdef __REACTOS__
-DWORD com_default_imp_level = RPC_C_IMP_LEVEL_IDENTIFY;
-static LONG com_security_initialized;
+#define COM_SECURITY_CAPABILITIES (EOAC_MUTUAL_AUTH | EOAC_SECURE_REFS | EOAC_ACCESS_CONTROL | EOAC_APPID | \
+        EOAC_DYNAMIC | EOAC_STATIC_CLOAKING | EOAC_DYNAMIC_CLOAKING | EOAC_ANY_AUTHORITY | EOAC_MAKE_FULLSIC | \
+        EOAC_REQUIRE_FULLSIC | EOAC_AUTO_IMPERSONATE | EOAC_DEFAULT | EOAC_DISABLE_AAA | EOAC_NO_CUSTOM_MARSHAL)
 
+DWORD com_default_imp_level = RPC_C_IMP_LEVEL_IDENTIFY;
+static BOOL com_security_initialized;
+DWORD com_default_authn_level = RPC_C_AUTHN_LEVEL_CONNECT;
+DWORD com_default_capabilities = EOAC_NONE;
+static SOLE_AUTHENTICATION_SERVICE *com_auth_services;
+static DWORD com_auth_service_count;
+
+static CRITICAL_SECTION com_security_cs;
+static CRITICAL_SECTION_DEBUG com_security_cs_debug =
+{
+    0, 0, &com_security_cs,
+    { &com_security_cs_debug.ProcessLocksList, &com_security_cs_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": com_security_cs") }
+};
+static CRITICAL_SECTION com_security_cs = { &com_security_cs_debug, -1, 0, 0, 0, 0 };
+
+static WCHAR *com_security_copy_name(const WCHAR *name)
+{
+    SIZE_T size = ((name ? lstrlenW(name) : 0) + 1) * sizeof(WCHAR);
+    WCHAR *copy = CoTaskMemAlloc(size);
+
+    if (copy)
+        memcpy(copy, name ? name : L"", size);
+    return copy;
+}
+
+WCHAR *com_security_token_user(HANDLE token)
+{
+    WCHAR name[256], domain[256], *ret = NULL;
+    DWORD name_len = ARRAY_SIZE(name), domain_len = ARRAY_SIZE(domain), size = 0;
+    TOKEN_USER *user = NULL;
+    SID_NAME_USE use;
+
+    GetTokenInformation(token, TokenUser, NULL, 0, &size);
+    if (size && (user = malloc(size)) && GetTokenInformation(token, TokenUser, user, size, &size) &&
+        LookupAccountSidW(NULL, user->User.Sid, name, &name_len, domain, &domain_len, &use) &&
+        (ret = CoTaskMemAlloc((domain_len + name_len + 2) * sizeof(WCHAR))))
+    {
+        memcpy(ret, domain, domain_len * sizeof(WCHAR));
+        ret[domain_len] = '\\';
+        memcpy(ret + domain_len + 1, name, (name_len + 1) * sizeof(WCHAR));
+    }
+    free(user);
+    return ret;
+}
+
+static WCHAR *com_security_process_user(void)
+{
+    WCHAR *ret;
+    HANDLE token;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return NULL;
+    ret = com_security_token_user(token);
+    CloseHandle(token);
+    return ret;
+}
+
+static void com_security_free_services(SOLE_AUTHENTICATION_SERVICE *services, DWORD count)
+{
+    DWORD i;
+
+    if (!services)
+        return;
+    for (i = 0; i < count; i++)
+        CoTaskMemFree(services[i].pPrincipalName);
+    CoTaskMemFree(services);
+}
+
+static SOLE_AUTHENTICATION_SERVICE *com_security_copy_services(const SOLE_AUTHENTICATION_SERVICE *services,
+        DWORD count)
+{
+    SOLE_AUTHENTICATION_SERVICE *copy;
+    DWORD i;
+
+    if (!(copy = CoTaskMemAlloc(count * sizeof(*copy))))
+        return NULL;
+    for (i = 0; i < count; i++)
+    {
+        copy[i] = services[i];
+        if (!(copy[i].pPrincipalName = com_security_copy_name(services[i].pPrincipalName)))
+        {
+            com_security_free_services(copy, i);
+            return NULL;
+        }
+    }
+    return copy;
+}
+
+static DWORD com_security_registry_level(HKEY root, const WCHAR *path, const WCHAR *value, DWORD min, DWORD max,
+        DWORD fallback)
+{
+    DWORD data, size = sizeof(data);
+
+    if (!RegGetValueW(root, path, value, RRF_RT_REG_DWORD, NULL, &data, &size) && data >= min && data <= max)
+        return data;
+    return fallback;
+}
+
+static DWORD com_security_default_authn_level(void)
+{
+    WCHAR module[MAX_PATH], path[MAX_PATH + 8], appid[CHARS_IN_GUID];
+    DWORD level, size = sizeof(appid);
+    const WCHAR *exe;
+    HKEY key;
+    LSTATUS status;
+
+    level = com_security_registry_level(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Ole", L"LegacyAuthenticationLevel",
+            RPC_C_AUTHN_LEVEL_NONE, RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_AUTHN_LEVEL_CONNECT);
+    if (!GetModuleFileNameW(NULL, module, ARRAY_SIZE(module)))
+        return level;
+    exe = wcsrchr(module, '\\') ? wcsrchr(module, '\\') + 1 : module;
+    lstrcpyW(path, L"AppID\\");
+    lstrcatW(path, exe);
+    if (open_classes_key(HKEY_CLASSES_ROOT, path, KEY_READ, &key))
+        return level;
+    status = RegGetValueW(key, NULL, L"AppID", RRF_RT_REG_SZ, NULL, appid, &size);
+    RegCloseKey(key);
+    if (status)
+        return level;
+    lstrcpyW(path, L"AppID\\");
+    lstrcatW(path, appid);
+    if (open_classes_key(HKEY_CLASSES_ROOT, path, KEY_READ, &key))
+        return level;
+    level = com_security_registry_level(key, NULL, L"AuthenticationLevel",
+            RPC_C_AUTHN_LEVEL_NONE, RPC_C_AUTHN_LEVEL_PKT_PRIVACY, level);
+    RegCloseKey(key);
+    return level;
+}
+
+static HRESULT com_security_store(LONG count, const SOLE_AUTHENTICATION_SERVICE *services, DWORD authn_level,
+        DWORD imp_level, DWORD capabilities)
+{
+    SOLE_AUTHENTICATION_SERVICE process_service = { RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, NULL, S_OK };
+    SOLE_AUTHENTICATION_SERVICE *copy;
+
+    if (count == -1)
+    {
+        process_service.pPrincipalName = com_security_process_user();
+        copy = com_security_copy_services(&process_service, 1);
+        CoTaskMemFree(process_service.pPrincipalName);
+        count = 1;
+    }
+    else
+        copy = com_security_copy_services(services, count);
+    if (!copy)
+        return E_OUTOFMEMORY;
+
+    com_auth_services = copy;
+    com_auth_service_count = count;
+    com_default_authn_level = authn_level == RPC_C_AUTHN_LEVEL_DEFAULT ? com_security_default_authn_level() : authn_level;
+    com_default_imp_level = imp_level;
+    com_default_capabilities = capabilities;
+    com_security_initialized = TRUE;
+    return S_OK;
+}
+
+void com_security_init_default(void)
+{
+    DWORD imp_level;
+
+    EnterCriticalSection(&com_security_cs);
+    if (!com_security_initialized)
+    {
+        imp_level = com_security_registry_level(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Ole",
+                L"LegacyImpersonationLevel", RPC_C_IMP_LEVEL_ANONYMOUS, RPC_C_IMP_LEVEL_DELEGATE,
+                RPC_C_IMP_LEVEL_IDENTIFY);
+        com_security_store(-1, NULL, RPC_C_AUTHN_LEVEL_DEFAULT, imp_level, EOAC_NONE);
+    }
+    LeaveCriticalSection(&com_security_cs);
+}
+
+BOOL com_call_security_enabled(void)
+{
+    static LONG enabled = -1;
+
+    if (enabled < 0)
+        InterlockedCompareExchange(&enabled, com_security_registry_level(HKEY_LOCAL_MACHINE, L"Software\\LiberNT\\COM",
+                L"CallSecurity", 0, 1, 0), -1);
+    return enabled == 1;
+}
+
+void com_security_reset(void)
+{
+    EnterCriticalSection(&com_security_cs);
+    com_security_free_services(com_auth_services, com_auth_service_count);
+    com_auth_services = NULL;
+    com_auth_service_count = 0;
+    com_default_authn_level = RPC_C_AUTHN_LEVEL_CONNECT;
+    com_default_imp_level = RPC_C_IMP_LEVEL_IDENTIFY;
+    com_default_capabilities = EOAC_NONE;
+    com_security_initialized = FALSE;
+    LeaveCriticalSection(&com_security_cs);
+}
 #endif
 /******************************************************************************
  *            CoQueryProxyBlanket        (combase.@)
@@ -1265,16 +1526,30 @@ HRESULT WINAPI CoInitializeSecurity(PSECURITY_DESCRIPTOR sd, LONG cAuthSvc,
     TRACE("%p, %ld, %p, %p, %ld, %ld, %p, %ld, %p\n", sd, cAuthSvc, asAuthSvc, reserved1, authn_level,
           imp_level, reserved2, capabilities, reserved3);
 
-    if (InterlockedCompareExchange(&com_security_initialized, TRUE, FALSE))
-        return RPC_E_TOO_LATE;
+    struct apartment *apt;
+    HRESULT hr;
 
-    if (sd || authn_level > RPC_C_AUTHN_LEVEL_NONE || capabilities != EOAC_NONE)
+    if (reserved1 || !cAuthSvc || cAuthSvc < -1 || (cAuthSvc > 0 && !asAuthSvc) ||
+        authn_level > RPC_C_AUTHN_LEVEL_PKT_PRIVACY ||
+        imp_level < RPC_C_IMP_LEVEL_ANONYMOUS || imp_level > RPC_C_IMP_LEVEL_DELEGATE ||
+        (capabilities & ~COM_SECURITY_CAPABILITIES))
+        return E_INVALIDARG;
+
+    if (!(apt = apartment_get_current_or_mta()))
+        return CO_E_NOTINITIALIZED;
+    apartment_release(apt);
+
+    EnterCriticalSection(&com_security_cs);
+    if (com_security_initialized)
+        hr = RPC_E_TOO_LATE;
+    else
+        hr = com_security_store(cAuthSvc, asAuthSvc, authn_level, imp_level, capabilities);
+    LeaveCriticalSection(&com_security_cs);
+
+    if (hr == S_OK && (sd || authn_level > RPC_C_AUTHN_LEVEL_NONE || capabilities != EOAC_NONE))
         FIXME("security descriptor %p, authentication level %ld and capabilities %#lx are not enforced\n",
               sd, authn_level, capabilities);
-
-    if (imp_level >= RPC_C_IMP_LEVEL_ANONYMOUS && imp_level <= RPC_C_IMP_LEVEL_DELEGATE)
-        com_default_imp_level = imp_level;
-    return S_OK;
+    return hr;
 #else
     static LONG warned;
 
@@ -1288,6 +1563,34 @@ HRESULT WINAPI CoInitializeSecurity(PSECURITY_DESCRIPTOR sd, LONG cAuthSvc,
     return S_OK;
 #endif
 }
+
+#ifdef __REACTOS__
+/***********************************************************************
+ *           CoQueryAuthenticationServices    (combase.@)
+ */
+HRESULT WINAPI CoQueryAuthenticationServices(DWORD *count, SOLE_AUTHENTICATION_SERVICE **services)
+{
+    HRESULT hr = S_OK;
+
+    TRACE("%p, %p\n", count, services);
+
+    if (!services)
+        return E_INVALIDARG;
+
+    EnterCriticalSection(&com_security_cs);
+    *count = 0;
+    *services = NULL;
+    if (com_auth_service_count)
+    {
+        if ((*services = com_security_copy_services(com_auth_services, com_auth_service_count)))
+            *count = com_auth_service_count;
+        else
+            hr = E_OUTOFMEMORY;
+    }
+    LeaveCriticalSection(&com_security_cs);
+    return hr;
+}
+#endif
 
 /***********************************************************************
  *           CoGetObjectContext    (combase.@)
@@ -1307,6 +1610,7 @@ HRESULT WINAPI CoGetObjectContext(REFIID riid, void **ppv)
     return IObjContext_QueryInterface(context, riid, ppv);
 }
 
+#ifndef __REACTOS__
 /***********************************************************************
  *           CoGetDefaultContext    (combase.@)
  */
@@ -1316,6 +1620,7 @@ HRESULT WINAPI CoGetDefaultContext(APTTYPE type, REFIID riid, void **obj)
 
     return E_NOINTERFACE;
 }
+#endif
 
 /***********************************************************************
  *          CoGetCallState        (combase.@)
@@ -1757,20 +2062,23 @@ HRESULT WINAPI CLSIDFromString(LPCOLESTR str, LPCLSID clsid)
         return E_INVALIDARG;
 
 #ifdef __REACTOS__
-    CLSID saved_id = *clsid;
     BOOL found;
-#endif
 
-    if (guid_from_string(str, clsid))
+    if (guid_from_string(str, &tmp_id))
+    {
+        *clsid = tmp_id;
         return S_OK;
+    }
 
-#ifdef __REACTOS__
     hr = clsid_from_progid_reg(str, &tmp_id, &found);
     if (SUCCEEDED(hr))
         *clsid = tmp_id;
-    else if (found)
-        *clsid = saved_id;
+    else if (!found)
+        guid_from_string(str, clsid);
 #else
+    if (guid_from_string(str, clsid))
+        return S_OK;
+
     /* It appears a ProgID is also valid */
     hr = clsid_from_string_reg(str, &tmp_id);
     if (SUCCEEDED(hr))
@@ -2163,6 +2471,10 @@ static HRESULT com_get_class_object(REFCLSID rclsid, DWORD clscontext,
         hr = rpc_get_local_class_object(rclsid, riid, obj);
         if (SUCCEEDED(hr))
             return hr;
+#ifdef __REACTOS__
+        if (hr == REGDB_E_KEYMISSING)
+            hr = REGDB_E_CLASSNOTREG;
+#endif
     }
 
     /* Finally try remote: this requires networked DCOM (a lot of work) */
@@ -2404,6 +2716,9 @@ HRESULT WINAPI CoWaitForMultipleHandles(DWORD flags, DWORD timeout, ULONG handle
         return hr;
 
     apt = com_get_current_apt();
+#ifdef __REACTOS__
+    apt = neutral_wait_apartment(apt);
+#endif
     message_loop = apt && !apt->multi_threaded;
 
     if (message_loop)
@@ -2963,7 +3278,13 @@ static HRESULT WINAPI thread_context_callback_ContextCallback(IContextCallback *
     }
 
 #ifdef __REACTOS__
-    if (!apt->multi_threaded && context == mta_context)
+    if (neutral_is_context(&context->IObjContext_iface))
+    {
+        apartment_release(apt);
+        return neutral_context_callback(&context->IComThreadingInfo_iface, callback, param, riid);
+    }
+
+    if ((!apt->multi_threaded || apt->neutral) && context == mta_context)
     {
         IComThreadingInfo *cti = NULL;
         IObjContext *saved_token;
@@ -3184,6 +3505,15 @@ HRESULT WINAPI CoGetContextToken(ULONG_PTR *token)
         return CO_E_NOTINITIALIZED;
     }
 
+#ifdef __REACTOS__
+    if (apt->neutral)
+    {
+        *token = (ULONG_PTR)neutral_context_token();
+        apartment_release(apt);
+        return *token ? S_OK : E_OUTOFMEMORY;
+    }
+#endif
+
     if (tlsdata->context_token)
     {
         struct thread_context *context = impl_from_IObjContext(tlsdata->context_token);
@@ -3247,6 +3577,59 @@ HRESULT WINAPI CoGetContextToken(ULONG_PTR *token)
     apartment_release(apt);
     return S_OK;
 }
+
+#ifdef __REACTOS__
+IObjContext *context_create_token(OXID oxid)
+{
+    struct thread_context *context;
+
+    if (!(context = calloc(1, sizeof(*context))))
+        return NULL;
+
+    context->IComThreadingInfo_iface.lpVtbl = &thread_context_info_vtbl;
+    context->IContextCallback_iface.lpVtbl = &thread_context_callback_vtbl;
+    context->IObjContext_iface.lpVtbl = &thread_object_context_vtbl;
+    context->ref = 1;
+    context->reported_ref = 0;
+    context->oxid = oxid;
+    return &context->IObjContext_iface;
+}
+
+IObjContext *context_get_mta_token(OXID oxid)
+{
+    struct thread_context *context;
+    IObjContext *token;
+
+    EnterCriticalSection(&context_cs);
+    if ((context = mta_context))
+        InterlockedIncrement(&context->ref);
+    LeaveCriticalSection(&context_cs);
+    if (context)
+        return &context->IObjContext_iface;
+
+    if (!(token = context_create_token(oxid)))
+        return NULL;
+
+    EnterCriticalSection(&context_cs);
+    if (!mta_context)
+    {
+        mta_context = impl_from_IObjContext(token);
+        LeaveCriticalSection(&context_cs);
+        return token;
+    }
+    context = mta_context;
+    InterlockedIncrement(&context->ref);
+    LeaveCriticalSection(&context_cs);
+
+    context_token_release(token);
+    return &context->IObjContext_iface;
+}
+
+void context_release_token(IObjContext *token)
+{
+    context_token_release(token);
+}
+#endif
 
 /***********************************************************************
  *              CoGetCurrentLogicalThreadId    (combase.@)
@@ -3426,6 +3809,9 @@ void WINAPI DECLSPEC_HOTPATCH CoUninitialize(void)
 
         com_revoke_all_ps_clsids();
         DestroyRunningObjectTable();
+#ifdef __REACTOS__
+        com_security_reset();
+#endif
     }
     else if (lockcount < 1)
     {
@@ -3478,6 +3864,11 @@ HRESULT WINAPI CoGetApartmentType(APTTYPE *type, APTTYPEQUALIFIER *qualifier)
 
     if (FAILED(hr = com_get_tlsdata(&tlsdata)))
         return hr;
+
+#ifdef __REACTOS__
+    if (neutral_get_apartment_type(type, qualifier))
+        return S_OK;
+#endif
 
     if (!tlsdata->apt)
         *type = APTTYPE_CURRENT;
@@ -3892,6 +4283,7 @@ HRESULT WINAPI CoEnableCallCancellation(void *reserved)
     return S_OK;
 }
 
+#ifndef __REACTOS__ /* see callctl.c */
 /***********************************************************************
  *           CoGetCallerTID    (combase.@)
  */
@@ -3900,6 +4292,7 @@ HRESULT WINAPI CoGetCallerTID(DWORD *tid)
     FIXME("stub!\n");
     return E_NOTIMPL;
 }
+#endif
 
 /***********************************************************************
  *           CoIsHandlerConnected    (combase.@)
@@ -4036,6 +4429,9 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD reason, LPVOID reserved)
     {
     case DLL_PROCESS_ATTACH:
         hProxyDll = hinstDLL;
+#ifdef __REACTOS__
+        callctl_register_hook();
+#endif
         break;
     case DLL_PROCESS_DETACH:
         com_revoke_local_servers();
@@ -4046,6 +4442,9 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD reason, LPVOID reserved)
         break;
     case DLL_THREAD_DETACH:
         com_cleanup_tlsdata();
+#ifdef __REACTOS__
+        callctl_thread_detach();
+#endif
         break;
     }
 

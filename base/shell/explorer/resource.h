@@ -104,6 +104,14 @@
 #define IDI_FLU_TRAYCHEVRIGHT 369
 #define IDI_FLU_TRAYDISMISS  380
 #define IDI_FLU_SEARCHREG    381
+#define IDI_FLU_WIFI1_LOCK   382
+#define IDI_FLU_WIFI2_LOCK   383
+#define IDI_FLU_WIFI3_LOCK   384
+#define IDI_FLU_WIFI4_LOCK   385
+#define IDI_FLU_WIFI1_LOCK_LIGHT   1382
+#define IDI_FLU_WIFI2_LOCK_LIGHT   1383
+#define IDI_FLU_WIFI3_LOCK_LIGHT   1384
+#define IDI_FLU_WIFI4_LOCK_LIGHT   1385
 #define IDI_FOLDER_DOCUMENTS 370
 #define IDI_FOLDER_DOWNLOADS 371
 #define IDI_FOLDER_MUSIC     372
@@ -208,6 +216,28 @@
 #define IDS_TRAYCLOCK_NEWNOTIFICATION      816
 #define IDS_TRAYCLOCK_NEWNOTIFICATIONS     817
 #define IDS_TRAYQUICKSETTINGS_TOOLTIP      818
+#define IDS_SM2_SHUTDOWN                   832
+#define IDS_SM2_RESTART                    833
+#define IDS_SM2_LOGOFF                     834
+#define IDS_SM2_LOCK                       835
+#define IDS_SM2_SLEEP                      836
+#define IDS_SM2_HIBERNATE                  837
+#define IDS_SM2_ERROR                      838
+#define IDS_SM2_DOCUMENTS                  839
+#define IDS_SM2_PICTURES                   840
+#define IDS_SM2_MUSIC                      841
+#define IDS_SM2_GAMES                      842
+#define IDS_SM2_COMPUTER                   843
+#define IDS_SM2_SETTINGS                   844
+#define IDS_SM2_DEVICES                    845
+#define IDS_SM2_ASSIST                     846
+#define IDS_SM2_ALLPROGRAMS                847
+#define IDS_SM2_BACK                       848
+#define IDS_SM2_NOMATCH                    849
+#define IDS_SM2_RENAME                     850
+#define IDS_SM2_RENAME_FAILED              851
+#define IDS_SM2_REMOVE                     852
+#define IDS_SM2_SEARCH                     853
 
 /* These values must be synchronized with shell32 */
 #define IDS_ADVANCED_DISPLAY_FAVORITES              30466

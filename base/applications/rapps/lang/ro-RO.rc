@@ -173,7 +173,7 @@ BEGIN
     IDS_APPTITLE "Managerul de aplicații ReactOS"
     IDS_APP_AUTHORS "Marcă înregistrată 2009 Dmitry Chapyshev"
     IDS_WELCOME_TITLE "Bun venit la Managerul de aplicații ReactOS!"
-    IDS_WELCOME_TEXT "Alegeți o categorie din stânga, apoi alegeți o aplicație pentru a o instala sau dezinstala.\nArdesa web LiberNT: "
+    IDS_WELCOME_TEXT "Alegeți o categorie din stânga, apoi alegeți o aplicație pentru a o instala sau dezinstala.\nArdesa web Orosi: "
     IDS_WELCOME_URL "https://reactos.org"
 
     IDS_APPWIZ_TITLE "Adăugare/Eliminare de programe"
@@ -206,7 +206,7 @@ BEGIN
     IDS_UNABLE_TO_WRITE "Nu se poate scrie pe disc. Discul poate fi la capacitate maximă."
     IDS_INSTALL_SELECTED "Instalare aplicații selectate"
     IDS_SELECTEDFORINST "Selectate pentru instalare"
-    IDS_MISMATCH_CERT_INFO "Certificatul în uz este necunoscut:\nSubiect: %s\nEmitent: %s\nVreți să continuați oricum?"
+    IDS_MISMATCH_CERT_INFO "Certificatul în uz este necunoscut:\nSubiect: %s\nEmitent root: %s\nVreți să continuați oricum?"
     IDS_UNABLE_PATH "Formatul căii specificate nu este corect."
     IDS_APP_DISPLAY_DETAILS "Detalii"
     IDS_APP_DISPLAY_LIST "Listă"

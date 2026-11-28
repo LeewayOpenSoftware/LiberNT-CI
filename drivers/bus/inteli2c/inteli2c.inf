@@ -590,6 +590,6 @@ ServiceBinary = %12%\inteli2c.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 IntelI2c.DeviceDesc = "Intel Serial I/O I2C Host Controller"
-IntelI2c.ServiceDesc = "LiberNT Intel Serial I/O I2C Driver"
+IntelI2c.ServiceDesc = "Orosi Intel Serial I/O I2C Driver"

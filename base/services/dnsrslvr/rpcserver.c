@@ -149,7 +149,16 @@ R_ResolverQuery(
             if (Status == ERROR_SUCCESS)
             {
                 DPRINT("DNS query successful!\n");
-                DnsIntCacheAddEntry(pszName, wType, *ppResultRecords, FALSE);
+                DnsIntCacheAddEntry(pszName, wType, *ppResultRecords, ERROR_SUCCESS, FALSE);
+            }
+            else if ((dwFlags == DNS_QUERY_STANDARD) &&
+                     (Status == DNS_ERROR_RCODE_NAME_ERROR || Status == DNS_INFO_NO_RECORDS))
+            {
+                /* Cache negatives only for default-option queries: the cache key
+                 * is name and type, but the answer depends on the caller's
+                 * options, so option-specific negatives would poison other users */
+                DPRINT("DNS query returned a negative answer, caching it\n");
+                DnsIntCacheAddEntry(pszName, wType, NULL, Status, FALSE);
             }
         }
     }

@@ -279,8 +279,8 @@ EXIT\t\tإغلاق CMD\n\
     WCMD_ANYKEY, "اضغط أي مفتاح للاستمرار... "
     WCMD_CONSTITLE, "سطر أوامر واين"
     WCMD_VERSION, "Microsoft Windows [Version %1!S!]\n"
-    WCMD_BANNER, "LiberNT [الإصدار %1!S! %2!S!]\n\
-(C) حقوق النشر %3!S! فريق LiberNT.\n"
+    WCMD_BANNER, "Orosi [الإصدار %1!S! %2!S!]\n\
+(C) حقوق النشر %3!S! Leeway Open Software.\n"
     WCMD_MOREPROMPT, "المزيد؟ "
     WCMD_LINETOOLONG, "سطر الإدخال طويل جدًا.\n"
     WCMD_VOLUMELABEL, "وحدة التخزين في المحرك %1!c! هي %2\n"

@@ -709,6 +709,18 @@ BOOL HasNativeDriver(const LUID &Luid)
     return Status >= 0 && Name.UmdFileName[0] != 0;
 }
 
+BOOL ScansOutOutput(const WCHAR *DeviceName, const LUID &Luid)
+{
+    D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME Open = {};
+    lstrcpynW(Open.DeviceName, DeviceName, ARRAYSIZE(Open.DeviceName));
+    if (D3DKMTOpenAdapterFromGdiDisplayName(&Open) < 0)
+        return FALSE;
+    D3DKMT_CLOSEADAPTER Close = {};
+    Close.hAdapter = Open.hAdapter;
+    D3DKMTCloseAdapter(&Close);
+    return Open.AdapterLuid.LowPart == Luid.LowPart && Open.AdapterLuid.HighPart == Luid.HighPart;
+}
+
 void SetNativeTraceProvider(IDXGIAdapter1 *Adapter)
 {
     DXGI_ADAPTER_DESC1 Desc = {};
@@ -850,7 +862,10 @@ BOOL CreateDevice(IDXGIAdapter1 **Selected)
                 if (Adapter->EnumOutputs(OutputIndex, &Output) != S_OK)
                     break;
                 DXGI_OUTPUT_DESC OutputDesc = {};
-                if (SUCCEEDED(Output->GetDesc(&OutputDesc)) && OutputDesc.AttachedToDesktop && OutputDesc.Monitor == Monitor)
+                /* DXGI lists the primary output under a hybrid system's preferred GPU; the window
+                 * surfaces DWM imports live on the adapter that scans the output out. */
+                if (SUCCEEDED(Output->GetDesc(&OutputDesc)) && OutputDesc.AttachedToDesktop && OutputDesc.Monitor == Monitor &&
+                    ScansOutOutput(OutputDesc.DeviceName, Desc.AdapterLuid))
                     OwnsOutput = TRUE;
                 Release(Output);
                 if (OwnsOutput)
@@ -1016,7 +1031,8 @@ Texture *UploadGdi(const DWM_WIN *Window, const BYTE *Pixels)
 {
     if (Window->Generation == 0 || Window->BaseUpdateId == 0 ||
         Window->cx <= 0 || Window->cy <= 0 ||
-        Window->BaseWidth != (ULONG)Window->cx || Window->BaseHeight != (ULONG)Window->cy ||
+        Window->BaseWidth != (ULONG)DWM_BACKING_CX(Window) ||
+        Window->BaseHeight != (ULONG)DWM_BACKING_CY(Window) ||
         Window->BaseFormat != DWM_DX_FORMAT_B8G8R8A8_UNORM ||
         Window->Stride != Window->BasePitch || Window->Stride > MAXLONG ||
         (ULONGLONG)Window->cx * sizeof(ULONG) > Window->Stride ||
@@ -1234,7 +1250,7 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
          (!Client || (Format != DWM_DX_FORMAT_R8G8B8A8_UNORM && Format != DWM_DX_FORMAT_R10G10B10A2_UNORM &&
                       Format != DWM_DX_FORMAT_R16G16B16A16_FLOAT))))
         return NULL;
-    if (!Client && (Width != (ULONG)Window->cx || Height != (ULONG)Window->cy))
+    if (!Client && (Width != (ULONG)DWM_BACKING_CX(Window) || Height != (ULONG)DWM_BACKING_CY(Window)))
         return NULL;
     if (Client && ForeignAdapter(Window))
         return ImportForeign(Window, (DXGI_FORMAT)Format);
@@ -1273,8 +1289,9 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
     }
     if (Window->BaseUpdateId == 0)
         return NULL;
+    /* The snapshot holds only the visible rect of a frame with a transparent band. */
     if (Slot->SharedSource == NULL || Slot->Share != Share || Slot->Generation != Generation ||
-        Slot->Image.Width != (LONG)Width || Slot->Image.Height != (LONG)Height)
+        Slot->Image.Width != Window->cx || Slot->Image.Height != Window->cy)
     {
         RetainReplacedSurface(Slot, Window);
         Slot->Reset();
@@ -1290,7 +1307,7 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
             Slot->Reset();
             return NULL;
         }
-        if (!CreateTexture(Slot->Image, Width, Height, FALSE, NULL, 0, Desc.Format))
+        if (!CreateTexture(Slot->Image, Window->cx, Window->cy, FALSE, NULL, 0, Desc.Format))
         {
             Slot->Reset();
             return NULL;
@@ -1305,7 +1322,18 @@ Texture *Import(const DWM_WIN *Window, BOOL Client)
     {
         /* Keep unchanged GDI publications in a GPU-owned texture. */
         UnbindTextures();
-        State.Context->CopyResource(Slot->Image.Resource, Slot->SharedSource);
+        if (DWM_HAS_FRAME_INSETS(Window))
+        {
+            D3D11_BOX Box = {(UINT)Window->FrameInsets.left, (UINT)Window->FrameInsets.top, 0,
+                             (UINT)(Window->FrameInsets.left + Window->cx),
+                             (UINT)(Window->FrameInsets.top + Window->cy), 1};
+            State.Context->CopySubresourceRegion(Slot->Image.Resource, 0, 0, 0, 0,
+                                                 Slot->SharedSource, 0, &Box);
+        }
+        else
+        {
+            State.Context->CopyResource(Slot->Image.Resource, Slot->SharedSource);
+        }
         State.WorkPending = TRUE;
         if (!Result(State.Device->GetDeviceRemovedReason(), "GDI texture snapshot"))
             return NULL;
@@ -1768,6 +1796,125 @@ DwmD3dShutdown(void)
     State.Runtime = Runtime;
     State.Dxgi = Dxgi;
     State.Compiler = Compiler;
+}
+
+/* A mode change resizes the output; the device, its shaders and its states do not depend on the mode. */
+BOOL
+DwmD3dResize(LONG Width, LONG Height)
+{
+    if (!State.Active || Width <= 0 || Height <= 0)
+        return FALSE;
+    if (Width == State.Width && Height == State.Height)
+        return TRUE;
+
+    FinishGpuReads();
+    State.Context->ClearState();
+    State.Context->Flush();
+    for (ULONG Index = 0; Index < ARRAYSIZE(State.Surfaces); ++Index)
+        State.Surfaces[Index].Reset();
+    for (ULONG Index = 0; Index < ARRAYSIZE(State.ClientSources); ++Index)
+        State.ClientSources[Index].Reset();
+    for (ULONG Index = 0; Index < ARRAYSIZE(State.Blurs); ++Index)
+        State.Blurs[Index].Reset();
+    for (ULONG Index = 0; Index < ARRAYSIZE(State.FrameAtlases); ++Index)
+        State.FrameAtlases[Index].Image.Reset();
+    State.Backdrop.Reset();
+    State.Canvas.Reset();
+    State.PointerImage.Reset();
+    State.PointerInvert.Reset();
+    Release(State.Mirror);
+    Release(State.BackBuffer);
+
+    struct
+    {
+        HMODULE Runtime, Dxgi, Compiler, TraceProvider;
+        HWND Window;
+        char Renderer[sizeof(State.Renderer)];
+        LUID AdapterLuid;
+        ID3D11Device *Device;
+        ID3D11DeviceContext *Context;
+        IDXGISwapChain1 *SwapChain;
+        IDwmOverlaySwapChain *OverlayChain;
+        ID3D11VertexShader *VertexShader;
+        ID3D11PixelShader *PixelShaders[ShaderCount];
+        ConstantBuffer *ConstantsHead, *ConstantsTail;
+        ID3D11SamplerState *Sampler;
+        ID3D11BlendState *Blend, *PremultipliedBlend, *InvertBlend;
+        ID3D11RasterizerState *Rasterizer;
+        ID3D11Query *Completion, *ClientCopies;
+    } Kept;
+    Kept.Runtime = State.Runtime;
+    Kept.Dxgi = State.Dxgi;
+    Kept.Compiler = State.Compiler;
+    Kept.TraceProvider = State.TraceProvider;
+    Kept.Window = State.Window;
+    CopyMemory(Kept.Renderer, State.Renderer, sizeof(Kept.Renderer));
+    Kept.AdapterLuid = State.AdapterLuid;
+    Kept.Device = State.Device;
+    Kept.Context = State.Context;
+    Kept.SwapChain = State.SwapChain;
+    Kept.OverlayChain = State.OverlayChain;
+    Kept.VertexShader = State.VertexShader;
+    CopyMemory(Kept.PixelShaders, State.PixelShaders, sizeof(Kept.PixelShaders));
+    Kept.ConstantsHead = State.ConstantsHead;
+    Kept.ConstantsTail = State.ConstantsTail;
+    Kept.Sampler = State.Sampler;
+    Kept.Blend = State.Blend;
+    Kept.PremultipliedBlend = State.PremultipliedBlend;
+    Kept.InvertBlend = State.InvertBlend;
+    Kept.Rasterizer = State.Rasterizer;
+    Kept.Completion = State.Completion;
+    Kept.ClientCopies = State.ClientCopies;
+    ZeroMemory(&State, sizeof(State));
+    State.Runtime = Kept.Runtime;
+    State.Dxgi = Kept.Dxgi;
+    State.Compiler = Kept.Compiler;
+    State.TraceProvider = Kept.TraceProvider;
+    State.Window = Kept.Window;
+    CopyMemory(State.Renderer, Kept.Renderer, sizeof(State.Renderer));
+    State.AdapterLuid = Kept.AdapterLuid;
+    State.Device = Kept.Device;
+    State.Context = Kept.Context;
+    State.SwapChain = Kept.SwapChain;
+    State.OverlayChain = Kept.OverlayChain;
+    State.VertexShader = Kept.VertexShader;
+    CopyMemory(State.PixelShaders, Kept.PixelShaders, sizeof(State.PixelShaders));
+    State.ConstantsHead = Kept.ConstantsHead;
+    State.ConstantsTail = Kept.ConstantsTail;
+    State.NextConstants = Kept.ConstantsHead;
+    State.Sampler = Kept.Sampler;
+    State.Blend = Kept.Blend;
+    State.PremultipliedBlend = Kept.PremultipliedBlend;
+    State.InvertBlend = Kept.InvertBlend;
+    State.Rasterizer = Kept.Rasterizer;
+    State.Completion = Kept.Completion;
+    State.ClientCopies = Kept.ClientCopies;
+    State.Width = Width;
+    State.Height = Height;
+
+    /* The output is claimed for one size: give the claim up and take it again for the new one. */
+    DWM_GPU_OUTPUT Output = {};
+    Output.StructSize = sizeof(Output);
+    BOOL Success = (LONG)NtUserCallOneParam((DWORD_PTR)&Output, DWM_ROUTINE_SETGPUOUTPUT) >= 0 &&
+        SetWindowPos(State.Window, HWND_TOPMOST, 0, 0, Width, Height,
+                     SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+    if (Success)
+    {
+        Output.Window = (ULONGLONG)(ULONG_PTR)State.Window;
+        Output.Width = Width;
+        Output.Height = Height;
+        State.Registered = (LONG)NtUserCallOneParam((DWORD_PTR)&Output, DWM_ROUTINE_SETGPUOUTPUT) >= 0;
+        Success = State.Registered &&
+            Result(State.SwapChain->ResizeBuffers(0, Width, Height, DXGI_FORMAT_UNKNOWN, 0), "ResizeBuffers") &&
+            BindOutput();
+    }
+    if (!Success)
+    {
+        DwmD3dShutdown();
+        return FALSE;
+    }
+    State.Active = TRUE;
+    return TRUE;
 }
 
 void

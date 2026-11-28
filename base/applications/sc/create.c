@@ -98,6 +98,14 @@ BOOL Create(LPCTSTR *ServiceArgs, INT ArgCount)
         goto done;
     }
 
+    /* "start= delayed-auto" is an auto-start service plus the delayed flag. */
+    if (ServiceInfo.bDelayedAutoStart &&
+        !ApplyDelayedAutoStart(hService, TRUE))
+    {
+        bRet = FALSE;
+        goto done;
+    }
+
     _tprintf(_T("[SC] CreateService SUCCESS\n\n"));
 
 done:

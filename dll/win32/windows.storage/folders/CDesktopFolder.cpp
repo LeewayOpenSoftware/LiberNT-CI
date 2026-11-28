@@ -709,6 +709,7 @@ HRESULT WINAPI CDesktopFolder::CreateViewObject(
     {
         CRegKeyHandleArray keys;
         AddClassKeyToArray(L"Directory\\Background", keys, keys);
+        AddClassKeyToArray(L"DesktopBackground", keys, keys);
         DEFCONTEXTMENU dcm = { hwndOwner, this, pidlRoot, this, 0, NULL, NULL, keys, keys };
         hr = SHCreateDefaultContextMenu(&dcm, riid, ppvOut);
     }
@@ -1083,7 +1084,13 @@ HRESULT WINAPI CDesktopFolder::CallBack(IShellFolder *psf, HWND hwndOwner, IData
             if (!bIsSelf)
                 return SHELL32_ShowPropertiesDialog(pdtobj); // File selection
         }
-        return SHELL_ExecuteControlPanelCPL(hwndOwner, L"desk.cpl") ? S_OK : E_FAIL; // Background
+        // Background: the Leeway Personalization applet, desk.cpl as the fallback
+        WCHAR szCpl[MAX_PATH];
+        if (GetSystemDirectoryW(szCpl, _countof(szCpl)) && SUCCEEDED(StringCchCatW(szCpl, _countof(szCpl), L"\\leewaydisp.cpl")) &&
+            GetFileAttributesW(szCpl) != INVALID_FILE_ATTRIBUTES &&
+            SHELL_ExecuteControlPanelCPL(hwndOwner, L"leewaydisp.cpl"))
+            return S_OK;
+        return SHELL_ExecuteControlPanelCPL(hwndOwner, L"desk.cpl") ? S_OK : E_FAIL;
     }
     else if (uMsg == DFM_MERGECONTEXTMENU && !pdtobj) // Add Properties item when called for directory background
     {

@@ -1,0 +1,39 @@
+/*
+ * PROJECT:     LiberNT Local Security Authority (LSA) Server
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     DPAPI (Data Protection API) server interface
+ * COPYRIGHT:   Copyright 2026 LeewayOpenSoftware
+ */
+
+#include <ms-dtyp.idl>
+
+cpp_quote("#define DPAPI_LOCAL_ENDPOINT L\"protected_storage\"")
+
+[
+    uuid(6b2a4f17-0c93-4d6e-9a1b-2f7e8c5d3a40),
+    version(1.0),
+    pointer_default(unique)
+]
+interface dpapi
+{
+    typedef struct _DPAPI_BLOB
+    {
+        [range(0, 0x10000000)] unsigned long cbData;
+        [size_is(cbData)] byte *pbData;
+    } DPAPI_BLOB, *PDPAPI_BLOB;
+
+    long s_DpapiProtect(
+        [in] handle_t HandleBinding,
+        [in] unsigned long Flags,
+        [in, unique, string] wchar_t *Description,
+        [in] DPAPI_BLOB DataIn,
+        [in] DPAPI_BLOB Entropy,
+        [out] DPAPI_BLOB *DataOut);
+
+    long s_DpapiUnprotect(
+        [in] handle_t HandleBinding,
+        [in] unsigned long Flags,
+        [in] DPAPI_BLOB DataIn,
+        [in] DPAPI_BLOB Entropy,
+        [out] DPAPI_BLOB *DataOut);
+}

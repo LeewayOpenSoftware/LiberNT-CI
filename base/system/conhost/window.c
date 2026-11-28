@@ -60,8 +60,12 @@ struct console_window
     unsigned int      ui_charset;      /* default UI charset */
     WCHAR            *config_key;      /* config registry key name */
     LONG              ext_leading;     /* external leading for font */
+#ifdef __REACTOS__
+    HFONT             italic_font;     /* italic variant of font, created on first use */
+#endif
 
     BOOL              quick_edit;      /* whether mouse ops are sent to app or used for content selection */
+    BOOL              transparency;    /* content backdrop blur */
     unsigned int      menu_mask;       /* MK_CONTROL MK_SHIFT mask to drive submenu opening */
     COORD             win_pos;         /* position (in cells) of visible part of screen buffer in window */
     unsigned int      win_width;       /* size (in cells) of visible part of window (width & height) */
@@ -99,6 +103,7 @@ struct console_config
     unsigned int  insert_mode;    /* TRUE to insert text at the cursor location; FALSE to overwrite it */
     unsigned int  menu_mask;      /* MK_CONTROL MK_SHIFT mask to drive submenu opening */
     unsigned int  quick_edit;     /* whether mouse ops are sent to app or used for content selection */
+    unsigned int  transparency;   /* content backdrop blur on (1) or off (0) */
     unsigned int  sb_width;       /* active screen buffer width */
     unsigned int  sb_height;      /* active screen buffer height */
     unsigned int  win_width;      /* size (in cells) of visible part of window (width & height) */
@@ -217,7 +222,11 @@ static void load_registry_key( HKEY key, struct console_config *config )
         config->history_mode = val;
 
     count = sizeof(val);
+#ifdef __REACTOS__
+    if (!RegQueryValueExW( key, L"InsertMode", 0, &type, (BYTE *)&val, &count ))
+#else
     if (!RegQueryValueExW( key, L"wszInsertMode", 0, &type, (BYTE *)&val, &count ))
+#endif
         config->insert_mode = val;
 
     count = sizeof(val);
@@ -231,6 +240,10 @@ static void load_registry_key( HKEY key, struct console_config *config )
     count = sizeof(val);
     if (!RegQueryValueExW( key, L"QuickEdit", 0, &type, (BYTE *)&val, &count ))
         config->quick_edit = val;
+
+    count = sizeof(val);
+    if (!RegQueryValueExW( key, L"Transparency", 0, &type, (BYTE *)&val, &count ))
+        config->transparency = val != 0;
 
     count = sizeof(val);
     if (!RegQueryValueExW( key, L"ScreenBufferSize", 0, &type, (BYTE *)&val, &count ))
@@ -285,6 +298,7 @@ static void load_config( const WCHAR *key_name, struct console_config *config )
 #else
     config->quick_edit   = 0;
 #endif
+    config->transparency = 1;
     config->sb_height    = 150;
     config->sb_width     = 80;
 #ifdef __REACTOS__
@@ -425,6 +439,12 @@ static void save_registry_key( HKEY key, const struct console_config *config, BO
         RegSetValueExW( key, L"QuickEdit", 0, REG_DWORD, (BYTE *)&val, sizeof(val) );
     }
 
+    if (save_all || config->transparency != default_config.transparency)
+    {
+        val = config->transparency;
+        RegSetValueExW( key, L"Transparency", 0, REG_DWORD, (BYTE *)&val, sizeof(val) );
+    }
+
     if (save_all || config->sb_width != default_config.sb_width ||
         config->sb_height != default_config.sb_height)
     {
@@ -489,6 +509,7 @@ static void fill_mem_dc( struct console *console, const RECT *update )
     const struct cell_color *colors;
     COLORREF fg, bg;
     unsigned int first, last;
+    DWORD style;
 #endif
 
     if (!console->window->font || !console->window->bitmap)
@@ -525,11 +546,31 @@ static void fill_mem_dc( struct console *console, const RECT *update )
             bg = console->active->color_map[(attr >> 4) & 0x0F];
             if (colors && colors[i].fg != CLR_INVALID) fg = colors[i].fg;
             if (colors && colors[i].bg != CLR_INVALID) bg = colors[i].bg;
+            style = colors ? colors[i].style : CELL_STYLE_NONE;
+            if (style == CELL_STYLE_NONE) style = 0;
+            /* SGR 2: faint text is drawn halfway between the text and background colours */
+            if (style & CELL_STYLE_FAINT)
+                fg = RGB( (GetRValue( fg ) + GetRValue( bg )) / 2, (GetGValue( fg ) + GetGValue( bg )) / 2,
+                          (GetBValue( fg ) + GetBValue( bg )) / 2 );
+            /* SGR 3: italic text uses an italic variant of the console font */
+            if ((style & CELL_STYLE_ITALIC) && !console->window->italic_font)
+            {
+                LOGFONTW lf;
+
+                if (GetObjectW( console->window->font, sizeof(lf), &lf ))
+                {
+                    lf.lfItalic = TRUE;
+                    console->window->italic_font = CreateFontIndirectW( &lf );
+                }
+            }
+            SelectObject( console->window->mem_dc, (style & CELL_STYLE_ITALIC) && console->window->italic_font ?
+                                                   console->window->italic_font : console->window->font );
             SetBkColor( console->window->mem_dc, bg );
             SetTextColor( console->window->mem_dc, fg );
             for (k = i; k <= last && (cell[k].attr & ~CELL_WIDE_FLAGS) == attr &&
                         (!colors || (colors[k].fg == colors[i].fg && colors[k].bg == colors[i].bg &&
-                                     colors[k].underline == colors[i].underline)); k++)
+                                     colors[k].underline == colors[i].underline &&
+                                     colors[k].style == colors[i].style)); k++)
             {
                 if ((cell[k].attr & COMMON_LVB_TRAILING_BYTE) && k > i &&
                     (cell[k - 1].attr & COMMON_LVB_LEADING_BYTE))
@@ -660,6 +701,15 @@ static void update_content_backdrop( struct console *console )
     COLORREF fill;
 
     if (!console->win || !console->active) return;
+    if (!console->window->transparency)
+    {
+        if (console->window->backdrop_set)
+        {
+            DwmSettingsClearContentBackdrop( console->win );
+            console->window->backdrop_set = FALSE;
+        }
+        return;
+    }
     fill = console->active->color_map[(console->active->attr >> 4) & 0x0f];
     if (console->window->backdrop_set && console->window->backdrop == fill) return;
     if (DwmSettingsSetContentBackdrop( console->win, fill, 192 ))
@@ -966,6 +1016,10 @@ static BOOL set_console_font( struct console *console, const LOGFONTW *logfont )
 
     if (console->window->font) DeleteObject( console->window->font );
     console->window->font = font;
+#ifdef __REACTOS__
+    if (console->window->italic_font) DeleteObject( console->window->italic_font );
+    console->window->italic_font = NULL;
+#endif
     console->window->ext_leading = tm.tmExternalLeading;
 
     if (console->window->bitmap)
@@ -1771,6 +1825,13 @@ static void record_key_input( struct console *console, BOOL down, WPARAM wparam,
 static void record_char_input( struct console *console, WCHAR ch, LPARAM lparam )
 {
     INPUT_RECORD ir;
+#ifdef __REACTOS__
+    ir.EventType = KEY_EVENT;
+    ir.Event.KeyEvent.bKeyDown          = TRUE;
+    ir.Event.KeyEvent.wRepeatCount      = 1;
+    ir.Event.KeyEvent.wVirtualKeyCode   = 0;
+    ir.Event.KeyEvent.wVirtualScanCode  = 0;
+#else
     SHORT sh = VkKeyScanW( ch );
 
     if (sh == ~0) return;
@@ -1779,6 +1840,7 @@ static void record_char_input( struct console *console, WCHAR ch, LPARAM lparam 
     ir.Event.KeyEvent.wRepeatCount      = 0;
     ir.Event.KeyEvent.wVirtualKeyCode   = LOBYTE(sh);
     ir.Event.KeyEvent.wVirtualScanCode  = MapVirtualKeyW( LOBYTE(sh), 0 );
+#endif
     ir.Event.KeyEvent.uChar.UnicodeChar = ch;
     ir.Event.KeyEvent.dwControlKeyState = 0;
     if (lparam & (1u << 24)) ir.Event.KeyEvent.dwControlKeyState |= ENHANCED_KEY;
@@ -1847,6 +1909,8 @@ static INT_PTR WINAPI option_dialog_proc( HWND dialog, UINT msg, WPARAM wparam, 
                              (di->config.menu_mask & MK_SHIFT) ? BST_CHECKED : BST_UNCHECKED, 0 );
         SendDlgItemMessageW( dialog, IDC_OPT_QUICK_EDIT, BM_SETCHECK,
                              (di->config.quick_edit) ? BST_CHECKED : BST_UNCHECKED, 0 );
+        SendDlgItemMessageW( dialog, IDC_OPT_TRANSPARENCY, BM_SETCHECK,
+                             (di->config.transparency) ? BST_CHECKED : BST_UNCHECKED, 0 );
         return FALSE; /* because we set the focus */
 
     case WM_COMMAND:
@@ -1898,6 +1962,8 @@ static INT_PTR WINAPI option_dialog_proc( HWND dialog, UINT msg, WPARAM wparam, 
 
             val = (IsDlgButtonChecked( dialog, IDC_OPT_QUICK_EDIT ) & BST_CHECKED) != 0;
             di->config.quick_edit = val;
+
+            di->config.transparency = (IsDlgButtonChecked( dialog, IDC_OPT_TRANSPARENCY ) & BST_CHECKED) != 0;
 
             SetWindowLongPtrW( dialog, DWLP_MSGRESULT, PSNRET_NOERROR );
             return TRUE;
@@ -2322,6 +2388,13 @@ static void apply_config( struct console *console, const struct console_config *
     console->window->menu_mask     = config->menu_mask;
     console->window->quick_edit    = config->quick_edit;
 #ifdef __REACTOS__
+    if (console->window->transparency != (BOOL)config->transparency)
+    {
+        console->window->transparency = config->transparency;
+        if (config->transparency) console->window->backdrop_set = FALSE;
+        update_content_backdrop( console );
+        if (console->win) InvalidateRect( console->win, NULL, TRUE );
+    }
     if (config->quick_edit) console->mode |= ENABLE_QUICK_EDIT_MODE | ENABLE_EXTENDED_FLAGS;
     else console->mode &= ~ENABLE_QUICK_EDIT_MODE;
 #endif
@@ -2330,6 +2403,10 @@ static void apply_config( struct console *console, const struct console_config *
     console->edition_mode = config->edition_mode;
     console->history_mode = config->history_mode;
 
+#ifdef __REACTOS__
+    if (console->history_buffer_size != config->history_size)
+        set_history_buffer_size( console, config->history_size );
+#else
     if (console->history_size != config->history_size)
     {
         struct history_line **mem = NULL;
@@ -2356,11 +2433,15 @@ static void apply_config( struct console *console, const struct console_config *
             console->history_size = config->history_size;
         }
     }
+#endif
 
     if (config->insert_mode)
         console->mode |= ENABLE_INSERT_MODE|ENABLE_EXTENDED_FLAGS;
     else
         console->mode &= ~ENABLE_INSERT_MODE;
+#ifdef __REACTOS__
+    console->insert_mode = config->insert_mode != 0;
+#endif
 
     console->active->cursor_size = config->cursor_size;
     console->active->cursor_visible = config->cursor_visible;
@@ -2395,14 +2476,23 @@ static void current_config( struct console *console, struct console_config *conf
 
     config->menu_mask     = console->window->menu_mask;
     config->quick_edit    = console->window->quick_edit;
+    config->transparency  = console->window->transparency;
     config->close_on_exit = console->window->close_on_exit;
 
     config->edition_mode = console->edition_mode;
     config->history_mode = console->history_mode;
+#ifdef __REACTOS__
+    config->history_size = console->history_buffer_size;
+#else
     config->history_size = console->history_size;
+#endif
 
+#ifdef __REACTOS__
+    config->insert_mode = console->insert_mode;
+#else
     config->insert_mode = (console->mode & (ENABLE_INSERT_MODE|ENABLE_EXTENDED_FLAGS)) ==
         (ENABLE_INSERT_MODE|ENABLE_EXTENDED_FLAGS);
+#endif
 
     config->cursor_size = console->active->cursor_size;
     config->cursor_visible = console->active->cursor_visible;
@@ -2698,6 +2788,13 @@ static LRESULT WINAPI window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
     case WM_DESTROY:
         console->win = NULL;
+#ifdef __REACTOS__
+        if (console->window && console->window->italic_font)
+        {
+            DeleteObject( console->window->italic_font );
+            console->window->italic_font = NULL;
+        }
+#endif
         PostQuitMessage( 0 );
         break;
 

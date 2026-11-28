@@ -30,6 +30,37 @@ OslQueryDpi(VOID);
 
 POSL_SYSTEM_BLOCK OslSystemBlock;
 
+/* The firmware RNG is the only entropy the kernel debugger can trust before the OS runs */
+static
+VOID
+OslFillBootEntropy(
+    _Out_ PBOOT_ENTROPY_LDR_RESULT Entropy)
+{
+    PBOOT_ENTROPY_SOURCE_LDR_RESULT Source = &Entropy->EntropySourceResult[0];
+
+    Entropy->maxEntropySources = BootMaxEntropySources;
+    Source->SourceId = BootEntropySourceUefi;
+    if (!FwGetRandom(Source->EntropyData, sizeof(Source->EntropyData)))
+    {
+        RtlZeroMemory(Source->EntropyData, sizeof(Source->EntropyData));
+        Source->ResultCode = BootEntropySourceNotPresent;
+        Source->ResultStatus = STATUS_NOT_FOUND;
+        return;
+    }
+
+    Source->EntropyLength = sizeof(Source->EntropyData);
+    Source->ResultCode = BootEntropySourceSuccess;
+    Source->ResultStatus = STATUS_SUCCESS;
+
+    /* These seeds stay in the loader block; whoever consumes them should wipe them */
+    if (!FwGetRandom(Entropy->SeedBytesForCng, sizeof(Entropy->SeedBytesForCng)) ||
+        !FwGetRandom(Entropy->RngBytesForNtoskrnl, sizeof(Entropy->RngBytesForNtoskrnl)))
+    {
+        RtlZeroMemory(Entropy->SeedBytesForCng, sizeof(Entropy->SeedBytesForCng));
+        RtlZeroMemory(Entropy->RngBytesForNtoskrnl, sizeof(Entropy->RngBytesForNtoskrnl));
+    }
+}
+
 PLOADER_PARAMETER_BLOCK
 OslAllocateLoaderBlock(VOID)
 {
@@ -57,6 +88,8 @@ OslAllocateLoaderBlock(VOID)
 
     if (FwGetTime(&Time))
         RtlTimeFieldsToTime(&Time, &Extension->SystemTime);
+
+    OslFillBootEntropy(&Extension->BootEntropyResult);
 
     InitializeListHead(&LoaderBlock->LoadOrderListHead);
     InitializeListHead(&LoaderBlock->MemoryDescriptorListHead);
@@ -192,9 +225,16 @@ OslFinalizeLoaderBlock(
         RtlStringCbCopyA(OslSystemBlock->ArcBootDeviceName,
                          sizeof(OslSystemBlock->ArcBootDeviceName),
                          OSL_RAMDISK_ARC_NAME);
-        RtlStringCbCopyA(OslSystemBlock->ArcHalDeviceName,
-                         sizeof(OslSystemBlock->ArcHalDeviceName),
-                         OSL_RAMDISK_ARC_NAME);
+        if (DkLocateBootPartition(&BootPartition))
+            RtlStringCbPrintfA(OslSystemBlock->ArcHalDeviceName,
+                               sizeof(OslSystemBlock->ArcHalDeviceName),
+                               "multi(0)disk(0)rdisk(%lu)partition(%lu)",
+                               BootPartition.DiskIndex,
+                               BootPartition.PartitionNumber);
+        else
+            RtlStringCbCopyA(OslSystemBlock->ArcHalDeviceName,
+                             sizeof(OslSystemBlock->ArcHalDeviceName),
+                             OSL_RAMDISK_ARC_NAME);
     }
     else
     {

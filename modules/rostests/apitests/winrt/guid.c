@@ -16,5 +16,10 @@
 #include <windows.devices.input.h>
 #include <windows.ui.notifications.h>
 #include <windows.applicationmodel.store.preview.installcontrol.h>
+#include <windows.system.h>
+#include <weakreference.h>
+#include <windows.applicationmodel.h>
+#include <windows.management.deployment.h>
+#include <windows.system.profile.h>
 #include <shlobj.h>
 #include <propkey.h>

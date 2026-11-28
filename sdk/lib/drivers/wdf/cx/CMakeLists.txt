@@ -21,6 +21,8 @@ add_wdfcx_stub(ucmcxstub ucmcxstub.c)
 add_wdfcx_stub(ucmtcpcicxstub ucmtcpcicxstub.c)
 add_wdfcx_stub(ucmucsicxstub ucmucsicxstub.c)
 add_wdfcx_stub(ufxstub ufxstub.c)
+add_wdfcx_stub(ucxstub ucxstub.c)
+target_include_directories(ucxstub PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/ddk/ucx/1.0)
 add_wdfcx_stub(treeclxstub treeclxstub.c)
 add_wdfcx_stub(netadaptercxstub_2_3 netadaptercxstub23.c)
 add_wdfcx_stub(netadaptercxstub_2_5 netadaptercxstub25.c)
@@ -31,7 +33,7 @@ add_wdfcx_stub(acxstub_1_0 acxstub10.c)
 add_wdfcx_stub(acxstub_1_1 acxstub11.c)
 
 function(add_wdfcx_library _target _source)
-    add_library(${_target} MODULE ${_source})
+    add_library(${_target} MODULE ${_source} ${ARGN})
     set_module_type(${_target} kmdfdriver KMDF_VERSION 1.33)
     target_include_directories(${_target} PRIVATE
         ${REACTOS_SOURCE_DIR}/sdk/lib/drivers/wdf
@@ -60,5 +62,8 @@ endif()
 add_wdfcx_library(ufx01000 ufx01000.c)
 target_include_directories(ufx01000 PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/ddk/ufx/1.1)
 target_link_libraries(ufx01000 aux_klib)
+
+add_wdfcx_library(ucx01000 ucx01000.c ucxroothub.c ucxdevice.c ucxurbcheck.c)
+target_include_directories(ucx01000 PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/ddk/ucx/1.0)
 
 add_registry_inf(wdfcx_reg.inf)

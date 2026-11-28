@@ -8,8 +8,64 @@
 #include "cabinet.h"
 #include <exdisp.h>
 #include <shldisp.h>
+#include <docobj.h>
+#include <shlguid_undoc.h>
 
-class CCabinetSite : public IServiceProvider, public ICommDlgBrowser2, public IExplorerBrowserEvents
+// SID_SCabinetFrame commands (shlguid_undoc.h): open a folder from a menu of this
+// window in a new tab or a new window, as the tab menu does
+static HRESULT
+CabinetFrame_Exec(CCabinetWindow *window, const GUID *group, DWORD command, VARIANT *in)
+{
+    IShellItem *item = NULL;
+    PIDLIST_ABSOLUTE pidl = NULL;
+    HRESULT hr;
+
+    if (!group || !IsEqualGUID(*group, CGID_CabinetFrame))
+        return OLECMDERR_E_UNKNOWNGROUP;
+    if (!window)
+        return E_UNEXPECTED;
+    if (!in || V_VT(in) != VT_UNKNOWN || !V_UNKNOWN(in) ||
+        FAILED(V_UNKNOWN(in)->QueryInterface(IID_PPV_ARG(IShellItem, &item))))
+        return E_INVALIDARG;
+
+    switch (command)
+    {
+        case CABINETFRAME_CMD_OPENNEWTAB:
+            window->OnNavigationItem(item, TRUE);
+            hr = S_OK;
+            break;
+        case CABINETFRAME_CMD_OPENNEWWINDOW:
+            hr = SHGetIDListFromObject(item, &pidl);
+            if (SUCCEEDED(hr))
+            {
+                hr = Cabinet_OpenWindow(pidl, NULL, SW_SHOWNORMAL);
+                ILFree(pidl);
+            }
+            break;
+        default:
+            hr = OLECMDERR_E_NOTSUPPORTED;
+            break;
+    }
+    item->Release();
+    return hr;
+}
+
+static HRESULT
+CabinetFrame_QueryStatus(const GUID *group, ULONG count, OLECMD *commands)
+{
+    if (!group || !IsEqualGUID(*group, CGID_CabinetFrame))
+        return OLECMDERR_E_UNKNOWNGROUP;
+    for (ULONG i = 0; i < count; i++)
+    {
+        commands[i].cmdf = (commands[i].cmdID == CABINETFRAME_CMD_OPENNEWTAB ||
+                            commands[i].cmdID == CABINETFRAME_CMD_OPENNEWWINDOW) ?
+                           (OLECMDF_SUPPORTED | OLECMDF_ENABLED) : 0;
+    }
+    return S_OK;
+}
+
+class CCabinetSite : public IServiceProvider, public ICommDlgBrowser2, public IExplorerBrowserEvents,
+                     public IOleCommandTarget
 {
 public:
     CCabinetSite(CCabinetWindow *window, IExplorerBrowser *browser) :
@@ -29,6 +85,8 @@ public:
             *ppv = static_cast<ICommDlgBrowser2 *>(this);
         else if (IsEqualIID(riid, IID_IExplorerBrowserEvents))
             *ppv = static_cast<IExplorerBrowserEvents *>(this);
+        else if (IsEqualIID(riid, IID_IOleCommandTarget))
+            *ppv = static_cast<IOleCommandTarget *>(this);
         else
         {
             *ppv = NULL;
@@ -56,9 +114,22 @@ public:
         if (!ppv)
             return E_POINTER;
         *ppv = NULL;
-        if (IsEqualGUID(service, SID_SExplorerBrowserFrame))
+        if (IsEqualGUID(service, SID_SExplorerBrowserFrame) || IsEqualGUID(service, SID_SCabinetFrame))
             return QueryInterface(riid, ppv);
         return E_NOINTERFACE;
+    }
+
+    STDMETHODIMP QueryStatus(const GUID *group, ULONG count, OLECMD *commands, OLECMDTEXT *text) override
+    {
+        UNREFERENCED_PARAMETER(text);
+        return CabinetFrame_QueryStatus(group, count, commands);
+    }
+
+    STDMETHODIMP Exec(const GUID *group, DWORD command, DWORD options, VARIANT *in, VARIANT *out) override
+    {
+        UNREFERENCED_PARAMETER(options);
+        UNREFERENCED_PARAMETER(out);
+        return CabinetFrame_Exec(m_Window, group, command, in);
     }
 
     STDMETHODIMP OnDefaultCommand(IShellView *view) override
@@ -150,7 +221,10 @@ CabinetSite_Create(CCabinetWindow *window, IExplorerBrowser *browser, IUnknown *
     return S_OK;
 }
 
-class CCabinetNavigation : public INameSpaceTreeControlEvents, public INameSpaceTreeControlCustomDraw
+// Also the navigation pane's site (IObjectWithSite of the tree control), so the
+// pane's context menus reach this window through SID_SCabinetFrame
+class CCabinetNavigation : public INameSpaceTreeControlEvents, public INameSpaceTreeControlCustomDraw,
+                           public IServiceProvider, public IOleCommandTarget
 {
 public:
     CCabinetNavigation(CCabinetWindow *window) :
@@ -175,8 +249,43 @@ public:
             AddRef();
             return S_OK;
         }
+        if (IsEqualIID(riid, IID_IServiceProvider))
+        {
+            *ppv = static_cast<IServiceProvider *>(this);
+            AddRef();
+            return S_OK;
+        }
+        if (IsEqualIID(riid, IID_IOleCommandTarget))
+        {
+            *ppv = static_cast<IOleCommandTarget *>(this);
+            AddRef();
+            return S_OK;
+        }
         *ppv = NULL;
         return E_NOINTERFACE;
+    }
+
+    STDMETHODIMP QueryService(REFGUID service, REFIID riid, void **ppv) override
+    {
+        if (!ppv)
+            return E_POINTER;
+        *ppv = NULL;
+        if (IsEqualGUID(service, SID_SCabinetFrame))
+            return QueryInterface(riid, ppv);
+        return E_NOINTERFACE;
+    }
+
+    STDMETHODIMP QueryStatus(const GUID *group, ULONG count, OLECMD *commands, OLECMDTEXT *text) override
+    {
+        UNREFERENCED_PARAMETER(text);
+        return CabinetFrame_QueryStatus(group, count, commands);
+    }
+
+    STDMETHODIMP Exec(const GUID *group, DWORD command, DWORD options, VARIANT *in, VARIANT *out) override
+    {
+        UNREFERENCED_PARAMETER(options);
+        UNREFERENCED_PARAMETER(out);
+        return CabinetFrame_Exec(m_Window, group, command, in);
     }
 
     STDMETHODIMP_(ULONG) AddRef() override

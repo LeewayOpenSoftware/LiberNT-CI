@@ -10,7 +10,7 @@ Original SHA-256:
 
     70fbf16131a2513db05af5967f168132284be46a830dbd2732a9880d3e716299
 
-lntget.ico contains mechanically downscaled copies of that image at standard
-Windows icon sizes. No license or original-author information accompanied the
-supplied image. Do not describe this artwork as MIT-licensed unless its license
-is independently established.
+lntget.ico no longer derives from that image: it now carries Orosi Forma art
+from the owner manifest, so this notice covers lntget.png only. No license or
+original-author information accompanied the supplied image. Do not describe
+this artwork as MIT-licensed unless its license is independently established.

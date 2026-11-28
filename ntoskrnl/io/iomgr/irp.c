@@ -468,11 +468,6 @@ IopCompleteRequest(IN PKAPC Apc,
             PREPARSE_DATA_BUFFER ReparseData;
 
             ReparseData = (PREPARSE_DATA_BUFFER)*SystemArgument2;
-
-            ASSERT(ReparseData->ReparseTag == Irp->IoStatus.Information);
-            ASSERT(ReparseData->ReparseDataLength < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-            ASSERT(ReparseData->Reserved < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-
             IopDoNameTransmogrify(Irp, FileObject, ReparseData);
         }
     }
@@ -954,6 +949,20 @@ IoAllocateIrp(IN CCHAR StackSize,
             Irp,
             Flags);
     return Irp;
+}
+
+/*
+ * @implemented
+ */
+PIRP
+NTAPI
+IoAllocateIrpEx(IN PDEVICE_OBJECT DeviceObject,
+                IN CCHAR StackSize,
+                IN BOOLEAN ChargeQuota)
+{
+    /* No IRP extension is kept, so the device object only names the target */
+    UNREFERENCED_PARAMETER(DeviceObject);
+    return IoAllocateIrp(StackSize, ChargeQuota);
 }
 
 /*
@@ -1598,6 +1607,9 @@ IofCompleteRequest(IN PIRP Irp,
             __FUNCTION__,
             Irp);
 
+    if (VfIrpTrackingEnabled)
+        VfUntrackIrp(Irp);
+
     /* Make sure this IRP isn't getting completed twice or is invalid */
     if ((Irp->CurrentLocation) > (Irp->StackCount + 1))
     {
@@ -2003,6 +2015,9 @@ IoFreeIrp(IN PIRP Irp)
             __FUNCTION__,
             Irp);
 
+    if (VfIrpTrackingEnabled)
+        VfUntrackIrp(Irp);
+
     /* Make sure the Thread IRP list is empty and that it OK to free it */
     ASSERT(Irp->Type == IO_TYPE_IRP);
     ASSERT(IsListEmpty(&Irp->ThreadListEntry));
@@ -2187,6 +2202,9 @@ IoInitializeIrp(IN PIRP Irp,
                 IN USHORT PacketSize,
                 IN CCHAR StackSize)
 {
+    if (VfIrpTrackingEnabled)
+        VfUntrackIrp(Irp);
+
     /* Clear it */
     IOTRACE(IO_IRP_DEBUG,
             "%s - Initializing IRP %p\n",
@@ -2238,15 +2256,29 @@ IoIsOperationSynchronous(IN PIRP Irp)
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 BOOLEAN
 NTAPI
 IoIsValidNameGraftingBuffer(IN PIRP Irp,
                             IN PREPARSE_DATA_BUFFER ReparseBuffer)
 {
-    UNIMPLEMENTED;
-    return FALSE;
+    PIO_STACK_LOCATION Stack;
+    ULONG Length = MAXIMUM_REPARSE_DATA_BUFFER_SIZE;
+
+    PAGED_CODE();
+
+    if (Irp != NULL)
+    {
+        Stack = IoGetCurrentIrpStackLocation(Irp);
+        if (Stack->MajorFunction == IRP_MJ_FILE_SYSTEM_CONTROL &&
+            Stack->Parameters.FileSystemControl.InputBufferLength < Length)
+        {
+            Length = Stack->Parameters.FileSystemControl.InputBufferLength;
+        }
+    }
+
+    return NT_SUCCESS(IopValidateMountPointBuffer(ReparseBuffer, Length));
 }
 
 /*
@@ -2487,4 +2519,268 @@ IoPropagateActivityIdToThread(
     *PropagatedId = Extension->ActivityId;
     *OriginalId = IoSetActivityIdThread(PropagatedId);
     return STATUS_SUCCESS;
+}
+
+/* I/O PRIORITY HINT *********************************************************/
+
+C_ASSERT(((MaxIoPriorityTypes - 1) << IRP_IO_PRIORITY_HINT_SHIFT) <= IRP_IO_PRIORITY_HINT_MASK);
+C_ASSERT((IRP_IO_PRIORITY_HINT_MASK & IRP_IO_PRIORITY_HINT_VALID) == 0);
+C_ASSERT(((IRP_IO_PRIORITY_HINT_MASK | IRP_IO_PRIORITY_HINT_VALID) & 0xFFFF) == 0);
+
+/*
+ * @implemented
+ *
+ * An IRP carries an explicit hint only after IoSetIoPriorityHint; otherwise
+ * it reports the I/O priority of the thread that issued it (NT semantics:
+ * the I/O manager derives the IRP priority from the requesting thread).
+ */
+IO_PRIORITY_HINT
+NTAPI
+IoGetIoPriorityHint(
+    _In_ PIRP Irp)
+{
+    PETHREAD Thread;
+
+    if (Irp->Flags & IRP_IO_PRIORITY_HINT_VALID)
+    {
+        return (IO_PRIORITY_HINT)((Irp->Flags & IRP_IO_PRIORITY_HINT_MASK) >>
+                                  IRP_IO_PRIORITY_HINT_SHIFT);
+    }
+
+    /* No explicit hint: inherit from the issuing thread (or the caller when
+     * the IRP has not been tied to a thread yet) */
+    Thread = Irp->Tail.Overlay.Thread;
+    if (Thread == NULL) Thread = PsGetCurrentThread();
+    return (IO_PRIORITY_HINT)Thread->ThreadIoPriority;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoSetIoPriorityHint(
+    _In_ PIRP Irp,
+    _In_ IO_PRIORITY_HINT PriorityHint)
+{
+    if ((ULONG)PriorityHint >= MaxIoPriorityTypes)
+        return STATUS_INVALID_PARAMETER;
+
+    Irp->Flags = (Irp->Flags & ~IRP_IO_PRIORITY_HINT_MASK) |
+                 ((ULONG)PriorityHint << IRP_IO_PRIORITY_HINT_SHIFT) |
+                 IRP_IO_PRIORITY_HINT_VALID;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * The initiator is the process on whose behalf another process opened the file.
+ * This kernel records no such process for any file object, so there is never one
+ * to report; callers then use the requestor process.
+ */
+PEPROCESS
+NTAPI
+IoGetInitiatorProcess(
+    _In_ PFILE_OBJECT FileObject)
+{
+    UNREFERENCED_PARAMETER(FileObject);
+
+    return NULL;
+}
+
+static
+PIOP_IRP_EXTENSION
+IopGetOrAllocateIrpExtension(
+    _Inout_ PIRP Irp)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    if (Extension == NULL)
+    {
+        Extension = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*Extension), TAG_IRP_EXTENSION);
+        if (Extension == NULL)
+            return NULL;
+
+        Extension->Allocated = 1;
+        Irp->Tail.Overlay.IrpExtension = Extension;
+    }
+    return Extension;
+}
+
+/*
+ * @implemented
+ */
+PIRP
+NTAPI
+IoMakeAssociatedIrpEx(
+    _In_ PIRP Irp,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ CCHAR StackSize)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    return IoMakeAssociatedIrp(Irp, StackSize);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoGetFsTrackOffsetState(
+    _In_ PIRP Irp,
+    _Out_ PIO_IRP_EXT_TRACK_OFFSET_HEADER *RetFsTrackOffsetBlob,
+    _Out_ LONGLONG *RetTrackedOffset)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    if ((Extension == NULL) || !(Extension->TypesAllocated & IOP_IRP_EXTENSION_FS_TRACK_OFFSET))
+        return STATUS_NOT_FOUND;
+
+    *RetFsTrackOffsetBlob = Extension->FsTrackOffsetBlob;
+    *RetTrackedOffset = Extension->FsTrackedOffset;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoSetFsTrackOffsetState(
+    _Inout_ PIRP Irp,
+    _In_ PIO_IRP_EXT_TRACK_OFFSET_HEADER FsTrackOffsetBlob,
+    _In_ LONGLONG TrackedOffset)
+{
+    PIOP_IRP_EXTENSION Extension;
+
+    if (FsTrackOffsetBlob == NULL ||
+        FsTrackOffsetBlob->Validation != IRP_EXT_TRACK_OFFSET_HEADER_VALIDATION_VALUE)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Extension = IopGetOrAllocateIrpExtension(Irp);
+    if (Extension == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Extension->FsTrackOffsetBlob = FsTrackOffsetBlob;
+    Extension->FsTrackedOffset = TrackedOffset;
+    Extension->TypesAllocated |= IOP_IRP_EXTENSION_FS_TRACK_OFFSET;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoClearFsTrackOffsetState(
+    _Inout_ PIRP Irp)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    if ((Extension == NULL) || !(Extension->TypesAllocated & IOP_IRP_EXTENSION_FS_TRACK_OFFSET))
+        return STATUS_SUCCESS;
+
+    Extension->TypesAllocated &= ~IOP_IRP_EXTENSION_FS_TRACK_OFFSET;
+    Extension->FsTrackOffsetBlob = NULL;
+    Extension->FsTrackedOffset = 0;
+    if (Extension->TypesAllocated == 0)
+        IopFreeIrpExtension(Irp);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+IoIrpHasFsTrackOffsetExtensionType(
+    _In_ PIRP Irp)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    return (Extension != NULL) &&
+           ((Extension->TypesAllocated & IOP_IRP_EXTENSION_FS_TRACK_OFFSET) != 0);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoGetFsZeroingOffset(
+    _In_ PIRP Irp,
+    _Out_ PULONG ZeroingOffset)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    if ((Extension == NULL) || !(Extension->TypesAllocated & IOP_IRP_EXTENSION_ZEROING_OFFSET))
+        return STATUS_NOT_FOUND;
+
+    *ZeroingOffset = Extension->ZeroingOffset;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoSetFsZeroingOffset(
+    _Inout_ PIRP Irp,
+    _In_ ULONG ZeroingOffset)
+{
+    PIOP_IRP_EXTENSION Extension = IopGetOrAllocateIrpExtension(Irp);
+
+    if (Extension == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Extension->ZeroingOffset = ZeroingOffset;
+    Extension->TypesAllocated |= IOP_IRP_EXTENSION_ZEROING_OFFSET;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+PESILO
+NTAPI
+IoGetSilo(
+    _In_ PFILE_OBJECT FileObject)
+{
+    /* TODO: return the file object's silo context once a component stores IO_FOEXT_SILO_PARAMETERS on file objects; today none does, so every file answers "not in a container context" with NULL per the documented contract */
+    UNREFERENCED_PARAMETER(FileObject);
+    return NULL;
+}
+
+/*
+ * @implemented
+ */
+PIO_FOEXT_SILO_PARAMETERS
+NTAPI
+IoGetSiloParameters(
+    _In_ PFILE_OBJECT FileObject)
+{
+    /* TODO: return the file object's silo parameters once a component stores IO_FOEXT_SILO_PARAMETERS on file objects; today none does, so every file answers "not in a container context" with NULL per the documented contract */
+    UNREFERENCED_PARAMETER(FileObject);
+    return NULL;
+}
+
+
+LOGICAL
+NTAPI
+IoIsValidIrpStatus(
+    _In_ NTSTATUS Status)
+{
+    ULONG Value = (ULONG)Status;
+
+    /* Customer codes (C bit) follow their own rules */
+    if (Value & 0x20000000)
+        return TRUE;
+
+    /* Otherwise the reserved N bit must be clear and the facility a defined one */
+    if (Value & 0x10000000)
+        return FALSE;
+
+    return ((Value >> 16) & 0xFFF) <= FACILITY_MAXIMUM_VALUE;
 }

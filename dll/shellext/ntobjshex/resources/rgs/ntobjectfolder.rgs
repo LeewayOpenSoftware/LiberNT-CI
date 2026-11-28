@@ -46,9 +46,7 @@ HKLM
             {
               NoRemove NameSpace
               {
-                ForceRemove {845B0FB2-66E0-416B-8F91-314E23F7C12D} = s 'NT Object Namespace'
-                {
-                }
+                Delete {845B0FB2-66E0-416B-8F91-314E23F7C12D}
               }
             }
           }

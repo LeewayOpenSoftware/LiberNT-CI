@@ -1,0 +1,9 @@
+/*
+ * PROJECT:     ReactOS Setup Library - Unit-tests
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     Manifest, so UAC runs the test as the invoker and not as an installer
+ */
+
+#include <windef.h>
+#include <winuser.h>
+#include <reactos/manifest_exe.rc>

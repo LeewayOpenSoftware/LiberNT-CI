@@ -54,16 +54,16 @@
 @ stub CredGetTargetInfoA
 @ stub CredGetTargetInfoW
 @ stdcall CredIsMarshaledCredentialW(wstr) advapi32.CredIsMarshaledCredentialW
-@ stub CredIsProtectedA
-@ stub CredIsProtectedW
+@ stdcall CredIsProtectedA(str ptr) advapi32.CredIsProtectedA
+@ stdcall CredIsProtectedW(wstr ptr) advapi32.CredIsProtectedW
 @ stdcall CredMarshalCredentialA(long ptr ptr) advapi32.CredMarshalCredentialA
 @ stdcall CredMarshalCredentialW(long ptr ptr) advapi32.CredMarshalCredentialW
 @ stub CredParseUserNameWithType
 @ stub CredProfileLoaded
 @ stub CredProfileLoadedEx
 @ stub CredProfileUnloaded
-@ stub CredProtectA
-@ stub CredProtectW
+@ stdcall CredProtectA(long str long ptr ptr ptr) advapi32.CredProtectA
+@ stdcall CredProtectW(long wstr long ptr ptr ptr) advapi32.CredProtectW
 @ stdcall CredReadA(str long long ptr) advapi32.CredReadA
 @ stub CredReadByTokenHandle
 @ stdcall CredReadDomainCredentialsA(ptr long ptr ptr) advapi32.CredReadDomainCredentialsA
@@ -72,8 +72,8 @@
 @ stub CredRestoreCredentials
 @ stdcall CredUnmarshalCredentialA(str ptr ptr) advapi32.CredUnmarshalCredentialA
 @ stdcall CredUnmarshalCredentialW(wstr ptr ptr) advapi32.CredUnmarshalCredentialW
-@ stub CredUnprotectA
-@ stub CredUnprotectW
+@ stdcall CredUnprotectA(long str long ptr ptr) advapi32.CredUnprotectA
+@ stdcall CredUnprotectW(long wstr long ptr ptr) advapi32.CredUnprotectW
 @ stdcall CredWriteA(ptr long) advapi32.CredWriteA
 @ stub CredWriteDomainCredentialsA
 @ stub CredWriteDomainCredentialsW
@@ -101,7 +101,7 @@
 @ stub GetServiceDirectory
 @ stdcall GetServiceDisplayNameW(ptr wstr ptr ptr) advapi32.GetServiceDisplayNameW
 @ stdcall GetServiceKeyNameW(long wstr ptr ptr) advapi32.GetServiceKeyNameW
-@ stub GetServiceRegistryStateKey
+@ stdcall GetServiceRegistryStateKey(ptr long long ptr) advapi32.#1000
 @ stub I_QueryTagInformation
 @ stub I_RegisterSvchostNotificationCallback
 @ stub I_ScBroadcastServiceControlMessage

@@ -174,7 +174,7 @@ DWORD generate_Cookie(DWORD magic, LPVOID data)
         }
         else
         {
-            ERR("cookies: %p, array_size: %d\n", cookies, array_size);
+            TRACE("cookies: %p, array_size: %d\n", cookies, array_size);
             CookieInternal *new_cookies = (CookieInternal *)
                 cicMemReCalloc(cookies, array_size * 2, sizeof(CookieInternal));
             if (!new_cookies)
@@ -494,9 +494,6 @@ HRESULT add_active_textservice(TF_LANGUAGEPROFILE *lp)
     if (actsvr->LanguageProfile.catid != GUID_NULL)
         deactivate_remove_conflicting_ts(actsvr->LanguageProfile.catid);
 
-    if (activated > 0)
-        activate_given_ts(actsvr, tm);
-
     entry = (AtsEntry *)cicMemAlloc(sizeof(AtsEntry));
     if (!entry)
     {
@@ -506,6 +503,9 @@ HRESULT add_active_textservice(TF_LANGUAGEPROFILE *lp)
 
     entry->ats = actsvr;
     list_add_head(&AtsList, &entry->entry);
+
+    if (activated > 0)
+        activate_given_ts(actsvr, tm);
 
     return S_OK;
 }

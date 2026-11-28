@@ -9,7 +9,7 @@ LANGUAGE LANG_ITALIAN, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_HEADER "\nLiberNT IP Configuration\n\n"
+    IDS_HEADER "\nOrosi IP Configuration\n\n"
     IDS_HOSTNAME            "\tHost Name . . . . . . . . . . . . : %hs\n"
     IDS_PRIMARYDNSSUFFIX    "\tPrimary DNS Suffix. . . . . . . . : %hs\n"
     IDS_NODETYPEBCAST       "\tNode Type . . . . . . . . . . . . : Broadcast\n"
@@ -88,6 +88,7 @@ BEGIN
     IDS_DNSTYPEAAAA          "\tAAAA Record . . . . . : %ls\n"
     IDS_DNSTYPEATMA          "\tATMA Record . . . . . : \n"
     IDS_DNSTYPESRV           "\tSRV Record. . . . . . : %ls\n\t                        %hu\n\t                        %hu\n\t                        %hu\n"
+    IDS_DNSTYPETXT           "\tTXT Record . . . . . : ""%ls""\n"
 END
 
 STRINGTABLE

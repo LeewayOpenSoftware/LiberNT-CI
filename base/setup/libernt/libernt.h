@@ -25,9 +25,11 @@
 
 #include <strsafe.h>
 
+#include <stringapiset.h>
+#include <winnls.h>
+
 #include <commctrl.h>
 #include <windowsx.h>
-#include <dwmapi.h>
 #include <lmcons.h>
 
 #define EnableDlgItem(hDlg, nID, bEnable)   \
@@ -109,6 +111,8 @@ typedef struct _SETUPDATA
 
     PPARTLIST PartitionList;
     BOOL bInstalled;
+    BOOL bUpgrade;
+    BOOL bUpgradeOnly;
     BOOL bAlongside;
     BOOL bWindowsFirst;
     WCHAR WindowsName[32];
@@ -165,6 +169,7 @@ typedef struct _VOL_CREATE_INFO
 
 typedef enum _SETUP_PAGE
 {
+    SETUP_PAGE_UPGRADE,
     SETUP_PAGE_LANGUAGE,
     SETUP_PAGE_TYPE,
     SETUP_PAGE_DISK,
@@ -181,6 +186,7 @@ typedef enum _SETUP_PAGE
 #define SETUP_PAGE_NO_CANCEL        0x4
 #define SETUP_PAGE_CLOSE            0x8
 #define SETUP_PAGE_OPTIONAL         0x10
+#define SETUP_PAGE_SKIP_UPGRADE     0x20
 
 typedef struct _SETUP_PAGE_INFO
 {
@@ -247,6 +253,31 @@ PlanAlongsideInstall(
     _In_ ULONG DiskNumber,
     _In_ ULONGLONG StartSector,
     _In_ ULONGLONG ShrinkBytes);
+
+BOOLEAN
+IsWindowsHibernated(
+    _In_ PCWSTR DeviceName);
+
+ULONG
+FindUpgradeTargets(
+    _In_ PSETUPDATA pSetupData);
+
+BOOL
+SelectUnattendedUpgrade(
+    _Inout_ PSETUPDATA pSetupData);
+
+VOID
+DescribeUpgrade(
+    _Out_writes_(cchText) PWSTR Text,
+    _In_ SIZE_T cchText);
+
+INT_PTR
+CALLBACK
+UpgradePageProc(
+    _In_ HWND hwndDlg,
+    _In_ UINT uMsg,
+    _In_ WPARAM wParam,
+    _In_ LPARAM lParam);
 
 INT_PTR
 CALLBACK
@@ -386,6 +417,58 @@ LoadPrintfW(
     _In_ SIZE_T cchText,
     _In_ UINT uID,
     ...);
+
+/* filesec.c */
+typedef struct _FILESEC_POLICY FILESEC_POLICY, *PFILESEC_POLICY;
+
+typedef struct _FILESEC_ITEM
+{
+    PCWSTR Path;
+    BOOLEAN Directory;
+} FILESEC_ITEM, *PFILESEC_ITEM;
+
+DWORD
+FileSecurityLoadPolicy(
+    _Out_ PFILESEC_POLICY *Policy);
+
+VOID
+FileSecurityFreePolicy(
+    _In_opt_ PFILESEC_POLICY Policy);
+
+PSECURITY_DESCRIPTOR
+FileSecurityFindDescriptor(
+    _In_ PFILESEC_POLICY Policy,
+    _In_ PCWSTR Path,
+    _In_ BOOLEAN Directory);
+
+NTSTATUS
+FileSecurityApply(
+    _In_ PFILESEC_POLICY Policy,
+    _In_ PCWSTR VolumeRoot,
+    _In_ PCWSTR InstallationDirectory,
+    _In_ BOOLEAN WholeVolume);
+
+NTSTATUS
+InstallApplyFileSecurity(
+    _In_ PCWSTR VolumeRoot,
+    _In_ PCWSTR InstallationDirectory,
+    _In_ BOOLEAN WholeVolume);
+
+NTSTATUS
+FileSecurityApplyItems(
+    _In_ PFILESEC_POLICY Policy,
+    _In_ PCWSTR VolumeRoot,
+    _In_ PCWSTR InstallationDirectory,
+    _In_ ULONG Count,
+    _In_reads_(Count) const FILESEC_ITEM *Items);
+
+NTSTATUS
+InstallApplyFileSecurityToItems(
+    _In_ PCWSTR VolumeRoot,
+    _In_ PCWSTR InstallationDirectory,
+    _In_ ULONG Count,
+    _In_reads_(Count) const FILESEC_ITEM *Items);
+
 
 INT
 SetupMessage(

@@ -43,7 +43,24 @@ PDRIVER_OBJECT NtfsDriverObject;
  */
 LIST_ENTRY NtfsGlobalVolumeList;
 ERESOURCE NtfsGlobalVolumeListResource;
+static PDRIVER_DISPATCH NtfsFsdDispatchTable[IRP_MJ_MAXIMUM_FUNCTION + 1];
 /* FUNCTIONS ****************************************************************/
+static
+NTSTATUS
+NTAPI
+NtfsFsdDispatch(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                _Inout_ PIRP Irp)
+{
+    UCHAR MajorFunction = IoGetCurrentIrpStackLocation(Irp)->MajorFunction;
+    NTSTATUS Status;
+
+    FsRtlEnterFileSystem();
+    Status = NtfsFsdDispatchTable[MajorFunction](VolumeDeviceObject, Irp);
+    FsRtlExitFileSystem();
+
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 DriverEntry(_In_ PDRIVER_OBJECT DriverObject,
@@ -51,6 +68,7 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject,
 {
     NTSTATUS Status;
     UNICODE_STRING UnicodeString;
+    ULONG Index;
     NtfsDriverObject = DriverObject;
     UNREFERENCED_PARAMETER(RegistryPath);
     RtlInitUnicodeString(&UnicodeString, L"\\Ntfs");
@@ -87,6 +105,12 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject,
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL]           = NtfsFsdDeviceControl;
     DriverObject->MajorFunction[IRP_MJ_SHUTDOWN]                 = NtfsFsdShutdown;
     DriverObject->MajorFunction[IRP_MJ_PNP]                      = NtfsFsdPnp;
+
+    for (Index = 0; Index <= IRP_MJ_MAXIMUM_FUNCTION; Index++)
+    {
+        NtfsFsdDispatchTable[Index] = DriverObject->MajorFunction[Index];
+        DriverObject->MajorFunction[Index] = NtfsFsdDispatch;
+    }
 
     // Do not set DO_DIRECT_IO/DO_BUFFERED_IO flags on the FS control device
     // The I/O manager and Cache Manager will decide buffering for file I/O
@@ -317,7 +341,7 @@ NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 NtfsBindVolumeDisk(VolCB);
                 Status = NtfsFlushVolume(VolCB, FALSE);
                 if (NT_SUCCESS(Status))
-                    Status = NtfsDiskFlushKm();
+                    Status = NtfsDiskFlushVolumeKm(VolCB->StorageDevice);
                 if (NT_SUCCESS(Status))
                 {
                     KeEnterCriticalRegion();
@@ -659,6 +683,7 @@ NtfsFinalizePendingDelete(_In_ PVolumeContextBlock VolCB,
             NtfsDropPagingExtent(Stream);
             Stream->Deleted = TRUE;
             Stream->SizePending = FALSE;
+            Stream->ResidentSizeDeferred = FALSE;
             ExReleaseResourceLite(&Stream->PagingIoResource);
         }
         if (FileObject->SectionObjectPointer)
@@ -947,6 +972,8 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     IrpSp = IoGetCurrentIrpStackLocation(Irp);
     FileCB = NtfsGetFileContext(IrpSp->FileObject);
+    /* Journal reads still waiting on this handle end with it */
+    NtfsUsnCancelFileWaiters(VolumeDeviceObject, IrpSp->FileObject);
 
     if (FileCB && !FileCB->CleanupComplete)
     {
@@ -1014,6 +1041,7 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                FileCB);
             KeLeaveCriticalRegion();
         }
+        NtfsTxfCleanup(VolCB, FileCB);
         LastHandle = TRUE;
         if (FileCB->StreamCB)
         {
@@ -1119,6 +1147,26 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 NtfsReportFileChange(VolCB, FileCB, NotifyFilter, FILE_ACTION_MODIFIED);
         }
 
+        /* A resident stream defers its data size to a paging write (see the
+         * ResidentSizeDeferred path in NtfsWriteFileData): the record keeps
+         * the old size until the lazy writer flushes. Flush it now, on the
+         * last handle's cleanup, so the file record carries the right size
+         * once the handle is gone - as on Windows, where metadata is correct
+         * after close. The paging write this triggers persists the resident
+         * data and settles the deferred size; it is a no-op if nothing is
+         * dirty. Guarded on the shared cache map, which holds the deferred
+         * data, and skipped for a file that is being deleted. */
+        if (LastHandle && FileCB->StreamCB && FileCB->StreamCB->ResidentSizeDeferred &&
+            !FileCB->StreamCB->DeletePending && !FileCB->DeletePending &&
+            !(FileCB->CreateOptions & FILE_DELETE_ON_CLOSE) &&
+            IrpSp->FileObject->SectionObjectPointer &&
+            IrpSp->FileObject->SectionObjectPointer->SharedCacheMap)
+        {
+            IO_STATUS_BLOCK FlushStatus;
+
+            CcFlushCache(IrpSp->FileObject->SectionObjectPointer, NULL, 0, &FlushStatus);
+        }
+
         /* The cache holds a file-object reference, so waiting for CLOSE to
          * release the private map prevents normal cached files from closing. */
         if (IrpSp->FileObject->PrivateCacheMap)
@@ -1127,6 +1175,5 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     Irp->IoStatus.Information = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    NtfsReleaseDismountedVolume(VolumeDeviceObject);
     return STATUS_SUCCESS;
 }

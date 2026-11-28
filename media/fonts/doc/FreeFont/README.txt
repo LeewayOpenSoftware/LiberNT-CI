@@ -125,3 +125,18 @@ Original author: Primoz Peterlin
 Current administrator: Steve White <stevan.white@googlemail.com>
 
 $Id: README,v 1.10 2011-06-12 07:14:12 Stevan_White Exp $
+
+---- Provenance (LiberNT font program) ----
+
+GNU FreeFont, FreeSans (ReactOS/LiberNT family name)
+
+Origin:  https://savannah.gnu.org/projects/freefont/
+Version: FreeFont 20120503 (0412), unmodified
+Licence: GNU GPL 3 or later with the FreeFont embedding exception (see COPYING.txt)
+Note:    Target of the System substitute.
+
+Files and SHA-256:
+  c80858440d8fb618e0ac5ff6f16251dbfa6b3316f00f3cdd17d477297dd87b04  FreeSans.ttf
+  982534a3731416a15e2756601721f26053f68bf4239011550f3dd23ce6308215  FreeSansBold.ttf
+  43ef481308dfb3aa1103a75699cb4976139b6339eda0901df69a25533f07cf6b  FreeSansOblique.ttf
+  deb48d677df0b521793df8da28729316bfcc255309aeb6dacfbd38241ac9b7ba  FreeSansBoldOblique.ttf

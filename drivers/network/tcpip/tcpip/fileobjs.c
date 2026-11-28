@@ -10,6 +10,8 @@
 
 #include "precomp.h"
 
+#include <datagram.h>
+
 /* FIXME: including pstypes.h without ntifs fails */
 #include <ntifs.h>
 #include <ndk/pstypes.h>
@@ -601,6 +603,8 @@ VOID AddrFileFree(
     ExFreePoolWithTag(ReceiveRequest, DATAGRAM_RECV_TAG);
   }
 
+  DGFreeQueuedDatagrams(AddrFile);
+
   TI_DbgPrint(DEBUG_ADDRFILE, ("Aborting send requests on address file at (0x%X).\n", AddrFile));
 
 #if 0 /* Biggest WTF. All of this was taken care of above as DATAGRAM_RECEIVE_REQUEST. */
@@ -713,6 +717,8 @@ NTSTATUS FileOpenAddress(
     return Status;
 
   DualStack = (Address->TAAddressCount == 2);
+  if (DualStack && TCPUnmapFromDualStack(&BindAddress))
+      DualStack = FALSE;
 
   /* If it's shared and has a port specified, look for a match */
   if (BindPort != 0)
@@ -945,6 +951,7 @@ NTSTATUS FileOpenAddress(
 
   /* Initialize receive and transmit queues */
   InitializeListHead(&AddrFile->ReceiveQueue);
+  InitializeListHead(&AddrFile->DatagramQueue);
   InitializeListHead(&AddrFile->TransmitQueue);
 
   /* Initialize spin lock that protects the address file object */
@@ -1009,7 +1016,6 @@ NTSTATUS FileCloseAddress(
       LockObject(AddrFile);
       if (AddrFile->Port)
       {
-          /* The port came from the set of this address's family. */
           TCPFreePortForAddress(&AddrFile->Address, AddrFile->Port);
           AddrFile->Port = 0;
       }

@@ -105,6 +105,16 @@
 #define IOP_CREATE_FILE_OBJECT_EXTENSION    0x02
 #define IOP_TRAVERSED_MOUNT_POINT           0x04
 
+//
+// IRP I/O priority hint (Vista+). Carried in Irp->Flags above the public
+// IRP_* bits, which occupy the low 16 bits. VALID marks an explicit
+// IoSetIoPriorityHint; without it the IRP inherits the issuing thread's
+// I/O priority (IoGetIoPriorityHint).
+//
+#define IRP_IO_PRIORITY_HINT_SHIFT          16
+#define IRP_IO_PRIORITY_HINT_MASK           0x00070000
+#define IRP_IO_PRIORITY_HINT_VALID          0x00080000
+
 
 typedef struct _FILE_OBJECT_EXTENSION
 {
@@ -355,6 +365,8 @@ typedef struct _IOP_MINI_COMPLETION_PACKET
 VOID NTAPI IopReleaseWaitCompletionPacket(PIOP_MINI_COMPLETION_PACKET Packet);
 
 #define IOP_IRP_EXTENSION_ACTIVITY_ID 0x0001
+#define IOP_IRP_EXTENSION_FS_TRACK_OFFSET 0x0002
+#define IOP_IRP_EXTENSION_ZEROING_OFFSET  0x0004
 
 typedef struct _IOP_IRP_EXTENSION
 {
@@ -425,6 +437,8 @@ typedef struct _IO_WORKITEM
     PDEVICE_OBJECT DeviceObject;
     PIO_WORKITEM_ROUTINE WorkerRoutine;
     PVOID Context;
+    PIO_WORKITEM_ROUTINE_EX WorkerRoutineEx;
+    LONG Queued;
 } IO_WORKITEM;
 
 //
@@ -433,7 +447,7 @@ typedef struct _IO_WORKITEM
 typedef struct _IO_INTERRUPT
 {
     KINTERRUPT FirstInterrupt;
-    PKINTERRUPT Interrupt[MAXIMUM_PROCESSORS];
+    PKINTERRUPT Interrupt[KI_MAXIMUM_PROCESSORS];
     KSPIN_LOCK SpinLock;
 } IO_INTERRUPT, *PIO_INTERRUPT;
 
@@ -1670,6 +1684,13 @@ IopDoNameTransmogrify(
     IN PIRP Irp,
     IN PFILE_OBJECT FileObject,
     IN PREPARSE_DATA_BUFFER DataBuffer
+);
+
+NTSTATUS
+NTAPI
+IopValidateMountPointBuffer(
+    _In_reads_bytes_(BufferLength) PREPARSE_DATA_BUFFER Buffer,
+    _In_ ULONG BufferLength
 );
 
 NTSTATUS

@@ -1773,6 +1773,8 @@ DxgkpCreateSynchronizationObjectInternal(
     }
 
     RtlZeroMemory(SyncObj, sizeof(*SyncObj));
+    KeInitializeSpinLock(&SyncObj->SemaphoreWaitLock);
+    InitializeListHead(&SyncObj->SemaphoreWaitQueue);
     SyncObj->hDevice = Device->Handle;
     SyncObj->Device = Device;
     SyncObj->OwnerProcess = PsGetCurrentProcess();
@@ -2397,7 +2399,8 @@ DxgkSyncShareNtObject(
         DxgkpDereferenceSyncObject(SyncObj);
         return STATUS_INVALID_PARAMETER;
     }
-    Status = ObCreateObject(KernelMode, DxgkSharedSyncObjectType, ObjectAttributes, KernelMode, NULL,
+    /* Captured attributes, but the user's name, root directory and descriptor: UserMode ownership */
+    Status = ObCreateObject(KernelMode, DxgkSharedSyncObjectType, ObjectAttributes, UserMode, NULL,
                             sizeof(*SharedObject), 0, 0, (PVOID *)&SharedObject);
     if (!NT_SUCCESS(Status))
     {

@@ -208,11 +208,14 @@ private:
             return lRes;
 
         dwSize = sizeof(szBuffer) / sizeof(szBuffer[0]);
-        while (RegEnumKeyExW(parentKey, 0, szBuffer, &dwSize, NULL, NULL, NULL, &time) == ERROR_SUCCESS)
+        while (RegEnumKeyExW(childKey, 0, szBuffer, &dwSize, NULL, NULL, NULL, &time) == ERROR_SUCCESS)
         {
             lRes = RegDeleteTreeX(childKey, szBuffer);
             if (lRes != ERROR_SUCCESS)
+            {
+                RegCloseKey(childKey);
                 return lRes;
+            }
             dwSize = sizeof(szBuffer) / sizeof(szBuffer[0]);
         }
         RegCloseKey(childKey);

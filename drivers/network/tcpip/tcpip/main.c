@@ -30,6 +30,7 @@ TDIEntityInfo *EntityList        = NULL;
 ULONG EntityCount                = 0;
 ULONG EntityMax                  = 0;
 UDP_STATISTICS UDPStats;
+IP_STATISTICS IPStats;
 
 /* Network timers */
 KTIMER IPTimer;
@@ -242,7 +243,7 @@ NTSTATUS TiCreateFileObject(
         Status = FileOpenAddress(&Request, Address, Protocol, DeviceObject == RawIPDeviceObject, Shared, Exclusive, NULL);
         if (NT_SUCCESS(Status))
         {
-            IrpSp->FileObject->FsContext2 = (PVOID)TDI_TRANSPORT_ADDRESS_FILE;
+            IrpSp->FileObject->FsContext2 = (PVOID)(ULONG_PTR)TDI_TRANSPORT_ADDRESS_FILE;
             Context->Handle.AddressHandle = Request.Handle.AddressHandle;
         }
 
@@ -281,7 +282,7 @@ NTSTATUS TiCreateFileObject(
         Status = FileOpenConnection(&Request, ClientContext);
         if (NT_SUCCESS(Status))
         {
-            IrpSp->FileObject->FsContext2 = (PVOID)TDI_CONNECTION_FILE;
+            IrpSp->FileObject->FsContext2 = (PVOID)(ULONG_PTR)TDI_CONNECTION_FILE;
             Context->Handle.ConnectionContext = Request.Handle.ConnectionContext;
         }
     }
@@ -291,7 +292,7 @@ NTSTATUS TiCreateFileObject(
         Status = FileOpenControlChannel(&Request);
         if (NT_SUCCESS(Status))
         {
-            IrpSp->FileObject->FsContext2 = (PVOID)TDI_CONTROL_CHANNEL_FILE;
+            IrpSp->FileObject->FsContext2 = (PVOID)(ULONG_PTR)TDI_CONTROL_CHANNEL_FILE;
             Context->Handle.ControlChannel = Request.Handle.ControlChannel;
         }
     }
@@ -657,6 +658,9 @@ TiDispatch(
         return IRPFinish(Irp, STATUS_ACCESS_DENIED);
     }
 
+    /* The set codes carry FILE_WRITE_ACCESS: the I/O manager refuses them on a
+     * handle without write access before the request reaches this driver */
+
 #if 0
     Status = TdiMapUserRequest(DeviceObject, Irp, IrpSp);
     if (NT_SUCCESS(Status))
@@ -836,6 +840,20 @@ TiDispatch(
                     Status = STATUS_INVALID_PARAMETER;
                 else
                     Status = RouterSetRouteV4(Irp->AssociatedIrp.SystemBuffer);
+                break;
+
+            case IOCTL_IP_SET_ADDRESS:
+                if (DeviceObject != IPDeviceObject)
+                    Status = STATUS_INVALID_DEVICE_REQUEST;
+                else if (IrpSp->Parameters.DeviceIoControl.InputBufferLength < sizeof(IP4_ADDRESS_INFO) ||
+                         IrpSp->Parameters.DeviceIoControl.OutputBufferLength < sizeof(IP4_ADDRESS_INFO))
+                    Status = STATUS_INVALID_PARAMETER;
+                else
+                {
+                    Status = IPSetAddressV4(Irp->AssociatedIrp.SystemBuffer);
+                    if (NT_SUCCESS(Status))
+                        Irp->IoStatus.Information = sizeof(IP4_ADDRESS_INFO);
+                }
                 break;
 
             case IOCTL_IP_QUERY_ADDRESS:
@@ -1141,12 +1159,44 @@ NTSTATUS TiSecurityStartup(
         return Status;
     }
 
+    /* Everyone reads; writing (addresses, routes, interfaces) is for
+     * administrators and the system, as on Windows */
     Status = TiSetupTcpDeviceSD(IPDeviceObject,
-                                FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
+                                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
                                 FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
     if (!NT_SUCCESS(Status))
     {
         TI_DbgPrint(MIN_TRACE, ("Failed to set security data for IP device object\n"));
+        return Status;
+    }
+
+    Status = TiSetupTcpDeviceSD(IP6DeviceObject,
+                                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
+    if (!NT_SUCCESS(Status))
+    {
+        TI_DbgPrint(MIN_TRACE, ("Failed to set security data for IPv6 device object\n"));
+        return Status;
+    }
+
+    /* A control channel on the UDP or raw IP device reaches the same
+     * setters, so they get the same descriptor; sockets are opened on
+     * them by AFD from kernel mode, which the descriptor does not touch */
+    Status = TiSetupTcpDeviceSD(UDPDeviceObject,
+                                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
+    if (!NT_SUCCESS(Status))
+    {
+        TI_DbgPrint(MIN_TRACE, ("Failed to set security data for UDP device object\n"));
+        return Status;
+    }
+
+    Status = TiSetupTcpDeviceSD(RawIPDeviceObject,
+                                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE);
+    if (!NT_SUCCESS(Status))
+    {
+        TI_DbgPrint(MIN_TRACE, ("Failed to set security data for raw IP device object\n"));
         return Status;
     }
 
@@ -1205,9 +1255,11 @@ VOID NTAPI TiUnload(
 
     if (TCPDeviceObject)
     {
-        UNICODE_STRING strTcpLinkName = RTL_CONSTANT_STRING(L"\\DosDevices\\Tcp");
-        UNICODE_STRING strTcp6DeviceName = RTL_CONSTANT_STRING(DD_TCPV6_DEVICE_NAME);
+        UNICODE_STRING strTcpLinkName;
+        UNICODE_STRING strTcp6DeviceName;
 
+        RtlInitUnicodeString(&strTcpLinkName, L"\\DosDevices\\Tcp");
+        RtlInitUnicodeString(&strTcp6DeviceName, DD_TCPV6_DEVICE_NAME);
         IoDeleteSymbolicLink(&strTcpLinkName);
         IoDeleteSymbolicLink(&strTcp6DeviceName);
         IoDeleteDevice(TCPDeviceObject);
@@ -1215,16 +1267,18 @@ VOID NTAPI TiUnload(
 
     if (UDPDeviceObject)
     {
-        UNICODE_STRING strUdp6DeviceName = RTL_CONSTANT_STRING(DD_UDPV6_DEVICE_NAME);
+        UNICODE_STRING strUdp6DeviceName;
 
+        RtlInitUnicodeString(&strUdp6DeviceName, DD_UDPV6_DEVICE_NAME);
         IoDeleteSymbolicLink(&strUdp6DeviceName);
         IoDeleteDevice(UDPDeviceObject);
     }
 
     if (RawIPDeviceObject)
     {
-        UNICODE_STRING strRaw6DeviceName = RTL_CONSTANT_STRING(DD_RAWIPV6_DEVICE_NAME);
+        UNICODE_STRING strRaw6DeviceName;
 
+        RtlInitUnicodeString(&strRaw6DeviceName, DD_RAWIPV6_DEVICE_NAME);
         IoDeleteSymbolicLink(&strRaw6DeviceName);
         IoDeleteDevice(RawIPDeviceObject);
     }
@@ -1257,19 +1311,29 @@ DriverEntry(
  */
 {
     NTSTATUS Status;
-    UNICODE_STRING strIpDeviceName = RTL_CONSTANT_STRING(DD_IP_DEVICE_NAME);
-    UNICODE_STRING strIp6DeviceName = RTL_CONSTANT_STRING(DD_IPV6_DEVICE_NAME);
-    UNICODE_STRING strRawDeviceName = RTL_CONSTANT_STRING(DD_RAWIP_DEVICE_NAME);
-    UNICODE_STRING strUdpDeviceName = RTL_CONSTANT_STRING(DD_UDP_DEVICE_NAME);
-    UNICODE_STRING strTcpDeviceName = RTL_CONSTANT_STRING(DD_TCP_DEVICE_NAME);
-    UNICODE_STRING strTcpLinkName = RTL_CONSTANT_STRING(L"\\DosDevices\\Tcp");
-    UNICODE_STRING strTcp6DeviceName = RTL_CONSTANT_STRING(DD_TCPV6_DEVICE_NAME);
-    UNICODE_STRING strUdp6DeviceName = RTL_CONSTANT_STRING(DD_UDPV6_DEVICE_NAME);
-    UNICODE_STRING strRaw6DeviceName = RTL_CONSTANT_STRING(DD_RAWIPV6_DEVICE_NAME);
-    UNICODE_STRING strNdisDeviceName = RTL_CONSTANT_STRING(TCPIP_PROTOCOL_NAME);
+    UNICODE_STRING strIpDeviceName;
+    UNICODE_STRING strIp6DeviceName;
+    UNICODE_STRING strRawDeviceName;
+    UNICODE_STRING strUdpDeviceName;
+    UNICODE_STRING strTcpDeviceName;
+    UNICODE_STRING strTcpLinkName;
+    UNICODE_STRING strTcp6DeviceName;
+    UNICODE_STRING strUdp6DeviceName;
+    UNICODE_STRING strRaw6DeviceName;
+    UNICODE_STRING strNdisDeviceName;
     NDIS_STATUS NdisStatus;
     LARGE_INTEGER DueTime;
 
+    RtlInitUnicodeString(&strIpDeviceName, DD_IP_DEVICE_NAME);
+    RtlInitUnicodeString(&strIp6DeviceName, DD_IPV6_DEVICE_NAME);
+    RtlInitUnicodeString(&strRawDeviceName, DD_RAWIP_DEVICE_NAME);
+    RtlInitUnicodeString(&strUdpDeviceName, DD_UDP_DEVICE_NAME);
+    RtlInitUnicodeString(&strTcpDeviceName, DD_TCP_DEVICE_NAME);
+    RtlInitUnicodeString(&strTcpLinkName, L"\\DosDevices\\Tcp");
+    RtlInitUnicodeString(&strTcp6DeviceName, DD_TCPV6_DEVICE_NAME);
+    RtlInitUnicodeString(&strUdp6DeviceName, DD_UDPV6_DEVICE_NAME);
+    RtlInitUnicodeString(&strRaw6DeviceName, DD_RAWIPV6_DEVICE_NAME);
+    RtlInitUnicodeString(&strNdisDeviceName, TCPIP_PROTOCOL_NAME);
     InitializeListHead(&TiChangeIrps);
     KeInitializeSpinLock(&TiChangeLock);
 
@@ -1287,8 +1351,10 @@ DriverEntry(
     KeInitializeTimer(&NeighborTimer);
 
     /* Create IP device object */
+    /* Secure open: an open with a trailing name (as raw IP uses for the
+     * protocol number) is checked against the device's descriptor too */
     Status = IoCreateDevice(DriverObject, 0, &strIpDeviceName,
-        FILE_DEVICE_NETWORK, 0, FALSE, &IPDeviceObject);
+        FILE_DEVICE_NETWORK, FILE_DEVICE_SECURE_OPEN, FALSE, &IPDeviceObject);
     if (!NT_SUCCESS(Status)) {
         TI_DbgPrint(MIN_TRACE, ("Failed to create IP device object. Status (0x%X).\n", Status));
         TiUnload(DriverObject);
@@ -1298,7 +1364,7 @@ DriverEntry(
     ChewInit( IPDeviceObject );
 
     Status = IoCreateDevice(DriverObject, 0, &strIp6DeviceName,
-        FILE_DEVICE_NETWORK, 0, FALSE, &IP6DeviceObject);
+        FILE_DEVICE_NETWORK, FILE_DEVICE_SECURE_OPEN, FALSE, &IP6DeviceObject);
     if (!NT_SUCCESS(Status)) {
         TI_DbgPrint(MIN_TRACE, ("Failed to create IPv6 device object. Status (0x%X).\n", Status));
         TiUnload(DriverObject);
@@ -1307,7 +1373,7 @@ DriverEntry(
 
     /* Create RawIP device object */
     Status = IoCreateDevice(DriverObject, 0, &strRawDeviceName,
-        FILE_DEVICE_NETWORK, 0, FALSE, &RawIPDeviceObject);
+        FILE_DEVICE_NETWORK, FILE_DEVICE_SECURE_OPEN, FALSE, &RawIPDeviceObject);
     if (!NT_SUCCESS(Status)) {
         TI_DbgPrint(MIN_TRACE, ("Failed to create RawIP device object. Status (0x%X).\n", Status));
         TiUnload(DriverObject);
@@ -1316,7 +1382,7 @@ DriverEntry(
 
     /* Create UDP device object */
     Status = IoCreateDevice(DriverObject, 0, &strUdpDeviceName,
-        FILE_DEVICE_NETWORK, 0, FALSE, &UDPDeviceObject);
+        FILE_DEVICE_NETWORK, FILE_DEVICE_SECURE_OPEN, FALSE, &UDPDeviceObject);
     if (!NT_SUCCESS(Status)) {
         TI_DbgPrint(MIN_TRACE, ("Failed to create UDP device object. Status (0x%X).\n", Status));
         TiUnload(DriverObject);
@@ -1325,7 +1391,7 @@ DriverEntry(
 
     /* Create TCP device object */
     Status = IoCreateDevice(DriverObject, 0, &strTcpDeviceName,
-        FILE_DEVICE_NETWORK, 0, FALSE, &TCPDeviceObject);
+        FILE_DEVICE_NETWORK, FILE_DEVICE_SECURE_OPEN, FALSE, &TCPDeviceObject);
     if (!NT_SUCCESS(Status)) {
         TI_DbgPrint(MIN_TRACE, ("Failed to create TCP device object. Status (0x%X).\n", Status));
         TiUnload(DriverObject);

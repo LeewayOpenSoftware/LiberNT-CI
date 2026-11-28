@@ -36,11 +36,48 @@ SepAclHasMandatoryLabel(
     return FALSE;
 }
 
+/* The parts of a SACL that are read and set on their own: the label, the resource attributes, the scoped policies */
+#define SEP_SACL_PARTS (LABEL_SECURITY_INFORMATION | ATTRIBUTE_SECURITY_INFORMATION | SCOPE_SECURITY_INFORMATION)
+#define SEP_SACL_ALL (SACL_SECURITY_INFORMATION | SEP_SACL_PARTS)
+
+/* Which part of a SACL an entry belongs to; the audit entries are the SACL proper */
+static
+SECURITY_INFORMATION
+SepSaclPartOf(
+    _In_ PACE_HEADER Ace)
+{
+    switch (Ace->AceType)
+    {
+        case SYSTEM_MANDATORY_LABEL_ACE_TYPE: return LABEL_SECURITY_INFORMATION;
+        case SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE: return ATTRIBUTE_SECURITY_INFORMATION;
+        case SYSTEM_SCOPED_POLICY_ID_ACE_TYPE: return SCOPE_SECURITY_INFORMATION;
+        default: return SACL_SECURITY_INFORMATION;
+    }
+}
+
+static
+BOOLEAN
+SepAclHasParts(
+    _In_opt_ PACL Acl,
+    _In_ SECURITY_INFORMATION Parts)
+{
+    ULONG Index;
+    PACE_HEADER Ace;
+
+    if (!Acl) return FALSE;
+    for (Index = 0; Index < Acl->AceCount; Index++)
+    {
+        if (!NT_SUCCESS(RtlGetAce(Acl, Index, (PVOID*)&Ace))) break;
+        if (SepSaclPartOf(Ace) & Parts) return TRUE;
+    }
+    return FALSE;
+}
+
 static
 ULONG
-SepAclSelectedLength(
+SepAclPartsLength(
     _In_opt_ PACL Acl,
-    _In_ BOOLEAN Labels)
+    _In_ SECURITY_INFORMATION Parts)
 {
     ULONG Index, Length = 0;
     PACE_HEADER Ace;
@@ -49,17 +86,17 @@ SepAclSelectedLength(
     for (Index = 0; Index < Acl->AceCount; Index++)
     {
         if (!NT_SUCCESS(RtlGetAce(Acl, Index, (PVOID*)&Ace))) break;
-        if (SepAceIsMandatoryLabel(Ace) == Labels) Length += Ace->AceSize;
+        if (SepSaclPartOf(Ace) & Parts) Length += Ace->AceSize;
     }
     return Length;
 }
 
 static
 VOID
-SepAclCopySelected(
+SepAclCopyParts(
     _Inout_ PACL Dest,
     _In_opt_ PACL Source,
-    _In_ BOOLEAN Labels)
+    _In_ SECURITY_INFORMATION Parts)
 {
     ULONG Index;
     PACE_HEADER Ace;
@@ -70,7 +107,7 @@ SepAclCopySelected(
     for (Index = 0; Index < Source->AceCount; Index++)
     {
         if (!NT_SUCCESS(RtlGetAce(Source, Index, (PVOID*)&Ace))) break;
-        if (SepAceIsMandatoryLabel(Ace) != Labels) continue;
+        if (!(SepSaclPartOf(Ace) & Parts)) continue;
         Current = (PUCHAR)Dest + Dest->AclSize;
         RtlCopyMemory(Current, Ace, Ace->AceSize);
         Dest->AclSize += Ace->AceSize;
@@ -78,24 +115,31 @@ SepAclCopySelected(
     }
 }
 
+/* An ACL holding the named parts of one list, then the named parts of another, in their own order; the
+ * revision is the higher of the two sources. NULL when the two do not fit one ACL or on no pool */
 static
 PACL
-SepBuildMergedSacl(
-    _In_opt_ PACL LabelSource,
-    _In_opt_ PACL AuditSource)
+SepBuildPartSacl(
+    _In_opt_ PACL First,
+    _In_ SECURITY_INFORMATION FirstParts,
+    _In_opt_ PACL Second,
+    _In_ SECURITY_INFORMATION SecondParts)
 {
     ULONG Length;
     PACL Acl;
 
-    Length = sizeof(ACL) + SepAclSelectedLength(LabelSource, TRUE) + SepAclSelectedLength(AuditSource, FALSE);
+    Length = sizeof(ACL) + SepAclPartsLength(First, FirstParts) + SepAclPartsLength(Second, SecondParts);
     Length = ROUND_UP(Length, 4);
+    if (Length > MAXUSHORT) return NULL;
     Acl = ExAllocatePoolWithTag(PagedPool, Length, TAG_ACL);
     if (!Acl) return NULL;
     RtlZeroMemory(Acl, Length);
     Acl->AclRevision = ACL_REVISION;
+    if (First && First->AclRevision > Acl->AclRevision) Acl->AclRevision = First->AclRevision;
+    if (Second && Second->AclRevision > Acl->AclRevision) Acl->AclRevision = Second->AclRevision;
     Acl->AclSize = sizeof(ACL);
-    SepAclCopySelected(Acl, AuditSource, FALSE);
-    SepAclCopySelected(Acl, LabelSource, TRUE);
+    SepAclCopyParts(Acl, First, FirstParts);
+    SepAclCopyParts(Acl, Second, SecondParts);
     Acl->AclSize = (USHORT)Length;
     return Acl;
 }
@@ -549,6 +593,92 @@ SeSetWorldSecurityDescriptor(
     return STATUS_SUCCESS;
 }
 
+/**
+ * @brief
+ * Tells whether a token may make a SID the owner of an object: the token's user, a
+ * group of the token that carries SE_GROUP_OWNER (and is not deny-only), or any SID
+ * when SeRestorePrivilege is enabled. The caller holds the token's lock.
+ */
+BOOLEAN
+NTAPI
+SepCanAssignOwner(
+    _In_ PTOKEN Token,
+    _In_ PSID Owner)
+{
+    ULONG i;
+
+    PAGED_CODE();
+
+    if (RtlEqualSid(Token->UserAndGroups[0].Sid, Owner))
+        return TRUE;
+    for (i = 1; i < Token->UserAndGroupCount; i++)
+    {
+        if ((Token->UserAndGroups[i].Attributes & SE_GROUP_OWNER) &&
+            !(Token->UserAndGroups[i].Attributes & SE_GROUP_USE_FOR_DENY_ONLY) &&
+            RtlEqualSid(Token->UserAndGroups[i].Sid, Owner))
+        {
+            return TRUE;
+        }
+    }
+    return SepSinglePrivilegeCheck(SeRestorePrivilege, Token, UserMode);
+}
+
+/**
+ * @brief
+ * Writes one debug line for an owner the subject may not name, so a component that
+ * relies on naming such an owner shows up in the log. At most 256 lines per boot.
+ */
+static
+VOID
+SepReportRefusedOwner(
+    _In_ PTOKEN Token,
+    _In_ PSID Owner)
+{
+    static LONG Reported;
+    UNICODE_STRING OwnerString, UserString;
+
+    if (Reported >= 256 || InterlockedIncrement(&Reported) > 256)
+        return;
+    if (!NT_SUCCESS(RtlConvertSidToUnicodeString(&OwnerString, Owner, TRUE)))
+        return;
+    if (NT_SUCCESS(RtlConvertSidToUnicodeString(&UserString, Token->UserAndGroups[0].Sid, TRUE)))
+    {
+        DPRINT1("SE: owner %wZ refused for %wZ, process %s (%p)\n",
+                &OwnerString, &UserString, PsGetCurrentProcess()->ImageFileName, PsGetCurrentProcessId());
+        RtlFreeUnicodeString(&UserString);
+    }
+    RtlFreeUnicodeString(&OwnerString);
+}
+
+/**
+ * @brief
+ * SepCanAssignOwner for the calling thread (its impersonation token, else its
+ * process's primary token).
+ */
+BOOLEAN
+NTAPI
+SepCallerCanAssignOwner(
+    _In_ PSID Owner)
+{
+    SECURITY_SUBJECT_CONTEXT SubjectContext;
+    PTOKEN Token;
+    BOOLEAN Result;
+
+    PAGED_CODE();
+
+    if (!Owner)
+        return TRUE;
+    SeCaptureSubjectContext(&SubjectContext);
+    SeLockSubjectContext(&SubjectContext);
+    Token = SubjectContext.ClientToken ? SubjectContext.ClientToken : SubjectContext.PrimaryToken;
+    Result = SepCanAssignOwner(Token, Owner);
+    if (!Result)
+        SepReportRefusedOwner(Token, Owner);
+    SeUnlockSubjectContext(&SubjectContext);
+    SeReleaseSubjectContext(&SubjectContext);
+    return Result;
+}
+
 /* PUBLIC FUNCTIONS ***********************************************************/
 
 /**
@@ -792,41 +922,51 @@ SeCaptureSecurityDescriptor(
 
         if (DescriptorCopy.Owner)
         {
-            if (!RtlValidSid(DescriptorCopy.Owner)) RtlRaiseStatus(STATUS_INVALID_SID);
             NewDescriptor->Owner = Offset;
             RtlCopyMemory((PUCHAR)NewDescriptor + Offset,
                           DescriptorCopy.Owner,
                           OwnerSize);
+            if (!RtlValidSid((PUCHAR)NewDescriptor + Offset) ||
+                RtlLengthRequiredSid(((PISID)((PUCHAR)NewDescriptor + Offset))->SubAuthorityCount) != OwnerSize)
+                RtlRaiseStatus(STATUS_INVALID_SID);
             Offset += ROUND_UP(OwnerSize, sizeof(ULONG));
         }
 
         if (DescriptorCopy.Group)
         {
-            if (!RtlValidSid(DescriptorCopy.Group)) RtlRaiseStatus(STATUS_INVALID_SID);
             NewDescriptor->Group = Offset;
             RtlCopyMemory((PUCHAR)NewDescriptor + Offset,
                           DescriptorCopy.Group,
                           GroupSize);
+            if (!RtlValidSid((PUCHAR)NewDescriptor + Offset) ||
+                RtlLengthRequiredSid(((PISID)((PUCHAR)NewDescriptor + Offset))->SubAuthorityCount) != GroupSize)
+                RtlRaiseStatus(STATUS_INVALID_SID);
             Offset += ROUND_UP(GroupSize, sizeof(ULONG));
         }
 
         if (DescriptorCopy.Sacl)
         {
-            if (!RtlValidAcl(DescriptorCopy.Sacl)) RtlRaiseStatus(STATUS_INVALID_ACL);
             NewDescriptor->Sacl = Offset;
             RtlCopyMemory((PUCHAR)NewDescriptor + Offset,
                           DescriptorCopy.Sacl,
                           SaclSize);
+            if (SaclSize < sizeof(ACL) ||
+                ((PACL)((PUCHAR)NewDescriptor + Offset))->AclSize != SaclSize ||
+                !RtlValidAcl((PACL)((PUCHAR)NewDescriptor + Offset)))
+                RtlRaiseStatus(STATUS_INVALID_ACL);
             Offset += ROUND_UP(SaclSize, sizeof(ULONG));
         }
 
         if (DescriptorCopy.Dacl)
         {
-            if (!RtlValidAcl(DescriptorCopy.Dacl)) RtlRaiseStatus(STATUS_INVALID_ACL);
             NewDescriptor->Dacl = Offset;
             RtlCopyMemory((PUCHAR)NewDescriptor + Offset,
                           DescriptorCopy.Dacl,
                           DaclSize);
+            if (DaclSize < sizeof(ACL) ||
+                ((PACL)((PUCHAR)NewDescriptor + Offset))->AclSize != DaclSize ||
+                !RtlValidAcl((PACL)((PUCHAR)NewDescriptor + Offset)))
+                RtlRaiseStatus(STATUS_INVALID_ACL);
             Offset += ROUND_UP(DaclSize, sizeof(ULONG));
         }
 
@@ -957,14 +1097,13 @@ SeQuerySecurityDescriptorInfo(
                                          SE_DACL_PROTECTED));
     }
 
-    SaclInfo = *SecurityInformation & (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION);
+    SaclInfo = *SecurityInformation & SEP_SACL_ALL;
     if (SaclInfo && (ObjectSd->Control & SE_SACL_PRESENT))
     {
         Sacl = SepGetSaclFromDescriptor(ObjectSd);
-        if (Sacl != NULL && SaclInfo != (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION))
+        if (Sacl != NULL && !(SaclInfo & SACL_SECURITY_INFORMATION))
         {
-            FilteredSacl = SepBuildMergedSacl((SaclInfo & LABEL_SECURITY_INFORMATION) ? Sacl : NULL,
-                                              (SaclInfo & SACL_SECURITY_INFORMATION) ? Sacl : NULL);
+            FilteredSacl = SepBuildPartSacl(Sacl, SaclInfo, NULL, 0);
             Sacl = FilteredSacl;
         }
         if (Sacl != NULL)
@@ -1259,8 +1398,8 @@ SeSetSecurityDescriptorInfoEx(
     DaclLength = Dacl ? ROUND_UP((ULONG)Dacl->AclSize, 4) : 0;
 
     /* Get SACL and SACL size */
-    SaclInfo = SecurityInformation & (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION);
-    if (SaclInfo == (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION))
+    SaclInfo = SecurityInformation & SEP_SACL_ALL;
+    if (SaclInfo == SEP_SACL_ALL)
     {
         Sacl = SepGetSaclFromDescriptor(SecurityDescriptor);
         Control |= (SecurityDescriptor->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT |
@@ -1279,14 +1418,14 @@ SeSetSecurityDescriptorInfoEx(
         PACL OldSacl = SepGetSaclFromDescriptor(ObjectSd);
         PACL NewSacl = SepGetSaclFromDescriptor(SecurityDescriptor);
 
-        if (SaclInfo == SACL_SECURITY_INFORMATION && !NewSacl && !SepAclHasMandatoryLabel(OldSacl))
+        SECURITY_INFORMATION Kept = SEP_SACL_ALL & ~SaclInfo;
+
+        if ((SaclInfo & SACL_SECURITY_INFORMATION) && !NewSacl && !SepAclHasParts(OldSacl, Kept))
             Sacl = NULL;
         else
         {
-            if (SaclInfo & LABEL_SECURITY_INFORMATION)
-                MergedSacl = SepBuildMergedSacl(NewSacl, OldSacl);
-            else
-                MergedSacl = SepBuildMergedSacl(OldSacl, NewSacl);
+            /* Only the parts named come from the caller's list; each has its own right and its own request */
+            MergedSacl = SepBuildPartSacl(NewSacl, SaclInfo, OldSacl, Kept);
             if (!MergedSacl)
                 return STATUS_INSUFFICIENT_RESOURCES;
             Sacl = MergedSacl;
@@ -1430,15 +1569,16 @@ SeValidSecurityDescriptor(
 
     /* Reference it */
     Sid = (PISID)((ULONG_PTR)SecurityDescriptor + SecurityDescriptor->Owner);
-    if (Sid->Revision != SID_REVISION)
+    if (Sid->Revision != SID_REVISION || Sid->SubAuthorityCount > SID_MAX_SUB_AUTHORITIES)
     {
-        DPRINT1("Invalid Owner SID revision\n");
+        DPRINT1("Invalid Owner SID revision or sub-authority count\n");
         return FALSE;
     }
 
     // NOTE: Same as SeLengthSid(Sid); but doesn't use hardcoded values.
     SdLength += (sizeof(SID) + (Sid->SubAuthorityCount - 1) * sizeof(ULONG));
-    if (Length < SdLength)
+    if ((Length < SdLength) ||
+        (Length - SecurityDescriptor->Owner < RtlLengthRequiredSid(Sid->SubAuthorityCount)))
     {
         DPRINT1("Invalid Owner SID size\n");
         return FALSE;
@@ -1463,15 +1603,16 @@ SeValidSecurityDescriptor(
 
         /* Reference it */
         Sid = (PSID)((ULONG_PTR)SecurityDescriptor + SecurityDescriptor->Group);
-        if (Sid->Revision != SID_REVISION)
+        if (Sid->Revision != SID_REVISION || Sid->SubAuthorityCount > SID_MAX_SUB_AUTHORITIES)
         {
-            DPRINT1("Invalid Group SID revision\n");
+            DPRINT1("Invalid Group SID revision or sub-authority count\n");
             return FALSE;
         }
 
         // NOTE: Same as SeLengthSid(Sid); but doesn't use hardcoded values.
         SdLength += (sizeof(SID) + (Sid->SubAuthorityCount - 1) * sizeof(ULONG));
-        if (Length < SdLength)
+        if ((Length < SdLength) ||
+            (Length - SecurityDescriptor->Group < RtlLengthRequiredSid(Sid->SubAuthorityCount)))
         {
             DPRINT1("Invalid Group SID size\n");
             return FALSE;
@@ -1499,7 +1640,8 @@ SeValidSecurityDescriptor(
         Acl = (PACL)((ULONG_PTR)SecurityDescriptor + SecurityDescriptor->Dacl);
 
         SdLength += Acl->AclSize;
-        if (Length < SdLength)
+        if ((Length < SdLength) ||
+            (Length - SecurityDescriptor->Dacl < Acl->AclSize))
         {
             DPRINT1("Invalid DACL size\n");
             return FALSE;
@@ -1533,7 +1675,8 @@ SeValidSecurityDescriptor(
         Acl = (PACL)((ULONG_PTR)SecurityDescriptor + SecurityDescriptor->Sacl);
 
         SdLength += Acl->AclSize;
-        if (Length < SdLength)
+        if ((Length < SdLength) ||
+            (Length - SecurityDescriptor->Sacl < Acl->AclSize))
         {
             DPRINT1("Invalid SACL size\n");
             return FALSE;
@@ -1702,6 +1845,14 @@ SeAssignSecurityEx(
     {
         DPRINT("Use explicit owner sid!\n");
         Owner = SepGetOwnerFromDescriptor(ExplicitDescriptor);
+
+        /* The subject may only name an owner it could be */
+        if (Owner && !(AutoInheritFlags & SEF_AVOID_OWNER_CHECK) && !SepCanAssignOwner(Token, Owner))
+        {
+            SepReportRefusedOwner(Token, Owner);
+            SeUnlockSubjectContext(SubjectContext);
+            return STATUS_INVALID_OWNER;
+        }
     }
     if (!Owner)
     {

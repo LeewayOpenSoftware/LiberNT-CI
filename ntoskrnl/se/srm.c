@@ -20,7 +20,22 @@ typedef struct _SEP_LOGON_SESSION_TERMINATED_NOTIFICATION
 {
     struct _SEP_LOGON_SESSION_TERMINATED_NOTIFICATION *Next;
     PSE_LOGON_SESSION_TERMINATED_ROUTINE CallbackRoutine;
+    PSE_LOGON_SESSION_TERMINATED_ROUTINE_EX CallbackRoutineEx;
+    PVOID Context;
 } SEP_LOGON_SESSION_TERMINATED_NOTIFICATION, *PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION;
+
+static
+VOID
+SepNotifyLogonSessionTerminated(
+    _In_ PLUID LogonId);
+
+typedef struct _SEP_LSA_NOTICE
+{
+    LIST_ENTRY Entry;
+    LUID LogonId;
+} SEP_LSA_NOTICE, *PSEP_LSA_NOTICE;
+
+#define SEP_LSA_NOTICE_TIMEOUT (-5LL * 1000 * 1000 * 10)
 
 VOID
 NTAPI
@@ -37,6 +52,12 @@ NTSTATUS
 SepRmCreateLogonSession(
     _In_ PLUID LogonLuid);
 
+static
+VOID
+NTAPI
+SepLsaNoticeWorker(
+    _In_ PVOID Context);
+
 
 /* GLOBALS ********************************************************************/
 
@@ -47,6 +68,13 @@ HANDLE SeRmCommandPort;
 HANDLE SeLsaInitEvent;
 
 static HANDLE SepRmCommandMessagePort;
+
+static HANDLE SepLsaCommandPort;
+static BOOLEAN SepLsaReady;
+static BOOLEAN SepLsaNoticeQueued;
+static LIST_ENTRY SepLsaNoticeList;
+static KGUARDED_MUTEX SepLsaNoticeLock;
+static WORK_QUEUE_ITEM SepLsaNoticeWorkItem;
 
 BOOLEAN SepAdtAuditingEnabled;
 ULONG SepAdtMinListLength = 0x2000;
@@ -69,7 +97,16 @@ PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION SepLogonNotifications = NULL;
 static PSEP_LOGON_SESSION_REFERENCES _SepLogonSessions[MAX_LOGON_SESSION_LISTS_IN_ARRAY] = {NULL};
 PSEP_LOGON_SESSION_REFERENCES* const SepLogonSessions = _SepLogonSessions;
 static KGUARDED_MUTEX SepRmDbLock[MAX_LOGON_SESSION_LISTS_IN_ARRAY];
-static KGUARDED_MUTEX SepRmNotificationLock;
+
+/* Serializes every change to the UAC pair slots of the logon sessions. It is
+ * taken before, never inside, a database bucket lock. */
+static KGUARDED_MUTEX SepRmPairLock;
+
+static
+PSEP_LOGON_SESSION_REFERENCES
+SepRmFindLogonSessionLocked(
+    _In_ PLUID LogonLuid);
+static EX_PUSH_LOCK SepRmNotificationLock;
 
 static
 PKGUARDED_MUTEX
@@ -198,7 +235,12 @@ SeRmInitPhase0(VOID)
     /* Initialize the database lock */
     for (i = 0; i < MAX_LOGON_SESSION_LISTS_IN_ARRAY; i++)
         KeInitializeGuardedMutex(&SepRmDbLock[i]);
-    KeInitializeGuardedMutex(&SepRmNotificationLock);
+    KeInitializeGuardedMutex(&SepRmPairLock);
+    ExInitializePushLock(&SepRmNotificationLock);
+
+    KeInitializeGuardedMutex(&SepLsaNoticeLock);
+    InitializeListHead(&SepLsaNoticeList);
+    ExInitializeWorkItem(&SepLsaNoticeWorkItem, SepLsaNoticeWorker, NULL);
 
     /* Create the system logon session */
     Status = SepRmCreateLogonSession(&SeSystemAuthenticationId);
@@ -557,6 +599,10 @@ SepRmCreateLogonSession(
     NewSession->ReferenceCount = 0;
     NewSession->Flags = 0;
     NewSession->pDeviceMap = NULL;
+    NewSession->FullToken = NULL;
+    NewSession->LimitedToken = NULL;
+    RtlZeroMemory(&NewSession->LinkedLogonId, sizeof(LUID));
+    NewSession->FullTokenReferenced = FALSE;
     InitializeListHead(&NewSession->TokenList);
 
     /* Acquire the database lock */
@@ -1043,12 +1089,192 @@ AllocateLinksAgain:
  * without issues. STATUS_NO_SUCH_LOGON_SESSION is returned if no
  * such logon exists otherwise.
  */
+static
+BOOLEAN
+SepIsWellKnownLogonId(
+    _In_ PLUID LogonId)
+{
+    LUID SystemLuid = SYSTEM_LUID;
+
+    return (LogonId->HighPart == 0 && LogonId->LowPart <= SystemLuid.LowPart);
+}
+
+static
+NTSTATUS
+SepConnectToLsa(
+    _Out_ PHANDLE PortHandle)
+{
+    UNICODE_STRING PortName = RTL_CONSTANT_STRING(L"\\SeLsaCommandPort");
+    ALPC_PORT_ATTRIBUTES PortAttributes;
+    LARGE_INTEGER Timeout;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    *PortHandle = NULL;
+
+    RtlZeroMemory(&PortAttributes, sizeof(PortAttributes));
+    PortAttributes.MaxMessageLength = PORT_MAXIMUM_MESSAGE_LENGTH;
+    PortAttributes.SecurityQos.Length = sizeof(PortAttributes.SecurityQos);
+    PortAttributes.SecurityQos.ImpersonationLevel = SecurityImpersonation;
+    PortAttributes.SecurityQos.ContextTrackingMode = SECURITY_DYNAMIC_TRACKING;
+    PortAttributes.SecurityQos.EffectiveOnly = TRUE;
+
+    Timeout.QuadPart = SEP_LSA_NOTICE_TIMEOUT;
+    Status = ZwAlpcConnectPort(PortHandle,
+                               &PortName,
+                               NULL,
+                               &PortAttributes,
+                               ALPC_SYNC_CONNECTION,
+                               NULL,
+                               NULL,
+                               NULL,
+                               NULL,
+                               NULL,
+                               &Timeout);
+    if (Status == STATUS_TIMEOUT)
+        Status = STATUS_IO_TIMEOUT;
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Security: Connect to LSA Port failed 0x%lx\n", Status);
+        *PortHandle = NULL;
+    }
+
+    return Status;
+}
+
+static
+NTSTATUS
+SepTellLsaSessionEnded(
+    _In_ HANDLE PortHandle,
+    _In_ PLUID LogonId)
+{
+    LSAP_RM_API_MESSAGE Message;
+    LSAP_RM_API_MESSAGE Reply;
+    LARGE_INTEGER Timeout;
+    SIZE_T Length;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    RtlZeroMemory(&Message, sizeof(Message));
+    Message.Header.u1.s1.TotalLength = (CSHORT)(sizeof(PORT_MESSAGE) + sizeof(ULONG) + sizeof(LUID));
+    Message.Header.u1.s1.DataLength = Message.Header.u1.s1.TotalLength - (CSHORT)sizeof(PORT_MESSAGE);
+    Message.ApiNumber = LsapLogonSessionDeletedApi;
+    Message.u.LogonLuid = *LogonId;
+
+    Length = sizeof(Reply);
+    Timeout.QuadPart = SEP_LSA_NOTICE_TIMEOUT;
+    Status = ZwAlpcSendWaitReceivePort(PortHandle,
+                                       ALPC_MSGFLG_SYNC_REQUEST,
+                                       &Message.Header,
+                                       NULL,
+                                       &Reply.Header,
+                                       &Length,
+                                       NULL,
+                                       &Timeout);
+    if (Status == STATUS_TIMEOUT)
+        Status = STATUS_IO_TIMEOUT;
+    if (!NT_SUCCESS(Status))
+        DPRINT1("Security: LSA did not take an ended logon session 0x%lx\n", Status);
+
+    return Status;
+}
+
+static
+VOID
+NTAPI
+SepLsaNoticeWorker(
+    _In_ PVOID Context)
+{
+    PSEP_LSA_NOTICE Notice;
+    PLIST_ENTRY Entry;
+    HANDLE PortHandle;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(Context);
+
+    for (;;)
+    {
+        KeAcquireGuardedMutex(&SepLsaNoticeLock);
+        if (!SepLsaReady || IsListEmpty(&SepLsaNoticeList))
+        {
+            SepLsaNoticeQueued = FALSE;
+            KeReleaseGuardedMutex(&SepLsaNoticeLock);
+            return;
+        }
+        Entry = RemoveHeadList(&SepLsaNoticeList);
+        PortHandle = SepLsaCommandPort;
+        KeReleaseGuardedMutex(&SepLsaNoticeLock);
+
+        Notice = CONTAINING_RECORD(Entry, SEP_LSA_NOTICE, Entry);
+
+        Status = (PortHandle != NULL) ? STATUS_SUCCESS : SepConnectToLsa(&PortHandle);
+        if (NT_SUCCESS(Status))
+            Status = SepTellLsaSessionEnded(PortHandle, &Notice->LogonId);
+
+        if (NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(Notice, TAG_LOGON_SESSION);
+            KeAcquireGuardedMutex(&SepLsaNoticeLock);
+            SepLsaCommandPort = PortHandle;
+            KeReleaseGuardedMutex(&SepLsaNoticeLock);
+            continue;
+        }
+
+        /* The port is lost: the notice waits for the next one, which connects again */
+        if (PortHandle != NULL)
+            ObCloseHandle(PortHandle, KernelMode);
+
+        KeAcquireGuardedMutex(&SepLsaNoticeLock);
+        SepLsaCommandPort = NULL;
+        InsertHeadList(&SepLsaNoticeList, &Notice->Entry);
+        SepLsaNoticeQueued = FALSE;
+        KeReleaseGuardedMutex(&SepLsaNoticeLock);
+        return;
+    }
+}
+
+static
+VOID
+SepQueueLsaNotice(
+    _In_ PLUID LogonId)
+{
+    PSEP_LSA_NOTICE Notice;
+    BOOLEAN Queue;
+
+    PAGED_CODE();
+
+    Notice = ExAllocatePoolWithTag(PagedPool, sizeof(*Notice), TAG_LOGON_SESSION);
+    /* FIXME: without memory LSA is not told, and the session stays until shutdown */
+    if (Notice == NULL)
+        return;
+
+    Notice->LogonId = *LogonId;
+
+    KeAcquireGuardedMutex(&SepLsaNoticeLock);
+    InsertTailList(&SepLsaNoticeList, &Notice->Entry);
+    Queue = SepLsaReady && !SepLsaNoticeQueued;
+    if (Queue)
+        SepLsaNoticeQueued = TRUE;
+    KeReleaseGuardedMutex(&SepLsaNoticeLock);
+
+    if (Queue)
+        ExQueueWorkItem(&SepLsaNoticeWorkItem, DelayedWorkQueue);
+}
+
 NTSTATUS
 SepRmDereferenceLogonSession(
     _In_ PLUID LogonLuid)
 {
     ULONG RefCount;
     PDEVICE_MAP DeviceMap;
+    PTOKEN FullToken, PairFull, PairLimited;
+    LUID LinkedLogonId;
+    BOOLEAN HadPair;
+    BOOLEAN NotifyTermination;
     PSEP_LOGON_SESSION_REFERENCES CurrentSession;
 
     DPRINT("SepRmDereferenceLogonSession(%08lx:%08lx)\n",
@@ -1069,22 +1295,72 @@ SepRmDereferenceLogonSession(
             RefCount = --CurrentSession->ReferenceCount;
             DPRINT("ReferenceCount: %lu\n", CurrentSession->ReferenceCount);
 
+            /* Once the lock is gone LSA may delete the session, so only a local copy is used after it */
+            DeviceMap = NULL;
+            FullToken = NULL;
+            HadPair = FALSE;
+            NotifyTermination = FALSE;
+            PairFull = NULL;
+            PairLimited = NULL;
+            if (RefCount == 0)
+            {
+                DeviceMap = CurrentSession->pDeviceMap;
+                CurrentSession->pDeviceMap = NULL;
+                NotifyTermination = (CurrentSession->Flags & SEP_LOGON_SESSION_TERMINATION_NOTIFY) != 0;
+                PairFull = CurrentSession->FullToken;
+                PairLimited = CurrentSession->LimitedToken;
+                HadPair = (PairFull != NULL || PairLimited != NULL);
+                LinkedLogonId = CurrentSession->LinkedLogonId;
+                FullToken = CurrentSession->FullTokenReferenced ? PairFull : NULL;
+                CurrentSession->FullToken = NULL;
+                CurrentSession->LimitedToken = NULL;
+                CurrentSession->FullTokenReferenced = FALSE;
+            }
+
             /* Release the database lock */
             KeReleaseGuardedMutex(SepRmDbLockFor(LogonLuid));
 
             /* We're done with the session */
             if (RefCount == 0)
             {
+                /* The partner session of a two-session pair must not keep pointing at
+                 * tokens that are about to go */
+                if (HadPair && !RtlEqualLuid(&LinkedLogonId, LogonLuid))
+                {
+                    PSEP_LOGON_SESSION_REFERENCES Partner;
+
+                    KeAcquireGuardedMutex(&SepRmPairLock);
+                    KeAcquireGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+                    Partner = SepRmFindLogonSessionLocked(&LinkedLogonId);
+                    if (Partner != NULL &&
+                        ((PairFull != NULL && Partner->FullToken == PairFull) ||
+                         (PairLimited != NULL && Partner->LimitedToken == PairLimited)))
+                    {
+                        Partner->FullToken = NULL;
+                        Partner->LimitedToken = NULL;
+                        Partner->FullTokenReferenced = FALSE;
+                    }
+                    KeReleaseGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+                    KeReleaseGuardedMutex(&SepRmPairLock);
+                }
+
+                /* The last token of the session is gone: release its elevated token */
+                if (FullToken != NULL)
+                    ObDereferenceObject(FullToken);
+
                 /* Get rid of the LUID device map */
-                DeviceMap = CurrentSession->pDeviceMap;
                 if (DeviceMap != NULL)
                 {
-                    CurrentSession->pDeviceMap = NULL;
                     SepCleanupLUIDDeviceMapDirectory(LogonLuid);
                     ObfDereferenceDeviceMap(DeviceMap);
                 }
 
-                /* FIXME: Alert LSA and filesystems that a logon is about to be deleted */
+                if (!SepIsWellKnownLogonId(LogonLuid))
+                    SepQueueLsaNotice(LogonLuid);
+
+                /* Alert the file systems that asked for it with SeMarkLogonSessionForTerminationNotification */
+                if (NotifyTermination)
+                    SepNotifyLogonSessionTerminated(LogonLuid);
             }
 
             return STATUS_SUCCESS;
@@ -1113,12 +1389,11 @@ BOOLEAN
 NTAPI
 SepRmCommandServerThreadInit(VOID)
 {
-    ALPC_PORT_ATTRIBUTES PortAttributes;
     SEP_RM_API_MESSAGE Message;
-    UNICODE_STRING PortName;
     SIZE_T BufferLength;
     HANDLE PortHandle;
     NTSTATUS Status;
+    BOOLEAN Queue;
     BOOLEAN Result;
 
     PortHandle = NULL;
@@ -1173,46 +1448,26 @@ SepRmCommandServerThreadInit(VOID)
         goto Cleanup;
     }
 
-    /* Setup security QOS */
-    RtlZeroMemory(&PortAttributes, sizeof(PortAttributes));
-    PortAttributes.MaxMessageLength = PORT_MAXIMUM_MESSAGE_LENGTH;
-    PortAttributes.SecurityQos.Length = sizeof(PortAttributes.SecurityQos);
-    PortAttributes.SecurityQos.ImpersonationLevel = SecurityImpersonation;
-    PortAttributes.SecurityQos.ContextTrackingMode = SECURITY_DYNAMIC_TRACKING;
-    PortAttributes.SecurityQos.EffectiveOnly = TRUE;
+    /* The port carries the notices of ended logon sessions; a failed connect is retried by the next notice */
+    SepConnectToLsa(&PortHandle);
 
-    /* Connect to LSASS */
-    RtlInitUnicodeString(&PortName, L"\\SeLsaCommandPort");
-    Status = ZwAlpcConnectPort(&PortHandle,
-                               &PortName,
-                               NULL,
-                               &PortAttributes,
-                               ALPC_SYNC_CONNECTION,
-                               NULL,
-                               NULL,
-                               NULL,
-                               NULL,
-                               NULL,
-                               NULL);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("Security Rm Init: Connect to LSA Port failed 0x%lx\n", Status);
-        goto Cleanup;
-    }
+    KeAcquireGuardedMutex(&SepLsaNoticeLock);
+    SepLsaCommandPort = PortHandle;
+    SepLsaReady = TRUE;
+    Queue = !IsListEmpty(&SepLsaNoticeList) && !SepLsaNoticeQueued;
+    if (Queue)
+        SepLsaNoticeQueued = TRUE;
+    KeReleaseGuardedMutex(&SepLsaNoticeLock);
+
+    if (Queue)
+        ExQueueWorkItem(&SepLsaNoticeWorkItem, DelayedWorkQueue);
 
     DPRINT("SepRmCommandServerThreadInit: done\n");
 
 Cleanup:
     /* Check for failure */
     if (!NT_SUCCESS(Status))
-    {
-        if (PortHandle != NULL)
-        {
-            ObCloseHandle(PortHandle, KernelMode);
-        }
-
         Result = FALSE;
-    }
 
     return Result;
 }
@@ -1606,17 +1861,21 @@ SeRegisterLogonSessionTerminatedRoutine(
         return STATUS_INSUFFICIENT_RESOURCES;
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmNotificationLock);
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&SepRmNotificationLock);
 
     /* Set the callback routine */
     Notification->CallbackRoutine = CallbackRoutine;
+    Notification->CallbackRoutineEx = NULL;
+    Notification->Context = NULL;
 
     /* Insert the new notification item into the list */
     Notification->Next = SepLogonNotifications;
     SepLogonNotifications = Notification;
 
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmNotificationLock);
+    ExReleasePushLockExclusive(&SepRmNotificationLock);
+    KeLeaveCriticalRegion();
 
     return STATUS_SUCCESS;
 }
@@ -1649,7 +1908,8 @@ SeUnregisterLogonSessionTerminatedRoutine(
         return STATUS_INVALID_PARAMETER;
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmNotificationLock);
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&SepRmNotificationLock);
 
     /* Loop all registered notification items */
     for (Current = SepLogonNotifications;
@@ -1683,9 +1943,462 @@ SeUnregisterLogonSessionTerminatedRoutine(
     }
 
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmNotificationLock);
+    ExReleasePushLockExclusive(&SepRmNotificationLock);
+    KeLeaveCriticalRegion();
 
     return Status;
+}
+
+static
+VOID
+SepNotifyLogonSessionTerminated(
+    _In_ PLUID LogonId)
+{
+    PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION Current;
+    LUID LocalLogonId = *LogonId;
+
+    PAGED_CODE();
+
+    /* Shared: routines run concurrently and must not register or unregister from inside the callback */
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&SepRmNotificationLock);
+    for (Current = SepLogonNotifications; Current != NULL; Current = Current->Next)
+    {
+        if (Current->CallbackRoutineEx != NULL)
+            Current->CallbackRoutineEx(&LocalLogonId, PsGetHostSilo(), Current->Context);
+        else
+            Current->CallbackRoutine(&LocalLogonId);
+    }
+    ExReleasePushLockShared(&SepRmNotificationLock);
+    KeLeaveCriticalRegion();
+}
+
+/**
+ * @brief
+ * Registers a callback, with a caller context, that is called once a
+ * logon session marked for termination notification terminates.
+ *
+ * @return
+ * STATUS_SUCCESS, STATUS_INVALID_PARAMETER without a callback routine, or
+ * STATUS_INSUFFICIENT_RESOURCES.
+ */
+NTSTATUS
+NTAPI
+SeRegisterLogonSessionTerminatedRoutineEx(
+    _In_ PSE_LOGON_SESSION_TERMINATED_ROUTINE_EX CallbackRoutine,
+    _In_ PVOID Context)
+{
+    PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION Notification;
+    PAGED_CODE();
+
+    if (CallbackRoutine == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Notification = ExAllocatePoolWithTag(PagedPool,
+                                         sizeof(SEP_LOGON_SESSION_TERMINATED_NOTIFICATION),
+                                         TAG_LOGON_NOTIFICATION);
+    if (Notification == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Notification->CallbackRoutine = NULL;
+    Notification->CallbackRoutineEx = CallbackRoutine;
+    Notification->Context = Context;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&SepRmNotificationLock);
+    Notification->Next = SepLogonNotifications;
+    SepLogonNotifications = Notification;
+    ExReleasePushLockExclusive(&SepRmNotificationLock);
+    KeLeaveCriticalRegion();
+
+    return STATUS_SUCCESS;
+}
+
+/**
+ * @brief
+ * Un-registers a callback registered by SeRegisterLogonSessionTerminatedRoutineEx
+ * with the same context.
+ *
+ * @return
+ * STATUS_SUCCESS, STATUS_INVALID_PARAMETER without a callback routine, or
+ * STATUS_NOT_FOUND.
+ */
+NTSTATUS
+NTAPI
+SeUnregisterLogonSessionTerminatedRoutineEx(
+    _In_ PSE_LOGON_SESSION_TERMINATED_ROUTINE_EX CallbackRoutine,
+    _In_ PVOID Context)
+{
+    PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION Current, Previous = NULL;
+    PAGED_CODE();
+
+    if (CallbackRoutine == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&SepRmNotificationLock);
+    for (Current = SepLogonNotifications; Current != NULL; Current = Current->Next)
+    {
+        if (Current->CallbackRoutineEx == CallbackRoutine && Current->Context == Context)
+            break;
+        Previous = Current;
+    }
+
+    if (Current != NULL)
+    {
+        if (Previous == NULL)
+            SepLogonNotifications = Current->Next;
+        else
+            Previous->Next = Current->Next;
+    }
+    ExReleasePushLockExclusive(&SepRmNotificationLock);
+    KeLeaveCriticalRegion();
+
+    if (Current == NULL)
+        return STATUS_NOT_FOUND;
+
+    ExFreePoolWithTag(Current, TAG_LOGON_NOTIFICATION);
+    return STATUS_SUCCESS;
+}
+
+
+/* Walks the session list of a LUID; the caller holds the database lock for it. */
+static
+PSEP_LOGON_SESSION_REFERENCES
+SepRmFindLogonSessionLocked(
+    _In_ PLUID LogonLuid)
+{
+    PSEP_LOGON_SESSION_REFERENCES Session;
+
+    for (Session = SepLogonSessions[LogonLuid->LowPart % MAX_LOGON_SESSION_LISTS_IN_ARRAY];
+         Session != NULL;
+         Session = Session->Next)
+    {
+        if (RtlEqualLuid(&Session->LogonId, LogonLuid))
+            return Session;
+    }
+
+    return NULL;
+}
+
+/**
+ * @brief
+ * Records the two tokens of a UAC pair on their logon session. The session
+ * keeps the elevated token alive for as long as any other token of the
+ * session exists, so that hold must not count as a session reference.
+ * The caller holds the elevated token's lock exclusively.
+ */
+static
+NTSTATUS
+SepRmLinkLogonSessionTokensLocked(
+    _In_ PTOKEN FullToken,
+    _In_ PTOKEN LimitedToken)
+{
+    PSEP_LOGON_SESSION_REFERENCES LimitedSession, FullSession;
+    BOOLEAN SameSession;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    SameSession = RtlEqualLuid(&FullToken->AuthenticationId, &LimitedToken->AuthenticationId);
+
+    /* The well-known sessions (System, services, anonymous) never carry a pair */
+    if (SepIsWellKnownLogonId(&FullToken->AuthenticationId) ||
+        SepIsWellKnownLogonId(&LimitedToken->AuthenticationId))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* The limited token's session owns the reference on the elevated token */
+    KeAcquireGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+
+    LimitedSession = SepRmFindLogonSessionLocked(&LimitedToken->AuthenticationId);
+    if (LimitedSession == NULL)
+    {
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+        return STATUS_NO_SUCH_LOGON_SESSION;
+    }
+
+    if (LimitedSession->FullToken != NULL || LimitedSession->LimitedToken != NULL)
+    {
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* One session for both: the elevated token stops counting, so something
+     * else must keep the session alive or the pair would end it at once */
+    if (SameSession &&
+        !(FullToken->TokenFlags & TOKEN_SESSION_NOT_REFERENCED) &&
+        LimitedSession->ReferenceCount <= 1)
+    {
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ObReferenceObject(FullToken);
+    LimitedSession->FullToken = FullToken;
+    LimitedSession->LimitedToken = LimitedToken;
+    LimitedSession->FullTokenReferenced = TRUE;
+    LimitedSession->LinkedLogonId = FullToken->AuthenticationId;
+
+    if (SameSession)
+    {
+        /* One session for both: the session's own hold must not keep it alive */
+        if (!(FullToken->TokenFlags & TOKEN_SESSION_NOT_REFERENCED))
+        {
+            FullToken->TokenFlags |= TOKEN_SESSION_NOT_REFERENCED;
+            LimitedSession->ReferenceCount--;
+        }
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+        return STATUS_SUCCESS;
+    }
+
+    KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+
+    /* Two sessions: the elevated token's session only points at the pair. It stays
+     * alive through the elevated token itself, which the limited session holds. */
+    KeAcquireGuardedMutex(SepRmDbLockFor(&FullToken->AuthenticationId));
+
+    FullSession = SepRmFindLogonSessionLocked(&FullToken->AuthenticationId);
+    if (FullSession != NULL && FullSession->FullToken == NULL && FullSession->LimitedToken == NULL)
+    {
+        FullSession->FullToken = FullToken;
+        FullSession->LimitedToken = LimitedToken;
+        FullSession->FullTokenReferenced = FALSE;
+        FullSession->LinkedLogonId = LimitedToken->AuthenticationId;
+        KeReleaseGuardedMutex(SepRmDbLockFor(&FullToken->AuthenticationId));
+        return STATUS_SUCCESS;
+    }
+
+    Status = (FullSession == NULL) ? STATUS_NO_SUCH_LOGON_SESSION : STATUS_INVALID_PARAMETER;
+    KeReleaseGuardedMutex(SepRmDbLockFor(&FullToken->AuthenticationId));
+
+    /* Undo the limited side */
+    KeAcquireGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+    LimitedSession = SepRmFindLogonSessionLocked(&LimitedToken->AuthenticationId);
+    if (LimitedSession != NULL && LimitedSession->FullToken == FullToken)
+    {
+        LimitedSession->FullToken = NULL;
+        LimitedSession->LimitedToken = NULL;
+        LimitedSession->FullTokenReferenced = FALSE;
+    }
+    KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+    ObDereferenceObject(FullToken);
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+SepRmLinkLogonSessionTokens(
+    _In_ PTOKEN FullToken,
+    _In_ PTOKEN LimitedToken)
+{
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    KeAcquireGuardedMutex(&SepRmPairLock);
+    Status = SepRmLinkLogonSessionTokensLocked(FullToken, LimitedToken);
+    KeReleaseGuardedMutex(&SepRmPairLock);
+    return Status;
+}
+
+/**
+ * @brief
+ * Clears the pair slots of one session when they point at the given token.
+ * The caller holds the database lock of that session. Returns the token the
+ * session referenced, so the caller can release it after the lock is gone.
+ */
+static
+PTOKEN
+SepRmClearPairLocked(
+    _In_ PSEP_LOGON_SESSION_REFERENCES Session,
+    _In_opt_ PTOKEN Token)
+{
+    PTOKEN Referenced = NULL;
+
+    if (Token != NULL && Session->FullToken != Token && Session->LimitedToken != Token)
+        return NULL;
+
+    if (Session->FullTokenReferenced)
+        Referenced = Session->FullToken;
+    Session->FullToken = NULL;
+    Session->LimitedToken = NULL;
+    Session->FullTokenReferenced = FALSE;
+    return Referenced;
+}
+
+/**
+ * @brief
+ * Breaks the UAC pair a token belongs to, in both sessions. Used by the
+ * TokenLinkedToken set with a null handle (SeTcbPrivilege callers).
+ */
+/* The references found are handed back, never dropped here: the caller holds the
+ * pair lock and a token's delete procedure takes it again. */
+static
+NTSTATUS
+SepRmUnlinkLogonSessionPairLocked(
+    _In_ PTOKEN Token,
+    _Out_ PTOKEN *Referenced,
+    _Out_ PTOKEN *Other)
+{
+    PSEP_LOGON_SESSION_REFERENCES Session;
+    LUID LinkedLogonId;
+    BOOLEAN Linked = FALSE;
+    PAGED_CODE();
+
+    *Referenced = NULL;
+    *Other = NULL;
+
+    KeAcquireGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+    Session = SepRmFindLogonSessionLocked(&Token->AuthenticationId);
+    if (Session != NULL && (Session->FullToken == Token || Session->LimitedToken == Token))
+    {
+        Linked = TRUE;
+        LinkedLogonId = Session->LinkedLogonId;
+        *Referenced = SepRmClearPairLocked(Session, NULL);
+    }
+    KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    if (!Linked)
+        return STATUS_NO_SUCH_LOGON_SESSION;
+
+    if (!RtlEqualLuid(&LinkedLogonId, &Token->AuthenticationId))
+    {
+        KeAcquireGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+        Session = SepRmFindLogonSessionLocked(&LinkedLogonId);
+        if (Session != NULL)
+            *Other = SepRmClearPairLocked(Session, Token);
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+SepRmUnlinkLogonSessionPair(
+    _In_ PTOKEN Token)
+{
+    PTOKEN Referenced, Other;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    KeAcquireGuardedMutex(&SepRmPairLock);
+    Status = SepRmUnlinkLogonSessionPairLocked(Token, &Referenced, &Other);
+    KeReleaseGuardedMutex(&SepRmPairLock);
+
+    /* Dropping a reference may delete the token, whose delete procedure takes the lock */
+    if (Referenced != NULL)
+        ObDereferenceObject(Referenced);
+    if (Other != NULL)
+        ObDereferenceObject(Other);
+    return Status;
+}
+
+/**
+ * @brief
+ * Clears a token from the UAC pair of its logon session when the token goes
+ * away. Runs from the token's delete procedure.
+ */
+VOID
+NTAPI
+SepRmUnlinkLogonSessionToken(
+    _In_ PTOKEN Token)
+{
+    PSEP_LOGON_SESSION_REFERENCES Session;
+    PAGED_CODE();
+
+    LUID LinkedLogonId;
+    BOOLEAN Linked = FALSE;
+
+    KeAcquireGuardedMutex(&SepRmPairLock);
+    KeAcquireGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    Session = SepRmFindLogonSessionLocked(&Token->AuthenticationId);
+    if (Session != NULL && (Session->LimitedToken == Token || Session->FullToken == Token))
+    {
+        Linked = TRUE;
+        LinkedLogonId = Session->LinkedLogonId;
+        if (Session->LimitedToken == Token)
+            Session->LimitedToken = NULL;
+        if (Session->FullToken == Token)
+        {
+            /* A referenced elevated token cannot be deleted; this is the weak slot */
+            ASSERT(!Session->FullTokenReferenced);
+            Session->FullToken = NULL;
+        }
+    }
+
+    KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    /* The other session of a two-session pair still points at this token */
+    if (Linked && !RtlEqualLuid(&LinkedLogonId, &Token->AuthenticationId))
+    {
+        KeAcquireGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+        Session = SepRmFindLogonSessionLocked(&LinkedLogonId);
+        if (Session != NULL)
+        {
+            if (Session->LimitedToken == Token)
+                Session->LimitedToken = NULL;
+            if (Session->FullToken == Token && !Session->FullTokenReferenced)
+                Session->FullToken = NULL;
+        }
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+    }
+
+    KeReleaseGuardedMutex(&SepRmPairLock);
+}
+
+BOOLEAN
+NTAPI
+SepRmLogonSessionHasFullToken(
+    _In_ PTOKEN Token)
+{
+    PSEP_LOGON_SESSION_REFERENCES Session;
+    BOOLEAN HasFullToken;
+    PAGED_CODE();
+
+    KeAcquireGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+    Session = SepRmFindLogonSessionLocked(&Token->AuthenticationId);
+    HasFullToken = (Session != NULL && Session->FullToken != NULL);
+    KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    return HasFullToken;
+}
+
+/**
+ * @brief
+ * Returns a referenced pointer to the other token of the caller's UAC pair:
+ * the elevated one for a LUA token, the filtered one otherwise.
+ */
+NTSTATUS
+NTAPI
+SepRmReferenceLinkedToken(
+    _In_ PTOKEN Token,
+    _Out_ PTOKEN *LinkedToken)
+{
+    PSEP_LOGON_SESSION_REFERENCES Session;
+    PTOKEN Linked = NULL;
+    PAGED_CODE();
+
+    KeAcquireGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    Session = SepRmFindLogonSessionLocked(&Token->AuthenticationId);
+    if (Session != NULL)
+        Linked = (Token->TokenFlags & TOKEN_LUA) ? Session->FullToken : Session->LimitedToken;
+
+    /* A token being deleted clears its slot under this lock, so a safe
+     * reference either succeeds or the link is already gone. */
+    if (Linked == Token || (Linked != NULL && !ObReferenceObjectSafe(Linked)))
+        Linked = NULL;
+
+    KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    if (Linked == NULL)
+        return STATUS_NO_SUCH_LOGON_SESSION;
+
+    *LinkedToken = Linked;
+    return STATUS_SUCCESS;
 }
 
 /* EOF */

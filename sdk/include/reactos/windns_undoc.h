@@ -28,6 +28,11 @@ DnsFlushResolverCache(VOID);
 
 BOOL
 WINAPI
+DnsFlushResolverCacheEntry_W(
+    _In_ LPCWSTR pszEntry);
+
+BOOL
+WINAPI
 DnsGetCacheDataTable(
     _Out_ PDNS_CACHE_ENTRY *DnsCache);
 

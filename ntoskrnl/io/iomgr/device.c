@@ -47,6 +47,18 @@ IopReadyDeviceObjects(IN PDRIVER_OBJECT Driver)
     }
 }
 
+static
+VOID
+IopForgetDeviceLocks(
+    _In_ PDEVICE_OBJECT DeviceObject)
+{
+    ULONG_PTR Start = (ULONG_PTR)DeviceObject;
+    ULONG_PTR End = (ULONG_PTR)DeviceObject->DeviceObjectExtension;
+
+    if (VfDeadlockDetectionEnabled && End > Start)
+        VfForgetLocksInRange(DeviceObject, End - Start);
+}
+
 VOID
 NTAPI
 IopDeleteDevice(IN PVOID ObjectBody)
@@ -55,9 +67,18 @@ IopDeleteDevice(IN PVOID ObjectBody)
     PDEVICE_NODE DeviceNode = IopGetDeviceNode(DeviceObject);
     PAGED_CODE();
 
+    IopForgetDeviceLocks(DeviceObject);
+
     /* Cleanup and free the device node */
     if (DeviceNode)
         IopFreeDeviceNode(DeviceNode);
+
+    /* The device's descriptor lives in the security descriptor cache; the header slot holds nothing for a device */
+    if (DeviceObject->SecurityDescriptor)
+    {
+        ObDereferenceSecurityDescriptor(DeviceObject->SecurityDescriptor, 1);
+        DeviceObject->SecurityDescriptor = NULL;
+    }
 
     /* Dereference the driver object, referenced in IoCreateDevice */
     if (DeviceObject->DriverObject)
@@ -499,6 +520,9 @@ IopReleasePnpUnloadBarrier(IN PDRIVER_OBJECT DriverObject)
     ObDereferenceObject(DriverObject);
 }
 
+/* Private to this file: the device is being taken apart by IopUnloadDevice */
+#define DOE_DELETE_CLAIMED 0x80000000
+
 VOID
 NTAPI
 IopUnloadDevice(IN PDEVICE_OBJECT DeviceObject)
@@ -531,11 +555,23 @@ IopUnloadDevice(IN PDEVICE_OBJECT DeviceObject)
             return;
         }
 
+        /* Several threads can get here for the same device: the one that
+         * deletes it, one that drops its last reference, one that detaches
+         * the device above it. Each saw no reference and the delete flag
+         * without a lock. Only the first may take the device apart; the
+         * others would release the keep-alive reference a second time. */
+        if (InterlockedOr((PLONG)&ThisExtension->ExtensionFlags, DOE_DELETE_CLAIMED) &
+            DOE_DELETE_CLAIMED)
+        {
+            return;
+        }
+
         /* Check if we have a Security Descriptor */
         if (DeviceObject->SecurityDescriptor)
         {
-            /* Dereference it */
+            /* Dereference it; the delete procedure must not release it again */
             ObDereferenceSecurityDescriptor(DeviceObject->SecurityDescriptor, 1);
+            DeviceObject->SecurityDescriptor = NULL;
         }
 
         /* Remove the device from the list */
@@ -1535,6 +1571,8 @@ IoDeleteDevice(IN PDEVICE_OBJECT DeviceObject)
 {
     PIO_TIMER Timer;
 
+    IopForgetDeviceLocks(DeviceObject);
+
     /* Check if the device is registered for shutdown notifications */
     if (DeviceObject->Flags & DO_SHUTDOWN_REGISTERED)
     {
@@ -1579,6 +1617,12 @@ NTAPI
 IoDetachDevice(IN PDEVICE_OBJECT TargetDevice)
 {
     PEXTENDED_DEVOBJ_EXTENSION DeviceExtension;
+    KIRQL OldIrql;
+
+    /* The attach links are walked under the database lock by code that holds
+     * no reference on the devices of the stack, so they change only with the
+     * lock held exclusive, as in the attach */
+    OldIrql = IopAcquireDatabaseLockExclusive();
 
     /* Sanity check */
     DeviceExtension = IoGetDevObjExtension(TargetDevice->AttachedDevice);
@@ -1587,6 +1631,8 @@ IoDetachDevice(IN PDEVICE_OBJECT TargetDevice)
     /* Remove the attachment */
     DeviceExtension->AttachedTo = NULL;
     TargetDevice->AttachedDevice = NULL;
+
+    IopReleaseDatabaseLockExclusive(OldIrql);
 
     /* Check if it's ok to delete this device */
     if ((IoGetDevObjExtension(TargetDevice)->ExtensionFlags & DOE_DELETE_PENDING) &&

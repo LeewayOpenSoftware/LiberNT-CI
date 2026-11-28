@@ -19,7 +19,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_REACTOS_FONTS_FOLDER "Cartella dei font di LiberNT"
+    IDS_REACTOS_FONTS_FOLDER "Cartella dei font di Orosi"
     IDS_INSTALL_OK "The font(s) have been installed successfully."
     IDS_INSTALL_FAILED "Failed to install the font(s)."
     IDS_CONFIRM_DELETE_FONT "Do you want to delete the font(s)?"
@@ -44,4 +44,32 @@ END
 STRINGTABLE
 BEGIN
     IDS_FONT_PREVIEW "Anteprima"
+END
+
+STRINGTABLE
+BEGIN
+    IDS_COL_STYLE "Font style"
+    IDS_COL_SHOWHIDE "Show/hide"
+    IDS_COL_DESIGNEDFOR "Designed for"
+    IDS_COL_CATEGORY "Category"
+    IDS_COL_DESIGNER "Designer/foundry"
+    IDS_COL_EMBED "Font embeddability"
+    IDS_SHOW "Show"
+    IDS_HIDE "Hide"
+    IDS_CAT_TEXT "Text"
+    IDS_CAT_DISPLAY "Display"
+    IDS_CAT_SYMBOL "Symbol"
+    IDS_EMB_INSTALLABLE "Installable"
+    IDS_EMB_EDITABLE "Editable"
+    IDS_EMB_PREVIEW "Preview and print"
+    IDS_EMB_RESTRICTED "Restricted license"
+    IDS_STYLES_FMT "%u styles"
+    IDS_TASK_SETTINGS "Font settings"
+    IDS_TASK_CLEARTYPE "Adjust ClearType text"
+    IDS_TASK_CHARMAP "Find a character"
+    IDS_TASK_FONTINFO "Get more font information online"
+    IDS_TASK_FONTSIZE "Change font size"
+    IDS_FONT_HIDE_VERB "&Hide"
+    IDS_FONT_SHOW_VERB "&Show"
+    IDS_FONT_OPEN_VERB "&Open"
 END

@@ -6,6 +6,7 @@ set(WOW64_I386_MODULES ${COMPAT_RUNTIME_MODULES}
     activeds.tlb
     atl100
     d3d8thk
+    difxapi
     dmusic
     dplayx
     dpwsockx
@@ -105,13 +106,14 @@ set(WOW64_I386_EXECUTABLES
     svchost
     taskkill
     tasklist
-    taskmgr
+    taskmgr11
     tcpsvcs
     timeout
     tracert
     tree
     userinit
     utilman
+    werfault
     wglgears_runner
     where
     whoami

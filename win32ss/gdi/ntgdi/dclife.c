@@ -332,7 +332,7 @@ DC_vInitDc(
 	pdc->dcattr.lRelAbs = 1;
 	pdc->dcattr.lBreakExtra = 0;
 	pdc->dcattr.cBreak = 0;
-    pdc->dcattr.hlfntNew = StockObjects[SYSTEM_FONT];
+    pdc->dcattr.hlfntNew = NtGdiGetStockObject(SYSTEM_FONT);
     pdc->dclevel.plfnt = LFONT_ShareLockFont(pdc->dcattr.hlfntNew);
 
     /* Other stuff */
@@ -829,6 +829,13 @@ NtGdiOpenDCW(
         {
             pustrDevice = NULL;
         }
+    }
+
+    if (!pustrDevice && !gpmdev)
+    {
+        UserEnterExclusive();
+        co_IntGraphicsCheck(TRUE);
+        UserLeave();
     }
 
     /* Call the internal function */

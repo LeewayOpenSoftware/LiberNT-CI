@@ -53,7 +53,7 @@ MAIN_MENU MENU
  }
  POPUP "A&yuda" {
    MENUITEM "&Ayuda sobre la ayuda",          MNID_HELP_HELPON
-   MENUITEM "&Acerca de la Ayuda de Wine...", MNID_HELP_ABOUT
+   MENUITEM "&Acerca de la Ayuda de Orosi...", MNID_HELP_ABOUT
  }
 }
 
@@ -75,7 +75,7 @@ END
 
 STRINGTABLE
 {
-STID_WINE_HELP,        "Ayuda de LiberNT"
+STID_WINE_HELP,        "Ayuda de Orosi"
 STID_WHERROR,          "ERROR"
 STID_WARNING,          "ADVERTENCIA"
 STID_INFO,             "Información"

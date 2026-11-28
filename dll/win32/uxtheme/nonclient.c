@@ -210,6 +210,8 @@ ThemeHasCompositedFrame(void)
     PTHEME_CLASS liquid;
     BOOL composited = FALSE;
 
+    if (!UXTHEME_CompositionAvailable())
+        return FALSE;
     liquid = MSSTYLES_OpenThemeClass(L"NonClient", L"Liquid", 96);
     if (!liquid)
         return FALSE;
@@ -364,6 +366,12 @@ HRESULT WINAPI ThemeDrawCaptionText(PDRAW_CONTEXT pcontext, RECT* pRect, int iPa
         textColor = GetThemeSysColor(pcontext->theme, pcontext->Active ? COLOR_CAPTIONTEXT : COLOR_INACTIVECAPTIONTEXT);
 
     GetThemeEnumValue(pcontext->theme, iPartId, iStateId, TMT_CONTENTALIGNMENT, &align);
+    {
+        /* Leeway: a user-selected caption alignment overrides the theme default. */
+        int captionAlign = CAPTIONALIGN_LEFT;
+        if (SystemParametersInfoW(SPI_GETCAPTIONALIGNMENT, 0, &captionAlign, 0))
+            align = (captionAlign == CAPTIONALIGN_CENTER) ? CA_CENTER : CA_LEFT;
+    }
     rcText = *pRect;
     if (align == CA_CENTER)
     {
@@ -427,6 +435,51 @@ HRESULT WINAPI ThemeDrawCaptionText(PDRAW_CONTEXT pcontext, RECT* pRect, int iPa
     return S_OK;
 }
 
+static BOOL
+ThemeCaptionIsLight(HTHEME hTheme)
+{
+    COLORREF fill;
+
+    return !hTheme ||
+           FAILED(GetThemeColor(hTheme, WP_CAPTION, FS_ACTIVE, TMT_FILLCOLORHINT, &fill)) ||
+           (GetRValue(fill) * 299 + GetGValue(fill) * 587 + GetBValue(fill) * 114) / 1000 >= 128;
+}
+
+/* The width of the visible frame comes from BorderSize on the frame parts; the rest of the NC band is transparent.
+ * Only a themed top-level window on the compositor opts in, at its own DPI. */
+static BOOL
+ThemeGetFrameInsets(HWND hWnd, const WINDOWINFO *wi, HTHEME theme, RECT *Insets)
+{
+    PWND_DATA pwndData;
+    INT visible, visibleRight, visibleBottom, left, right, bottom;
+
+    SetRectEmpty(Insets);
+    if (!g_bThemeHooksActive || (wi->dwStyle & (WS_CHILD | WS_MINIMIZE | WS_MAXIMIZE)) ||
+        (wi->dwStyle & WS_CAPTION) != WS_CAPTION || !GetPropW(hWnd, DWM_PROP_THEMED_FRAME) ||
+        !ThemeHasCompositedFrame())
+        return FALSE;
+    pwndData = ThemeGetWndData(hWnd);
+    if (!pwndData || pwndData->HasAppDefinedRgn || pwndData->HasThemeRgn)
+        return FALSE;
+    if (!theme)
+        theme = GetNCCaptionTheme(hWnd, wi->dwStyle);
+    if (!theme || FAILED(GetThemeInt(theme, WP_FRAMELEFT, 0, TMT_BORDERSIZE, &visible)) || visible <= 0)
+        return FALSE;
+    if (FAILED(GetThemeInt(theme, WP_FRAMERIGHT, 0, TMT_BORDERSIZE, &visibleRight)) || visibleRight <= 0)
+        visibleRight = visible;
+    if (FAILED(GetThemeInt(theme, WP_FRAMEBOTTOM, 0, TMT_BORDERSIZE, &visibleBottom)) || visibleBottom <= 0)
+        visibleBottom = visible;
+    /* BorderSize is the visible width in device pixels, not scaled: the frame line stays 1 px at any DPI.
+     * The small frame parts share these values. */
+    left = min(max(0, (INT)wi->cxWindowBorders - visible), 255);
+    right = min(max(0, (INT)wi->cxWindowBorders - visibleRight), 255);
+    bottom = min(max(0, (INT)wi->cyWindowBorders - visibleBottom), 255);
+    if (!left && !right && !bottom)
+        return FALSE;
+    SetRect(Insets, left, 0, right, bottom);
+    return TRUE;
+}
+
 void
 ThemeInitDrawContext(PDRAW_CONTEXT pcontext,
                      HWND hWnd,
@@ -438,17 +491,11 @@ ThemeInitDrawContext(PDRAW_CONTEXT pcontext,
     GetWindowInfo(hWnd, &pcontext->wi);
     pcontext->hWnd = hWnd;
     pcontext->Active = IsWindowActive(hWnd, pcontext->wi.dwExStyle);
-    pcontext->DarkMode = GetPropW(hWnd, immersive_dark_mode_propW) != NULL;
     pcontext->theme = GetNCCaptionTheme(hWnd, pcontext->wi.dwStyle);
-    if (pcontext->DarkMode && pcontext->theme)
-    {
-        COLORREF fill;
-
-        if (SUCCEEDED(GetThemeColor(pcontext->theme, WP_CAPTION, FS_ACTIVE, TMT_FILLCOLORHINT, &fill)) &&
-            (GetRValue(fill) * 299 + GetGValue(fill) * 587 + GetBValue(fill) * 114) / 1000 < 128)
-            pcontext->DarkMode = FALSE;
-    }
+    pcontext->DarkMode = GetPropW(hWnd, immersive_dark_mode_propW) != NULL &&
+                         ThemeCaptionIsLight(pcontext->theme);
     pcontext->scrolltheme = GetNCScrollbarTheme(hWnd, pcontext->wi.dwStyle);
+    ThemeGetFrameInsets(hWnd, &pcontext->wi, pcontext->theme, &pcontext->FrameInsets);
 
     pcontext->CaptionHeight = pcontext->wi.cyWindowBorders;
     pcontext->CaptionHeight += GetSystemMetrics(pcontext->wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMCAPTION : SM_CYCAPTION);
@@ -495,7 +542,7 @@ static void
 ThemeEndBufferedPaint(PDRAW_CONTEXT pcontext, int x, int y, int cx, int cy)
 {
     HBITMAP hbmp;
-    BitBlt(pcontext->hDCScreen, 0, 0, cx, cy, pcontext->hDC, x, y, SRCCOPY);
+    BitBlt(pcontext->hDCScreen, x, y, cx, cy, pcontext->hDC, x, y, SRCCOPY);
     hbmp = (HBITMAP) SelectObject(pcontext->hDC, pcontext->hbmpOld);
     DeleteObject(pcontext->hDC);
     DeleteObject(hbmp);
@@ -640,7 +687,7 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
     PWND_DATA pwndData;
     DWORD style;
     INT captionBtnWidth, captionBtnHeight, iPartId, i, topOverhang;
-    RECT rcCurrent, rcWindow, rcLastButton;
+    RECT rcCurrent, rcWindow, rcLastButton, rcInsets;
     SIZE ButtonSize;
     BOOL hasLastButton = FALSE;
     BOOL lastButtonLeft = FALSE;
@@ -673,6 +720,13 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
     SetRect(&rcWindow, 0, 0,
             wi->rcWindow.right - wi->rcWindow.left,
             wi->rcWindow.bottom - wi->rcWindow.top);
+    if (ThemeGetFrameInsets(hWnd, wi, htheme, &rcInsets))
+    {
+        rcWindow.left += rcInsets.left;
+        rcWindow.top += rcInsets.top;
+        rcWindow.right -= rcInsets.right;
+        rcWindow.bottom -= rcInsets.bottom;
+    }
 
     composited = ThemeHasCompositedFrame();
     if (composited)
@@ -713,9 +767,22 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
         else if (i == MINBUTTON && (style & WS_MINIMIZE))
             iPartId = WP_RESTOREBUTTON;
 
-        if (FAILED(GetThemePartSize(htheme, NULL, iPartId, 0, NULL, TS_MIN, &ButtonSize)) ||
+        if (FAILED(GetThemePartSize(htheme, NULL, iPartId, 0, NULL, TS_TRUE, &ButtonSize)) ||
             ButtonSize.cy <= 0)
-            ButtonSize.cx = ButtonSize.cy = captionBtnHeight;
+        {
+            ButtonSize.cy = captionBtnHeight;
+            ButtonSize.cx = MulDiv(captionBtnHeight, CAPTION_BUTTON_WIDTH_UNITS, CAPTION_BUTTON_HEIGHT_UNITS);
+        }
+        /* TS_TRUE can hand back the whole multi-frame button strip (46x256 = 8 frames of
+         * 46x32) while the theme is mid-reload; one frame is about caption-tall. If the
+         * size is implausible for a single frame, use the caption-button ratio so the
+         * button is never sized from the strip. */
+        if (ButtonSize.cy <= 0 || ButtonSize.cx <= 0 ||
+            ButtonSize.cy > 2 * captionBtnHeight || ButtonSize.cx > 3 * captionBtnHeight)
+        {
+            ButtonSize.cy = captionBtnHeight;
+            ButtonSize.cx = MulDiv(captionBtnHeight, CAPTION_BUTTON_WIDTH_UNITS, CAPTION_BUTTON_HEIGHT_UNITS);
+        }
 
         captionBtnWidth = MulDiv(ButtonSize.cx, captionBtnHeight, ButtonSize.cy);
 
@@ -727,11 +794,8 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
         {
             offset.x = MulDiv(offset.x, dpi, 96);
             offset.y = MulDiv(offset.y, dpi, 96);
-            if (composited)
-            {
-                captionBtnHeight = MulDiv(ButtonSize.cy, dpi, 96);
-                captionBtnWidth = MulDiv(ButtonSize.cx, dpi, 96);
-            }
+            captionBtnHeight = MulDiv(ButtonSize.cy, dpi, 96);
+            captionBtnWidth = MulDiv(ButtonSize.cx, dpi, 96);
         }
 
         if (!hasPlacement ||
@@ -765,6 +829,8 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
         else
             rcCurrent.right = min(rcCurrent.right, rcLastButton.left);
     }
+    pwndData->CaptionCalcSize.cx = wi->rcWindow.right - wi->rcWindow.left;
+    pwndData->CaptionCalcSize.cy = wi->rcWindow.bottom - wi->rcWindow.top;
 }
 
 void ThemeCalculateCaptionButtonsPos(HWND hWnd, HTHEME htheme)
@@ -777,6 +843,7 @@ void ThemeCalculateCaptionButtonsPos(HWND hWnd, HTHEME htheme)
     btnHeight = GetSystemMetrics(wi.dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMCAPTION : SM_CYCAPTION);
 
     ThemeCalculateCaptionButtonsPosEx(&wi, hWnd, htheme, btnHeight);
+    ThemeDwmUpdateFrameInsets(hWnd);
 }
 
 static COLORREF
@@ -806,26 +873,26 @@ ThemeFillSolidRect(HDC hDC, const RECT *rect, COLORREF color)
 }
 
 static BOOL
-ThemeDrawCaptionGlyph(HDC hDC, const RECT *rect, UINT baseId, INT shade)
+ThemeDrawCaptionGlyph(HDC hDC, const RECT *rect, UINT baseId, INT shade, UINT dpi)
 {
-    static const INT frames[] = { 10, 12, 14, 16, 20, 24, 32 };
+    /* Win11 draws the caption glyph at roughly a third of the button height. The sizes are frames
+     * present in the cap_*.ico files (10/12/16/20/24/28), so the glyph is drawn at a native size:
+     * 10 px at 100%, 12 at 125%, 16 at 150%, 20 at 200%, 24 at 250%, 28 at 300%. */
+    static const struct
+    {
+        UINT MinDpi;
+        INT Size;
+    } glyphFrames[] = { { 288, 28 }, { 240, 24 }, { 192, 20 }, { 144, 16 }, { 120, 12 }, { 96, 10 }, { 0, 10 } };
     INT height = rect->bottom - rect->top;
-    INT size = MulDiv(height, 10, CAPTION_BUTTON_HEIGHT_UNITS);
-    INT i;
+    INT size, i;
     HICON icon;
 
-    for (i = 0; i < ARRAYSIZE(frames); i++)
+    for (i = 0; i < ARRAYSIZE(glyphFrames) - 1; i++)
     {
-        if (frames[i] >= size)
-        {
-            size = frames[i];
+        if (dpi >= glyphFrames[i].MinDpi && glyphFrames[i].Size <= height)
             break;
-        }
     }
-    if (size > 32)
-        size = 32;
-    if (size < 12)
-        size = 12;
+    size = glyphFrames[i].Size;
 
     icon = LoadImageW(hDllInst, MAKEINTRESOURCEW(baseId + shade), IMAGE_ICON, size, size, LR_SHARED);
     if (!icon)
@@ -836,40 +903,53 @@ ThemeDrawCaptionGlyph(HDC hDC, const RECT *rect, UINT baseId, INT shade)
 }
 
 static void
-ThemeDrawDarkCaptionButton(PDRAW_CONTEXT pcontext,
-                           CAPTIONBUTTON buttonId,
-                           INT iStateId,
-                           const RECT *rect)
+ThemeDrawCaptionGlyphButton(PDRAW_CONTEXT pcontext,
+                            CAPTIONBUTTON buttonId,
+                            INT iStateId,
+                            const RECT *rect,
+                            COLORREF background,
+                            BOOL fillNormal,
+                            UINT dpi)
 {
+    static const COLORREF foregrounds[] = { RGB(255, 255, 255), RGB(160, 160, 160), RGB(105, 105, 105),
+                                            RGB(0, 0, 0), RGB(146, 146, 146), RGB(224, 224, 224) };
     UINT glyphId = 0;
     INT shade = 0;
-    COLORREF background = ThemeDarkCaptionColor(pcontext);
     COLORREF foreground;
     HPEN pen, oldPen;
     HBRUSH oldBrush;
     INT centerX, centerY, radius;
+    BOOL fill = fillNormal;
+    BOOL light = (GetRValue(background) * 299 + GetGValue(background) * 587 +
+                  GetBValue(background) * 114) / 1000 >= 128;
+    BOOL closeHighlight = FALSE;
 
     if (iStateId == BUTTON_HOT || iStateId == BUTTON_INACTIVE_HOT)
+    {
         background = buttonId == CLOSEBUTTON ? RGB(196, 43, 28)
-                     : ThemeLiftColor(background, CAPTION_BUTTON_HOT_LIFT);
+                     : light ? RGB(233, 233, 233) : ThemeLiftColor(background, CAPTION_BUTTON_HOT_LIFT);
+        closeHighlight = buttonId == CLOSEBUTTON;
+        fill = TRUE;
+    }
     else if (iStateId == BUTTON_PRESSED || iStateId == BUTTON_INACTIVE_PRESSED)
-        background = buttonId == CLOSEBUTTON ? RGB(176, 39, 25)
-                     : ThemeLiftColor(background, CAPTION_BUTTON_PRESSED_LIFT);
+    {
+        background = buttonId == CLOSEBUTTON ? (light ? RGB(200, 64, 49) : RGB(176, 39, 25))
+                     : light ? RGB(237, 237, 237) : ThemeLiftColor(background, CAPTION_BUTTON_PRESSED_LIFT);
+        closeHighlight = buttonId == CLOSEBUTTON;
+        fill = TRUE;
+    }
 
-    ThemeFillSolidRect(pcontext->hDC, rect, background);
-
-    if (iStateId == BUTTON_DISABLED || iStateId == BUTTON_INACTIVE_DISABLED)
-        foreground = RGB(105, 105, 105);
-    else if (!pcontext->Active && iStateId != BUTTON_INACTIVE_HOT &&
-             iStateId != BUTTON_INACTIVE_PRESSED)
-        foreground = RGB(160, 160, 160);
-    else
-        foreground = RGB(255, 255, 255);
+    if (fill)
+        ThemeFillSolidRect(pcontext->hDC, rect, background);
 
     if (iStateId == BUTTON_DISABLED || iStateId == BUTTON_INACTIVE_DISABLED)
         shade = 2;
-    else if (foreground != RGB(255, 255, 255))
+    else if (!pcontext->Active && iStateId != BUTTON_INACTIVE_HOT &&
+             iStateId != BUTTON_INACTIVE_PRESSED)
         shade = 1;
+    if (light && !closeHighlight)
+        shade += IDI_CAPTION_CLOSE_LIGHT - IDI_CAPTION_CLOSE;
+    foreground = foregrounds[shade];
 
     switch (buttonId)
     {
@@ -888,7 +968,7 @@ ThemeDrawDarkCaptionButton(PDRAW_CONTEXT pcontext,
     default:
         break;
     }
-    if (glyphId && ThemeDrawCaptionGlyph(pcontext->hDC, rect, glyphId, shade))
+    if (glyphId && ThemeDrawCaptionGlyph(pcontext->hDC, rect, glyphId, shade, dpi))
         return;
 
     centerX = (rect->left + rect->right) / 2;
@@ -941,6 +1021,31 @@ ThemeDrawDarkCaptionButton(PDRAW_CONTEXT pcontext,
     DeleteObject(pen);
 }
 
+static UINT
+ThemeCaptionDpi(PDRAW_CONTEXT pcontext)
+{
+    UINT dpi = pcontext->theme ? MSSTYLES_GetThemeDPI((PTHEME_CLASS)pcontext->theme) : 0;
+
+    return dpi ? dpi : 96;
+}
+
+static BOOL
+ThemeUseCaptionGlyphs(HTHEME hTheme, INT iPartId, INT iStateId, COLORREF *background)
+{
+    COLORREF fill;
+
+    /* Win11 caption buttons are flat: transparent at rest, a solid fill only on hover/press. Draw any
+     * themed caption (one that defines a caption fill colour) with the glyph button at every DPI --
+     * 100% included -- instead of the Win8 msstyles button bitmap and its opaque FillColorHint block.
+     * A classic theme defines no caption fill -> return FALSE and keep the msstyles button. */
+    UNREFERENCED_PARAMETER(iPartId);
+    UNREFERENCED_PARAMETER(iStateId);
+    if (FAILED(GetThemeColor(hTheme, WP_CAPTION, FS_ACTIVE, TMT_FILLCOLORHINT, &fill)))
+        return FALSE;
+    *background = fill;
+    return TRUE;
+}
+
 static VOID
 ThemeDrawCaptionGroupStart(PDRAW_CONTEXT pcontext, INT iPartId, INT iStateId, const RECT *prc)
 {
@@ -951,7 +1056,7 @@ ThemeDrawCaptionGroupStart(PDRAW_CONTEXT pcontext, INT iPartId, INT iStateId, co
     HDC hdcMem;
     SIZE size;
 
-    if (FAILED(GetThemePartSize(pcontext->theme, NULL, iPartId, 0, NULL, TS_MIN, &size)) || size.cx <= 0)
+    if (FAILED(GetThemePartSize(pcontext->theme, NULL, iPartId, 0, NULL, TS_TRUE, &size)) || size.cx <= 0)
         goto plain;
     edge = MulDiv(CAPTION_BUTTON_EDGE_UNITS, cx, size.cx);
     if (edge <= 0 || edge * 2 > cx)
@@ -981,6 +1086,22 @@ plain:
     DrawThemeBackground(pcontext->theme, pcontext->hDC, iPartId, iStateId, prc, NULL);
 }
 
+/* A dialog frame has no immersive-dark property; when the active style has a dark caption its close part from
+ * the msstyles image is not drawn for the dark fill, so use the glyph button on the style's caption fill. */
+static BOOL
+ThemeDarkStyleCaption(PDRAW_CONTEXT pcontext, COLORREF *color)
+{
+    COLORREF fill;
+
+    if (ThemeCaptionIsLight(pcontext->theme) ||
+        (FAILED(GetThemeColor(pcontext->theme, WP_CAPTION, pcontext->Active ? FS_ACTIVE : FS_INACTIVE,
+                              TMT_FILLCOLORHINT, &fill)) &&
+         FAILED(GetThemeColor(pcontext->theme, WP_CAPTION, FS_ACTIVE, TMT_FILLCOLORHINT, &fill))))
+        return FALSE;
+    *color = fill;
+    return TRUE;
+}
+
 static void
 ThemeDrawCaptionButton(PDRAW_CONTEXT pcontext,
                        RECT* prcCurrent,
@@ -990,6 +1111,7 @@ ThemeDrawCaptionButton(PDRAW_CONTEXT pcontext,
     INT iPartId;
     HMENU SysMenu;
     UINT MenuState;
+    COLORREF background;
     PWND_DATA pwndData = ThemeGetWndData(pcontext->hWnd);
     if (!pwndData)
         return;
@@ -1052,8 +1174,18 @@ ThemeDrawCaptionButton(PDRAW_CONTEXT pcontext,
     }
 
     if (pcontext->DarkMode)
-        ThemeDrawDarkCaptionButton(pcontext, buttonId, iStateId,
-                                   &pwndData->rcCaptionButtons[buttonId]);
+        ThemeDrawCaptionGlyphButton(pcontext, buttonId, iStateId,
+                                    &pwndData->rcCaptionButtons[buttonId],
+                                    ThemeDarkCaptionColor(pcontext), TRUE, ThemeCaptionDpi(pcontext));
+    else if (ThemeUseCaptionGlyphs(pcontext->theme, iPartId, iStateId, &background))
+        ThemeDrawCaptionGlyphButton(pcontext, buttonId, iStateId,
+                                    &pwndData->rcCaptionButtons[buttonId], background, FALSE,
+                                    ThemeCaptionDpi(pcontext));
+    else if (iPartId == WP_CLOSEBUTTON && !(pcontext->wi.dwStyle & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) &&
+             ThemeDarkStyleCaption(pcontext, &background))
+        ThemeDrawCaptionGlyphButton(pcontext, buttonId, iStateId,
+                                    &pwndData->rcCaptionButtons[buttonId], background, TRUE,
+                                    ThemeCaptionDpi(pcontext));
     else if (iPartId == WP_CLOSEBUTTON && !(pcontext->wi.dwStyle & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX)))
         ThemeDrawCaptionGroupStart(pcontext, iPartId, iStateId, &pwndData->rcCaptionButtons[buttonId]);
     else
@@ -1112,6 +1244,24 @@ ThemeDwmSetCaptionProperty(HWND hWnd, PWND_DATA pwndData, UINT Slot, LPCWSTR Nam
 }
 
 static VOID
+ThemeDwmPublishFrameInsets(HWND hWnd, const WINDOWINFO *wi, PWND_DATA pwndData)
+{
+    RECT Insets;
+    ULONG Value = 0;
+
+    if (ThemeGetFrameInsets(hWnd, wi, NULL, &Insets))
+        Value = DWM_FRAME_INSETS_PACK(Insets.left, Insets.top, Insets.right, Insets.bottom);
+
+    if (pwndData->DwmFrameInsets == Value)
+        return;
+    pwndData->DwmFrameInsets = Value;
+    if (Value)
+        SetPropW(hWnd, DWM_PROP_FRAME_INSETS, (HANDLE)(ULONG_PTR)Value);
+    else
+        RemovePropW(hWnd, DWM_PROP_FRAME_INSETS);
+}
+
+static VOID
 ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWORD htDown)
 {
     static const CAPTIONBUTTON Buttons[DWM_CAPTION_BUTTONS] = { CLOSEBUTTON, MAXBUTTON, MINBUTTON };
@@ -1133,6 +1283,9 @@ ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWOR
 
     if (ThemeDwmHasCaptionButtons(hWnd, wi))
     {
+        if (pwndData->CaptionCalcSize.cx != wi->rcWindow.right - wi->rcWindow.left ||
+            pwndData->CaptionCalcSize.cy != wi->rcWindow.bottom - wi->rcWindow.top)
+            ThemeCalculateCaptionButtonsPos(hWnd, NULL);   /* rects were computed at a different window size */
         Rect = &pwndData->rcCaptionButtons[CLOSEBUTTON];
         Row = DWM_CAPTION_PACK(Rect->top, Rect->bottom);
         State = DWM_CAPTION_STATE_VALID;
@@ -1150,12 +1303,16 @@ ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWOR
                 continue;
             if (pwndData->CaptionButtonLeft[Buttons[i]])
             {
+                if (Rect->left < 0 || Rect->right <= Rect->left)
+                    continue;   /* stale/reversed rect: never pack a negative/wrapped span */
                 Spans[i] = DWM_CAPTION_PACK(Rect->left, Rect->right);
             }
             else
             {
                 LONG Width = wi->rcWindow.right - wi->rcWindow.left;
 
+                if (Rect->right > Width || Rect->right <= Rect->left)
+                    continue;   /* stale rect from a larger width: skip, never pack a negative/wrapped span */
                 Spans[i] = DWM_CAPTION_PACK(Width - Rect->right, Width - Rect->left);
                 State |= DWM_CAPTION_STATE_RIGHT(i);
             }
@@ -1178,6 +1335,17 @@ ThemeDwmPublishCaptionButtons(HWND hWnd, const WINDOWINFO *wi, DWORD htHot, DWOR
         ThemeDwmSetCaptionProperty(hWnd, pwndData, i, Names[i], Spans[i]);
     ThemeDwmSetCaptionProperty(hWnd, pwndData, DWM_CAPTION_BUTTONS, DWM_PROP_CAPTION_ROW, Row);
     ThemeDwmSetCaptionProperty(hWnd, pwndData, DWM_CAPTION_BUTTONS + 1, DWM_PROP_CAPTION_STATE, State);
+    ThemeDwmPublishFrameInsets(hWnd, wi, pwndData);
+}
+
+void
+ThemeDwmUpdateFrameInsets(HWND hWnd)
+{
+    WINDOWINFO wi = { sizeof(wi) };
+    PWND_DATA pwndData = ThemeGetWndData(hWnd);
+
+    if (pwndData && GetWindowInfo(hWnd, &wi))
+        ThemeDwmPublishFrameInsets(hWnd, &wi, pwndData);
 }
 
 void
@@ -1207,6 +1375,9 @@ ThemeDwmDrawCaptionButton(HDC hDC, const RECT *prc, UINT Button, ULONG State, BO
     DRAW_CONTEXT context;
     HTHEME hTheme;
     INT iPart, iState;
+    COLORREF Background;
+    DPI_AWARENESS_CONTEXT OldContext;
+    UINT Dpi;
 
     if (!hDC || !prc || Button >= DWM_CAPTION_BUTTONS)
         return FALSE;
@@ -1220,15 +1391,26 @@ ThemeDwmDrawCaptionButton(HDC hDC, const RECT *prc, UINT Button, ULONG State, BO
     else
         iState = Active ? BUTTON_NORMAL : BUTTON_INACTIVE;
 
-    if (Dark)
+    OldContext = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
+    hTheme = UXTHEME_OpenNcThemeData(NULL, L"WINDOW", OTD_NONCLIENT);
+    if (OldContext)
+        SetThreadDpiAwarenessContext(OldContext);
+    if (Dark && ThemeCaptionIsLight(hTheme))
     {
+        if (hTheme)
+            CloseThemeData(hTheme);
         ZeroMemory(&context, sizeof(context));
         context.hDC = hDC;
         context.Active = Active;
         context.DarkMode = TRUE;
         context.wi.dwStyle = WS_CAPTION | WS_SYSMENU | ((State & DWM_CAPTION_STATE_RESTORE) ? WS_MAXIMIZE : 0);
         context.wi.dwExStyle = (State & DWM_CAPTION_STATE_TOOLWINDOW) ? WS_EX_TOOLWINDOW : 0;
-        ThemeDrawDarkCaptionButton(&context, Buttons[Button], iState, prc);
+        OldContext = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
+        Dpi = GetDpiForSystem();
+        if (OldContext)
+            SetThreadDpiAwarenessContext(OldContext);
+        ThemeDrawCaptionGlyphButton(&context, Buttons[Button], iState, prc,
+                                    ThemeDarkCaptionColor(&context), TRUE, Dpi);
         return TRUE;
     }
 
@@ -1245,10 +1427,19 @@ ThemeDwmDrawCaptionButton(HDC hDC, const RECT *prc, UINT Button, ULONG State, BO
         break;
     }
 
-    hTheme = UXTHEME_OpenNcThemeData(NULL, L"WINDOW", OTD_NONCLIENT);
     if (!hTheme)
         return FALSE;
-    if (iPart == WP_CLOSEBUTTON &&
+    if (ThemeUseCaptionGlyphs(hTheme, iPart, iState, &Background))
+    {
+        ZeroMemory(&context, sizeof(context));
+        context.hDC = hDC;
+        context.Active = Active;
+        context.wi.dwStyle = WS_CAPTION | WS_SYSMENU | ((State & DWM_CAPTION_STATE_RESTORE) ? WS_MAXIMIZE : 0);
+        context.wi.dwExStyle = (State & DWM_CAPTION_STATE_TOOLWINDOW) ? WS_EX_TOOLWINDOW : 0;
+        ThemeDrawCaptionGlyphButton(&context, Buttons[Button], iState, prc, Background, FALSE,
+                                    MSSTYLES_GetThemeDPI((PTHEME_CLASS)hTheme));
+    }
+    else if (iPart == WP_CLOSEBUTTON &&
         (State & DWM_CAPTION_STATE_DISABLED(DWM_CAPTION_BUTTON_MAXIMIZE)) &&
         (State & DWM_CAPTION_STATE_DISABLED(DWM_CAPTION_BUTTON_MINIMIZE)))
     {
@@ -1327,9 +1518,13 @@ ThemeDrawCaptionButtons(PDRAW_CONTEXT pcontext, DWORD htHot, DWORD htDown)
     }
 
     OffsetRect(&rcCurrent, -pcontext->wi.rcWindow.left, -pcontext->wi.rcWindow.top);
+    rcCurrent.left += pcontext->FrameInsets.left;
+    rcCurrent.top += pcontext->FrameInsets.top;
+    rcCurrent.right -= pcontext->FrameInsets.right;
+    rcCurrent.bottom -= pcontext->FrameInsets.bottom;
     ThemeStartBufferedPaint(pcontext, rcCurrent.right, pcontext->CaptionHeight);
     ThemeDrawCaption(pcontext, &rcCurrent, htHot, htDown);
-    ThemeEndBufferedPaint(pcontext, 0, 0, rcCurrent.right, pcontext->CaptionHeight);
+    ThemeEndBufferedPaint(pcontext, rcCurrent.left, 0, rcCurrent.right - rcCurrent.left, pcontext->CaptionHeight);
 }
 
 /* Used from WM_NCPAINT and WM_NCACTIVATE handlers */
@@ -1375,8 +1570,9 @@ ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent, DWORD htHot, DWORD ht
     rcContent.top += ThemeGetMaximizedTopOverhang(&pcontext->wi);
 
     /* Add a padding around the objects of the caption */
-    InflateRect(&rcPart, -(int)pcontext->wi.cyWindowBorders-BUTTON_GAP_SIZE,
+    InflateRect(&rcPart, -(int)pcontext->wi.cyWindowBorders-BUTTON_GAP_SIZE + pcontext->FrameInsets.left,
                          -(int)pcontext->wi.cyWindowBorders-BUTTON_GAP_SIZE);
+    rcPart.right += pcontext->FrameInsets.right - pcontext->FrameInsets.left;
 
     /* Draw the caption buttons */
     if (pcontext->wi.dwStyle & WS_SYSMENU)
@@ -1410,6 +1606,30 @@ ThemeDrawCaption(PDRAW_CONTEXT pcontext, RECT* prcCurrent, DWORD htHot, DWORD ht
     ThemeDrawCaptionText(pcontext, &rcContent, iPart, iState);
 }
 
+static COLORREF ThemeFrameFillColor(PDRAW_CONTEXT pcontext, INT iPartId);
+
+/* Win11's frame line is neutral grey: drop the theme fill colour tint, keep its luminance so the
+ * line stays light/dark adaptive. */
+static COLORREF
+ThemeNeutralGray(COLORREF color)
+{
+    INT l = (GetRValue(color) * 299 + GetGValue(color) * 587 + GetBValue(color) * 114) / 1000;
+    return RGB(l, l, l);
+}
+
+/* One frame edge: on the composited frame a flat neutral-grey hairline (Win11); off the compositor
+ * (FrameInsets empty) the classic themed frame part. */
+static void
+ThemeDrawFrameEdge(PDRAW_CONTEXT pcontext, const RECT *rc, INT iPartId, INT iState)
+{
+    if (!IsRectEmpty(&pcontext->FrameInsets))
+        ThemeFillSolidRect(pcontext->hDC, rc, ThemeNeutralGray(ThemeFrameFillColor(pcontext, iPartId)));
+    else if (pcontext->DarkMode)
+        ThemeFillSolidRect(pcontext->hDC, rc, ThemeDarkCaptionColor(pcontext));
+    else
+        DrawThemeBackground(pcontext->theme, pcontext->hDC, iPartId, iState, rc, NULL);
+}
+
 static void
 ThemeDrawBorders(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
 {
@@ -1418,30 +1638,21 @@ ThemeDrawBorders(PDRAW_CONTEXT pcontext, RECT* prcCurrent)
 
     /* Draw the bottom border */
     rcPart = *prcCurrent;
-    rcPart.top = rcPart.bottom - pcontext->wi.cyWindowBorders;
+    rcPart.top = rcPart.bottom - (pcontext->wi.cyWindowBorders - pcontext->FrameInsets.bottom);
     prcCurrent->bottom = rcPart.top;
-    if (pcontext->DarkMode)
-        ThemeFillSolidRect(pcontext->hDC, &rcPart, ThemeDarkCaptionColor(pcontext));
-    else
-        DrawThemeBackground(pcontext->theme, pcontext->hDC, WP_FRAMEBOTTOM, iState, &rcPart, NULL);
+    ThemeDrawFrameEdge(pcontext, &rcPart, WP_FRAMEBOTTOM, iState);
 
     /* Draw the left border */
     rcPart = *prcCurrent;
-    rcPart.right = rcPart.left + pcontext->wi.cxWindowBorders ;
+    rcPart.right = rcPart.left + (pcontext->wi.cxWindowBorders - pcontext->FrameInsets.left);
     prcCurrent->left = rcPart.right;
-    if (pcontext->DarkMode)
-        ThemeFillSolidRect(pcontext->hDC, &rcPart, ThemeDarkCaptionColor(pcontext));
-    else
-        DrawThemeBackground(pcontext->theme, pcontext->hDC, WP_FRAMELEFT, iState, &rcPart, NULL);
+    ThemeDrawFrameEdge(pcontext, &rcPart, WP_FRAMELEFT, iState);
 
     /* Draw the right border */
     rcPart = *prcCurrent;
-    rcPart.left = rcPart.right - pcontext->wi.cxWindowBorders;
+    rcPart.left = rcPart.right - (pcontext->wi.cxWindowBorders - pcontext->FrameInsets.right);
     prcCurrent->right = rcPart.left;
-    if (pcontext->DarkMode)
-        ThemeFillSolidRect(pcontext->hDC, &rcPart, ThemeDarkCaptionColor(pcontext));
-    else
-        DrawThemeBackground(pcontext->theme, pcontext->hDC, WP_FRAMERIGHT, iState, &rcPart, NULL);
+    ThemeDrawFrameEdge(pcontext, &rcPart, WP_FRAMERIGHT, iState);
 }
 
 static void
@@ -1477,9 +1688,9 @@ DrawClassicFrame(PDRAW_CONTEXT context, RECT* prcCurrent)
                prcCurrent->right - prcCurrent->left, Height, PATCOPY);
         PatBlt(context->hDC, prcCurrent->left, prcCurrent->top,
                Width, prcCurrent->bottom - prcCurrent->top, PATCOPY);
-        PatBlt(context->hDC, prcCurrent->left, prcCurrent->bottom - 1,
+        PatBlt(context->hDC, prcCurrent->left, prcCurrent->bottom,
                prcCurrent->right - prcCurrent->left, -Height, PATCOPY);
-        PatBlt(context->hDC, prcCurrent->right - 1, prcCurrent->top,
+        PatBlt(context->hDC, prcCurrent->right, prcCurrent->top,
                -Width, prcCurrent->bottom - prcCurrent->top, PATCOPY);
 
         InflateRect(prcCurrent, -Width, -Height);
@@ -1502,9 +1713,9 @@ DrawClassicFrame(PDRAW_CONTEXT context, RECT* prcCurrent)
                prcCurrent->right - prcCurrent->left, Height, PATCOPY);
         PatBlt(context->hDC, prcCurrent->left, prcCurrent->top,
                Width, prcCurrent->bottom - prcCurrent->top, PATCOPY);
-        PatBlt(context->hDC, prcCurrent->left, prcCurrent->bottom - 1,
+        PatBlt(context->hDC, prcCurrent->left, prcCurrent->bottom,
                prcCurrent->right - prcCurrent->left, -Height, PATCOPY);
-        PatBlt(context->hDC, prcCurrent->right - 1, prcCurrent->top,
+        PatBlt(context->hDC, prcCurrent->right, prcCurrent->top,
               -Width, prcCurrent->bottom - prcCurrent->top, PATCOPY);
 
         InflateRect(prcCurrent, -Width, -Height);
@@ -1589,7 +1800,7 @@ ThemePaintWindow(PDRAW_CONTEXT pcontext, RECT* prcCurrent, BOOL bDoDoubleBufferi
             ThemeStartBufferedPaint(pcontext, prcCurrent->right, pcontext->CaptionHeight);
         ThemeDrawCaption(pcontext, prcCurrent, 0, 0);
         if (bDoDoubleBuffering)
-            ThemeEndBufferedPaint(pcontext, 0, 0, prcCurrent->right, pcontext->CaptionHeight);
+            ThemeEndBufferedPaint(pcontext, prcCurrent->left, 0, prcCurrent->right - prcCurrent->left, pcontext->CaptionHeight);
         ThemeDrawBorders(pcontext, prcCurrent);
     }
     else
@@ -1627,6 +1838,37 @@ ThemePaintWindow(PDRAW_CONTEXT pcontext, RECT* prcCurrent, BOOL bDoDoubleBufferi
  * Message handlers
  */
 
+/* The fill of a frame part: its own FillColorHint, the caption's when the style has none */
+static COLORREF
+ThemeFrameFillColor(PDRAW_CONTEXT pcontext, INT iPartId)
+{
+    INT iState = pcontext->Active ? FS_ACTIVE : FS_INACTIVE;
+    COLORREF color;
+
+    if (pcontext->DarkMode)
+        return ThemeDarkCaptionColor(pcontext);
+    if (SUCCEEDED(GetThemeColor(pcontext->theme, iPartId, iState, TMT_FILLCOLORHINT, &color)) ||
+        SUCCEEDED(GetThemeColor(pcontext->theme, WP_CAPTION, iState, TMT_FILLCOLORHINT, &color)))
+        return color;
+    return GetSysColor(pcontext->Active ? COLOR_ACTIVECAPTION : COLOR_INACTIVECAPTION);
+}
+
+/* Whatever a compositor shows of the transparent band (GL fallback, or no DWM consumer) is the frame fill, not stale pixels */
+static void
+ThemeFillFrameBand(PDRAW_CONTEXT pcontext, const RECT *Window)
+{
+    RECT rc;
+
+    if (IsRectEmpty(&pcontext->FrameInsets))
+        return;
+    SetRect(&rc, Window->left, Window->top, Window->left + pcontext->FrameInsets.left, Window->bottom);
+    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeNeutralGray(ThemeFrameFillColor(pcontext, WP_FRAMELEFT)));
+    SetRect(&rc, Window->right - pcontext->FrameInsets.right, Window->top, Window->right, Window->bottom);
+    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeNeutralGray(ThemeFrameFillColor(pcontext, WP_FRAMERIGHT)));
+    SetRect(&rc, Window->left, Window->bottom - pcontext->FrameInsets.bottom, Window->right, Window->bottom);
+    ThemeFillSolidRect(pcontext->hDC, &rc, ThemeNeutralGray(ThemeFrameFillColor(pcontext, WP_FRAMEBOTTOM)));
+}
+
 static LRESULT
 ThemeHandleNCPaint(HWND hWnd, HRGN hRgn, const BOOL *pActive)
 {
@@ -1642,9 +1884,15 @@ ThemeHandleNCPaint(HWND hWnd, HRGN hRgn, const BOOL *pActive)
 
     rcCurrent = context.wi.rcWindow;
     OffsetRect( &rcCurrent, -context.wi.rcWindow.left, -context.wi.rcWindow.top);
+    ThemeFillFrameBand(&context, &rcCurrent);
+    rcCurrent.left += context.FrameInsets.left;
+    rcCurrent.top += context.FrameInsets.top;
+    rcCurrent.right -= context.FrameInsets.right;
+    rcCurrent.bottom -= context.FrameInsets.bottom;
 
     ThemePaintWindow(&context, &rcCurrent, TRUE);
     ThemeCleanupDrawContext(&context);
+    ThemeDwmUpdateFrameInsets(hWnd);
 
     return 0;
 }
@@ -2332,6 +2580,7 @@ DrawWindowForNCPreview(
 
     DWORD dwStyle = pcontext->wi.dwStyle;
     DWORD dwExStyle = pcontext->wi.dwExStyle;
+    SetRectEmpty(&pcontext->FrameInsets);
     pcontext->CaptionHeight = pcontext->wi.cyWindowBorders + GetThemeSysSize(pcontext->theme, dwExStyle & WS_EX_TOOLWINDOW ? SM_CYSMSIZE : SM_CYSIZE);
     /* FIXME: still need to use ncmetrics from parameters for window border width */
 

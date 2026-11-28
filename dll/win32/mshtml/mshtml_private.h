@@ -59,6 +59,7 @@
 #define NS_ERROR_NOT_AVAILABLE    ((nsresult)0x80040111L)
 #define NS_ERROR_INVALID_ARG      ((nsresult)0x80070057L) 
 #define NS_ERROR_UNEXPECTED       ((nsresult)0x8000ffffL)
+#define NS_ERROR_DOM_INVALID_CHARACTER_ERR ((nsresult)0x80530005)
 #define NS_ERROR_DOM_NO_MODIFICATION_ALLOWED_ERR ((nsresult)0x80530007)
 #define NS_ERROR_DOM_SYNTAX_ERR   ((nsresult)0x8053000c)
 
@@ -78,6 +79,12 @@
 #define MSHTML_E_NODOC            0x800a025c
 #define MSHTML_E_SYNTAX           0x800a03ea
 #define MSHTML_E_NOT_FUNC         0x800a138a
+#define MSHTML_E_INDEX_SIZE       0x80700001
+#define MSHTML_E_INVALID_CHARACTER 0x80700005
+#define MSHTML_E_INVALID_STATE    0x8070000b
+#define MSHTML_E_DOM_SYNTAX       0x8070000c
+#define MSHTML_E_NAMESPACE        0x8070000e
+#define MSHTML_E_TYPE_MISMATCH    0x80700011
 
 typedef struct HTMLWindow HTMLWindow;
 typedef struct HTMLInnerWindow HTMLInnerWindow;
@@ -109,41 +116,62 @@ struct constructor;
     XDIID(DispDOMStorageEvent) \
     XDIID(DispDOMUIEvent) \
     XDIID(DispDOMDocumentType) \
+    XDIID(DispDOMException) \
     XDIID(DispDOMParser) \
     XDIID(DispHTMLAnchorElement) \
     XDIID(DispHTMLAreaElement) \
     XDIID(DispHTMLAttributeCollection) \
+    XDIID(DispHTMLBaseElement) \
+    XDIID(DispHTMLBaseFontElement) \
+    XDIID(DispHTMLBlockElement) \
     XDIID(DispHTMLBody) \
+    XDIID(DispHTMLBRElement) \
     XDIID(DispHTMLButtonElement) \
     XDIID(DispHTMLCommentElement) \
     XDIID(DispHTMLCurrentStyle) \
+    XDIID(DispHTMLDDElement) \
+    XDIID(DispHTMLDivElement) \
+    XDIID(DispHTMLDListElement) \
     XDIID(DispHTMLDocument) \
     XDIID(DispHTMLDOMAttribute) \
     XDIID(DispHTMLDOMImplementation) \
+    XDIID(DispHTMLDTElement) \
     XDIID(DispHTMLDOMRange) \
     XDIID(DispHTMLDOMTextNode) \
     XDIID(DispHTMLElementCollection) \
     XDIID(DispHTMLEmbed) \
+    XDIID(DispHTMLFontElement) \
     XDIID(DispHTMLFormElement) \
+    XDIID(DispHTMLFieldSetElement) \
+    XDIID(DispHTMLLegendElement) \
     XDIID(DispHTMLGenericElement) \
     XDIID(DispHTMLFrameElement) \
+    XDIID(DispHTMLFrameSetSite) \
     XDIID(DispHTMLHeadElement) \
+    XDIID(DispHTMLHeaderElement) \
+    XDIID(DispHTMLHRElement) \
     XDIID(DispHTMLHtmlElement) \
     XDIID(DispHTMLHistory) \
     XDIID(DispHTMLIFrame) \
     XDIID(DispHTMLImg) \
     XDIID(DispHTMLInputElement) \
+    XDIID(DispHTMLLIElement) \
     XDIID(DispHTMLLabelElement) \
     XDIID(DispHTMLLinkElement) \
     XDIID(DispHTMLLocation) \
     XDIID(DispHTMLMetaElement) \
     XDIID(DispHTMLNamespaceCollection) \
     XDIID(DispHTMLNavigator) \
+    XDIID(DispHTMLOListElement) \
     XDIID(DispHTMLObjectElement) \
+    XDIID(DispHTMLParamElement) \
     XDIID(DispHTMLOptionElement) \
+    XDIID(DispHTMLParaElement) \
+    XDIID(DispHTMLPhraseElement) \
     XDIID(DispHTMLScreen) \
     XDIID(DispHTMLScriptElement) \
     XDIID(DispHTMLSelectElement) \
+    XDIID(DispHTMLSpanElement) \
     XDIID(DispHTMLStyle) \
     XDIID(DispHTMLStyleElement) \
     XDIID(DispHTMLStyleSheet) \
@@ -151,10 +179,14 @@ struct constructor;
     XDIID(DispHTMLStyleSheetRulesCollection) \
     XDIID(DispHTMLStyleSheetsCollection) \
     XDIID(DispHTMLTable) \
+    XDIID(DispHTMLTableCaption) \
     XDIID(DispHTMLTableCell) \
+    XDIID(DispHTMLTableCol) \
     XDIID(DispHTMLTableRow) \
+    XDIID(DispHTMLTableSection) \
     XDIID(DispHTMLTextAreaElement) \
     XDIID(DispHTMLTitleElement) \
+    XDIID(DispHTMLUListElement) \
     XDIID(DispHTMLUnknownElement) \
     XDIID(DispHTMLW3CComputedStyle) \
     XDIID(DispHTMLWindow2) \
@@ -176,6 +208,7 @@ struct constructor;
     XIID(IDOMStorageEvent) \
     XIID(IDOMUIEvent) \
     XIID(IDOMDocumentType) \
+    XIID(IDOMException) \
     XIID(IDOMParser) \
     XIID(IDOMXmlSerializer) \
     XIID(IDocumentEvent) \
@@ -184,13 +217,19 @@ struct constructor;
     XIID(IElementSelector) \
     XIID(IElementTraversal) \
     XIID(IEventTarget) \
+    XIID(IGetSVGDocument) \
     XIID(IHTMLAnchorElement) \
     XIID(IHTMLAreaElement) \
     XIID(IHTMLAttributeCollection) \
     XIID(IHTMLAttributeCollection2) \
     XIID(IHTMLAttributeCollection3) \
     XIID(IHTMLAttributeCollection4) \
+    XIID(IHTMLBaseElement) \
+    XIID(IHTMLBaseFontElement) \
+    XIID(IHTMLBlockElement) \
+    XIID(IHTMLBlockElement2) \
     XIID(IHTMLBodyElement) \
+    XIID(IHTMLBRElement) \
     XIID(IHTMLBodyElement2) \
     XIID(IHTMLButtonElement) \
     XIID(IHTMLCSSStyleDeclaration) \
@@ -200,6 +239,11 @@ struct constructor;
     XIID(IHTMLCurrentStyle2) \
     XIID(IHTMLCurrentStyle3) \
     XIID(IHTMLCurrentStyle4) \
+    XIID(IHTMLDatabinding) \
+    XIID(IHTMLDDElement) \
+    XIID(IHTMLDivElement) \
+    XIID(IHTMLDListElement) \
+    XIID(IHTMLDTElement) \
     XIID(IHTMLDocument2) \
     XIID(IHTMLDocument3) \
     XIID(IHTMLDocument4) \
@@ -222,6 +266,7 @@ struct constructor;
     XIID(IHTMLElement2) \
     XIID(IHTMLElement3) \
     XIID(IHTMLElement4) \
+    XIID(IHTMLElement5) \
     XIID(IHTMLElement6) \
     XIID(IHTMLElement7) \
     XIID(IHTMLElementCollection) \
@@ -229,42 +274,70 @@ struct constructor;
     XIID(IHTMLEventObj) \
     XIID(IHTMLEventObj5) \
     XIID(IHTMLFiltersCollection) \
+    XIID(IHTMLFontElement) \
     XIID(IHTMLFormElement) \
+    XIID(IHTMLFieldSetElement) \
+    XIID(IHTMLLegendElement) \
+    XIID(IHTMLFormElement2) \
     XIID(IHTMLFrameBase) \
     XIID(IHTMLFrameBase2) \
+    XIID(IHTMLFrameBase3) \
+    XIID(IHTMLFrameElement) \
+    XIID(IHTMLFrameElement2) \
     XIID(IHTMLFrameElement3) \
+    XIID(IHTMLFrameSetElement) \
+    XIID(IHTMLFrameSetElement2) \
+    XIID(IHTMLFrameSetElement3) \
     XIID(IHTMLGenericElement) \
     XIID(IHTMLHeadElement) \
+    XIID(IHTMLHeaderElement) \
+    XIID(IHTMLHRElement) \
     XIID(IHTMLHtmlElement) \
     XIID(IHTMLIFrameElement) \
     XIID(IHTMLIFrameElement2) \
     XIID(IHTMLIFrameElement3) \
     XIID(IHTMLImageElementFactory) \
     XIID(IHTMLImgElement) \
+    XIID(IHTMLImgElement2) \
     XIID(IHTMLInputElement) \
+    XIID(IHTMLInputElement2) \
     XIID(IHTMLInputTextElement2) \
+    XIID(IHTMLLIElement) \
     XIID(IHTMLLabelElement) \
+    XIID(IHTMLListElement2) \
     XIID(IHTMLLinkElement) \
+    XIID(IHTMLLinkElement2) \
+    XIID(IHTMLLinkElement3) \
     XIID(IHTMLLocation) \
     XIID(IHTMLMetaElement) \
+    XIID(IHTMLMetaElement2) \
     XIID(IHTMLMimeTypesCollection) \
     XIID(IHTMLNamespaceCollection) \
+    XIID(IHTMLOListElement) \
     XIID(IHTMLObjectElement) \
     XIID(IHTMLObjectElement2) \
+    XIID(IHTMLObjectElement3) \
     XIID(IHTMLOptionElement) \
+    XIID(IHTMLOptionElement3) \
     XIID(IHTMLOptionElementFactory) \
+    XIID(IHTMLParamElement) \
+    XIID(IHTMLParamElement2) \
+    XIID(IHTMLParaElement) \
     XIID(IHTMLPerformance) \
     XIID(IHTMLPerformanceNavigation) \
     XIID(IHTMLPerformanceTiming) \
+    XIID(IHTMLPhraseElement2) \
     XIID(IHTMLPluginsCollection) \
     XIID(IHTMLRect) \
     XIID(IHTMLRect2) \
     XIID(IHTMLRectCollection) \
     XIID(IHTMLScreen) \
     XIID(IHTMLScriptElement) \
+    XIID(IHTMLScriptElement2) \
     XIID(IHTMLSelectElement) \
     XIID(IHTMLSelectionObject) \
     XIID(IHTMLSelectionObject2) \
+    XIID(IHTMLSpanElement) \
     XIID(IHTMLStorage) \
     XIID(IHTMLStyle) \
     XIID(IHTMLStyle2) \
@@ -280,14 +353,28 @@ struct constructor;
     XIID(IHTMLStyleSheetRulesCollection) \
     XIID(IHTMLStyleSheetsCollection) \
     XIID(IHTMLTable) \
+    XIID(IHTMLTableCaption) \
     XIID(IHTMLTable2) \
     XIID(IHTMLTable3) \
     XIID(IHTMLTableCell) \
+    XIID(IHTMLTableCell2) \
+    XIID(IHTMLTableCell3) \
+    XIID(IHTMLTableCol) \
+    XIID(IHTMLTableCol2) \
+    XIID(IHTMLTableCol3) \
     XIID(IHTMLTableRow) \
+    XIID(IHTMLTableRow2) \
+    XIID(IHTMLTableRow3) \
+    XIID(IHTMLTableRow4) \
+    XIID(IHTMLTableSection) \
+    XIID(IHTMLTableSection2) \
+    XIID(IHTMLTableSection3) \
+    XIID(IHTMLTableSection4) \
     XIID(IHTMLTextAreaElement) \
     XIID(IHTMLTextContainer) \
     XIID(IHTMLTitleElement) \
     XIID(IHTMLTxtRange) \
+    XIID(IHTMLUListElement) \
     XIID(IHTMLUniqueName) \
     XIID(IHTMLWindow2) \
     XIID(IHTMLWindow3) \
@@ -309,6 +396,7 @@ struct constructor;
     XIID(ISVGTextContentElement)
 
 #define PRIVATE_TID_LIST \
+    XIID(IWineDOMException) \
     XIID(IWineDOMTokenList) \
     XIID(IWineHTMLCharacterData) \
     XIID(IWineHTMLDOMNodePrivate) \
@@ -434,6 +522,8 @@ typedef struct {
     /* Used by objects that have a collection of items, required by enumerators */
     ULONG (*collection_len)(DispatchEx*);
     HRESULT (*collection_item)(DispatchEx*,ULONG,IDispatch**);
+
+    compat_mode_t (*get_compat_mode)(DispatchEx*);
 } dispex_static_data_vtbl_t;
 
 #define ALL_OBJECTS                     \
@@ -449,6 +539,7 @@ typedef struct {
     X(Console)                             \
     X(Crypto)                              \
     X(CustomEvent)                         \
+    X(DOMException)                        \
     X(DOMImplementation)                   \
     X(DOMParser)                           \
     X(DOMTokenList)                        \
@@ -459,33 +550,63 @@ typedef struct {
     X(Event)                               \
     X(HTMLAnchorElement)                   \
     X(HTMLAreaElement)                     \
+    X(HTMLBRElement)                       \
+    X(HTMLBaseElement)                     \
+    X(HTMLBaseFontElement)                 \
+    X(HTMLBlockElement)                    \
     X(HTMLBodyElement)                     \
     X(HTMLButtonElement)                   \
     X(HTMLCollection)                      \
+    X(HTMLDDElement)                       \
+    X(HTMLDListElement)                    \
+    X(HTMLDTElement)                       \
+    X(HTMLDirectoryElement)                \
+    X(HTMLDivElement)                      \
     X(HTMLDocument)                        \
     X(HTMLElement)                         \
     X(HTMLEmbedElement)                    \
+    X(HTMLFieldSetElement)                 \
+    X(HTMLFontElement)                     \
     X(HTMLFormElement)                     \
     X(HTMLFrameElement)                    \
+    X(HTMLFrameSetElement)                 \
+    X(HTMLHRElement)                       \
     X(HTMLHeadElement)                     \
+    X(HTMLHeadingElement)                  \
     X(HTMLHtmlElement)                     \
     X(HTMLIFrameElement)                   \
     X(HTMLImageElement)                    \
     X(HTMLInputElement)                    \
+    X(HTMLLIElement)                       \
     X(HTMLLabelElement)                    \
+    X(HTMLLegendElement)                   \
     X(HTMLLinkElement)                     \
+    X(HTMLMenuElement)                     \
     X(HTMLMetaElement)                     \
+    X(HTMLModElement)                      \
+    X(HTMLOListElement)                    \
     X(HTMLObjectElement)                   \
     X(HTMLOptionElement)                   \
+    X(HTMLParagraphElement)                \
+    X(HTMLParamElement)                    \
+    X(HTMLPhraseElement)                   \
+    X(HTMLPreElement)                      \
+    X(HTMLQuoteElement)                    \
     X(HTMLScriptElement)                   \
     X(HTMLSelectElement)                   \
+    X(HTMLSpanElement)                     \
     X(HTMLStyleElement)                    \
+    X(HTMLTableCaptionElement)             \
     X(HTMLTableCellElement)                \
+    X(HTMLTableColElement)                 \
     X(HTMLTableDataCellElement)            \
     X(HTMLTableElement)                    \
+    X(HTMLTableHeaderCellElement)          \
     X(HTMLTableRowElement)                 \
+    X(HTMLTableSectionElement)             \
     X(HTMLTextAreaElement)                 \
     X(HTMLTitleElement)                    \
+    X(HTMLUListElement)                    \
     X(HTMLUnknownElement)                  \
     X(History)                             \
     X(Image)                               \
@@ -543,6 +664,12 @@ typedef enum {
     OBJID_LAST,
 } object_id_t;
 
+typedef struct {
+    const WCHAR *name;
+    LONG value;
+    compat_mode_t min_compat_mode;
+} dispex_constant_t;
+
 struct dispex_static_data_t {
     const char *name;
     const dispex_static_data_vtbl_t *vtbl;
@@ -560,6 +687,7 @@ struct dispex_static_data_t {
     compat_mode_t min_compat_mode;
     compat_mode_t max_compat_mode;
     char prototype_name[64];
+    const dispex_constant_t *constants;
 };
 
 #define X(name) extern dispex_static_data_t name ## _dispex;
@@ -576,6 +704,8 @@ typedef struct {
     dispex_hook_invoke_t invoke;
     const WCHAR *name;
     BOOL noattr;
+    const WCHAR *attr_name;
+    DWORD min_script_version;
 } dispex_hook_t;
 
 struct DispatchEx {
@@ -653,6 +783,7 @@ void init_dispatch_with_owner(DispatchEx*,dispex_static_data_t*,DispatchEx*);
 HTMLInnerWindow *get_script_global(DispatchEx*);
 void dispex_props_unlink(DispatchEx*);
 HRESULT change_type(VARIANT*,VARIANT*,VARTYPE,IServiceProvider*);
+IDispatch *get_caller_security_window(IServiceProvider*);
 HRESULT dispex_get_dprop_ref(DispatchEx*,const WCHAR*,BOOL,VARIANT**);
 HRESULT get_dispids(tid_t,DWORD*,DISPID**);
 HRESULT remove_attribute(DispatchEx*,DISPID,VARIANT_BOOL*);
@@ -676,10 +807,15 @@ HRESULT dispex_prop_put(DispatchEx *dispex, DISPID id, LCID lcid, VARIANT *v, EX
 HRESULT dispex_get_chain_builtin_id(DispatchEx *dispex, const WCHAR *name, DWORD flags, DISPID *pid);
 HRESULT dispex_get_id(DispatchEx *dispex, const WCHAR *name, DWORD flags, DISPID *pid);
 HRESULT dispex_next_id(DispatchEx *dispex, DISPID id, BOOL enum_all_own_props, DISPID *ret);
+HRESULT dispex_next_attr_id(DispatchEx *dispex, DISPID id, DISPID *ret);
+HRESULT dispex_next_replaced_method(DispatchEx*,DISPID,DISPID*);
 HRESULT dispex_prop_name(DispatchEx *dispex, DISPID id, BSTR *ret);
 HRESULT dispex_define_property(DispatchEx *dispex, const WCHAR *name, DWORD flags, VARIANT *v, DISPID *id);
 HRESULT dispex_index_prop_desc(DispatchEx*,DISPID,struct property_info*);
 const WCHAR *dispex_builtin_prop_name(DispatchEx *dispex, DISPID id);
+const WCHAR *dispex_builtin_attr_name(DispatchEx *dispex, DISPID id);
+HRESULT dispex_get_builtin_attr_id(DispatchEx *dispex, const WCHAR *name, DISPID *id);
+VARTYPE dispex_builtin_prop_vt(DispatchEx*,DISPID);
 BOOL dispex_builtin_is_noattr(DispatchEx *dispex, DISPID id);
 IWineJSDispatchHost *dispex_outer_iface(DispatchEx *dispex);
 HRESULT get_constructor(HTMLInnerWindow *script_global, object_id_t id, DispatchEx **ret);
@@ -1088,6 +1224,8 @@ typedef struct {
     IHTMLElement2 IHTMLElement2_iface;
     IHTMLElement3 IHTMLElement3_iface;
     IHTMLElement4 IHTMLElement4_iface;
+    IHTMLElement5 IHTMLElement5_iface;
+    IHTMLDatabinding IHTMLDatabinding_iface;
     IHTMLElement6 IHTMLElement6_iface;
     IHTMLElement7 IHTMLElement7_iface;
     IHTMLUniqueName IHTMLUniqueName_iface;
@@ -1114,6 +1252,8 @@ struct HTMLFrameBase {
 
     IHTMLFrameBase  IHTMLFrameBase_iface;
     IHTMLFrameBase2 IHTMLFrameBase2_iface;
+    IHTMLFrameBase3 IHTMLFrameBase3_iface;
+    IGetSVGDocument IGetSVGDocument_iface;
 
     HTMLOuterWindow *content_window;
 
@@ -1210,6 +1350,7 @@ HRESULT create_enum_variant(DispatchEx*,IUnknown**);
 HRESULT create_outer_window(GeckoBrowser*,mozIDOMWindowProxy*,HTMLOuterWindow*,HTMLOuterWindow**);
 HRESULT update_window_doc(HTMLInnerWindow*);
 HTMLOuterWindow *mozwindow_to_window(const mozIDOMWindowProxy*);
+HTMLOuterWindow *unsafe_outer_window_from_IHTMLWindow2(IHTMLWindow2*);
 void get_top_window(HTMLOuterWindow*,HTMLOuterWindow**);
 HRESULT create_location(HTMLOuterWindow*,HTMLLocation**);
 HRESULT create_navigator(HTMLInnerWindow*,IOmNavigator**);
@@ -1218,6 +1359,7 @@ HRESULT create_performance(HTMLInnerWindow*,IHTMLPerformance**);
 HRESULT create_history(HTMLInnerWindow*,OmHistory**);
 HRESULT create_namespace_collection(HTMLDocumentNode*,IHTMLNamespaceCollection**);
 HRESULT create_dom_implementation(HTMLDocumentNode*,IHTMLDOMImplementation**);
+HRESULT create_dom_exception(DispatchEx*,HRESULT,IDispatch**);
 void detach_dom_implementation(IHTMLDOMImplementation*);
 HRESULT create_html_storage(HTMLInnerWindow*,BOOL,IHTMLStorage**);
 
@@ -1302,6 +1444,7 @@ void nsAString_Finish(nsAString*);
 #define NSSTR_COLOR          0x02
 
 HRESULT map_nsresult(nsresult);
+HRESULT map_selector_nsresult(nsresult,DispatchEx*);
 HRESULT return_nsstr(nsresult,nsAString*,BSTR*);
 HRESULT return_nsstr_variant(nsresult,nsAString*,unsigned,VARIANT*);
 HRESULT variant_to_nsstr(VARIANT*,BOOL,nsAString*);
@@ -1347,7 +1490,6 @@ HRESULT create_element(HTMLDocumentNode*,const WCHAR*,HTMLElement**);
 
 HRESULT HTMLDOMTextNode_Create(HTMLDocumentNode*,nsIDOMNode*,HTMLDOMNode**);
 
-BOOL variant_to_nscolor(const VARIANT *v, nsAString *nsstr);
 HRESULT nscolor_to_str(LPCWSTR color, BSTR *ret);
 
 static inline BOOL is_main_content_window(HTMLOuterWindow *window)
@@ -1369,6 +1511,7 @@ struct HTMLAttributeCollection {
 
     nsIDOMMozNamedAttrMap *dom_attrs;
     HTMLElement *elem;
+    const WCHAR *const *tag_attr_only_names;
     struct list attrs;
 };
 
@@ -1406,23 +1549,59 @@ HRESULT HTMLBodyElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLButtonElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLEmbedElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLFormElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLFieldSetElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLLegendElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLFrameElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLHeadElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLBRElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLBaseElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLBaseFontElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLBlockElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLFontElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLFrameSetElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLHeaderElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLParaElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLPhraseElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLSpanElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLDivElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLHRElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+BOOL is_text_block_attr(HTMLElement*,const WCHAR*);
+const WCHAR *text_block_canonical_attr(HTMLElement*,const WCHAR*,const WCHAR*,WCHAR*,unsigned);
+BOOL text_block_attr_is_invalid(HTMLElement*,const WCHAR*);
+HRESULT HTMLModElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLQuoteElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLPreElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLHtmlElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLIFrame_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLStyleElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLImgElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLInputElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLLabelElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLUListElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLDirectoryElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLMenuElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLOListElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLDListElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLLIElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLDDElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLDTElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+const WCHAR *list_canonical_attr(HTMLElement*,const WCHAR*,const WCHAR*,WCHAR*,unsigned);
+BOOL is_list_attr(HTMLElement*,const WCHAR*);
+BOOL list_attr_is_invalid(HTMLElement*,const WCHAR*);
 HRESULT HTMLLinkElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLMetaElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLObjectElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLParamElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLOptionElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLScriptElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLSelectElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLTable_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLTableCaptionElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLTableCell_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLTableHeaderCell_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLTableCol_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLTableRow_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
+HRESULT HTMLTableSection_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLTextAreaElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLTitleElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
 HRESULT HTMLGenericElement_Create(HTMLDocumentNode*,nsIDOMElement*,HTMLElement**);
@@ -1480,6 +1659,16 @@ HRESULT get_elem_source_index(HTMLElement*,LONG*);
 nsresult get_elem_attr_value(nsIDOMElement*,const WCHAR*,nsAString*,const PRUnichar**);
 HRESULT elem_string_attr_getter(HTMLElement*,const WCHAR*,BOOL,BSTR*);
 HRESULT elem_string_attr_setter(HTMLElement*,const WCHAR*,const WCHAR*);
+HRESULT elem_put_reflected_string(HTMLElement*,const WCHAR*,BSTR);
+HRESULT elem_get_reflected_string(HTMLElement*,const WCHAR*,BSTR*);
+VARIANT_BOOL element_has_attribute(HTMLElement*,const WCHAR*);
+BOOL is_ie8_attr_specified_default(HTMLElement*,const WCHAR*);
+HRESULT element_remove_attribute(HTMLElement*,const WCHAR*);
+HRESULT elem_get_attr_string(HTMLElement*,const WCHAR*,BSTR*);
+HRESULT elem_put_bool_attr(HTMLElement*,const WCHAR*,VARIANT_BOOL);
+HRESULT elem_get_bool_attr(HTMLElement*,const WCHAR*,VARIANT_BOOL*);
+HRESULT elem_put_color_attr(HTMLElement*,const WCHAR*,VARIANT*);
+HRESULT elem_get_color_attr(HTMLElement*,const WCHAR*,VARIANT*);
 
 HRESULT elem_unique_id(unsigned id, BSTR *p);
 

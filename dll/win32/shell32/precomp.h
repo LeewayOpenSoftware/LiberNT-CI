@@ -23,6 +23,7 @@
 #include <wininet.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <thumbcache.h>
 #include <emptyvc.h>
 #include <ndk/rtlfuncs.h>
 #include <fmifs/fmifs.h>
@@ -62,6 +63,7 @@
 #include "shresdef.h"
 #include "wine/cpanel.h"
 #include "CActiveDesktop.h"
+#include "CDesktopWallpaper.h"
 #include "CEnumIDListBase.h"
 #include "shfldr.h"
 #include "CShellItem.h"
@@ -76,6 +78,9 @@
 #include "folders/CDrivesFolder.h"
 #include "folders/CDesktopFolder.h"
 #include "folders/CControlPanelFolder.h"
+#include "folders/CPersonalizationFolder.h"
+#include "folders/CNetCenterFolder.h"
+#include "folders/CFirewallFolder.h"
 #include "folders/CMyDocsFolder.h"
 #include "folders/CNetFolder.h"
 #include "folders/CFontsFolder.h"
@@ -140,6 +145,17 @@ extern const GUID SHELL32_AdvtShortcutComponent;
 #define SHV_UPDATESTATUSBAR (WM_USER + 0x1112)
 #define SHV_FILL_LIST       (WM_USER + 0x1113)
 #define SHV_ARRANGE_COMPUTER (WM_USER + 0x1114)
+#define SHV_THUMBNAIL (WM_USER + 0x1115) /* CLSID_Thumbnail result: wParam HBITMAP, lParam item id */
+#define SHV_TASKPANE_FOCUS (WM_USER + 0x1117) /* CDefViewTasks.cpp: the task pane got the focus */
+
+#ifdef __cplusplus
+/* CDefViewTasks.cpp: the task pane (links from an IExplorerCommandProvider) */
+HWND DefViewTasks_Create(HWND hwndParent, IShellFolder *psf, HWND hwndOwner, IUnknown *pSite);
+HWND DefViewTasks_CreateFromProvider(HWND hwndParent, IExplorerCommandProvider *pProvider, IUnknown *pSite);
+int DefViewTasks_Layout(HWND hwndPane, int cx, int cy);
+void DefViewTasks_Refresh(HWND hwndPane);
+HRESULT CPaneVisibility_CreateInstance(EXPLORERPANESTATE navPane, REFIID riid, void **ppv);
+#endif
 
 extern inline
 BOOL

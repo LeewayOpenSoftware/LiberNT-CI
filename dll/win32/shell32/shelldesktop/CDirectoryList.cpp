@@ -76,21 +76,30 @@ BOOL CDirectoryList::DeletePath(LPCWSTR pszPath)
 
 BOOL CDirectoryList::AddPathsFromDirectory(LPCWSTR pszDirectoryPath)
 {
+    // Scanning into an empty list (the constructor) finds every path once, so the
+    // duplicate search of AddPath, which made a large scan quadratic, is skipped
+    return ScanDirectory(pszDirectoryPath, m_items.GetSize() == 0);
+}
+
+BOOL CDirectoryList::ScanDirectory(LPCWSTR pszDirectoryPath, BOOL fFresh)
+{
     // get the full path
-    WCHAR szPath[MAX_PATH];
-    lstrcpynW(szPath, pszDirectoryPath, _countof(szPath));
-    assert(!PathIsRelativeW(szPath));
+    WCHAR szDir[MAX_PATH], szPath[MAX_PATH];
+    lstrcpynW(szDir, pszDirectoryPath, _countof(szDir));
+    assert(!PathIsRelativeW(szDir));
 
     // is it a directory?
-    if (!PathIsDirectoryW(szPath))
+    if (!PathIsDirectoryW(szDir))
         return FALSE;
 
     // add the path
-    if (!AddPath(szPath))
+    if (fFresh ? !m_items.Add(szDir) : !AddPath(szDir))
         return FALSE;
 
     // enumerate the file items to remember
-    PathAppendW(szPath, L"*");
+    lstrcpynW(szPath, szDir, _countof(szPath));
+    if (!PathAppendW(szPath, L"*"))
+        return FALSE;
     WIN32_FIND_DATAW find;
     HANDLE hFind = FindFirstFileW(szPath, &find);
     if (hFind == INVALID_HANDLE_VALUE)
@@ -107,20 +116,24 @@ BOOL CDirectoryList::AddPathsFromDirectory(LPCWSTR pszDirectoryPath)
         if (pch[0] == L'.' && (pch[1] == 0 || (pch[1] == L'.' && pch[2] == 0)))
             continue;
 
-        // build a path
-        PathRemoveFileSpecW(szPath);
-        if (lstrlenW(szPath) + lstrlenW(find.cFileName) + 1 > MAX_PATH)
+        // build a path (always from the directory, so a skipped name cannot
+        // leave szPath one level too high for the next one)
+        if (lstrlenW(szDir) + lstrlenW(find.cFileName) + 2 > MAX_PATH)
         {
             ERR("szPath is too long\n");
             continue;
         }
+        lstrcpynW(szPath, szDir, _countof(szPath));
         PathAppendW(szPath, find.cFileName);
 
-        // add the path and do recurse
+        // add the path and do recurse; junctions and symbolic links are not
+        // followed, since they can lead back up the tree
         if (find.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         {
-            if (m_fRecursive)
-                AddPathsFromDirectory(szPath);
+            if (m_fRecursive && !(find.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+                ScanDirectory(szPath, fFresh);
+            else if (fFresh)
+                m_items.Add(szPath);
             else
                 AddPath(szPath);
         }

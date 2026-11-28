@@ -12,6 +12,7 @@ extern void func__strupr(void);
 extern void func__vscwprintf(void);
 extern void func__vsnprintf(void);
 extern void func__vsnwprintf(void);
+extern void func__vswprintf(void);
 extern void func__wcsicmp(void);
 extern void func__wcslwr(void);
 extern void func__wcsnicmp(void);
@@ -25,8 +26,12 @@ extern void func_strtoul(void);
 extern void func_wcstoul(void);
 extern void func_wcstombs(void);
 
+extern void func_AppendOnlyWrite(void);
+extern void func_BootLog(void);
+extern void func_DbgCommandString(void);
 extern void func_DebugRegisters(void);
 extern void func_DllLoadNotification(void);
+extern void func_DpcBehaviorRegistry(void);
 extern void func_FileStatInformation(void);
 extern void func_arm64_chpe(void);
 extern void func_wow64_startup(void);
@@ -35,6 +40,7 @@ extern void func_LdrEnumResources(void);
 extern void func_LdrFindResource_U(void);
 extern void func_LdrForwarderPath(void);
 extern void func_LdrGetDllHandleByName(void);
+extern void func_LdrInitLoaderLock(void);
 extern void func_LdrLoadDll(void);
 extern void func_LdrQueryProcessModuleInformation(void);
 extern void func_load_notifications(void);
@@ -57,6 +63,7 @@ extern void func_NtContinue(void);
 extern void func_NullGsSelector(void);
 extern void func_RtlRestoreContextConsolidate(void);
 extern void func_RtlVirtualUnwindFragment(void);
+extern void func_RtlVirtualUnwindTailJump(void);
 extern void func_SyscallStub(void);
 extern void func_x87Exception(void);
 #endif
@@ -64,22 +71,29 @@ extern void func_x87Exception(void);
 extern void func_InstructionCacheMigration(void);
 #endif
 extern void func_NtCreateFile(void);
+extern void func_NtCreateDirectoryObjectEx(void);
 extern void func_NtCreateKey(void);
 extern void func_NtCreateKeyCached(void);
 extern void func_NtCreateProfile(void);
 extern void func_NtCreateSection(void);
+extern void func_NtCreateSection_CachedRead(void);
 extern void func_NtCreateSection_ConcurrentImage(void);
 extern void func_NtCreateThread(void);
 extern void func_NtCreateThreadWin32(void);
+extern void func_NtCreateUserProcess(void);
 extern void func_NtDeleteKey(void);
 extern void func_NtDuplicateObject(void);
 extern void func_NtDuplicateToken(void);
 extern void func_NtFilterToken(void);
 extern void func_NtFreeVirtualMemory(void);
+extern void func_NtGetNextProcess(void);
 extern void func_NtImpersonateAnonymousToken(void);
 extern void func_NtLoadUnloadKey(void);
 extern void func_NtMapViewOfSection(void);
 extern void func_NtMapViewOfSection_ImageZeroBits(void);
+extern void func_NtKeDispatcherTransitions(void);
+extern void func_NtKeHandoff(void);
+extern void func_NtKeyedEvent(void);
 extern void func_NtMutant(void);
 extern void func_NtNotifyChangeMultipleKeys(void);
 extern void func_NtOpenKey(void);
@@ -87,6 +101,9 @@ extern void func_NtOpenKeyEx(void);
 extern void func_NtOpenProcessToken(void);
 extern void func_NtOpenThreadToken(void);
 extern void func_NtProtectVirtualMemory(void);
+extern void func_NtOpenMaximumAllowed(void);
+extern void func_ObTraverse(void);
+extern void func_DbgPrintEx(void);
 extern void func_NtQueryInformationFile(void);
 extern void func_NtQueryDirectoryFile(void);
 extern void func_NtQueryInformationProcess(void);
@@ -94,17 +111,21 @@ extern void func_NtQueryInformationThread(void);
 extern void func_NtQueryInformationToken(void);
 extern void func_NtQueryKey(void);
 extern void func_NtQueryObject(void);
+extern void func_NtQueryObjectName(void);
 extern void func_NtQueryOpenSubKeys(void);
 extern void func_NtQuerySection(void);
 extern void func_NtQuerySystemEnvironmentValue(void);
 extern void func_NtQuerySystemInformation(void);
 extern void func_NtQueryValueKey(void);
 extern void func_NtQueryVolumeInformationFile(void);
+extern void func_VolumeDeviceOpen(void);
+extern void func_NtRaiseException(void);
 extern void func_NtReadFile(void);
 extern void func_NtReadFileAsync(void);
 extern void func_NtSaveKey(void);
 extern void func_NtSetDefaultLocale(void);
 extern void func_NtSetInformationFile(void);
+extern void func_NtSetInformationSymbolicLink(void);
 extern void func_NtSetInformationProcess(void);
 extern void func_NtSetInformationThread(void);
 extern void func_NtSetInformationToken(void);
@@ -112,18 +133,23 @@ extern void func_NtSetValueKey(void);
 extern void func_NtSetVolumeInformationFile(void);
 extern void func_NtStartProfile(void);
 extern void func_NtSystemInformation(void);
+extern void func_NtTerminateThread(void);
 extern void func_NtUnloadDriver(void);
 extern void func_NtWnfState(void);
 extern void func_NtWriteFile(void);
+extern void func_NtdllDefWindowProc(void);
 extern void func_RtlAllocateHeap(void);
 extern void func_RtlCreateTagHeap(void);
 extern void func_RtlBitmapApi(void);
+extern void func_RtlBarrier(void);
 extern void func_RtlSList(void);
 extern void func_RtlCaptureContext(void);
 extern void func_RtlComputePrivatizedDllName_U(void);
 extern void func_RtlConditionVariable(void);
 extern void func_RtlCopyMappedMemory(void);
+extern void func_RtlCreateServiceSid(void);
 extern void func_RtlCriticalSection(void);
+extern void func_RtlCurrentTransaction(void);
 extern void func_RtlDebugInformation(void);
 extern void func_RtlDeleteAce(void);
 extern void func_RtlDetermineDosPathNameType(void);
@@ -143,8 +169,11 @@ extern void func_RtlGetLengthWithoutTrailingPathSeperators(void);
 extern void func_RtlGetLongestNtPathLength(void);
 extern void func_RtlGetNtProductType(void);
 extern void func_RtlGetProcessHeaps(void);
+extern void func_RtlHeapApis(void);
 extern void func_RtlGetProductInfo(void);
+extern void func_RtlGetThreadErrorMode(void);
 extern void func_RtlGetUnloadEventTrace(void);
+extern void func_RtlTryAcquirePebLock(void);
 extern void func_RtlHandle(void);
 extern void func_RtlHeapDecommit(void);
 extern void func_RtlHeapFreeCoalesce(void);
@@ -155,8 +184,15 @@ extern void func_RtlIsNameInExpression(void);
 extern void func_RtlIsNameLegalDOS8Dot3(void);
 extern void func_RtlLocale(void);
 extern void func_RtlMemoryStream(void);
+extern void func_PfxPrefixTable(void);
+extern void func_RtlAddressInSectionTable(void);
+extern void func_RtlCompareAltitudes(void);
+extern void func_RtlCopyMemoryNonTemporal(void);
+extern void func_RtlEnumerateGenericTableLikeADirectory(void);
+extern void func_RtlMemIoResource(void);
 extern void func_RtlMultipleAllocateHeap(void);
 extern void func_RtlNtPathNameToDosPathName(void);
+extern void func_RtlPlaceholderCompatibilityMode(void);
 extern void func_RtlPortableOperatingSystem(void);
 extern void func_PortableWorkspaceHibernate(void);
 extern void func_RtlpApplyLengthFunction(void);
@@ -176,22 +212,33 @@ extern void func_RtlUpcaseUnicodeStringToCountedOemString(void);
 extern void func_RtlValidateUnicodeString(void);
 extern void func_RtlWaitOnAddress(void);
 extern void func_RtlWaitOnAddressPriority(void);
+extern void func_RtlWow64EnableFsRedirectionEx(void);
 extern void func_RtlVirtualUnwind(void);
 extern void func_RtlVirtualUnwindChainedHandler(void);
 extern void func_RtlxUnicodeStringToAnsiSize(void);
 extern void func_RtlxUnicodeStringToOemSize(void);
+extern void func_NtProcessDeviceMap(void);
+extern void func_NtQueryDirectoryObject(void);
+extern void func_NtDuplicateTokenQos(void);
+extern void func_NtWaitForObjects(void);
 extern void func_SatisfiedWait(void);
+extern void func_SharedUserData(void);
 extern void func_StackOverflow(void);
 extern void func_ScanfSecure(void);
 extern void func_StackProbe(void);
 extern void func_TimerResolution(void);
 extern void func_SehHandlerLocals(void);
+extern void func_UserHiveLinks(void);
 #if defined(_M_IX86) || defined(_M_AMD64)
 extern void func_UserModeException(void);
 #endif
 
 extern void func_ProcessPoolQuota(void);
+extern void func_ProcessUserModeIopl(void);
+extern void func_LinkReparseLimit(void);
+extern void func_ObjectQuotaLimit(void);
 extern void func_RtlWnfAndSqm(void);
+extern void func_WinSqmSession(void);
 extern void func_RtlCheckPortableOperatingSystem(void);
 
 const struct test winetest_testlist[] =
@@ -207,6 +254,7 @@ const struct test winetest_testlist[] =
     { "_vscwprintf", func__vscwprintf },
     { "_vsnprintf", func__vsnprintf },
     { "_vsnwprintf", func__vsnwprintf },
+    { "_vswprintf", func__vswprintf },
     { "_wcsicmp", func__wcsicmp },
     { "_wcslwr", func__wcslwr },
     { "_wcsnicmp", func__wcsnicmp },
@@ -220,14 +268,19 @@ const struct test winetest_testlist[] =
     { "wcstoul", func_wcstoul },
     { "wcstombs", func_wcstombs },
 
+    { "AppendOnlyWrite",                func_AppendOnlyWrite },
+    { "BootLog",                        func_BootLog },
+    { "DbgCommandString",               func_DbgCommandString },
     { "DebugRegisters",                 func_DebugRegisters },
     { "DllLoadNotification",            func_DllLoadNotification },
+    { "DpcBehaviorRegistry",            func_DpcBehaviorRegistry },
     { "FileStatInformation",            func_FileStatInformation },
     { "arm64_chpe",                     func_arm64_chpe },
     { "LdrEnumResources",               func_LdrEnumResources },
     { "LdrFindResource_U",              func_LdrFindResource_U },
     { "LdrForwarderPath",               func_LdrForwarderPath },
     { "LdrGetDllHandleByName",          func_LdrGetDllHandleByName },
+    { "LdrInitLoaderLock",              func_LdrInitLoaderLock },
     { "LdrLoadDll",                     func_LdrLoadDll },
     { "LdrQueryProcessModuleInformation", func_LdrQueryProcessModuleInformation },
     { "load_notifications",             func_load_notifications },
@@ -250,6 +303,7 @@ const struct test winetest_testlist[] =
     { "NullGsSelector",                 func_NullGsSelector },
     { "RtlRestoreContextConsolidate",   func_RtlRestoreContextConsolidate },
     { "RtlVirtualUnwindFragment",       func_RtlVirtualUnwindFragment },
+    { "RtlVirtualUnwindTailJump",       func_RtlVirtualUnwindTailJump },
     { "SyscallStub",                    func_SyscallStub },
     { "x87Exception",                   func_x87Exception },
 #endif
@@ -257,22 +311,29 @@ const struct test winetest_testlist[] =
     { "InstructionCacheMigration",      func_InstructionCacheMigration },
 #endif
     { "NtCreateFile",                   func_NtCreateFile },
+    { "NtCreateDirectoryObjectEx",      func_NtCreateDirectoryObjectEx },
     { "NtCreateKey",                    func_NtCreateKey },
     { "NtCreateKeyCached",              func_NtCreateKeyCached },
     { "NtCreateProfile",                func_NtCreateProfile },
     { "NtCreateSection",                func_NtCreateSection },
+    { "NtCreateSection_CachedRead", func_NtCreateSection_CachedRead },
     { "NtCreateSection_ConcurrentImage", func_NtCreateSection_ConcurrentImage },
     { "NtCreateThread",                 func_NtCreateThread },
     { "NtCreateThreadWin32",            func_NtCreateThreadWin32 },
+    { "NtCreateUserProcess",            func_NtCreateUserProcess },
     { "NtDeleteKey",                    func_NtDeleteKey },
     { "NtDuplicateObject",              func_NtDuplicateObject },
     { "NtDuplicateToken",               func_NtDuplicateToken },
     { "NtFilterToken",                  func_NtFilterToken },
     { "NtFreeVirtualMemory",            func_NtFreeVirtualMemory },
+    { "NtGetNextProcess",               func_NtGetNextProcess },
     { "NtImpersonateAnonymousToken",    func_NtImpersonateAnonymousToken },
     { "NtLoadUnloadKey",                func_NtLoadUnloadKey },
     { "NtMapViewOfSection",             func_NtMapViewOfSection },
     { "NtMapViewOfSection_ImageZeroBits", func_NtMapViewOfSection_ImageZeroBits },
+    { "NtKeDispatcherTransitions",       func_NtKeDispatcherTransitions },
+    { "NtKeHandoff",                     func_NtKeHandoff },
+    { "NtKeyedEvent",                    func_NtKeyedEvent },
     { "NtMutant",                       func_NtMutant },
     { "NtNotifyChangeMultipleKeys",     func_NtNotifyChangeMultipleKeys },
     { "NtOpenKeyEx",                    func_NtOpenKeyEx },
@@ -280,6 +341,9 @@ const struct test winetest_testlist[] =
     { "NtOpenProcessToken",             func_NtOpenProcessToken },
     { "NtOpenThreadToken",              func_NtOpenThreadToken },
     { "NtProtectVirtualMemory",         func_NtProtectVirtualMemory },
+    { "NtOpenMaximumAllowed",           func_NtOpenMaximumAllowed },
+    { "ObTraverse",                     func_ObTraverse },
+    { "DbgPrintEx",                     func_DbgPrintEx },
     { "NtQueryInformationFile",         func_NtQueryInformationFile },
     { "NtQueryDirectoryFile",           func_NtQueryDirectoryFile },
     { "NtQueryInformationProcess",      func_NtQueryInformationProcess },
@@ -287,17 +351,21 @@ const struct test winetest_testlist[] =
     { "NtQueryInformationToken",        func_NtQueryInformationToken },
     { "NtQueryKey",                     func_NtQueryKey },
     { "NtQueryObject",                  func_NtQueryObject },
+    { "NtQueryObjectName",              func_NtQueryObjectName },
     { "NtQueryOpenSubKeys",             func_NtQueryOpenSubKeys },
     { "NtQuerySection",                 func_NtQuerySection },
     { "NtQuerySystemEnvironmentValue",  func_NtQuerySystemEnvironmentValue },
     { "NtQuerySystemInformation",       func_NtQuerySystemInformation },
     { "NtQueryValueKey",                func_NtQueryValueKey },
     { "NtQueryVolumeInformationFile",   func_NtQueryVolumeInformationFile },
+    { "VolumeDeviceOpen",               func_VolumeDeviceOpen },
+    { "NtRaiseException",               func_NtRaiseException },
     { "NtReadFile",                     func_NtReadFile },
     { "NtReadFileAsync",                func_NtReadFileAsync },
     { "NtSaveKey",                      func_NtSaveKey},
     { "NtSetDefaultLocale",             func_NtSetDefaultLocale },
     { "NtSetInformationFile",           func_NtSetInformationFile },
+    { "NtSetInformationSymbolicLink",   func_NtSetInformationSymbolicLink },
     { "NtSetInformationProcess",        func_NtSetInformationProcess },
     { "NtSetInformationThread",         func_NtSetInformationThread },
     { "NtSetInformationToken",          func_NtSetInformationToken },
@@ -305,17 +373,22 @@ const struct test winetest_testlist[] =
     { "NtSetVolumeInformationFile",     func_NtSetVolumeInformationFile },
     { "NtStartProfile",                 func_NtStartProfile },
     { "NtSystemInformation",            func_NtSystemInformation },
+    { "NtTerminateThread",              func_NtTerminateThread },
     { "NtUnloadDriver",                 func_NtUnloadDriver },
     { "NtWnfState",                     func_NtWnfState },
     { "NtWriteFile",                    func_NtWriteFile },
+    { "NtdllDefWindowProc",             func_NtdllDefWindowProc },
     { "RtlAllocateHeap",                func_RtlAllocateHeap },
     { "RtlCreateTagHeap", func_RtlCreateTagHeap },
     { "RtlBitmapApi",                   func_RtlBitmapApi },
+    { "RtlBarrier",                     func_RtlBarrier },
     { "RtlSList",                       func_RtlSList },
     { "RtlComputePrivatizedDllName_U",  func_RtlComputePrivatizedDllName_U },
     { "RtlConditionVariable",           func_RtlConditionVariable },
     { "RtlCopyMappedMemory",            func_RtlCopyMappedMemory },
+    { "RtlCreateServiceSid",            func_RtlCreateServiceSid },
     { "RtlCriticalSection",             func_RtlCriticalSection },
+    { "RtlCurrentTransaction",          func_RtlCurrentTransaction },
     { "RtlDebugInformation",            func_RtlDebugInformation },
     { "wow64_startup",                  func_wow64_startup },
     { "wow64_native_process",           func_wow64_native_process },
@@ -337,8 +410,11 @@ const struct test winetest_testlist[] =
     { "RtlGetLongestNtPathLength",      func_RtlGetLongestNtPathLength },
     { "RtlGetNtProductType",            func_RtlGetNtProductType },
     { "RtlGetProcessHeaps",             func_RtlGetProcessHeaps },
+    { "RtlHeapApis",                    func_RtlHeapApis },
     { "RtlGetProductInfo",              func_RtlGetProductInfo },
+    { "RtlGetThreadErrorMode",          func_RtlGetThreadErrorMode },
     { "RtlGetUnloadEventTrace",         func_RtlGetUnloadEventTrace },
+    { "RtlTryAcquirePebLock",           func_RtlTryAcquirePebLock },
     { "RtlHandle",                      func_RtlHandle },
     { "RtlHeapDecommit",                func_RtlHeapDecommit },
     { "RtlHeapFreeCoalesce",            func_RtlHeapFreeCoalesce },
@@ -349,8 +425,15 @@ const struct test winetest_testlist[] =
     { "RtlIsNameLegalDOS8Dot3",         func_RtlIsNameLegalDOS8Dot3 },
     { "RtlLocale",                      func_RtlLocale },
     { "RtlMemoryStream",                func_RtlMemoryStream },
+    { "PfxPrefixTable", func_PfxPrefixTable },
+    { "RtlAddressInSectionTable", func_RtlAddressInSectionTable },
+    { "RtlCompareAltitudes", func_RtlCompareAltitudes },
+    { "RtlCopyMemoryNonTemporal", func_RtlCopyMemoryNonTemporal },
+    { "RtlEnumerateGenericTableLikeADirectory", func_RtlEnumerateGenericTableLikeADirectory },
+    { "RtlMemIoResource", func_RtlMemIoResource },
     { "RtlMultipleAllocateHeap",        func_RtlMultipleAllocateHeap },
     { "RtlNtPathNameToDosPathName",     func_RtlNtPathNameToDosPathName },
+    { "RtlPlaceholderCompatibilityMode", func_RtlPlaceholderCompatibilityMode },
     { "RtlPortableOperatingSystem",     func_RtlPortableOperatingSystem },
     { "PortableWorkspaceHibernate",     func_PortableWorkspaceHibernate },
     { "RtlpApplyLengthFunction",        func_RtlpApplyLengthFunction },
@@ -371,12 +454,19 @@ const struct test winetest_testlist[] =
     { "RtlValidateUnicodeString",       func_RtlValidateUnicodeString },
     { "RtlWaitOnAddress",               func_RtlWaitOnAddress },
     { "RtlWaitOnAddressPriority",       func_RtlWaitOnAddressPriority },
+    { "RtlWow64EnableFsRedirectionEx",  func_RtlWow64EnableFsRedirectionEx },
+    { "NtProcessDeviceMap",                func_NtProcessDeviceMap },
+    { "NtQueryDirectoryObject",            func_NtQueryDirectoryObject },
+    { "NtDuplicateTokenQos",               func_NtDuplicateTokenQos },
+    { "NtWaitForObjects",                  func_NtWaitForObjects },
     { "SatisfiedWait",                  func_SatisfiedWait },
+    { "SharedUserData",                 func_SharedUserData },
     { "StackOverflow",                  func_StackOverflow },
     { "ScanfSecure",                    func_ScanfSecure },
     { "StackProbe",                     func_StackProbe },
     { "TimerResolution",                func_TimerResolution },
     { "SehHandlerLocals",               func_SehHandlerLocals },
+    { "UserHiveLinks",                  func_UserHiveLinks },
 #if defined(_M_IX86) || defined(_M_AMD64)
     { "UserModeException",              func_UserModeException },
 #endif
@@ -390,7 +480,11 @@ const struct test winetest_testlist[] =
 #endif
 
     { "ProcessPoolQuota",               func_ProcessPoolQuota },
+    { "ProcessUserModeIopl",            func_ProcessUserModeIopl },
+    { "LinkReparseLimit",               func_LinkReparseLimit },
+    { "ObjectQuotaLimit",               func_ObjectQuotaLimit },
     { "RtlWnfAndSqm", func_RtlWnfAndSqm },
+    { "WinSqmSession", func_WinSqmSession },
     { "RtlCheckPortableOperatingSystem", func_RtlCheckPortableOperatingSystem },
     { 0, 0 }
 };

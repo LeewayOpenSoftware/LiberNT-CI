@@ -301,7 +301,8 @@ NTSTATUS TCPTranslateError(const err_t err)
         case ERR_VAL: Status = STATUS_INVALID_PARAMETER; break; //-6
         case ERR_WOULDBLOCK: Status = STATUS_CANT_WAIT; break; //-7
         case ERR_USE: Status = STATUS_ADDRESS_ALREADY_EXISTS; break; //-8
-        case ERR_ISCONN: Status = STATUS_UNSUCCESSFUL; break; //-9 (FIXME)
+        case ERR_ALREADY: Status = STATUS_UNSUCCESSFUL; break;
+        case ERR_ISCONN: Status = STATUS_UNSUCCESSFUL; break; // (FIXME)
         case ERR_ABRT: Status = STATUS_LOCAL_DISCONNECT; break; //-10
         case ERR_RST: Status = STATUS_REMOTE_DISCONNECT; break; //-11
         case ERR_CLSD: Status = STATUS_FILE_CLOSED; break; //-12
@@ -386,21 +387,17 @@ NTSTATUS TCPConnect
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (RemoteAddress.Type == IP_ADDRESS_V6 &&
-        !RemoteAddress.Address.IPv6Address[0] && !RemoteAddress.Address.IPv6Address[1] &&
-        !RemoteAddress.Address.IPv6Address[2] && !RemoteAddress.Address.IPv6Address[3] &&
-        !RemoteAddress.Address.IPv6Address[4] && RemoteAddress.Address.IPv6Address[5] == 0xFFFF)
+    if (TCPUnmapFromDualStack(&RemoteAddress) &&
+        !TCPAddressFileAcceptsMapped(Connection->AddressFile))
     {
-        ULONG IPv4Address;
+        UnlockObject(Connection);
+        return STATUS_INVALID_ADDRESS;
+    }
 
-        if (!Connection->AddressFile->DualStack)
-        {
-            UnlockObject(Connection);
-            return STATUS_INVALID_ADDRESS;
-        }
-
-        RtlCopyMemory(&IPv4Address, &RemoteAddress.Address.IPv6Address[6], sizeof(IPv4Address));
-        AddrInitIPv4(&RemoteAddress, IPv4Address);
+    if (RemoteAddress.Type == IP_ADDRESS_V4 ? !RemoteAddress.Address.IPv4Address : AddrIsUnspecified(&RemoteAddress))
+    {
+        UnlockObject(Connection);
+        return STATUS_INVALID_ADDRESS;
     }
 
     if (Connection->AddressFile->Address.Type != RemoteAddress.Type &&
@@ -713,6 +710,18 @@ NTSTATUS TCPReceiveData
     return Status;
 }
 
+/* Runs on the stack's thread, behind the input that was queued when the send was */
+static
+void
+TCPSendTakenIn(void *Context)
+{
+    PTDI_BUCKET Bucket = Context;
+    PCONNECTION_ENDPOINT Connection = Bucket->AssociatedEndpoint;
+
+    CompleteBucket(Connection, Bucket, FALSE);
+    DereferenceObject(Connection);
+}
+
 NTSTATUS TCPSendData
 ( PCONNECTION_ENDPOINT Connection,
   PCHAR BufferData,
@@ -742,6 +751,37 @@ NTSTATUS TCPSendData
                                           FALSE));
 
     TI_DbgPrint(DEBUG_TCP,("[IP, TCPSendData] Send: %x, %d\n", Status, SendLength));
+
+    /* Urgent data is for its receiver to act on at once. A segment that looped back to this host is queued
+     * behind this call, so the send completes behind it: after the stack took the segment in and after the
+     * receive it satisfied was completed. */
+    if (Status == STATUS_SUCCESS && (Flags & TDI_SEND_EXPEDITED))
+    {
+        Bucket = ExAllocateFromNPagedLookasideList(&TdiBucketLookasideList);
+        if (Bucket)
+        {
+            Bucket->Request.RequestNotifyObject = Complete;
+            Bucket->Request.RequestContext = Context;
+            Bucket->AssociatedEndpoint = Connection;
+            Bucket->Status = STATUS_SUCCESS;
+            Bucket->Information = *BytesSent;
+
+            ReferenceObject(Connection);
+            if (tcpip_callback(TCPSendTakenIn, Bucket) == ERR_OK)
+            {
+                Status = STATUS_PENDING;
+            }
+            else
+            {
+                DereferenceObject(Connection);
+                ExFreeToNPagedLookasideList(&TdiBucketLookasideList, Bucket);
+            }
+        }
+
+        TI_DbgPrint(DEBUG_TCP, ("[IP, TCPSendData] Leaving. Status = %x\n", Status));
+        DereferenceObject(Connection);
+        return Status;
+    }
 
     /* Keep this request around ... there was no data yet */
     if (Status == STATUS_PENDING)
@@ -785,7 +825,7 @@ UINT TCPAllocatePort(const UINT HintPort)
         }
     }
     else
-        return AllocatePortFromRange( &TCPPorts, DYNAMIC_PORT_FIRST, DYNAMIC_PORT_LAST );
+        return AllocatePortFromRangeExcluding(&TCPPorts, DYNAMIC_PORT_FIRST, DYNAMIC_PORT_LAST, &TCPPorts6);
 }
 
 VOID TCPFreePort(const UINT Port)
@@ -801,7 +841,7 @@ UINT TCPAllocatePortForAddress(const IP_ADDRESS *Address, const UINT HintPort)
     if (HintPort)
         return AllocatePort(&TCPPorts6, HintPort) ? HintPort : (UINT)-1;
 
-    return AllocatePortFromRange(&TCPPorts6, DYNAMIC_PORT_FIRST, DYNAMIC_PORT_LAST);
+    return AllocatePortFromRangeExcluding(&TCPPorts6, DYNAMIC_PORT_FIRST, DYNAMIC_PORT_LAST, &TCPPorts);
 }
 
 VOID TCPFreePortForAddress(const IP_ADDRESS *Address, const UINT Port)
@@ -828,6 +868,32 @@ VOID TCPMapToDualStack(
     Address->ScopeId = 0;
 }
 
+BOOLEAN TCPUnmapFromDualStack(
+    PIP_ADDRESS Address)
+{
+    ULONG IPv4Address;
+
+    if (Address->Type != IP_ADDRESS_V6 ||
+        Address->Address.IPv6Address[0] || Address->Address.IPv6Address[1] ||
+        Address->Address.IPv6Address[2] || Address->Address.IPv6Address[3] ||
+        Address->Address.IPv6Address[4] || Address->Address.IPv6Address[5] != 0xFFFF)
+    {
+        return FALSE;
+    }
+
+    RtlCopyMemory(&IPv4Address, &Address->Address.IPv6Address[6], sizeof(IPv4Address));
+    AddrInitIPv4(Address, IPv4Address);
+    return TRUE;
+}
+
+BOOLEAN TCPAddressFileAcceptsMapped(
+    PADDRESS_FILE AddrFile)
+{
+    return AddrFile->DualStack ||
+           (AddrFile->Family == TDI_ADDRESS_TYPE_IP6 &&
+            AddrFile->Address.Type == IP_ADDRESS_V4);
+}
+
 NTSTATUS TCPGetSockAddress
 ( PCONNECTION_ENDPOINT Connection,
   PTRANSPORT_ADDRESS Address,
@@ -852,7 +918,7 @@ NTSTATUS TCPGetSockAddress
         return Status;
 
     LibIPAddressFromLwip(&ipaddr, &IpAddress);
-    if (Connection->AddressFile && Connection->AddressFile->DualStack)
+    if (Connection->AddressFile && Connection->AddressFile->Family == TDI_ADDRESS_TYPE_IP6)
         TCPMapToDualStack(&IpAddress);
     return AddrBuildTransportAddress(&IpAddress, WH2N(Port), Address, AddressLength);
 }

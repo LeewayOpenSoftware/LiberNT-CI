@@ -12,6 +12,7 @@ BEGIN
     IDS_HLP_INTERFACE_SHOW "显示信息。\n"
     IDS_HLP_INTERFACE_SHOW_INTERFACE "显示接口。\n"
     IDS_HLP_INTERFACE_SHOW_INTERFACE_EX "\n用法:\n"
+    IDS_INTERFACE_HEADER "\nAdmin State    State          Type             Interface Name\n-------------------------------------------------------------------------\n"
 
     IDS_HLP_IP_ADD "将配置项添加到表中。\n"
     IDS_HLP_IP_ADD_ADDRESS     "将 IP 地址添加到指定的接口。\n"
@@ -208,7 +209,7 @@ BEGIN
     IDS_DUMP_IP_FOOTER    "# 接口 IP 配置结束\n"
 
     IDS_ERROR_INVALID_INTERFACE  "\n指定的接口 %1!s! 无效。\n"
-    IDS_ERROR_BAD_VALUE "\n%1!s! 不是 %1!s! 可接受的值。\n"
+    IDS_ERROR_BAD_VALUE "\n%1!s! 不是 %2!s! 可接受的值。\n"
     IDS_ERROR_ALREADY_DHCP "\n此接口上已启用 DHCP。\n"
     IDS_ERROR_GET_PROPERTIES "\n获取接口 %1!s! 的配置时出错。\n"
 

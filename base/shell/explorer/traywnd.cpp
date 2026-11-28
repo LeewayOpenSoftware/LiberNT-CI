@@ -895,6 +895,8 @@ class CTrayWindow :
     BOOL     m_bSecondary;
 
     RECT m_TrayRects[4];
+    /* Edges whose docked rectangle has been fitted to the rebar (1 << ABE_*) */
+    DWORD m_FittedEdges;
     SIZE m_TraySize;
 
     HWND m_TrayPropertiesOwner;
@@ -918,6 +920,7 @@ public:
             DWORD InSizeMove : 1;
             DWORD IsDragging : 1;
             DWORD ThemeLayoutPending : 1;
+            DWORD SizedInSizeMove : 1;
         };
     };
 
@@ -937,6 +940,7 @@ public:
         m_DraggingPosition(0),
         m_DraggingMonitor(NULL),
         m_bSecondary(FALSE),
+        m_FittedEdges(0),
         m_TrayPropertiesOwner(NULL),
         m_RunFileDlgOwner(NULL),
         m_AutoHideState(NULL),
@@ -1818,23 +1822,37 @@ GetPrimaryRect:
                               IN const SIZE *pTraySize,
                               IN OUT RECT *pRect)
     {
+        /* Clamp the tray thickness to one row .. less than half the monitor, with a
+           default fall-back for an empty/inverted/~0x7FFF size. This is the funnel
+           for every tray rect, so a bad re-fit or a logon empty rect can neither
+           collapse the bar (boot -2 / 3 px) nor blow it up. */
+        SIZE sz = *pTraySize;
+        RECT rcMon = *pRect;
+        GetScreenRectFromRect(&rcMon, MONITOR_DEFAULTTONEAREST);
+        LONG cxMon = rcMon.right - rcMon.left;
+        LONG cyMon = rcMon.bottom - rcMon.top;
+        if (sz.cx <= 0 || (cxMon > 0 && sz.cx >= cxMon / 2))
+            sz.cx = GetMinimumVerticalWidth();
+        if (sz.cy <= 0 || (cyMon > 0 && sz.cy >= cyMon / 2))
+            sz.cy = GetDefaultTrayHeight();
+
         switch (Position)
         {
         case ABE_LEFT:
-            pRect->right = pRect->left + pTraySize->cx;
+            pRect->right = pRect->left + sz.cx;
             break;
 
         case ABE_TOP:
-            pRect->bottom = pRect->top + pTraySize->cy;
+            pRect->bottom = pRect->top + sz.cy;
             break;
 
         case ABE_RIGHT:
-            pRect->left = pRect->right - pTraySize->cx;
+            pRect->left = pRect->right - sz.cx;
             break;
 
         case ABE_BOTTOM:
         default:
-            pRect->top = pRect->bottom - pTraySize->cy;
+            pRect->top = pRect->bottom - sz.cy;
             break;
         }
     }
@@ -1890,10 +1908,13 @@ GetPrimaryRect:
             }
         }
 
-        if (sz.cx > (rcScreen.right - rcScreen.left) / 2)
-            sz.cx = (rcScreen.right - rcScreen.left) / 2;
-        if (sz.cy > (rcScreen.bottom - rcScreen.top) / 2)
-            sz.cy = (rcScreen.bottom - rcScreen.top) / 2;
+        /* Size is {width of a vertical bar, height of a horizontal bar}. A width or
+           height of half the screen or more is the length of the other orientation
+           saved as a thickness; fall back to the default instead of a half-screen bar */
+        if (sz.cx >= (rcScreen.right - rcScreen.left) / 2)
+            sz.cx = GetMinimumVerticalWidth();
+        if (sz.cy >= (rcScreen.bottom - rcScreen.top) / 2)
+            sz.cy = GetDefaultTrayHeight();
 
         if (Position == ABE_LEFT || Position == ABE_RIGHT)
         {
@@ -2270,14 +2291,58 @@ GetPrimaryScreenRect:
             }
 
 ChangePos:
-            m_TraySize.cx = rcTray.right - rcTray.left;
-            m_TraySize.cy = rcTray.bottom - rcTray.top;
+            /* Only the thickness of the docked edge is a tray size; the length
+               along the screen edge must not become the other edge's thickness */
+            {
+                /* Clamp the tray thickness to the valid range (one row .. less than
+                   half the screen), exactly as the saved-size validation does. A
+                   re-fit that reports an inverted/empty rect (a few px, or a
+                   negative size wrapped to ~32768) must not collapse or blow up the
+                   bar; fall back to the default row height instead. */
+                RECT rcMon = rcTray;
+                GetScreenRectFromRect(&rcMon, MONITOR_DEFAULTTONEAREST);
+                LONG cxMon = rcMon.right - rcMon.left;
+                LONG cyMon = rcMon.bottom - rcMon.top;
+                LONG cxMin = GetMinimumVerticalWidth();
+                LONG cyMin = GetDefaultTrayHeight();
+
+                if (m_Position == ABE_LEFT || m_Position == ABE_RIGHT)
+                {
+                    LONG cx = rcTray.right - rcTray.left;
+                    if (cx <= 0 || (cxMon > 0 && cx >= cxMon / 2))
+                        cx = cxMin;
+                    m_TraySize.cx = cx;
+                }
+                else if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
+                {
+                    LONG cy = rcTray.bottom - rcTray.top;
+                    if (cy <= 0 || (cyMon > 0 && cy >= cyMon / 2))
+                        cy = cyMin;
+                    m_TraySize.cy = cy;
+                }
+                else
+                {
+                    LONG cx = rcTray.right - rcTray.left;
+                    LONG cy = rcTray.bottom - rcTray.top;
+                    if (cx <= 0 || (cxMon > 0 && cx >= cxMon / 2))
+                        cx = cxMin;
+                    if (cy <= 0 || (cyMon > 0 && cy >= cyMon / 2))
+                        cy = cyMin;
+                    m_TraySize.cx = cx;
+                    m_TraySize.cy = cy;
+                }
+            }
+
+            /* Size the window from the clamped thickness, not the raw rcTray: a
+               re-fit (or the empty boot rect) otherwise applies a 3 px / ~32768
+               window size through pwp even though m_TraySize is already clamped. */
+            MakeTrayRectWithSize(m_Position, &m_TraySize, &rcTray);
 
             pwp->flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
             pwp->x = rcTray.left;
             pwp->y = rcTray.top;
-            pwp->cx = m_TraySize.cx;
-            pwp->cy = m_TraySize.cy;
+            pwp->cx = rcTray.right - rcTray.left;
+            pwp->cy = rcTray.bottom - rcTray.top;
         }
     }
 
@@ -2376,7 +2441,8 @@ ChangePos:
                               SPIF_SENDCHANGE);
     }
 
-    VOID CheckTrayWndPosition()
+    /* bFitToRebar: FALSE keeps the docked size (Lock already moved it by the sizing bar) */
+    VOID CheckTrayWndPosition(BOOL bFitToRebar = TRUE)
     {
         /* Force the rebar bands to resize */
         IUnknown_Exec(m_TrayBandSite,
@@ -2387,7 +2453,11 @@ ChangePos:
                       NULL);
 
         /* Calculate the size of the taskbar based on the rebar */
-        FitToRebar(&m_TrayRects[m_Position]);
+        if (bFitToRebar)
+        {
+            FitToRebar(&m_TrayRects[m_Position]);
+            m_FittedEdges |= 1 << m_Position;
+        }
 
         /* Move the tray window */
         /* The handler of WM_WINDOWPOSCHANGING will override whatever size
@@ -2395,6 +2465,9 @@ ChangePos:
         SetWindowPos(NULL, 0, 0, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE);
         ResizeWorkArea();
         ApplyClipping(TRUE);
+        /* Lay the children out even when the size did not change (no WM_SIZE then):
+           the notification area re-decides its modern or classic layout here */
+        AlignControls(NULL);
         RedrawWindow(NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_INVALIDATE | RDW_ALLCHILDREN);
 
         {
@@ -2453,6 +2526,7 @@ ChangePos:
 
         rcScreen = m_TrayRects[m_Position];
         GetScreenRect(m_Monitor, &rcScreen);
+        m_FittedEdges = 0;
         for (DWORD Position = ABE_LEFT; Position <= ABE_BOTTOM; ++Position)
         {
             GetTrayRectFromScreenRect(Position, &rcScreen, &m_TraySize,
@@ -2543,6 +2617,7 @@ ChangePos:
         /* Calculate all docking rectangles. We need to do this here so they're
            initialized and dragging the tray window to another position gives
            usable results */
+        m_FittedEdges = 0;
         for (Pos = ABE_LEFT; Pos <= ABE_BOTTOM; Pos++)
         {
             GetTrayRectFromScreenRect(Pos,
@@ -2565,6 +2640,12 @@ ChangePos:
         BOOL Horizontal;
         HDWP dwp;
 
+        /* An unlocked tray gets a sizing strip from WM_NCCALCSIZE when the theme is
+           applied inside WM_CREATE, which sends WM_SIZE before the children exist */
+        if (!m_Rebar || !m_TaskSwitch ||
+            (!m_bSecondary && (!m_StartButton.m_hWnd || !m_TrayNotify)))
+            return;
+
         if (!m_bSecondary)
             m_StartButton.UpdateSize();
 
@@ -2577,6 +2658,28 @@ ChangePos:
             if (!GetClientRect(&rcClient))
             {
                 ERR("Could not get client rect lastErr=%d\n", GetLastError());
+                return;
+            }
+        }
+
+        /* A transient or failed size query (a WM_SIZE during an unlocked re-fit,
+           an unconstrained ~SHRT_MAX extent minus margins) can hand us an empty,
+           inverted or absurd client rect. Laying the children out from it writes
+           garbage heights into the clock and the task band, so skip this pass;
+           a valid WM_SIZE / AlignControls(NULL) follows. */
+        {
+            LONG cxClient = rcClient.right - rcClient.left;
+            LONG cyClient = rcClient.bottom - rcClient.top;
+            LONG cxMax = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            LONG cyMax = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+            if (cxMax <= 0)
+                cxMax = GetSystemMetrics(SM_CXSCREEN);
+            if (cyMax <= 0)
+                cyMax = GetSystemMetrics(SM_CYSCREEN);
+            if (cxClient <= 0 || cyClient <= 0 || cxClient > cxMax || cyClient > cyMax)
+            {
+                ERR("AlignControls: skipping invalid client rect %ld,%ld,%ld,%ld\n",
+                    rcClient.left, rcClient.top, rcClient.right, rcClient.bottom);
                 return;
             }
         }
@@ -2754,6 +2857,20 @@ ChangePos:
 
     void FitToRebar(PRECT pRect)
     {
+        /* At logon FitToRebar can be handed the stale inverted rect (h<=0) before
+           the children exist. Rebuild a valid docked rect from the clamped tray
+           size and run the fit anyway, so RB_SIZETORECT shrinks the bar to the
+           band at boot; only give up if even that is not valid. */
+        if (pRect->right - pRect->left <= 0 || pRect->bottom - pRect->top <= 0)
+        {
+            MakeTrayRectWithSize(m_Position, &m_TraySize, pRect);
+            if (pRect->right - pRect->left <= 0 || pRect->bottom - pRect->top <= 0)
+            {
+                ERR("FitToRebar: skipping invalid rect %ld,%ld,%ld,%ld\n",
+                    pRect->left, pRect->top, pRect->right, pRect->bottom);
+                return;
+            }
+        }
         /* Get the rect of the rebar */
         RECT rebarRect, taskbarRect, clientRect;
         ::GetWindowRect(m_Rebar, &rebarRect);
@@ -2789,6 +2906,37 @@ ChangePos:
             ::SendMessageW(m_Rebar, RB_SIZETORECT, RBSTR_CHANGERECT,  (LPARAM)&rebarRect);
             pRect->left = pRect->right - (rebarRect.right - rebarRect.left + margins.cx);
             break;
+        }
+
+        /* RB_SIZETORECT can hand back a bad (huge) rebar height; keep the docked
+           thickness within one row .. half the monitor, like MakeTrayRectWithSize. */
+        {
+            RECT rcMon2 = *pRect;
+            GetScreenRectFromRect(&rcMon2, MONITOR_DEFAULTTONEAREST);
+            LONG cyMon2 = rcMon2.bottom - rcMon2.top;
+            LONG cxMon2 = rcMon2.right - rcMon2.left;
+            if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
+            {
+                LONG cy = pRect->bottom - pRect->top;
+                if (cy <= 0 || (cyMon2 > 0 && cy >= cyMon2 / 2))
+                {
+                    if (m_Position == ABE_BOTTOM)
+                        pRect->top = pRect->bottom - GetDefaultTrayHeight();
+                    else
+                        pRect->bottom = pRect->top + GetDefaultTrayHeight();
+                }
+            }
+            else
+            {
+                LONG cx = pRect->right - pRect->left;
+                if (cx <= 0 || (cxMon2 > 0 && cx >= cxMon2 / 2))
+                {
+                    if (m_Position == ABE_RIGHT)
+                        pRect->left = pRect->right - GetMinimumVerticalWidth();
+                    else
+                        pRect->right = pRect->left + GetMinimumVerticalWidth();
+                }
+            }
         }
 
         CalculateValidSize(m_Position, pRect);
@@ -3063,7 +3211,15 @@ ChangePos:
             }
             else
             {
-                DrawThemeBackground(m_Theme, hdc, iSBkgndPart[m_Position], 0, &rect, 0);
+                /* No taskbar part in the style: paint what the class background would */
+                int iPart = iSBkgndPart[m_Position], iBgType;
+
+                /* The right edge part can resolve to the border fill default (a white box) where the left
+                   one draws the image; both carry the same artwork, so fall back to the left one */
+                if (iPart == TBP_BACKGROUNDRIGHT && FAILED(GetThemeEnumValue(m_Theme, iPart, 0, TMT_BGTYPE, &iBgType)))
+                    iPart = TBP_BACKGROUNDLEFT;
+                if (FAILED(DrawThemeBackground(m_Theme, hdc, iPart, 0, &rect, 0)))
+                    FillRect(hdc, &rect, GetSysColorBrush(COLOR_3DFACE));
             }
         }
 
@@ -3143,10 +3299,7 @@ ChangePos:
         if (!Create(NULL, rcWnd, NULL, dwStyle, dwExStyle))
             return E_FAIL;
 
-        /* Align all controls on the tray window */
-        AlignControls(NULL);
-
-        /* Move the tray window to the right position and resize it if necessary */
+        /* Move the tray window to the right position, resize it if necessary and align its controls */
         CheckTrayWndPosition();
 
         return S_OK;
@@ -3226,8 +3379,10 @@ ChangePos:
                 }
             }
             SetWindowPos(NULL, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOOWNERZORDER);
-            ResizeWorkArea();
-            ApplyClipping(TRUE);
+            /* Lay out and repaint everything so the sizing bar's strip and the
+               unlocked-state paint do not outlive the toggle. Keep the docked size:
+               fitting to the rebar here grew the taskbar by the rebar's minimum */
+            CheckTrayWndPosition(FALSE);
         }
 
         return bPrevLock;
@@ -3432,6 +3587,9 @@ ChangePos:
 
     LRESULT OnThemeChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        /* Sizes fitted under the previous theme no longer hold for any edge */
+        m_FittedEdges = 0;
+
         if (m_Theme)
             CloseThemeData(m_Theme);
 
@@ -3488,22 +3646,50 @@ ChangePos:
             SendMessage(m_TrayNotify, uMsg, wParam, lParam);
             SendMessage(m_TaskSwitch, uMsg, wParam, lParam);
             UpdateFonts();
-            AlignControls(NULL);
+            /* New fonts change the row height on every edge */
+            m_FittedEdges = 0;
             CheckTrayWndPosition();
         }
 
-        if (lParam && lstrcmpiW((LPCWSTR)lParam, L"TraySettings") == 0)
+        if (lParam && lstrcmpiW((LPCWSTR)lParam, L"TraySettings") == 0 && !TaskbarSettings::IsBroadcasting())
         {
+            /* Another program (Settings, a control panel) wrote the values: read them
+             * back and apply them as the properties dialog does. Our own save also
+             * broadcasts; IsBroadcasting keeps that from coming back here. */
             TaskbarSettings newSettings = g_TaskbarSettings;
             if (newSettings.Load())
             {
-                SendMessageW(TWM_SETTINGSCHANGED, 0, (LPARAM)&newSettings);
-                g_TaskbarSettings = newSettings;
-                g_TaskbarSettings.Save();
+                /* The position and size are ours; a stale blob must not move the bar */
+                newSettings.sr.Position = g_TaskbarSettings.sr.Position;
+                newSettings.sr.Size = g_TaskbarSettings.sr.Size;
+                newSettings.sr.Rect = g_TaskbarSettings.sr.Rect;
+                if (newSettings.bLock != g_TaskbarSettings.bLock ||
+                    newSettings.bGroupButtons != g_TaskbarSettings.bGroupButtons ||
+                    newSettings.dwTaskbarGlomLevel != g_TaskbarSettings.dwTaskbarGlomLevel ||
+                    newSettings.bShowSeconds != g_TaskbarSettings.bShowSeconds ||
+                    newSettings.bPreferDate != g_TaskbarSettings.bPreferDate ||
+                    newSettings.bHideInactiveIcons != g_TaskbarSettings.bHideInactiveIcons ||
+                    newSettings.bSmallIcons != g_TaskbarSettings.bSmallIcons ||
+                    newSettings.eCompactTrayIcons != g_TaskbarSettings.eCompactTrayIcons ||
+                    newSettings.bShowDesktopButton != g_TaskbarSettings.bShowDesktopButton ||
+                    newSettings.bMMTaskbarEnabled != g_TaskbarSettings.bMMTaskbarEnabled ||
+                    newSettings.uMMTaskbarMode != g_TaskbarSettings.uMMTaskbarMode ||
+                    newSettings.sr.AutoHide != g_TaskbarSettings.sr.AutoHide ||
+                    newSettings.sr.AlwaysOnTop != g_TaskbarSettings.sr.AlwaysOnTop)
+                {
+                    ERR("TraySettings broadcast: applying lock=%d small=%d glom=%lu sd=%d seconds=%d autotray=%d autohide=%d\n",
+                        newSettings.bLock, newSettings.bSmallIcons, newSettings.dwTaskbarGlomLevel,
+                        newSettings.bShowDesktopButton, newSettings.bShowSeconds, newSettings.bHideInactiveIcons,
+                        (int)newSettings.sr.AutoHide);
+                    SendMessageW(TWM_SETTINGSCHANGED, 0, (LPARAM)&newSettings);
+                    g_TaskbarSettings = newSettings;
+                    g_TaskbarSettings.Save();
+                }
             }
         }
 
-        if (m_StartMenuPopup && lstrcmpiW((LPCWSTR)lParam, L"TraySettings") == 0)
+        if (m_StartMenuPopup && lParam && lstrcmpiW((LPCWSTR)lParam, L"TraySettings") == 0 &&
+            !TaskbarSettings::IsBroadcasting())
         {
             HideStartMenu();
 
@@ -3554,7 +3740,7 @@ ChangePos:
             ::SendMessageW(m_TaskSwitch, WM_THEMECHANGED, 0, 0);
         if (m_TrayNotify)
             ::SendMessageW(m_TrayNotify, WM_THEMECHANGED, 0, 0);
-        AlignControls(NULL);
+        /* Every caller runs CheckTrayWndPosition next, which aligns the controls */
     }
 
     LRESULT OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -3748,6 +3934,7 @@ ChangePos:
 
         if (!g_TaskbarSettings.bLock)
         {
+            SizedInSizeMove = TRUE;
             FitToRebar(pRect);
         }
         else
@@ -3780,9 +3967,18 @@ ChangePos:
         }
         else
         {
+            /* The size is signed: an unlocked bar mid-re-fit can report a
+               negative client (the sizing strip exceeds the window), which
+               LOWORD/HIWORD would wrap to ~63534. Read it signed and, if the
+               client is empty, re-read the real client rect. */
             rcClient.left = rcClient.top = 0;
-            rcClient.right = LOWORD(lParam);
-            rcClient.bottom = HIWORD(lParam);
+            rcClient.right = (SHORT)LOWORD(lParam);
+            rcClient.bottom = (SHORT)HIWORD(lParam);
+            if (rcClient.right <= 0 || rcClient.bottom <= 0)
+            {
+                if (!GetClientRect(&rcClient))
+                    return FALSE;
+            }
         }
 
         AlignControls(&rcClient);
@@ -3793,6 +3989,7 @@ ChangePos:
     {
         InSizeMove = TRUE;
         IsDragging = FALSE;
+        SizedInSizeMove = FALSE;
         ERR("[T2] EnterSizeMove lock %d pos %lu\n", (int)g_TaskbarSettings.bLock, (ULONG)m_Position);
         if (!g_TaskbarSettings.bLock)
         {
@@ -3809,17 +4006,27 @@ ChangePos:
         InSizeMove = FALSE;
         if (!g_TaskbarSettings.bLock && m_Position <= ABE_BOTTOM)
         {
-            FitToRebar(&m_TrayRects[m_Position]);
+            /* Fit an edge once, and again after a resize: a move back to an edge keeps the
+               size it had there, as Windows does (fitting again added the rebar's minimum) */
+            if (SizedInSizeMove || !(m_FittedEdges & (1 << m_Position)))
+            {
+                FitToRebar(&m_TrayRects[m_Position]);
+                m_FittedEdges |= 1 << m_Position;
+            }
 
             g_TaskbarSettings.sr.Position = m_Position;
             g_TaskbarSettings.sr.Rect = m_TrayRects[m_Position];
-            g_TaskbarSettings.sr.Size.cx = m_TrayRects[m_Position].right - m_TrayRects[m_Position].left;
-            g_TaskbarSettings.sr.Size.cy = m_TrayRects[m_Position].bottom - m_TrayRects[m_Position].top;
+            if (m_Position == ABE_TOP || m_Position == ABE_BOTTOM)
+                g_TaskbarSettings.sr.Size.cy = m_TrayRects[m_Position].bottom - m_TrayRects[m_Position].top;
+            else
+                g_TaskbarSettings.sr.Size.cx = m_TrayRects[m_Position].right - m_TrayRects[m_Position].left;
             g_TaskbarSettings.Save();
 
             /* Apply clipping */
             PostMessage(WM_SIZE, SIZE_RESTORED, 0);
         }
+        /* Nothing painted for the edges the taskbar passed over may stay behind */
+        RedrawWindow(NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
         return TRUE;
     }
 

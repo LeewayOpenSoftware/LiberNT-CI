@@ -8,13 +8,32 @@
 /* INCLUDES ******************************************************************/
 
 #include <hal.h>
+#include "apicp.h"
+#include <smp.h>
 #define NDEBUG
 #include <debug.h>
 
 KAFFINITY HalpActiveProcessors;
 KAFFINITY HalpDefaultInterruptAffinity;
 
+extern HALP_APIC_INFO_TABLE HalpApicInfoTable;
+
 /* PRIVATE FUNCTIONS *********************************************************/
+
+ULONG
+NTAPI
+HalQueryMaximumProcessorCount(VOID)
+{
+    ULONG Count = HalpApicInfoTable.ProcessorCount;
+    return (Count != 0) ? Count : 1;
+}
+
+BOOLEAN
+NTAPI
+HalIsHyperThreadingEnabled(VOID)
+{
+    return (KeGetCurrentPrcb()->LogicalProcessorsPerCore > 1);
+}
 
 VOID
 NTAPI
@@ -45,6 +64,17 @@ VOID
 NTAPI
 HalProcessorIdle(VOID)
 {
+#ifdef _M_AMD64
+    /*
+     * The interrupt priority lives in CR8 on amd64. A local APIC emulated
+     * outside the processor only learns of it when the guest leaves, and can go
+     * on holding back what is pending behind a priority lowered long ago. Give
+     * the priority to the APIC itself before halting on it.
+     */
+    if (!HalpApicX2Mode)
+        ApicWrite(APIC_TPR, IrqlToTpr(KeGetCurrentIrql()));
+#endif
+
     /* Enable interrupts and halt the processor */
     _enable();
     __halt();

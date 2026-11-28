@@ -233,6 +233,7 @@ ShutdownHandlerRoutine(DWORD dwCtrlType)
         DPRINT("Shutdown event received\n");
         ScmShutdown = TRUE;
 
+        ScmPreshutdownServices();
         ScmAutoShutdownServices();
         ScmShutdownServiceDatabase();
 
@@ -309,13 +310,7 @@ wWinMain(HINSTANCE hInstance,
 
     /* FIXME: more initialization */
 
-    /* Create the 'Last Known Good' control set */
-    dwError = ScmCreateLastKnownGoodControlSet();
-    if (dwError != ERROR_SUCCESS)
-    {
-        DPRINT1("SERVICES: Failed to create the 'Last Known Good' control set (Error %lu)\n", dwError);
-        goto done;
-    }
+    ScmReadBootConfigPolicy();
 
     /* Create the services database */
     dwError = ScmCreateServiceDatabase();
@@ -363,11 +358,15 @@ wWinMain(HINSTANCE hInstance,
      */
     SetProcessShutdownParameters(480, SHUTDOWN_NORETRY);
 
+    ScmLoadSystemProfile();
+
     /* Start auto-start services */
     ScmAutoStartServices();
 
     /* Signal auto-start complete event */
     SetEvent(hScmAutoStartCompleteEvent);
+
+    ScmStartDelayedAutoStartServices(hScmShutdownEvent);
 
     ScmStartTriggers();
 

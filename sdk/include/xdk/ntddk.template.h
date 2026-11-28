@@ -143,6 +143,7 @@ $include (mmfuncs.h)
 $include (psfuncs.h)
 $include (rtlfuncs.h)
 $include (sefuncs.h)
+$include (wheafuncs.h)
 $include (zwfuncs.h)
 
 
@@ -168,6 +169,12 @@ typedef struct _KERNEL_USER_TIMES {
   LARGE_INTEGER KernelTime;
   LARGE_INTEGER UserTime;
 } KERNEL_USER_TIMES, *PKERNEL_USER_TIMES;
+
+typedef enum _SUBSYSTEM_INFORMATION_TYPE {
+  SubsystemInformationTypeWin32 = 0,
+  SubsystemInformationTypeWSL = 1,
+  MaxSubsystemInformationType
+} SUBSYSTEM_INFORMATION_TYPE, *PSUBSYSTEM_INFORMATION_TYPE;
 
 /* NtXxx Functions */
 

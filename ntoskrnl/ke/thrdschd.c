@@ -19,6 +19,7 @@
 /* GLOBALS *******************************************************************/
 
 KAFFINITY KiIdleSummary;
+KAFFINITY KiIdleSummaryGroups[KI_MAXIMUM_GROUPS];
 KAFFINITY KiIdleSMTSummary;
 
 #ifdef CONFIG_SMP
@@ -34,7 +35,7 @@ typedef struct DECLSPEC_CACHEALIGN _KI_BALANCE_STATE
     volatile LONG IdleTick;
 } KI_BALANCE_STATE;
 
-static KI_BALANCE_STATE KiBalanceState[MAXIMUM_PROCESSORS];
+static KI_BALANCE_STATE KiBalanceState[KI_MAXIMUM_PROCESSORS];
 #endif
 
 /* FUNCTIONS *****************************************************************/
@@ -153,12 +154,13 @@ BOOLEAN
 KiTryClaimIdleProcessor(
     _In_ ULONG Processor)
 {
-    return InterlockedBitTestAndResetAffinity(&KiIdleSummary, Processor);
+    return KiClearProcessorIdle(Processor);
 }
 
 static
 KAFFINITY
 KiRemoveDpcActiveProcessors(
+    _In_ ULONG GroupBase,
     _In_ KAFFINITY IdleSet)
 {
     KAFFINITY Remaining = IdleSet, FreeSet = IdleSet;
@@ -168,7 +170,7 @@ KiRemoveDpcActiveProcessors(
     while (BitScanForwardAffinity(&Processor, Remaining))
     {
         Remaining &= ~AFFINITY_MASK(Processor);
-        Prcb = KiProcessorBlock[Processor];
+        Prcb = KiProcessorBlock[GroupBase + Processor];
         if ((Prcb != NULL) && Prcb->DpcRoutineActive)
             FreeSet &= ~AFFINITY_MASK(Processor);
     }
@@ -267,7 +269,7 @@ KiFindStealableThreadLocked(
     {
         (*Scanned)++;
         Thread = CONTAINING_RECORD(Entry, KTHREAD, WaitListEntry);
-        if (!(KiThreadAffinityMask(Thread) & AFFINITY_MASK(TargetCpu)))
+        if (!KiIsProcessorInThreadAffinity(Thread, TargetCpu))
             continue;
         if (KiTryThreadLock(Thread))
             continue;
@@ -278,7 +280,7 @@ KiFindStealableThreadLocked(
             !Thread->ProcessReadyQueue &&
             (Thread->NextProcessor == Source->Number) &&
             (Thread->Priority == Priority) &&
-            (KiThreadAffinityMask(Thread) & AFFINITY_MASK(TargetCpu)) &&
+            KiIsProcessorInThreadAffinity(Thread, TargetCpu) &&
             ((Thread->WaitReason != WrDispatchInt) ||
              (Thread->WaitTime != KeTickCount.LowPart)))
         {
@@ -295,6 +297,7 @@ ULONG
 KiFindBestStandbySource(
     _In_ ULONG TargetCpu,
     _In_ LONG MinimumPriority,
+    _In_ ULONG GroupBase,
     _In_ ULONG Start,
     _In_ ULONG ProcessorCount,
     _Out_ PLONG StandbyPriority)
@@ -309,9 +312,9 @@ KiFindBestStandbySource(
 
     for (Offset = 0; Offset < ProcessorCount; Offset++)
     {
-        SourceCpu = (Start + Offset) % ProcessorCount;
+        SourceCpu = GroupBase + ((Start + Offset) % ProcessorCount);
         if ((SourceCpu == TargetCpu) ||
-            !(KeActiveProcessors & AFFINITY_MASK(SourceCpu)))
+            !KiIsProcessorActive(SourceCpu))
         {
             continue;
         }
@@ -325,13 +328,13 @@ KiFindBestStandbySource(
         Thread = Source->NextThread;
         if ((CurrentThread != NULL) &&
             (CurrentThread != Source->IdleThread) &&
-            (KiThreadAffinityMask(CurrentThread) & Source->SetMember) &&
+            KiIsProcessorInThreadAffinity(CurrentThread, Source->Number) &&
             (Thread != NULL) &&
             (Thread != Source->IdleThread) &&
             (Thread->State == Standby) &&
             (Thread->NextProcessor == SourceCpu) &&
             (Thread->Priority >= MinimumPriority) &&
-            (KiThreadAffinityMask(Thread) & AFFINITY_MASK(TargetCpu)) &&
+            KiIsProcessorInThreadAffinity(Thread, TargetCpu) &&
             (Thread->Priority > BestPriority))
         {
             BestCpu = SourceCpu;
@@ -364,23 +367,35 @@ KiTryStealStandbyThreadLocked(
      * leave that thread running where its affinity no longer allows. */
     if ((CurrentThread == NULL) ||
         (CurrentThread == Source->IdleThread) ||
-        !(KiThreadAffinityMask(CurrentThread) & Source->SetMember) ||
+        !KiIsProcessorInThreadAffinity(CurrentThread, Source->Number) ||
         (Thread == NULL) ||
         (Thread == Source->IdleThread) ||
         (Thread->State != Standby) ||
         (Thread->NextProcessor != Source->Number) ||
         (Thread->Priority != ExpectedPriority) ||
-        !(KiThreadAffinityMask(Thread) & AFFINITY_MASK(TargetCpu)) ||
+        !KiIsProcessorInThreadAffinity(Thread, TargetCpu) ||
         KiTryThreadLock(Thread))
     {
         return NULL;
     }
 
+    /* A thread that was picked from the ready queue of the source by another
+     * processor can still be on its way out of the source: its stack and its
+     * extended state are not saved until Running is cleared. The context
+     * switch waits for that flag before it loads the stack of the thread it
+     * switches to, so such a thread is never run on two processors. But a
+     * processor that stole it would sit in that wait at SYNCH_LEVEL until
+     * the source is done, and the source would have lost its standby thread
+     * for nothing. So it is left where it is, to run next on the source. The
+     * steal from the ready queue makes the same test for the same reason. */
     if ((Source->NextThread != Thread) ||
+#if KI_THREAD_HANDOFF_USES_RUNNING
+        Thread->Running ||
+#endif
         (Thread->State != Standby) ||
         (Thread->NextProcessor != Source->Number) ||
         (Thread->Priority != ExpectedPriority) ||
-        !(KiThreadAffinityMask(Thread) & AFFINITY_MASK(TargetCpu)))
+        !KiIsProcessorInThreadAffinity(Thread, TargetCpu))
     {
         KiReleaseThreadLock(Thread);
         return NULL;
@@ -418,9 +433,12 @@ KiAnyReadyThreadQueued(
     _In_ ULONG ExceptCpu)
 {
     PKPRCB Prcb;
-    ULONG Cpu;
+    ULONG Cpu, GroupBase, GroupEnd;
 
-    for (Cpu = 0; Cpu < (ULONG)KeNumberProcessors; Cpu++)
+    /* Only the processors of the group can hand a thread to this one */
+    GroupBase = ExceptCpu & ~(KI_PROCESSORS_PER_GROUP - 1);
+    GroupEnd = min(KiNumberProcessors, GroupBase + KI_PROCESSORS_PER_GROUP);
+    for (Cpu = GroupBase; Cpu < GroupEnd; Cpu++)
     {
         Prcb = KiProcessorBlock[Cpu];
         if ((Cpu != ExceptCpu) && (Prcb != NULL) && (Prcb->ReadySummary != 0))
@@ -439,7 +457,7 @@ KiBalanceReadyQueues(
 {
     PKPRCB Source;
     PKTHREAD CurrentThread, DisplacedThread, SourceReplacement, Thread;
-    ULONG IpiCause, LocalPriority, ProcessorCount, Scanned;
+    ULONG GroupBase, IpiCause, LocalPriority, ProcessorCount, Scanned;
     ULONG StandbyCpu, Start, Offset, SourceCpu, TargetCpu, TargetTick;
     LONG MinimumPriority, Priority, StandbyPriority;
     BOOLEAN Preempted, RequestIpi, RequestSourceIpi, StandbySteal, TargetIdle;
@@ -448,8 +466,8 @@ KiBalanceReadyQueues(
     ASSERT((Reason >= KiBalanceIdle) && (Reason <= KiBalanceQuantum));
 
     TargetCpu = Target->Number;
-    if ((TargetCpu >= (ULONG)KeNumberProcessors) ||
-        !(KeActiveProcessors & Target->SetMember) ||
+    if ((TargetCpu >= KiNumberProcessors) ||
+        !KiIsProcessorActive(TargetCpu) ||
         KiIsProcessorParked(Target))
     {
         return FALSE;
@@ -488,7 +506,9 @@ KiBalanceReadyQueues(
     }
     KiReleasePrcbLock(Target);
 
-    ProcessorCount = (ULONG)KeNumberProcessors;
+    /* Threads are stolen only within the target's group */
+    GroupBase = TargetCpu & ~(KI_PROCESSORS_PER_GROUP - 1);
+    ProcessorCount = min(KiNumberProcessors - GroupBase, KI_PROCESSORS_PER_GROUP);
     Start = (ULONG)InterlockedIncrement(&KiBalanceState[TargetCpu].SourceCursor) % ProcessorCount;
     Scanned = 0;
     Thread = NULL;
@@ -496,7 +516,7 @@ KiBalanceReadyQueues(
     SourceReplacement = NULL;
     RequestSourceIpi = FALSE;
     StandbySteal = FALSE;
-    StandbyCpu = KiFindBestStandbySource(TargetCpu, MinimumPriority, Start, ProcessorCount, &StandbyPriority);
+    StandbyCpu = KiFindBestStandbySource(TargetCpu, MinimumPriority, GroupBase, Start, ProcessorCount, &StandbyPriority);
 
     for (Priority = HIGH_PRIORITY;
          (Priority >= MinimumPriority) && (Scanned < KI_BALANCE_QUEUE_LIMIT);
@@ -521,10 +541,10 @@ KiBalanceReadyQueues(
 
         for (Offset = 0; Offset < ProcessorCount; Offset++)
         {
-            SourceCpu = (Start + Offset) % ProcessorCount;
+            SourceCpu = GroupBase + ((Start + Offset) % ProcessorCount);
             if (SourceCpu == TargetCpu)
                 continue;
-            if (!(KeActiveProcessors & AFFINITY_MASK(SourceCpu)))
+            if (!KiIsProcessorActive(SourceCpu))
                 continue;
 
             Source = KiProcessorBlock[SourceCpu];
@@ -549,8 +569,10 @@ KiBalanceReadyQueues(
             }
 
             ASSERT(Source->ReadySummary & PRIORITY_MASK(Thread->Priority));
+            KiAssertReadyQueue(Source, Thread->Priority);
             if (RemoveEntryList(&Thread->WaitListEntry))
                 Source->ReadySummary &= ~PRIORITY_MASK(Thread->Priority);
+            KiAssertReadyQueue(Source, Thread->Priority);
 
             Preempted = Thread->Preempted;
             Thread->Preempted = FALSE;
@@ -603,16 +625,18 @@ ThreadFound:
     else
     {
         Thread->State = Ready;
+        KiAssertReadyQueue(Target, Thread->Priority);
         if (Preempted)
             InsertHeadList(&Target->DispatcherReadyListHead[Thread->Priority], &Thread->WaitListEntry);
         else
             InsertTailList(&Target->DispatcherReadyListHead[Thread->Priority], &Thread->WaitListEntry);
         Target->ReadySummary |= PRIORITY_MASK(Thread->Priority);
+        KiAssertReadyQueue(Target, Thread->Priority);
     }
 
     if (CurrentThread == Target->IdleThread)
     {
-        InterlockedBitTestAndResetAffinity(&KiIdleSummary, TargetCpu);
+        KiClearProcessorIdle(TargetCpu);
         IpiCause = SMPDBG_SCHED_IDLE_REQUEST;
         RequestIpi = (Target != KeGetCurrentPrcb());
     }
@@ -630,14 +654,14 @@ ThreadFound:
     {
         if (SmpDbgEnabled)
             SmpDbgSchedulerIpi(SourceCpu, SourceReplacement, SMPDBG_SCHED_STANDBY_REPAIR);
-        KiIpiSend(Source->SetMember, IPI_DPC);
+        KiIpiSendProcessor(SourceCpu, IPI_DPC);
     }
 
     if (RequestIpi)
     {
         if (SmpDbgEnabled)
             SmpDbgSchedulerIpi(TargetCpu, Thread, IpiCause);
-        KiIpiSend(Target->SetMember, IPI_DPC);
+        KiIpiSendProcessor(TargetCpu, IPI_DPC);
     }
 
     if (DisplacedThread != NULL)
@@ -655,27 +679,40 @@ KiSelectNextProcessor(
     KAFFINITY PreferredSet, IdleSet, NonParkedSet;
     ULONG Processor, ProcessorCount, StartProcessor, Offset;
     ULONG BestProcessor, RunnableLoad, BestLoad;
+    ULONG GroupBase, IdealBit;
+    USHORT Group;
     KPRIORITY DispatchPriority, BestPriority;
     PKPRCB Prcb;
 
+    /* The masks below are within the thread's group; bit B is processor GroupBase + B */
+    Group = KiThreadAffinityGroup(Thread);
+    GroupBase = (ULONG)Group * KI_PROCESSORS_PER_GROUP;
+    IdealBit = KiIsProcessorInThreadAffinity(Thread, Thread->IdealProcessor) ?
+               (Thread->IdealProcessor - GroupBase) : MAXULONG;
+
     /* Start with the affinity */
-    PreferredSet = KiThreadAffinityMask(Thread) & KeActiveProcessors;
+    PreferredSet = KiThreadAffinityMask(Thread) & KiQueryActiveGroupAffinity(Group);
     ASSERT(PreferredSet != 0);
-    NonParkedSet = KiGetNonParkedProcessorSet();
-    if (PreferredSet & NonParkedSet)
-        PreferredSet &= NonParkedSet;
+    if (Group == 0)
+    {
+        /* Core parking describes group 0 */
+        NonParkedSet = KiGetNonParkedProcessorSet();
+        if (PreferredSet & NonParkedSet)
+            PreferredSet &= NonParkedSet;
+    }
     *IdleRequest = 0;
 
     /* Claim an allowed idle processor atomically. */
     for (;;)
     {
-        IdleSet = PreferredSet & KiIdleSummary;
+        IdleSet = PreferredSet & *KiIdleSummaryOfGroup(Group);
         if (IdleSet == 0)
             break;
-        IdleSet = KiRemoveDpcActiveProcessors(IdleSet);
+        IdleSet = KiRemoveDpcActiveProcessors(GroupBase, IdleSet);
 
 #ifdef KI_CORE_PARKING
-        if (Thread->IdealProcessor < (ULONG)KeNumberProcessors &&
+        if ((Group == 0) &&
+            Thread->IdealProcessor < KiNumberProcessors &&
             KiProcessorBlock[Thread->IdealProcessor] != NULL)
         {
             PKSCHEDULER_SUBNODE SubNode =
@@ -698,31 +735,32 @@ KiSelectNextProcessor(
         }
 #endif
 
-        if ((Thread->IdealProcessor < (ULONG)KeNumberProcessors) &&
-            (IdleSet & AFFINITY_MASK(Thread->IdealProcessor)))
+        if ((IdealBit != MAXULONG) &&
+            (IdleSet & AFFINITY_MASK(IdealBit)))
         {
-            Processor = Thread->IdealProcessor;
+            Processor = IdealBit;
         }
         else
         {
             NT_VERIFY(BitScanForwardAffinity(&Processor, IdleSet) != FALSE);
         }
 
-        if (KiTryClaimIdleProcessor(Processor))
+        if (KiTryClaimIdleProcessor(GroupBase + Processor))
         {
             *IdleRequest = AFFINITY_MASK(Processor);
-            return Processor;
+            return GroupBase + Processor;
         }
     }
 
     BestProcessor = MAXULONG;
     BestPriority = HIGH_PRIORITY + 1;
     BestLoad = MAXULONG;
-    ProcessorCount = (ULONG)KeNumberProcessors;
-    if ((Thread->IdealProcessor < ProcessorCount) &&
-        (PreferredSet & AFFINITY_MASK(Thread->IdealProcessor)))
+
+    /* Bits of this group that can hold a processor */
+    ProcessorCount = min(KiNumberProcessors - GroupBase, KI_PROCESSORS_PER_GROUP);
+    if ((IdealBit != MAXULONG) && (PreferredSet & AFFINITY_MASK(IdealBit)))
     {
-        StartProcessor = Thread->IdealProcessor;
+        StartProcessor = IdealBit;
     }
     else
     {
@@ -735,7 +773,7 @@ KiSelectNextProcessor(
         if (!(PreferredSet & AFFINITY_MASK(Processor)))
             continue;
 
-        Prcb = KiProcessorBlock[Processor];
+        Prcb = KiProcessorBlock[GroupBase + Processor];
         if (Prcb == NULL)
             continue;
 
@@ -743,15 +781,15 @@ KiSelectNextProcessor(
         if ((DispatchPriority < BestPriority) ||
             ((DispatchPriority == BestPriority) && (RunnableLoad < BestLoad)) ||
             ((DispatchPriority == BestPriority) && (RunnableLoad == BestLoad) &&
-             (Processor == Thread->IdealProcessor)))
+             (Processor == IdealBit)))
         {
-            BestProcessor = Processor;
+            BestProcessor = GroupBase + Processor;
             BestPriority = DispatchPriority;
             BestLoad = RunnableLoad;
         }
     }
 
-    ASSERT(BestProcessor < (ULONG)KeNumberProcessors);
+    ASSERT(BestProcessor < KiNumberProcessors);
     if (SmpDbgEnabled)
         SmpDbgBalanceEvent(BestProcessor, Thread->NextProcessor, KiBalanceWakePlacement);
     return BestProcessor;
@@ -989,7 +1027,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
             {
                 if (SmpDbgEnabled)
                     SmpDbgSchedulerIpi(Prcb->Number, Thread, SMPDBG_SCHED_REPLACE_STANDBY);
-                KiIpiSend(Prcb->SetMember, IPI_DPC);
+                KiIpiSendProcessor(Prcb->Number, IPI_DPC);
             }
 #endif
 
@@ -1021,7 +1059,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
                 /* We are, send an IPI */
                 if (SmpDbgEnabled)
                     SmpDbgSchedulerIpi(Thread->NextProcessor, Thread, SMPDBG_SCHED_PREEMPT_CURRENT);
-                KiIpiSend(AFFINITY_MASK(Thread->NextProcessor), IPI_DPC);
+                KiIpiSendProcessor(Thread->NextProcessor, IPI_DPC);
             }
             return;
         }
@@ -1029,6 +1067,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 
     /* Sanity check */
     ASSERT((OldPriority >= 0) && (OldPriority <= HIGH_PRIORITY));
+    KiAssertReadyQueue(Prcb, OldPriority);
 
     /* Set this thread as ready */
     Thread->State = Ready;
@@ -1042,6 +1081,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
 
     /* Update the ready summary */
     Prcb->ReadySummary |= PRIORITY_MASK(OldPriority);
+    KiAssertReadyQueue(Prcb, OldPriority);
 
     /* Sanity check */
     ASSERT(OldPriority == Thread->Priority);
@@ -1055,7 +1095,7 @@ KiDeferredReadyThread(IN PKTHREAD Thread)
     {
         if (SmpDbgEnabled)
             SmpDbgSchedulerIpi(Processor, Thread, SMPDBG_SCHED_IDLE_REQUEST);
-        KiIpiSend(IdleRequest, IPI_DPC);
+        KiIpiSendProcessor(Processor, IPI_DPC);
     }
 #endif
 }
@@ -1074,7 +1114,7 @@ KiSelectNextThread(IN PKPRCB Prcb)
         Thread = Prcb->IdleThread;
 
         /* Enable idle scheduling */
-        InterlockedBitTestAndSetAffinity(&KiIdleSummary, Prcb->Number);
+        KiSetProcessorIdle(Prcb->Number);
         Prcb->IdleSchedule = TRUE;
 
         /* FIXME: SMT support */
@@ -1173,7 +1213,7 @@ KiSwapThread(IN PKTHREAD CurrentThread,
         else
         {
             /* Set the idle summary */
-            InterlockedBitTestAndSetAffinity(&KiIdleSummary, Prcb->Number);
+            KiSetProcessorIdle(Prcb->Number);
 
             /* Schedule the idle thread */
             NextThread = Prcb->IdleThread;
@@ -1336,6 +1376,9 @@ KiSetPriorityThread(IN PKTHREAD Thread,
                         /* Sanity check */
                         ASSERT((Prcb->ReadySummary &
                                 PRIORITY_MASK(Thread->Priority)));
+                        KiAssertReadyQueue(Prcb, Thread->Priority);
+                        ASSERT(Thread->WaitListEntry.Flink->Blink == &Thread->WaitListEntry);
+                        ASSERT(Thread->WaitListEntry.Blink->Flink == &Thread->WaitListEntry);
 
                         /* Remove it from the current queue */
                         if (RemoveEntryList(&Thread->WaitListEntry))
@@ -1344,6 +1387,7 @@ KiSetPriorityThread(IN PKTHREAD Thread,
                             Prcb->ReadySummary ^= PRIORITY_MASK(Thread->
                                                                 Priority);
                         }
+                        KiAssertReadyQueue(Prcb, Thread->Priority);
 
                         /* Update priority */
                         Thread->Priority = (SCHAR)Priority;
@@ -1447,7 +1491,7 @@ KiSetPriorityThread(IN PKTHREAD Thread,
                             /* We are, send an IPI */
                             if (SmpDbgEnabled)
                                 SmpDbgSchedulerIpi(Processor, NewThread, SMPDBG_SCHED_PRIORITY);
-                            KiIpiSend(AFFINITY_MASK(Processor), IPI_DPC);
+                            KiIpiSendProcessor(Processor, IPI_DPC);
                         }
                     }
                 }
@@ -1490,10 +1534,11 @@ KiUpdateEffectiveAffinityThread(
     /* GROUP_AFFINITY's reserved bytes overlap other KTHREAD state, including
      * ApcStateIndex. Copy only the mask for our single processor group. */
     KiThreadAffinityMask(Thread) = KiThreadUserAffinityMask(Thread);
+    KiSetThreadAffinityGroup(Thread, KiThreadUserAffinityGroup(Thread));
     Thread->IdealProcessor = Thread->UserIdealProcessor;
 
     /* Check if the affinity doesn't match with the current processor */
-    if ((Prcb->SetMember & KiThreadAffinityMask(Thread)) == 0)
+    if (!KiIsProcessorInThreadAffinity(Thread, Prcb->Number))
     {
         if (Thread->State == Running)
         {
@@ -1511,7 +1556,7 @@ KiUpdateEffectiveAffinityThread(
                 /* It is, send an IPI */
                 if (SmpDbgEnabled)
                     SmpDbgSchedulerIpi(Thread->NextProcessor, Prcb->NextThread, SMPDBG_SCHED_AFFINITY);
-                KiIpiSend(AFFINITY_MASK(Thread->NextProcessor), IPI_DPC);
+                KiIpiSendProcessor(Thread->NextProcessor, IPI_DPC);
             }
         }
         else if (Thread->State == Standby)
@@ -1541,20 +1586,35 @@ KiUpdateEffectiveAffinityThread(
 }
 #endif // CONFIG_SMP
 
-KAFFINITY
+VOID
 FASTCALL
-KiSetAffinityThread(IN PKTHREAD Thread,
-                    IN KAFFINITY Affinity)
+KiSetGroupAffinityThread(
+    _In_ PKTHREAD Thread,
+    _In_ USHORT Group,
+    _In_ KAFFINITY Affinity,
+    _Out_opt_ PGROUP_AFFINITY PreviousAffinity)
 {
-    KAFFINITY OldAffinity;
+    KAFFINITY Allowed;
 
     KiAcquireThreadLock(Thread);
 
     /* Get the current affinity */
-    OldAffinity = KiThreadUserAffinityMask(Thread);
+    if (PreviousAffinity != NULL)
+    {
+        RtlZeroMemory(PreviousAffinity, sizeof(*PreviousAffinity));
+        PreviousAffinity->Mask = KiThreadUserAffinityMask(Thread);
+        PreviousAffinity->Group = KiThreadUserAffinityGroup(Thread);
+    }
+
+    /* The process affinity describes group 0; other groups allow their
+     * active processors */
+    if (Group == 0)
+        Allowed = Thread->ApcState.Process->Affinity;
+    else
+        Allowed = KiQueryActiveGroupAffinity(Group);
 
     /* Make sure that the affinity is valid */
-    if (((Affinity & Thread->ApcState.Process->Affinity) != (Affinity)) ||
+    if (((Affinity & Allowed) != (Affinity)) ||
         (!Affinity))
     {
         /* Bugcheck the system */
@@ -1563,14 +1623,26 @@ KiSetAffinityThread(IN PKTHREAD Thread,
 
     /* Update the new affinity */
     KiThreadUserAffinityMask(Thread) = Affinity;
+    KiSetThreadUserAffinityGroup(Thread, Group);
 
 #ifdef CONFIG_SMP
     /* Check if system affinity is not active */
     if (!Thread->SystemAffinityActive)
     {
         /* Calculate the new ideal processor from the affinity set */
-        Thread->UserIdealProcessor =
-            KiFindIdealProcessor(Affinity, Thread->UserIdealProcessor);
+        if ((Group == 0) && (Thread->UserIdealProcessor < KI_PROCESSORS_PER_GROUP))
+        {
+            Thread->UserIdealProcessor =
+                KiFindIdealProcessor(Affinity, (UCHAR)Thread->UserIdealProcessor);
+        }
+        else
+        {
+            ULONG Bit;
+
+            /* The node and parking information describe group 0 */
+            NT_VERIFY(BitScanForwardAffinity(&Bit, Affinity));
+            Thread->UserIdealProcessor = KiProcessorIndexFromNumber(Group, (UCHAR)Bit);
+        }
 
         /* Update the effective affinity */
         KiUpdateEffectiveAffinityThread(Thread);
@@ -1578,9 +1650,18 @@ KiSetAffinityThread(IN PKTHREAD Thread,
 #endif
 
     KiReleaseThreadLock(Thread);
+}
 
-    /* Return the old affinity */
-    return OldAffinity;
+KAFFINITY
+FASTCALL
+KiSetAffinityThread(IN PKTHREAD Thread,
+                    IN KAFFINITY Affinity)
+{
+    GROUP_AFFINITY OldAffinity;
+
+    /* A group 0 mask; the old mask is returned whatever its group */
+    KiSetGroupAffinityThread(Thread, 0, Affinity, &OldAffinity);
+    return OldAffinity.Mask;
 }
 
 //

@@ -22,6 +22,8 @@
 #include <advapi32.h>
 #include <stdlib.h>
 #include <wincred.h>
+#include <rpc.h>
+#include "dpapi_c.h"
 #include "advapi32_misc.h"
 #define ARRAY_SIZE(x) _countof(x)
 #else
@@ -47,46 +49,226 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(cred);
 
-/* the size of the ARC4 key used to encrypt the password data */
-#define KEY_SIZE 8
+#ifndef STATUS_UNSUCCESSFUL
+#define STATUS_UNSUCCESSFUL       ((LONG)0xC0000001)
+#endif
+#ifndef STATUS_INVALID_PARAMETER
+#define STATUS_INVALID_PARAMETER  ((LONG)0xC000000D)
+#endif
+#ifndef STATUS_ACCESS_DENIED
+#define STATUS_ACCESS_DENIED      ((LONG)0xC0000022)
+#endif
+#ifndef STATUS_NOT_FOUND
+#define STATUS_NOT_FOUND          ((LONG)0xC0000225)
+#endif
 
-static DWORD read_credential_blob(HKEY hkey, const BYTE key_data[KEY_SIZE],
+/* Map a DPAPI server NTSTATUS to a Win32 error, as crypt32 does: a bad/foreign blob is corruption,
+ * a missing logon key means no key for this session, access denial keeps its meaning. */
+static DWORD cred_dpapi_status_to_error(LONG status)
+{
+    switch (status)
+    {
+        case STATUS_INVALID_PARAMETER:
+        case STATUS_UNSUCCESSFUL:
+            return ERROR_INVALID_DATA;
+        case STATUS_NOT_FOUND:
+            return ERROR_NO_SUCH_LOGON_SESSION;
+        case STATUS_ACCESS_DENIED:
+            return ERROR_ACCESS_DENIED;
+        default:
+            return RtlNtStatusToDosError(status);
+    }
+}
+
+/* Bind to the LSA DPAPI server over local RPC, authenticated and sealed; fail closed so a
+ * credential secret is never sent over an unauthenticated channel. */
+/* The server runs as LocalSystem. Naming it makes rpcrt4 refuse a process that took the endpoint first. */
+static const SID LocalSystemSid = { SID_REVISION, 1, {SECURITY_NT_AUTHORITY}, { SECURITY_LOCAL_SYSTEM_RID } };
+
+static handle_t cred_dpapi_bind(void)
+{
+    RPC_WSTR string_binding = NULL;
+    handle_t binding = NULL;
+    RPC_SECURITY_QOS_V3_W qos;
+    RPC_STATUS status;
+
+    if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncalrpc", NULL,
+                                 (RPC_WSTR)DPAPI_LOCAL_ENDPOINT, NULL, &string_binding) != RPC_S_OK)
+        return NULL;
+    status = RpcBindingFromStringBindingW(string_binding, &binding);
+    RpcStringFreeW(&string_binding);
+    if (status != RPC_S_OK)
+        return NULL;
+
+    qos.Version = RPC_C_SECURITY_QOS_VERSION_3;
+    qos.Capabilities = RPC_C_QOS_CAPABILITIES_DEFAULT;
+    qos.IdentityTracking = RPC_C_QOS_IDENTITY_STATIC;
+    qos.ImpersonationType = RPC_C_IMP_LEVEL_IDENTIFY;
+    qos.AdditionalSecurityInfoType = 0;
+    qos.u.HttpCredentials = NULL;
+    qos.Sid = (PSID)&LocalSystemSid;
+    if (RpcBindingSetAuthInfoExW(binding, NULL, RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
+                                 RPC_C_AUTHN_WINNT, NULL, 0, (RPC_SECURITY_QOS *)&qos) != RPC_S_OK)
+    {
+        RpcBindingFree(&binding);
+        return NULL;
+    }
+    return binding;
+}
+
+/* Protect/unprotect a credential secret with DPAPI user scope (flags 0). On success *out is a
+ * malloc'd buffer the caller frees with free(); returns a Win32 error otherwise. */
+static DWORD cred_dpapi_protect(const BYTE *plain, DWORD plain_len, BYTE **out, DWORD *out_len)
+{
+    handle_t binding;
+    DPAPI_BLOB in = {0}, entropy = {0}, result = {0};
+    LONG status = 0;
+    DWORD err = ERROR_SUCCESS;
+
+    *out = NULL;
+    *out_len = 0;
+    binding = cred_dpapi_bind();
+    if (binding == NULL)
+        return ERROR_NO_SUCH_LOGON_SESSION;
+
+    in.cbData = plain_len;
+    in.pbData = (byte *)plain;
+    RpcTryExcept
+    {
+        status = s_DpapiProtect(binding, 0, NULL, in, entropy, &result);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        err = RpcExceptionCode();
+    }
+    RpcEndExcept
+
+    if (err == ERROR_SUCCESS)
+    {
+        if (status != 0)
+            err = cred_dpapi_status_to_error(status);
+        else if (!(*out = malloc(result.cbData ? result.cbData : 1)))
+            err = ERROR_OUTOFMEMORY;
+        else
+        {
+            if (result.cbData)
+                memcpy(*out, result.pbData, result.cbData);
+            *out_len = result.cbData;
+        }
+    }
+    if (result.pbData)
+        MIDL_user_free(result.pbData);
+    RpcBindingFree(&binding);
+    return err;
+}
+
+static DWORD cred_dpapi_unprotect(const BYTE *blob, DWORD blob_len, BYTE **out, DWORD *out_len)
+{
+    handle_t binding;
+    DPAPI_BLOB in = {0}, entropy = {0}, result = {0};
+    LONG status = 0;
+    DWORD err = ERROR_SUCCESS;
+
+    *out = NULL;
+    *out_len = 0;
+    binding = cred_dpapi_bind();
+    if (binding == NULL)
+        return ERROR_NO_SUCH_LOGON_SESSION;
+
+    in.cbData = blob_len;
+    in.pbData = (byte *)blob;
+    RpcTryExcept
+    {
+        status = s_DpapiUnprotect(binding, 0, in, entropy, &result);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        err = RpcExceptionCode();
+    }
+    RpcEndExcept
+
+    if (err == ERROR_SUCCESS)
+    {
+        if (status != 0)
+            err = cred_dpapi_status_to_error(status);
+        else if (!(*out = malloc(result.cbData ? result.cbData : 1)))
+            err = ERROR_OUTOFMEMORY;
+        else
+        {
+            if (result.cbData)
+                memcpy(*out, result.pbData, result.cbData);
+            *out_len = result.cbData;
+        }
+    }
+    if (result.pbData)
+    {
+        SecureZeroMemory(result.pbData, result.cbData);
+        MIDL_user_free(result.pbData);
+    }
+    RpcBindingFree(&binding);
+    return err;
+}
+
+static DWORD read_credential_blob(HKEY hkey,
                                   LPBYTE credential_blob,
                                   DWORD *credential_blob_size)
 {
     DWORD ret;
     DWORD type;
+    DWORD stored_size = 0;
+    BYTE *stored;
+    BYTE *plain = NULL;
+    DWORD plain_len = 0;
+    DWORD err;
+    DWORD capacity = *credential_blob_size;
 
     *credential_blob_size = 0;
-    ret = RegQueryValueExW(hkey, L"Password", 0, &type, NULL, credential_blob_size);
+    ret = RegQueryValueExW(hkey, L"Password", 0, &type, NULL, &stored_size);
     if (ret != ERROR_SUCCESS)
         return ret;
     else if (type != REG_BINARY)
         return ERROR_REGISTRY_CORRUPT;
-    if (credential_blob)
+    if (stored_size == 0)
+        return ERROR_SUCCESS;
+
+    stored = malloc(stored_size);
+    if (!stored)
+        return ERROR_OUTOFMEMORY;
+    ret = RegQueryValueExW(hkey, L"Password", 0, &type, stored, &stored_size);
+    if (ret != ERROR_SUCCESS)
     {
-        struct ustring data;
-        struct ustring key;
+        free(stored);
+        return ret;
+    }
 
-        ret = RegQueryValueExW(hkey, L"Password", 0, &type, credential_blob,
-                               credential_blob_size);
-        if (ret != ERROR_SUCCESS)
-            return ret;
-        else if (type != REG_BINARY)
-            return ERROR_REGISTRY_CORRUPT;
+    err = cred_dpapi_unprotect(stored, stored_size, &plain, &plain_len);
+    free(stored);
+    if (err == ERROR_INVALID_DATA)
+        return ERROR_NOT_FOUND;    /* secret written by the old RC4 scheme (or foreign/corrupt): it
+                                      cannot be recovered, so report the credential as absent rather
+                                      than a misleading corruption error. */
+    if (err != ERROR_SUCCESS)
+        return err;
 
-        key.Length = key.MaximumLength = KEY_SIZE;
-        key.Buffer = (unsigned char *)key_data;
-
-        data.Length = data.MaximumLength = *credential_blob_size;
-        data.Buffer = credential_blob;
-        SystemFunction032(&data, &key);
+    *credential_blob_size = plain_len;
+    if (credential_blob && plain_len > capacity)
+    {
+        /* The secret grew between the caller's size query and this read: never overrun the buffer. */
+        SecureZeroMemory(plain, plain_len);
+        free(plain);
+        return ERROR_MORE_DATA;
+    }
+    if (credential_blob && plain_len)
+        memcpy(credential_blob, plain, plain_len);
+    if (plain)
+    {
+        SecureZeroMemory(plain, plain_len);
+        free(plain);
     }
     return ERROR_SUCCESS;
 }
 
 static DWORD registry_read_credential(HKEY hkey, PCREDENTIALW credential,
-                                      const BYTE key_data[KEY_SIZE],
                                       char *buffer, DWORD *len)
 {
     DWORD type;
@@ -183,14 +365,14 @@ static DWORD registry_read_credential(HKEY hkey, PCREDENTIALW credential,
             buffer += count;
     }
 
-    ret = read_credential_blob(hkey, key_data, NULL, &count);
+    ret = read_credential_blob(hkey, NULL, &count);
     if (ret != ERROR_FILE_NOT_FOUND && ret != ERROR_SUCCESS)
         return ret;
     *len += count;
     if (credential)
     {
         credential->CredentialBlob = (LPBYTE)buffer;
-        ret = read_credential_blob(hkey, key_data, credential->CredentialBlob, &count);
+        ret = read_credential_blob(hkey, credential->CredentialBlob, &count);
         if (ret == ERROR_FILE_NOT_FOUND)
             credential->CredentialBlob = NULL;
         else if (ret != ERROR_SUCCESS)
@@ -248,33 +430,29 @@ static DWORD registry_read_credential(HKEY hkey, PCREDENTIALW credential,
 }
 
 static DWORD write_credential_blob(HKEY hkey, LPCWSTR target_name, DWORD type,
-                                   const BYTE key_data[KEY_SIZE],
                                    const BYTE *credential_blob, DWORD credential_blob_size)
 {
-    LPBYTE encrypted_credential_blob;
-    struct ustring data;
-    struct ustring key;
+    BYTE *protected_blob = NULL;
+    DWORD protected_len = 0;
+    DWORD err;
     DWORD ret;
 
-    key.Length = key.MaximumLength = KEY_SIZE;
-    key.Buffer = (unsigned char *)key_data;
+    (void)target_name;
+    (void)type;
 
-    encrypted_credential_blob = malloc(credential_blob_size);
-    if (!encrypted_credential_blob) return ERROR_OUTOFMEMORY;
+    err = cred_dpapi_protect(credential_blob, credential_blob_size, &protected_blob, &protected_len);
+    if (err != ERROR_SUCCESS)
+        return err;
 
-    memcpy(encrypted_credential_blob, credential_blob, credential_blob_size);
-    data.Length = data.MaximumLength = credential_blob_size;
-    data.Buffer = encrypted_credential_blob;
-    SystemFunction032(&data, &key);
-
-    ret = RegSetValueExW(hkey, L"Password", 0, REG_BINARY, encrypted_credential_blob, credential_blob_size);
-    free(encrypted_credential_blob);
+    ret = RegSetValueExW(hkey, L"Password", 0, REG_BINARY, protected_blob, protected_len);
+    SecureZeroMemory(protected_blob, protected_len);
+    free(protected_blob);
 
     return ret;
 }
 
 static DWORD registry_write_credential(HKEY hkey, const CREDENTIALW *credential,
-                                       const BYTE key_data[KEY_SIZE], BOOL preserve_blob)
+                                       BOOL preserve_blob)
 {
     DWORD ret;
     FILETIME LastWritten;
@@ -318,7 +496,7 @@ static DWORD registry_write_credential(HKEY hkey, const CREDENTIALW *credential,
     if (!preserve_blob)
     {
         ret = write_credential_blob(hkey, credential->TargetName, credential->Type,
-                                    key_data, credential->CredentialBlob,
+                                    credential->CredentialBlob,
                                     credential->CredentialBlobSize);
     }
     return ret;
@@ -403,56 +581,13 @@ static DWORD host_write_credential( const CREDENTIALW *credential, BOOL preserve
 
 static DWORD open_cred_mgr_key(HKEY *hkey, BOOL open_for_write)
 {
-    return RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Wine\\Credential Manager", 0,
-                           NULL, REG_OPTION_NON_VOLATILE,
-                           KEY_READ | (open_for_write ? KEY_WRITE : 0), NULL, hkey, NULL);
-}
-
-static DWORD get_cred_mgr_encryption_key(HKEY hkeyMgr, BYTE key_data[KEY_SIZE])
-{
-    static const BYTE my_key_data[KEY_SIZE] = { 0 };
-    DWORD type;
-    DWORD count;
-    FILETIME ft;
-    ULONG seed;
-    ULONG value;
-    DWORD ret;
-
-    memcpy(key_data, my_key_data, KEY_SIZE);
-
-    count = KEY_SIZE;
-    ret = RegQueryValueExW(hkeyMgr, L"EncryptionKey", NULL, &type, key_data,
-                           &count);
-    if (ret == ERROR_SUCCESS)
-    {
-        if (type != REG_BINARY)
-            return ERROR_REGISTRY_CORRUPT;
-        else
-            return ERROR_SUCCESS;
-    }
-    if (ret != ERROR_FILE_NOT_FOUND)
-        return ret;
-
-    GetSystemTimeAsFileTime(&ft);
-    seed = ft.dwLowDateTime;
-    value = RtlUniform(&seed);
-    *(DWORD *)key_data = value;
-    seed = ft.dwHighDateTime;
-    value = RtlUniform(&seed);
-    *(DWORD *)(key_data + 4) = value;
-
-    ret = RegSetValueExW(hkeyMgr, L"EncryptionKey", 0, REG_BINARY,
-                         key_data, KEY_SIZE);
-    if (ret == ERROR_ACCESS_DENIED)
-    {
-        ret = open_cred_mgr_key(&hkeyMgr, TRUE);
-        if (ret == ERROR_SUCCESS)
-        {
-            ret = RegSetValueExW(hkeyMgr, L"EncryptionKey", 0, REG_BINARY,
-                                 key_data, KEY_SIZE);
-            RegCloseKey(hkeyMgr);
-        }
-    }
+    DWORD ret = RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Wine\\Credential Manager", 0,
+                                NULL, REG_OPTION_NON_VOLATILE,
+                                KEY_READ | (open_for_write ? KEY_WRITE : 0), NULL, hkey, NULL);
+    /* The legacy RC4 encryption key is obsolete now that secrets are DPAPI-protected, and must not
+     * linger in the hive where it could still recover old secrets: remove it when opening for write. */
+    if (ret == ERROR_SUCCESS && open_for_write)
+        RegDeleteValueW(*hkey, L"EncryptionKey");
     return ret;
 }
 
@@ -526,7 +661,7 @@ static BOOL registry_credential_matches_filter(HKEY hkeyCred, LPCWSTR filter)
 
 static DWORD registry_enumerate_credentials(HKEY hkeyMgr, LPCWSTR filter,
                                             LPWSTR target_name,
-                                            DWORD target_name_len, const BYTE key_data[KEY_SIZE],
+                                            DWORD target_name_len,
                                             PCREDENTIALW *credentials, char **buffer,
                                             DWORD *len, DWORD *count)
 {
@@ -560,9 +695,11 @@ static DWORD registry_enumerate_credentials(HKEY hkeyMgr, LPCWSTR filter,
         else
             *len += sizeof(CREDENTIALW);
         ret = registry_read_credential(hkeyCred, buffer ? credentials[*count] : NULL,
-                                       key_data, buffer ? *buffer + sizeof(CREDENTIALW) : NULL,
+                                       buffer ? *buffer + sizeof(CREDENTIALW) : NULL,
                                        len);
         RegCloseKey(hkeyCred);
+        if (ret == ERROR_NOT_FOUND)
+            continue;    /* an old/unreadable secret: drop it from the enumeration, do not abort */
         if (ret != ERROR_SUCCESS) break;
         if (buffer) *buffer += *len;
         (*count)++;
@@ -597,7 +734,6 @@ static INT convert_PCREDENTIALW_to_PCREDENTIALA(const CREDENTIALW *CredentialW, 
 
         return needed;
     }
-
 
     buffer = (char *)CredentialA + sizeof(CREDENTIALA);
     len -= sizeof(CREDENTIALA);
@@ -1069,7 +1205,6 @@ BOOL WINAPI CredEnumerateW(LPCWSTR Filter, DWORD Flags, DWORD *Count, PCREDENTIA
     DWORD target_name_len;
     DWORD len;
     char *buffer;
-    BYTE key_data[KEY_SIZE];
 
     TRACE("(%s, 0x%lx, %p, %p)\n", debugstr_w(Filter), Flags, Count, Credentials);
 
@@ -1084,14 +1219,6 @@ BOOL WINAPI CredEnumerateW(LPCWSTR Filter, DWORD Flags, DWORD *Count, PCREDENTIA
     {
         WARN("couldn't open/create manager key, error %ld\n", ret);
         SetLastError(ERROR_NO_SUCH_LOGON_SESSION);
-        return FALSE;
-    }
-
-    ret = get_cred_mgr_encryption_key(hkeyMgr, key_data);
-    if (ret != ERROR_SUCCESS)
-    {
-        RegCloseKey(hkeyMgr);
-        SetLastError(ret);
         return FALSE;
     }
 
@@ -1114,7 +1241,7 @@ BOOL WINAPI CredEnumerateW(LPCWSTR Filter, DWORD Flags, DWORD *Count, PCREDENTIA
     *Count = 0;
     len = 0;
     ret = registry_enumerate_credentials(hkeyMgr, Filter, target_name, target_name_len,
-                                         key_data, NULL, NULL, &len, Count);
+                                         NULL, NULL, &len, Count);
     if (ret == ERROR_SUCCESS)
     {
         ret = host_enumerate_credentials(Filter, NULL, NULL, &len, Count);
@@ -1139,7 +1266,7 @@ BOOL WINAPI CredEnumerateW(LPCWSTR Filter, DWORD Flags, DWORD *Count, PCREDENTIA
         {
             buffer += *Count * sizeof(PCREDENTIALW);
             *Count = 0;
-            ret = registry_enumerate_credentials(hkeyMgr, Filter, target_name, target_name_len, key_data,
+            ret = registry_enumerate_credentials(hkeyMgr, Filter, target_name, target_name_len,
                                                  *Credentials, &buffer, &len, Count);
             if (ret == ERROR_SUCCESS)
             {
@@ -1315,7 +1442,6 @@ BOOL WINAPI CredReadW(LPCWSTR TargetName, DWORD Type, DWORD Flags, PCREDENTIALW 
     DWORD ret;
     LPWSTR key_name;
     DWORD len;
-    BYTE key_data[KEY_SIZE];
 
     TRACE("(%s, %ld, 0x%lx, %p)\n", debugstr_w(TargetName), Type, Flags, Credential);
 
@@ -1358,14 +1484,6 @@ BOOL WINAPI CredReadW(LPCWSTR TargetName, DWORD Type, DWORD Flags, PCREDENTIALW 
         return FALSE;
     }
 
-    ret = get_cred_mgr_encryption_key(hkeyMgr, key_data);
-    if (ret != ERROR_SUCCESS)
-    {
-        RegCloseKey(hkeyMgr);
-        SetLastError(ret);
-        return FALSE;
-    }
-
     key_name = get_key_name_for_target(TargetName, Type);
     ret = RegOpenKeyExW(hkeyMgr, key_name, 0, KEY_QUERY_VALUE, &hkeyCred);
     free(key_name);
@@ -1377,14 +1495,14 @@ BOOL WINAPI CredReadW(LPCWSTR TargetName, DWORD Type, DWORD Flags, PCREDENTIALW 
     }
 
     len = sizeof(**Credential);
-    ret = registry_read_credential(hkeyCred, NULL, key_data, NULL, &len);
+    ret = registry_read_credential(hkeyCred, NULL, NULL, &len);
     if (ret == ERROR_SUCCESS)
     {
         *Credential = malloc(len);
         if (*Credential)
         {
             len = sizeof(**Credential);
-            ret = registry_read_credential(hkeyCred, *Credential, key_data,
+            ret = registry_read_credential(hkeyCred, *Credential,
                                            (char *)(*Credential + 1), &len);
         }
         else
@@ -1612,7 +1730,6 @@ BOOL WINAPI CredWriteW(PCREDENTIALW Credential, DWORD Flags)
     HKEY hkeyCred;
     DWORD ret;
     LPWSTR key_name;
-    BYTE key_data[KEY_SIZE];
 
     TRACE("(%p, 0x%lx)\n", Credential, Flags);
 
@@ -1632,6 +1749,12 @@ BOOL WINAPI CredWriteW(PCREDENTIALW Credential, DWORD Flags)
     if (Credential->Type != CRED_TYPE_GENERIC && Credential->Type != CRED_TYPE_DOMAIN_PASSWORD)
     {
         FIXME("unhandled type %ld\n", Credential->Type);
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (Credential->CredentialBlobSize > CRED_MAX_CREDENTIAL_BLOB_SIZE)
+    {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
@@ -1677,14 +1800,6 @@ BOOL WINAPI CredWriteW(PCREDENTIALW Credential, DWORD Flags)
         return FALSE;
     }
 
-    ret = get_cred_mgr_encryption_key(hkeyMgr, key_data);
-    if (ret != ERROR_SUCCESS)
-    {
-        RegCloseKey(hkeyMgr);
-        SetLastError(ret);
-        return FALSE;
-    }
-
     key_name = get_key_name_for_target(Credential->TargetName, Credential->Type);
     ret = RegCreateKeyExW(hkeyMgr, key_name, 0, NULL,
                           Credential->Persist == CRED_PERSIST_SESSION ? REG_OPTION_VOLATILE : REG_OPTION_NON_VOLATILE,
@@ -1698,7 +1813,7 @@ BOOL WINAPI CredWriteW(PCREDENTIALW Credential, DWORD Flags)
         return FALSE;
     }
 
-    ret = registry_write_credential(hkeyCred, Credential, key_data,
+    ret = registry_write_credential(hkeyCred, Credential,
                                     Flags & CRED_PRESERVE_CREDENTIAL_BLOB);
 
     RegCloseKey(hkeyCred);
@@ -2048,4 +2163,367 @@ BOOL WINAPI CredIsMarshaledCredentialA(LPCSTR name)
     res = CredIsMarshaledCredentialW(nameW);
     free(nameW);
     return res;
+}
+
+/* Windows marks protected credentials with "@@D" and these control characters. */
+static const WCHAR cred_protect_prefix[] = {'@', '@', 'D', 7, 8, 12, 10, 13};
+#define CRED_PROTECT_PREFIX_LEN ARRAY_SIZE(cred_protect_prefix)
+
+/* Marker + encoded (length field + DPAPI header 44 + MAC 64 + CBC padding 16 + 32767 chars and NUL); longer is not protected. */
+#define CRED_PROTECT_MAX_CHARS \
+    (CRED_PROTECT_PREFIX_LEN + (sizeof(DWORD) + 44 + 64 + 16 + (32767 + 1) * sizeof(WCHAR) + 2) / 3 * 4)
+
+static UINT cred_encoded_len(UINT bytes)
+{
+    return bytes / 3 * 4 + (bytes % 3 ? bytes % 3 + 1 : 0);
+}
+
+/* Like Windows, a protected string is read up to its terminator whatever count the caller passes. */
+static UINT cred_bounded_len(const WCHAR *str)
+{
+    UINT len = 0;
+
+    while (len <= CRED_PROTECT_MAX_CHARS && str[len])
+        len++;
+    return len;
+}
+
+/* The payload is the DPAPI blob length followed by the blob. A string whose marker, alphabet or
+ * length does not match is not protected text. */
+static DWORD cred_protected_blob(const WCHAR *str, BYTE **blob, DWORD *blob_len)
+{
+    UINT len = cred_bounded_len(str), enc, decoded;
+    DWORD stored;
+    BYTE *buf;
+
+    *blob = NULL;
+    *blob_len = 0;
+    if (len > CRED_PROTECT_MAX_CHARS || len <= CRED_PROTECT_PREFIX_LEN ||
+        memcmp(str, cred_protect_prefix, sizeof(cred_protect_prefix)))
+        return ERROR_INVALID_DATA;
+    enc = len - CRED_PROTECT_PREFIX_LEN;
+    if (enc % 4 == 1)
+        return ERROR_INVALID_DATA;
+    decoded = enc / 4 * 3 + (enc % 4 ? enc % 4 - 1 : 0);
+    if (decoded <= sizeof(DWORD))
+        return ERROR_INVALID_DATA;
+    if (!(buf = malloc(decoded + 3)))
+        return ERROR_OUTOFMEMORY;
+    if (!cred_decode(str + CRED_PROTECT_PREFIX_LEN, enc, (char *)buf))
+    {
+        free(buf);
+        return ERROR_INVALID_DATA;
+    }
+    memcpy(&stored, buf, sizeof(stored));
+    if (stored != decoded - sizeof(DWORD))
+    {
+        free(buf);
+        return ERROR_INVALID_DATA;
+    }
+    memmove(buf, buf + sizeof(DWORD), stored);
+    *blob = buf;
+    *blob_len = stored;
+    return ERROR_SUCCESS;
+}
+
+static HANDLE cred_revert_to_self(BOOL as_self)
+{
+    HANDLE token = NULL;
+
+    if (as_self && OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &token) &&
+        !SetThreadToken(NULL, NULL))
+    {
+        CloseHandle(token);
+        token = NULL;
+    }
+    return token;
+}
+
+static void cred_restore_token(HANDLE token)
+{
+    if (!token)
+        return;
+    SetThreadToken(NULL, token);
+    CloseHandle(token);
+}
+
+/******************************************************************************
+ * CredProtectW [ADVAPI32.@]
+ */
+BOOL WINAPI CredProtectW(BOOL as_self, LPWSTR creds, DWORD cch, LPWSTR out, DWORD *out_cch,
+                         CRED_PROTECTION_TYPE *type)
+{
+    BYTE *blob, *payload;
+    DWORD blob_len, need, err;
+    HANDLE token;
+
+    TRACE("(%d, %p, %lu, %p, %p, %p)\n", as_self, creds, cch, out, out_cch, type);
+
+    if (!creds || !out_cch || cch > MAXDWORD / sizeof(WCHAR))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    token = cred_revert_to_self(as_self);
+    err = cred_dpapi_protect((const BYTE *)creds, cch * sizeof(WCHAR), &blob, &blob_len);
+    cred_restore_token(token);
+    if (err != ERROR_SUCCESS)
+    {
+        SetLastError(err);
+        return FALSE;
+    }
+
+    if (!(payload = malloc(sizeof(DWORD) + blob_len)))
+    {
+        free(blob);
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    memcpy(payload, &blob_len, sizeof(DWORD));
+    memcpy(payload + sizeof(DWORD), blob, blob_len);
+    free(blob);
+
+    need = CRED_PROTECT_PREFIX_LEN + cred_encoded_len(sizeof(DWORD) + blob_len) + 1;
+    if (need - 1 > CRED_PROTECT_MAX_CHARS)
+    {
+        free(payload);
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!out || *out_cch < need)
+    {
+        free(payload);
+        *out_cch = need;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    memcpy(out, cred_protect_prefix, sizeof(cred_protect_prefix));
+    out[CRED_PROTECT_PREFIX_LEN + cred_encode((const char *)payload, sizeof(DWORD) + blob_len,
+                                              out + CRED_PROTECT_PREFIX_LEN)] = 0;
+    free(payload);
+    /* Windows reports 0 characters after protecting an empty count. */
+    *out_cch = cch ? need : 0;
+    if (type)
+        *type = CredUserProtection;
+    return TRUE;
+}
+
+/******************************************************************************
+ * CredUnprotectW [ADVAPI32.@]
+ */
+BOOL WINAPI CredUnprotectW(BOOL as_self, LPWSTR prot, DWORD cch, LPWSTR out, DWORD *out_cch)
+{
+    BYTE *blob, *plain;
+    DWORD blob_len, plain_len, chars, need, err;
+    HANDLE token;
+
+    TRACE("(%d, %p, %lu, %p, %p)\n", as_self, prot, cch, out, out_cch);
+
+    if (!prot || !out_cch)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    err = cred_protected_blob(prot, &blob, &blob_len);
+    if (err == ERROR_INVALID_DATA)
+    {
+        /* Windows returns a string that is not protected unchanged. */
+        if (!out || *out_cch < cch)
+        {
+            *out_cch = cch;
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            return FALSE;
+        }
+        memcpy(out, prot, cch * sizeof(WCHAR));
+        *out_cch = cch;
+        return TRUE;
+    }
+    if (err != ERROR_SUCCESS)
+    {
+        SetLastError(err);
+        return FALSE;
+    }
+
+    token = cred_revert_to_self(as_self);
+    err = cred_dpapi_unprotect(blob, blob_len, &plain, &plain_len);
+    cred_restore_token(token);
+    free(blob);
+    if (err != ERROR_SUCCESS)
+    {
+        SetLastError(err);
+        return FALSE;
+    }
+
+    chars = plain_len / sizeof(WCHAR);
+    need = (chars && !((const WCHAR *)plain)[chars - 1]) ? chars : chars + 1;
+    if (!out || *out_cch < need)
+    {
+        SecureZeroMemory(plain, plain_len);
+        free(plain);
+        *out_cch = need;
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    memcpy(out, plain, chars * sizeof(WCHAR));
+    out[need - 1] = 0;
+    SecureZeroMemory(plain, plain_len);
+    free(plain);
+    *out_cch = chars;
+    return TRUE;
+}
+
+/******************************************************************************
+ * CredIsProtectedW [ADVAPI32.@]
+ */
+BOOL WINAPI CredIsProtectedW(LPWSTR prot, CRED_PROTECTION_TYPE *type)
+{
+    BYTE *blob;
+    DWORD blob_len;
+
+    TRACE("(%p, %p)\n", prot, type);
+
+    if (!prot || !type)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    *type = cred_protected_blob(prot, &blob, &blob_len) == ERROR_SUCCESS ? CredUserProtection : CredUnprotected;
+    free(blob);
+    return TRUE;
+}
+
+static WCHAR *cred_strdup_aw(const char *str, DWORD cch, DWORD *wide_cch)
+{
+    WCHAR *wide;
+    int len = cch ? MultiByteToWideChar(CP_ACP, 0, str, cch, NULL, 0) : 0;
+
+    if (!(wide = malloc((len + 1) * sizeof(WCHAR))))
+        return NULL;
+    if (len)
+        MultiByteToWideChar(CP_ACP, 0, str, cch, wide, len);
+    wide[len] = 0;
+    *wide_cch = len;
+    return wide;
+}
+
+static void cred_free_secret(WCHAR *str, DWORD cch)
+{
+    if (!str)
+        return;
+    SecureZeroMemory(str, (cch + 1) * sizeof(WCHAR));
+    free(str);
+}
+
+/******************************************************************************
+ * CredProtectA [ADVAPI32.@]
+ */
+BOOL WINAPI CredProtectA(BOOL as_self, LPSTR creds, DWORD cch, LPSTR out, DWORD *out_cch,
+                         CRED_PROTECTION_TYPE *type)
+{
+    WCHAR *credsW, *outW = NULL;
+    DWORD credsW_cch, n;
+    BOOL ret;
+
+    TRACE("(%d, %p, %lu, %p, %p, %p)\n", as_self, creds, cch, out, out_cch, type);
+
+    if (!creds || !out_cch)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!(credsW = cred_strdup_aw(creds, cch, &credsW_cch)))
+    {
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    n = *out_cch;
+    if (out && n && !(outW = malloc(n * sizeof(WCHAR))))
+    {
+        cred_free_secret(credsW, credsW_cch);
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    ret = CredProtectW(as_self, credsW, credsW_cch, outW, &n, type);
+    if (ret)
+        WideCharToMultiByte(CP_ACP, 0, outW, -1, out, *out_cch, NULL, NULL);
+    *out_cch = n;
+    free(outW);
+    cred_free_secret(credsW, credsW_cch);
+    return ret;
+}
+
+/******************************************************************************
+ * CredUnprotectA [ADVAPI32.@]
+ */
+BOOL WINAPI CredUnprotectA(BOOL as_self, LPSTR prot, DWORD cch, LPSTR out, DWORD *out_cch)
+{
+    WCHAR *protW, *outW = NULL;
+    DWORD protW_cch, n, alloc;
+    BOOL ret;
+    int len;
+
+    TRACE("(%d, %p, %lu, %p, %p)\n", as_self, prot, cch, out, out_cch);
+
+    if (!prot || !out_cch)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!(protW = cred_strdup_aw(prot, cch, &protW_cch)))
+    {
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    n = alloc = *out_cch;
+    if (out && n && !(outW = malloc(n * sizeof(WCHAR))))
+    {
+        cred_free_secret(protW, protW_cch);
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    ret = CredUnprotectW(as_self, protW, protW_cch, outW, &n);
+    if (ret && n)
+    {
+        len = WideCharToMultiByte(CP_ACP, 0, outW, n, out, *out_cch, NULL, NULL);
+        if (!len)
+        {
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            ret = FALSE;
+        }
+        n = len;
+    }
+    *out_cch = n;
+    if (outW)
+    {
+        SecureZeroMemory(outW, alloc * sizeof(WCHAR));
+        free(outW);
+    }
+    cred_free_secret(protW, protW_cch);
+    return ret;
+}
+
+/******************************************************************************
+ * CredIsProtectedA [ADVAPI32.@]
+ */
+BOOL WINAPI CredIsProtectedA(LPSTR prot, CRED_PROTECTION_TYPE *type)
+{
+    WCHAR *protW;
+    DWORD protW_cch;
+    BOOL ret;
+
+    TRACE("(%p, %p)\n", prot, type);
+
+    if (!prot || !type)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!(protW = cred_strdup_aw(prot, lstrlenA(prot) + 1, &protW_cch)))
+    {
+        SetLastError(ERROR_OUTOFMEMORY);
+        return FALSE;
+    }
+    ret = CredIsProtectedW(protW, type);
+    free(protW);
+    return ret;
 }

@@ -1,0 +1,17 @@
+/*
+ * PROJECT:     Orosi Firewall settings
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Resource script: the name and icon the elevation prompt shows
+ * COPYRIGHT:   Copyright 2026 LeewayOpenSoftware
+ */
+
+#include <windef.h>
+#include <winuser.h>
+
+#define REACTOS_STR_FILE_DESCRIPTION  "Orosi Firewall settings"
+#define REACTOS_STR_INTERNAL_NAME     "fwsettings"
+#define REACTOS_STR_ORIGINAL_FILENAME "fwsettings.exe"
+#include <reactos/version.rc>
+
+1 ICON "res/fwsettings.ico"
+1 RT_MANIFEST "res/fwsettings.exe.manifest"

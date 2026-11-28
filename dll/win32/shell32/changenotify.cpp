@@ -110,7 +110,7 @@ public:
 
     void OnFinalMessage(HWND) override
     {
-        // The server will destroy this window.
+        // The server posts WM_CLOSE, so this thread destroys the window.
         // After the window gets destroyed we can delete this broker here.
         delete this;
     }
@@ -366,9 +366,10 @@ CreateNotificationParamAndSend(LONG wEventId, UINT uFlags, LPCITEMIDLIST pidl1, 
     }
     else
     {
-        SendNotifyMessageW(hwndServer, CN_DELIVER_NOTIFICATION, (WPARAM)hTicket, pid);
-        if (hTicket2)
-            SendNotifyMessageW(hwndServer, CN_DELIVER_NOTIFICATION, (WPARAM)hTicket2, pid);
+        if (!SendNotifyMessageW(hwndServer, CN_DELIVER_NOTIFICATION, (WPARAM)hTicket, pid))
+            SHFreeShared(hTicket, pid);
+        if (hTicket2 && !SendNotifyMessageW(hwndServer, CN_DELIVER_NOTIFICATION, (WPARAM)hTicket2, pid))
+            SHFreeShared(hTicket2, pid);
     }
 }
 
@@ -481,7 +482,8 @@ SHChangeNotifyRegister(HWND hwnd, INT fSources, LONG wEventMask, UINT uMsg,
     // The owner PID is the process ID of the server
     GetWindowThreadProcessId(hwndServer, &dwOwnerPID);
 
-    EnterCriticalSection(&SHELL32_ChangenotifyCS);
+    // No lock held across the sends below: the server may itself be waiting on a
+    // window of this process, whose thread would then block on that lock (deadlock)
     for (iItem = 0; iItem < cItems; ++iItem)
     {
         // create a registration entry
@@ -565,7 +567,6 @@ SHChangeNotifyRegister(HWND hwnd, INT fSources, LONG wEventMask, UINT uMsg,
             }
         }
     }
-    LeaveCriticalSection(&SHELL32_ChangenotifyCS);
 
     return nRegID;
 }
@@ -676,6 +677,9 @@ EXTERN_C void WINAPI
 SHChangeNotify(LONG wEventId, UINT uFlags, LPCVOID dwItem1, LPCVOID dwItem2)
 {
     TRACE("(0x%08x,0x%08x,%p,%p)\n", wEventId, uFlags, dwItem1, dwItem2);
+
+    if (wEventId & SHCNE_ASSOCCHANGED)
+        SHELL_AssocGenerationIncrement();
 
     if (!GetNotificationServer(FALSE))
         return;

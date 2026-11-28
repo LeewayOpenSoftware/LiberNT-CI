@@ -38,6 +38,6 @@ ServiceBinary = %12%\it8613sensor.sys
 LoadOrderGroup = Extended Base
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 It8613Sensor.DeviceDesc = "ITE IT8613E Hardware Monitor"
-It8613Sensor.ServiceDesc = "LiberNT ITE IT8613E Sensor Provider"
+It8613Sensor.ServiceDesc = "Orosi ITE IT8613E Sensor Provider"

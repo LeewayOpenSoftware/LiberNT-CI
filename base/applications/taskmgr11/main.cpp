@@ -14,8 +14,10 @@
 #define TIMER_TICK 1
 
 AppState g_app;
+static void EnableDebugPrivilege(void);
 
 static ULONG_PTR s_gdiplusToken;
+static BOOL s_comInitialized;
 
 /* pages */
 static Page* s_pages[PG_COUNT];
@@ -132,7 +134,7 @@ static void PageRect(HWND hwnd, RECT* r)
 /*  Settings                                                           */
 /* ------------------------------------------------------------------ */
 
-static const WCHAR* SETTINGS_KEY = L"Software\\ReactOS\\TaskMgr11";
+static const WCHAR* SETTINGS_KEY = L"Software\\ReactOS\\TaskMgr";
 
 static DWORD RegReadDw(HKEY hk, const WCHAR* name, DWORD def)
 {
@@ -162,6 +164,7 @@ void Settings_Load(void)
         st.navExpanded = RegReadDw(hk, L"NavExpanded", 0);
         st.noEffPrompt = RegReadDw(hk, L"NoEfficiencyPrompt", 0);
         st.fullAcctName = RegReadDw(hk, L"FullAccountName", 0);
+        st.noBlur = RegReadDw(hk, L"NoTransparency", 0);
         st.perfResource = RegReadDw(hk, L"PerfResource", 0);
         st.perfIndex = RegReadDw(hk, L"PerfIndex", 0);
 
@@ -192,6 +195,7 @@ void Settings_Save(void)
     WR(L"NavExpanded", st.navExpanded);
     WR(L"NoEfficiencyPrompt", st.noEffPrompt);
     WR(L"FullAccountName", st.fullAcctName);
+    WR(L"NoTransparency", st.noBlur);
     WR(L"PerfResource", st.perfResource);
     WR(L"PerfIndex", st.perfIndex);
 #undef WR
@@ -850,6 +854,15 @@ static LRESULT CALLBACK FrameProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             DoTick(hwnd);
         return 0;
 
+    case WM_APP_INITDATA:
+        Search_CreateEdit(s_search);
+        EnableDebugPrivilege();
+        s_comInitialized = SUCCEEDED(CoInitialize(NULL));
+        Data::InitDeferred();
+        DoTick(hwnd);
+        RearmTimer(hwnd);
+        return 0;
+
     case WM_APP_SEARCH:
     {
         WCHAR text[128];
@@ -950,12 +963,52 @@ static void EnableDebugPrivilege(void)
     CloseHandle(token);
 }
 
+/* As on Windows, the SysWOW64 taskmgr.exe only hands over to the native Task Manager;
+   Sysnative reaches the real System32 from a WoW64 process whatever the redirection state. */
+static BOOL RelaunchNative(int nCmdShow)
+{
+    BOOL wow = FALSE;
+    if (!IsWow64Process(GetCurrentProcess(), &wow) || !wow)
+        return FALSE;
+
+    WCHAR exe[MAX_PATH];
+    UINT n = GetSystemWindowsDirectoryW(exe, _countof(exe));
+    if (n == 0 || n >= _countof(exe) ||
+        FAILED(StringCchCatW(exe, _countof(exe), L"\\Sysnative\\taskmgr.exe")))
+        return FALSE;
+
+    const WCHAR* args = PathGetArgsW(GetCommandLineW());
+    size_t cch = wcslen(exe) + wcslen(args) + 4;
+    WCHAR* cmd = (WCHAR*)HeapAlloc(GetProcessHeap(), 0, cch * sizeof(WCHAR));
+    if (!cmd)
+        return FALSE;
+    StringCchPrintfW(cmd, cch, L"\"%s\"%s%s", exe, *args ? L" " : L"", args);
+
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = (WORD)nCmdShow;
+    BOOL ok = CreateProcessW(exe, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
+    HeapFree(GetProcessHeap(), 0, cmd);
+    if (!ok)
+        return FALSE;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return TRUE;
+}
+
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int nCmdShow)
 {
     (void)hPrev;
 
+    /* before the instance mutex, so the native one can take it */
+    if (RelaunchNative(nCmdShow))
+        return 0;
+
     /* single instance */
-    HANDLE mutex = CreateMutexW(NULL, TRUE, L"Local\\ROS_TaskMgr11");
+    HANDLE mutex = CreateMutexW(NULL, TRUE, L"Local\\ROS_TaskMgr");
     if (mutex && GetLastError() == ERROR_ALREADY_EXISTS)
     {
         HWND prev = FindWindowW(FRAME_CLASS, NULL);
@@ -971,7 +1024,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int 
 
     /* Match Windows Task Manager's process priority. */
     SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
-    EnableDebugPrivilege();
 
     /* dpi awareness (dynamic; ancient user32 may lack it) */
     {
@@ -984,7 +1036,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int 
         if (g_app.dpi < 96) g_app.dpi = 96;
     }
 
-    CoInitialize(NULL);
     INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_STANDARD_CLASSES };
     InitCommonControlsEx(&icc);
 
@@ -1053,9 +1104,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int 
 
     ShowWindow(g_app.hFrame, (nCmdShow == SW_SHOWDEFAULT) ? SW_SHOW : nCmdShow);
     UpdateWindow(g_app.hFrame);
-
-    DoTick(g_app.hFrame);
-    RearmTimer(g_app.hFrame);
+    PostMessageW(g_app.hFrame, WM_APP_INITDATA, 0, 0);
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0))
@@ -1085,7 +1134,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR lpCmdLine, int 
     Data::Shutdown();
     Theme_Free();
     Gdiplus::GdiplusShutdown(s_gdiplusToken);
-    CoUninitialize();
+    if (s_comInitialized)
+        CoUninitialize();
     if (mutex) CloseHandle(mutex);
     return (int)msg.wParam;
 }

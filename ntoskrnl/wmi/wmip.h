@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include <ntwmi.h>
+
 extern POBJECT_TYPE WmipGuidObjectType;
 extern GENERIC_MAPPING WmipGenericMapping;
 
@@ -183,3 +185,89 @@ EtwpGetTraceGuidInfo(
     _In_ ULONG OutBufferLen,
     _Out_opt_ PULONG ReturnSize,
     _In_ KPROCESSOR_MODE PreviousMode);
+
+NTSTATUS
+EtwpTraceClassicEvent(
+    _In_opt_ HANDLE TraceHandle,
+    _In_ ULONG FieldSize,
+    _In_ PVOID Fields,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+/* etwlog.c: modern events */
+NTSTATUS
+EtwpLogModernEvent(
+    _In_ ULONG LoggerId,
+    _In_ LPCGUID ProviderId,
+    _In_ PCEVENT_DESCRIPTOR Descriptor,
+    _In_opt_ LPCGUID ActivityId,
+    _In_ ULONG UserDataCount,
+    _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData,
+    _In_ KPROCESSOR_MODE DataMode,
+    _In_ BOOLEAN NarrowCaller);
+
+BOOLEAN
+EtwpLoggerExists(
+    _In_ ULONG LoggerId);
+
+/* etwprov.c: providers and their enable state */
+NTSTATUS
+EtwpEnableGuid(
+    _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,
+    _In_ ULONG InBufferLen,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+NTSTATUS
+EtwpQueryEnable(
+    _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,
+    _In_ ULONG InBufferLen,
+    _Out_writes_bytes_opt_(OutBufferLen) PVOID OutBuffer,
+    _In_ ULONG OutBufferLen,
+    _Out_opt_ PULONG ReturnSize,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+NTSTATUS
+EtwpTraceUserEvent(
+    _In_opt_ HANDLE RegistrationHandle,
+    _In_ ULONG PacketSize,
+    _In_ PVOID Packet,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+VOID
+EtwpProvidersLoggerStopped(
+    _In_ ULONG LoggerId);
+
+/* etwreg.c */
+NTSTATUS
+EtwpGuidFromRegistrationHandle(
+    _In_ HANDLE Handle,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _Out_ GUID *Guid);
+
+TRACEHANDLE
+EtwpTraceHandleFromLoggerId(
+    _In_ ULONG LoggerId);
+
+ULONG
+EtwpLoggerIdFromTraceHandle(
+    _In_ TRACEHANDLE TraceHandle);
+
+NTSTATUS
+EtwpTraceControlKernel(
+    _In_ ULONG FunctionCode,
+    _Inout_ PWMI_LOGGER_INFORMATION LoggerInfo);
+
+NTSTATUS
+EtwpQueryLoggerById(
+    _In_ ULONG LoggerId,
+    _Out_opt_ PWMI_LOGGER_INFORMATION Information,
+    _Out_opt_ PULONG EventsLogged);
+
+NTSTATUS
+EtwpFindLoggerByName(
+    _In_ PCUNICODE_STRING LoggerName,
+    _Out_ PULONG LoggerId);
+
+ULONG
+EtwpEnumerateLoggers(
+    _Out_writes_to_(Count, return) PULONG LoggerIds,
+    _In_ ULONG Count);

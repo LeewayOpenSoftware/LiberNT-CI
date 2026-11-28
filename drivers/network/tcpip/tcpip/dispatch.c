@@ -843,6 +843,7 @@ NTSTATUS DispTdiQueryInformation(
         PADDRESS_FILE AddrFile;
         PTA_IP_ADDRESS Address;
         PCONNECTION_ENDPOINT Endpoint = NULL;
+        IP_ADDRESS LocalAddress;
 
 
         if (MmGetMdlByteCount(Irp->MdlAddress) <
@@ -865,7 +866,10 @@ NTSTATUS DispTdiQueryInformation(
                 return STATUS_INVALID_PARAMETER;
             }
 
-            return AddrBuildTransportAddress(&AddrFile->Address, AddrFile->Port,
+            LocalAddress = AddrFile->Address;
+            if (AddrFile->Family == TDI_ADDRESS_TYPE_IP6)
+                TCPMapToDualStack(&LocalAddress);
+            return AddrBuildTransportAddress(&LocalAddress, AddrFile->Port,
                                              (PTRANSPORT_ADDRESS)Address,
                                              MmGetMdlByteCount(Irp->MdlAddress) -
                                              FIELD_OFFSET(TDI_ADDRESS_INFO, Address));
@@ -889,7 +893,10 @@ NTSTATUS DispTdiQueryInformation(
                 return STATUS_SUCCESS;
             }
 
-            return AddrBuildTransportAddress(&Endpoint->AddressFile->Address,
+            LocalAddress = Endpoint->AddressFile->Address;
+            if (Endpoint->AddressFile->Family == TDI_ADDRESS_TYPE_IP6)
+                TCPMapToDualStack(&LocalAddress);
+            return AddrBuildTransportAddress(&LocalAddress,
                                              Endpoint->AddressFile->Port,
                                              (PTRANSPORT_ADDRESS)Address,
                                              MmGetMdlByteCount(Irp->MdlAddress) -
@@ -1518,13 +1525,25 @@ VOID DispTdiQueryInformationExComplete(
 
 static NTSTATUS DispTdiCopyQueryRequest(
     PTI_QUERY_CONTEXT QueryContext,
+    KPROCESSOR_MODE RequestorMode,
     PVOID InputBuffer,
     ULONG RequestLength,
-    ULONG ContextOffset)
+    ULONG ContextOffset,
+    PVOID OutputBuffer,
+    ULONG OutputLength)
 {
     NTSTATUS Status = STATUS_SUCCESS;
 
     _SEH2_TRY {
+        /* METHOD_NEITHER: both pointers come straight from the caller. The
+         * request is read here and its context written back on completion;
+         * the output is written on completion. Both must be user addresses. */
+        if (RequestorMode != KernelMode)
+        {
+            ProbeForWrite(InputBuffer, RequestLength, sizeof(UCHAR));
+            ProbeForWrite(OutputBuffer, OutputLength, sizeof(UCHAR));
+        }
+
         RtlCopyMemory(QueryContext->KernelInputBuffer, InputBuffer, RequestLength);
     } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
         Status = _SEH2_GetExceptionCode();
@@ -1569,8 +1588,6 @@ NTSTATUS DispTdiQueryInformationEx(
     UINT OutputBufferLength;
     ULONG RequestLength;
     ULONG ContextOffset;
-    BOOLEAN InputMdlLocked  = FALSE;
-    BOOLEAN OutputMdlLocked = FALSE;
     PMDL InputMdl           = NULL;
     PMDL OutputMdl          = NULL;
     NTSTATUS Status         = STATUS_SUCCESS;
@@ -1635,7 +1652,12 @@ NTSTATUS DispTdiQueryInformationEx(
                 goto fetch_cleanup;
             }
 
-            Status = DispTdiCopyQueryRequest(QueryContext, InputBuffer, RequestLength, ContextOffset);
+            /* Completion copies up to the reported count back to the caller,
+             * so the whole buffer is defined first */
+            RtlZeroMemory(QueryContext->KernelOutputBuffer, OutputBufferLength);
+
+            Status = DispTdiCopyQueryRequest(QueryContext, Irp->RequestorMode, InputBuffer, RequestLength,
+                                             ContextOffset, OutputBuffer, OutputBufferLength);
             if (!NT_SUCCESS(Status))
                 goto fetch_cleanup;
 
@@ -1656,8 +1678,6 @@ NTSTATUS DispTdiQueryInformationEx(
 
             MmBuildMdlForNonPagedPool(InputMdl);
             MmBuildMdlForNonPagedPool(OutputMdl);
-            InputMdlLocked = TRUE;    /* not locked, but treated as such for cleanup */
-            OutputMdlLocked = TRUE;
 
             /* Save the original user pointers so completion can copy back. */
             QueryContext->UserInputBuffer  = InputBuffer;
@@ -1674,6 +1694,9 @@ NTSTATUS DispTdiQueryInformationEx(
                 QueryContext->InputMdl  = InputMdl;
                 QueryContext->OutputMdl = OutputMdl;
 
+                /* The query below is synchronous and is completed here, in the
+                 * caller's process: the completion writes to the saved user
+                 * addresses and must not move to another context. */
                 Request.RequestNotifyObject = DispTdiQueryInformationExComplete;
                 Request.RequestContext      = QueryContext;
                 Status = InfoTdiQueryInformationEx(&Request,
@@ -1689,16 +1712,17 @@ NTSTATUS DispTdiQueryInformationEx(
             /* An error occurred if we get here */
 
             if (InputMdl) {
-                if (InputMdlLocked)
-                    MmUnlockPages(InputMdl);
                 IoFreeMdl(InputMdl);
             }
 
             if (OutputMdl) {
-                if (OutputMdlLocked)
-                    MmUnlockPages(OutputMdl);
                 IoFreeMdl(OutputMdl);
             }
+
+            if (QueryContext->KernelInputBuffer)
+                ExFreePoolWithTag(QueryContext->KernelInputBuffer, QUERY_CONTEXT_TAG);
+            if (QueryContext->KernelOutputBuffer)
+                ExFreePoolWithTag(QueryContext->KernelOutputBuffer, QUERY_CONTEXT_TAG);
 
             ExFreePoolWithTag(QueryContext, QUERY_CONTEXT_TAG);
         } else

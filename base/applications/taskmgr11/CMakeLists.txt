@@ -29,14 +29,20 @@ list(APPEND SOURCE
     page_settings.cpp
     main.cpp
     battery_telemetry.h
+    hardware_text.h
+    performance_layout.h
+    wheel_scroll.h
     app.h)
 
 file(GLOB taskmgr11_rc_deps res/*.*)
 add_rc_deps(taskmgr11.rc ${taskmgr11_rc_deps})
 add_executable(taskmgr11 ${SOURCE} taskmgr11.rc)
 set_module_type(taskmgr11 win32gui UNICODE)
+# Installed under the Windows 11 name; the classic Task Manager is taskmgr_classic.exe in orosi_platform.
+set_target_properties(taskmgr11 PROPERTIES OUTPUT_NAME taskmgr)
 target_link_libraries(taskmgr11 uuid wdmguid dx10guid cpprt)
 add_dependencies(taskmgr11 d3d_idl_headers)
-add_importlibs(taskmgr11 advapi32 user32 gdi32 gdiplus shell32 shlwapi setupapi ole32 oleaut32 comdlg32 wtsapi32 iphlpapi ws2_32 version psapi comctl32 dwmapi uxtheme msvcrt kernel32 ntdll)
+add_importlibs(taskmgr11 advapi32 user32 gdi32 gdiplus shlwapi ole32 oleaut32 psapi comctl32 dwmapi uxtheme msvcrt kernel32 ntdll)
+add_delay_importlibs(taskmgr11 shell32 setupapi comdlg32 wtsapi32 iphlpapi ws2_32 version)
 add_pch(taskmgr11 app.h SOURCE)
 add_cd_file(TARGET taskmgr11 DESTINATION reactos/system32 FOR all)

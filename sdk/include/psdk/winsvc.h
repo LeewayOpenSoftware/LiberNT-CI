@@ -53,6 +53,7 @@ extern "C" {
 #define SERVICE_CONTROL_HARDWAREPROFILECHANGE 12
 #define SERVICE_CONTROL_POWEREVENT            13
 #define SERVICE_CONTROL_SESSIONCHANGE         14
+#define SERVICE_CONTROL_PRESHUTDOWN           15
 #define SERVICE_ACTIVE 1
 #define SERVICE_INACTIVE 2
 #define SERVICE_STATE_ALL 3
@@ -147,6 +148,13 @@ extern "C" {
 typedef struct _SERVICE_PRESHUTDOWN_INFO {
     DWORD dwPreshutdownTimeout;
 } SERVICE_PRESHUTDOWN_INFO, *LPSERVICE_PRESHUTDOWN_INFO;
+#endif
+
+#ifndef _SERVICE_DELAYED_AUTO_START_INFO_DEFINED_
+#define _SERVICE_DELAYED_AUTO_START_INFO_DEFINED_
+typedef struct _SERVICE_DELAYED_AUTO_START_INFO {
+    BOOL fDelayedAutostart;
+} SERVICE_DELAYED_AUTO_START_INFO, *LPSERVICE_DELAYED_AUTO_START_INFO;
 #endif
 
 #ifndef _SERVICE_FAILURE_ACTIONS_FLAG_DEFINED_
@@ -612,6 +620,20 @@ _Must_inspect_result_ SERVICE_STATUS_HANDLE WINAPI RegisterServiceCtrlHandlerExA
 _Must_inspect_result_ SERVICE_STATUS_HANDLE WINAPI RegisterServiceCtrlHandlerExW(_In_ LPCWSTR, _In_ LPHANDLER_FUNCTION_EX, _In_opt_ LPVOID);
 BOOL WINAPI SetServiceObjectSecurity(_In_ SC_HANDLE, _In_ SECURITY_INFORMATION, _In_ PSECURITY_DESCRIPTOR);
 BOOL WINAPI SetServiceStatus(_In_ SERVICE_STATUS_HANDLE, _In_ LPSERVICE_STATUS);
+
+typedef enum SERVICE_REGISTRY_STATE_TYPE {
+  ServiceRegistryStateParameters = 0,
+  ServiceRegistryStatePersistent = 1,
+  MaxServiceRegistryStateType = 2
+} SERVICE_REGISTRY_STATE_TYPE;
+
+DWORD
+WINAPI
+GetServiceRegistryStateKey(
+  _In_ SERVICE_STATUS_HANDLE ServiceStatusHandle,
+  _In_ SERVICE_REGISTRY_STATE_TYPE StateType,
+  _In_ DWORD AccessMask,
+  _Out_ HKEY *ServiceStateKey);
 
 BOOL
 WINAPI

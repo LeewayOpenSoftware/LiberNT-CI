@@ -49,7 +49,7 @@ BEGIN
     IDS_VOL_VOLUME "वॉल्यूम"
     IDS_VOL_ADJUST "ऑडियो गुण &समायोजित करें"
     IDS_VOL_OPEN "वॉल्यूम नियंत्रण &खोलें"
-    IDS_VOL_RUN "SNDVOL32.EXE"
+    IDS_VOL_RUN "SNDVOL.EXE"
     IDS_VOL_MUTED "वॉल्यूम (मौन)"
     IDS_VOL_NODEVICE "No Audio Output Device is installed."
 

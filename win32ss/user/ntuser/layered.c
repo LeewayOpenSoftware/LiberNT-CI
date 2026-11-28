@@ -99,6 +99,17 @@ IntCompositionGetLayered(PWND pWnd, BYTE *pAlpha, COLORREF *pKey, DWORD *pFlags)
    return TRUE;
 }
 
+/* A layered window painted by UpdateLayeredWindow: its surface is the sprite, USER never repaints it. */
+BOOL FASTCALL
+IntIsUpdateLayeredWindow(PWND pWnd)
+{
+   PLRD_PROP p;
+   if (!(pWnd->ExStyle & WS_EX_LAYERED))
+      return FALSE;
+   p = IntGetLayeredProp(pWnd, FALSE);
+   return p != NULL && p->UpdateLayered;
+}
+
 BOOL FASTCALL
 IntSetLayeredWindowAttributes(PWND pWnd,
                               COLORREF crKey,
@@ -256,11 +267,29 @@ IntUpdateLayeredWindowI( PWND pWnd,
       Rect = Window;
 
       RECTL_vOffsetRect( &Rect, -Window.left, -Window.top );
+      if (UserDpiIsVirtualWindow(pWnd))
+      {
+         RECT Logical = Window;
+
+         if ((pWnd->style & WS_CHILD) && Parent)
+            RECTL_vOffsetRect(&Logical, Parent->rcClient.left, Parent->rcClient.top);
+         UserDpiRectToLogical(&Logical);
+         Rect.right = Logical.right - Logical.left;
+         Rect.bottom = Logical.bottom - Logical.top;
+      }
 
       TRACE("H %d W %d\n",Rect.bottom - Rect.top,Rect.right - Rect.left);
 
-      if (!info->hdcDst) hdc = UserGetDCEx(pWnd, NULL, DCX_USESTYLE);
-      else hdc = info->hdcDst;
+      /* hdcDst names the screen the caller works for; it is not where the
+       * bits go. They always go to the window itself, as on Windows: with
+       * the caller's screen DC they were drawn on the screen and the window
+       * kept an empty surface. */
+      hdc = UserGetDCEx(pWnd, NULL, DCX_USESTYLE);
+      if (!hdc)
+      {
+         EngSetLastError(ERROR_INVALID_WINDOW_HANDLE);
+         return FALSE;
+      }
 
       bComposited = IntCompositionIsEnabled();
       bDirect = bComposited ||
@@ -353,7 +382,7 @@ IntUpdateLayeredWindowI( PWND pWnd,
       if (hdcBuffer) NtGdiSelectBitmap(hdcBuffer, hOldBitmap);
       if (hbmSrc) GreDeleteObject(hbmSrc);
       if (hdcBuffer) IntGdiDeleteDC(hdcBuffer, FALSE);
-      if (!info->hdcDst) UserReleaseDC(pWnd, hdc, FALSE);
+      UserReleaseDC(pWnd, hdc, FALSE);
       if (ret && !IntSetUpdateLayeredAttributes(pWnd, info))
       {
          EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
@@ -540,6 +569,15 @@ NtUserUpdateLayeredWindow(
       ERR("Layered Window Invalid Parameters\n");
       EngSetLastError( ERROR_INVALID_PARAMETER );
       goto Exit;
+   }
+
+   if (UserDpiIsVirtualCaller())
+   {
+      INT X = pptDst ? Dst.x : 0, Y = pptDst ? Dst.y : 0;
+
+      UserDpiWindowPosToPhysical(pWnd, &X, &Y, (PINT)&Size.cx, (PINT)&Size.cy, pptDst ? 0 : SWP_NOMOVE);
+      Dst.x = X;
+      Dst.y = Y;
    }
 
    info.cbSize   = sizeof(info);

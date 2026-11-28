@@ -282,6 +282,11 @@ LxTmpfsFileInode(PLX_FILE File)
     return NULL;
 }
 
+VOID
+LxTmpfsFileModified(PLX_FILE File)
+{
+}
+
 ULONG64
 LxTmpfsInodeSize(PLX_TMPFS_INODE Inode)
 {
@@ -298,6 +303,11 @@ NTSTATUS
 LxTmpfsMapSection(PLX_TMPFS_INODE Inode, BOOLEAN Shared, PHANDLE Section, PULONG64 Size)
 {
     return STATUS_NOT_SUPPORTED;
+}
+VOID
+LxTmpfsFileAccessed(PLX_FILE File)
+{
+    return;
 }
 
 NTSTATUS
@@ -888,6 +898,18 @@ LxFileReadKernel(PLX_FILE File, PVOID Buffer, ULONG Length, ULONG64 Offset)
         Length = (ULONG)(Size - Offset);
     memcpy(Buffer, Host->Data->Data + Offset, Length);
     return Length;
+}
+
+BOOLEAN
+LxDrmIsFile(PLX_FILE File)
+{
+    return FALSE;
+}
+
+LONG64
+LxDrmMmap(PLX_PROCESS Process, PLX_FILE File, ULONG64 Address, ULONG64 Length, ULONG Prot, ULONG Flags, ULONG64 Offset)
+{
+    return -LX_ENODEV;
 }
 
 VOID

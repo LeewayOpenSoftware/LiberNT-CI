@@ -747,10 +747,10 @@ Language=English
 
 Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
 
-    ENABLE      Enables LiberNT to automatically assign drive letters
+    ENABLE      Enables Orosi to automatically assign drive letters
                 to volumes that are added to the system.
 
-    DISABLE     Prevents LiberNT from automatically assigning drive letters
+    DISABLE     Prevents Orosi from automatically assigning drive letters
                 to volumes that are added to the system.
 
     SCRUB       Removes mounted folder pathnames, drive letters, mounted
@@ -765,10 +765,10 @@ Syntax:  AUTOMOUNT [ENABLE] [DISABLE] [SCRUB] [NOERR]
                 Without the NOERR parameter, an error causes DiskPart to exit
                 with an error code.
 
-    When the AutoMount feature is enabled, LiberNT automatically brings the
+    When the AutoMount feature is enabled, Orosi automatically brings the
     volume online and assigns a drive letter and a volume GUID pathname to
     the volume, when the volume is added to the system. In storage area network
-    (SAN) configurations, disabling AutoMount prevents LiberNT from automatically
+    (SAN) configurations, disabling AutoMount prevents Orosi from automatically
     onlining the volume and assigning drive letters or volume GUID pathnames
     to any new volumes that are visible to the system.
 
@@ -2904,12 +2904,12 @@ Syntax:  CREATE PARTITION MSR [SIZE=<N>] [OFFSET=<N>] [NOERR]
         Be very careful when using this command. Because GPT disks require a
         specific partition layout, creating Microsoft Reserved partitions could
         cause the disk to become unreadable. On GPT disks that are used to boot
-        LiberNT, the EFI System partition is the first partition on the disk,
+        Orosi, the EFI System partition is the first partition on the disk,
         followed by the Microsoft Reserved partition. GPT disks used only for
         data storage do not have an EFI System partition, in which case the
         Microsoft Reserved partition is the first partition.
 
-    LiberNT does not online Microsoft Reserved partitions. You cannot store data
+    Orosi does not online Microsoft Reserved partitions. You cannot store data
     on them and you cannot delete them.
 
 Example:
@@ -5402,7 +5402,7 @@ SymbolicName=MSG_COMMAND_FORMAT
 Severity=Informational
 Facility=System
 Language=English
-    Formats the specified volume for use with LiberNT.
+    Formats the specified volume for use with Orosi.
 
 Syntax:  FORMAT [[FS=<FS>] [REVISION=<X.XX>] | RECOMMENDED] [LABEL=<"label">]
                 [UNIT=<N>] [QUICK] [COMPRESS] [OVERRIDE] [DUPLICATE] [NOWAIT]
@@ -7046,7 +7046,7 @@ Syntax:  INACTIVE
 
         Your computer might not start without an active partition. Do not mark
         a system or boot partition as inactive unless you are an experienced
-        user with a thorough understanding of LiberNT storage management.
+        user with a thorough understanding of Orosi storage management.
 
 Example:
 

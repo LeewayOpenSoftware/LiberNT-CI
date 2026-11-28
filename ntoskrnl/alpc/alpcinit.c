@@ -1027,8 +1027,9 @@ AlpcpCompleteReply(
     {
         AlpcpSignalWaiter(Message->WaitingThread);
     }
-    else if (!(Message->State & ALPC_MSG_STATE_IMPERSONATING))
+    else if (!(Message->State & (ALPC_MSG_STATE_IN_CANCELED_QUEUE | ALPC_MSG_STATE_IMPERSONATING)))
     {
+        /* A message in a canceled queue is reclaimed by the lookup that finds it, or with the port */
         AlpcpFreeMessage(Message);
     }
 }
@@ -1090,7 +1091,9 @@ AlpcpCompleteWithStatus(
     {
         AlpcpSignalWaiter(Message->WaitingThread);
     }
-    else if (!(Message->State & (ALPC_MSG_STATE_IN_CANCELED_QUEUE | ALPC_MSG_STATE_IMPERSONATING)))
+    else if (!(Message->State & (ALPC_MSG_STATE_IN_CANCELED_QUEUE |
+                                 ALPC_MSG_STATE_IMPERSONATING |
+                                 ALPC_MSG_STATE_ACCEPT_IN_PROGRESS)))
     {
         AlpcpFreeMessage(Message);
     }

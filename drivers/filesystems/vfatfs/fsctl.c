@@ -591,7 +591,6 @@ VfatMount(
 
     /* use same vpb as device disk */
     DeviceObject->Vpb = Vpb;
-    DeviceToMount->Vpb = Vpb;
 
     RtlCopyMemory(&DeviceExt->FatInfo, &FatInfo, sizeof(FATINFO));
 
@@ -650,9 +649,8 @@ VfatMount(
     }
 
     DeviceExt->StorageDevice = DeviceToMount;
-    DeviceExt->StorageDevice->Vpb->DeviceObject = DeviceObject;
-    DeviceExt->StorageDevice->Vpb->RealDevice = DeviceExt->StorageDevice;
-    DeviceExt->StorageDevice->Vpb->Flags |= VPB_MOUNTED;
+    Vpb->DeviceObject = DeviceObject;
+    Vpb->Flags |= VPB_MOUNTED;
     DeviceObject->StackSize = DeviceExt->StorageDevice->StackSize + 1;
     DeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 

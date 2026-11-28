@@ -45,7 +45,7 @@ ServiceBinary = %12%\mouclass.sys
 LoadOrderGroup = Pointer Class
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 StdMfg = "(Standard mice)"
 TpadHid.DeviceDesc = "HID Precision Touchpad"
-TpadHid.ServiceDesc = "LiberNT HID Precision Touchpad Driver"
+TpadHid.ServiceDesc = "Orosi HID Precision Touchpad Driver"

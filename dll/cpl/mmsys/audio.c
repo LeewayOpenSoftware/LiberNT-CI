@@ -311,7 +311,7 @@ AudioDlgProc(HWND hwndDlg,
             {
                 case IDC_VOLUME1_BTN:
                 {
-                    StringCchPrintfW(szPath, _countof(szPath), L"sndvol32.exe -d %d",
+                    StringCchPrintfW(szPath, _countof(szPath), L"sndvol.exe -d %d",
                                      GetDevNum(GetDlgItem(hwndDlg, IDC_DEVICE_PLAY_LIST), MIXER_OBJECTF_WAVEOUT));
 
                     ZeroMemory(&si, sizeof(si));
@@ -335,7 +335,7 @@ AudioDlgProc(HWND hwndDlg,
 
                 case IDC_VOLUME2_BTN:
                 {
-                    StringCchPrintfW(szPath, _countof(szPath), L"sndvol32.exe -r -d %d",
+                    StringCchPrintfW(szPath, _countof(szPath), L"sndvol.exe -r -d %d",
                                      GetDevNum(GetDlgItem(hwndDlg, IDC_DEVICE_REC_LIST), MIXER_OBJECTF_WAVEIN));
 
                     ZeroMemory(&si, sizeof(si));
@@ -359,7 +359,7 @@ AudioDlgProc(HWND hwndDlg,
 
                 case IDC_VOLUME3_BTN:
                 {
-                    StringCchPrintfW(szPath, _countof(szPath), L"sndvol32.exe -d %d",
+                    StringCchPrintfW(szPath, _countof(szPath), L"sndvol.exe -d %d",
                                      GetDevNum(GetDlgItem(hwndDlg, IDC_DEVICE_MIDI_LIST), MIXER_OBJECTF_MIDIOUT));
 
                     ZeroMemory(&si, sizeof(si));

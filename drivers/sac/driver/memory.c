@@ -95,7 +95,8 @@ MyAllocatePool(IN SIZE_T PoolSize,
 {
     PVOID p;
     p = ExAllocatePoolWithTag(NonPagedPool, PoolSize, 'HACK');
-    RtlZeroMemory(p, PoolSize);
+    if (p != NULL)
+        RtlZeroMemory(p, PoolSize);
     SAC_DBG(SAC_DBG_MM, "Returning block 0x%X.\n", p);
     return p;
 #if 0
@@ -114,6 +115,7 @@ MyAllocatePool(IN SIZE_T PoolSize,
 
 #if _USE_SAC_HEAP_ALLOCATOR_
     GlobalDescriptor = GlobalMemoryList;
+    /* FIXME: MemoryLock is already held here and OldIrql is overwritten; enabling this allocator self-deadlocks */
     KeAcquireSpinLock(&MemoryLock, &OldIrql);
     while (GlobalDescriptor)
     {

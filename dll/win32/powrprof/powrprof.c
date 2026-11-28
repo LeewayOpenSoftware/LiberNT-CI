@@ -30,6 +30,7 @@
 #include <ndk/setypes.h>
 #include <powersetting.h>
 #include <powrprof.h>
+#include <rpc.h>
 #include <wine/debug.h>
 #include <wine/unicode.h>
 
@@ -61,6 +62,8 @@ static const GUID PowrProfVideoPowerdownTimeout = { 0x3C0BC021, 0xC8A8, 0x4E07, 
 static const GUID PowrProfSleepSubgroup = { 0x238C9FA8, 0x0AAD, 0x41ED, { 0x83, 0xF4, 0x97, 0xBE, 0x24, 0x2C, 0x8F, 0x20 } };
 static const GUID PowrProfStandbyTimeout = { 0x29F6C1DB, 0x86DA, 0x48C5, { 0x9F, 0xDB, 0xF2, 0xB6, 0x7B, 0x1F, 0x44, 0xDA } };
 static const GUID PowrProfHibernateTimeout = { 0x9D7815A6, 0x7EE4, 0x497E, { 0x88, 0x88, 0x51, 0x5A, 0x05, 0xF0, 0x23, 0x64 } };
+static const GUID PowrProfDiskSubgroup = { 0x0012EE47, 0x9041, 0x4B5D, { 0x9B, 0x77, 0x53, 0x5F, 0xBA, 0x8B, 0x14, 0x42 } };
+static const GUID PowrProfDiskPowerdownTimeout = { 0x6738E2C4, 0xE8A5, 0x4A42, { 0xB1, 0x6A, 0xE0, 0x40, 0xE7, 0x69, 0x75, 0x6E } };
 static const GUID PowrProfButtonSubgroup = { 0x4F971E89, 0xEEBD, 0x4455, { 0xA8, 0xDE, 0x9E, 0x59, 0x04, 0x0E, 0x73, 0x47 } };
 static const GUID PowrProfPowerButtonAction = { 0x7648EFA3, 0xDD9C, 0x4E3E, { 0xB5, 0x66, 0x50, 0xF9, 0x29, 0x38, 0x62, 0x80 } };
 static const POWER_ACTION PowrProfButtonActions[] = { PowerActionNone, PowerActionSleep, PowerActionHibernate, PowerActionShutdownOff };
@@ -79,6 +82,8 @@ typedef struct _POWRPROF_SCHEME_DEFAULTS
     DWORD DcVideoTimeout;
     DWORD AcSleepTimeout;
     DWORD DcSleepTimeout;
+    DWORD AcDiskTimeout;
+    DWORD DcDiskTimeout;
     LPCWSTR Name;
     LPCWSTR Description;
 } POWRPROF_SCHEME_DEFAULTS;
@@ -103,13 +108,15 @@ static const WCHAR szModernPowerSchemes[] = L"Control Panel\\PowerCfg\\PowerSche
 static const WCHAR szActivePowerScheme[] = L"ActivePowerScheme";
 static const WCHAR szAcSettingIndex[] = L"ACSettingIndex";
 static const WCHAR szDcSettingIndex[] = L"DCSettingIndex";
+static const WCHAR szPersonality[] = L"Personality";
+static const WCHAR szDeleted[] = L"Deleted";
 static const POWRPROF_SCHEME_DEFAULTS PowrProfSchemes[] =
 {
-    {&GUID_TYPICAL_POWER_SAVINGS, 0, 5, 5, 100, 100, 33, 50, 600, 300, 1800, 900,
+    {&GUID_TYPICAL_POWER_SAVINGS, 0, 5, 5, 100, 100, 33, 50, 600, 300, 1800, 900, 1200, 600,
      L"Balanced", L"Automatically balances performance with energy consumption on capable hardware."},
-    {&GUID_MAX_POWER_SAVINGS, 5, 5, 5, 100, 100, 60, 60, 300, 120, 900, 600,
+    {&GUID_MAX_POWER_SAVINGS, 5, 5, 5, 100, 100, 60, 60, 300, 120, 900, 600, 1200, 300,
      L"Power saver", L"Saves energy by reducing your computer's performance where possible."},
-    {&GUID_MIN_POWER_SAVINGS, 4, 100, 5, 100, 100, 0, 0, 900, 900, 0, 1200,
+    {&GUID_MIN_POWER_SAVINGS, 4, 100, 5, 100, 100, 0, 0, 900, 900, 0, 1200, 1200, 1200,
      L"High performance", L"Favors performance, but may use more energy."}
 };
 
@@ -140,20 +147,53 @@ POWRPROF_IsPercentSetting(
            IsEqualGUID(Setting, &GUID_PROCESSOR_PERF_ENERGY_PERFORMANCE_PREFERENCE);
 }
 
+static DWORD
+POWRPROF_OpenSchemeKey(
+    const GUID *Scheme,
+    REGSAM Access,
+    BOOL Create,
+    HKEY *Key);
+
 static const POWRPROF_SCHEME_DEFAULTS *
-POWRPROF_FindScheme(
+POWRPROF_FindBuiltinScheme(
     const GUID *Scheme)
 {
     UINT Index;
 
-    if (!Scheme)
-        return NULL;
     for (Index = 0; Index < sizeof(PowrProfSchemes) / sizeof(PowrProfSchemes[0]); Index++)
     {
         if (IsEqualGUID(PowrProfSchemes[Index].Guid, Scheme))
             return &PowrProfSchemes[Index];
     }
     return NULL;
+}
+
+static const POWRPROF_SCHEME_DEFAULTS *
+POWRPROF_FindScheme(
+    const GUID *Scheme)
+{
+    const POWRPROF_SCHEME_DEFAULTS *Builtin, *Defaults;
+    GUID Personality;
+    HKEY Key;
+    DWORD Type, Size, Error;
+
+    if (!Scheme)
+        return NULL;
+    Builtin = POWRPROF_FindBuiltinScheme(Scheme);
+    if (POWRPROF_OpenSchemeKey(Scheme, KEY_QUERY_VALUE, FALSE, &Key) != ERROR_SUCCESS)
+        return Builtin;
+    if (Builtin && RegQueryValueExW(Key, szDeleted, NULL, NULL, NULL, NULL) == ERROR_SUCCESS)
+    {
+        RegCloseKey(Key);
+        return NULL;
+    }
+    Size = sizeof(Personality);
+    Error = RegQueryValueExW(Key, szPersonality, NULL, &Type, (BYTE *)&Personality, &Size);
+    RegCloseKey(Key);
+    if (Error != ERROR_SUCCESS || Type != REG_BINARY || Size != sizeof(Personality))
+        return Builtin;
+    Defaults = POWRPROF_FindBuiltinScheme(&Personality);
+    return Defaults ? Defaults : Builtin;
 }
 
 static const GUID *
@@ -283,11 +323,12 @@ POWRPROF_GetSettingDefaults(
     BOOL AcValue,
     DWORD *Value)
 {
+    const POWRPROF_SCHEME_DEFAULTS *Defaults;
     DWORD Error;
 
     Error = POWRPROF_GetBuiltinSettingDefaults(Scheme, Subgroup, Setting, AcValue, Value);
-    if (Error == ERROR_FILE_NOT_FOUND && POWRPROF_FindScheme(Scheme))
-        Error = POWRPROF_GetDefinedSettingDefault(Scheme, Subgroup, Setting, AcValue, Value);
+    if (Error == ERROR_FILE_NOT_FOUND && (Defaults = POWRPROF_FindScheme(Scheme)) != NULL)
+        Error = POWRPROF_GetDefinedSettingDefault(Defaults->Guid, Subgroup, Setting, AcValue, Value);
     return Error;
 }
 
@@ -323,6 +364,13 @@ POWRPROF_GetBuiltinSettingDefaults(
             *Value = 0;
         else
             return ERROR_FILE_NOT_FOUND;
+        return ERROR_SUCCESS;
+    }
+    if (IsEqualGUID(Subgroup, &PowrProfDiskSubgroup))
+    {
+        if (!IsEqualGUID(Setting, &PowrProfDiskPowerdownTimeout))
+            return ERROR_FILE_NOT_FOUND;
+        *Value = AcValue ? Defaults->AcDiskTimeout : Defaults->DcDiskTimeout;
         return ERROR_SUCCESS;
     }
     if (IsEqualGUID(Subgroup, &PowrProfButtonSubgroup))
@@ -579,6 +627,34 @@ POWRPROF_ApplyProcessorPolicyValues(
 }
 
 static DWORD
+POWRPROF_WriteLegacyPolicy(
+    const GUID *Scheme,
+    const POWER_POLICY *Policy)
+{
+    DWORD Values[4][2];
+    const GUID *Subgroups[4] = { &PowrProfVideoSubgroup, &PowrProfSleepSubgroup, &PowrProfSleepSubgroup, &PowrProfDiskSubgroup };
+    const GUID *Settings[4] = { &PowrProfVideoPowerdownTimeout, &PowrProfStandbyTimeout, &PowrProfHibernateTimeout, &PowrProfDiskPowerdownTimeout };
+    DWORD Error = ERROR_SUCCESS;
+    UINT Index;
+
+    Values[0][PoAc] = Policy->user.VideoTimeoutAc;
+    Values[0][PoDc] = Policy->user.VideoTimeoutDc;
+    Values[1][PoAc] = Policy->user.IdleAc.Action == PowerActionSleep ? Policy->user.IdleTimeoutAc : 0;
+    Values[1][PoDc] = Policy->user.IdleDc.Action == PowerActionSleep ? Policy->user.IdleTimeoutDc : 0;
+    Values[2][PoAc] = Policy->mach.DozeS4TimeoutAc ? Policy->user.IdleTimeoutAc + Policy->mach.DozeS4TimeoutAc : 0;
+    Values[2][PoDc] = Policy->mach.DozeS4TimeoutDc ? Policy->user.IdleTimeoutDc + Policy->mach.DozeS4TimeoutDc : 0;
+    Values[3][PoAc] = Policy->user.SpindownTimeoutAc;
+    Values[3][PoDc] = Policy->user.SpindownTimeoutDc;
+    for (Index = 0; Index < _countof(Values) && Error == ERROR_SUCCESS; Index++)
+    {
+        Error = POWRPROF_WriteValueIndex(Scheme, Subgroups[Index], Settings[Index], TRUE, Values[Index][PoAc]);
+        if (Error == ERROR_SUCCESS)
+            Error = POWRPROF_WriteValueIndex(Scheme, Subgroups[Index], Settings[Index], FALSE, Values[Index][PoDc]);
+    }
+    return Error;
+}
+
+static DWORD
 POWRPROF_ApplyScheme(
     const GUID *Scheme,
     BOOL UpdateLegacy)
@@ -638,29 +714,7 @@ POWRPROF_ApplyScheme(
     if (Error == ERROR_SUCCESS)
         Error = POWRPROF_PersistActiveScheme(Scheme, Defaults->LegacyId, UpdateLegacy);
     if (Error == ERROR_SUCCESS)
-    {
-        POWER_POLICY Policy;
-        UINT LegacyId = Defaults->LegacyId;
-        WCHAR LegacyNum[16];
-        DWORD VideoAc, VideoDc, SleepAc, SleepDc;
-        swprintf(LegacyNum, L"%u", LegacyId);
-        if (POWRPROF_GetUserPowerPolicy(LegacyNum, &Policy.user, 0, NULL, 0, NULL) &&
-            POWRPROF_GetMachinePowerPolicy(LegacyNum, &Policy.mach) &&
-            POWRPROF_ReadValueIndex(Scheme, &PowrProfVideoSubgroup, &PowrProfVideoPowerdownTimeout, TRUE, &VideoAc) == ERROR_SUCCESS &&
-            POWRPROF_ReadValueIndex(Scheme, &PowrProfVideoSubgroup, &PowrProfVideoPowerdownTimeout, FALSE, &VideoDc) == ERROR_SUCCESS &&
-            POWRPROF_ReadValueIndex(Scheme, &PowrProfSleepSubgroup, &PowrProfStandbyTimeout, TRUE, &SleepAc) == ERROR_SUCCESS &&
-            POWRPROF_ReadValueIndex(Scheme, &PowrProfSleepSubgroup, &PowrProfStandbyTimeout, FALSE, &SleepDc) == ERROR_SUCCESS)
-        {
-            Policy.user.VideoTimeoutAc = VideoAc;
-            Policy.user.VideoTimeoutDc = VideoDc;
-            Policy.user.IdleTimeoutAc = SleepAc;
-            Policy.user.IdleTimeoutDc = SleepDc;
-            Policy.user.IdleAc.Action = SleepAc ? PowerActionSleep : PowerActionNone;
-            Policy.user.IdleDc.Action = SleepDc ? PowerActionSleep : PowerActionNone;
-            (void)WritePwrPolicy(&LegacyId, &Policy);
-        }
         return ERROR_SUCCESS;
-    }
 
     if (POWRPROF_ReadProcessorPolicyValues(&OldScheme, TRUE, &OldValues[PoAc]) == ERROR_SUCCESS &&
         POWRPROF_ReadProcessorPolicyValues(&OldScheme, FALSE, &OldValues[PoDc]) == ERROR_SUCCESS)
@@ -835,11 +889,8 @@ CreatePwrProfSemaphoreSecurity(
     if (!SetSecurityDescriptorDacl(&AbsSd, TRUE, Dacl, FALSE))
         goto Quit;
 
-    if (!SetSecurityDescriptorOwner(&AbsSd, AdminsSid, FALSE))
-        goto Quit;
-
-    if (!SetSecurityDescriptorGroup(&AbsSd, SystemSid, FALSE))
-        goto Quit;
+    /* Owner and group come from the creating process's token: any process may create
+     * the semaphore, and a process can only name an owner it could be */
 
     /* Retrieve the size needed for the relative SD */
     if (MakeSelfRelativeSD(&AbsSd, NULL, &RelSDSize) ||
@@ -1480,6 +1531,173 @@ DWORD WINAPI PowerSetActiveScheme(HKEY UserRootPowerKey, const GUID *polguid)
 }
 
 static DWORD
+POWRPROF_DeleteSchemeKey(
+    const GUID *Scheme)
+{
+    WCHAR SchemeString[39];
+    WCHAR Path[MAX_PATH];
+
+    POWRPROF_FormatGuid(SchemeString, Scheme);
+    swprintf(Path, L"%s\\%s", szModernPowerSchemes, SchemeString);
+    return RegDeleteTreeW(HKEY_CURRENT_USER, Path);
+}
+
+static DWORD
+POWRPROF_DeleteBuiltinScheme(
+    const GUID *Scheme)
+{
+    HKEY Key;
+    DWORD Value = 1, Error;
+
+    ASSERT(POWRPROF_FindBuiltinScheme(Scheme));
+    Error = POWRPROF_DeleteSchemeKey(Scheme);
+    if (Error != ERROR_SUCCESS && Error != ERROR_FILE_NOT_FOUND && Error != ERROR_PATH_NOT_FOUND)
+        return Error;
+    Error = POWRPROF_OpenSchemeKey(Scheme, KEY_SET_VALUE, TRUE, &Key);
+    if (Error != ERROR_SUCCESS)
+        return Error;
+    Error = RegSetValueExW(Key, szDeleted, 0, REG_DWORD, (const BYTE *)&Value, sizeof(Value));
+    RegCloseKey(Key);
+    return Error;
+}
+
+static DWORD
+POWRPROF_SetMissingSchemeText(
+    HKEY Key,
+    LPCWSTR ValueName,
+    LPCWSTR Text)
+{
+    DWORD Error;
+
+    Error = RegQueryValueExW(Key, ValueName, NULL, NULL, NULL, NULL);
+    if (Error != ERROR_FILE_NOT_FOUND)
+        return Error;
+    return RegSetValueExW(Key, ValueName, 0, REG_SZ, (const BYTE *)Text, (strlenW(Text) + 1) * sizeof(WCHAR));
+}
+
+static DWORD
+POWRPROF_CopyScheme(
+    const GUID *Source,
+    const GUID *Destination)
+{
+    const POWRPROF_SCHEME_DEFAULTS *Defaults;
+    HKEY SourceKey, DestinationKey;
+    DWORD Error;
+
+    Defaults = POWRPROF_FindScheme(Source);
+    if (!Defaults)
+        return ERROR_FILE_NOT_FOUND;
+    if (POWRPROF_FindScheme(Destination))
+        return ERROR_ALREADY_EXISTS;
+    Error = POWRPROF_OpenSchemeKey(Destination, KEY_QUERY_VALUE, FALSE, &DestinationKey);
+    if (Error == ERROR_SUCCESS)
+    {
+        RegCloseKey(DestinationKey);
+        if (!POWRPROF_FindBuiltinScheme(Destination))
+            return ERROR_ALREADY_EXISTS;
+        Error = POWRPROF_DeleteSchemeKey(Destination);
+        if (Error != ERROR_SUCCESS)
+            return Error;
+    }
+    Error = POWRPROF_OpenSchemeKey(Destination, KEY_ALL_ACCESS, TRUE, &DestinationKey);
+    if (Error != ERROR_SUCCESS)
+        return Error;
+    Error = POWRPROF_OpenSchemeKey(Source, KEY_READ, FALSE, &SourceKey);
+    if (Error == ERROR_SUCCESS)
+    {
+        Error = RegCopyTreeW(SourceKey, NULL, DestinationKey);
+        RegCloseKey(SourceKey);
+    }
+    else if (Error == ERROR_FILE_NOT_FOUND || Error == ERROR_PATH_NOT_FOUND)
+    {
+        Error = ERROR_SUCCESS;
+    }
+    if (Error == ERROR_SUCCESS)
+        Error = RegSetValueExW(DestinationKey, szPersonality, 0, REG_BINARY, (const BYTE *)Defaults->Guid, sizeof(*Defaults->Guid));
+    if (Error == ERROR_SUCCESS)
+        Error = POWRPROF_SetMissingSchemeText(DestinationKey, szFriendlyName, Defaults->Name);
+    if (Error == ERROR_SUCCESS)
+        Error = POWRPROF_SetMissingSchemeText(DestinationKey, szSettingDescription, Defaults->Description);
+    RegCloseKey(DestinationKey);
+    if (Error != ERROR_SUCCESS)
+        (void)POWRPROF_DeleteSchemeKey(Destination);
+    ASSERT(Error != ERROR_SUCCESS || POWRPROF_FindScheme(Destination) == Defaults);
+    return Error;
+}
+
+DWORD WINAPI
+PowerDuplicateScheme(HKEY RootPowerKey, const GUID *SourceSchemeGuid, GUID **DestinationSchemeGuid)
+{
+    GUID *Allocated = NULL;
+    GUID Destination;
+    RPC_STATUS RpcStatus;
+    DWORD Error;
+
+    TRACE("(%p,%s,%p)\n", RootPowerKey, debugstr_guid(SourceSchemeGuid), DestinationSchemeGuid);
+    UNREFERENCED_PARAMETER(RootPowerKey);
+    if (!SourceSchemeGuid || !DestinationSchemeGuid)
+        return ERROR_INVALID_PARAMETER;
+    if (*DestinationSchemeGuid)
+    {
+        Destination = **DestinationSchemeGuid;
+    }
+    else
+    {
+        RpcStatus = UuidCreate(&Destination);
+        if (RpcStatus != RPC_S_OK && RpcStatus != RPC_S_UUID_LOCAL_ONLY)
+            return RpcStatus;
+        Allocated = LocalAlloc(LMEM_FIXED, sizeof(*Allocated));
+        if (!Allocated)
+            return ERROR_NOT_ENOUGH_MEMORY;
+    }
+    Error = AcquirePwrProfSemaphoreError();
+    if (Error == ERROR_SUCCESS)
+    {
+        Error = POWRPROF_CopyScheme(SourceSchemeGuid, &Destination);
+        ReleaseSemaphore(PPRegSemaphore, 1, NULL);
+    }
+    if (Error != ERROR_SUCCESS)
+    {
+        LocalFree(Allocated);
+        return Error;
+    }
+    if (Allocated)
+    {
+        *Allocated = Destination;
+        *DestinationSchemeGuid = Allocated;
+    }
+    return ERROR_SUCCESS;
+}
+
+DWORD WINAPI
+PowerDeleteScheme(HKEY RootPowerKey, const GUID *SchemeGuid)
+{
+    GUID Active;
+    DWORD Error;
+
+    TRACE("(%p,%s)\n", RootPowerKey, debugstr_guid(SchemeGuid));
+    UNREFERENCED_PARAMETER(RootPowerKey);
+    if (!SchemeGuid)
+        return ERROR_INVALID_PARAMETER;
+    Error = AcquirePwrProfSemaphoreError();
+    if (Error != ERROR_SUCCESS)
+        return Error;
+    if (!POWRPROF_FindScheme(SchemeGuid))
+        Error = ERROR_FILE_NOT_FOUND;
+    else
+        Error = POWRPROF_ReadActiveScheme(&Active, NULL);
+    if (Error == ERROR_SUCCESS && IsEqualGUID(&Active, SchemeGuid))
+        Error = ERROR_NOT_SUPPORTED;
+    else if (Error == ERROR_SUCCESS && POWRPROF_FindBuiltinScheme(SchemeGuid))
+        Error = POWRPROF_DeleteBuiltinScheme(SchemeGuid);
+    else if (Error == ERROR_SUCCESS)
+        Error = POWRPROF_DeleteSchemeKey(SchemeGuid);
+    ASSERT(Error != ERROR_SUCCESS || !POWRPROF_FindScheme(SchemeGuid));
+    ReleaseSemaphore(PPRegSemaphore, 1, NULL);
+    return Error;
+}
+
+static DWORD
 POWRPROF_ReadValue(
     const GUID *Scheme,
     const GUID *SubGroup,
@@ -1685,6 +1903,47 @@ POWRPROF_ReturnGuid(
     return ERROR_SUCCESS;
 }
 
+static DWORD
+POWRPROF_EnumerateCustomScheme(
+    ULONG Index,
+    UCHAR *Buffer,
+    DWORD *BufferSize)
+{
+    WCHAR Name[40];
+    UNICODE_STRING String;
+    GUID Scheme;
+    HKEY Key;
+    DWORD Length, Error;
+    ULONG Found = 0, KeyIndex;
+
+    Error = RegOpenKeyExW(HKEY_CURRENT_USER, szModernPowerSchemes, 0, KEY_ENUMERATE_SUB_KEYS, &Key);
+    if (Error == ERROR_FILE_NOT_FOUND || Error == ERROR_PATH_NOT_FOUND)
+        return ERROR_NO_MORE_ITEMS;
+    if (Error != ERROR_SUCCESS)
+        return Error;
+    for (KeyIndex = 0;; KeyIndex++)
+    {
+        Length = _countof(Name);
+        Error = RegEnumKeyExW(Key, KeyIndex, Name, &Length, NULL, NULL, NULL, NULL);
+        if (Error == ERROR_MORE_DATA)
+            continue;
+        if (Error != ERROR_SUCCESS)
+            break;
+        RtlInitUnicodeString(&String, Name);
+        if (!NT_SUCCESS(RtlGUIDFromString(&String, &Scheme)))
+            continue;
+        if (POWRPROF_FindBuiltinScheme(&Scheme) || !POWRPROF_FindScheme(&Scheme))
+            continue;
+        if (Found++ == Index)
+        {
+            RegCloseKey(Key);
+            return POWRPROF_ReturnGuid(&Scheme, Buffer, BufferSize);
+        }
+    }
+    RegCloseKey(Key);
+    return Error == ERROR_NO_MORE_ITEMS ? ERROR_NO_MORE_ITEMS : Error;
+}
+
 DWORD WINAPI PowerEnumerate(HKEY key, const GUID *scheme, const GUID *subgroup, POWER_DATA_ACCESSOR flags,
                         ULONG index, UCHAR *buffer, DWORD *buffer_size)
 {
@@ -1696,10 +1955,12 @@ DWORD WINAPI PowerEnumerate(HKEY key, const GUID *scheme, const GUID *subgroup, 
     switch (flags)
     {
         case ACCESS_SCHEME:
-            Count = sizeof(PowrProfSchemes) / sizeof(PowrProfSchemes[0]);
-            if (index >= Count)
-                return ERROR_NO_MORE_ITEMS;
-            return POWRPROF_ReturnGuid(PowrProfSchemes[index].Guid, buffer, buffer_size);
+            for (Count = 0; Count < sizeof(PowrProfSchemes) / sizeof(PowrProfSchemes[0]); Count++)
+            {
+                if (POWRPROF_FindScheme(PowrProfSchemes[Count].Guid) && Found++ == index)
+                    return POWRPROF_ReturnGuid(PowrProfSchemes[Count].Guid, buffer, buffer_size);
+            }
+            return POWRPROF_EnumerateCustomScheme(index - Found, buffer, buffer_size);
 
         case ACCESS_SUBGROUP:
             if (scheme && !POWRPROF_FindScheme(scheme))
@@ -2020,6 +2281,24 @@ DWORD WINAPI PowerRemovePowerSetting(const GUID *PowerSettingSubKeyGuid, const G
     }
     ReleaseSemaphore(PPRegSemaphore, 1, NULL);
     return Error;
+}
+
+DWORD WINAPI PowerReadACDefaultIndex(HKEY RootPowerKey, const GUID *SchemePersonalityGuid, const GUID *SubGroupOfPowerSettingsGuid, const GUID *PowerSettingGuid, LPDWORD AcDefaultIndex)
+{
+    TRACE("(%p,%s,%s,%s,%p)\n", RootPowerKey, debugstr_guid(SchemePersonalityGuid), debugstr_guid(SubGroupOfPowerSettingsGuid), debugstr_guid(PowerSettingGuid), AcDefaultIndex);
+
+    if (!SchemePersonalityGuid || !PowerSettingGuid || !AcDefaultIndex)
+        return ERROR_INVALID_PARAMETER;
+    return POWRPROF_GetSettingDefaults(SchemePersonalityGuid, SubGroupOfPowerSettingsGuid, PowerSettingGuid, TRUE, AcDefaultIndex);
+}
+
+DWORD WINAPI PowerReadDCDefaultIndex(HKEY RootPowerKey, const GUID *SchemePersonalityGuid, const GUID *SubGroupOfPowerSettingsGuid, const GUID *PowerSettingGuid, LPDWORD DcDefaultIndex)
+{
+    TRACE("(%p,%s,%s,%s,%p)\n", RootPowerKey, debugstr_guid(SchemePersonalityGuid), debugstr_guid(SubGroupOfPowerSettingsGuid), debugstr_guid(PowerSettingGuid), DcDefaultIndex);
+
+    if (!SchemePersonalityGuid || !PowerSettingGuid || !DcDefaultIndex)
+        return ERROR_INVALID_PARAMETER;
+    return POWRPROF_GetSettingDefaults(SchemePersonalityGuid, SubGroupOfPowerSettingsGuid, PowerSettingGuid, FALSE, DcDefaultIndex);
 }
 
 DWORD WINAPI PowerWriteACDefaultIndex(HKEY RootSystemPowerKey, const GUID *SchemePersonalityGuid, const GUID *SubGroupOfPowerSettingsGuid, const GUID *PowerSettingGuid, DWORD DefaultAcIndex)
@@ -2372,6 +2651,15 @@ SetActivePwrScheme(UINT uiID,
     {
         SetLastError(Error);
         return FALSE;
+    }
+    if (lpPowerPolicy != NULL)
+    {
+        Error = POWRPROF_WriteLegacyPolicy(POWRPROF_MapLegacyScheme(uiID), lpPowerPolicy);
+        if (Error != ERROR_SUCCESS)
+        {
+            SetLastError(Error);
+            return FALSE;
+        }
     }
     Error = POWRPROF_ApplyScheme(POWRPROF_MapLegacyScheme(uiID), FALSE);
     if (Error != ERROR_SUCCESS)

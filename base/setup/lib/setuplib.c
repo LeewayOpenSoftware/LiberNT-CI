@@ -222,6 +222,13 @@ CheckUnattendedSetup(
         INF_FreeData(Value);
     }
 
+    if (SpInfFindFirstLine(UnattendInf, L"Unattend", L"Upgrade", &Context) &&
+        INF_GetData(&Context, NULL, &Value))
+    {
+        pSetupData->Upgrade = (_wcsicmp(Value, L"yes") == 0);
+        INF_FreeData(Value);
+    }
+
     /* Check if Unattend setup is enabled */
     if (!SpInfFindFirstLine(UnattendInf, L"Unattend", L"UnattendSetupEnabled", &Context))
     {
@@ -376,6 +383,8 @@ GetSourcePaths(
     struct { OBJECT_NAME_INFORMATION; WCHAR Buffer[MAX_PATH]; } SystemRootBuffer;
     PUNICODE_STRING SystemRootPath = &SystemRootBuffer.Name;
     const UNICODE_STRING SystemRoot = RTL_CONSTANT_STRING(L"\\SystemRoot");
+    const UNICODE_STRING OobeDir = RTL_CONSTANT_STRING(L"\\system32\\oobe");
+    UNICODE_STRING Tail;
 
     /* Retrieve the installer's full image file path */
     RtlInitEmptyUnicodeString(InstallSourcePath,
@@ -400,6 +409,18 @@ GetSourcePaths(
      * and manually NULL-terminate */
     InstallSourcePath->Length = (ULONG_PTR)Ptr - (ULONG_PTR)ImageFileBuffer.Buffer;
     InstallSourcePath->Buffer[InstallSourcePath->Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+    /* The GUI installer runs from <source>\system32\oobe */
+    if (InstallSourcePath->Length > OobeDir.Length)
+    {
+        Tail.Buffer = (PWCHAR)((ULONG_PTR)InstallSourcePath->Buffer + InstallSourcePath->Length - OobeDir.Length);
+        Tail.Length = Tail.MaximumLength = OobeDir.Length;
+        if (RtlEqualUnicodeString(&Tail, &OobeDir, TRUE))
+        {
+            InstallSourcePath->Length -= OobeDir.Length;
+            InstallSourcePath->Buffer[InstallSourcePath->Length / sizeof(WCHAR)] = UNICODE_NULL;
+        }
+    }
 
 
     /*
@@ -1142,6 +1163,7 @@ UpdateRegistry(
     BOOLEAN Success;
     BOOLEAN ShouldRepairRegistry = FALSE;
     BOOLEAN Delete;
+    PVOID KeptSettings = NULL;
 
     if (RepairUpdateFlag)
     {
@@ -1218,6 +1240,15 @@ DoUpdate:
             DPRINT1("No update needed for the registry!\n");
             goto Cleanup;
         }
+
+        KeptSettings = RegSaveKeptSettings(pSetupData->SetupInf, L"HiveInfs.Upgrade.Keep");
+
+        /*
+         * State of a component this version no longer has: the installed copy
+         * keeps its service registration and its own keys otherwise, because
+         * an upgrade only replaces what the new inventory still lists.
+         */
+        RegRemoveObsoleteSettings(pSetupData->SetupInf, L"HiveInfs.Upgrade.Remove");
     }
 
     do
@@ -1353,6 +1384,9 @@ DoUpdate:
 #endif
 
 Cleanup:
+    RegRestoreKeptSettings(KeptSettings);
+    KeptSettings = NULL;
+
     //
     // TODO: Unload all the registry stuff, perform cleanup,
     // and copy the created hive files into .sav files.

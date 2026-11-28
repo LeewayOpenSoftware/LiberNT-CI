@@ -220,7 +220,7 @@ ObInit2(VOID)
     PGENERAL_LOOKASIDE CurrentList = NULL;
 
     /* Now allocate the per-processor lists */
-    for (i = 0; i < KeNumberProcessors; i++)
+    for (i = 0; i < KiNumberProcessors; i++)
     {
         /* Get the PRCB for this CPU */
         Prcb = KiProcessorBlock[(int)i];
@@ -524,7 +524,8 @@ ObPostPhase0:
                                          &NameInfo->Name,
                                          OBJ_CASE_INSENSITIVE,
                                          FALSE,
-                                         &Context))
+                                         &Context,
+                                         NULL))
             {
                 /* Insert this object type */
                 ObpInsertEntryDirectory(ObpTypeDirectoryObject,

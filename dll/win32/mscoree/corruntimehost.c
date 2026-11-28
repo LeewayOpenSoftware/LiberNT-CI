@@ -2060,6 +2060,7 @@ static void FixupVTable(HMODULE hmodule)
 
 __int32 WINAPI _CorExeMain(void)
 {
+    FARPROC forward = mscoree_get_real_export("_CorExeMain");
     static const WCHAR dotconfig[] = {'.','c','o','n','f','i','g',0};
     static const WCHAR scW[] = {';',0};
     int exit_code;
@@ -2078,6 +2079,9 @@ __int32 WINAPI _CorExeMain(void)
     parsed_config_file parsed_config;
     HRESULT hr;
     int i, number_of_private_paths = 0;
+
+    if (forward)
+        return ((__int32 (WINAPI *)(void))forward)();
 
 #ifdef __REACTOS__
     if (!get_utf8_args(&argc, &argv)) return -1;
@@ -2188,10 +2192,14 @@ __int32 WINAPI _CorExeMain(void)
 
 BOOL WINAPI _CorDllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
+    FARPROC forward = mscoree_get_real_export("_CorDllMain");
     ASSEMBLY *assembly=NULL;
     HRESULT hr;
 
     TRACE("(%p, %ld, %p)\n", hinstDLL, fdwReason, lpvReserved);
+
+    if (forward)
+        return ((BOOL (WINAPI *)(HINSTANCE, DWORD, LPVOID))forward)(hinstDLL, fdwReason, lpvReserved);
 
     hr = assembly_from_hmodule(&assembly, hinstDLL);
     if (SUCCEEDED(hr))

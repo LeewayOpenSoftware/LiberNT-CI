@@ -299,6 +299,19 @@ DEFINE_GUID(GUID_ECP_OPLOCK_KEY, 0x48850596, 0x3050, 0x4be7, 0x98, 0x63, 0xfe, 0
 
 #endif
 
+#if (NTDDI_VERSION >= NTDDI_WIN8)
+
+typedef struct _DUAL_OPLOCK_KEY_ECP_CONTEXT {
+  GUID ParentOplockKey;
+  GUID TargetOplockKey;
+  BOOLEAN ParentOplockKeySet;
+  BOOLEAN TargetOplockKeySet;
+} DUAL_OPLOCK_KEY_ECP_CONTEXT, *PDUAL_OPLOCK_KEY_ECP_CONTEXT;
+
+DEFINE_GUID(GUID_ECP_DUAL_OPLOCK_KEY, 0x41621a14, 0xb08b, 0x4df1, 0xb6, 0x76, 0xa0, 0x5f, 0xfd, 0xf0, 0x1b, 0xea);
+
+#endif
+
 typedef PVOID PNOTIFY_SYNC;
 
 #if (NTDDI_VERSION >= NTDDI_WIN7)

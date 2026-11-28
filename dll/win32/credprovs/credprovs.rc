@@ -1,0 +1,30 @@
+#define REACTOS_VERSION_DLL
+#define REACTOS_STR_FILE_DESCRIPTION  "Credential Providers"
+#define REACTOS_STR_INTERNAL_NAME     "credprovs"
+#define REACTOS_STR_ORIGINAL_FILENAME "credprovs.dll"
+#include <reactos/version.rc>
+
+#include <windef.h>
+#include "resource.h"
+
+/* @makedep: credprovs.rgs */
+1 WINE_REGISTRY credprovs.rgs
+
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+
+STRINGTABLE
+BEGIN
+    IDS_FRIENDLY_OTHER_USER     "Other user"
+    IDS_FRIENDLY_NAME           "Friendly name"
+    IDS_USERNAME                "User name"
+    IDS_PASSWORD                "Password"
+    IDS_NEW_PASSWORD            "New password"
+    IDS_CONFIRM_PASSWORD        "Confirm password"
+    IDS_SUBMIT                  "Submit"
+    IDS_PROVIDER_LABEL          "Password"
+    IDS_BAD_USER_OR_PASSWORD    "The user name or password is incorrect. Try again."
+    IDS_BAD_PASSWORD            "The password is incorrect. Try again."
+    IDS_PASSWORD_EXPIRED        "Your password has expired and must be changed."
+    IDS_PASSWORD_MISMATCH       "The passwords you entered did not match."
+    IDS_PASSWORD_CHANGED        "Your password has been changed."
+END

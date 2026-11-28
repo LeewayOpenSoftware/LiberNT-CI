@@ -10,6 +10,7 @@
 #include "mmharness.h"
 #include "ntsessionshim.h"
 
+PMI_SYSTEM MiSessionTestSystem;
 _Thread_local PEPROCESS MiSessionTestCurrent;
 volatile LONG MiSessionTestAllocations;
 volatile LONG MiSessionTestFailAllocate;
@@ -24,6 +25,8 @@ SessionProcessInitialize(PEPROCESS Process, PMI_PROCESS Native)
     Process->References = 1;
     Process->AddressSpaceInitialized = 2;
     Process->Vm.VmWorkingSetList = Native;
+    Native->Space.RootFrame = MiPfnAllocatePage(&MiSessionTestSystem->Pfn, 0);
+    CHECK(Native->Space.RootFrame != MI_FRAME_INVALID && Native->Space.RootFrame != 0);
 }
 
 static void
@@ -248,11 +251,55 @@ SessionMoveProcess(void)
     MiSessionTestCurrent = NULL;
 }
 
+static void
+SessionMultipleMembers(void)
+{
+    struct _EPROCESS_HOST Leader, Members[12];
+    MI_PROCESS LeaderNative, Native[12];
+    ULONG Id, i;
+    PVOID Session;
+
+    SessionProcessInitialize(&Leader, &LeaderNative);
+    MiSessionTestCurrent = &Leader;
+    CHECK(MmSessionCreate(&Id) == STATUS_SUCCESS);
+    Session = MmGetSessionById(Id);
+    CHECK(Session != NULL);
+    for (i = 0; i < RTL_NUMBER_OF(Members); i++)
+    {
+        SessionProcessInitialize(&Members[i], &Native[i]);
+        MiSessionAddProcess(&Members[i]);
+        CHECK(Members[i].Session == Session && MmGetSessionId(&Members[i]) == Id);
+    }
+    for (i = 1; i < RTL_NUMBER_OF(Members); i += 2)
+    {
+        MiSessionRemoveProcess(&Members[i]);
+        CHECK(Members[i].Session == NULL && !(Members[i].Flags & PSF_PROCESS_IN_SESSION_BIT));
+    }
+    CHECK(MmSessionDelete(Id) == STATUS_SUCCESS);
+    for (i = 0; i < RTL_NUMBER_OF(Members); i += 2)
+    {
+        CHECK(MmGetSessionId(&Members[i]) == Id);
+        MiSessionRemoveProcess(&Members[i]);
+    }
+    CHECK(MmGetSessionById(Id) == NULL);
+    MmQuitNextSession(Session);
+    MiSessionRemoveProcess(&Leader);
+    CHECK(MiSessionTestAllocations == 0);
+    MiSessionTestCurrent = NULL;
+}
+
 void
 TestSession(void)
 {
+    TEST_WORLD World;
+
+    WorldCreate(&World, 256, 1, 1024);
+    MiSessionTestSystem = &World.System;
+    SessionMultipleMembers();
     SessionCreateRace();
     SessionLifecycle();
     SessionAttachRundown();
     SessionMoveProcess();
+    MiSessionTestSystem = NULL;
+    WorldDestroy(&World);
 }

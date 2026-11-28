@@ -702,7 +702,10 @@ ObIsLUIDDeviceMapsEnabled(VOID)
 }
 
 
-#if 0
+/*
+ * Index is the drive letter numbered from 1 (A) to 26 (Z). The drive map
+ * numbers its bits from 0 (A), as PROCESS_DEVICEMAP_INFORMATION does.
+ */
 NTSTATUS
 NTAPI
 ObIsDosDeviceLocallyMapped(
@@ -716,14 +719,14 @@ ObIsDosDeviceLocallyMapped(
     /* Acquire the device map lock */
     KeAcquireGuardedMutex(&ObpDeviceMapLock);
 
-    /* Get drive mapping status */
-    *DosDeviceState = (ObSystemDeviceMap->DriveMap & (1 << Index)) != 0;
+    /* Get drive mapping status; no letter is mapped before the system device map exists */
+    *DosDeviceState = (ObSystemDeviceMap != NULL) &&
+                      (ObSystemDeviceMap->DriveMap & (1UL << (Index - 1))) != 0;
 
     /* Release the device map lock */
     KeReleaseGuardedMutex(&ObpDeviceMapLock);
 
     return STATUS_SUCCESS;
 }
-#endif
 
 /* EOF */

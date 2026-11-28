@@ -162,6 +162,7 @@
 #define IDS_DMUSIC_PORT              10137
 #define IDS_DDDISABLE_MSG            10138
 #define IDS_D3DTEST_RESULT           10139
+#define IDS_D3DCFG_RUNTIME           10140
 
 /* icon resource constants */
 #define IDI_APPICON 20000

@@ -34,7 +34,8 @@
 #define HFILE_TYPE_LOG                  1
 #define HFILE_TYPE_EXTERNAL             2
 #define HFILE_TYPE_ALTERNATE            3 // Technically a HFILE_TYPE_PRIMARY but for mirror backup hives. ONLY USED for the SYSTEM hive!
-#define HFILE_TYPE_MAX                  4
+#define HFILE_TYPE_LOG2                 4 // Second incremental log (.LOG2); 1.5 hives alternate LOG1/LOG2
+#define HFILE_TYPE_MAX                  5
 
 //
 // Hive sizes
@@ -74,6 +75,13 @@
 #define HSYS_WHISTLER_BETA1             4
 #define HSYS_WHISTLER                   5
 #define HSYS_MINOR_SUPPORTED            HSYS_WHISTLER
+
+//
+// Format written to newly created hives; configure with -DLIBERNT_LEGACY_HIVE_FORMAT=ON for 1.3
+//
+#ifndef HSYS_MINOR_NEW_DEFAULT
+#define HSYS_MINOR_NEW_DEFAULT          HSYS_WHISTLER
+#endif
 
 //
 // Hive formats

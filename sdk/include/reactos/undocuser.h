@@ -438,6 +438,13 @@ typedef enum tagSETIMEHOTKEY_ACTION
 #define ZBID_IMMERSIVE_RESTRICTED 15
 #define ZBID_MAX     18
 
+/* Leeway extension: window caption (title bar) text alignment.
+   Value is 0 = left (Windows 10/11 default), 1 = centre (Windows 8 look). */
+#define SPI_GETCAPTIONALIGNMENT 0x2100
+#define SPI_SETCAPTIONALIGNMENT 0x2101
+#define CAPTIONALIGN_LEFT 0
+#define CAPTIONALIGN_CENTER 1
+
 BOOL WINAPI IsTopLevelWindow(HWND hWnd);
 BOOL WINAPI GetWindowBand(HWND hWnd, PDWORD pdwBand);
 HWND WINAPI CreateWindowInBand(DWORD dwExStyle, LPCWSTR lpClassName, LPCWSTR lpWindowName,

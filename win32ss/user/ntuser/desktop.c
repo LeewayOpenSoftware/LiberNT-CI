@@ -11,6 +11,7 @@
 #include <win32k.h>
 #include <reactos/buildno.h>
 #include <ndk/inbvfuncs.h>
+#include "wallpaperspan.h"
 DBG_DEFAULT_CHANNEL(UserDesktop);
 
 
@@ -69,7 +70,7 @@ IntDesktopObjectParse(IN PVOID ParseObject,
                       IN PSECURITY_QUALITY_OF_SERVICE SecurityQos OPTIONAL,
                       OUT PVOID *Object)
 {
-    NTSTATUS Status;
+    NTSTATUS Status, AccessStatus;
     PDESKTOP Desktop;
     OBJECT_ATTRIBUTES ObjectAttributes;
     PLIST_ENTRY NextEntry, ListHead;
@@ -117,6 +118,10 @@ IntDesktopObjectParse(IN PVOID ParseObject,
                 /* This was a real open, so this is OK */
                 Status = STATUS_SUCCESS;
             }
+
+            AccessStatus = IntCheckParsedObjectAccess(Desktop, ExDesktopObjectType, AccessState, AccessMode);
+            if (!NT_SUCCESS(AccessStatus))
+                return AccessStatus;
 
             /* Reference the desktop and return it */
             ObReferenceObject(Desktop);
@@ -286,46 +291,6 @@ InitDesktopImpl(VOID)
     return STATUS_SUCCESS;
 }
 
-static VOID
-IntQueryNetworkAssistanceKey(OUT PWSTR pwszText,
-                             IN SIZE_T cchText)
-{
-    WCHAR KeyBuffer[40];
-    UNICODE_STRING KeyString;
-    RTL_QUERY_REGISTRY_TABLE QueryTable[] =
-    {
-        {
-            NULL,
-            RTL_QUERY_REGISTRY_DIRECT,
-            L"Key",
-            &KeyString,
-            REG_NONE, NULL, 0
-        },
-
-        {0}
-    };
-
-    pwszText[0] = UNICODE_NULL;
-    RtlInitEmptyUnicodeString(&KeyString, KeyBuffer, sizeof(KeyBuffer));
-    if (!NT_SUCCESS(RtlQueryRegistryValues(RTL_REGISTRY_CONTROL,
-                                           L"NetworkAssistance",
-                                           QueryTable,
-                                           NULL,
-                                           NULL)) ||
-        KeyString.Length == 0)
-    {
-        return;
-    }
-
-    if (!NT_SUCCESS(RtlStringCchPrintfW(pwszText,
-                                        cchText,
-                                        L"Network assistance key %wZ",
-                                        &KeyString)))
-    {
-        pwszText[0] = UNICODE_NULL;
-    }
-}
-
 static NTSTATUS
 GetSystemVersionString(OUT PWSTR pwszzVersion,
                        IN SIZE_T cchDest,
@@ -471,7 +436,7 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         /* String for Safe Mode */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"LiberNT \u00b7 Development Preview (Target: Windows 11 24H2 %u.%u%s) %wZ-%.*S\n",
+                                     L"LiberNT \u00b7 Development Preview (Target: Windows 11 24H2 %u.%u%s) %wZ-%.*S LBI " LIBERNT_LBI_BUILD_WSTR L"\n",
                                      (VerInfo.dwBuildNumber & 0xFFFF),
                                      (ULONG)VER_PRODUCTBUILD_QFE,
                                      VersionBuffer,
@@ -486,7 +451,7 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
                                      cchDest,
                                      L"LiberNT \u00b7 Development Preview\n"
                                      L"Target: Windows 11 24H2 %u.%u%s\n"
-                                     L"Build %wZ-%.*S\n",
+                                     L"Build %wZ-%.*S LBI " LIBERNT_LBI_BUILD_WSTR L"\n",
                                      (VerInfo.dwBuildNumber & 0xFFFF),
                                      (ULONG)VER_PRODUCTBUILD_QFE,
                                      VersionBuffer,
@@ -500,7 +465,7 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
         /* Fall-back string */
         Status = RtlStringCchPrintfW(pwszzVersion,
                                      cchDest,
-                                     L"LiberNT \u00b7 Development Preview %wZ-%.*S\n",
+                                     L"LiberNT \u00b7 Development Preview %wZ-%.*S LBI " LIBERNT_LBI_BUILD_WSTR L"\n",
                                      &BuildLabString,
                                      ArchLength,
                                      Arch);
@@ -594,6 +559,73 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
  * Return Value
  *    Status code.
  */
+
+static
+BOOLEAN
+IntIsServiceAccountProcess(
+    _In_ PEPROCESS Process)
+{
+    PACCESS_TOKEN Token;
+    PTOKEN_USER User = NULL;
+    BOOLEAN IsService = TRUE;
+
+    Token = PsReferencePrimaryToken(Process);
+    if (Token == NULL)
+        return TRUE;
+    if (NT_SUCCESS(SeQueryInformationToken(Token, TokenUser, (PVOID*)&User)))
+    {
+        IsService = RtlEqualSid(User->User.Sid, SeExports->SeNetworkServiceSid) ||
+                    RtlEqualSid(User->User.Sid, SeExports->SeLocalServiceSid);
+        ExFreePool(User);
+    }
+    PsDereferencePrimaryToken(Token);
+    return IsService;
+}
+
+/* Checked against the primary token: the open carries the caller's token (NtUserResolveDesktop) or an impersonated one */
+static
+BOOLEAN
+IntProcessHasWinStaAccess(
+    _In_ PEPROCESS Process,
+    _In_ HWINSTA hWinSta,
+    _In_ ACCESS_MASK Access)
+{
+    SECURITY_SUBJECT_CONTEXT Subject;
+    PSECURITY_DESCRIPTOR Descriptor;
+    PPRIVILEGE_SET Privileges = NULL;
+    ACCESS_MASK Granted = 0;
+    BOOLEAN MemoryAllocated;
+    BOOLEAN Allowed = FALSE;
+    PVOID WinSta;
+    NTSTATUS Status;
+
+    Status = ObReferenceObjectByHandle(hWinSta, 0, ExWindowStationObjectType, KernelMode, &WinSta, NULL);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    Status = ObGetObjectSecurity(WinSta, &Descriptor, &MemoryAllocated);
+    if (NT_SUCCESS(Status) && Descriptor != NULL)
+    {
+        RtlZeroMemory(&Subject, sizeof(Subject));
+        Subject.ImpersonationLevel = SecurityAnonymous;
+        Subject.PrimaryToken = PsReferencePrimaryToken(Process);
+        if (Subject.PrimaryToken != NULL)
+        {
+            SeLockSubjectContext(&Subject);
+            Allowed = SeAccessCheck(Descriptor, &Subject, TRUE, Access, 0, &Privileges,
+                                    &ExWindowStationObjectType->TypeInfo.GenericMapping,
+                                    UserMode, &Granted, &Status);
+            SeUnlockSubjectContext(&Subject);
+            if (Privileges != NULL)
+                SeFreePrivileges(Privileges);
+            PsDereferencePrimaryToken(Subject.PrimaryToken);
+        }
+        ObReleaseObjectSecurity(Descriptor, MemoryAllocated);
+    }
+
+    ObDereferenceObject(WinSta);
+    return Allowed;
+}
 
 NTSTATUS
 FASTCALL
@@ -1008,10 +1040,17 @@ IntResolveDesktop(
 
             // TODO: Check also that we compare wrt. window station WinSta0
             // which is the only one that can be interactive on the system.
-            if (((!bUseDefaultWinSta || bInherit) && RtlEqualLuid(&ProcessLuid, &SystemLuid)) ||
-                 RtlEqualLuid(&ProcessLuid, &WinStaObject->luidUser))
+            if ((bInherit && RtlEqualLuid(&ProcessLuid, &SystemLuid)) ||
+                RtlEqualLuid(&ProcessLuid, &WinStaObject->luidUser))
             {
                 /* We are interactive on this window station */
+                bAccessAllowed = TRUE;
+                Status = STATUS_SUCCESS;
+            }
+            /* A named WinSta0 from another logon needs a logon SID grant: admins and the user SID hold less */
+            else if (!bUseDefaultWinSta && !IntIsServiceAccountProcess(Process) &&
+                     IntProcessHasWinStaAccess(Process, hTempWinSta, WINSTA_CREATEDESKTOP))
+            {
                 bAccessAllowed = TRUE;
                 Status = STATUS_SUCCESS;
             }
@@ -1589,8 +1628,10 @@ VOID NTAPI DesktopThreadMain(VOID)
     BOOL Ret;
     MSG Msg;
     PUSER_SESSION Session = UserGetCurrentSession();
+    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
 
-    Session->DesktopThread = PsGetCurrentThreadWin32Thread();
+    ASSERT(pti->pEventQueueServer != NULL);
+    WritePointerRelease((PVOID volatile *)&Session->DesktopThread, pti);
 
     UserEnterExclusive();
 
@@ -1602,12 +1643,12 @@ VOID NTAPI DesktopThreadMain(VOID)
 
     while (TRUE)
     {
-        Ret = co_IntGetPeekMessage(&Msg, 0, 0, 0, PM_REMOVE, TRUE);
-        if (Ret)
+        while ((Ret = co_IntGetPeekMessage(&Msg, 0, 0, 0, PM_REMOVE | PM_NOYIELD, FALSE)) != FALSE)
         {
             IntDispatchMessage(&Msg);
         }
         co_UserProcessDisplayConfigurationUpdate();
+        (VOID)co_MsqWaitForNewMessages(pti, NULL, 0, 0);
     }
 
     UserLeave();
@@ -2008,7 +2049,7 @@ IntDrawScaledWallpaper(
     PDC pdc;
     BOOL Ret;
 
-    if (!UserIsEnteredExclusive())
+    if (!UserIsEnteredExclusive() || cx <= 0 || cy <= 0)
         return NtGdiStretchBlt(hDC, x, y, cx, cy, hWallpaperDC, xSrc, ySrc, cxSrc, cySrc, SRCCOPY, CLR_INVALID);
 
     pdc = DC_LockDc(hDC);
@@ -2081,7 +2122,6 @@ static BOOL
 IntPaintDesktopContent(HDC hDC)
 {
     static WCHAR s_wszSafeMode[] = L"Safe Mode"; // FIXME: Localize!
-    static WCHAR s_wszAssistance[64];
 
     RECTL Rect;
     HBRUSH DesktopBrush, PreviousBrush;
@@ -2111,7 +2151,8 @@ IntPaintDesktopContent(HDC hDC)
         if ((gspv.hbmWallpaper == NULL ||
              (gspv.WallpaperMode != wmStretch &&
               gspv.WallpaperMode != wmFit &&
-              gspv.WallpaperMode != wmFill)) &&
+              gspv.WallpaperMode != wmFill &&
+              gspv.WallpaperMode != wmSpan)) &&
             UserIsEnteredExclusive())
         {
             IntFreeScaledWallpaper();
@@ -2130,10 +2171,38 @@ IntPaintDesktopContent(HDC hDC)
             INT OldStretchMode = 0;
             BOOL RestoreStretchMode = FALSE;
 
-            sz.cx = WndDesktop->rcWindow.right - WndDesktop->rcWindow.left;
-            sz.cy = WndDesktop->rcWindow.bottom - WndDesktop->rcWindow.top;
+            if (gspv.WallpaperMode == wmSpan)
+            {
+                /* Span fits one canvas: the virtual screen. TODO: D1 samples it per monitor. */
+                sz.cx = UserGetSystemMetrics(SM_CXVIRTUALSCREEN);
+                sz.cy = UserGetSystemMetrics(SM_CYVIRTUALSCREEN);
+            }
+            else
+            {
+                sz.cx = WndDesktop->rcWindow.right - WndDesktop->rcWindow.left;
+                sz.cy = WndDesktop->rcWindow.bottom - WndDesktop->rcWindow.top;
+            }
 
-            if (gspv.WallpaperMode == wmFit ||
+            if (gspv.WallpaperMode == wmSpan)
+            {
+                WALLPAPER_SPAN_LAYOUT SpanLayout;
+                RECTL VirtualBounds;
+
+                VirtualBounds.left = UserGetSystemMetrics(SM_XVIRTUALSCREEN);
+                VirtualBounds.top = UserGetSystemMetrics(SM_YVIRTUALSCREEN);
+                VirtualBounds.right = VirtualBounds.left + sz.cx;
+                VirtualBounds.bottom = VirtualBounds.top + sz.cy;
+                if (WallpaperSpanLayout(gspv.cxWallpaper, gspv.cyWallpaper, &VirtualBounds, &SpanLayout))
+                {
+                    scaledWidth = EngMulDiv(gspv.cxWallpaper, SpanLayout.ScaleNum, SpanLayout.ScaleDen);
+                    scaledHeight = EngMulDiv(gspv.cyWallpaper, SpanLayout.ScaleNum, SpanLayout.ScaleDen);
+                    wallpaperX = SpanLayout.Source.left;
+                    wallpaperY = SpanLayout.Source.top;
+                    wallpaperWidth = SpanLayout.Source.right - SpanLayout.Source.left;
+                    wallpaperHeight = SpanLayout.Source.bottom - SpanLayout.Source.top;
+                }
+            }
+            else if (gspv.WallpaperMode == wmFit ||
                 gspv.WallpaperMode == wmFill)
             {
                 int scaleNum, scaleDen;
@@ -2181,8 +2250,10 @@ IntPaintDesktopContent(HDC hDC)
 
             if (gspv.WallpaperMode == wmStretch ||
                 gspv.WallpaperMode == wmTile ||
-                gspv.WallpaperMode == wmFill)
+                gspv.WallpaperMode == wmFill ||
+                gspv.WallpaperMode == wmSpan)
             {
+                /* TODO(D1): Span destination must be VirtualBounds minus the primary origin, clipped per monitor. */
                 x = 0;
                 y = 0;
             }
@@ -2219,7 +2290,8 @@ IntPaintDesktopContent(HDC hDC)
 
                 if (gspv.WallpaperMode == wmStretch ||
                     gspv.WallpaperMode == wmFit ||
-                    gspv.WallpaperMode == wmFill)
+                    gspv.WallpaperMode == wmFill ||
+                    gspv.WallpaperMode == wmSpan)
                 {
                     OldStretchMode = GreSetStretchBltMode(hDC, HALFTONE);
                     RestoreStretchMode = TRUE;
@@ -2277,9 +2349,13 @@ IntPaintDesktopContent(HDC hDC)
                                                gspv.cyWallpaper);
                     }
                 }
-                else if (gspv.WallpaperMode == wmFill)
+                else if (gspv.WallpaperMode == wmFill ||
+                    gspv.WallpaperMode == wmSpan)
                 {
-                    if (Rect.right && Rect.bottom)
+                    /* A failed Span layout paints nothing instead of a zero-extent blit. */
+                    if (Rect.right && Rect.bottom &&
+                        (gspv.WallpaperMode != wmSpan ||
+                         (wallpaperWidth != 0 && wallpaperHeight != 0)))
                     {
                         IntDrawScaledWallpaper(hDC,
                                                hWallpaperDC,
@@ -2331,17 +2407,14 @@ IntPaintDesktopContent(HDC hDC)
     /*
      * Display the system version on the desktop background
      */
-    /* TODO: a key that appears after the desktop was painted shows at the next paint, nothing asks for one */
-    if (!*s_wszAssistance && KD_DEBUGGER_ENABLED)
-        IntQueryNetworkAssistanceKey(s_wszAssistance, ARRAYSIZE(s_wszAssistance));
 
-    if (InSafeMode || g_AlwaysDisplayVersion || g_PaintDesktopVersion || *s_wszAssistance)
+    if (InSafeMode || g_AlwaysDisplayVersion || g_PaintDesktopVersion)
     {
         NTSTATUS Status;
         static WCHAR wszzVersion[1024] = L"\0";
 
         /* Only used in normal mode */
-        static POLYTEXTW VerStrs[4] = {{0},{0},{0},{0}};
+        static POLYTEXTW VerStrs[3] = {{0},{0},{0}};
         INT i = 0;
         SIZE_T len;
 
@@ -2416,16 +2489,11 @@ IntPaintDesktopContent(HDC hDC)
             if (!InSafeMode && NT_SUCCESS(Status) && *wszzVersion)
             {
                 PWCHAR pstr = wszzVersion;
-                for (i = 0; (i < ARRAYSIZE(VerStrs) - 1) && *pstr; ++i)
+                for (i = 0; (i < ARRAYSIZE(VerStrs)) && *pstr; ++i)
                 {
                     VerStrs[i].n = lstrlenW(pstr);
                     VerStrs[i].lpstr = pstr;
                     pstr += (VerStrs[i].n + 1);
-                }
-                if (*s_wszAssistance)
-                {
-                    VerStrs[i].n = lstrlenW(s_wszAssistance);
-                    VerStrs[i].lpstr = s_wszAssistance;
                 }
             }
         }
@@ -2489,14 +2557,6 @@ IntPaintDesktopContent(HDC hDC)
 
                 IntGdiSetTextAlign(hDC, TA_CENTER | TA_TOP);
                 GreExtTextOutW(hDC, (Rect.right + Rect.left)/2, Rect.top + 3, 0, NULL, wszzVersion, len, NULL, 0);
-                if (*s_wszAssistance)
-                {
-                    SIZE Size = {0, 0};
-
-                    GreGetTextExtentW(hDC, wszzVersion, (INT)len, &Size, 1);
-                    GreExtTextOutW(hDC, (Rect.right + Rect.left)/2, Rect.top + 3 + Size.cy, 0, NULL,
-                                   s_wszAssistance, lstrlenW(s_wszAssistance), NULL, 0);
-                }
             }
         }
 
@@ -3340,7 +3400,8 @@ NtUserSwitchDesktop(HDESK hdesk)
         return FALSE;
     }
 
-    Status = IntValidateDesktopHandle(hdesk, UserMode, 0, &pdesk);
+    /* Switching takes the switch right on the desktop, as on Windows */
+    Status = IntValidateDesktopHandle(hdesk, UserMode, DESKTOP_SWITCHDESKTOP, &pdesk);
     if (!NT_SUCCESS(Status))
     {
         ERR("Validation of desktop handle 0x%p failed\n", hdesk);

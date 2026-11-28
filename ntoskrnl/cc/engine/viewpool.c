@@ -263,7 +263,10 @@ CcViewReclaimShard(
     }
 
     if (Claimed != NULL)
+    {
+        CC_RESOURCE_REUSE(&Claimed->IoResource);
         Claimed->ReferenceCount = 1;
+    }
 
     CC_LOCK_RELEASE(&Shard->Lock, ShardIrql);
     return Claimed;
@@ -315,6 +318,7 @@ CcViewDetachIdleShard(
         RemoveEntryList(&Claimed->LruLink);
         Claimed->OnLru = FALSE;
         Shard->Count--;
+        CC_RESOURCE_REUSE(&Claimed->IoResource);
         Claimed->ReferenceCount = 1;
     }
 
@@ -729,4 +733,31 @@ CcCacheCheck(
     }
 
     return Errors + (OnLru != 0);
+}
+
+BOOLEAN
+CcMapViewAttached(
+    _Inout_ PCC_MAP Map,
+    _In_ ULONG64 FileOffset,
+    _Out_ PULONG64 NextOffset)
+{
+    ULONG64 Number = CcSlotNumber(FileOffset);
+    ULONG64 Limit;
+    PCC_SLOT Slot;
+    BOOLEAN Attached;
+    KIRQL OldIrql;
+
+    CC_LOCK_ACQUIRE(&Map->IndexLock, &OldIrql);
+    Limit = (ULONG64)(ULONG)CC_ATOMIC_READ32(&Map->LeafCount) << CC_LEAF_SHIFT;
+    Slot = CcMapSlot(Map, Number, FALSE);
+    Attached = (Slot != NULL && Slot->View != NULL);
+    CC_LOCK_RELEASE(&Map->IndexLock, OldIrql);
+
+    if (Number >= Limit)
+        *NextOffset = (ULONG64)-1;
+    else if (Slot == NULL)
+        *NextOffset = ((Number | CC_LEAF_MASK) + 1) << CC_VIEW_SHIFT;
+    else
+        *NextOffset = (Number + 1) << CC_VIEW_SHIFT;
+    return Attached;
 }

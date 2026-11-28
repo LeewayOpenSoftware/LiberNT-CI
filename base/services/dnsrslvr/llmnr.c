@@ -15,6 +15,8 @@
 #define NDEBUG
 #include <debug.h>
 
+BOOL LlmnrSourceOnLink(const SOCKADDR_INET *From, ULONG *Index, BOOL *LinkLocal);
+
 #define LLMNR_PORT 5355
 #define LLMNR_GROUP4 0xe00000fc
 #define LLMNR_TTL 30
@@ -30,21 +32,28 @@ typedef struct _LLMNR_STATE
     SOCKET Socket4;
     SOCKET Socket6;
     ULONG Joined4[LLMNR_MAX_JOINS];
+    ULONG Joined4Address[LLMNR_MAX_JOINS];
     ULONG Joined4Count;
     ULONG Joined6[LLMNR_MAX_JOINS];
     ULONG Joined6Count;
 } LLMNR_STATE, *PLLMNR_STATE;
 
-static BOOL LlmnrRemember(ULONG *List, ULONG *Count, ULONG Value)
+/* Finds Value in List and appends it when absent and there is room; returns the slot, or LLMNR_MAX_JOINS when full */
+static ULONG LlmnrSlot(ULONG *List, ULONG *Count, ULONG Value, BOOL *Added)
 {
     ULONG i;
 
+    *Added = FALSE;
     for (i = 0; i < *Count; i++)
     {
         if (List[i] == Value)
-            return FALSE;
+            return i;
     }
-    return *Count < LLMNR_MAX_JOINS;
+    if (*Count >= LLMNR_MAX_JOINS)
+        return LLMNR_MAX_JOINS;
+    List[*Count] = Value;
+    *Added = TRUE;
+    return (*Count)++;
 }
 
 static VOID LlmnrJoinInterfaces(PLLMNR_STATE State)
@@ -76,21 +85,39 @@ static VOID LlmnrJoinInterfaces(PLLMNR_STATE State)
                 else if (Unicast->Address.lpSockaddr->sa_family == AF_INET && Address == INADDR_ANY)
                     Address = ((SOCKADDR_IN *)Unicast->Address.lpSockaddr)->sin_addr.s_addr;
             }
-            if (Address != INADDR_ANY && State->Socket4 != INVALID_SOCKET &&
-                LlmnrRemember(State->Joined4, &State->Joined4Count, Adapter->IfIndex))
+            if (Address != INADDR_ANY && State->Socket4 != INVALID_SOCKET)
             {
-                Request4.imr_multiaddr.s_addr = htonl(LLMNR_GROUP4);
-                Request4.imr_interface.s_addr = Address;
-                if (!setsockopt(State->Socket4, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char *)&Request4, sizeof(Request4)))
-                    State->Joined4[State->Joined4Count++] = Adapter->IfIndex;
+                BOOL Added;
+                ULONG Slot = LlmnrSlot(State->Joined4, &State->Joined4Count, Adapter->IfIndex, &Added);
+
+                /* The membership is tied to the interface address, so a changed address needs a new join */
+                if (Slot < LLMNR_MAX_JOINS && (Added || State->Joined4Address[Slot] != Address))
+                {
+                    Request4.imr_multiaddr.s_addr = htonl(LLMNR_GROUP4);
+                    if (!Added)
+                    {
+                        Request4.imr_interface.s_addr = State->Joined4Address[Slot];
+                        setsockopt(State->Socket4, IPPROTO_IP, IP_DROP_MEMBERSHIP, (const char *)&Request4, sizeof(Request4));
+                    }
+                    Request4.imr_interface.s_addr = Address;
+                    if (!setsockopt(State->Socket4, IPPROTO_IP, IP_ADD_MEMBERSHIP, (const char *)&Request4, sizeof(Request4)))
+                        State->Joined4Address[Slot] = Address;
+                    else if (Added)
+                        State->Joined4Count--;
+                }
             }
-            if (!HasIpv6 || !Adapter->Ipv6IfIndex || State->Socket6 == INVALID_SOCKET ||
-                !LlmnrRemember(State->Joined6, &State->Joined6Count, Adapter->Ipv6IfIndex))
-                continue;
-            Request6.ipv6mr_multiaddr = LlmnrGroup6;
-            Request6.ipv6mr_interface = Adapter->Ipv6IfIndex;
-            if (!setsockopt(State->Socket6, IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP, (const char *)&Request6, sizeof(Request6)))
-                State->Joined6[State->Joined6Count++] = Adapter->Ipv6IfIndex;
+            if (HasIpv6 && Adapter->Ipv6IfIndex && State->Socket6 != INVALID_SOCKET)
+            {
+                BOOL Added;
+
+                if (LlmnrSlot(State->Joined6, &State->Joined6Count, Adapter->Ipv6IfIndex, &Added) < LLMNR_MAX_JOINS && Added)
+                {
+                    Request6.ipv6mr_multiaddr = LlmnrGroup6;
+                    Request6.ipv6mr_interface = Adapter->Ipv6IfIndex;
+                    if (setsockopt(State->Socket6, IPPROTO_IPV6, IPV6_ADD_MEMBERSHIP, (const char *)&Request6, sizeof(Request6)))
+                        State->Joined6Count--;
+                }
+            }
         }
     }
     HeapFree(GetProcessHeap(), 0, Addresses);
@@ -114,7 +141,7 @@ static BOOL LlmnrNameMatches(const UCHAR *Packet, int Length, int *Offset, const
     return TRUE;
 }
 
-static BOOL LlmnrInterfaceAddress(ULONG Index, ADDRESS_FAMILY Family, BOOL LinkLocal, SOCKADDR_INET *Result)
+BOOL LlmnrInterfaceAddress(ULONG Index, ADDRESS_FAMILY Family, BOOL LinkLocal, SOCKADDR_INET *Result)
 {
     MIB_UNICASTIPADDRESS_TABLE *Table;
     BOOL Found = FALSE;
@@ -138,6 +165,29 @@ static BOOL LlmnrInterfaceAddress(ULONG Index, ADDRESS_FAMILY Family, BOOL LinkL
     return Found;
 }
 
+/* Only askers directly on a link are answered (RFC 4795 2.4, RFC 6762 11): the route to the source must have no next hop */
+BOOL LlmnrSourceOnLink(const SOCKADDR_INET *From, ULONG *Index, BOOL *LinkLocal)
+{
+    SOCKADDR_INET Destination, Best;
+    MIB_IPFORWARD_ROW2 Route;
+    static const IN6_ADDR None;
+
+    *LinkLocal = From->si_family == AF_INET6 && IN6_IS_ADDR_LINKLOCAL(&From->Ipv6.sin6_addr);
+    if (*LinkLocal)
+    {
+        *Index = From->Ipv6.sin6_scope_id;
+        return *Index != 0;
+    }
+    Destination = *From;
+    if (GetBestRoute2(NULL, 0, NULL, &Destination, 0, &Route, &Best))
+        return FALSE;
+    if (Route.NextHop.si_family == AF_INET6 ? memcmp(&Route.NextHop.Ipv6.sin6_addr, &None, sizeof(None)) :
+                                              Route.NextHop.Ipv4.sin_addr.s_addr != 0)
+        return FALSE;
+    *Index = Route.InterfaceIndex;
+    return TRUE;
+}
+
 static VOID LlmnrRespond(SOCKET Socket, const UCHAR *Query, int Length, const SOCKADDR_INET *From, int FromLength,
                          const char *Host)
 {
@@ -158,18 +208,8 @@ static VOID LlmnrRespond(SOCKET Socket, const UCHAR *Query, int Length, const SO
     if (Class != 1)
         return;
 
-    if (From->si_family == AF_INET6)
-    {
-        LinkLocal = IN6_IS_ADDR_LINKLOCAL(&From->Ipv6.sin6_addr);
-        if (LinkLocal)
-            Index = From->Ipv6.sin6_scope_id;
-        else if (GetBestInterfaceEx((struct sockaddr *)&From->Ipv6, &Index))
-            return;
-    }
-    else if (GetBestInterface(From->Ipv4.sin_addr.s_addr, &Index))
-    {
+    if (!LlmnrSourceOnLink(From, &Index, &LinkLocal))
         return;
-    }
 
     if (Type == 1)
         Answer = LlmnrInterfaceAddress(Index, AF_INET, FALSE, &Address);

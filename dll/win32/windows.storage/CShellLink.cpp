@@ -191,6 +191,13 @@ struct volume_info
 
 static HRESULT ShellLink_UpdatePath(LPCWSTR sPathRel, LPCWSTR path, LPCWSTR sWorkDir, LPWSTR* psPath);
 
+/* A LinkInfo path is followed for an icon or a thumbnail only when it is local:
+ * a dropped .lnk must not make a folder view reach out over the network. */
+static BOOL IsLocalLinkPath(LPCWSTR pszPath)
+{
+    return pszPath && *pszPath && !PathIsUNCW(pszPath) && !PathIsNetworkPathW(pszPath);
+}
+
 /* strdup on the process heap */
 static LPWSTR __inline HEAP_strdupAtoW(HANDLE heap, DWORD flags, LPCSTR str)
 {
@@ -1832,7 +1839,17 @@ HRESULT STDMETHODCALLTYPE CShellLink::GetIconLocation(UINT uFlags, PWSTR pszIcon
         }
         else
         {
-            hr = SHELL_GetUIObjectOfAbsoluteItem(NULL, m_pPidl, IID_PPV_ARG(IExtractIconW, &m_pTargetExtractIcon));
+            hr = m_pPidl ? SHELL_GetUIObjectOfAbsoluteItem(NULL, m_pPidl, IID_PPV_ARG(IExtractIconW, &m_pTargetExtractIcon))
+                         : E_FAIL;
+            if (FAILED(hr) && IsLocalLinkPath(m_sPath))
+            {
+                /* A link made elsewhere carries a pidl our folders may not resolve;
+                 * its LinkInfo path still names the target (Windows falls back the same way). */
+                CComHeapPtr<ITEMIDLIST> pidlPath;
+
+                if (SUCCEEDED(SHParseDisplayName(m_sPath, NULL, &pidlPath, 0, NULL)))
+                    hr = SHELL_GetUIObjectOfAbsoluteItem(NULL, pidlPath, IID_PPV_ARG(IExtractIconW, &m_pTargetExtractIcon));
+            }
             if (FAILED_UNEXPECTEDLY(hr))
                 return hr;
         }
@@ -2951,6 +2968,72 @@ HRESULT STDMETHODCALLTYPE CShellLink::GetDateStamp(FILETIME *pDateStamp)
     if (!m_pExtractImage || FAILED(m_pExtractImage->QueryInterface(IID_PPV_ARG(IExtractImage2, &pExtractImage2))))
         return E_FAIL;
     return pExtractImage2->GetDateStamp(pDateStamp);
+}
+
+/*
+ * A shortcut shows the thumbnail of its target (Vista+ IThumbnailProvider path,
+ * registered under lnkfile\shellex). Only the target's own thumbnail is
+ * forwarded: a shortcut to a shortcut, a folder or a program has none, the
+ * caller then keeps the icon.
+ */
+HRESULT STDMETHODCALLTYPE CShellLink::GetThumbnail(UINT cx, HBITMAP *phbmp, WTS_ALPHATYPE *pdwAlpha)
+{
+    CComPtr<IShellItemImageFactory> pFactory;
+    CComHeapPtr<ITEMIDLIST> pidlParsed;
+    PCIDLIST_ABSOLUTE pidl = m_pPidl;
+    WCHAR szTarget[MAX_PATH];
+    HBITMAP hbm = NULL;
+    BITMAP bm;
+    SIZE size;
+    HRESULT hr;
+
+    if (pdwAlpha)
+        *pdwAlpha = WTSAT_UNKNOWN;
+    if (!phbmp)
+        return E_POINTER;
+    *phbmp = NULL;
+    if (!cx)
+        return E_FAIL;
+    /* A link saved with a path only: resolve it now, local paths only */
+    if (!pidl && IsLocalLinkPath(m_sPath) &&
+        SUCCEEDED(SHParseDisplayName(m_sPath, NULL, &pidlParsed, 0, NULL)))
+        pidl = pidlParsed;
+    if (!pidl)
+        return E_FAIL;
+    if (SHGetPathFromIDListW(pidl, szTarget) &&
+        !StrCmpIW(PathFindExtensionW(szTarget), L".lnk"))
+        return E_FAIL;
+
+    hr = SHCreateItemFromIDList(pidl, IID_PPV_ARG(IShellItemImageFactory, &pFactory));
+    if (FAILED(hr))
+        return hr;
+    size.cx = size.cy = cx;
+    hr = pFactory->GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &hbm);
+    if (FAILED(hr))
+        return hr;
+    if (!hbm)
+        return E_FAIL;
+    if (pdwAlpha)
+    {
+        /* Only a bitmap that carries alpha is ARGB; a 32bpp image with zero alpha
+         * bytes would otherwise be composed fully transparent */
+        *pdwAlpha = WTSAT_RGB;
+        if (GetObjectW(hbm, sizeof(bm), &bm) && bm.bmBitsPixel == 32 && bm.bmBits)
+        {
+            const BYTE *pbBits = (const BYTE *)bm.bmBits;
+            LONG cb = bm.bmWidthBytes * abs(bm.bmHeight);
+            for (LONG i = 3; i < cb; i += 4)
+            {
+                if (pbBits[i])
+                {
+                    *pdwAlpha = WTSAT_ARGB;
+                    break;
+                }
+            }
+        }
+    }
+    *phbmp = hbm;
+    return S_OK;
 }
 
 HRESULT STDMETHODCALLTYPE CShellLink::InitNew()

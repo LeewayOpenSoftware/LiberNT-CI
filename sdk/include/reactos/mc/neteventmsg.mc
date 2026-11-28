@@ -230,7 +230,7 @@ Severity=Warning
 Facility=System
 SymbolicName=EVENT_EventLogProductInfo
 Language=English
-LiberNT %1 %2 %3 %4.
+Orosi %1 %2 %3 %4.
 .
 Language=Russian
 LiberNT %1 %2 %3 %4.
@@ -860,7 +860,7 @@ Severity=Error
 Facility=System
 SymbolicName=EVENT_RUNNING_LASTKNOWNGOOD
 Language=English
-LiberNT could not be started as configured.  A previous working configuration was used instead.
+Orosi could not be started as configured.  A previous working configuration was used instead.
 .
 Language=Russian
 LiberNT could not be started as configured.  A previous working configuration was used instead.

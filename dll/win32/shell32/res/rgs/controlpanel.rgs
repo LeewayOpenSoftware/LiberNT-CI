@@ -57,6 +57,7 @@ HKLM
 								'{17cd9488-1228-4b2f-88ce-4298e93e0966}' = s 'Default Programs'
 								'{A8A91A66-3A7D-4424-8D24-04E180695C7A}' = s 'Devices and Printers'
 								'{8E908FC9-BECC-40f6-915B-F4CA0E70D03D}' = s 'Network and Sharing Center'
+								'{4026492F-2F69-46B8-B9BF-5654FC07E423}' = s 'Orosi Firewall'
 							}
 						}
 						NoRemove MyComputer
@@ -86,16 +87,38 @@ HKCR
 			val InfoTip = s 'View the status of your network and manage its connections.'
 			val LocalizedString = s 'Network and Sharing Center'
 			DefaultIcon = e '%%SystemRoot%%\system32\netshell.dll,-100'
-			Shell
+			InprocServer32 = s '%MODULE%'
 			{
-				Open
-				{
-					Command = e '%%SystemRoot%%\ImmersiveControlPanel\SystemSettings.exe "ms-settings:network"'
-				}
+				val ThreadingModel = s 'Apartment'
 			}
 			ShellFolder
 			{
-				val Attributes = d '0'
+				val Attributes = d '671088644'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {4026492F-2F69-46B8-B9BF-5654FC07E423} = s 'Orosi Firewall'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.WindowsFirewall'
+			val 'System.ControlPanel.Category' = s '5'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '5'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = e '@%%SystemRoot%%\system32\shell32.dll,-60122'
+			val LocalizedString = e '@%%SystemRoot%%\system32\shell32.dll,-60080'
+			DefaultIcon = e '%%SystemRoot%%\system32\shell32.dll,-194'
+			InprocServer32 = s '%MODULE%'
+			{
+				val ThreadingModel = s 'Apartment'
+			}
+			ShellFolder
+			{
+				val Attributes = d '671088644'
 			}
 		}
 	}
@@ -304,16 +327,9 @@ HKCR
 			val InfoTip = s 'Change the visuals and sounds on your computer.'
 			val LocalizedString = s 'Personalization'
 			DefaultIcon = e '%%SystemRoot%%\system32\desk.cpl,-100'
-			Shell
-			{
-				Open
-				{
-					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL desk.cpl'
-				}
-			}
 			ShellFolder
 			{
-				val Attributes = d '0'
+				val Attributes = d '671088644'
 			}
 		}
 	}
@@ -336,7 +352,7 @@ HKCR
 			{
 				Open
 				{
-					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL desk.cpl,,@Settings'
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL leewaydisp.cpl,@1'
 				}
 			}
 			ShellFolder

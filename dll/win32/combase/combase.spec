@@ -75,7 +75,7 @@
 @ stub ClearCleanupFlag
 @ stdcall CoAddRefServerProcess()
 @ stub CoAllowUnmarshalerCLSID
-@ stub CoCancelCall
+@ stdcall CoCancelCall(long long)
 @ stdcall CoCopyProxy(ptr ptr)
 @ stdcall CoCreateErrorInfo(ptr) CreateErrorInfo
 @ stdcall CoCreateFreeThreadedMarshaler(ptr ptr)
@@ -88,7 +88,7 @@
 @ stdcall CoDecodeProxy(long int64 ptr)
 @ stdcall CoDecrementMTAUsage(ptr)
 @ stdcall CoDisableCallCancellation(ptr)
-@ stub CoDisconnectContext
+@ stdcall CoDisconnectContext(long)
 @ stdcall CoDisconnectObject(ptr long)
 @ stdcall CoEnableCallCancellation(ptr)
 @ stdcall CoFileTimeNow(ptr)
@@ -100,7 +100,7 @@
 @ stdcall CoGetCallContext(ptr ptr)
 @ stdcall CoGetCallState(long ptr)
 @ stdcall CoGetCallerTID(ptr)
-@ stub CoGetCancelObject
+@ stdcall CoGetCancelObject(long ptr ptr)
 @ stdcall CoGetClassObject(ptr long ptr ptr ptr)
 @ stub CoGetClassVersion
 @ stdcall CoGetContextToken(ptr)
@@ -135,7 +135,7 @@
 @ stdcall CoMarshalInterface(ptr ptr ptr long ptr long)
 @ stub CoPopServiceDomain
 @ stub CoPushServiceDomain
-@ stub CoQueryAuthenticationServices
+@ stdcall CoQueryAuthenticationServices(ptr ptr)
 @ stdcall CoQueryClientBlanket(ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall CoQueryProxyBlanket(ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stub CoReactivateObject
@@ -156,7 +156,7 @@
 @ stdcall CoRevokeClassObject(long)
 @ stdcall CoRevokeInitializeSpy(int64)
 @ stdcall CoRevokeMallocSpy()
-@ stub CoSetCancelObject
+@ stdcall CoSetCancelObject(ptr)
 @ stdcall CoSetErrorInfo(long ptr) SetErrorInfo
 @ stdcall CoSetProxyBlanket(ptr long long ptr long long ptr long)
 @ stdcall CoSuspendClassObjects()
@@ -164,7 +164,7 @@
 @ stdcall CoTaskMemAlloc(long)
 @ stdcall CoTaskMemFree(ptr)
 @ stdcall CoTaskMemRealloc(ptr long)
-@ stub CoTestCancel
+@ stdcall CoTestCancel()
 @ stdcall CoTreatAsClass(ptr ptr)
 @ stdcall CoUninitialize()
 @ stub CoUnloadingWOW
@@ -174,7 +174,7 @@
 @ stub CoVrfGetThreadState
 @ stub CoVrfReleaseThreadState
 @ stdcall CoWaitForMultipleHandles(long long long ptr ptr)
-@ stub CoWaitForMultipleObjects
+@ stdcall CoWaitForMultipleObjects(long long long ptr ptr)
 @ stdcall CreateErrorInfo(ptr)
 @ stdcall CreateStreamOnHGlobal(ptr long ptr)
 @ stub DcomChannelSetHResult

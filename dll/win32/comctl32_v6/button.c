@@ -91,6 +91,8 @@ typedef struct _BUTTON_INFO
     SIZE             glyph_size;
     RECT             text_margin;
     HANDLE           image; /* Original handle set with BM_SETIMAGE and returned with BM_GETIMAGE. */
+    HIMAGELIST       shield;          /* elevation shield (BCM_SETSHIELD) image list, owned */
+    BUTTON_IMAGELIST saved_imagelist; /* caller's image list, parked while the shield holds the slot */
     union
     {
         HICON   icon;
@@ -435,6 +437,25 @@ static int get_draw_state(const BUTTON_INFO *infoPtr)
     }
 }
 
+static HIMAGELIST BUTTON_CreateShieldImageList(void)
+{
+    INT cx = GetSystemMetrics(SM_CXSMICON), cy = GetSystemMetrics(SM_CYSMICON);
+    HIMAGELIST himl;
+    HICON icon;
+
+    icon = LoadImageW(NULL, (LPCWSTR)IDI_SHIELD, IMAGE_ICON, cx, cy, LR_SHARED);
+    if (!icon)
+        return NULL;
+
+    himl = ImageList_Create(cx, cy, ILC_COLOR32 | ILC_MASK, 1, 0);
+    if (himl && ImageList_AddIcon(himl, icon) < 0)
+    {
+        ImageList_Destroy(himl);
+        himl = NULL;
+    }
+    return himl;
+}
+
 static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     BUTTON_INFO *infoPtr = (BUTTON_INFO *)GetWindowLongPtrW(hWnd, 0);
@@ -501,6 +522,8 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
             DeleteObject(infoPtr->u.bitmap);
         else if (infoPtr->image_type == IMAGE_ICON)
             DestroyIcon(infoPtr->u.icon);
+        if (infoPtr->shield)
+            ImageList_Destroy(infoPtr->shield);
         Free(infoPtr->note);
         Free(infoPtr);
         break;
@@ -928,7 +951,12 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
         if (!imagelist) return FALSE;
 
-        infoPtr->imagelist = *imagelist;
+        /* While the shield occupies the live slot, remember the caller's list so it
+         * is restored when the shield is cleared and reported by BCM_GETIMAGELIST. */
+        if (infoPtr->shield)
+            infoPtr->saved_imagelist = *imagelist;
+        else
+            infoPtr->imagelist = *imagelist;
         return TRUE;
     }
 
@@ -938,8 +966,35 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
         if (!imagelist) return FALSE;
 
-        *imagelist = infoPtr->imagelist;
+        *imagelist = infoPtr->shield ? infoPtr->saved_imagelist : infoPtr->imagelist;
         return TRUE;
+    }
+
+    case BCM_SETSHIELD:
+    {
+        /* Button_SetElevationRequiredState. The shield replaces the button's image
+         * (as on Windows), but the caller's image list is parked, not lost, so the
+         * two coexist: it is restored on clear and still returned by BCM_GETIMAGELIST. */
+        if (lParam && !infoPtr->shield)
+        {
+            infoPtr->shield = BUTTON_CreateShieldImageList();
+            if (infoPtr->shield)
+            {
+                infoPtr->saved_imagelist = infoPtr->imagelist;
+                infoPtr->imagelist.himl = infoPtr->shield;
+                infoPtr->imagelist.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
+                SetRect(&infoPtr->imagelist.margin, 0, 0, 2, 0);
+            }
+        }
+        else if (!lParam && infoPtr->shield)
+        {
+            infoPtr->imagelist = infoPtr->saved_imagelist;
+            memset(&infoPtr->saved_imagelist, 0, sizeof(infoPtr->saved_imagelist));
+            ImageList_Destroy(infoPtr->shield);
+            infoPtr->shield = NULL;
+        }
+        InvalidateRect(hWnd, NULL, TRUE);
+        return 1;
     }
 
     case BCM_SETSPLITINFO:

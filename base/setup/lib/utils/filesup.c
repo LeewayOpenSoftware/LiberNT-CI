@@ -12,9 +12,20 @@
 #include "filesup.h"
 #include <pseh/pseh2.h>
 #include <ndk/umfuncs.h> // Ldr* functions
+#include <ndk/sefuncs.h> // NtSetSecurityObject
 
 #define NDEBUG
 #include <debug.h>
+
+/* FileDispositionInformationEx is not in the user-mode NDK headers yet */
+#ifndef FILE_DISPOSITION_POSIX_SEMANTICS
+#define FILE_DISPOSITION_DELETE             0x00000001
+#define FILE_DISPOSITION_POSIX_SEMANTICS    0x00000002
+typedef struct _FILE_DISPOSITION_INFORMATION_EX
+{
+    ULONG Flags;
+} FILE_DISPOSITION_INFORMATION_EX, *PFILE_DISPOSITION_INFORMATION_EX;
+#endif
 
 /* FUNCTIONS ****************************************************************/
 
@@ -131,6 +142,76 @@ SetupCreateDirectory(
     return Status;
 }
 
+static NTSTATUS
+SetupClearFileDacl(
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes)
+{
+    SECURITY_DESCRIPTOR SecurityDescriptor;
+    IO_STATUS_BLOCK IoStatusBlock;
+    HANDLE FileHandle;
+    NTSTATUS Status;
+
+    Status = NtOpenFile(&FileHandle,
+                        WRITE_DAC,
+                        ObjectAttributes,
+                        &IoStatusBlock,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        FILE_NON_DIRECTORY_FILE | FILE_OPEN_FOR_BACKUP_INTENT);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = RtlCreateSecurityDescriptor(&SecurityDescriptor,
+                                         SECURITY_DESCRIPTOR_REVISION);
+    if (NT_SUCCESS(Status))
+    {
+        /* Absent, not empty: an absent list grants access rather than denying it */
+        Status = RtlSetDaclSecurityDescriptor(&SecurityDescriptor, FALSE, NULL, FALSE);
+    }
+    if (NT_SUCCESS(Status))
+    {
+        Status = NtSetSecurityObject(FileHandle,
+                                     DACL_SECURITY_INFORMATION,
+                                     &SecurityDescriptor);
+    }
+
+    NtClose(FileHandle);
+    return Status;
+}
+
+static NTSTATUS
+SetupOpenFileForDelete(
+    _In_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ ACCESS_MASK ExtraAccess,
+    _In_ BOOLEAN ForceDelete,
+    _Out_ PHANDLE FileHandle)
+{
+    IO_STATUS_BLOCK IoStatusBlock;
+    NTSTATUS Status;
+    ULONG Attempt;
+
+    for (Attempt = 0; Attempt < 2; ++Attempt)
+    {
+        Status = NtOpenFile(FileHandle,
+                            DELETE | FILE_READ_ATTRIBUTES | ExtraAccess,
+                            ObjectAttributes,
+                            &IoStatusBlock,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            FILE_NON_DIRECTORY_FILE | FILE_OPEN_FOR_BACKUP_INTENT);
+        if (Status != STATUS_ACCESS_DENIED || !ForceDelete || Attempt != 0)
+            return Status;
+
+        /*
+         * An inbox file carries a descriptor that grants full access to the
+         * trusted installer alone, so setup cannot open it for delete at all.
+         * Take the discretionary list off it and attempt the open once more.
+         */
+        if (!NT_SUCCESS(SetupClearFileDacl(ObjectAttributes)))
+            return STATUS_ACCESS_DENIED;
+    }
+
+    return Status;
+}
+
 NTSTATUS
 SetupDeleteFile(
     IN PCWSTR FileName,
@@ -142,6 +223,7 @@ SetupDeleteFile(
     IO_STATUS_BLOCK IoStatusBlock;
     HANDLE FileHandle;
     FILE_DISPOSITION_INFORMATION FileDispInfo;
+    FILE_DISPOSITION_INFORMATION_EX FileDispInfoEx;
     BOOLEAN RetryOnce = FALSE;
 
     /* Open the directory name that was passed in */
@@ -153,13 +235,10 @@ SetupDeleteFile(
                                NULL);
 
 Retry: // We go back there once if RetryOnce == TRUE
-    Status = NtOpenFile(&FileHandle,
-                        DELETE | FILE_READ_ATTRIBUTES |
-                        (RetryOnce ? FILE_WRITE_ATTRIBUTES : 0),
-                        &ObjectAttributes,
-                        &IoStatusBlock,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                        FILE_NON_DIRECTORY_FILE | FILE_OPEN_FOR_BACKUP_INTENT);
+    Status = SetupOpenFileForDelete(&ObjectAttributes,
+                                    RetryOnce ? FILE_WRITE_ATTRIBUTES : 0,
+                                    ForceDelete,
+                                    &FileHandle);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("NtOpenFile failed with Status 0x%08lx\n", Status);
@@ -196,13 +275,29 @@ Retry: // We go back there once if RetryOnce == TRUE
         }
     }
 
-    /* Ask for the file to be deleted */
-    FileDispInfo.DeleteFile = TRUE;
+    /*
+     * Ask for the file to be deleted. As DeleteFile does on Windows 10 1809
+     * and later, unlink the name at once (POSIX semantics) so a handle some
+     * other process still holds cannot keep the name in its directory; a
+     * file system without that information class gets the classic request.
+     */
+    FileDispInfoEx.Flags = FILE_DISPOSITION_DELETE | FILE_DISPOSITION_POSIX_SEMANTICS;
     Status = NtSetInformationFile(FileHandle,
                                   &IoStatusBlock,
-                                  &FileDispInfo,
-                                  sizeof(FILE_DISPOSITION_INFORMATION),
-                                  FileDispositionInformation);
+                                  &FileDispInfoEx,
+                                  sizeof(FileDispInfoEx),
+                                  FileDispositionInformationEx);
+    if (Status == STATUS_INVALID_INFO_CLASS || Status == STATUS_NOT_SUPPORTED ||
+        Status == STATUS_NOT_IMPLEMENTED || Status == STATUS_INVALID_PARAMETER ||
+        Status == STATUS_INVALID_DEVICE_REQUEST)
+    {
+        FileDispInfo.DeleteFile = TRUE;
+        Status = NtSetInformationFile(FileHandle,
+                                      &IoStatusBlock,
+                                      &FileDispInfo,
+                                      sizeof(FILE_DISPOSITION_INFORMATION),
+                                      FileDispositionInformation);
+    }
     NtClose(FileHandle);
 
     if (!NT_SUCCESS(Status))
@@ -330,7 +425,8 @@ SetupCopyFile(
                           FailIfExists ? FILE_CREATE : FILE_OVERWRITE_IF,
                           FILE_NO_INTERMEDIATE_BUFFERING |
                           FILE_SEQUENTIAL_ONLY |
-                          FILE_SYNCHRONOUS_IO_NONALERT,
+                          FILE_SYNCHRONOUS_IO_NONALERT |
+                          FILE_OPEN_FOR_BACKUP_INTENT,
                           NULL,
                           0);
     if (!NT_SUCCESS(Status))
@@ -354,7 +450,8 @@ SetupCopyFile(
                                   FILE_OPEN,
                                   FILE_NO_INTERMEDIATE_BUFFERING |
                                   FILE_SEQUENTIAL_ONLY |
-                                  FILE_SYNCHRONOUS_IO_NONALERT,
+                                  FILE_SYNCHRONOUS_IO_NONALERT |
+                                  FILE_OPEN_FOR_BACKUP_INTENT,
                                   NULL,
                                   0);
             /* Fail for real if we cannot open it that way */
@@ -389,7 +486,8 @@ SetupCopyFile(
                                   FILE_OVERWRITE_IF,
                                   FILE_NO_INTERMEDIATE_BUFFERING |
                                   FILE_SEQUENTIAL_ONLY |
-                                  FILE_SYNCHRONOUS_IO_NONALERT,
+                                  FILE_SYNCHRONOUS_IO_NONALERT |
+                                  FILE_OPEN_FOR_BACKUP_INTENT,
                                   NULL,
                                   0);
         }

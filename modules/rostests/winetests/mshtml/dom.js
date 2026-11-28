@@ -172,7 +172,7 @@ sync_test("anchor", function() {
         { href: "https://www.winehq.org:123/about",
           protocol: "https:", host: "www.winehq.org:123", path: "/about" },
         { href: "about:blank",
-          protocol: "about:", host: "", path: "/blank", todo_pathname: 1 },
+          protocol: "about:", host: "", path: "/blank" },
         { href: "unknown:path",
           protocol: "unknown:", host: "", path: "path" },
         { href: "ftp:path",
@@ -182,7 +182,7 @@ sync_test("anchor", function() {
         { href: "ws:path",
           protocol: "ws:", host: "", path: "path" },
         { href: "file:path",
-          protocol: "file:", host: "", path: "/path", todo_pathname: 1 },
+          protocol: "file:", host: "", path: "/path" },
         { href: "file:///c:/dir/file.html",
           protocol: "file:", host: "", path: "/c:/dir/file.html" },
         { href: "http://www.winehq.org/about",
@@ -388,7 +388,6 @@ sync_test("document_owner", function() {
 sync_test("document_style_props", function() {
     document.body.innerHTML = '<a href="#"></a>';
     var r, elem = document.getElementsByTagName("a")[0];
-    todo_wine.
     ok(document.linkColor === "#0000ff", "default linkColor = " + document.linkColor);
 
     document.linkColor = "#deadb8";
@@ -507,7 +506,6 @@ sync_test("style_properties", function() {
         current_style.zIndex = 1;
         ok(false, "expected exception");
     }catch(e) {
-        todo_wine.
         ok(e.name === "NoModificationAllowedError", "setting current_style.zIndex threw " + e.name);
     }
 
@@ -515,7 +513,6 @@ sync_test("style_properties", function() {
         computed_style.zIndex = 1;
         ok(false, "expected exception");
     }catch(e) {
-        todo_wine.
         ok(e.name === "NoModificationAllowedError", "setting computed_style.zIndex threw " + e.name);
     }
 
@@ -524,7 +521,6 @@ sync_test("style_properties", function() {
         current_style.perspective = 1;
         ok(false, "expected exception");
     }catch(e) {
-        todo_wine.
         ok(e.name === "NoModificationAllowedError", "setting current_style.perspective threw " + e.name);
     }
 
@@ -532,7 +528,6 @@ sync_test("style_properties", function() {
         computed_style.perspective = 1;
         ok(false, "expected exception");
     }catch(e) {
-        todo_wine.
         ok(e.name === "NoModificationAllowedError", "setting computed_style.perspective threw " + e.name);
     }
 

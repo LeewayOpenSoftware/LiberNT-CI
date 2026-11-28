@@ -15,25 +15,29 @@ list(APPEND SOURCE
     diskpage.c
     frame.c
     langpage.c
+    filesec.c
     libernt.c
     selftest.c
+    upgrade.c
     wizard.c
     libernt.h)
 
 file(GLOB libernt_rc_deps res/*.*)
 list(APPEND libernt_rc_deps
     ${REACTOS_SOURCE_DIR}/base/system/userinit/res/rosbitmap.bmp
-    ${REACTOS_SOURCE_DIR}/base/system/userinit/res/rosbitmap_mask.bmp)
+    ${REACTOS_SOURCE_DIR}/base/system/userinit/res/rosbitmap_mask.bmp
+    ${REACTOS_SOURCE_DIR}/boot/bootdata/filesecurity.txt)
 add_rc_deps(libernt.rc ${libernt_rc_deps})
 add_executable(libernt ${SOURCE} libernt.rc)
 
 add_pch(libernt libernt.h SOURCE)
 set_module_type(libernt win32gui UNICODE)
+set_target_properties(libernt PROPERTIES OUTPUT_NAME "oros")
 target_link_libraries(libernt uuid tzlib volresize)
 add_delay_importlibs(libernt setuplib)
-add_importlibs(libernt advapi32 gdi32 user32 comctl32 dwmapi shlwapi setupapi ole32 oleaut32 version msvcrt kernel32 ntdll)
-add_cd_file(TARGET libernt DESTINATION reactos NO_CAB FOR bootcd livecd)
-add_cd_file(TARGET libernt DESTINATION ${ARCH} FOR preinstall)
+add_importlibs(libernt advapi32 gdi32 user32 comctl32 shlwapi setupapi ole32 oleaut32 version msvcrt kernel32 ntdll)
+add_cd_file(TARGET libernt DESTINATION reactos/system32/oobe NO_CAB FOR bootcd livecd)
+add_cd_file(TARGET libernt DESTINATION ${ARCH}/system32/oobe FOR preinstall)
 
 list(APPEND OOBE_SOURCE
     account.c
@@ -47,7 +51,8 @@ add_rc_deps(oobe.rc ${libernt_rc_deps})
 add_executable(oobe ${OOBE_SOURCE} oobe.rc)
 add_pch(oobe libernt.h OOBE_SOURCE)
 set_module_type(oobe win32gui UNICODE)
+set_target_properties(oobe PROPERTIES OUTPUT_NAME "msoobe")
 target_link_libraries(oobe uuid tzlib)
-add_importlibs(oobe advapi32 gdi32 user32 comctl32 dwmapi setupapi ole32 oleaut32 msi wintrust crypt32 bcrypt netapi32 samlib userenv syssetup msvcrt kernel32 ntdll)
+add_importlibs(oobe advapi32 gdi32 user32 comctl32 setupapi ole32 oleaut32 msi wintrust crypt32 bcrypt netapi32 samlib userenv syssetup msvcrt kernel32 ntdll)
 add_cd_file(TARGET oobe DESTINATION reactos/system32/oobe FOR all)
 add_cd_file(FILE ${CMAKE_CURRENT_SOURCE_DIR}/oobeapps.inf DESTINATION reactos/system32/oobe FOR all)

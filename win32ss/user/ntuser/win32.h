@@ -154,6 +154,7 @@ typedef struct _THREADINFO
     struct tagIMC*      spDefaultImc;
     HKL                 hklPrev;
     ULONG               DpiContext; /* 0 inherits the process context */
+    LONG                DpiHostingBehavior; /* DPI_HOSTING_BEHAVIOR set by SetThreadDpiHostingBehavior */
 
     INT                 cEnterCount;
     /* Queue of messages posted to the queue. */
@@ -186,6 +187,10 @@ typedef struct _THREADINFO
     ULONG cCritDispositionDepth;
     SINGLE_LIST_ENTRY DeferredFreeList;
     ULONG cSharedCrit;
+    /* The kernel copy of the top-level structure of the D3DKMT call from user
+     * mode that this thread is running (see D3dkmtCallCaptured) */
+    PVOID pvD3dkmtCapture;
+    SIZE_T cbD3dkmtCapture;
 #if DBG
     USHORT acExclusiveLockCount[GDIObjTypeTotal + 1];
     UINT cRefObjectCo;
@@ -330,6 +335,7 @@ typedef struct _PROCESSINFO
     BOOLEAN MouseInPointerSet;
     PRAWINPUTDEVICE pRawInputDevices;
     UINT cRawInputDevices;
+    PVOID TouchInjection;
 
     /* ReactOS */
     FAST_MUTEX PrivateFontListLock;

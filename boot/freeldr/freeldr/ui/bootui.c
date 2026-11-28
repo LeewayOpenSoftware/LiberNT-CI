@@ -317,18 +317,21 @@ BootUiLogo(ULONG Left, ULONG Top, ULONG Scale)
     }
 }
 
+/* The operating system's name beside its mark in the header */
+#define BOOTUI_OS_NAME "Orosi"
+
 static VOID
 BootUiBrand(VOID)
 {
     ULONG Scale = BootUiHeight < 600 ? 2 : 1;
     ULONG Width = 48 / Scale, Height = 42 / Scale;
     ULONG Size = BootUiHeight < 600 ? 20 : 26;
-    ULONG TextWidth = BootUiTextWidth("LiberNT", Size, MAXULONG);
+    ULONG TextWidth = BootUiTextWidth(BOOTUI_OS_NAME, Size, MAXULONG);
     ULONG Left = (BootUiWidth - Width - 14 - TextWidth) / 2;
     ULONG Top = BootUiHeight < 600 ? 12 : 28;
     BootUiLogo(Left, Top, Scale);
     BootUiText(Left + Width + 14, Top + (Height - min(Height, Size)) / 2 - 1,
-               "LiberNT", Size, BOOTUI_TEXT, TextWidth, MAXULONG);
+               BOOTUI_OS_NAME, Size, BOOTUI_TEXT, TextWidth, MAXULONG);
 }
 
 static VOID

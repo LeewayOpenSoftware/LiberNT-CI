@@ -135,6 +135,7 @@ list(APPEND SOURCE
     user/ntuser/defwnd.c
     user/ntuser/desktop.c
     user/ntuser/display.c
+    user/ntuser/dpi.c
     user/ntuser/draw.c
     user/ntuser/event.c
     user/ntuser/focus.c
@@ -145,6 +146,7 @@ list(APPEND SOURCE
     user/ntuser/hotkey.c
     user/ntuser/ime.c
     user/ntuser/input.c
+    user/ntuser/inputhold.c
     user/ntuser/job.c
     user/ntuser/keyboard.c
     user/ntuser/kbdlayout.c
@@ -177,6 +179,7 @@ list(APPEND SOURCE
     user/ntuser/useratom.c
     user/ntuser/usrheap.c
     user/ntuser/vis.c
+    user/ntuser/wallpaperspan.c
     user/ntuser/windc.c
     user/ntuser/window.c
     user/ntuser/winpos.c
@@ -219,6 +222,7 @@ list(APPEND SOURCE
     gdi/ntgdi/region.c
     gdi/ntgdi/stockobj.c
     gdi/ntgdi/text.c
+    gdi/ntgdi/umfd.c
     gdi/ntgdi/utils.c
     gdi/ntgdi/wingl.c
     gdi/ntgdi/xformobj.c

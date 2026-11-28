@@ -82,6 +82,11 @@ typedef struct _TOKEN_AUDIT_POLICY_INFORMATION
 #define TOKEN_FILTER_METHOD    0xFUL
 
 //
+// Token flags private to the kernel, above the public TOKEN_* bits
+//
+#define TOKEN_LUA              0x00400000UL
+
+//
 // Security descriptor internal helpers
 //
 FORCEINLINE
@@ -401,6 +406,24 @@ SepCreateToken(
     _In_opt_ PACL DefaultDacl,
     _In_ PTOKEN_SOURCE TokenSource,
     _In_ BOOLEAN SystemToken);
+
+BOOLEAN
+NTAPI
+SepSinglePrivilegeCheck(
+    _In_ LUID PrivilegeValue,
+    _In_ PTOKEN Token,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+BOOLEAN
+NTAPI
+SepCanAssignOwner(
+    _In_ PTOKEN Token,
+    _In_ PSID Owner);
+
+BOOLEAN
+NTAPI
+SepCallerCanAssignOwner(
+    _In_ PSID Owner);
 
 BOOLEAN
 NTAPI
@@ -838,6 +861,40 @@ SepRmDereferenceLogonSession(
 
 NTSTATUS
 NTAPI
+SepRmLinkLogonSessionTokens(
+    _In_ PTOKEN FullToken,
+    _In_ PTOKEN LimitedToken);
+
+VOID
+NTAPI
+SepRmUnlinkLogonSessionToken(
+    _In_ PTOKEN Token);
+
+NTSTATUS
+NTAPI
+SepRmUnlinkLogonSessionPair(
+    _In_ PTOKEN Token);
+
+BOOLEAN
+NTAPI
+SeTokenOpenAccessAllowed(
+    _In_ PACCESS_TOKEN Token,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+BOOLEAN
+NTAPI
+SepRmLogonSessionHasFullToken(
+    _In_ PTOKEN Token);
+
+NTSTATUS
+NTAPI
+SepRmReferenceLinkedToken(
+    _In_ PTOKEN Token,
+    _Out_ PTOKEN *LinkedToken);
+
+NTSTATUS
+NTAPI
 SepRegQueryHelper(
     _In_ PCWSTR KeyName,
     _In_ PCWSTR ValueName,
@@ -928,6 +985,22 @@ SepObjectTypeGuidInList(
     _In_ ULONG ObjectTypeListLength,
     _In_ PGUID ObjectTypeGuid,
     _Out_ PULONG ObjectIndex);
+
+NTSTATUS
+NTAPI
+SepAccessCheckClientToken(
+    _In_ PSECURITY_DESCRIPTOR SecurityDescriptor,
+    _In_ PTOKEN Token,
+    _In_ PTOKEN PrimaryToken,
+    _In_opt_ PSID PrincipalSelfSid,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_TYPE_LIST_INTERNAL ObjectTypeList,
+    _In_ ULONG ObjectTypeListLength,
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_ BOOLEAN UseResultList,
+    _Out_writes_(UseResultList ? ObjectTypeListLength : 1) PACCESS_MASK GrantedAccessList,
+    _Out_writes_(UseResultList ? ObjectTypeListLength : 1) PNTSTATUS AccessStatusList);
 
 NTSTATUS
 SeCaptureObjectTypeList(

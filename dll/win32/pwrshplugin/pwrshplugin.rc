@@ -1,0 +1,19 @@
+/*
+ * PROJECT:     Orosi PowerShell WinRM plugin stub
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ *
+ * The version comes from the standard reactos/version.rc defaults: with
+ * the NT 10.0 target, VER_PRODUCTVERSION is 10.0.26100.1 (>= the MSI
+ * file signature MinVersion 6.3.9600.16383), the same shape Windows
+ * uses - the plugin version tracks the OS version. Identity strings
+ * follow the Orosi defaults.
+ */
+
+#define REACTOS_VERSION_DLL
+
+#define REACTOS_STR_FILE_DESCRIPTION  "PowerShell WinRM plugin"
+#define REACTOS_STR_INTERNAL_NAME     "pwrshplugin"
+#define REACTOS_STR_ORIGINAL_FILENAME "pwrshplugin.dll"
+
+#include <reactos/version.rc>

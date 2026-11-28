@@ -306,6 +306,11 @@ static void WINAPI schedsvc_handler(DWORD control)
         SetEvent(done_event);
         break;
 
+    case 128: /* Winlogon SchedStartShell (wlnotify): a user logged on */
+        engine_notify_logon();
+        schedsvc_update_status(SERVICE_RUNNING);
+        break;
+
     default:
         schedsvc_update_status(SERVICE_RUNNING);
         break;
@@ -412,10 +417,12 @@ void WINAPI ServiceMain(DWORD argc, LPWSTR *argv)
 
     if (thread && RPC_init() == RPC_S_OK)
     {
+        engine_start();
         schedsvc_update_status(SERVICE_RUNNING);
         WaitForSingleObject(thread, INFINITE);
         CloseHandle(thread);
         RPC_finish();
+        engine_stop();
     }
 
     schedsvc_update_status(SERVICE_STOPPED);

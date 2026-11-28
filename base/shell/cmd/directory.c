@@ -57,6 +57,7 @@ static DISPLAYTIME dirTime;
 static DISPLAYORDER dirOrder;
 static BOOL orderReverse, orderGroupDirs, orderGroupDirsReverse, orderByCol;
 static BOOL paged_mode, recurse, wide, bare, lower, shortname, usernames, separator;
+static BOOL show_streams;
 static ULONG showattrs, attrsbits;
 
 /*****************************************************************************
@@ -278,6 +279,99 @@ static void output_reparse_target(const WCHAR *dir, const WCHAR *filename)
 }
 
 /*****************************************************************************
+ * output_file_streams
+ *
+ * Print the named data streams of a file or directory (dir /R), one per
+ * line, aligned under the file size column like Windows:
+ * "<size> <entry>:<stream>:$DATA". The unnamed data stream (name ending in
+ * "::$DATA") is skipped.
+ */
+static void output_file_streams(const WCHAR *dir, const WCHAR *filename)
+{
+  static const WCHAR default_stream[] = L"::$DATA";
+  WCHAR full[MAX_PATH];
+  WIN32_FIND_STREAM_DATA fsd;
+  HANDLE hff;
+
+  if (lstrlenW(dir) + lstrlenW(filename) + 1 > ARRAY_SIZE(full)) return;
+  lstrcpyW(full, dir);
+  lstrcatW(full, filename);
+
+  hff = FindFirstStreamW(full, FindStreamInfoStandard, &fsd, 0);
+  if (hff == INVALID_HANDLE_VALUE) return;
+
+  do
+  {
+    SIZE_T stream_len = lstrlenW(fsd.cStreamName);
+    ULONGLONG stream_size = fsd.StreamSize.QuadPart;
+
+    /* Skip the unnamed data stream */
+    if (stream_len >= ARRAY_SIZE(default_stream) - 1 &&
+        wcsicmp(fsd.cStreamName + stream_len - (ARRAY_SIZE(default_stream) - 1),
+                default_stream) == 0)
+      continue;
+
+    WCMD_output(L"\r\n%1!24s!%2!14s! %3%4",
+                L"",
+                WCMD_filesize64(stream_size),
+                filename,
+                fsd.cStreamName);
+  } while (FindNextStreamW(hff, &fsd));
+
+  FindClose(hff);
+}
+
+/*****************************************************************************
+ * WCMD_dir_parent_is_root
+ *
+ * Check whether the parent of the directory in dirName (which ends in a
+ * backslash) is a drive root or the root of a UNC share. Windows' DIR
+ * does not display ".." in that case (e.g. "dir C:\Windows" lists only ".").
+ */
+static BOOL WCMD_dir_parent_is_root(const WCHAR *dirName)
+{
+  WCHAR full[MAX_PATH];
+  WCHAR *lastSlash;
+  DWORD len;
+
+  len = GetFullPathNameW(dirName, ARRAY_SIZE(full), full, NULL);
+  if (len == 0 || len >= ARRAY_SIZE(full)) return FALSE;
+
+  /* Normalize a verbatim path: \\?\C:\... -> C:\... and
+     \\?\UNC\server\share\... -> \\server\share\... */
+  if (full[0] == L'\\' && full[1] == L'\\' && full[2] == L'?' && full[3] == L'\\') {
+    if (full[4] == L'U' && full[5] == L'N' && full[6] == L'C' && full[7] == L'\\')
+      memmove(full + 2, full + 8, (lstrlenW(full + 8) + 1) * sizeof(WCHAR));
+    else
+      memmove(full, full + 4, (lstrlenW(full + 4) + 1) * sizeof(WCHAR));
+  }
+
+  /* Strip the trailing backslash */
+  lastSlash = full + lstrlenW(full) - 1;
+  if (lastSlash > full && *lastSlash == L'\\') *lastSlash = L'\0';
+
+  /* Find the start of the final (child) component */
+  lastSlash = wcsrchr(full, L'\\');
+  if (!lastSlash) return FALSE;           /* relative name without a parent */
+
+  /* Parent is a drive root: C:\ */
+  if (lastSlash - full == 2 && full[1] == L':') return TRUE;
+
+  /* UNC: parent is the share root when the child sits directly under
+     \\server\share */
+  if (full[0] == L'\\' && full[1] == L'\\') {
+    WCHAR *p = full + 2;
+    while (*p && *p != L'\\') p++;        /* skip server */
+    if (*p == L'\\') {
+      WCHAR *q = p + 1;
+      while (*q && *q != L'\\') q++;      /* skip share */
+      if (q == lastSlash) return TRUE;    /* parent == \\server\share */
+    }
+  }
+  return FALSE;
+}
+
+/*****************************************************************************
  * WCMD_list_directory
  *
  * List a single file directory. This function (and those below it) can be called
@@ -336,6 +430,10 @@ static RETURN_CODE WCMD_list_directory (DIRECTORY_STACK *inputparms, int level, 
         /* Skip any which are filtered out by attribute */
         if ((fd[entry_count].dwFileAttributes & attrsbits) != showattrs) continue;
 
+        /* Windows does not display ".." when the parent of the listed
+           directory is a drive root (e.g. dir C:\Windows shows only ".") */
+        if (!lstrcmpW(fd[entry_count].cFileName, L"..") && WCMD_dir_parent_is_root(parms->dirName)) continue;
+
         entry_count++;
 
         /* Keep running track of longest filename for wide output */
@@ -370,8 +468,10 @@ static RETURN_CODE WCMD_list_directory (DIRECTORY_STACK *inputparms, int level, 
   /* Handle case where everything is filtered out */
   if (entry_count > 0) {
 
-    /* Sort the list of files */
-    qsort (fd, entry_count, sizeof(WIN32_FIND_DATAW), WCMD_dir_sort);
+    /* Sort the list of files. With no ordering options Windows leaves the
+       entries in find-first order, so skip the sort to preserve it. */
+    if (dirOrder != Unspecified || orderGroupDirs)
+      qsort (fd, entry_count, sizeof(WIN32_FIND_DATAW), WCMD_dir_sort);
 
     /* Work out the number of columns */
     WINE_TRACE("%d entries, maxwidth=%d, widest=%d\n", entry_count, max_width, widest);
@@ -462,6 +562,8 @@ static RETURN_CODE WCMD_list_directory (DIRECTORY_STACK *inputparms, int level, 
            WCMD_output(L"%1",fd[i].cFileName);
            if (fd[i].dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
                 output_reparse_target(inputparms->dirName, fd[i].cFileName);
+           if (show_streams)
+                output_file_streams(inputparms->dirName, fd[i].cFileName);
         } else {
            if (!((lstrcmpW(fd[i].cFileName, L".") == 0) ||
                  (lstrcmpW(fd[i].cFileName, L"..") == 0))) {
@@ -488,6 +590,8 @@ static RETURN_CODE WCMD_list_directory (DIRECTORY_STACK *inputparms, int level, 
            WCMD_output(L"%1",fd[i].cFileName);
            if (fd[i].dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
                 output_reparse_target(inputparms->dirName, fd[i].cFileName);
+           if (show_streams)
+                output_file_streams(inputparms->dirName, fd[i].cFileName);
         } else {
            WCMD_output(L"%1%2", recurse ? inputparms->dirName : L"", fd[i].cFileName);
         }
@@ -770,6 +874,7 @@ RETURN_CODE WCMD_directory(WCHAR *args)
   usernames  = FALSE;
   orderByCol = FALSE;
   separator  = TRUE;
+  show_streams = FALSE;
   dirTime = Written;
   dirOrder = Unspecified;
   orderReverse = FALSE;
@@ -819,6 +924,9 @@ RETURN_CODE WCMD_directory(WCHAR *args)
               break;
     case 'C': if (negate) separator = !separator;
               else separator = TRUE;
+              break;
+    case 'R': if (negate) show_streams = !show_streams;
+              else show_streams = TRUE;
               break;
     case 'T': p = p + 1;
               if (*p==':') p++;  /* Skip optional : */
@@ -955,7 +1063,7 @@ RETURN_CODE WCMD_directory(WCHAR *args)
     if (argN && argN[0] != '/') {
 
       WINE_TRACE("Found parm '%s'\n", wine_dbgstr_w(thisArg));
-      if (thisArg[1] == ':' && thisArg[2] == '\\') {
+      if ((thisArg[1] == ':' && thisArg[2] == '\\') || (thisArg[0] == '\\' && thisArg[1] == '\\')) {
         lstrcpyW(fullname, thisArg);
       } else if (thisArg[1] == ':' && thisArg[2] != '\\') {
         WCHAR envvar[4];
@@ -1055,7 +1163,8 @@ RETURN_CODE WCMD_directory(WCHAR *args)
          drive[2] = L'\\';
          drive[3] = L'\0';
          trailerReqd = TRUE;
-         if (!WCMD_print_volume_information(drive)) {
+         /* FIXME: the volume header of a path of two backslashes is not printed */
+         if ((drive[0] != L'\\' || drive[1] != L'\\') && !WCMD_print_volume_information(drive)) {
            return_code = ERROR_INVALID_PARAMETER;
            goto exit;
          }

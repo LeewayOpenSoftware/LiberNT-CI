@@ -890,3 +890,19 @@ FsRtlAreThereWaitingFileLocks(
     Waiting = (ReadPointerNoFence((PVOID const volatile *)&State->Waiting.Flink) != &State->Waiting);
     return Waiting;
 }
+
+/*
+ * TRUE while byte-range locks are granted on the file, or while the file
+ * system reports lock requests in progress around its own lock processing
+ * (FsRtlIncrementLockRequestsInProgress / FsRtlDecrementLockRequestsInProgress
+ * on FILE_LOCK.LockRequestsInProgress). A lock IRP waiting in this package
+ * always conflicts with a granted lock, so it is covered by the first term.
+ */
+BOOLEAN
+NTAPI
+FsRtlAreThereCurrentOrInProgressFileLocks(
+    _In_ PFILE_LOCK FileLock)
+{
+    return FsRtlAreThereCurrentFileLocks(FileLock) ||
+           (FileLock->LockRequestsInProgress > 0);
+}

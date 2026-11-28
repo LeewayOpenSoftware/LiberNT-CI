@@ -122,7 +122,7 @@ HKR, , TypesSupported,   0x00010001, 7
 usbrndis.sys = 1
 
 [Strings]
-LiberNT            = "LiberNT Team"
+LiberNT            = "Leeway Open Software"
 Generic            = "Generic"
 VBox               = "Oracle VirtualBox"
 Realtek            = "Realtek"

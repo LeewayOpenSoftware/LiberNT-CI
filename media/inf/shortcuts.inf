@@ -26,6 +26,8 @@ QuickLaunchShortcuts=26, Microsoft\Internet Explorer\Quick Launch
 %SystemRoot%\system32\diskmgmt.exe, %DISKMGMT_TITLE%, %DISKMGMT_DESC%, 0
 %SystemRoot%\system32\eventvwr.exe, %EVENTVWR_TITLE%, %EVENTVWR_DESC%, 0
 %SystemRoot%\system32\msconfig.exe, %MSCONFIG_TITLE%, %MSCONFIG_DESC%, 0
+%SystemRoot%\regedit.exe, %REGEDIT_TITLE%, %REGEDIT_DESC%, 0
+%SystemRoot%\explorer.exe, %NTOBJECT_TITLE%, %NTOBJECT_DESC%, 0, , "shell:::{845B0FB2-66E0-416B-8F91-314E23F7C12D}", %SystemRoot%\system32\ntobjshex.dll,0
 
 [CommunicationsShortcuts]
 %SystemRoot%\system32\mstsc.exe, %MSTSC_TITLE%, %MSTSC_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
@@ -39,31 +41,33 @@ QuickLaunchShortcuts=26, Microsoft\Internet Explorer\Quick Launch
 %SystemRoot%\system32\mspaint.exe, %MSPAINT_TITLE%, %MSPAINT_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
 
 [SystemToolsShortcuts]
-%SystemRoot%\system32\camera.exe, %CAMERA_TITLE%, %CAMERA_DESC%, 0
+%SystemRoot%\system32\orosi_platform\camera.exe, %CAMERA_TITLE%, %CAMERA_DESC%, 0
 %SystemRoot%\system32\charmap.exe, %CHARMAP_TITLE%, %CHARMAP_DESC%, 0
-%SystemRoot%\system32\clipbrd.exe, %CLIPBRD_TITLE%, %CLIPBRD_DESC%, 0
+%SystemRoot%\system32\orosi_platform\clipbrd.exe, %CLIPBRD_TITLE%, %CLIPBRD_DESC%, 0
 %SystemRoot%\system32\kbswitch.exe, %KBSWITCH_TITLE%, %KBSWITCH_DESC%, 0
-%SystemRoot%\regedit.exe, %REGEDIT_TITLE%, %REGEDIT_DESC%, 0
 %SystemRoot%\system32\taskmgr.exe, %TASKMGR_TITLE%, %TASKMGR_DESC%, 0
-%SystemRoot%\system32\taskmgr11.exe, %TASKMGR11_TITLE%, %TASKMGR11_DESC%, 0
+%SystemRoot%\system32\orosi_platform\taskmgr_classic.exe, %TASKMGR_CLASSIC_TITLE%, %TASKMGR_CLASSIC_DESC%, 0
 %SystemRoot%\system32\lntget.exe, %LNTGET_TITLE%, %LNTGET_DESC%, 0, %SystemRoot%\system32, gui
 %SystemRoot%\system32\dxdiag.exe, %DXDIAG_TITLE%, %DXDIAG_DESC%, 0
-%SystemRoot%\system32\netassist.exe, %NETASSIST_TITLE%, %NETASSIST_DESC%, 0
 %SystemRoot%\system32\control.exe, %GECKO_TITLE%, %GECKO_DESC%, 0, , "appwiz.cpl,,install_gecko"
-%SystemRoot%\system32\oobe\oobe.exe, %COMPONENTS_TITLE%, %COMPONENTS_DESC%, 0, %SystemRoot%\system32\oobe, "/components"
+%SystemRoot%\system32\oobe\msoobe.exe, %COMPONENTS_TITLE%, %COMPONENTS_DESC%, 0, %SystemRoot%\system32\oobe, "/components"
 
 [AccessibilityShortcuts]
 %SystemRoot%\system32\magnify.exe, %MAGNIFY_TITLE%, %MAGNIFY_DESC%, 0
 %SystemRoot%\system32\osk.exe, %OSK_TITLE%, %OSK_DESC%, 0
 
 [EntertainmentShortcuts]
-%SystemRoot%\system32\mplay32.exe, %MPLAY_TITLE%, %MPLAY_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
-%SystemRoot%\system32\sndrec32.exe, %SNDREC32_TITLE%, %SNDREC32_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
+%SystemRoot%\system32\orosi_platform\mplay32.exe, %MPLAY_TITLE%, %MPLAY_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
+%SystemRoot%\system32\orosi_platform\sndrec32.exe, %SNDREC32_TITLE%, %SNDREC32_DESC%, 0, %HOMEDRIVE%%HOMEPATH%
 
 [GamesShortcuts]
-%SystemRoot%\system32\sol.exe, %SOL_TITLE%, %SOL_DESC%, 0
-%SystemRoot%\system32\winmine.exe, %WINMINE_TITLE%, %WINMINE_DESC%, 0
-%SystemRoot%\system32\spider.exe, %SPIDER_TITLE%, %SPIDER_DESC%, 0
+%SystemRoot%\system32\orosi_platform\sol.exe, %SOL_TITLE%, %SOL_DESC%, 0
+%SystemRoot%\system32\orosi_platform\winmine.exe, %WINMINE_TITLE%, %WINMINE_DESC%, 0
+%SystemRoot%\system32\orosi_platform\spider.exe, %SPIDER_TITLE%, %SPIDER_DESC%, 0
+
+; Links of programs an upgrade removes: "<folder section> = <link name>", deleted on upgrade when present
+[ObsoleteShortcuts]
+SystemToolsShortcuts = "Task Manager 11"
 
 [QuickLaunchShortcuts]
 %SystemRoot%\explorer.exe, %EXPLORER_TITLE%, %EXPLORER_DESC%, 1, %HOMEDRIVE%%HOMEPATH%
@@ -100,12 +104,10 @@ DEVMGMT_TITLE=Device Manager
 DEVMGMT_DESC=Launch Device Manager
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 DWMSETTINGS_TITLE=DWM Settings
 DWMSETTINGS_DESC=Customize desktop window effects
-NETASSIST_TITLE=Network Assistance
-NETASSIST_DESC=Show the network assistance key for a LiberNT developer
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Optional Components
@@ -116,6 +118,8 @@ EVENTVWR_TITLE=Event Viewer
 EVENTVWR_DESC=Launch Event Viewer
 MSCONFIG_TITLE=System Configuration
 MSCONFIG_DESC=Launch System Configuration program
+NTOBJECT_TITLE=NT Object Namespace Explorer
+NTOBJECT_DESC=Browse the NT Object Namespace
 CALC_TITLE=Calculator
 CALC_DESC=Launch Calculator
 NOTEPAD_TITLE=Notepad
@@ -184,8 +188,10 @@ DEVMGMT_TITLE=Диспечер на устройствата
 DEVMGMT_DESC=Пускане на управителя на устройствата
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Допълнителни компоненти
@@ -257,8 +263,8 @@ DEVMGMT_TITLE=裝置管理員
 DEVMGMT_DESC=啟動裝置管理員
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=選用元件
@@ -333,8 +339,10 @@ DEVMGMT_TITLE=Správce zařízení
 DEVMGMT_DESC=Spustit Správce zařízení
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Volitelné součásti
@@ -406,8 +414,10 @@ DEVMGMT_TITLE=Geräte-Manager
 DEVMGMT_DESC=Starte Gerätemanager
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Optionale Komponenten
@@ -478,8 +488,10 @@ DEVMGMT_TITLE=Διαχείριση συσκευών
 DEVMGMT_DESC=Διαχείριση Συσκευών
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Προαιρετικά στοιχεία
@@ -551,8 +563,8 @@ DEVMGMT_TITLE=Administrador de dispositivos
 DEVMGMT_DESC=Ejecuta el administrador de dispositivos
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Componentes opcionales
@@ -563,6 +575,8 @@ EVENTVWR_TITLE=Visor de sucesos
 EVENTVWR_DESC=Ejecuta el visor de sucesos
 MSCONFIG_TITLE=Configuración del sistema
 MSCONFIG_DESC=Ejecuta la utilidad de configuración del sistema
+NTOBJECT_TITLE=Explorador de objetos NT
+NTOBJECT_DESC=Examinar el espacio de nombres de objetos NT
 CALC_TITLE=Calculadora
 CALC_DESC=Ejecuta la calculadora
 NOTEPAD_TITLE=Bloc de notas
@@ -628,8 +642,8 @@ DEVMGMT_TITLE=Seadmehaldur
 DEVMGMT_DESC=Ava Seadmehaldur
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Valikulised komponendid
@@ -703,8 +717,8 @@ DEVMGMT_TITLE=Gestionnaire de périphériques
 DEVMGMT_DESC=Lancer le gestionnaire de périphériques
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Composants facultatifs
@@ -779,8 +793,8 @@ DEVMGMT_TITLE=מנהל ההתקנים
 DEVMGMT_DESC=מנהל ההתקנים
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=רכיבים אופציונליים
@@ -856,8 +870,8 @@ DEVMGMT_TITLE=Eszközkezelő
 DEVMGMT_DESC=Eszközkezelő indítása
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Választható összetevők
@@ -930,8 +944,10 @@ DEVMGMT_TITLE=Manajer Perangkat
 DEVMGMT_DESC=Jalankan Manajer Perangkat
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Komponen opsional
@@ -1003,8 +1019,10 @@ DEVMGMT_TITLE=Gestione periferiche
 DEVMGMT_DESC=Avvia la Gestione periferiche
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Componenti facoltativi
@@ -1073,8 +1091,10 @@ DEVMGMT_TITLE=デバイス マネージャ
 DEVMGMT_DESC=デバイス マネージャを起動します
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=オプション コンポーネント
@@ -1146,8 +1166,10 @@ DEVMGMT_TITLE=Device Manager
 DEVMGMT_DESC=Launch Device Manager
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Optionele onderdelen
@@ -1216,8 +1238,10 @@ DEVMGMT_TITLE=Device Manager
 DEVMGMT_DESC=Start Enhetsbehandler
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Valgfrie komponenter
@@ -1289,8 +1313,8 @@ DEVMGMT_TITLE=Menedżer urządzeń
 DEVMGMT_DESC=Uruchom Menedżer urządzeń
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Składniki opcjonalne
@@ -1366,8 +1390,10 @@ DEVMGMT_TITLE=Device Manager
 DEVMGMT_DESC=Iniciar Gerenciador de Dispositivos
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Componentes opcionais
@@ -1439,8 +1465,10 @@ DEVMGMT_TITLE=Gestor de Dispositivos
 DEVMGMT_DESC=Iniciar Gestor de Dispositivos
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Componentes opcionais
@@ -1512,8 +1540,8 @@ DEVMGMT_TITLE=Manager dispozitive
 DEVMGMT_DESC=Vizualizați și actualizați setările hardware și software-ul pentru drivere
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Componente opționale
@@ -1587,8 +1615,8 @@ DEVMGMT_TITLE=Диспетчер устройств
 DEVMGMT_DESC=Запустить диспетчер устройств
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Дополнительные компоненты
@@ -1661,8 +1689,10 @@ DEVMGMT_TITLE=Správca zariadení
 DEVMGMT_DESC=Spustiť Správcu zariadení
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Voliteľné súčasti
@@ -1734,8 +1764,10 @@ DEVMGMT_TITLE=Aygıt Yöneticisi
 DEVMGMT_DESC=Aygıt Yöneticisi'ni başlat
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=İsteğe bağlı bileşenler
@@ -1811,8 +1843,10 @@ DEVMGMT_TITLE=Диспетчер пристроїв
 DEVMGMT_DESC=Запустити Диспетчер пристроїв
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_TITLE=Task Manager
+TASKMGR_DESC=Launch the Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Додаткові компоненти
@@ -1886,8 +1920,8 @@ DEVMGMT_TITLE=Gailu administratzaile
 DEVMGMT_DESC=Hasi gailu administratzaile
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=Aukerako osagaiak
@@ -1963,8 +1997,8 @@ DEVMGMT_TITLE=设备管理器
 DEVMGMT_DESC=设备管理器
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=可选组件
@@ -2038,8 +2072,8 @@ DEVMGMT_TITLE=裝置管理員
 DEVMGMT_DESC=啟動裝置管理員
 DISKMGMT_TITLE=Disk Management
 DISKMGMT_DESC=Launch Disk Management
-TASKMGR11_TITLE=Task Manager
-TASKMGR11_DESC=Launch Task Manager
+TASKMGR_CLASSIC_TITLE=Task Manager (Classic)
+TASKMGR_CLASSIC_DESC=Launch the classic Task Manager
 LNTGET_TITLE=LntGet
 LNTGET_DESC=Search, download, and install software
 COMPONENTS_TITLE=選用元件

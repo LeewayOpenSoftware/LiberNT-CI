@@ -68,6 +68,14 @@ BEGIN_COM_MAP(CActiveDesktop)
     COM_INTERFACE_ENTRY_IID(IID_IADesktopP2, IADesktopP2)
     COM_INTERFACE_ENTRY_IID(IID_IPropertyBag, IPropertyBag)
 END_COM_MAP()
+
+private:
+    /* Pending wallpaper state, committed by ApplyChanges() on the user32
+     * SystemParametersInfo(SPI_SETDESKWALLPAPER) path. */
+    WCHAR m_szPendingWallpaper[MAX_PATH];
+    DWORD m_dwPendingStyle;
+    BOOL m_bWallpaperPending;
+    BOOL m_bOptionsPending;
 };
 
 

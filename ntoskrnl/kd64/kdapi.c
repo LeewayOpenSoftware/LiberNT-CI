@@ -469,7 +469,7 @@ KdpSetCommonState(IN ULONG NewState,
     WaitStateChange->NewState = NewState;
     WaitStateChange->ProcessorLevel = KeProcessorLevel;
     WaitStateChange->Processor = (USHORT)KeGetCurrentPrcb()->Number;
-    WaitStateChange->NumberProcessors = (ULONG)KeNumberProcessors;
+    WaitStateChange->NumberProcessors = KiNumberProcessors;
     WaitStateChange->Thread = (ULONG64)(LONG_PTR)KeGetCurrentThread();
     WaitStateChange->ProgramCounter = (ULONG64)(LONG_PTR)KeGetContextPc(Context);
 
@@ -804,7 +804,7 @@ KdpGetContext(IN PDBGKD_MANIPULATE_STATE64 State,
     ASSERT(Data->Length == 0);
 
     /* Make sure that this is a valid request */
-    if (State->Processor < KeNumberProcessors)
+    if (State->Processor < KiNumberProcessors)
     {
         /* Check if the request is for this CPU */
         if (State->Processor == KeGetCurrentPrcb()->Number)
@@ -859,7 +859,7 @@ KdpSetContext(IN PDBGKD_MANIPULATE_STATE64 State,
     ASSERT(Data->Length == sizeof(CONTEXT));
 
     /* Make sure that this is a valid request */
-    if ((State->Processor < KeNumberProcessors) &&
+    if ((State->Processor < KiNumberProcessors) &&
         (KdpContextSent))
     {
         /* Check if the request is for this CPU */
@@ -915,7 +915,7 @@ KdpGetContextEx(IN PDBGKD_MANIPULATE_STATE64 State,
     Header.Buffer = (PCHAR)State;
 
     /* Make sure that this is a valid request */
-    if ((State->Processor < KeNumberProcessors) &&
+    if ((State->Processor < KiNumberProcessors) &&
         (ContextEx->Offset + ContextEx->ByteCount) <= sizeof(CONTEXT))
     {
         /* Check if the request is for this CPU */
@@ -978,7 +978,7 @@ KdpSetContextEx(IN PDBGKD_MANIPULATE_STATE64 State,
     Header.Buffer = (PCHAR)State;
 
     /* Make sure that this is a valid request */
-    if ((State->Processor < KeNumberProcessors) &&
+    if ((State->Processor < KiNumberProcessors) &&
         ((ContextEx->Offset + ContextEx->ByteCount) <= sizeof(CONTEXT)) &&
         (KdpContextSent))
     {
@@ -1336,7 +1336,7 @@ KdpSwitchProcessor(
     _In_ USHORT ProcessorIndex)
 {
     /* Make sure that the processor index is valid */
-    if (ProcessorIndex >= KeNumberProcessors)
+    if (ProcessorIndex >= KiNumberProcessors)
     {
         KdpDprintf("%u is not a valid processor number\n", ProcessorIndex);
         return ContinueProcessorReselected;
@@ -1977,6 +1977,13 @@ KdEnterDebugger(IN PKTRAP_FRAME TrapFrame,
 {
     BOOLEAN Enable;
 
+    if (KiHasFreezeFailure())
+    {
+        if (!KiIsBugCheckEntryOwner(KeGetCurrentPrcb()))
+            for (;;) HalHaltSystem();
+        return FALSE;
+    }
+
     if (KdEnteredDebugger || KdpDebuggerLockOwnedByCurrentThread())
     {
         InterlockedIncrement(&KdpDebuggerNestedDepth);
@@ -2002,6 +2009,7 @@ KdEnterDebugger(IN PKTRAP_FRAME TrapFrame,
 
     /* Freeze all CPUs, raising also the IRQL to HIGH_LEVEL */
     Enable = KeFreezeExecution(TrapFrame, ExceptionFrame);
+    if (KiHasFreezeFailure()) return Enable;
     if (!(KiFreezeFlag & 2))
         KiFreezeInterruptTime();
 
@@ -2037,6 +2045,13 @@ KdExitDebugger(IN BOOLEAN Enable)
 {
     ULONG TimeSlip;
 
+    if (KiHasFreezeFailure())
+    {
+        if (!KiIsBugCheckEntryOwner(KeGetCurrentPrcb()))
+            for (;;) HalHaltSystem();
+        return;
+    }
+
     if (KdpDebuggerNestedDepth > 0)
     {
         InterlockedDecrement(&KdpDebuggerNestedDepth);
@@ -2057,6 +2072,7 @@ KdExitDebugger(IN BOOLEAN Enable)
     /* Unfreeze the CPUs, restoring also the IRQL */
     KiThawInterruptTime();
     KeThawExecution(Enable);
+    if (KiHasFreezeFailure()) return;
 
     /* Compare time with the one from KdEnterDebugger */
     if (!KdTimerStop.QuadPart)
@@ -2787,6 +2803,7 @@ KdRefreshDebuggerNotPresent(VOID)
 
     /* Enter the debugger */
     Enable = KdEnterDebugger(NULL, NULL);
+    if (KiHasFreezeFailure()) return TRUE;
 
     /*
      * Attempt to send a string to the debugger

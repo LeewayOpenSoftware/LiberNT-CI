@@ -189,6 +189,11 @@ PDEVOBJ_pSurface(
 
 VOID
 NTAPI
+PDEVOBJ_vSetLogPixels(
+    _In_ ULONG ulLogPixels);
+
+VOID
+NTAPI
 PDEVOBJ_vGetDeviceCaps(
     _In_ PPDEVOBJ ppdev,
     _Out_ PDEVCAPS pDevCaps);

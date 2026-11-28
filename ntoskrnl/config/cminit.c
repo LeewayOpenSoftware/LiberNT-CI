@@ -24,6 +24,7 @@ CmpInitializeHive(
     _In_opt_ PVOID HiveData,
     _In_ HANDLE Primary,
     _In_ HANDLE Log,
+    _In_opt_ HANDLE Log2,
     _In_ HANDLE External,
     _In_ HANDLE Alternate,
     _In_opt_ PCUNICODE_STRING FileName,
@@ -51,6 +52,7 @@ CmpInitializeHive(
      */
     if ((External && (Primary || Log)) ||
         (Log && !Primary) ||
+        (Log2 && !Log) ||
         (!CmpShareSystemHives && (HiveFlags & HIVE_VOLATILE) &&
             (Primary || External || Log)) ||
         ((OperationType == HINIT_MEMORY) && !HiveData) ||
@@ -105,6 +107,7 @@ CmpInitializeHive(
     /* Setup the handles */
     Hive->FileHandles[HFILE_TYPE_PRIMARY] = Primary;
     Hive->FileHandles[HFILE_TYPE_LOG] = Log;
+    Hive->FileHandles[HFILE_TYPE_LOG2] = Log2;
     Hive->FileHandles[HFILE_TYPE_EXTERNAL] = External;
     Hive->FileHandles[HFILE_TYPE_ALTERNATE] = Alternate;
 
@@ -378,11 +381,49 @@ Exit:
     return Status;
 }
 
+/* Opens <BaseName>.LOG2, the second incremental log. Failing to is not fatal: the hive then keeps using LOG1 only. */
+NTSTATUS
+NTAPI
+CmpOpenHiveLog2(IN POBJECT_ATTRIBUTES Base,
+                IN PCUNICODE_STRING BaseName,
+                IN BOOLEAN NewHive,
+                OUT PHANDLE Log2)
+{
+    OBJECT_ATTRIBUTES Attributes = *Base;
+    IO_STATUS_BLOCK IoStatus;
+    UNICODE_STRING Name;
+    NTSTATUS Status;
+
+    *Log2 = NULL;
+    if (CmpShareSystemHives) return STATUS_SUCCESS;
+    if (BaseName->Length > MAXUSHORT - 6 * sizeof(WCHAR)) return STATUS_NAME_TOO_LONG;
+
+    Name.Length = BaseName->Length + 5 * sizeof(WCHAR);
+    Name.MaximumLength = Name.Length + sizeof(WCHAR);
+    Name.Buffer = ExAllocatePoolWithTag(PagedPool, Name.MaximumLength, TAG_CM);
+    if (!Name.Buffer) return STATUS_INSUFFICIENT_RESOURCES;
+    RtlCopyMemory(Name.Buffer, BaseName->Buffer, BaseName->Length);
+    RtlCopyMemory((PUCHAR)Name.Buffer + BaseName->Length, L".LOG2", 6 * sizeof(WCHAR));
+
+    Attributes.ObjectName = &Name;
+    Attributes.Attributes |= OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE;
+    Status = ZwCreateFile(Log2,
+                          FILE_READ_DATA | FILE_WRITE_DATA | SYNCHRONIZE,
+                          &Attributes, &IoStatus, NULL, FILE_ATTRIBUTE_HIDDEN,
+                          0, NewHive ? FILE_SUPERSEDE : FILE_OPEN_IF,
+                          FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE | FILE_NO_COMPRESSION,
+                          NULL, 0);
+    ExFreePoolWithTag(Name.Buffer, TAG_CM);
+    if (!NT_SUCCESS(Status)) *Log2 = NULL;
+    return Status;
+}
+
 static NTSTATUS
 CmpOpenAppHiveFiles(POBJECT_ATTRIBUTES SourceFile,
                     KPROCESSOR_MODE AccessMode,
                     HANDLE *Primary,
                     HANDLE *Log,
+                    HANDLE *Log2,
                     PBOOLEAN NewHive)
 {
     OBJECT_ATTRIBUTES Attributes = *SourceFile;
@@ -393,6 +434,7 @@ CmpOpenAppHiveFiles(POBJECT_ATTRIBUTES SourceFile,
 
     *Primary = NULL;
     *Log = NULL;
+    *Log2 = NULL;
     *NewHive = FALSE;
     Attributes.Attributes |= OBJ_KERNEL_HANDLE;
     if (AccessMode != KernelMode) Attributes.Attributes |= OBJ_FORCE_ACCESS_CHECK;
@@ -435,11 +477,15 @@ CmpOpenAppHiveFiles(POBJECT_ATTRIBUTES SourceFile,
                           FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE,
                           NULL, 0);
     ExFreePoolWithTag(LogName.Buffer, TAG_CM);
+    if (NT_SUCCESS(Status))
+        CmpOpenHiveLog2(&Attributes, SourceFile->ObjectName, *NewHive, Log2);
 Exit:
     if (!NT_SUCCESS(Status))
     {
+        if (*Log2) ZwClose(*Log2);
         if (*Log) ZwClose(*Log);
         ZwClose(*Primary);
+        *Log2 = NULL;
         *Log = NULL;
         *Primary = NULL;
     }
@@ -457,7 +503,7 @@ CmpLoadAppHive(POBJECT_ATTRIBUTES TargetKey,
 {
     OBJECT_ATTRIBUTES Attributes = *SourceFile;
     IO_STATUS_BLOCK IoStatus;
-    HANDLE Probe = NULL, Primary = NULL, Log = NULL;
+    HANDLE Probe = NULL, Primary = NULL, Log = NULL, Log2 = NULL;
     PCMHIVE Hive = NULL;
     PCM_KEY_BODY Body = NULL;
     PCM_KEY_CONTROL_BLOCK Kcb;
@@ -517,14 +563,14 @@ CmpLoadAppHive(POBJECT_ATTRIBUTES TargetKey,
             Status = STATUS_TOO_LATE;
             goto Exit;
         }
-        Status = CmpOpenAppHiveFiles(SourceFile, AccessMode, &Primary, &Log, &NewHive);
+        Status = CmpOpenAppHiveFiles(SourceFile, AccessMode, &Primary, &Log, &Log2, &NewHive);
         if (!NT_SUCCESS(Status)) goto Exit;
         Status = CmpInitializeHive(&Hive, NewHive ? HINIT_CREATE : HINIT_FILE,
-                                   HIVE_NOLAZYFLUSH, HFILE_TYPE_LOG, NULL, Primary, Log,
+                                   HIVE_NOLAZYFLUSH, HFILE_TYPE_LOG, NULL, Primary, Log, Log2,
                                    NULL, NULL, SourceFile->ObjectName,
                                    CM_CHECK_REGISTRY_PURGE_VOLATILES);
         if (!NT_SUCCESS(Status)) goto Exit;
-        Primary = Log = NULL;
+        Primary = Log = Log2 = NULL;
         Hive->Flags |= CMHIVE_FLAG_APPLICATION_HIVE;
         if (Flags & REG_PROCESS_PRIVATE) Hive->Flags |= CMHIVE_FLAG_PROCESS_PRIVATE;
         Hive->Hive.HiveFlags |= HIVE_NOLAZYFLUSH;
@@ -619,6 +665,7 @@ Exit:
     CmpUnlockRegistry();
     if (Body) ObDereferenceObject(Body);
     if (Hive) CmpCompleteAppHiveLoad(Hive);
+    if (Log2) ZwClose(Log2);
     if (Log) ZwClose(Log);
     if (Primary) ZwClose(Primary);
     RtlFreeUnicodeString(&RootPath);

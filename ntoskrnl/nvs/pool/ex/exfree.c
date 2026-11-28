@@ -29,6 +29,11 @@ ExFreePoolWithTag(
     if (P == NULL)
         return;
 
+#if !defined(POOL_HOST_TEST)
+    if (VfPoolTrackingEnabled)
+        VfUntrackPool(P);
+#endif
+
     if ((ExpPoolFlags & EX_POOL_FLAG_SPECIAL_POOL) && MmIsSpecialPoolAddress(P))
     {
         MmFreeSpecialPool(P);
@@ -51,6 +56,7 @@ ExFreePoolWithTag(
     {
         PEPROCESS Process = (PEPROCESS)Info.Trailer;
 
+        POOL_ASSERT(Info.Size >= sizeof(PEPROCESS) && Process != NULL);
         if (Process != NULL)
         {
             PsReturnPoolQuota(Process, ExpPoolClass(HeapIndex), Info.Size);

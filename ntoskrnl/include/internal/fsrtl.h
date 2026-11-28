@@ -138,6 +138,12 @@ FsRtlInitSystem(
     VOID
 );
 
+VOID
+NTAPI
+FsRtlSetVolumeStartupApplicationsComplete(
+    VOID
+);
+
 //
 // Global data inside the File System Runtime Library
 //

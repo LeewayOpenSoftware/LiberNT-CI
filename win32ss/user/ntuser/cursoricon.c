@@ -370,9 +370,10 @@ IntRemoveCursorFromList(
             /* Remove it from the list */
             (*ppcur) = pcur->pcurNext;
 
+            pcur->CURSORF_flags &= ~CURSORF_LINKED;
+
             /* Dereference it */
             UserDereferenceObject(pcur);
-            pcur->CURSORF_flags &= ~CURSORF_LINKED;
             return;
         }
     }
@@ -660,6 +661,69 @@ IntCleanupCurIconCache(PPROCESSINFO Win32Process)
     }
 }
 
+static BOOL
+IntIsPhysicalSystemCursor(_In_ PCURICON_OBJECT CurIcon)
+{
+    return (CurIcon->CURSORF_flags & CURSORF_GLOBAL) && UserDpiIsVirtualCaller();
+}
+
+static VOID
+IntGetLogicalImageSize(_In_ PCURICON_OBJECT CurIcon, _Out_ PLONG Cx, _Out_ PLONG Cy)
+{
+    if (!is_icon(CurIcon) && CurIcon->cx == (ULONG)UserGetSystemMetrics(SM_CXCURSOR) &&
+        CurIcon->cy == (ULONG)UserGetSystemMetrics(SM_CYCURSOR))
+    {
+        *Cx = UserGetCallerSystemMetrics(SM_CXCURSOR);
+        *Cy = UserGetCallerSystemMetrics(SM_CYCURSOR);
+        return;
+    }
+    *Cx = max(UserDpiToLogical(CurIcon->cx), 1);
+    *Cy = max(UserDpiToLogical(CurIcon->cy), 1);
+}
+
+static HBITMAP
+IntCopyLogicalBitmap(_In_opt_ HBITMAP Source, _In_ PCURICON_OBJECT CurIcon, _In_ LONG Cx, _In_ LONG Cy)
+{
+    SURFACE *Src, *Dst;
+    HBITMAP Copy;
+    RECTL SrcRect, DstRect;
+    EXLATEOBJ Exlo;
+
+    if (!Source)
+        return NULL;
+    Src = SURFACE_ShareLockSurface(Source);
+    if (!Src)
+        return NULL;
+    RECTL_vSetRect(&SrcRect, 0, 0, Src->SurfObj.sizlBitmap.cx, Src->SurfObj.sizlBitmap.cy);
+    RECTL_vSetRect(&DstRect, 0, 0, max(EngMulDiv(SrcRect.right, Cx, max(CurIcon->cx, 1)), 1),
+                   max(EngMulDiv(SrcRect.bottom, Cy, max(CurIcon->cy, 1)), 1));
+    Copy = GreCreateBitmapEx(DstRect.right, DstRect.bottom, 0, Src->SurfObj.iBitmapFormat,
+                             Src->SurfObj.fjBitmap & BMF_TOPDOWN, 0, NULL, 0);
+    Dst = Copy ? SURFACE_ShareLockSurface(Copy) : NULL;
+    if (!Dst)
+    {
+        if (Copy)
+            GreDeleteObject(Copy);
+        SURFACE_ShareUnlockSurface(Src);
+        return NULL;
+    }
+    SURFACE_vSetPalette(Dst, Src->ppal);
+    EXLATEOBJ_vInitialize(&Exlo, Src->ppal, Dst->ppal, 0, 0, 0);
+    if (!IntEngStretchBlt(&Dst->SurfObj, &Src->SurfObj, NULL, NULL, &Exlo.xlo, NULL, &DstRect, &SrcRect, NULL, NULL,
+                          NULL, COLORONCOLOR, ROP4_SRCCOPY, FALSE))
+    {
+        EXLATEOBJ_vCleanup(&Exlo);
+        SURFACE_ShareUnlockSurface(Dst);
+        SURFACE_ShareUnlockSurface(Src);
+        GreDeleteObject(Copy);
+        return NULL;
+    }
+    EXLATEOBJ_vCleanup(&Exlo);
+    SURFACE_ShareUnlockSurface(Dst);
+    SURFACE_ShareUnlockSurface(Src);
+    return Copy;
+}
+
 /*
  * @implemented
  */
@@ -681,6 +745,8 @@ NtUserGetIconInfo(
     DWORD colorBpp = 0;
 
     TRACE("Enter NtUserGetIconInfo\n");
+
+    RtlZeroMemory(&ii, sizeof(ii));
 
     /* Check if something was actually asked */
     if (!IconInfo && !lpModule && !lpResName)
@@ -715,9 +781,22 @@ NtUserGetIconInfo(
         ii.yHotspot = FrameCurIcon->yHotspot;
 
         /* Copy bitmaps */
-        ii.hbmMask = BITMAP_CopyBitmap(FrameCurIcon->hbmMask);
+        if (IntIsPhysicalSystemCursor(CurIcon))
+        {
+            LONG Cx, Cy;
+
+            IntGetLogicalImageSize(FrameCurIcon, &Cx, &Cy);
+            ii.xHotspot = EngMulDiv(ii.xHotspot, Cx, max(FrameCurIcon->cx, 1));
+            ii.yHotspot = EngMulDiv(ii.yHotspot, Cy, max(FrameCurIcon->cy, 1));
+            ii.hbmMask = IntCopyLogicalBitmap(FrameCurIcon->hbmMask, FrameCurIcon, Cx, Cy);
+            ii.hbmColor = IntCopyLogicalBitmap(FrameCurIcon->hbmColor, FrameCurIcon, Cx, Cy);
+        }
+        else
+        {
+            ii.hbmMask = BITMAP_CopyBitmap(FrameCurIcon->hbmMask);
+            ii.hbmColor = BITMAP_CopyBitmap(FrameCurIcon->hbmColor);
+        }
         GreSetObjectOwner(ii.hbmMask, GDI_OBJ_HMGR_POWNED);
-        ii.hbmColor = BITMAP_CopyBitmap(FrameCurIcon->hbmColor);
         GreSetObjectOwner(ii.hbmColor, GDI_OBJ_HMGR_POWNED);
         colorBpp = FrameCurIcon->bpp;
 
@@ -886,7 +965,8 @@ NtUserGetIconSize(
 {
     PCURICON_OBJECT CurIcon;
     NTSTATUS Status = STATUS_SUCCESS;
-    BOOL bRet = FALSE;
+    BOOL bRet = FALSE, Logical;
+    LONG Cx, Cy;
 
     TRACE("Enter NtUserGetIconSize\n");
     UserEnterShared();
@@ -896,6 +976,7 @@ NtUserGetIconSize(
         goto cleanup;
     }
 
+    Logical = IntIsPhysicalSystemCursor(CurIcon);
     if (CurIcon->CURSORF_flags & CURSORF_ACON)
     {
         /* Use first frame for animated cursors */
@@ -905,12 +986,16 @@ NtUserGetIconSize(
         UserReferenceObject(CurIcon);
     }
 
+    Cx = CurIcon->cx;
+    Cy = CurIcon->cy;
+    if (Logical)
+        IntGetLogicalImageSize(CurIcon, &Cx, &Cy);
     _SEH2_TRY
     {
         ProbeForWrite(plcx, sizeof(LONG), 1);
-        *plcx = CurIcon->cx;
+        *plcx = Cx;
         ProbeForWrite(plcy, sizeof(LONG), 1);
-        *plcy = CurIcon->cy * 2;
+        *plcy = Cy * 2;
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -949,6 +1034,12 @@ NtUserGetCursorInfo(
     TRACE("Enter NtUserGetCursorInfo\n");
     UserEnterShared();
 
+    if (!CheckWinstaAttributeAccess(WINSTA_READATTRIBUTES, ERROR_ACCESS_DENIED))
+    {
+        UserLeave();
+        return FALSE;
+    }
+
     CurInfo = IntGetSysCursorInfo();
     CurIcon = (PCURICON_OBJECT)CurInfo->CurrentCursorObject;
 
@@ -957,6 +1048,8 @@ NtUserGetCursorInfo(
     SafeCi.hCursor = (CurIcon ? UserHMGetHandle(CurIcon) : NULL);
 
     SafeCi.ptScreenPos = gpsi->ptCursor;
+    if (UserDpiIsVirtualCaller())
+        UserDpiPointToLogical(&SafeCi.ptScreenPos);
 
     _SEH2_TRY
     {
@@ -995,11 +1088,6 @@ UserClipCursor(
 {
     PSYSTEM_CURSORINFO CurInfo;
     PWND DesktopWindow = NULL;
-
-    if (!CheckWinstaAttributeAccess(WINSTA_WRITEATTRIBUTES))
-    {
-        return FALSE;
-    }
 
     CurInfo = IntGetSysCursorInfo();
 
@@ -1068,6 +1156,15 @@ NtUserClipCursor(
     }
 
     UserEnterExclusive();
+
+    if (!CheckWinstaAttributeAccess(WINSTA_WRITEATTRIBUTES, ERROR_ACCESS_DENIED))
+    {
+        UserLeave();
+        return FALSE;
+    }
+
+    if (prcl && UserDpiIsVirtualCaller())
+        UserDpiRectToPhysical((PRECT)prcl);
 
     /* Call the internal function */
     bResult = UserClipCursor(prcl);
@@ -1147,6 +1244,41 @@ leave:
 }
 
 
+/* The size a shared lookup compares against: an animated cursor has it on its first frame. */
+static VOID
+IntGetCurIconLookupSize(
+    _In_ PCURICON_OBJECT CurIcon,
+    _Out_ PLONG pcx,
+    _Out_ PLONG pcy)
+{
+    if (CurIcon->CURSORF_flags & CURSORF_ACON)
+    {
+        PACON pacon = (PACON)CurIcon;
+
+        if (pacon->cpcur && pacon->aspcur && pacon->aspcur[0])
+            CurIcon = pacon->aspcur[0];
+    }
+    *pcx = (LONG)CurIcon->cx;
+    *pcy = (LONG)CurIcon->cy;
+}
+
+/* LR_SHARED images are cached per size: a cursor of another size is not the one asked for.
+ * No requested size, or an object of unknown size, keeps the name-only match. */
+static BOOL
+IntCurIconSizeMatches(
+    _In_ PCURICON_OBJECT CurIcon,
+    _In_ const FINDEXISTINGCURICONPARAM *param)
+{
+    LONG cx, cy;
+
+    if (param->cx <= 0 && param->cy <= 0)
+        return TRUE;
+    IntGetCurIconLookupSize(CurIcon, &cx, &cy);
+    if (cx <= 0 || cy <= 0)
+        return TRUE;
+    return (param->cx <= 0 || cx == param->cx) && (param->cy <= 0 || cy == param->cy);
+}
+
 /*
  * @implemented
  */
@@ -1164,6 +1296,7 @@ NtUserFindExistingCursorIcon(
     NTSTATUS Status;
     PPROCESSINFO pProcInfo = PsGetCurrentProcessWin32Process();
     RTL_ATOM atomModName;
+    BOOL bSystemCursor = FALSE;
 
     TRACE("Enter NtUserFindExistingCursorIcon\n");
 
@@ -1194,11 +1327,42 @@ NtUserFindExistingCursorIcon(
     }
 
     UserEnterShared();
-    CurIcon = pProcInfo->pCursorCache;
-    while (CurIcon)
+    CurIcon = NULL;
+    if (paramSafe.cx <= 0 && paramSafe.cy <= 0)
+    {
+        /* No size asked (LoadCursor, LR_DEFAULTSIZE): the system cursor of that name comes
+         * first, at whatever size the pointer scheme loaded it. */
+        PCURICON_OBJECT pcurGlobal;
+
+        for (pcurGlobal = gcurFirst; pcurGlobal; pcurGlobal = pcurGlobal->pcurNext)
+        {
+            if (!(pcurGlobal->CURSORF_flags & CURSORF_GLOBAL) ||
+                paramSafe.bIcon != is_icon(pcurGlobal) ||
+                atomModName != pcurGlobal->atomModName ||
+                IS_INTRESOURCE(pcurGlobal->strName.Buffer) != IS_INTRESOURCE(ustrRsrcSafe.Buffer))
+                continue;
+            if (IS_INTRESOURCE(pcurGlobal->strName.Buffer)
+                    ? pcurGlobal->strName.Buffer == ustrRsrcSafe.Buffer
+                    : RtlCompareUnicodeString(&ustrRsrcSafe, &pcurGlobal->strName, TRUE) == 0)
+            {
+                CurIcon = pcurGlobal;
+                bSystemCursor = TRUE;
+                break;
+            }
+        }
+    }
+    if (!bSystemCursor)
+        CurIcon = pProcInfo->pCursorCache;
+    while (!bSystemCursor && CurIcon)
     {
         /* Icon/cursor */
         if (paramSafe.bIcon != is_icon(CurIcon))
+        {
+            CurIcon = CurIcon->pcurNext;
+            continue;
+        }
+        /* Size */
+        if (!IntCurIconSizeMatches(CurIcon, &paramSafe))
         {
             CurIcon = CurIcon->pcurNext;
             continue;
@@ -1239,6 +1403,12 @@ NtUserFindExistingCursorIcon(
         {
             /* Icon/cursor */
             if (paramSafe.bIcon != is_icon(CurIcon))
+            {
+                CurIcon = CurIcon->pcurNext;
+                continue;
+            }
+            /* Size */
+            if (!IntCurIconSizeMatches(CurIcon, &paramSafe))
             {
                 CurIcon = CurIcon->pcurNext;
                 continue;
@@ -1298,7 +1468,7 @@ NtUserGetClipCursor(
     TRACE("Enter NtUserGetClipCursor\n");
     UserEnterShared();
 
-    if (!CheckWinstaAttributeAccess(WINSTA_READATTRIBUTES))
+    if (!CheckWinstaAttributeAccess(WINSTA_READATTRIBUTES, ERROR_SUCCESS))
     {
         goto Exit; // Return FALSE
     }
@@ -1318,6 +1488,8 @@ NtUserGetClipCursor(
         Rect.right = UserGetSystemMetrics(SM_CXSCREEN);
         Rect.bottom = UserGetSystemMetrics(SM_CYSCREEN);
     }
+    if (UserDpiIsVirtualCaller())
+        UserDpiRectToLogical((PRECT)&Rect);
 
     Status = MmCopyToCaller(lpRect, &Rect, sizeof(RECT));
     if (!NT_SUCCESS(Status))
@@ -2407,6 +2579,28 @@ NtUserDrawIconEx(
         return FALSE;
     }
 
+    if (UserDpiIsVirtualCaller() && (!cxWidth || !cyHeight))
+    {
+        LONG Cx = pIcon->cx, Cy = pIcon->cy;
+
+        if (diFlags & DI_DEFAULTSIZE)
+        {
+            Cx = UserGetCallerSystemMetrics(is_icon(pIcon) ? SM_CXICON : SM_CXCURSOR);
+            Cy = UserGetCallerSystemMetrics(is_icon(pIcon) ? SM_CYICON : SM_CYCURSOR);
+        }
+        else if (IntIsPhysicalSystemCursor(pIcon))
+        {
+            IntGetLogicalImageSize(pIcon, &Cx, &Cy);
+        }
+        if ((diFlags & DI_DEFAULTSIZE) || IntIsPhysicalSystemCursor(pIcon))
+        {
+            if (!cxWidth)
+                cxWidth = Cx;
+            if (!cyHeight)
+                cyHeight = Cy;
+        }
+    }
+
     Ret = UserDrawIconEx(hdc,
                          xLeft,
                          yTop,
@@ -2609,7 +2803,7 @@ NtUserSetSystemCursor(
     BOOL Ret = FALSE;
     UserEnterExclusive();
 
-    if (!CheckWinstaAttributeAccess(WINSTA_WRITEATTRIBUTES))
+    if (!CheckWinstaAttributeAccess(WINSTA_WRITEATTRIBUTES, ERROR_REQUIRES_INTERACTIVE_WINDOWSTATION))
     {
         goto Exit;
     }

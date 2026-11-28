@@ -137,19 +137,19 @@ IopInitLookasideLists(VOID)
 
     /* Allocate the global lookaside list buffer */
     CurrentList = ExAllocatePoolWithTag(NonPagedPool,
-                                        4 * KeNumberProcessors *
+                                        4 * KiNumberProcessors *
                                         sizeof(GENERAL_LOOKASIDE),
                                         TAG_IO);
 
     /* Loop all processors */
-    for (i = 0; i < KeNumberProcessors; i++)
+    for (i = 0; i < KiNumberProcessors; i++)
     {
         /* Get the PRCB for this CPU */
         Prcb = KiProcessorBlock[i];
         DPRINT("Setting up lookaside for CPU: %x, PRCB: %p\n", i, Prcb);
 
         /* Write IRP credit limit */
-        Prcb->LookasideIrpFloat = 512 / KeNumberProcessors;
+        Prcb->LookasideIrpFloat = 512 / KiNumberProcessors;
 
         /* Set the I/O Completion List */
         Prcb->PPLookasideList[LookasideCompletionList].L = &IoCompletionPacketLookaside;
@@ -524,13 +524,45 @@ IopIsBootDiskPresent(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     return TRUE;
 }
 
+/* Control\PnP\PollBootPartitionTimeout is in milliseconds */
+#define IOP_BOOT_DEVICE_POLL_INTERVAL       200
+#define IOP_BOOT_DEVICE_DEFAULT_TIMEOUT     10000
+#define IOP_BOOT_DEVICE_MAX_TIMEOUT         180000
+
+CODE_SEG("INIT")
+static
+ULONG
+IopGetBootDeviceTimeout(VOID)
+{
+    UNICODE_STRING KeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\PnP");
+    PKEY_VALUE_FULL_INFORMATION Information;
+    ULONG Timeout = IOP_BOOT_DEVICE_DEFAULT_TIMEOUT;
+    HANDLE KeyHandle;
+    NTSTATUS Status;
+
+    Status = IopOpenRegistryKeyEx(&KeyHandle, NULL, &KeyName, KEY_READ);
+    if (!NT_SUCCESS(Status))
+        return Timeout;
+
+    Status = IopGetRegistryValue(KeyHandle, L"PollBootPartitionTimeout", &Information);
+    if (NT_SUCCESS(Status))
+    {
+        if (Information->Type == REG_DWORD && Information->DataLength == sizeof(ULONG))
+            Timeout = *(PULONG)((PUCHAR)Information + Information->DataOffset);
+        ExFreePool(Information);
+    }
+    ZwClose(KeyHandle);
+
+    return min(max(Timeout, IOP_BOOT_DEVICE_POLL_INTERVAL), IOP_BOOT_DEVICE_MAX_TIMEOUT);
+}
+
 CODE_SEG("INIT")
 static
 NTSTATUS
 IopWaitForBootDevice(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
     PCONFIGURATION_INFORMATION ConfigurationInformation;
-    const ULONG AttemptCount = 50;
+    ULONG AttemptCount;
     LARGE_INTEGER Delay;
     BOOLEAN CdRomBoot;
     ULONG Attempt;
@@ -545,7 +577,8 @@ IopWaitForBootDevice(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     ConfigurationInformation = IoGetConfigurationInformation();
     CdRomBoot = (strstr(LoaderBlock->ArcBootDeviceName, "cdrom(") != NULL);
-    Delay.QuadPart = -2000000LL; /* 200 ms */
+    Delay.QuadPart = Int32x32To64(IOP_BOOT_DEVICE_POLL_INTERVAL, -10000);
+    AttemptCount = IopGetBootDeviceTimeout() / IOP_BOOT_DEVICE_POLL_INTERVAL;
 
     /*
      * A synchronous device-tree walk does not cover children reported later

@@ -531,26 +531,22 @@ int WhoamiGroups(void)
         cchGroupName  = _countof(szGroupName);
         cchDomainName = _countof(szDomainName);
 
-        LookupAccountSidW(NULL,
-                          pGroupInfo->Groups[dwIndex].Sid,
-                          (LPWSTR)&szGroupName,
-                          &cchGroupName,
-                          (LPWSTR)&szDomainName,
-                          &cchDomainName,
-                          &Use);
+        if (!LookupAccountSidW(NULL,
+                               pGroupInfo->Groups[dwIndex].Sid,
+                               (LPWSTR)&szGroupName,
+                               &cchGroupName,
+                               (LPWSTR)&szDomainName,
+                               &cchDomainName,
+                               &Use))
+        {
+            Use = SidTypeUnknown;
+        }
 
         /* the original tool seems to limit the list to these kind of SID items */
         if ((Use == SidTypeWellKnownGroup || Use == SidTypeAlias ||
             Use == SidTypeLabel) && !(pGroupInfo->Groups[dwIndex].Attributes & SE_GROUP_LOGON_ID))
         {
             WCHAR tmpBuffer[666];
-
-            /* looks like Windows treats 0x60 as 0x7 for some reason, let's just nod and call it a day:
-               0x60 is SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED
-               0x07 is SE_GROUP_MANDATORY | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_ENABLED */
-
-            if (pGroupInfo->Groups[dwIndex].Attributes == 0x60)
-                pGroupInfo->Groups[dwIndex].Attributes = 0x07;
 
             /* 1- format it as DOMAIN\GROUP if the domain exists, or just GROUP if not */
             _snwprintf(tmpBuffer,
@@ -585,7 +581,8 @@ int WhoamiGroups(void)
                 StringCchCat(tmpBuffer, _countof(tmpBuffer), WhoamiLoadRcString(IDS_ATTR_GROUP_OWNER));
 
             /* remove the last comma (', ' which is 2 wchars) of the buffer, let's keep it simple */
-            tmpBuffer[max(wcslen(tmpBuffer) - 2, 0)] = UNICODE_NULL;
+            if (wcslen(tmpBuffer) >= 2)
+                tmpBuffer[wcslen(tmpBuffer) - 2] = UNICODE_NULL;
 
             WhoamiSetTable(GroupTable, tmpBuffer, PrintingRow, 3);
 

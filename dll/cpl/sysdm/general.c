@@ -573,11 +573,13 @@ static VOID GetSystemInformation(HWND hwnd)
     }
 }
 
+static VOID AppendDlgItemText(HWND hwnd, INT nIDDlgItem, PCWSTR pszText);
+
 static VOID GetSystemVersion(HWND hwnd)
 {
     HWND hRosVersion;
     SIZE_T lenStr, lenVersion;
-    PCWSTR pwszVersion = L" " TEXT(KERNEL_VERSION_RC);
+    PCWSTR pwszVersion = L" " TEXT(KERNEL_VERSION_STR);
     PWSTR pwszStr;
 
     lenVersion = wcslen(pwszVersion);
@@ -604,6 +606,9 @@ static VOID GetSystemVersion(HWND hwnd)
     SetWindowText(hRosVersion, pwszStr);
 
     HeapFree(GetProcessHeap(), 0, pwszStr);
+
+    /* The cut number follows the commit hash on its own line: it did not fit the Version line. */
+    AppendDlgItemText(hwnd, IDC_ROSREVISION, L" LBI " LIBERNT_LBI_BUILD_WSTR);
 }
 
 static VOID AppendDlgItemText(HWND hwnd, INT nIDDlgItem, PCWSTR pszText)

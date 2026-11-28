@@ -20,6 +20,18 @@ Author:
 #ifndef _AMD64_KETYPES_H
 #define _AMD64_KETYPES_H
 
+#define PROCESSOR_POWER_STATE_LEGACY_AREA_SIZE 0x1C8
+#include <potypes.h>
+#ifndef NTOS_MODE_USER
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, ArchitecturalEfficiencyClass) == 0x1C8);
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, PerformanceSchedulingClass) == 0x1C9);
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, EfficiencySchedulingClass) == 0x1CA);
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, Reserved) == 0x1CB);
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, Parked) == 0x1CC);
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, SoftParked) == 0x1CD);
+C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, LongPriorQosPeriod) == 0x1CE);
+#endif
+
 //
 // Dependencies
 //
@@ -673,7 +685,8 @@ typedef struct _KPRCB
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     UCHAR NestingLevel;
     UCHAR Group;
-    UCHAR PrcbPad00[6];
+    UCHAR GroupIndex;
+    UCHAR PrcbPad00[5];
 #else
     UINT64 UserRsp;
 #endif
@@ -975,7 +988,10 @@ typedef struct _KPRCB
      * Windows dump readers obtain the saved processor context through
      * the OffsetPrcbContext member of KDDEBUGGER_DATA64.
      */
-    PCONTEXT CrashDumpContext;
+    PCONTEXT Context;
+
+    /* Top of the stack first-level interrupt service routines run on */
+    PVOID IsrStack;
 #endif
 } KPRCB, *PKPRCB;
 

@@ -1,5 +1,7 @@
 
 list(APPEND SOURCE
+    brand.c
+    brand.h
     osinfo.c
     winver.c
     winver_p.h)

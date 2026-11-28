@@ -810,8 +810,8 @@ static void test_ReadFile(void)
     res = ReadFile(server, buf, 1, &size, &overlapped);
     ok(!res && GetLastError() == ERROR_MORE_DATA, "ReadFile returned %x(%lu)\n", res, GetLastError());
     ok(size == 0, "size = %lu\n", size);
-    ok((NTSTATUS)overlapped.Internal == STATUS_BUFFER_OVERFLOW, "Internal = %Ix\n", overlapped.Internal);
-    ok(overlapped.InternalHigh == 1, "InternalHigh = %Ix\n", overlapped.InternalHigh);
+    ok((NTSTATUS)overlapped.Internal == STATUS_BUFFER_OVERFLOW, "Internal = %Ix\n", (size_t)overlapped.Internal);
+    ok(overlapped.InternalHigh == 1, "InternalHigh = %Ix\n", (size_t)overlapped.InternalHigh);
 
     DisconnectNamedPipe(server);
 
@@ -820,16 +820,16 @@ static void test_ReadFile(void)
     res = ReadFile(server, buf, 1, &size, &overlapped);
     ok(!res && GetLastError() == ERROR_PIPE_NOT_CONNECTED, "ReadFile returned %x(%lu)\n", res, GetLastError());
     ok(size == 0, "size = %lu\n", size);
-    ok(overlapped.Internal == STATUS_PENDING, "Internal = %Ix\n", overlapped.Internal);
-    ok(overlapped.InternalHigh == 0xdeadbeef, "InternalHigh = %Ix\n", overlapped.InternalHigh);
+    ok(overlapped.Internal == STATUS_PENDING, "Internal = %Ix\n", (size_t)overlapped.Internal);
+    ok(overlapped.InternalHigh == 0xdeadbeef, "InternalHigh = %Ix\n", (size_t)overlapped.InternalHigh);
 
     memset(&overlapped, 0, sizeof(overlapped));
     overlapped.InternalHigh = 0xdeadbeef;
     res = WriteFile(server, buf, 1, &size, &overlapped);
     ok(!res && GetLastError() == ERROR_PIPE_NOT_CONNECTED, "ReadFile returned %x(%lu)\n", res, GetLastError());
     ok(size == 0, "size = %lu\n", size);
-    ok(overlapped.Internal == STATUS_PENDING, "Internal = %Ix\n", overlapped.Internal);
-    ok(overlapped.InternalHigh == 0xdeadbeef, "InternalHigh = %Ix\n", overlapped.InternalHigh);
+    ok(overlapped.Internal == STATUS_PENDING, "Internal = %Ix\n", (size_t)overlapped.Internal);
+    ok(overlapped.InternalHigh == 0xdeadbeef, "InternalHigh = %Ix\n", (size_t)overlapped.InternalHigh);
 
     CloseHandle(server);
     CloseHandle(client);
@@ -849,6 +849,7 @@ static DWORD CALLBACK alarmThreadMain(LPVOID arg)
 }
 
 static HANDLE hnp = INVALID_HANDLE_VALUE;
+static HANDLE server_ready;
 
 /** Trivial byte echo server - disconnects after each session */
 static DWORD CALLBACK serverThreadMain1(LPVOID arg)
@@ -864,6 +865,7 @@ static DWORD CALLBACK serverThreadMain1(LPVOID arg)
         /* nInBufSize */ 1024,
         /* nDefaultWait */ NMPWAIT_USE_DEFAULT_WAIT,
         /* lpSecurityAttrib */ NULL);
+    SetEvent(server_ready);
 
     ok(hnp != INVALID_HANDLE_VALUE, "CreateNamedPipe failed\n");
     for (i = 0; i < NB_SERVER_LOOPS; i++) {
@@ -916,6 +918,7 @@ static DWORD CALLBACK serverThreadMain2(LPVOID arg)
         /* nInBufSize */ 1024,
         /* nDefaultWait */ NMPWAIT_USE_DEFAULT_WAIT,
         /* lpSecurityAttrib */ NULL);
+    SetEvent(server_ready);
     ok(hnp != INVALID_HANDLE_VALUE, "CreateNamedPipe failed\n");
 
     for (i = 0; i < NB_SERVER_LOOPS; i++) {
@@ -995,6 +998,7 @@ static DWORD CALLBACK serverThreadMain3(LPVOID arg)
         /* nInBufSize */ 1024,
         /* nDefaultWait */ NMPWAIT_USE_DEFAULT_WAIT,
         /* lpSecurityAttrib */ NULL);
+    SetEvent(server_ready);
     ok(hnp != INVALID_HANDLE_VALUE, "CreateNamedPipe failed\n");
 
     hEvent = CreateEventW(NULL,  /* security attribute */
@@ -1124,6 +1128,7 @@ static DWORD CALLBACK serverThreadMain4(LPVOID arg)
         /* nInBufSize */ 1024,
         /* nDefaultWait */ NMPWAIT_USE_DEFAULT_WAIT,
         /* lpSecurityAttrib */ NULL);
+    SetEvent(server_ready);
     ok(hnp != INVALID_HANDLE_VALUE, "CreateNamedPipe failed\n");
 
     hcompletion = CreateIoCompletionPort(hnp, NULL, 12345, 1);
@@ -1286,6 +1291,7 @@ static DWORD CALLBACK serverThreadMain5(LPVOID arg)
         /* nInBufSize */ 1024,
         /* nDefaultWait */ NMPWAIT_USE_DEFAULT_WAIT,
         /* lpSecurityAttrib */ NULL);
+    SetEvent(server_ready);
     ok(hnp != INVALID_HANDLE_VALUE, "CreateNamedPipe failed\n");
 
     hEvent = CreateEventW(NULL,  /* security attribute */
@@ -1369,6 +1375,7 @@ static void exerciseServer(const char *pipename, HANDLE serverThread)
     int i;
 
     if (winetest_debug > 1) trace("exerciseServer starting\n");
+    WaitForSingleObject(server_ready, 5000);
     for (i = 0; i < NB_SERVER_LOOPS; i++) {
         HANDLE hFile=INVALID_HANDLE_VALUE;
         static const char obuf[] = "Bit Bucket";
@@ -1391,7 +1398,7 @@ static void exerciseServer(const char *pipename, HANDLE serverThread)
 	    else
 	        ok(err == ERROR_PIPE_BUSY, "connecting to pipe\n");
             if (winetest_debug > 1) trace("connect failed, retrying\n");
-            Sleep(200);
+            WaitNamedPipeA(pipename, 200);
         }
         ok(hFile != INVALID_HANDLE_VALUE, "client opening named pipe\n");
 
@@ -1424,6 +1431,7 @@ static void test_NamedPipe_2(void)
     trace("test_NamedPipe_2 starting\n");
     /* Set up a twenty second timeout */
     alarm_event = CreateEventW( NULL, TRUE, FALSE, NULL );
+    server_ready = CreateEventW( NULL, FALSE, FALSE, NULL );
     SetLastError(0xdeadbeef);
     alarmThread = CreateThread(NULL, 0, alarmThreadMain, (void *) 20000, 0, &alarmThreadId);
     ok(alarmThread != NULL, "CreateThread failed: %ld\n", GetLastError());
@@ -1465,6 +1473,7 @@ static void test_NamedPipe_2(void)
 
     ok(SetEvent( alarm_event ), "SetEvent\n");
     CloseHandle( alarm_event );
+    CloseHandle( server_ready );
     if (winetest_debug > 1) trace("test_NamedPipe_2 returning\n");
 }
 
@@ -2394,7 +2403,7 @@ static void test_overlapped_error(void)
     ret = GetOverlappedResult(pipe, &overlapped, &numbytes, TRUE);
     ok(ret == TRUE, "GetOverlappedResult failed\n");
     ok(numbytes == 0, "expected 0, got %lu\n", numbytes);
-    ok(overlapped.Internal == STATUS_SUCCESS, "expected STATUS_SUCCESS, got %08Ix\n", overlapped.Internal);
+    ok(overlapped.Internal == STATUS_SUCCESS, "expected STATUS_SUCCESS, got %08Ix\n", (size_t)overlapped.Internal);
 
     CloseHandle(file);
     CloseHandle(pipe);
@@ -2414,7 +2423,7 @@ static void test_overlapped_error(void)
     err = GetLastError();
     ok(ret == FALSE, "ConnectNamedPipe succeeded\n");
     ok(err == ERROR_PIPE_CONNECTED, "expected ERROR_PIPE_CONNECTED, got %lu\n", err);
-    ok(overlapped.Internal == STATUS_PENDING, "expected STATUS_PENDING, got %08Ix\n", overlapped.Internal);
+    ok(overlapped.Internal == STATUS_PENDING, "expected STATUS_PENDING, got %08Ix\n", (size_t)overlapped.Internal);
 
     CloseHandle(file);
     CloseHandle(pipe);
@@ -2707,10 +2716,10 @@ static void test_readfileex_pending(void)
     ok(!ret, "ReadFile should fail\n");
     ok(GetLastError() == ERROR_IO_PENDING, "expected ERROR_IO_PENDING, got %ld\n", GetLastError());
     ok(num_bytes == 0, "bytes %lu\n", num_bytes);
-    ok((NTSTATUS)overlapped.Internal == STATUS_PENDING, "expected STATUS_PENDING, got %#Ix\n", overlapped.Internal);
-    ok(overlapped.InternalHigh == -1, "expected -1, got %Iu\n", overlapped.InternalHigh);
+    ok((NTSTATUS)overlapped.Internal == STATUS_PENDING, "expected STATUS_PENDING, got %#Ix\n", (size_t)overlapped.Internal);
+    ok(overlapped.InternalHigh == -1, "expected -1, got %Iu\n", (size_t)overlapped.InternalHigh);
 
-    wait = WaitForSingleObject(event, 100);
+    wait = WaitForSingleObject(event, 0);
     ok(wait == WAIT_TIMEOUT, "WaitForSingleObject returned %lx\n", wait);
 
     num_bytes = 0xdeadbeef;
@@ -2722,8 +2731,8 @@ static void test_readfileex_pending(void)
     ok(wait == WAIT_OBJECT_0, "WaitForSingleObject returned %lx\n", wait);
 
     ok(num_bytes == 1, "bytes %lu\n", num_bytes);
-    ok((NTSTATUS)overlapped.Internal == STATUS_SUCCESS, "expected STATUS_SUCCESS, got %#Ix\n", overlapped.Internal);
-    ok(overlapped.InternalHigh == 0, "expected 0, got %Iu\n", overlapped.InternalHigh);
+    ok((NTSTATUS)overlapped.Internal == STATUS_SUCCESS, "expected STATUS_SUCCESS, got %#Ix\n", (size_t)overlapped.Internal);
+    ok(overlapped.InternalHigh == 0, "expected 0, got %Iu\n", (size_t)overlapped.InternalHigh);
 
     /* read the pending byte and clear the pipe */
     num_bytes = 0xdeadbeef;
@@ -2756,7 +2765,7 @@ static void _test_peek_pipe(unsigned line, HANDLE pipe, DWORD expected_read, DWO
     status = NtFsControlFile(pipe, 0, NULL, NULL, &io, FSCTL_PIPE_PEEK, NULL, 0, buf, sizeof(buf));
     ok_(__FILE__,line)(!status || status == STATUS_PENDING, "NtFsControlFile(FSCTL_PIPE_PEEK) failed: %lx\n", status);
     ok_(__FILE__,line)(io.Information == FIELD_OFFSET(FILE_PIPE_PEEK_BUFFER, Data[expected_read]),
-                       "io.Information = %Iu\n", io.Information);
+                       "io.Information = %Iu\n", (size_t)io.Information);
     ok_(__FILE__,line)(peek_buf->ReadDataAvailable == expected_avail, "ReadDataAvailable = %lu, expected %lu\n",
                        peek_buf->ReadDataAvailable, expected_avail);
     ok_(__FILE__,line)(peek_buf->MessageLength == expected_message_length, "MessageLength = %lu, expected %lu\n",
@@ -2882,6 +2891,16 @@ static DWORD CALLBACK flush_proc(HANDLE pipe)
     return 0;
 }
 
+static void wait_io_pending(HANDLE thread)
+{
+    BOOL pending = FALSE;
+    unsigned int i;
+
+    for (i = 0; i < 100000 && WaitForSingleObject(thread, 0) == WAIT_TIMEOUT &&
+                GetThreadIOPendingFlag(thread, &pending) && !pending; i++)
+        SwitchToThread();
+}
+
 #define test_flush_async(a,b) _test_flush_async(__LINE__,a,b)
 static HANDLE _test_flush_async(unsigned line, HANDLE pipe, DWORD error)
 {
@@ -2892,7 +2911,7 @@ static HANDLE _test_flush_async(unsigned line, HANDLE pipe, DWORD error)
     thread = CreateThread(NULL, 0, flush_proc, pipe, 0, &tid);
     ok_(__FILE__,line)(thread != NULL, "CreateThread failed: %lu\n", GetLastError());
 
-    Sleep(50);
+    wait_io_pending(thread);
     _test_not_signaled(line, thread);
     return thread;
 }
@@ -4208,7 +4227,7 @@ static void test_exit_process_async(void)
     ok(!ret, "expected failure\n");
     ok(GetLastError() == ERROR_OPERATION_ABORTED, "got error %lu\n", GetLastError());
     ok(!size, "got size %lu\n", size);
-    ok(key == 123, "got key %Iu\n", key);
+    ok(key == 123, "got key %Iu\n", (size_t)key);
 
     CloseHandle(port);
     CloseHandle(server);

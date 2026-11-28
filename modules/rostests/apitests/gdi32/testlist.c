@@ -26,11 +26,13 @@ extern void func_EngCreateSemaphore(void);
 extern void func_EngReleaseSemaphore(void);
 extern void func_EnumFontFamilies(void);
 extern void func_FontFolder(void);
+extern void func_FontLinkBaseline(void);
 extern void func_ExcludeClipRect(void);
 extern void func_ExtCreatePen(void);
 extern void func_ExtCreateRegion(void);
 extern void func_ExtTextOut(void);
 extern void func_FrameRgn(void);
+extern void func_GdiBatch(void);
 extern void func_GdiConvertBitmap(void);
 extern void func_GdiConvertBrush(void);
 extern void func_GdiConvertDC(void);
@@ -68,8 +70,11 @@ extern void func_PaintRgn(void);
 extern void func_PatBlt(void);
 extern void func_Rectangle(void);
 extern void func_RealizePalette(void);
+extern void func_ScreenRows(void);
 extern void func_ScriptGetFontTags(void);
 extern void func_ScriptGetLogicalWidths(void);
+extern void func_ScriptShape(void);
+extern void func_ScriptShapeCache(void);
 extern void func_SelectObject(void);
 extern void func_SetBoundsRect(void);
 extern void func_SetBrushOrgEx(void);
@@ -83,6 +88,7 @@ extern void func_SetSysColors(void);
 extern void func_SetWindowExtEx(void);
 extern void func_SetWorldTransform(void);
 extern void func_StretchBlt(void);
+extern void func_TextAntialias(void);
 extern void func_TextTransform(void);
 extern void func_TypoMetrics(void);
 
@@ -112,11 +118,13 @@ const struct test winetest_testlist[] =
     { "EngReleaseSemaphore", func_EngReleaseSemaphore },
     { "EnumFontFamilies", func_EnumFontFamilies },
     { "FontFolder", func_FontFolder },
+    { "FontLinkBaseline", func_FontLinkBaseline },
     { "ExcludeClipRect", func_ExcludeClipRect },
     { "ExtCreatePen", func_ExtCreatePen },
     { "ExtCreateRegion", func_ExtCreateRegion },
     { "ExtTextOut", func_ExtTextOut },
     { "FrameRgn", func_FrameRgn },
+    { "GdiBatch", func_GdiBatch },
     { "GdiConvertBitmap", func_GdiConvertBitmap },
     { "GdiConvertBrush", func_GdiConvertBrush },
     { "GdiConvertDC", func_GdiConvertDC },
@@ -154,8 +162,11 @@ const struct test winetest_testlist[] =
     { "PatBlt", func_PatBlt },
     { "Rectangle", func_Rectangle },
     { "RealizePalette", func_RealizePalette },
+    { "ScreenRows", func_ScreenRows },
     { "ScriptGetFontTags", func_ScriptGetFontTags },
     { "ScriptGetLogicalWidths", func_ScriptGetLogicalWidths },
+    { "ScriptShape", func_ScriptShape },
+    { "ScriptShapeCache", func_ScriptShapeCache },
     { "SelectObject", func_SelectObject },
     { "SetBoundsRect", func_SetBoundsRect },
     { "SetBrushOrgEx", func_SetBrushOrgEx },
@@ -169,6 +180,7 @@ const struct test winetest_testlist[] =
     { "SetWindowExtEx", func_SetWindowExtEx },
     { "SetWorldTransform", func_SetWorldTransform },
     { "StretchBlt", func_StretchBlt },
+    { "TextAntialias", func_TextAntialias },
     { "TextTransform", func_TextTransform },
     { "TypoMetrics", func_TypoMetrics },
 

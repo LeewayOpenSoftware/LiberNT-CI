@@ -14,7 +14,7 @@ BEGIN
     LTEXT "Systém:", IDC_STATIC, 4, 116, 100, 9
     LTEXT REACTOS_STR_PRODUCT_NAME, IDC_STATIC, 10, 128, 116, 9
     LTEXT "Verze", IDC_ROSVERSION, 10, 137, 116, 9
-    LTEXT KERNEL_VERSION_REVISION_RC, IDC_STATIC, 10, 146, 110, 9
+    LTEXT KERNEL_VERSION_REVISION_RC, IDC_ROSREVISION, 10, 146, 110, 9
     LTEXT "Target: Windows 11 (NT 10.0.26100 interface level)", IDC_ROSTARGET, 10, 155, 116, 18
     LTEXT "Build", IDC_ROSBUILD, 10, 173, 116, 9, SS_LEFTNOWORDWRAP
     LTEXT "System Uptime:", IDC_STATIC, 4, 182, 100, 9
@@ -26,7 +26,7 @@ BEGIN
     LTEXT "", IDC_MACHINELINE4, 130, 155, 118, 9
     LTEXT "", IDC_MACHINELINE5, 130, 164, 118, 9
     LTEXT "", IDC_MACHINELINE6, 130, 173, 118, 9
-    CONTROL "Navštívit <A HREF=""https://libernt.com/"">stránku systému LiberNT</A>", IDC_ROSHOMEPAGE_LINK, "SysLink", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 10, 200, 140, 10
+    CONTROL "Navštívit <A HREF=""https://libernt.com/"">stránku systému Orosi</A>", IDC_ROSHOMEPAGE_LINK, "SysLink", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 10, 200, 140, 10
     PUSHBUTTON "Zobrazit &licenci...", IDC_LICENCE, 170, 198, 78, 15
 END
 
@@ -75,7 +75,7 @@ CAPTION "Nastavení systému"
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
     GROUPBOX "Informace o verzi", IDC_STATIC, 6, 3, 210, 73
-    LTEXT "LiberNT je vytvořen jako serverový OS a jako takový se také hlásí. Po zaškrtnutí tohoto políčka se pro aplikace toto chování změní.", IDC_STATIC, 15, 15, 183, 41
+    LTEXT "Orosi je vytvořen jako serverový OS a jako takový se také hlásí. Po zaškrtnutí tohoto políčka se pro aplikace toto chování změní.", IDC_STATIC, 15, 15, 183, 41
     CONTROL "Hlásit se jako pracovní stanice", IDC_REPORTASWORKSTATION, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 16, 57, 190, 10
     PUSHBUTTON "OK", IDOK, 166, 83, 50, 14
 END
@@ -85,7 +85,7 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Diagnostic Data"
 FONT 8, "MS Shell Dlg", 0, 0, 0x1
 BEGIN
-    LTEXT "LiberNT always sends required diagnostic data to the project: the build, the boot result and time, the hardware and crash summaries. This cannot be turned off.", IDC_STATIC, 7, 7, 226, 33
+    LTEXT "Orosi always sends required diagnostic data to the project: the build, the boot result and time, the hardware and crash summaries. This cannot be turned off.", IDC_STATIC, 7, 7, 226, 33
     AUTOCHECKBOX "Also send &optional diagnostic data (error entries of the system event log)", IDC_SENDOPTIONAL, 7, 46, 226, 20, BS_MULTILINE | BS_TOP | WS_TABSTOP
     LTEXT "Optional data is off unless you turn it on. It contains no files, documents or network addresses. See libernt.com/legal.", IDC_OPTIONALINFO, 7, 72, 226, 33
     DEFPUSHBUTTON "OK", IDOK, 129, 128, 50, 14
@@ -108,7 +108,7 @@ BEGIN
     PUSHBUTTON "&Přejmenovat", IDC_HRDPROFRENAME, 118, 106, 50, 14, WS_DISABLED
     PUSHBUTTON "&Odstranit", IDC_HRDPROFDEL, 173, 106, 50, 14, WS_DISABLED
     GROUPBOX "Výběr hardwarového profilu", IDC_STATIC, 7, 130, 240, 75
-    LTEXT "Při spuštění systému LiberNT:", IDC_STATIC, 14, 142, 210, 8
+    LTEXT "Při spuštění systému Orosi:", IDC_STATIC, 14, 142, 210, 8
     AUTORADIOBUTTON "Č&ekat, dokud nebude vybrán hardwarový profil", IDC_HRDPROFWAIT, 14, 158, 133, 8, WS_GROUP
     AUTORADIOBUTTON "&Zvolit první profil, pokud nebude žádný zvolen během", IDC_HRDPROFSELECT, 14, 173, 190, 8
     LTEXT "vteřin", IDC_STATIC, 65, 187, 35, 8
@@ -259,9 +259,9 @@ BEGIN
     LTEXT "%s", IDC_SPACEAVAIL, 88, 92, 104, 9
     LTEXT "&Počáteční velikost (MB):", -1, 22, 118, 78, 9
     LTEXT "Ma&ximální velikost (MB):", -1, 22, 131, 78, 9
-    AUTORADIOBUTTON "&Vlastní velikost", IDC_CUSTOM, 20, 105, 60, 9, WS_GROUP
-    AUTORADIOBUTTON "Velikost určí s&ystém", IDC_SYSMANSIZE, 20, 145, 88, 9
-    AUTORADIOBUTTON "&Vypnout", IDC_NOPAGEFILE, 20, 158, 78,9
+    AUTORADIOBUTTON "&Vlastní velikost", IDC_CUSTOM, 20, 104, 60, 12, WS_GROUP
+    AUTORADIOBUTTON "Velikost určí s&ystém", IDC_SYSMANSIZE, 20, 144, 88, 12
+    AUTORADIOBUTTON "&Vypnout", IDC_NOPAGEFILE, 20, 157, 78,12
     EDITTEXT IDC_INITIALSIZE, 100, 114, 44, 13, NOT WS_BORDER, WS_EX_CLIENTEDGE
     EDITTEXT IDC_MAXSIZE, 100, 129, 44, 13, NOT WS_BORDER, WS_EX_CLIENTEDGE
     PUSHBUTTON "N&astavit", IDC_SET, 158, 154, 50, 15
@@ -347,7 +347,7 @@ CAPTION "Visual Effects"
 FONT 8, "MS Shell Dlg"
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
 BEGIN
-   LTEXT "Select the settings you want to use for the appearance and performance of LiberNT on this computer.", IDC_STATIC, 7, 6, 208, 18
+   LTEXT "Select the settings you want to use for the appearance and performance of Orosi on this computer.", IDC_STATIC, 7, 6, 208, 18
    CONTROL "", IDC_TREE, "SysTreeView32", TVS_LINESATROOT | TVS_DISABLEDRAGDROP | WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP, 7, 32, 213, 168
 END
 
@@ -361,7 +361,7 @@ BEGIN
    AUTORADIOBUTTON "&Programs", IDC_CPUCLIENT, 14, 36, 75, 12
    AUTORADIOBUTTON "Background &services", IDC_CPUSERVER, 96, 36, 85, 12
    GROUPBOX "Virtual memory", IDC_STATIC, 7, 60, 213, 57
-   LTEXT "A paging file is an area on the hard disk that LiberNT uses as if it were RAM.", IDC_STATIC, 14, 74, 199, 16
+   LTEXT "A paging file is an area on the hard disk that Orosi uses as if it were RAM.", IDC_STATIC, 14, 74, 199, 16
    PUSHBUTTON "&Change...", IDC_CHANGESWAP, 163, 97, 50, 14
 END
 

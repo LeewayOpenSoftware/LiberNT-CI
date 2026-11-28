@@ -44,8 +44,8 @@ ServiceBinary=%12%\powervr.sys
 LoadOrderGroup=Video
 
 [Strings]
-LiberNT="LiberNT"
+LiberNT="Orosi"
 PowerVr.K1.DeviceDesc="SpacemiT K1 PowerVR BXE-2-32 GPU"
-PowerVr.ServiceDesc="LiberNT PowerVR Rogue Graphics Driver"
+PowerVr.ServiceDesc="Orosi PowerVR Rogue Graphics Driver"
 REG_SZ=0x00000000
 REG_DWORD=0x00010001

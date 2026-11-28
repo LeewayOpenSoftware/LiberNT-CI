@@ -100,13 +100,15 @@ KiInitializePcr(
     _In_ PKTHREAD IdleThread,
     _In_ PVOID DpcStack)
 {
+    PROCESSOR_NUMBER GroupNumber;
+
     /* Zero out the PCR */
     RtlZeroMemory(Pcr, sizeof(KIPCR));
 
     /* Set pointers to ourselves */
     Pcr->Self = (PKPCR)Pcr;
     Pcr->CurrentPrcb = &Pcr->Prcb;
-    Pcr->Prcb.CrashDumpContext = &Pcr->Prcb.ProcessorState.ContextFrame;
+    Pcr->Prcb.Context = &Pcr->Prcb.ProcessorState.ContextFrame;
 
     /* Set the PCR Version */
     Pcr->MajorVersion = PCR_MAJOR_VERSION;
@@ -125,9 +127,14 @@ KiInitializePcr(
     Pcr->Prcb.BuildType |= PRCB_BUILD_DEBUG;
 #endif
 
-    /* Set the Processor Number and current Processor Mask */
+    /* Set the Processor Number, its group identity and its mask within the group */
+    KiProcessorNumberFromIndex(ProcessorNumber, &GroupNumber);
     Pcr->Prcb.Number = (UCHAR)ProcessorNumber;
-    Pcr->Prcb.SetMember = 1ULL << ProcessorNumber;
+    Pcr->Prcb.SetMember = KiAffinityForProcessorIndex(GroupNumber.Number);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    Pcr->Prcb.Group = (UCHAR)GroupNumber.Group;
+    Pcr->Prcb.GroupIndex = GroupNumber.Number;
+#endif
 
     /* Set GDT and IDT base */
     Pcr->GdtBase = GdtBase;
@@ -392,6 +399,8 @@ KiInitializeKernelMachineDependent(
                    (HvRecommendations & (HV_APIC_ACCESS_RECOMMENDED | HV_X2APIC_MSRS_RECOMMENDED));
     KiRelaxedTiming = (HvRecommendations & HV_RELAXED_TIMING_RECOMMENDED) != 0;
 
+    KiDetectSpeculationFeatures();
+
     /* Set boot-level flags */
     KeI386CpuType = Prcb->CpuType;
     KeI386CpuStep = Prcb->CpuStep;
@@ -534,24 +543,36 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     FrLdrDbgPrint = LoaderBlock->u.I386.CommonDataArea;
     //FrLdrDbgPrint("Hello from KiSystemStartup!!!\n");
 
-    /* Get the current CPU number */
-    Cpu = KeNumberProcessors++; // FIXME
-
-    /* LoaderBlock initialization for Cpu 0 */
-    if (Cpu == 0)
+    if (KeNumberProcessors == 0)
     {
+        /* Boot processor: it prepares the loader block for itself */
+        Cpu = 0;
+
         /* Save the loader block */
         KeLoaderBlock = LoaderBlock;
 
         /* Prepare LoaderBlock, PCR, TSS with the P0 boot data */
         KiInitializeP0BootStructures(LoaderBlock);
     }
+    else
+    {
+        /* The number comes from the PRCB: KeNumberProcessors++ is not atomic */
+        Pcr = CONTAINING_RECORD(LoaderBlock->Prcb, KIPCR, Prcb);
+        Cpu = Pcr->Prcb.Number;
+    }
 
     /* Get Pcr from loader block */
     Pcr = CONTAINING_RECORD(LoaderBlock->Prcb, KIPCR, Prcb);
 
-    /* Set the PRCB for this Processor */
+    /* Publish the PRCB before counting: [0, KiNumberProcessors) must be valid */
     KiProcessorBlock[Cpu] = &Pcr->Prcb;
+    KeMemoryBarrier();
+    if (Cpu + 1 > KiNumberProcessors)
+        KiNumberProcessors = Cpu + 1;
+
+    /* The exported count is the group 0 view */
+    if ((Cpu < KI_PROCESSORS_PER_GROUP) && ((CCHAR)(Cpu + 1) > KeNumberProcessors))
+        KeNumberProcessors = (CCHAR)(Cpu + 1);
 
     /* Save the initial thread */
     InitialThread = (PKTHREAD)LoaderBlock->Thread;
@@ -561,6 +582,9 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Initialize the CPU features */
     KiInitializeCpu(Pcr);
+
+    /* The boot processor applies it once the policy is read */
+    if (Cpu != 0) KiApplySpeculationControlProcessor();
 
     /* Initial setup for the boot CPU */
     if (Cpu == 0)
@@ -596,7 +620,7 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Set processor as active */
     if (Cpu == 0)
-        KeActiveProcessors |= 1ULL << Cpu;
+        KiSetProcessorActive(Cpu);
 
     /* Release lock */
     InterlockedAnd64((PLONG64)&KiFreezeExecutionLock, 0);

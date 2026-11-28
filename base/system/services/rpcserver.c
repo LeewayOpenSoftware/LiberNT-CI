@@ -116,6 +116,8 @@ ScmServiceMapping = {SERVICE_READ,
 DWORD g_dwServiceBits = 0;
 
 static CRITICAL_SECTION ScmNotifyLock;
+CRITICAL_SECTION ScmStatusChangeLock;
+CONDITION_VARIABLE ScmStatusChanged;
 
 /* FUNCTIONS ***************************************************************/
 
@@ -229,6 +231,8 @@ VOID
 ScmInitServiceNotify(VOID)
 {
     InitializeCriticalSection(&ScmNotifyLock);
+    InitializeCriticalSection(&ScmStatusChangeLock);
+    InitializeConditionVariable(&ScmStatusChanged);
 }
 
 
@@ -314,6 +318,10 @@ ScmNotifyServiceStatus(PSERVICE lpService)
 
     dwMask = 1 << (lpService->Status.dwCurrentState - SERVICE_STOPPED);
 
+    EnterCriticalSection(&ScmStatusChangeLock);
+    WakeAllConditionVariable(&ScmStatusChanged);
+    LeaveCriticalSection(&ScmStatusChangeLock);
+
     EnterCriticalSection(&ScmNotifyLock);
 
     for (Entry = lpService->HandleListHead.Flink;
@@ -383,29 +391,92 @@ static DWORD
 ScmCheckAccess(SC_HANDLE Handle,
                DWORD dwDesiredAccess)
 {
-    PMANAGER_HANDLE hMgr;
+    PMANAGER_HANDLE hMgr = (PMANAGER_HANDLE)Handle;
+    PSECURITY_DESCRIPTOR pSD;
+    PGENERIC_MAPPING pMapping;
+    DWORD dwGranted;
+    DWORD dwError;
 
-    hMgr = (PMANAGER_HANDLE)Handle;
     if (hMgr->Handle.Tag == MANAGER_TAG)
     {
-        RtlMapGenericMask(&dwDesiredAccess,
-                          &ScmManagerMapping);
-
-        hMgr->Handle.DesiredAccess = dwDesiredAccess;
-
-        return ERROR_SUCCESS;
+        pSD = pManagerSD;
+        pMapping = &ScmManagerMapping;
     }
     else if (hMgr->Handle.Tag == SERVICE_TAG)
     {
-        RtlMapGenericMask(&dwDesiredAccess,
-                          &ScmServiceMapping);
-
-        hMgr->Handle.DesiredAccess = dwDesiredAccess;
-
-        return ERROR_SUCCESS;
+        pSD = ((PSERVICE_HANDLE)Handle)->ServiceEntry->pSecurityDescriptor;
+        if (pSD == NULL)
+            pSD = pDefaultSD;
+        pMapping = &ScmServiceMapping;
+    }
+    else
+    {
+        return ERROR_INVALID_HANDLE;
     }
 
-    return ERROR_INVALID_HANDLE;
+    hMgr->Handle.DesiredAccess = 0;
+
+    RtlMapGenericMask(&dwDesiredAccess, pMapping);
+    if (dwDesiredAccess == 0)
+        return ERROR_SUCCESS;
+
+    dwError = ScmAccessCheckCaller(pSD, dwDesiredAccess, pMapping, &dwGranted);
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
+
+    hMgr->Handle.DesiredAccess = dwGranted;
+
+    return ERROR_SUCCESS;
+}
+
+
+/* The creator of a service gets the access it asked for. */
+static VOID
+ScmGrantCreatorAccess(SC_HANDLE Handle,
+                      DWORD dwDesiredAccess)
+{
+    PSERVICE_HANDLE hSvc = (PSERVICE_HANDLE)Handle;
+
+    if (dwDesiredAccess & MAXIMUM_ALLOWED)
+        dwDesiredAccess = (dwDesiredAccess & ~MAXIMUM_ALLOWED) | SERVICE_ALL_ACCESS;
+
+    RtlMapGenericMask(&dwDesiredAccess, &ScmServiceMapping);
+
+    /* ACCESS_SYSTEM_SECURITY still needs SeSecurityPrivilege, as for any object */
+    if (dwDesiredAccess & ACCESS_SYSTEM_SECURITY)
+    {
+        PSECURITY_DESCRIPTOR pSD = hSvc->ServiceEntry->pSecurityDescriptor;
+        DWORD dwGranted;
+
+        if (ScmAccessCheckCaller(pSD ? pSD : pDefaultSD,
+                                 ACCESS_SYSTEM_SECURITY,
+                                 &ScmServiceMapping,
+                                 &dwGranted) != ERROR_SUCCESS)
+        {
+            dwDesiredAccess &= ~ACCESS_SYSTEM_SECURITY;
+        }
+    }
+
+    hSvc->Handle.DesiredAccess = dwDesiredAccess & (SERVICE_ALL_ACCESS | ACCESS_SYSTEM_SECURITY);
+}
+
+
+/* A status handle may only be used by the process that runs the service. */
+static BOOL
+ScmIsCallerServiceProcess(PSERVICE lpService)
+{
+    ULONG ulPid;
+
+    /* Only ncalrpc reports the client process; over the named pipe the caller must run
+     * as the account of the service's process, or as LocalSystem */
+    if (I_RpcBindingInqLocalClientPID(NULL, &ulPid) != RPC_S_OK)
+        return ScmIsCallerAccount(lpService->lpImage != NULL ? lpService->lpImage->hToken : NULL);
+
+    if (ulPid == GetCurrentProcessId())
+        return TRUE;
+
+    return lpService->lpImage != NULL &&
+           lpService->lpImage->dwProcessId == ulPid;
 }
 
 
@@ -1340,7 +1411,7 @@ ScmSendControl(
         dwError = ScmControlService(lpService->lpImage->hControlPipe,
                                     lpService->lpServiceName,
                                     dwControl,
-                                    lpService->dwResumeCount);
+                                    lpService->dwStatusHandle);
 
         /* Return service status information */
         RtlCopyMemory(lpServiceStatus,
@@ -1656,6 +1727,10 @@ RSetServiceObjectSecurity(
     RpcRevertToSelf();
 #endif
 
+    /* Lock the service database exclusive */
+    ScmLockDatabaseExclusive();
+    bDatabaseLocked = TRUE;
+
     /* Build the new security descriptor */
     Status = RtlSetSecurityObject(dwSecurityInformation,
                                   (PSECURITY_DESCRIPTOR)lpSecurityDescriptor,
@@ -1667,10 +1742,6 @@ RSetServiceObjectSecurity(
         dwError = RtlNtStatusToDosError(Status);
         goto Done;
     }
-
-    /* Lock the service database exclusive */
-    ScmLockDatabaseExclusive();
-    bDatabaseLocked = TRUE;
 
     /* Open the service key */
     dwError = ScmOpenServiceKey(lpService->lpServiceName,
@@ -1805,7 +1876,7 @@ ScmStopThread(PVOID pParam)
         ScmControlService(lpImage->hControlPipe,
                           L"",
                           SERVICE_CONTROL_STOP,
-                          lpService->dwResumeCount);
+                          lpService->dwStatusHandle);
     }
 
     /* Lock the service database exclusively */
@@ -1896,6 +1967,8 @@ RSetServiceStatus(
 
     ScmLockDatabaseShared();
     lpService = ScmGetServiceEntryByStatusHandle(hServiceStatus);
+    if (lpService != NULL && !ScmIsCallerServiceProcess(lpService))
+        lpService = NULL;
     ScmUnlockDatabase();
     if (lpService == NULL)
         return ERROR_INVALID_HANDLE;
@@ -2087,8 +2160,18 @@ RNotifyBootConfigStatus(
     SVCCTL_HANDLEW lpMachineName,
     DWORD BootAcceptable)
 {
+    DWORD dwGranted;
+    DWORD dwError;
+
     DPRINT("RNotifyBootConfigStatus(%p %lu)\n",
            lpMachineName, BootAcceptable);
+
+    dwError = ScmAccessCheckCaller(pManagerSD,
+                                   SC_MANAGER_MODIFY_BOOT_CONFIG,
+                                   &ScmManagerMapping,
+                                   &dwGranted);
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
 
     if (BootAcceptable)
         return ScmAcceptBoot();
@@ -2127,6 +2210,8 @@ RI_ScSetServiceBitsW(
 
     ScmLockDatabaseShared();
     pService = ScmGetServiceEntryByStatusHandle(hServiceStatus);
+    if (pService != NULL && !ScmIsCallerServiceProcess(pService))
+        pService = NULL;
     ScmUnlockDatabase();
     if (pService == NULL)
         return ERROR_INVALID_HANDLE;
@@ -2566,6 +2651,16 @@ RCreateServiceW(
         return ERROR_ACCESS_DENIED;
     }
 
+    /* ACCESS_SYSTEM_SECURITY on the new handle needs SeSecurityPrivilege: fail before anything is created */
+    if (dwDesiredAccess & ACCESS_SYSTEM_SECURITY)
+    {
+        DWORD dwGranted;
+
+        dwError = ScmAccessCheckCaller(pDefaultSD, ACCESS_SYSTEM_SECURITY, &ScmServiceMapping, &dwGranted);
+        if (dwError != ERROR_SUCCESS)
+            return dwError;
+    }
+
     if (*lpServiceName == 0)
         return ERROR_INVALID_NAME;
 
@@ -2883,10 +2978,8 @@ RCreateServiceW(
     if (dwError != ERROR_SUCCESS)
         goto done;
 
-    dwError = ScmCheckAccess(hServiceHandle,
-                             dwDesiredAccess);
-    if (dwError != ERROR_SUCCESS)
-        goto done;
+    ScmGrantCreatorAccess(hServiceHandle,
+                          dwDesiredAccess);
 
     ScmReferenceService(lpService);
 
@@ -3319,28 +3412,32 @@ RQueryServiceConfigW(
                         &lpDependencies,
                         &dwDependenciesLength);
 
-    dwRequiredSize = sizeof(QUERY_SERVICE_CONFIGW);
+    dwRequiredSize = ALIGN_UP_BY(sizeof(QUERY_SERVICE_CONFIGW), sizeof(PVOID));
 
     if (lpImagePath != NULL)
         dwRequiredSize += (DWORD)((wcslen(lpImagePath) + 1) * sizeof(WCHAR));
     else
         dwRequiredSize += 2 * sizeof(WCHAR);
 
+    dwRequiredSize = ALIGN_UP_BY(dwRequiredSize, sizeof(PVOID));
     if ((lpService->lpGroup != NULL) && (lpService->lpGroup->lpGroupName != NULL))
         dwRequiredSize += (DWORD)((wcslen(lpService->lpGroup->lpGroupName) + 1) * sizeof(WCHAR));
     else
         dwRequiredSize += 2 * sizeof(WCHAR);
 
+    dwRequiredSize = ALIGN_UP_BY(dwRequiredSize, sizeof(PVOID));
     if (lpDependencies != NULL)
         dwRequiredSize += dwDependenciesLength * sizeof(WCHAR);
     else
         dwRequiredSize += 2 * sizeof(WCHAR);
 
+    dwRequiredSize = ALIGN_UP_BY(dwRequiredSize, sizeof(PVOID));
     if (lpServiceStartName != NULL)
         dwRequiredSize += (DWORD)((wcslen(lpServiceStartName) + 1) * sizeof(WCHAR));
     else
         dwRequiredSize += 2 * sizeof(WCHAR);
 
+    dwRequiredSize = ALIGN_UP_BY(dwRequiredSize, sizeof(PVOID));
     if (lpService->lpDisplayName != NULL)
         dwRequiredSize += (DWORD)((wcslen(lpService->lpDisplayName) + 1) * sizeof(WCHAR));
     else
@@ -3357,7 +3454,8 @@ RQueryServiceConfigW(
         lpServiceConfig->dwErrorControl = lpService->dwErrorControl;
         lpServiceConfig->dwTagId = lpService->dwTag;
 
-        lpStr = (LPWSTR)(lpServiceConfig + 1);
+        ASSERT(((ULONG_PTR)lpServiceConfig & (sizeof(PVOID) - 1)) == 0);
+        lpStr = (LPWSTR)ALIGN_UP_POINTER_BY(lpServiceConfig + 1, sizeof(PVOID));
 
         /* Append the image path */
         if (lpImagePath != NULL)
@@ -3370,7 +3468,7 @@ RQueryServiceConfigW(
         }
 
         lpServiceConfig->lpBinaryPathName = (LPWSTR)((ULONG_PTR)lpStr - (ULONG_PTR)lpServiceConfig);
-        lpStr += (wcslen(lpStr) + 1);
+        lpStr = (LPWSTR)ALIGN_UP_POINTER_BY(lpStr + wcslen(lpStr) + 1, sizeof(PVOID));
 
         /* Append the group name */
         if ((lpService->lpGroup != NULL) && (lpService->lpGroup->lpGroupName != NULL))
@@ -3383,7 +3481,7 @@ RQueryServiceConfigW(
         }
 
         lpServiceConfig->lpLoadOrderGroup = (LPWSTR)((ULONG_PTR)lpStr - (ULONG_PTR)lpServiceConfig);
-        lpStr += (wcslen(lpStr) + 1);
+        lpStr = (LPWSTR)ALIGN_UP_POINTER_BY(lpStr + wcslen(lpStr) + 1, sizeof(PVOID));
 
         /* Append Dependencies */
         if (lpDependencies != NULL)
@@ -3394,7 +3492,8 @@ RQueryServiceConfigW(
         }
         else
         {
-            *lpStr = 0;
+            lpStr[0] = 0;
+            lpStr[1] = 0;
         }
 
         lpServiceConfig->lpDependencies = (LPWSTR)((ULONG_PTR)lpStr - (ULONG_PTR)lpServiceConfig);
@@ -3402,6 +3501,7 @@ RQueryServiceConfigW(
             lpStr += dwDependenciesLength;
         else
             lpStr += (wcslen(lpStr) + 1);
+        lpStr = (LPWSTR)ALIGN_UP_POINTER_BY(lpStr, sizeof(PVOID));
 
         /* Append the service start name */
         if (lpServiceStartName != NULL)
@@ -3414,7 +3514,7 @@ RQueryServiceConfigW(
         }
 
         lpServiceConfig->lpServiceStartName = (LPWSTR)((ULONG_PTR)lpStr - (ULONG_PTR)lpServiceConfig);
-        lpStr += (wcslen(lpStr) + 1);
+        lpStr = (LPWSTR)ALIGN_UP_POINTER_BY(lpStr + wcslen(lpStr) + 1, sizeof(PVOID));
 
         /* Append the display name */
         if (lpService->lpDisplayName != NULL)
@@ -4476,14 +4576,15 @@ RQueryServiceConfigA(
         }
         else
         {
-            *lpStr = 0;
+            lpStr[0] = 0;
+            lpStr[1] = 0;
         }
 
         lpServiceConfig->lpDependencies = (LPSTR)((ULONG_PTR)lpStr - (ULONG_PTR)lpServiceConfig);
         if (lpDependencies)
             lpStr += dwDependenciesLength;
         else
-            lpStr += (strlen(lpStr) + 1);
+            lpStr += 2;
 
         if (lpServiceStartName)
         {
@@ -5244,13 +5345,24 @@ Done:
 }
 
 
-/* TODO: SERVICE_CONFIG_DELAYED_AUTO_START_INFO, SERVICE_SID_INFO, REQUIRED_PRIVILEGES_INFO and PRESHUTDOWN_INFO */
+/* TODO: SERVICE_SID_INFO. REQUIRED_PRIVILEGES_INFO exists for the W entry points only (the client converts). */
+static BOOL ScmIsSupportedConfigLevel(DWORD dwInfoLevel);
+
+static BOOL
+ScmIsSupportedConfigLevelW(DWORD dwInfoLevel)
+{
+    return dwInfoLevel == SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO ||
+           ScmIsSupportedConfigLevel(dwInfoLevel);
+}
+
 static BOOL
 ScmIsSupportedConfigLevel(DWORD dwInfoLevel)
 {
     return dwInfoLevel == SERVICE_CONFIG_DESCRIPTION ||
            dwInfoLevel == SERVICE_CONFIG_FAILURE_ACTIONS ||
+           dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO ||
            dwInfoLevel == SERVICE_CONFIG_FAILURE_ACTIONS_FLAG ||
+           dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO ||
            dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO;
 }
 
@@ -5283,6 +5395,132 @@ ScmQueryFailureActionsFlag(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, L
 }
 
 
+static DWORD
+ScmSetDelayedAutoStart(HKEY hServiceKey, const SERVICE_DELAYED_AUTO_START_INFO *lpInfo)
+{
+    DWORD dwValue;
+
+    if (lpInfo == NULL)
+        return ERROR_INVALID_PARAMETER;
+    dwValue = lpInfo->fDelayedAutostart ? 1 : 0;
+    return RegSetValueExW(hServiceKey, L"DelayedAutostart", 0, REG_DWORD,
+                          (LPBYTE)&dwValue, sizeof(dwValue));
+}
+
+static DWORD
+ScmQueryDelayedAutoStart(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, LPBOUNDED_DWORD_8K pcbBytesNeeded)
+{
+    LPSERVICE_DELAYED_AUTO_START_INFO lpInfo = (LPSERVICE_DELAYED_AUTO_START_INFO)lpBuffer;
+
+    *pcbBytesNeeded = sizeof(SERVICE_DELAYED_AUTO_START_INFO);
+    if (cbBufSize < sizeof(SERVICE_DELAYED_AUTO_START_INFO))
+        return ERROR_INSUFFICIENT_BUFFER;
+    lpInfo->fDelayedAutostart = ScmReadDelayedAutoStart(hServiceKey) ? TRUE : FALSE;
+    return ERROR_SUCCESS;
+}
+
+static DWORD
+ScmSetPreshutdownTimeout(HKEY hServiceKey, const SERVICE_PRESHUTDOWN_INFO *lpInfo)
+{
+    if (lpInfo == NULL)
+        return ERROR_INVALID_PARAMETER;
+    return RegSetValueExW(hServiceKey, L"PreshutdownTimeout", 0, REG_DWORD,
+                          (LPBYTE)&lpInfo->dwPreshutdownTimeout, sizeof(DWORD));
+}
+
+static DWORD
+ScmQueryPreshutdownTimeout(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, LPBOUNDED_DWORD_8K pcbBytesNeeded)
+{
+    LPSERVICE_PRESHUTDOWN_INFO lpInfo = (LPSERVICE_PRESHUTDOWN_INFO)lpBuffer;
+    DWORD dwValue = SCM_DEFAULT_PRESHUTDOWN_TIMEOUT, dwSize = sizeof(dwValue), dwType = REG_NONE;
+
+    *pcbBytesNeeded = sizeof(SERVICE_PRESHUTDOWN_INFO);
+    if (cbBufSize < sizeof(SERVICE_PRESHUTDOWN_INFO))
+        return ERROR_INSUFFICIENT_BUFFER;
+    if (RegQueryValueExW(hServiceKey, L"PreshutdownTimeout", NULL, &dwType,
+                         (LPBYTE)&dwValue, &dwSize) != ERROR_SUCCESS || dwType != REG_DWORD)
+        dwValue = SCM_DEFAULT_PRESHUTDOWN_TIMEOUT;
+    lpInfo->dwPreshutdownTimeout = dwValue;
+    return ERROR_SUCCESS;
+}
+
+
+/* A valid privilege name list: MULTI_SZ, double-NUL terminated, every name a known privilege */
+static DWORD
+ScmValidatePrivilegeList(const WCHAR *pmsz, DWORD cb)
+{
+    DWORD cch = cb / sizeof(WCHAR), pos = 0;
+    LUID luid;
+
+    if ((cb % sizeof(WCHAR)) != 0 || cch < 2 || pmsz[cch - 1] != L'\0' || pmsz[cch - 2] != L'\0')
+        return ERROR_INVALID_PARAMETER;
+
+    while (pos < cch && pmsz[pos] != L'\0')
+    {
+        if (!LookupPrivilegeValueW(NULL, &pmsz[pos], &luid))
+            return ERROR_INVALID_PARAMETER;
+        pos += (DWORD)wcslen(&pmsz[pos]) + 1;
+    }
+    return ERROR_SUCCESS;
+}
+
+static DWORD
+ScmSetRequiredPrivileges(HKEY hServiceKey, const SERVICE_RPC_REQUIRED_PRIVILEGES_INFO *lpInfo)
+{
+    DWORD dwError;
+
+    if (lpInfo == NULL || lpInfo->cbRequiredPrivileges == 0 || lpInfo->pRequiredPrivileges == NULL)
+    {
+        /* clear: the service keeps every privilege of its account */
+        dwError = RegDeleteValueW(hServiceKey, L"RequiredPrivileges");
+        return (dwError == ERROR_FILE_NOT_FOUND) ? ERROR_SUCCESS : dwError;
+    }
+
+    dwError = ScmValidatePrivilegeList((const WCHAR *)lpInfo->pRequiredPrivileges, lpInfo->cbRequiredPrivileges);
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
+
+    return RegSetValueExW(hServiceKey, L"RequiredPrivileges", 0, REG_MULTI_SZ,
+                          lpInfo->pRequiredPrivileges, lpInfo->cbRequiredPrivileges);
+}
+
+/* Buffer layout: SERVICE_REQUIRED_PRIVILEGES_INFOW, then the MULTI_SZ; the pointer travels as an offset from the start of the buffer */
+static DWORD
+ScmQueryRequiredPrivileges(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, LPBOUNDED_DWORD_8K pcbBytesNeeded)
+{
+    LPSERVICE_REQUIRED_PRIVILEGES_INFOW lpInfo = (LPSERVICE_REQUIRED_PRIVILEGES_INFOW)lpBuffer;
+    LPWSTR pmsz = NULL;
+    DWORD cb = 0, dwError;
+
+    dwError = ScmReadRequiredPrivileges(hServiceKey, &pmsz, &cb);
+    if (dwError != ERROR_SUCCESS)
+    {
+        pmsz = NULL;
+        cb = 0;
+    }
+
+    *pcbBytesNeeded = sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOW) + cb;
+    if (cbBufSize < *pcbBytesNeeded)
+    {
+        if (pmsz != NULL)
+            HeapFree(GetProcessHeap(), 0, pmsz);
+        return ERROR_INSUFFICIENT_BUFFER;
+    }
+
+    if (pmsz == NULL)
+    {
+        lpInfo->pmszRequiredPrivileges = NULL;
+    }
+    else
+    {
+        RtlCopyMemory(lpBuffer + sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOW), pmsz, cb);
+        lpInfo->pmszRequiredPrivileges = (LPWSTR)(ULONG_PTR)sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOW);
+        HeapFree(GetProcessHeap(), 0, pmsz);
+    }
+    return ERROR_SUCCESS;
+}
+
+
 /* Function 36 */
 DWORD
 WINAPI
@@ -5307,6 +5545,10 @@ RChangeServiceConfig2A(
         InfoW.psfaf = Info.psfaf;
     else if (Info.dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO)
         InfoW.psti = Info.psti;
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+        InfoW.psda = Info.psda;
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+        InfoW.psps = Info.psps;
 
     if (InfoW.dwInfoLevel == SERVICE_CONFIG_DESCRIPTION)
     {
@@ -5659,7 +5901,7 @@ RChangeServiceConfig2W(
     if (ScmShutdown)
         return ERROR_SHUTDOWN_IN_PROGRESS;
 
-    if (!ScmIsSupportedConfigLevel(Info.dwInfoLevel))
+    if (!ScmIsSupportedConfigLevelW(Info.dwInfoLevel))
     {
         return ERROR_INVALID_LEVEL;
     }
@@ -5766,6 +6008,28 @@ RChangeServiceConfig2W(
         dwError = ScmSetServiceTriggers(hServiceKey, Info.psti);
         if (dwError == ERROR_SUCCESS)
             ScmTriggersChanged();
+    }
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+    {
+        /* A delayed auto-start service cannot be a member of a load ordering group */
+        if (Info.psda->fDelayedAutostart && lpService->lpGroup != NULL)
+        {
+            dwError = ERROR_INVALID_PARAMETER;
+        }
+        else
+        {
+            dwError = ScmSetDelayedAutoStart(hServiceKey, Info.psda);
+            if (dwError == ERROR_SUCCESS)
+                lpService->bDelayedAutoStart = Info.psda->fDelayedAutostart ? TRUE : FALSE;
+        }
+    }
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+    {
+        dwError = ScmSetPreshutdownTimeout(hServiceKey, Info.psps);
+    }
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO)
+    {
+        dwError = ScmSetRequiredPrivileges(hServiceKey, Info.psrp);
     }
 
 done:
@@ -5988,6 +6252,14 @@ RQueryServiceConfig2A(
     {
         dwError = ScmQueryServiceTriggers(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
     }
+    else if (dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+    {
+        dwError = ScmQueryDelayedAutoStart(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+    {
+        dwError = ScmQueryPreshutdownTimeout(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
 
 done:
     /* Unlock the service database */
@@ -6038,7 +6310,7 @@ RQueryServiceConfig2W(
     if (ScmShutdown)
         return ERROR_SHUTDOWN_IN_PROGRESS;
 
-    if (!ScmIsSupportedConfigLevel(dwInfoLevel))
+    if (!ScmIsSupportedConfigLevelW(dwInfoLevel))
     {
         return ERROR_INVALID_LEVEL;
     }
@@ -6194,6 +6466,18 @@ RQueryServiceConfig2W(
     else if (dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO)
     {
         dwError = ScmQueryServiceTriggers(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+    {
+        dwError = ScmQueryDelayedAutoStart(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+    {
+        dwError = ScmQueryPreshutdownTimeout(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO)
+    {
+        dwError = ScmQueryRequiredPrivileges(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
     }
 
 done:
@@ -7169,6 +7453,10 @@ RI_ScSendPnPMessage(
     DPRINT("RI_ScSendPnPMessage(%lu %lx %lu %lu %p)\n",
            hServiceStatus, dwControl, dwEventType, dwEventSize, pEventData);
 
+    /* Only the Plug and Play service sends these */
+    if (!ScmIsCallerLocalSystem())
+        return ERROR_ACCESS_DENIED;
+
     ScmLockDatabaseShared();
     pService = ScmGetServiceEntryByStatusHandle(hServiceStatus);
     ScmUnlockDatabase();
@@ -7227,7 +7515,7 @@ RI_ScSendPnPMessage(
 
     ControlPacket->dwSize = PacketSize;
     ControlPacket->dwControl = dwControl;
-    ControlPacket->hServiceStatus = pService->dwResumeCount;
+    ControlPacket->hServiceStatus = pService->dwStatusHandle;
     ControlPacket->dwServiceTag = pService->dwServiceTag;
 
     /* Copy the event type and event data into the control packet */
@@ -7278,8 +7566,6 @@ RI_ScValidatePnPService(
         return ERROR_INVALID_HANDLE;
     }
 
-    /* FIXME: should check whether client is local */
-
     /* Check access rights */
     if (!RtlAreAllAccessesGranted(hManager->Handle.DesiredAccess,
                                   SC_MANAGER_CONNECT))
@@ -7288,12 +7574,16 @@ RI_ScValidatePnPService(
         return ERROR_ACCESS_DENIED;
     }
 
+    /* Only the Plug and Play service hands out status handles */
+    if (!ScmIsCallerLocalSystem())
+        return ERROR_ACCESS_DENIED;
+
     pService = ScmGetServiceEntryByName(pszServiceName);
     DPRINT("pService: %p\n", pService);
     if (pService == NULL)
         return ERROR_SERVICE_DOES_NOT_EXIST;
 
-    *phServiceStatus = pService->dwResumeCount;
+    *phServiceStatus = pService->dwStatusHandle;
 
     return ERROR_SUCCESS;
 }

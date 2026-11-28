@@ -1,0 +1,636 @@
+/*
+ * PROJECT:     Orosi API tests
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     Win11/Orosi comparison tests for NtSetInformationSymbolicLink
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+#include "precomp.h"
+
+#ifndef SYMBOLIC_LINK_SET
+#define SYMBOLIC_LINK_SET 0x0002
+#endif
+#define TEST_SymbolicLinkGlobalInformation 1
+#define TEST_SymbolicLinkAccessMask        2
+
+typedef NTSTATUS (NTAPI *FN_NtSetInformationSymbolicLink)(HANDLE, ULONG, PVOID, ULONG);
+static FN_NtSetInformationSymbolicLink pNtSetInformationSymbolicLink;
+
+static WCHAR BnoPath[64];
+static ULONG Unique;
+static BOOLEAN HaveTcb;
+
+static WCHAR LastLink[128];
+
+/* Creates a uniquely named link under the session BaseNamedObjects; its full name stays in LastLink. */
+static
+NTSTATUS
+CreateLink(ACCESS_MASK Access, PCWSTR Target, PHANDLE Handle)
+{
+    WCHAR *Buffer = LastLink;
+    UNICODE_STRING Name, TargetName;
+    OBJECT_ATTRIBUTES Oa;
+
+    StringCchPrintfW(Buffer, _countof(LastLink), L"%s\\npsl-%lu-%lu", BnoPath,
+                     HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess), ++Unique);
+    RtlInitUnicodeString(&Name, Buffer);
+    RtlInitUnicodeString(&TargetName, Target);
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    *Handle = NULL;
+    return NtCreateSymbolicLinkObject(Handle, Access, &Oa, &TargetName);
+}
+
+static
+VOID
+TestAccessMaskMapping(VOID)
+{
+    HANDLE Link;
+    NTSTATUS Status;
+    OBJECT_BASIC_INFORMATION Info;
+    static const ACCESS_MASK Generic[] = { GENERIC_READ, GENERIC_WRITE, GENERIC_EXECUTE };
+    ULONG i;
+
+    /* Win11 26100: a link created ALL|SET is granted 0x000F0003 */
+    Status = CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, L"\\BaseNamedObjects", &Link);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+    Status = NtQueryObject(Link, ObjectBasicInformation, &Info, sizeof(Info), NULL);
+    ok_hex(Status, STATUS_SUCCESS);
+    ok_eq_print(Info.GrantedAccess, (ACCESS_MASK)(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET), "0x%08lx");
+    NtClose(Link);
+
+    /* Win11 26100: GENERIC_ALL maps to 0x000F0001 for the symbolic link type (no SET bit) */
+    Status = CreateLink(GENERIC_ALL, L"\\BaseNamedObjects", &Link);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        Status = NtQueryObject(Link, ObjectBasicInformation, &Info, sizeof(Info), NULL);
+        ok_hex(Status, STATUS_SUCCESS);
+        ok_eq_print(Info.GrantedAccess, (ACCESS_MASK)(SYMBOLIC_LINK_ALL_ACCESS), "0x%08lx");
+        NtClose(Link);
+    }
+
+    /* S5 regression: the other generic rights still create; their mapping is traced for Win11 */
+    for (i = 0; i < _countof(Generic); i++)
+    {
+        Status = CreateLink(Generic[i], L"\\BaseNamedObjects", &Link);
+        ok(NT_SUCCESS(Status), "create with generic 0x%08lx failed: 0x%lx\n", Generic[i], Status);
+        if (NT_SUCCESS(Status))
+        {
+            Info.GrantedAccess = 0;
+            NtQueryObject(Link, ObjectBasicInformation, &Info, sizeof(Info), NULL);
+            trace("PROBE generic 0x%08lx maps to 0x%08lx\n", Generic[i], Info.GrantedAccess);
+            NtClose(Link);
+        }
+    }
+}
+
+/* Statuses pinned to the Win11 26100 run of 2026-11-26 (native-parity-01/results-win11-ob.md). */
+static
+VOID
+TestInvalidInput(VOID)
+{
+    HANDLE Link = NULL, QueryOnly = NULL, Event = NULL;
+    ULONG Value = 0, Class, Len;
+    ULONGLONG Big = 0;
+    NTSTATUS Status;
+    static const ULONG Classes[] = { 0, 3, 4, 0xFF, 0x80000000 };
+    static const ULONG Lengths[] = { 0, 1, 3, 5, 8 };
+
+    Status = CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, L"\\BaseNamedObjects", &Link);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    for (Class = 0; Class < _countof(Classes); Class++)
+    {
+        Status = pNtSetInformationSymbolicLink(Link, Classes[Class], &Value, sizeof(Value));
+        trace("PROBE class %lu -> 0x%lx\n", Classes[Class], Status);
+        ok_hex(Status, STATUS_INVALID_INFO_CLASS);
+    }
+
+    for (Class = TEST_SymbolicLinkGlobalInformation; Class <= TEST_SymbolicLinkAccessMask; Class++)
+    {
+        for (Len = 0; Len < _countof(Lengths); Len++)
+        {
+            Status = pNtSetInformationSymbolicLink(Link, Class, &Big, Lengths[Len]);
+            trace("PROBE class %lu len %lu -> 0x%lx\n", Class, Lengths[Len], Status);
+            ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+        }
+        /* The privilege is checked before the buffer is read: without TCB the buffer never matters */
+        Status = pNtSetInformationSymbolicLink(Link, Class, NULL, sizeof(ULONG));
+        trace("PROBE class %lu NULL buffer -> 0x%lx\n", Class, Status);
+        ok_hex(Status, HaveTcb ? STATUS_ACCESS_VIOLATION : STATUS_PRIVILEGE_NOT_HELD);
+        Status = pNtSetInformationSymbolicLink(Link, Class, (PVOID)(ULONG_PTR)1, sizeof(ULONG));
+        trace("PROBE class %lu bad buffer -> 0x%lx\n", Class, Status);
+        ok_hex(Status, HaveTcb ? STATUS_DATATYPE_MISALIGNMENT : STATUS_PRIVILEGE_NOT_HELD);
+    }
+
+    /* Wrong object type */
+    Status = NtCreateEvent(&Event, EVENT_ALL_ACCESS, NULL, NotificationEvent, FALSE);
+    ok_hex(Status, STATUS_SUCCESS);
+    Status = pNtSetInformationSymbolicLink(Event, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+    trace("PROBE event handle -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_OBJECT_TYPE_MISMATCH);
+    /* Win11 checks the handle's object type before the length (rerun 2) */
+    Status = pNtSetInformationSymbolicLink(Event, TEST_SymbolicLinkGlobalInformation, &Value, 1);
+    trace("PROBE event handle, length 1 -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_OBJECT_TYPE_MISMATCH);
+    /* The handle type also wins over the class (rerun 3) */
+    Status = pNtSetInformationSymbolicLink(Event, 0, &Value, sizeof(Value));
+    trace("PROBE event handle, class 0 -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_OBJECT_TYPE_MISMATCH);
+    NtClose(Event);
+
+    Status = pNtSetInformationSymbolicLink(NULL, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+    ok_hex(Status, STATUS_INVALID_HANDLE);
+
+    /* Handle without SYMBOLIC_LINK_SET */
+    Status = NtDuplicateObject(NtCurrentProcess(), Link, NtCurrentProcess(), &QueryOnly,
+                               SYMBOLIC_LINK_QUERY, 0, 0);
+    ok_hex(Status, STATUS_SUCCESS);
+    for (Class = TEST_SymbolicLinkGlobalInformation; Class <= TEST_SymbolicLinkAccessMask; Class++)
+    {
+        Status = pNtSetInformationSymbolicLink(QueryOnly, Class, &Value, sizeof(Value));
+        trace("PROBE class %lu QUERY-only handle -> 0x%lx\n", Class, Status);
+        ok_hex(Status, STATUS_ACCESS_DENIED);
+    }
+    /* The SET access is checked before the length and the buffer (rerun 3) */
+    Status = pNtSetInformationSymbolicLink(QueryOnly, TEST_SymbolicLinkGlobalInformation, &Value, 1);
+    trace("PROBE QUERY-only handle, length 1 -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_ACCESS_DENIED);
+    Status = pNtSetInformationSymbolicLink(QueryOnly, TEST_SymbolicLinkGlobalInformation, NULL, sizeof(Value));
+    trace("PROBE QUERY-only handle, NULL buffer -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_ACCESS_DENIED);
+    /* Not yet probed on Win11: does the SET access also win over the class? */
+    Status = pNtSetInformationSymbolicLink(QueryOnly, 0, &Value, sizeof(Value));
+    trace("PROBE QUERY-only handle, class 0 -> 0x%lx (unpinned)\n", Status);
+    NtClose(QueryOnly);
+    NtClose(Link);
+}
+
+/* Without TCB a session-local link must never become global. */
+static
+VOID
+TestPrivilege(VOID)
+{
+    HANDLE Link;
+    ULONG Value = 1;
+    ACCESS_MASK Mask = SYMBOLIC_LINK_QUERY;
+    NTSTATUS Status;
+
+    Status = CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, L"\\BaseNamedObjects", &Link);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+    trace("PROBE global=1 (tcb=%d) -> 0x%lx\n", HaveTcb, Status);
+    ok_hex(Status, HaveTcb ? STATUS_SUCCESS : STATUS_PRIVILEGE_NOT_HELD);
+    if (HaveTcb)
+    {
+        Value = 0;
+        Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+        trace("PROBE global=0 (tcb) -> 0x%lx\n", Status);
+        ok_hex(Status, STATUS_SUCCESS);
+    }
+
+    Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkAccessMask, &Mask, sizeof(Mask));
+    trace("PROBE accessmask=QUERY (tcb=%d) -> 0x%lx\n", HaveTcb, Status);
+    ok_hex(Status, HaveTcb ? STATUS_SUCCESS : STATUS_PRIVILEGE_NOT_HELD);
+    NtClose(Link);
+}
+
+/* S6: a standard user may not globalise even a link it created and fully owns. */
+static
+VOID
+TestOwnLinkNotGlobal(VOID)
+{
+    HANDLE Link;
+    ULONG Value = 1;
+    NTSTATUS Status;
+
+    if (HaveTcb)
+    {
+        skip("own-link check needs a caller without TCB\n");
+        return;
+    }
+    Status = CreateLink(GENERIC_ALL, L"\\BaseNamedObjects", &Link);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+    /* GENERIC_ALL carries no SET bit, so the handle is refused before the privilege is looked at */
+    Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+    trace("PROBE own GENERIC_ALL link global=1 (no tcb) -> 0x%lx\n", Status);
+    ok_hex(Status, STATUS_ACCESS_DENIED);
+    NtClose(Link);
+}
+
+/*
+ * S4 (Win11 26100): SymbolicLinkAccessMask caps the access a traversal may ask of the link's
+ * target. Open through the link with D succeeds only if D is a subset of the mask; otherwise
+ * STATUS_ACCESS_DENIED. Mask 0 denies everything. Setting the mask always returns success.
+ */
+static
+VOID
+TestAccessMaskEffect(VOID)
+{
+    static const ACCESS_MASK Masks[] = { 0, DIRECTORY_QUERY, DIRECTORY_TRAVERSE, SYMBOLIC_LINK_QUERY, DIRECTORY_ALL_ACCESS };
+    static const ACCESS_MASK Wants[] = { DIRECTORY_QUERY, DIRECTORY_TRAVERSE, DIRECTORY_CREATE_OBJECT, DIRECTORY_ALL_ACCESS };
+    static const ACCESS_MASK Unpinned[] = { MAXIMUM_ALLOWED, GENERIC_READ };
+    UNICODE_STRING LinkName;
+    OBJECT_ATTRIBUTES Oa;
+    HANDLE Link, H;
+    ULONG m, w;
+    NTSTATUS Status;
+
+    if (!HaveTcb)
+    {
+        skip("access-mask effect needs TCB (run as SYSTEM)\n");
+        return;
+    }
+    for (m = 0; m < _countof(Masks); m++)
+    {
+        Status = CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, BnoPath, &Link);
+        ok_hex(Status, STATUS_SUCCESS);
+        if (!NT_SUCCESS(Status))
+            return;
+        Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkAccessMask, (PVOID)&Masks[m], sizeof(ACCESS_MASK));
+        trace("PROBE accessmask set 0x%08lx -> 0x%lx\n", Masks[m], Status);
+        ok_hex(Status, STATUS_SUCCESS);
+        RtlInitUnicodeString(&LinkName, LastLink);
+        InitializeObjectAttributes(&Oa, &LinkName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        for (w = 0; w < _countof(Wants); w++)
+        {
+            Status = NtOpenDirectoryObject(&H, Wants[w], &Oa);
+            trace("PROBE mask 0x%08lx open target want 0x%08lx -> 0x%lx\n", Masks[m], Wants[w], Status);
+            ok_hex(Status, (Wants[w] & ~Masks[m]) ? STATUS_ACCESS_DENIED : STATUS_SUCCESS);
+            if (NT_SUCCESS(Status))
+                NtClose(H);
+        }
+        /*
+         * Win11 rerun 2: MAXIMUM_ALLOWED through a capped link is denied at every mask, and
+         * GENERIC_READ is granted only when the mask holds all of its mapped directory rights.
+         */
+        for (w = 0; w < _countof(Unpinned); w++)
+        {
+            Status = NtOpenDirectoryObject(&H, Unpinned[w], &Oa);
+            trace("PROBE mask 0x%08lx open target want 0x%08lx -> 0x%lx\n", Masks[m], Unpinned[w], Status);
+            if (Unpinned[w] == MAXIMUM_ALLOWED)
+                ok_hex(Status, STATUS_ACCESS_DENIED);
+            else
+                ok_hex(Status, (Masks[m] == DIRECTORY_ALL_ACCESS) ? STATUS_SUCCESS : STATUS_ACCESS_DENIED);
+            if (NT_SUCCESS(Status))
+                NtClose(H);
+        }
+        /* The link itself, no traversal: the mask does not apply (Win11 rerun 2) */
+        Status = NtOpenSymbolicLinkObject(&H, SYMBOLIC_LINK_QUERY, &Oa);
+        trace("PROBE mask 0x%08lx reopen link itself -> 0x%lx\n", Masks[m], Status);
+        ok_hex(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+            NtClose(H);
+        Oa.Attributes |= OBJ_OPENLINK;
+        Status = NtOpenSymbolicLinkObject(&H, SYMBOLIC_LINK_QUERY, &Oa);
+        trace("PROBE mask 0x%08lx reopen link itself with OBJ_OPENLINK -> 0x%lx\n", Masks[m], Status);
+        ok_hex(Status, STATUS_INVALID_PARAMETER);
+        if (NT_SUCCESS(Status))
+            NtClose(H);
+        NtClose(Link);
+    }
+}
+
+/* P5: which object a \\??\\ target reaches with the global flag off and on (SYSTEM only). */
+static
+VOID
+TestGlobalEffect(VOID)
+{
+    UNICODE_STRING Name, LinkName;
+    OBJECT_ATTRIBUTES Oa;
+    HANDLE GlobalEv = NULL, Link = NULL, H;
+    WCHAR Target[96], GlobalName[96];
+    EVENT_BASIC_INFORMATION Info;
+    ULONG Value, Pass;
+    NTSTATUS Status;
+
+    if (!HaveTcb)
+    {
+        skip("global-flag effect needs TCB (run as SYSTEM)\n");
+        return;
+    }
+    StringCchPrintfW(GlobalName, _countof(GlobalName), L"\\GLOBAL??\\npsl-ev-%lu",
+                     HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    StringCchPrintfW(Target, _countof(Target), L"\\??\\npsl-ev-%lu",
+                     HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    RtlInitUnicodeString(&Name, GlobalName);
+    InitializeObjectAttributes(&Oa, &Name, 0, NULL, NULL);
+    Status = NtCreateEvent(&GlobalEv, EVENT_ALL_ACCESS, &Oa, NotificationEvent, TRUE);
+    trace("PROBE create %S -> 0x%lx\n", GlobalName, Status);
+    if (!NT_SUCCESS(Status))
+        return;
+    if (NT_SUCCESS(CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, Target, &Link)))
+    {
+        RtlInitUnicodeString(&LinkName, LastLink);
+        InitializeObjectAttributes(&Oa, &LinkName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        for (Pass = 0; Pass < 3; Pass++) /* off, on, off again: is the flag sticky? */
+        {
+            Value = Pass & 1;
+            Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+            trace("PROBE global=%lu -> 0x%lx\n", Value, Status);
+            Status = NtOpenEvent(&H, EVENT_QUERY_STATE, &Oa);
+            Info.EventState = -1;
+            if (NT_SUCCESS(Status))
+            {
+                NtQueryEvent(H, EventBasicInformation, &Info, sizeof(Info), NULL);
+                NtClose(H);
+            }
+            trace("PROBE global=%lu open via link -> 0x%lx state=%ld (1 = the \\GLOBAL?? event)\n",
+                  Value, Status, Info.EventState);
+        }
+        NtClose(Link);
+    }
+    NtClose(GlobalEv);
+}
+
+/*
+ * P5 private device map: as SYSTEM \??\ already is \GLOBAL??, so give the process its own
+ * DosDevices directory holding an unsignalled event of the same name. Flag off should reach
+ * that one (state 0), flag on the \GLOBAL?? one (state 1). The map is restored to \GLOBAL??.
+ */
+static
+VOID
+TestGlobalEffectPrivateMap(VOID)
+{
+    UNICODE_STRING Name, LinkName;
+    OBJECT_ATTRIBUTES Oa;
+    HANDLE GlobalEv = NULL, PrivDir = NULL, PrivEv = NULL, GlobalDir = NULL, Link = NULL, H;
+    WCHAR Leaf[32], GlobalName[96], Target[96];
+    PROCESS_DEVICEMAP_INFORMATION Map;
+    EVENT_BASIC_INFORMATION Info;
+    ULONG Value, Pass;
+    NTSTATUS Status;
+
+    if (!HaveTcb)
+    {
+        skip("private device-map probe needs TCB (run as SYSTEM)\n");
+        return;
+    }
+    StringCchPrintfW(Leaf, _countof(Leaf), L"npsl-pm-%lu", HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    StringCchPrintfW(GlobalName, _countof(GlobalName), L"\\GLOBAL??\\%s", Leaf);
+    StringCchPrintfW(Target, _countof(Target), L"\\??\\%s", Leaf);
+
+    RtlInitUnicodeString(&Name, GlobalName);
+    InitializeObjectAttributes(&Oa, &Name, 0, NULL, NULL);
+    Status = NtCreateEvent(&GlobalEv, EVENT_ALL_ACCESS, &Oa, NotificationEvent, TRUE);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    RtlInitUnicodeString(&Name, L"\\GLOBAL??");
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = NtOpenDirectoryObject(&GlobalDir, DIRECTORY_TRAVERSE, &Oa);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    InitializeObjectAttributes(&Oa, NULL, 0, NULL, NULL);
+    Status = NtCreateDirectoryObject(&PrivDir, DIRECTORY_ALL_ACCESS, &Oa);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status) || !GlobalEv || !GlobalDir)
+        goto Cleanup;
+    RtlInitUnicodeString(&Name, Leaf);
+    InitializeObjectAttributes(&Oa, &Name, 0, PrivDir, NULL);
+    Status = NtCreateEvent(&PrivEv, EVENT_ALL_ACCESS, &Oa, NotificationEvent, FALSE);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    Map.Set.DirectoryHandle = PrivDir;
+    Status = NtSetInformationProcess(NtCurrentProcess(), ProcessDeviceMap, &Map, sizeof(Map.Set));
+    trace("PROBE set private device map -> 0x%lx\n", Status);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    if (NT_SUCCESS(CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, Target, &Link)))
+    {
+        RtlInitUnicodeString(&LinkName, LastLink);
+        InitializeObjectAttributes(&Oa, &LinkName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        for (Pass = 0; Pass < 3; Pass++) /* off, on, off again: is the flag sticky? */
+        {
+            Value = Pass & 1;
+            Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+            trace("PROBE privmap global=%lu -> 0x%lx\n", Value, Status);
+            Info.EventState = -1;
+            Status = NtOpenEvent(&H, EVENT_QUERY_STATE, &Oa);
+            if (NT_SUCCESS(Status))
+            {
+                NtQueryEvent(H, EventBasicInformation, &Info, sizeof(Info), NULL);
+                NtClose(H);
+            }
+            trace("PROBE privmap global=%lu open via link -> 0x%lx state=%ld (0 = private, 1 = \\GLOBAL?" "?)\n",
+                  Value, Status, Info.EventState);
+        }
+        NtClose(Link);
+    }
+
+    Map.Set.DirectoryHandle = GlobalDir;
+    Status = NtSetInformationProcess(NtCurrentProcess(), ProcessDeviceMap, &Map, sizeof(Map.Set));
+    ok_hex(Status, STATUS_SUCCESS);
+
+Cleanup:
+    if (PrivEv) NtClose(PrivEv);
+    if (PrivDir) NtClose(PrivDir);
+    if (GlobalDir) NtClose(GlobalDir);
+    if (GlobalEv) NtClose(GlobalEv);
+}
+
+/*
+ * P5b session-local link: P5 keeps the link in BaseNamedObjects, where the flag showed no effect.
+ * Here the link itself lives in the process's own DosDevices directory (the private device map),
+ * which is where a local DosDevices link sits. The private directory holds an unsignalled event,
+ * \GLOBAL?? a signalled one of the same name, and the link targets \??\<event>. The probe opens
+ * \??\<link>: state 0 = the target resolved locally, 1 = it resolved in \GLOBAL??.
+ */
+static
+VOID
+TestGlobalEffectSessionLocal(VOID)
+{
+    UNICODE_STRING Name, TargetName;
+    OBJECT_ATTRIBUTES Oa;
+    HANDLE GlobalEv = NULL, PrivDir = NULL, PrivEv = NULL, GlobalDir = NULL, Link = NULL, H;
+    WCHAR EvLeaf[32], LinkLeaf[32], GlobalName[96], Target[96], LinkPath[96];
+    PROCESS_DEVICEMAP_INFORMATION Map;
+    EVENT_BASIC_INFORMATION Info;
+    ULONG Value, Pass;
+    NTSTATUS Status;
+
+    if (!HaveTcb)
+    {
+        skip("session-local link probe needs TCB (run as SYSTEM)\n");
+        return;
+    }
+    StringCchPrintfW(EvLeaf, _countof(EvLeaf), L"npsl-sl-ev-%lu", HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    StringCchPrintfW(LinkLeaf, _countof(LinkLeaf), L"npsl-sl-lnk-%lu", HandleToUlong(NtCurrentTeb()->ClientId.UniqueProcess));
+    StringCchPrintfW(GlobalName, _countof(GlobalName), L"\\GLOBAL??\\%s", EvLeaf);
+    StringCchPrintfW(Target, _countof(Target), L"\\??\\%s", EvLeaf);
+    StringCchPrintfW(LinkPath, _countof(LinkPath), L"\\??\\%s", LinkLeaf);
+
+    RtlInitUnicodeString(&Name, GlobalName);
+    InitializeObjectAttributes(&Oa, &Name, 0, NULL, NULL);
+    Status = NtCreateEvent(&GlobalEv, EVENT_ALL_ACCESS, &Oa, NotificationEvent, TRUE);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    RtlInitUnicodeString(&Name, L"\\GLOBAL??");
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = NtOpenDirectoryObject(&GlobalDir, DIRECTORY_TRAVERSE, &Oa);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    InitializeObjectAttributes(&Oa, NULL, 0, NULL, NULL);
+    Status = NtCreateDirectoryObject(&PrivDir, DIRECTORY_ALL_ACCESS, &Oa);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status) || !GlobalEv || !GlobalDir)
+        goto Cleanup;
+
+    RtlInitUnicodeString(&Name, EvLeaf);
+    InitializeObjectAttributes(&Oa, &Name, 0, PrivDir, NULL);
+    Status = NtCreateEvent(&PrivEv, EVENT_ALL_ACCESS, &Oa, NotificationEvent, FALSE);
+    ok_hex(Status, STATUS_SUCCESS);
+
+    RtlInitUnicodeString(&Name, LinkLeaf);
+    RtlInitUnicodeString(&TargetName, Target);
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, PrivDir, NULL);
+    Status = NtCreateSymbolicLinkObject(&Link, SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, &Oa, &TargetName);
+    trace("PROBE create session-local link %S -> %S: 0x%lx\n", LinkLeaf, Target, Status);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    Map.Set.DirectoryHandle = PrivDir;
+    Status = NtSetInformationProcess(NtCurrentProcess(), ProcessDeviceMap, &Map, sizeof(Map.Set));
+    trace("PROBE set private device map -> 0x%lx\n", Status);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    RtlInitUnicodeString(&Name, LinkPath);
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    for (Pass = 0; Pass < 3; Pass++) /* off, on, off again */
+    {
+        Value = Pass & 1;
+        Status = pNtSetInformationSymbolicLink(Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+        trace("PROBE sesslocal global=%lu -> 0x%lx\n", Value, Status);
+        Info.EventState = -1;
+        Status = NtOpenEvent(&H, EVENT_QUERY_STATE, &Oa);
+        if (NT_SUCCESS(Status))
+        {
+            NtQueryEvent(H, EventBasicInformation, &Info, sizeof(Info), NULL);
+            NtClose(H);
+        }
+        trace("PROBE sesslocal global=%lu open %S -> 0x%lx state=%ld (0 = local, 1 = \\GLOBAL?" "?)\n",
+              Value, LinkPath, Status, Info.EventState);
+    }
+
+    Map.Set.DirectoryHandle = GlobalDir;
+    Status = NtSetInformationProcess(NtCurrentProcess(), ProcessDeviceMap, &Map, sizeof(Map.Set));
+    ok_hex(Status, STATUS_SUCCESS);
+
+Cleanup:
+    if (Link) NtClose(Link);
+    if (PrivEv) NtClose(PrivEv);
+    if (PrivDir) NtClose(PrivDir);
+    if (GlobalDir) NtClose(GlobalDir);
+    if (GlobalEv) NtClose(GlobalEv);
+}
+
+typedef struct _RACE { HANDLE Link; volatile LONG Stop; LONG Failures; LONG Opens; WCHAR Name[128]; } RACE;
+
+static
+DWORD
+WINAPI
+OpenWorkerThread(PVOID Param)
+{
+    RACE *Race = Param;
+    UNICODE_STRING Name;
+    OBJECT_ATTRIBUTES Oa;
+    HANDLE Dir;
+
+    RtlInitUnicodeString(&Name, Race->Name);
+    InitializeObjectAttributes(&Oa, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    while (!Race->Stop)
+    {
+        if (NT_SUCCESS(NtOpenDirectoryObject(&Dir, DIRECTORY_QUERY, &Oa)))
+        {
+            InterlockedIncrement(&Race->Opens);
+            NtClose(Dir);
+        }
+        else
+            InterlockedIncrement(&Race->Failures);
+    }
+    return 0;
+}
+
+static
+VOID
+TestConcurrency(VOID)
+{
+    RACE Race = { NULL, 0, 0, 0 };
+    HANDLE Threads[3];
+    ULONG i, Value, Toggles;
+    DWORD Start;
+    NTSTATUS Status;
+
+    if (!HaveTcb)
+    {
+        skip("concurrency needs TCB (run as SYSTEM)\n");
+        return;
+    }
+    if (!NT_SUCCESS(CreateLink(SYMBOLIC_LINK_ALL_ACCESS | SYMBOLIC_LINK_SET, BnoPath, &Race.Link)))
+        return;
+    StringCchCopyW(Race.Name, _countof(Race.Name), LastLink);
+    for (i = 0; i < _countof(Threads); i++)
+        Threads[i] = CreateThread(NULL, 0, OpenWorkerThread, &Race, 0, NULL);
+    /* Let the workers get going before the toggles start, so the opens really overlap them */
+    for (i = 0; i < 500 && *(volatile LONG *)&Race.Opens == 0; i++)
+        Sleep(10);
+    /* Then keep toggling until the workers have opened through the link a few times (bounded at 10 s) */
+    Start = GetTickCount();
+    for (i = 0; i < 2000 || (*(volatile LONG *)&Race.Opens < 16 && GetTickCount() - Start < 10000); i++)
+    {
+        Value = i & 1;
+        Status = pNtSetInformationSymbolicLink(Race.Link, TEST_SymbolicLinkGlobalInformation, &Value, sizeof(Value));
+        if (!NT_SUCCESS(Status))
+            InterlockedIncrement(&Race.Failures);
+    }
+    Toggles = i;
+    Race.Stop = 1;
+    WaitForMultipleObjects(_countof(Threads), Threads, TRUE, 60000);
+    for (i = 0; i < _countof(Threads); i++)
+        CloseHandle(Threads[i]);
+    ok(Race.Failures == 0, "%ld flag toggles or opens through the link failed\n", Race.Failures);
+    trace("PROBE race toggles=%lu opens=%ld\n", Toggles, Race.Opens);
+    ok(Toggles >= 2000, "only %lu toggles\n", Toggles);
+    ok(Race.Opens > 0, "no open through the link succeeded\n");
+    NtClose(Race.Link);
+}
+
+START_TEST(NtSetInformationSymbolicLink)
+{
+    ULONG Session = NtCurrentPeb()->SessionId;
+    BOOLEAN Old;
+
+    pNtSetInformationSymbolicLink = (FN_NtSetInformationSymbolicLink)
+        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationSymbolicLink");
+    if (!pNtSetInformationSymbolicLink)
+    {
+        skip("NtSetInformationSymbolicLink is not exported\n");
+        return;
+    }
+    if (Session == 0)
+        StringCchCopyW(BnoPath, _countof(BnoPath), L"\\BaseNamedObjects");
+    else
+        StringCchPrintfW(BnoPath, _countof(BnoPath), L"\\Sessions\\%lu\\BaseNamedObjects", Session);
+    HaveTcb = NT_SUCCESS(RtlAdjustPrivilege(SE_TCB_PRIVILEGE, TRUE, FALSE, &Old));
+    trace("session %lu, TCB %s\n", Session, HaveTcb ? "held" : "not held");
+
+    TestAccessMaskMapping();
+    TestInvalidInput();
+    TestPrivilege();
+    TestOwnLinkNotGlobal();
+    TestGlobalEffect();
+    TestGlobalEffectPrivateMap();
+    TestGlobalEffectSessionLocal();
+    TestAccessMaskEffect();
+    TestConcurrency();
+}

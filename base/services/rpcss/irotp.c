@@ -30,6 +30,10 @@
 #include "wine/list.h"
 #include "wine/debug.h"
 
+#ifdef __REACTOS__
+#include "caller.h"
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(rpcss);
 
 /* define the structure of the running object table elements */
@@ -42,6 +46,10 @@ struct rot_entry
     DWORD              cookie; /* cookie identifying this object */
     FILETIME           last_modified;
     LONG               refs;
+#ifdef __REACTOS__
+    ULONG              pid;       /* the registering process */
+    DWORD              integrity; /* its integrity level; only callers at the same level see the entry */
+#endif
 };
 
 static struct list RunningObjectTable = LIST_INIT(RunningObjectTable);
@@ -119,6 +127,10 @@ HRESULT __cdecl IrotRegister(
     }
     rot_entry->moniker_data->ulCntData = data->ulCntData;
     memcpy(&rot_entry->moniker_data->abData, data->abData, data->ulCntData);
+#ifdef __REACTOS__
+    rot_entry->pid = rpcss_caller_pid(h);
+    rot_entry->integrity = rpcss_caller_integrity(h);
+#endif
 
     EnterCriticalSection(&csRunningObjectTable);
 
@@ -126,6 +138,10 @@ HRESULT __cdecl IrotRegister(
 
     LIST_FOR_EACH_ENTRY(existing_rot_entry, &RunningObjectTable, struct rot_entry, entry)
     {
+#ifdef __REACTOS__
+        if (existing_rot_entry->integrity != rot_entry->integrity)
+            continue;
+#endif
         if ((existing_rot_entry->moniker_data->ulCntData == data->ulCntData) &&
             !memcmp(&data->abData, &existing_rot_entry->moniker_data->abData, data->ulCntData))
         {
@@ -157,10 +173,18 @@ HRESULT __cdecl IrotRevoke(
 
     WINE_TRACE("%ld\n", cookie);
 
+#ifdef __REACTOS__
+    ULONG pid = rpcss_caller_pid(h);
+#endif
     EnterCriticalSection(&csRunningObjectTable);
     LIST_FOR_EACH_ENTRY(rot_entry, &RunningObjectTable, struct rot_entry, entry)
     {
+#ifdef __REACTOS__
+        /* only the registering process may revoke its entry */
+        if (rot_entry->cookie == cookie && rot_entry->pid == pid)
+#else
         if (rot_entry->cookie == cookie)
+#endif
         {
             HRESULT hr = S_OK;
 
@@ -202,10 +226,17 @@ HRESULT __cdecl IrotIsRunning(
 
     WINE_TRACE("\n");
 
+#ifdef __REACTOS__
+    DWORD integrity = rpcss_caller_integrity(h);
+#endif
     EnterCriticalSection(&csRunningObjectTable);
 
     LIST_FOR_EACH_ENTRY(rot_entry, &RunningObjectTable, const struct rot_entry, entry)
     {
+#ifdef __REACTOS__
+        if (!rpcss_integrity_visible(rot_entry->integrity, integrity))
+            continue;
+#endif
         if ((rot_entry->moniker_data->ulCntData == data->ulCntData) &&
             !memcmp(&data->abData, &rot_entry->moniker_data->abData, data->ulCntData))
         {
@@ -230,11 +261,18 @@ HRESULT __cdecl IrotGetObject(
 
     *cookie = 0;
 
+#ifdef __REACTOS__
+    DWORD integrity = rpcss_caller_integrity(h);
+#endif
     EnterCriticalSection(&csRunningObjectTable);
 
     LIST_FOR_EACH_ENTRY(rot_entry, &RunningObjectTable, const struct rot_entry, entry)
     {
         HRESULT hr = S_OK;
+#ifdef __REACTOS__
+        if (!rpcss_integrity_visible(rot_entry->integrity, integrity))
+            continue;
+#endif
         if ((rot_entry->moniker_data->ulCntData == moniker_data->ulCntData) &&
             !memcmp(&moniker_data->abData, &rot_entry->moniker_data->abData, moniker_data->ulCntData))
         {
@@ -269,10 +307,17 @@ HRESULT __cdecl IrotNoteChangeTime(
 
     WINE_TRACE("%ld %p\n", cookie, last_modified_time);
 
+#ifdef __REACTOS__
+    ULONG pid = rpcss_caller_pid(h);
+#endif
     EnterCriticalSection(&csRunningObjectTable);
     LIST_FOR_EACH_ENTRY(rot_entry, &RunningObjectTable, struct rot_entry, entry)
     {
+#ifdef __REACTOS__
+        if (rot_entry->cookie == cookie && rot_entry->pid == pid)
+#else
         if (rot_entry->cookie == cookie)
+#endif
         {
             rot_entry->last_modified = *last_modified_time;
             LeaveCriticalSection(&csRunningObjectTable);
@@ -296,9 +341,16 @@ HRESULT __cdecl IrotGetTimeOfLastChange(
 
     memset(time, 0, sizeof(*time));
 
+#ifdef __REACTOS__
+    DWORD integrity = rpcss_caller_integrity(h);
+#endif
     EnterCriticalSection(&csRunningObjectTable);
     LIST_FOR_EACH_ENTRY(rot_entry, &RunningObjectTable, const struct rot_entry, entry)
     {
+#ifdef __REACTOS__
+        if (!rpcss_integrity_visible(rot_entry->integrity, integrity))
+            continue;
+#endif
         if ((rot_entry->moniker_data->ulCntData == moniker_data->ulCntData) &&
             !memcmp(&moniker_data->abData, &rot_entry->moniker_data->abData, moniker_data->ulCntData))
         {
@@ -323,9 +375,15 @@ HRESULT __cdecl IrotEnumRunning(
 
     WINE_TRACE("\n");
 
+#ifdef __REACTOS__
+    DWORD integrity = rpcss_caller_integrity(h);
+#endif
     EnterCriticalSection(&csRunningObjectTable);
 
     LIST_FOR_EACH_ENTRY( rot_entry, &RunningObjectTable, const struct rot_entry, entry )
+#ifdef __REACTOS__
+        if (rpcss_integrity_visible(rot_entry->integrity, integrity))
+#endif
         moniker_count++;
 
     *list = MIDL_user_allocate(FIELD_OFFSET(InterfaceList, interfaces[moniker_count]));
@@ -334,6 +392,10 @@ HRESULT __cdecl IrotEnumRunning(
         (*list)->size = moniker_count;
         LIST_FOR_EACH_ENTRY( rot_entry, &RunningObjectTable, const struct rot_entry, entry )
         {
+#ifdef __REACTOS__
+            if (!rpcss_integrity_visible(rot_entry->integrity, integrity))
+                continue;
+#endif
             (*list)->interfaces[i] = MIDL_user_allocate(FIELD_OFFSET(InterfaceData, abData[rot_entry->moniker->ulCntData]));
             if (!(*list)->interfaces[i])
             {

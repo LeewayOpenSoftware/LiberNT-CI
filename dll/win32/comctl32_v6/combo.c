@@ -1965,10 +1965,13 @@ static LRESULT CALLBACK COMBO_WindowProc( HWND hwnd, UINT message, WPARAM wParam
         return  0;
 
     case WM_SYSKEYDOWN:
-        if ( KEYDATA_ALT & HIWORD(lParam) )
-            if( wParam == VK_UP || wParam == VK_DOWN )
-                COMBO_FlipListbox( lphc, FALSE, FALSE );
-        return  0;
+        if ( (KEYDATA_ALT & HIWORD(lParam)) &&
+             (wParam == VK_UP || wParam == VK_DOWN) )
+        {
+            COMBO_FlipListbox( lphc, FALSE, FALSE );
+            return  0;
+        }
+        break; /* -> DefWindowProc: Alt+F4, Alt+mnemonic, F10 */
 
     case WM_KEYDOWN:
         if ((wParam == VK_RETURN || wParam == VK_ESCAPE) &&

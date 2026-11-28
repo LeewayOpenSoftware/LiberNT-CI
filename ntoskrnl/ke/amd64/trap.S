@@ -155,6 +155,16 @@ FUNC InternalDispatchException
 
     /* Set up EXCEPTION_RECORD */
     lea rcx, [rsp + KEXCEPTION_FRAME_LENGTH]
+
+    /* The record goes whole to the user stack and to a debugger: start from zeroes.
+       rdi was saved above and is restored on the way out. */
+    lea rdi, [rcx + EXCEPTION_RECORD_LENGTH]
+InternalDispatchExceptionZero:
+    sub rdi, 8
+    mov qword ptr [rdi], 0
+    cmp rdi, rcx
+    ja InternalDispatchExceptionZero
+
     mov [rcx + EXCEPTION_RECORD_ExceptionCode], eax
     mov [rcx + EXCEPTION_RECORD_ExceptionFlags], r8d
     xor rax, rax
@@ -166,9 +176,18 @@ FUNC InternalDispatchException
 InternalDispatchExceptionAddress:
     mov [rcx + EXCEPTION_RECORD_ExceptionAddress], rax
     mov [rcx + EXCEPTION_RECORD_NumberParameters], edx
+
+    /* Only the parameters the caller counted are copied; the others stay zero */
+    cmp edx, 1
+    jb InternalDispatchExceptionParametersDone
     mov [rcx + EXCEPTION_RECORD_ExceptionInformation + HEX(00)], r9
+    cmp edx, 2
+    jb InternalDispatchExceptionParametersDone
     mov [rcx + EXCEPTION_RECORD_ExceptionInformation + HEX(08)], r10
+    cmp edx, 3
+    jb InternalDispatchExceptionParametersDone
     mov [rcx + EXCEPTION_RECORD_ExceptionInformation + HEX(10)], r11
+InternalDispatchExceptionParametersDone:
 
     /* Set up KEXCEPTION_FRAME */
     mov rax, [rbp + KTRAP_FRAME_Rbp]
@@ -273,12 +292,12 @@ ENDFUNC
 PUBLIC KiNmiInterrupt
 FUNC KiNmiInterrupt
     /* Push pseudo error code */
-    EnterTrap TF_SAVE_ALL
+    EnterTrap (TF_SAVE_ALL OR TF_SPEC_PARANOID)
 
     call KiNmiInterruptWithEf
 
     /* Return */
-    ExitTrap TF_SAVE_ALL
+    ExitTrap (TF_SAVE_ALL OR TF_SPEC_PARANOID)
 ENDFUNC
 
 
@@ -415,7 +434,7 @@ FUNC KiDoubleFaultAbort
     and rsp, HEX(FFFFFFFFFFFFFFF0)
 
     /* A zero error code is pushed */
-    EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL)
+    EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL OR TF_SPEC_PARANOID)
 
     /* Bugcheck */
     Fatal 8 // EXCEPTION_DOUBLE_FAULT
@@ -498,6 +517,35 @@ ENDFUNC
 
 PUBLIC KiGeneralProtectionFault
 FUNC KiGeneralProtectionFault
+    .pushframe code
+    .endprolog
+
+    /* An IRETQ that faults on its way to user mode does so after SWAPGS */
+    test byte ptr [rsp + 8 + MfSegCs], 1
+    jnz KiGeneralProtectionFaultTrap
+    push rax
+    mov rax, [rsp + 16 + MfRip]
+    cmp word ptr [rax], HEX(0CF48)
+    jne KiGpfKernelFault
+    mov rax, [rsp + 16 + MfRsp]
+    test byte ptr [rax + MfSegCs], 1
+    jz KiGpfKernelFault
+    push rcx
+    mov rcx, [rsp + 8]
+    mov [rax - 16], rcx
+    mov rcx, [rsp + 16]
+    mov [rax - 8], rcx
+    pop rcx
+    lea rsp, [rax - 16]
+    pop rax
+    jmp KiUserIretqFault
+
+KiGpfKernelFault:
+    pop rax
+    jmp KiGeneralProtectionFaultTrap
+ENDFUNC
+
+FUNC KiGeneralProtectionFaultTrap
     /* We have an error code */
     EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL)
 
@@ -532,6 +580,18 @@ KiGpfExit:
     ExitTrap (TF_SAVE_ALL OR TF_CHECKUSERAPC)
 ENDFUNC
 
+FUNC KiUserIretqFault
+    EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL)
+
+    test dword ptr [rbp + KTRAP_FRAME_EFlags], EFLAGS_IF_MASK
+    jz KiUserIretqFaultDispatch
+    sti
+
+KiUserIretqFaultDispatch:
+    DispatchException STATUS_ACCESS_VIOLATION, 2, 0, -1, 0
+    ExitTrap (TF_SAVE_ALL OR TF_CHECKUSERAPC)
+ENDFUNC
+
 
 PUBLIC KiPageFault
 FUNC KiPageFault
@@ -553,6 +613,11 @@ FUNC KiPageFault
     jnz SkipStackCheck
     test rcx, rcx
     jz SkipStackCheck
+    /* The previous frame is on another stack while a callout runs on an expansion stack */
+    cmp rcx, [rax + KTHREAD_StackLimit]
+    jb SkipStackCheck
+    cmp rcx, [rax + KTHREAD_StackBase]
+    jae SkipStackCheck
     cmp rcx, rbp
     jbe KernelStackOverflow
     sub rcx, rbp
@@ -748,7 +813,7 @@ ENDFUNC
 PUBLIC KiMcheckAbort
 FUNC KiMcheckAbort
     /* Push pseudo error code */
-    EnterTrap TF_SAVE_ALL
+    EnterTrap (TF_SAVE_ALL OR TF_SPEC_PARANOID)
 
     mov rcx, rbp
     call KiMcheckAbortHandler
@@ -948,8 +1013,10 @@ PUBLIC KiIpiInterrupt
    /* No error code */
     EnterTrap (TF_SAVE_ALL OR TF_IRQL)
 
-    /* Service the hardware IPI */
+    /* Service the hardware IPI on the ISR stack */
+    SwitchToIsrStack
     call KiIpiInterruptHandler
+    SwitchFromIsrStack
 
     /* Return */
     ExitTrap (TF_SAVE_ALL OR TF_IRQL)
@@ -1007,6 +1074,9 @@ FUNC KiInterruptDispatch
     /* Save the address of the InterruptListEntry in rsi */
     lea rsi, [rbx + KINTERRUPT_InterruptListEntry]
 
+    /* The service routines run on the ISR stack; interrupts are still disabled here */
+    SwitchToIsrStack
+
 .DoDispatchInterrupt:
     /* Raise IRQL to SynchronizeIrql */
     movzx rax, byte ptr [rbx + KINTERRUPT_SynchronizeIrql]
@@ -1047,6 +1117,9 @@ FUNC KiInterruptDispatch
     jmp .DoDispatchInterrupt
 
 .Done:
+    /* Back to the stack the trap frame is on; interrupts are disabled */
+    SwitchFromIsrStack
+
     /* Restore rbx and rsi */
     mov rbx, [rbp + KTRAP_FRAME_Rbx]
     mov rsi, [rbp + KTRAP_FRAME_Rsi]
@@ -1086,6 +1159,7 @@ PUBLIC KiSystemCallEntry64
 
     /* Allocate a TRAP_FRAME and space for parameters */
     sub rsp, (KTRAP_FRAME_LENGTH + MAX_SYSCALL_PARAM_SIZE)
+    SPEC_SITE HEX(49) /* kernel entry */
 
     /* Save volatile registers and rbp in the trap frame */
     mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rax], rax
@@ -1229,6 +1303,12 @@ NoUserApcPending:
     jnz SystemServiceInstrumented
 
 SystemServiceInstrumentationDone:
+    SPEC_SITE HEX(58) /* kernel exit */
+    /* SYSRET is used only for a return address inside the user range */
+    mov rdx, rcx
+    shr rdx, 47
+    jnz SystemServiceIretq
+
     /* Load user mode stack (It was copied to the trap frame) */
     mov rsp, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rsp]
 
@@ -1249,9 +1329,27 @@ SystemServiceInstrumentationDone:
     pxor xmm4, xmm4
     pxor xmm5, xmm5
     xor rdx, rdx
+    SPEC_SITE HEX(4D) /* verw */
 
     /* return to user mode */
     sysretq
+
+SystemServiceIretq:
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip], rcx
+    mov word ptr [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_SegCs], (KGDT64_R3_CODE OR RPL_MASK)
+    mov r8, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rsp]
+    mov r9, rbp
+    add rsp, MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip
+    swapgs
+    pxor xmm0, xmm0
+    pxor xmm1, xmm1
+    pxor xmm2, xmm2
+    pxor xmm3, xmm3
+    pxor xmm4, xmm4
+    pxor xmm5, xmm5
+    xor edx, edx
+    SPEC_SITE HEX(4D) /* verw */
+    iretq
 
 SystemServiceInstrumented:
     mov rdx, [rdx + ThApcState + AsProcess]
@@ -1323,8 +1421,10 @@ KiPicoSystemCallEntry:
     mov r10, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R10]
     mov r11, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_R11]
     mov rbp, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rbp]
+    SPEC_SITE HEX(58) /* kernel exit */
     add rsp, MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip
     swapgs
+    SPEC_SITE HEX(4D) /* verw */
     iretq
 
 .ENDP
@@ -1416,9 +1516,10 @@ FUNC KiZwSystemService
     mov dil, byte ptr [r11 + KTHREAD_PreviousMode]
     mov byte ptr [rbp + KTRAP_FRAME_PreviousMode], dil
 
-    /* Save the old trap frame in TrapFrame.Rdx */
+    /* Link the old trap frame and mark this one as a kernel-mode frame */
     mov rdi, [r11 + KTHREAD_TrapFrame]
-    mov [rbp + KTRAP_FRAME_Rdx], rdi
+    mov [rbp + KTRAP_FRAME_TrapFrame], rdi
+    mov word ptr [rbp + KTRAP_FRAME_SegCs], KGDT64_R0_CODE
 
     /* Set the new trap frame and previous mode */
     mov [r11 + ThTrapFrame], rbp
@@ -1446,7 +1547,7 @@ FUNC KiZwSystemService
 
     /* Restore the old trap frame */
     mov r11, gs:[PcCurrentThread]
-    mov rsi, [rbp + KTRAP_FRAME_Rdx]
+    mov rsi, [rbp + KTRAP_FRAME_TrapFrame]
     mov [r11 + KTHREAD_TrapFrame], rsi
 
     /* Restore PreviousMode from the trap frame */
@@ -1713,6 +1814,70 @@ FUNC KeSwitchKernelStack
     ret
 
 ENDFUNC
+
+
+/*!
+ * VOID
+ * KiSwitchStackAndCallout(
+ *     PVOID Parameter,                 // rcx
+ *     PEXPAND_STACK_CALLOUT Callout,   // rdx
+ *     PKSTACK_CONTROL Control);        // r8: at the top of the new stack, 16-byte aligned.
+ *                                      //     StackBase/ActualLimit describe the new stack,
+ *                                      //     Previous.StackBase/StackLimit the current one.
+ *
+ * Runs Callout(Parameter) on the new stack for KeExpandKernelStackAndCalloutEx. While the
+ * callout runs the current thread's StackBase/StackLimit describe the new stack (that is
+ * what MmGrowKernelStack reads; RtlpGetStackLimits falls back to StackBase). Nothing else of
+ * the thread moves: TrapFrame, InitialStack and the state save area stay on the original
+ * stack, which stays mapped. rbp is the frame pointer of this frame, so the unwinder and
+ * a stack walk cross the switch: unwinding it restores rsp from rbp and pops the saved
+ * registers from the original stack.
+ */
+PUBLIC KiSwitchStackAndCallout
+.PROC KiSwitchStackAndCallout
+    push rbp
+    .pushreg rbp
+    push rbx
+    .pushreg rbx
+    push rsi
+    .pushreg rsi
+    mov rbp, rsp
+    .setframe rbp, 0
+    .endprolog
+
+    /* rbx = the control block, rsi = the current thread */
+    mov rbx, r8
+    mov rsi, gs:[PcCurrentThread]
+
+    /* Remember where we come from */
+    mov [rbx + KSTACK_CONTROL_PreviousKernelStack], rsp
+
+    /* Describe the new stack in the thread */
+    mov rax, [rbx + KSTACK_CONTROL_StackBase]
+    mov [rsi + KTHREAD_StackBase], rax
+    mov rax, [rbx + KSTACK_CONTROL_ActualLimit]
+    mov [rsi + KTHREAD_StackLimit], rax
+
+    /* Switch: the control block is the top of the new stack; home space below it */
+    mov rsp, rbx
+    sub rsp, 32
+
+    /* Callout(Parameter) */
+    mov rax, rdx
+    call rax
+
+    /* Back to the original stack and restore the thread's description of it */
+    mov rsp, rbp
+    mov rax, [rbx + KSTACK_CONTROL_PreviousStackBase]
+    mov [rsi + KTHREAD_StackBase], rax
+    mov rax, [rbx + KSTACK_CONTROL_PreviousStackLimit]
+    mov [rsi + KTHREAD_StackLimit], rax
+
+    pop rsi
+    pop rbx
+    pop rbp
+    ret
+.ENDP
 
 
 

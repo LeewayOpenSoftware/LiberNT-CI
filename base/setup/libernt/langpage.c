@@ -105,7 +105,7 @@ SelectLayoutForLocale(
     const SETUP_CHOICE* Locale;
     WCHAR Keyboards[256];
     WCHAR LayoutId[KL_NAMELENGTH];
-    PWSTR Colon, End;
+    PWSTR Entry, Colon, End;
     LCID Lcid;
 
     Locale = GetSelectedChoice(GetDlgItem(hwndDlg, IDC_LANGUAGELIST),
@@ -114,15 +114,23 @@ SelectLayoutForLocale(
     if (!Locale)
         return;
 
+    /* Each "langid:klid" entry is an input profile; only one in the locale's own language is its default */
     Lcid = wcstoul(Locale->Id, NULL, 16);
-    if (GetLocaleInfoW(Lcid, LOCALE_SKEYBOARDSTOINSTALL, Keyboards, ARRAYSIZE(Keyboards)) &&
-        (Colon = wcschr(Keyboards, L':')) != NULL)
+    if (GetLocaleInfoW(Lcid, LOCALE_SKEYBOARDSTOINSTALL, Keyboards, ARRAYSIZE(Keyboards)))
     {
-        End = wcschr(Colon, L';');
-        if (End)
-            *End = UNICODE_NULL;
-        if (SelectChoiceById(hLayouts, pSetupData->Layouts, pSetupData->LayoutCount, Colon + 1))
-            return;
+        for (Entry = Keyboards; Entry && *Entry; Entry = End)
+        {
+            End = wcschr(Entry, L';');
+            if (End)
+                *End++ = UNICODE_NULL;
+            Colon = wcschr(Entry, L':');
+            if (Colon &&
+                (LANGID)wcstoul(Entry, NULL, 16) == LANGIDFROMLCID(Lcid) &&
+                SelectChoiceById(hLayouts, pSetupData->Layouts, pSetupData->LayoutCount, Colon + 1))
+            {
+                return;
+            }
+        }
     }
 
     StringCchPrintfW(LayoutId, ARRAYSIZE(LayoutId), L"%08lX", (ULONG)LANGIDFROMLCID(Lcid));
@@ -184,11 +192,16 @@ LanguagePageProc(
             }
             if (HIWORD(wParam) != CBN_SELCHANGE)
                 break;
+            /* Typing in the closed list only previews; the switch reloads the frame
+               and changes the input layout, so it waits for the close-up or Next */
             if (LOWORD(wParam) == IDC_LANGUAGELIST)
             {
                 SelectLayoutForLocale(hwndDlg, pSetupData);
-                ActivateLayout(hwndDlg, pSetupData);
-                SetTimer(hwndDlg, LANGUAGE_TIMER, LANGUAGE_DELAY, NULL);
+                if (SendMessageW((HWND)lParam, CB_GETDROPPEDSTATE, 0, 0))
+                {
+                    ActivateLayout(hwndDlg, pSetupData);
+                    SetTimer(hwndDlg, LANGUAGE_TIMER, LANGUAGE_DELAY, NULL);
+                }
             }
             else if (LOWORD(wParam) == IDC_LAYOUTLIST)
             {

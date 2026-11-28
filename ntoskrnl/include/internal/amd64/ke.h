@@ -331,6 +331,10 @@ KeInvalidateTlbEntry(IN PVOID Address)
 VOID MiAmd64FlushTargets(ULONG64 Targets, ULONG64 Address, ULONG64 Pages);
 VOID MiAmd64ProcessTlbRequest(ULONG Source);
 VOID KiSendMemoryIpi(ULONG64 Targets);
+VOID KiSendMemoryIpiGroup(ULONG Group, ULONG64 Targets);
+VOID KiIpiSendGroups(_In_reads_(Groups) const KAFFINITY *Masks, _In_ ULONG Groups, _In_ ULONG IpiRequest);
+ULONG64 KiQueryFreezeEpoch(VOID);
+BOOLEAN KiIsFreezeActive(VOID);
 
 VOID
 NTAPI
@@ -491,6 +495,8 @@ VOID KiPageFault(VOID);
 VOID KiFloatingErrorFault(VOID);
 VOID KiAlignmentFault(VOID);
 VOID KiMcheckAbort(VOID);
+VOID NTAPI WheaMcaInitialize(VOID);
+ULONG NTAPI WheaMcaBuildFatalRecord(PVOID Buffer, ULONG BufferLength, ULONG64 InstructionPointer, PULONG ReportedBank, PULONG64 ReportedStatus);
 VOID KiXmmException(VOID);
 VOID KiApcInterrupt(VOID);
 VOID KiRaiseSecurityCheckFailure(VOID);
@@ -598,6 +604,20 @@ VOID
 NTAPI
 KiFreezeIfRequested(
     VOID);
+
+CODE_SEG("INIT")
+VOID
+NTAPI
+KiPublishActiveProcessor(
+    _In_ PKPRCB Prcb);
+
+/* trap.S: run Callout(Parameter) on the stack described by Control (KeExpandKernelStackAndCalloutEx) */
+VOID
+NTAPI
+KiSwitchStackAndCallout(
+    _In_opt_ PVOID Parameter,
+    _In_ PEXPAND_STACK_CALLOUT Callout,
+    _In_ PKSTACK_CONTROL Control);
 
 VOID
 NTAPI

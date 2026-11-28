@@ -426,6 +426,31 @@ ObReferenceObjectByPointer(IN PVOID Object,
     return STATUS_SUCCESS;
 }
 
+
+NTSTATUS
+NTAPI
+ObReferenceObjectByPointerWithTag(
+    _In_ PVOID Object,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_TYPE ObjectType,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_ ULONG Tag)
+{
+    /* Tags only serve reference tracing, as in ObfReferenceObjectWithTag */
+    UNREFERENCED_PARAMETER(Tag);
+    return ObReferenceObjectByPointer(Object, DesiredAccess, ObjectType, AccessMode);
+}
+
+VOID
+NTAPI
+ObDereferenceObjectDeferDeleteWithTag(
+    _In_ PVOID Object,
+    _In_ ULONG Tag)
+{
+    UNREFERENCED_PARAMETER(Tag);
+    ObDereferenceObjectDeferDelete(Object);
+}
+
 NTSTATUS
 NTAPI
 ObReferenceObjectByName(IN PUNICODE_STRING ObjectPath,

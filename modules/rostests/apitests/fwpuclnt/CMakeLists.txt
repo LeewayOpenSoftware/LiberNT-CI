@@ -1,7 +1,8 @@
 
 list(APPEND SOURCE
     ale.c
-    mpssvc.c)
+    mpssvc.c
+    netfwpolicy2.c)
 
 list(APPEND PCH_SKIP_SOURCE
     testlist.c)
@@ -14,5 +15,6 @@ add_executable(fwpuclnt_apitest
 target_include_directories(fwpuclnt_apitest PRIVATE ${REACTOS_SOURCE_DIR}/base/services/mpssvc)
 target_link_libraries(fwpuclnt_apitest wine)
 set_module_type(fwpuclnt_apitest win32cui)
-add_importlibs(fwpuclnt_apitest fwpuclnt ws2_32 advapi32 msvcrt kernel32 ntdll)
+target_link_libraries(fwpuclnt_apitest uuid)
+add_importlibs(fwpuclnt_apitest fwpuclnt ws2_32 ole32 oleaut32 advapi32 msvcrt kernel32 ntdll)
 add_rostests_file(TARGET fwpuclnt_apitest)

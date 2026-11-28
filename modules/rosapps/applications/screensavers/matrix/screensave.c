@@ -54,7 +54,7 @@ BOOL ScreenSaver(HWND hwndParent)
 	UINT		nPreviousState;
 	MSG			msg;
 
-	InitScreenSaveClass(hwndParent);
+	InitScreenSaveClass(hwndParent != NULL);
 
 	SystemParametersInfo(SPI_SETSCREENSAVERRUNNING, TRUE, &nPreviousState, 0);
 

@@ -166,6 +166,120 @@ SeInitializeProcessAuditName(
         }
     }
 
+    /* Match Windows: report the on-disk spelling of the final component,
+       not the casing the caller happened to open the image with. Any
+       failure here keeps the name we already built. */
+    if ((ObjectNameInfo) &&
+        (ObjectNameInfo->Name.Length != 0) &&
+        (ObjectNameInfo->Name.Buffer != NULL))
+    {
+        PFILE_NAME_INFORMATION FileNameInfo;
+        ULONG QueryLength, FsComponentChars, FsComponentLength, DirectoryLength, NewLength;
+        PWCHAR FsLastBackslash, LastBackslash = NULL;
+        PWCHAR NameBuffer;
+        ULONG Index, FsNameChars;
+        USHORT OpenedChars;
+
+        QueryLength = sizeof(*FileNameInfo) + 1024 * sizeof(WCHAR);
+        FileNameInfo = ExAllocatePoolWithTag(NonPagedPool, QueryLength, TAG_SEPA);
+        if (FileNameInfo)
+        {
+            if (NT_SUCCESS(IoQueryFileInformation(FileObject,
+                                                  FileNameInformation,
+                                                  QueryLength,
+                                                  FileNameInfo,
+                                                  &QueryLength)))
+            {
+                /* The file system reports the full name length; clamp it to
+                   what the returned length and our buffer actually hold */
+                FsNameChars = 0;
+                if (QueryLength > FIELD_OFFSET(FILE_NAME_INFORMATION, FileName))
+                    FsNameChars = (QueryLength - FIELD_OFFSET(FILE_NAME_INFORMATION, FileName)) / sizeof(WCHAR);
+                if (FsNameChars > 1024)
+                    FsNameChars = 1024;
+                if (FsNameChars > FileNameInfo->FileNameLength / sizeof(WCHAR))
+                    FsNameChars = FileNameInfo->FileNameLength / sizeof(WCHAR);
+
+                FsLastBackslash = NULL;
+                for (Index = FsNameChars; Index > 0; Index--)
+                {
+                    if (FileNameInfo->FileName[Index - 1] == L'\\')
+                    {
+                        FsLastBackslash = &FileNameInfo->FileName[Index - 1];
+                        break;
+                    }
+                }
+                OpenedChars = ObjectNameInfo->Name.Length / sizeof(WCHAR);
+                for (Index = OpenedChars; Index > 0; Index--)
+                {
+                    if (ObjectNameInfo->Name.Buffer[Index - 1] == L'\\')
+                    {
+                        LastBackslash = &ObjectNameInfo->Name.Buffer[Index - 1];
+                        break;
+                    }
+                }
+
+                /* Substitute only when both names have a final component and
+                   the file system reports the same one, differently cased;
+                   a rename or reparse in between must not splice names */
+                if ((FsLastBackslash != NULL) && (LastBackslash != NULL))
+                {
+                    UNICODE_STRING FsComponent, OpenedComponent;
+
+                    FsComponentChars = FsNameChars -
+                                       (ULONG)(FsLastBackslash + 1 - FileNameInfo->FileName);
+                    FsComponent.Length = (USHORT)(FsComponentChars * sizeof(WCHAR));
+                    FsComponent.MaximumLength = FsComponent.Length;
+                    FsComponent.Buffer = FsLastBackslash + 1;
+                    OpenedComponent.Length = (USHORT)((OpenedChars -
+                                              (ULONG)(LastBackslash + 1 - ObjectNameInfo->Name.Buffer)) * sizeof(WCHAR));
+                    OpenedComponent.MaximumLength = OpenedComponent.Length;
+                    OpenedComponent.Buffer = LastBackslash + 1;
+
+                    if ((FsComponentChars > 0) &&
+                        RtlEqualUnicodeString(&FsComponent, &OpenedComponent, TRUE))
+                    {
+                        FsComponentLength = FsComponent.Length;
+                        DirectoryLength = (ULONG)((LastBackslash + 1 - ObjectNameInfo->Name.Buffer) * sizeof(WCHAR));
+                        NewLength = DirectoryLength + FsComponentLength;
+
+                        /* The substituted name must fit a UNICODE_STRING and
+                           keep the buffer the caller expects: length plus terminator */
+                        if ((NewLength >= DirectoryLength) &&
+                            (NewLength + sizeof(WCHAR) <= UNICODE_STRING_MAX_BYTES))
+                        {
+                            POBJECT_NAME_INFORMATION SubstitutedInfo;
+
+                            SubstitutedInfo = ExAllocatePoolWithTag(NonPagedPool,
+                                                                    sizeof(*SubstitutedInfo) + NewLength + sizeof(WCHAR),
+                                                                    TAG_SEPA);
+                            if (SubstitutedInfo)
+                            {
+                                NameBuffer = (PWCHAR)(SubstitutedInfo + 1);
+                                RtlCopyMemory(NameBuffer,
+                                              ObjectNameInfo->Name.Buffer,
+                                              DirectoryLength);
+                                RtlCopyMemory((PCHAR)NameBuffer + DirectoryLength,
+                                              FsLastBackslash + 1,
+                                              FsComponentLength);
+                                NameBuffer[NewLength / sizeof(WCHAR)] = UNICODE_NULL;
+
+                                SubstitutedInfo->Name.Length = (USHORT)NewLength;
+                                SubstitutedInfo->Name.MaximumLength = (USHORT)(NewLength + sizeof(WCHAR));
+                                SubstitutedInfo->Name.Buffer = NameBuffer;
+
+                                ExFreePool(ObjectNameInfo);
+                                ObjectNameInfo = SubstitutedInfo;
+                            }
+                        }
+                    }
+                }
+            }
+
+            ExFreePool(FileNameInfo);
+        }
+    }
+
     /* Check if memory allocation failed */
     if (!ObjectNameInfo) Status = STATUS_NO_MEMORY;
 
@@ -505,24 +619,36 @@ SepAccessCheckAndAuditAlarmWorker(
     _Out_ PBOOLEAN GenerateOnClose,
     _In_ BOOLEAN UseResultList)
 {
-    ULONG ResultListLength, i;
+    PTOKEN Token = (PTOKEN)SubjectContext->ClientToken;
+    NTSTATUS Status;
 
-    /* Get the length of the result list */
-    ResultListLength = UseResultList ? ObjectTypeListLength : 1;
-
-    /// FIXME: we should do some real work here...
-    UNIMPLEMENTED;
-
-    /// HACK: we just pretend all access is granted!
-    for (i = 0; i < ResultListLength; i++)
-    {
-        GrantedAccessList[i] = DesiredAccess;
-        AccessStatusList[i] = STATUS_SUCCESS;
-    }
+    UNREFERENCED_PARAMETER(SubsystemName);
+    UNREFERENCED_PARAMETER(HandleId);
+    UNREFERENCED_PARAMETER(ObjectTypeName);
+    UNREFERENCED_PARAMETER(ObjectName);
+    UNREFERENCED_PARAMETER(AuditType);
+    UNREFERENCED_PARAMETER(HaveAuditPrivilege);
 
     *GenerateOnClose = FALSE;
 
-    return STATUS_SUCCESS;
+    if (Token == NULL)
+        return STATUS_NO_IMPERSONATION_TOKEN;
+
+    Status = SepAccessCheckClientToken(SecurityDescriptor,
+                                       Token,
+                                       (PTOKEN)SubjectContext->PrimaryToken,
+                                       PrincipalSelfSid,
+                                       DesiredAccess,
+                                       ObjectTypeList,
+                                       ObjectTypeListLength,
+                                       GenericMapping,
+                                       UserMode,
+                                       UseResultList,
+                                       GrantedAccessList,
+                                       AccessStatusList);
+
+    /* Audit record generation is not implemented yet: GenerateOnClose stays FALSE */
+    return Status;
 }
 
 /**

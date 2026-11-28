@@ -6,15 +6,19 @@ list(APPEND SOURCE
     composition.cpp
     editsession.cpp
     inputmode.cpp
+    keyroute.cpp
     langbar.cpp
     langbarmgr.cpp
     layouttip.cpp
+    mtaproxy.cpp
     owner.cpp
+    profilemgr.cpp
     profiles.cpp
     property.cpp
     range.cpp
     textedit.cpp
     threadmgr.cpp
+    trackprop.cpp
     teststore.cpp
     testtip.cpp)
 

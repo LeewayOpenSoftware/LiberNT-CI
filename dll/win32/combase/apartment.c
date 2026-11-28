@@ -658,6 +658,41 @@ struct apartment * apartment_get_mta(void)
     return apt;
 }
 
+#ifdef __REACTOS__
+static struct apartment *neutral_apt;
+
+struct apartment *apartment_get_na(void)
+{
+    struct apartment *apt;
+
+    EnterCriticalSection(&apt_cs);
+    if (!neutral_apt)
+    {
+        neutral_apt = apartment_construct(COINIT_MULTITHREADED);
+        neutral_apt->neutral = TRUE;
+        neutral_apt->tid = 0;
+        neutral_apt->oxid = ((OXID)GetCurrentProcessId() << 32) | 0xcaf2;
+    }
+    apt = neutral_apt;
+    apartment_addref(apt);
+    LeaveCriticalSection(&apt_cs);
+
+    return apt;
+}
+
+struct apartment *apartment_get_main_sta(void)
+{
+    struct apartment *apt;
+
+    EnterCriticalSection(&apt_cs);
+    if ((apt = main_sta))
+        apartment_addref(apt);
+    LeaveCriticalSection(&apt_cs);
+
+    return apt;
+}
+#endif
+
 /* Return the current apartment if it exists, or, failing that, the MTA. Caller
  * must free the returned apartment in either case. */
 struct apartment * apartment_get_current_or_mta(void)
@@ -1098,8 +1133,12 @@ static enum comclass_threadingmodel get_threading_model(const struct class_reg_d
         if (!wcsicmp(threading_model, L"Free")) return ThreadingModel_Free;
         if (!wcsicmp(threading_model, L"Both")) return ThreadingModel_Both;
 
+#ifdef __REACTOS__
+        if (!wcsicmp(threading_model, L"Neutral")) return ThreadingModel_Neutral;
+#else
         /* there's not specific handling for this case */
         if (threading_model[0]) return ThreadingModel_Neutral;
+#endif
         return ThreadingModel_No;
     }
     else
@@ -1116,6 +1155,10 @@ HRESULT apartment_get_inproc_class_object(struct apartment *apt, const struct cl
     {
         enum comclass_threadingmodel model = get_threading_model(regdata);
 
+#ifdef __REACTOS__
+        if (model == ThreadingModel_Neutral)
+            return neutral_get_class_object(apt, regdata, rclsid, riid, ppv);
+#endif
         if (model == ThreadingModel_Apartment)
         {
             apartment_threaded = TRUE;
@@ -1155,6 +1198,18 @@ HRESULT apartment_get_inproc_class_object(struct apartment *apt, const struct cl
     return apartment_getclassobject(apt, dllpath, apartment_threaded, rclsid, riid, ppv);
 }
 
+#ifdef __REACTOS__
+HRESULT apartment_load_class_object(struct apartment *apt, const struct class_reg_data *regdata,
+        REFCLSID rclsid, REFIID riid, void **ppv)
+{
+    WCHAR dllpath[MAX_PATH+1];
+
+    if (!get_object_dll_path(regdata, dllpath, ARRAY_SIZE(dllpath)))
+        return REGDB_E_CLASSNOTREG;
+    return apartment_getclassobject(apt, dllpath, FALSE, rclsid, riid, ppv);
+}
+#endif
+
 static HRESULT apartment_hostobject(struct apartment *apt, const struct host_object_params *params)
 {
     static const LARGE_INTEGER llZero;
@@ -1190,10 +1245,33 @@ static LRESULT CALLBACK apartment_wndproc(HWND hWnd, UINT msg, WPARAM wParam, LP
     switch (msg)
     {
     case DM_EXECUTERPC:
+#ifdef __REACTOS__
+    {
+        struct neutral_frame saved;
+
+        neutral_suspend(&saved);
+        rpc_execute_call((struct dispatch_params *)lParam);
+        neutral_resume(&saved);
+        return 0;
+    }
+#else
         rpc_execute_call((struct dispatch_params *)lParam);
         return 0;
+#endif
     case DM_HOSTOBJECT:
+#ifdef __REACTOS__
+    {
+        struct neutral_frame saved;
+        LRESULT ret;
+
+        neutral_suspend(&saved);
+        ret = apartment_hostobject(com_get_current_apt(), (const struct host_object_params *)lParam);
+        neutral_resume(&saved);
+        return ret;
+    }
+#else
         return apartment_hostobject(com_get_current_apt(), (const struct host_object_params *)lParam);
+#endif
     default:
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     }
@@ -1213,6 +1291,10 @@ HRESULT enter_apartment(struct tlsdata *data, DWORD model)
         if (!apartment_get_or_create(model))
             return E_OUTOFMEMORY;
     }
+#ifdef __REACTOS__
+    else if (data->apt->neutral)
+        return RPC_E_CHANGED_MODE;
+#endif
     else if (!apartment_is_model(data->apt, model))
     {
         WARN("Attempt to change threading model of this apartment from %s to %s\n",
@@ -1243,7 +1325,15 @@ static void apartment_dispatch_pending_calls(struct apartment *apt)
     if (!apt->win)
         return;
     while (PeekMessageW(&msg, apt->win, DM_EXECUTERPC, DM_EXECUTERPC, PM_REMOVE))
+    {
+        /* WM_QUIT passes every filter once no call is left; it belongs to the thread's own loop */
+        if (msg.message == WM_QUIT)
+        {
+            PostQuitMessage((int)msg.wParam);
+            break;
+        }
         DispatchMessageW(&msg);
+    }
 }
 #endif
 

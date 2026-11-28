@@ -158,32 +158,32 @@ BEGIN
     LTEXT "", IDC_YESTOALL_MESSAGE, 40, 10, 238, 52, 0
 END
 
-IDD_ABOUT DIALOGEX 20, 20, 275, 198
-STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+IDD_ABOUT DIALOGEX 20, 20, 300, 223
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Acerca de %s"
-FONT 8, "MS Shell Dlg"
+FONT 9, "Segoe UI", 400, 0, 0x0
 BEGIN
-    ICON "", IDC_ABOUT_ICON, 7, 55, 21, 20
-    LTEXT "", IDC_ABOUT_APPNAME, 35, 55, 200, 10, SS_NOPREFIX
-    LTEXT "", IDC_ABOUT_VERSION, 35, 65, 250, 10, SS_NOPREFIX
-    LTEXT "Copyright 2026 El equipo de LiberNT", IDC_STATIC, 35, 75, 200, 10
-    LTEXT "", IDC_ABOUT_OTHERSTUFF, 35, 90, 180, 20, SS_NOPREFIX
-    LTEXT "Esta versión de LiberNT está registrada a nombre de:", IDC_ABOUT_REG_TO, 35, 115, 180, 10
-    LTEXT "", IDC_ABOUT_REG_USERNAME, 45, 125, 180, 10, SS_NOPREFIX
-    LTEXT "", IDC_ABOUT_REG_ORGNAME, 45, 135, 180, 10, SS_NOPREFIX
-    LTEXT "", IDC_STATIC, 35, 147, 235, 1, SS_ETCHEDHORZ
-    LTEXT "Memoria física instalada:", IDC_STATIC, 35, 152, 130, 10
-    LTEXT "", IDC_ABOUT_PHYSMEM, 167, 152, 88, 10
-    DEFPUSHBUTTON "Aceptar", IDOK, 220, 178, 50, 14
-    PUSHBUTTON "", IDC_ABOUT_AUTHORS, 5, 178, 70, 14
+    LTEXT "", IDC_ABOUT_SEPARATOR, 14, 46, 272, 1, SS_ETCHEDHORZ
+    ICON "", IDC_ABOUT_ICON, 10, 55, 21, 20
+    LTEXT "", IDC_ABOUT_APPNAME, 34, 56, 252, 10, SS_NOPREFIX
+    LTEXT "", IDC_ABOUT_VERSION, 34, 67, 252, 20, SS_NOPREFIX
+    LTEXT "© 2026 Leeway Open Software", IDC_STATIC, 34, 89, 252, 10, SS_NOPREFIX
+    LTEXT "Basado en ReactOS © 1996–2026", IDC_STATIC, 34, 100, 252, 10, SS_NOPREFIX
+    LTEXT "", IDC_ABOUT_OTHERSTUFF, 34, 112, 252, 18, SS_NOPREFIX
+    CONTROL "Orosi es software libre: puede usarlo, copiarlo, compartirlo y modificarlo según los <A>términos de licencia de Orosi</A>. Se entrega sin ninguna garantía.", IDC_ABOUT_LICENSE, "SysLink", WS_TABSTOP, 34, 133, 252, 26
+    LTEXT "Este producto está licenciado a:", IDC_ABOUT_REG_TO, 34, 163, 252, 10
+    LTEXT "", IDC_ABOUT_REG_USERNAME, 44, 174, 242, 10, SS_NOPREFIX
+    LTEXT "", IDC_ABOUT_REG_ORGNAME, 44, 185, 242, 10, SS_NOPREFIX
+    PUSHBUTTON "", IDC_ABOUT_AUTHORS, 14, 202, 60, 14
+    DEFPUSHBUTTON "Aceptar", IDOK, 236, 202, 50, 14
 END
 
-IDD_ABOUT_AUTHORS DIALOGEX 35, 90, 235, 85
-STYLE DS_SHELLFONT | WS_CHILD
-FONT 8, "MS Shell Dlg"
+IDD_ABOUT_AUTHORS DIALOGEX 34, 101, 252, 86
+STYLE DS_SETFONT | WS_CHILD
+FONT 9, "Segoe UI", 400, 0, 0x0
 BEGIN
-    LTEXT "LiberNT está disponible gracias al trabajo de:", IDC_STATIC, 0, 0, 180, 10
-    LISTBOX IDC_ABOUT_AUTHORS_LISTBOX, 0, 10, 165, 75
+    LTEXT "Orosi es obra de:", IDC_STATIC, 0, 0, 252, 10
+    LISTBOX IDC_ABOUT_AUTHORS_LISTBOX, 0, 11, 165, 75
 END
 
 IDD_RUN DIALOGEX 0, 0, 227, 95
@@ -192,7 +192,7 @@ CAPTION "Ejecutar"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON "", IDC_RUNDLG_ICON, 7, 11, 18, 20, WS_VISIBLE
-    LTEXT "Escriba el nombre de un programa, carpeta, documento o recurso de Internet y LiberNT lo abrirá para usted.", 12289, 36, 11, 185, 24
+    LTEXT "Escriba el nombre de un programa, carpeta, documento o recurso de Internet y Orosi lo abrirá para usted.", 12289, 36, 11, 185, 24
     LTEXT "&Abrir:", 12305, 7, 39, 24, 10
     CONTROL "", IDC_RUNDLG_EDITPATH, "COMBOBOX", WS_TABSTOP | WS_GROUP | WS_VSCROLL | WS_VISIBLE | CBS_AUTOHSCROLL | CBS_DROPDOWN, 36, 37, 184, 100
     DEFPUSHBUTTON "Aceptar", IDOK, 62, 70, 50, 14
@@ -441,7 +441,7 @@ BEGIN
     GROUPBOX "Tareas", -1, 7, 10, 279, 40
     CONTROL "", IDC_FOLDER_OPTIONS_TASKICON, "Static", SS_ICON | WS_CHILD | WS_VISIBLE, 14, 20, 21, 20
     AUTORADIOBUTTON "M&ostrar tareas comunes en las carpetas", IDC_FOLDER_OPTIONS_COMMONTASKS, 40, 20, 210, 10, WS_TABSTOP | WS_GROUP
-    AUTORADIOBUTTON "Utilizar las carpetas clá&sicas de LiberNT", IDC_FOLDER_OPTIONS_CLASSICFOLDERS, 40, 32, 210, 10
+    AUTORADIOBUTTON "Utilizar las carpetas clá&sicas de Orosi", IDC_FOLDER_OPTIONS_CLASSICFOLDERS, 40, 32, 210, 10
     GROUPBOX "Examinar carpetas", -1, 7, 60, 279, 40, WS_TABSTOP
     CONTROL "", IDC_FOLDER_OPTIONS_FOLDERICON, "Static", SS_ICON | WS_CHILD | WS_VISIBLE, 14, 70, 21, 20
     AUTORADIOBUTTON "Abrir todas las carpetas en la &misma ventana", IDC_FOLDER_OPTIONS_SAMEWINDOW, 40, 70, 210, 10, WS_TABSTOP | WS_GROUP
@@ -514,7 +514,7 @@ STYLE DS_SHELLFONT | DS_MODALFRAME | WS_POPUPWINDOW | WS_VISIBLE | WS_CLIPSIBLIN
 CAPTION "Reproducción automática"
 FONT 8, "MS Shell Dlg"
 BEGIN
-    LTEXT "&Seleccione un tipo de contenido y elija una acción para que LiberNT la realice automáticamente cuando ese tipo se use en este dispositivo:", 1000, 7, 7, 215, 20
+    LTEXT "&Seleccione un tipo de contenido y elija una acción para que Orosi la realice automáticamente cuando ese tipo se use en este dispositivo:", 1000, 7, 7, 215, 20
     CONTROL "", 1001, "COMBOBOXEX32", WS_TABSTOP | 0x00000043, 7, 27, 212, 200
     GROUPBOX "Acciones", -1, 7, 45, 212, 146
     AUTORADIOBUTTON "Seleccionar la &acción que desea ejecutar:", 1005, 14, 54, 202, 10, WS_GROUP
@@ -530,7 +530,7 @@ FONT 8, "MS Shell Dlg"
 BEGIN
     ICON "", 1000, 5, 7, 21, 20
     LTEXT "Este disco o dispositivo contiene más de un tipo de contenido.", 1001, 32, 7, 191, 20
-    LTEXT "¿Qué desea que haga LiberNT?", 1002, 32, 31, 188, 8
+    LTEXT "¿Qué desea que haga Orosi?", 1002, 32, 31, 188, 8
     CONTROL "", 1003, "SYSLISTVIEW32", WS_BORDER | WS_TABSTOP | 0x0000C04D, 32, 43, 188, 139
     DEFPUSHBUTTON "Aceptar", IDOK, 96, 186, 60, 14
     PUSHBUTTON "Cancelar", IDCANCEL, 160, 186, 60, 14
@@ -542,10 +542,10 @@ CAPTION "Contenido mixto"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON "", 1000, 5, 7, 21, 20
-    LTEXT "LiberNT puede realizar la misma acción cada vez que inserte un disco o conecte un dispositivo con este tipo de archivos:", 1001, 30, 7, 193, 20
+    LTEXT "Orosi puede realizar la misma acción cada vez que inserte un disco o conecte un dispositivo con este tipo de archivos:", 1001, 30, 7, 193, 20
     ICON "", 1005, 32, 27, 11, 10, SS_REALSIZECONTROL
     EDITTEXT 1006, 49, 28, 177, 14, ES_AUTOHSCROLL | ES_READONLY | NOT WS_BORDER | NOT WS_TABSTOP
-    LTEXT "¿Qué desea que haga LiberNT?", 1002, 32, 41, 190, 8
+    LTEXT "¿Qué desea que haga Orosi?", 1002, 32, 41, 190, 8
     CONTROL "", 1003, "SYSLISTVIEW32", WS_BORDER | WS_TABSTOP | 0x0000C04D, 32, 55, 188, 112
     AUTOCHECKBOX "Realizar siempre la acción seleccionada.", 1004, 32, 171, 190, 10
     DEFPUSHBUTTON "Aceptar", IDOK, 96, 185, 60, 14
@@ -558,8 +558,8 @@ CAPTION "Reproducción automática"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON "", 1000, 5, 7, 21, 20
-    LTEXT "LiberNT puede realizar la misma acción cada vez que conecte este dispositivo.", 1001, 32, 7, 190, 22
-    LTEXT "¿&Qué desea que haga LiberNT?", 1002, 32, 31, 190, 8
+    LTEXT "Orosi puede realizar la misma acción cada vez que conecte este dispositivo.", 1001, 32, 7, 190, 22
+    LTEXT "¿&Qué desea que haga Orosi?", 1002, 32, 31, 190, 8
     CONTROL "", 1003, "SYSLISTVIEW32", WS_BORDER | WS_TABSTOP | 0x0000C04D, 32, 43, 187, 96
     AUTOCHECKBOX "&Realizar siempre la acción seleccionada", 1004, 32, 143, 190, 8
     DEFPUSHBUTTON "Aceptar", IDOK, 94, 160, 60, 14
@@ -756,7 +756,7 @@ BEGIN
     IDS_PRINTERS_DESCRIPTION "Muestra impresoras y faxes instalados y le ayuda a configurar nuevos."
 
     /* About shell dialog version string */
-    IDS_ABOUT_VERSION_STRING "Versión %S (%S)"
+    IDS_ABOUT_VERSION_STRING "Versión %S\r\nCompilación del SO %S"
 
     /* context menus */
     IDS_VIEW_LARGE "Iconos &grandes"
@@ -827,7 +827,7 @@ BEGIN
 
     /* Warning format system drive dialog strings */
     IDS_NO_FORMAT_TITLE "No se puede formatear este volumen"
-    IDS_NO_FORMAT "Este volumen no se puede formatear. Contiene archivos del sistema imprescindibles para que LiberNT funcione."
+    IDS_NO_FORMAT "Este volumen no se puede formatear. Contiene archivos del sistema imprescindibles para que Orosi funcione."
 
     /* Run File dialog */
     IDS_RUNDLG_ERROR "No se pudo mostrar el diálogo Ejecutar (error interno)"
@@ -913,8 +913,8 @@ BEGIN
 
     /* Friendly File Type Names */
     IDS_DIRECTORY "Directorio"
-    IDS_BAT_FILE "Archivo por lotes de LiberNT"
-    IDS_CMD_FILE "Script de comandos LiberNT"
+    IDS_BAT_FILE "Archivo por lotes de Orosi"
+    IDS_CMD_FILE "Script de comandos Orosi"
     IDS_COM_FILE "Aplicación DOS"
     IDS_CPL_FILE "Elemento del Panel de Control"
     IDS_CUR_FILE "Cursor"
@@ -959,7 +959,7 @@ BEGIN
     IDS_DEFAULT_CLUSTER_SIZE "Tamaño asignado por defecto"
     IDS_COPY_OF "Copia de"
 
-    IDS_SHLEXEC_NOASSOC "No hay ningún programa configurado en LiberNT para abrir este tipo de archivo."
+    IDS_SHLEXEC_NOASSOC "No hay ningún programa configurado en Orosi para abrir este tipo de archivo."
 
     IDS_FILE_DETAILS "Detalles para el tipo de archivo «%s»"
     IDS_FILE_DETAILSADV "Los archivos con extensión «%s» son del tipo «%s». Para cambiar la configuración de los archivos «%s», haga clic en Opciones avanzadas."
@@ -1051,7 +1051,84 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_FILE_EXPLORER "File Explorer"
+    IDS_FILE_EXPLORER "Explorador de archivos"
+    IDS_CPL_HOME "Página principal del Panel de control"
+    IDS_CPL_CAT_SYSTEM "Sistema y seguridad"
+    IDS_CPL_CAT_NETWORK "Redes e Internet"
+    IDS_CPL_CAT_HARDWARE "Hardware y sonido"
+    IDS_CPL_CAT_PROGRAMS "Programas"
+    IDS_CPL_CAT_ACCOUNTS "Cuentas de usuario"
+    IDS_CPL_CAT_APPEARANCE "Apariencia y personalización"
+    IDS_CPL_CAT_CLOCK "Reloj y región"
+    IDS_CPL_CAT_ACCESS "Accesibilidad"
+    IDS_NSC_TITLE "Ver información básica de la red y configurar conexiones"
+    IDS_NSC_ACTIVE "Ver las redes activas"
+    IDS_NSC_NONE "Actualmente no está conectado a ninguna red."
+    IDS_NSC_ACCESS "Tipo de acceso:"
+    IDS_NSC_CONNECTIONS "Conexiones:"
+    IDS_NSC_INTERNET "Internet"
+    IDS_NSC_NOINTERNET "Sin acceso a Internet"
+    IDS_NSC_NOACCESS "Sin acceso a la red"
+    IDS_NSC_PUBLIC "Red pública"
+    IDS_NSC_PRIVATE "Red privada"
+    IDS_NSC_DOMAIN "Red de dominio"
+    IDS_NSC_UNIDENTIFIED "Red no identificada"
+    IDS_NSC_ADAPTERS "Cambiar configuración del adaptador"
+    IDS_NSC_SHARING "Cambiar configuración de uso compartido avanzado"
+    IDS_NSC_SEEALSO "Vea también"
+    IDS_NSC_INETOPTIONS "Opciones de Internet"
+    IDS_CPL_ALLITEMS "Todos los elementos de Panel de control"
+    IDS_CPL_ADJUST "Ajustar la configuración del equipo"
+    IDS_CPL_VIEWBY "Ver por:"
+    IDS_CPL_VIEW_CATEGORY "Categoría"
+    IDS_CPL_VIEW_LARGE "Iconos grandes"
+    IDS_CPL_VIEW_SMALL "Iconos pequeños"
+    IDS_CPL_VIEW_CLASSIC "Lista clásica"
+    IDS_FW_NAME "Orosi Firewall"
+    IDS_FW_TITLE "Ayude a proteger su equipo con Orosi Firewall"
+    IDS_FW_INTRO "Orosi Firewall puede ayudar a impedir que hackers o software malintencionado obtengan acceso a su equipo a través de Internet o de una red."
+    IDS_FW_PRIVATE "Redes privadas"
+    IDS_FW_PUBLIC "Redes públicas o de invitados"
+    IDS_FW_DOMAIN "Redes de dominio"
+    IDS_FW_CONNECTED "Conectado"
+    IDS_FW_NOTCONNECTED "No conectado"
+    IDS_FW_STATE "Estado de Orosi Firewall:"
+    IDS_FW_ON "Activado"
+    IDS_FW_OFF "Desactivado"
+    IDS_FW_INCOMING "Conexiones entrantes:"
+    IDS_FW_IN_ALLOWED "Bloquear todas las conexiones a aplicaciones que no estén en la lista de aplicaciones permitidas"
+    IDS_FW_IN_BLOCKALL "Bloquear todas las conexiones entrantes, incluidas las de la lista de aplicaciones permitidas"
+    IDS_FW_IN_ALLOW "Permitir todas las conexiones entrantes"
+    IDS_FW_ACTIVE "Redes activas:"
+    IDS_FW_NONE "Ninguna"
+    IDS_FW_PANE_ONOFF "Activar o desactivar Orosi Firewall"
+    IDS_FW_PANE_RESTORE "Restaurar valores predeterminados"
+    IDS_FW_CUSTOMIZE "Personalizar configuración"
+    IDS_FW_CUSTOMIZE_INTRO "Personalizar la configuración de cada tipo de red"
+    IDS_FW_PRIVATE_SETTINGS "Configuración de red privada"
+    IDS_FW_PUBLIC_SETTINGS "Configuración de red pública"
+    IDS_FW_TURN_ON "Activar Orosi Firewall"
+    IDS_FW_TURN_OFF "Desactivar Orosi Firewall (no recomendado)"
+    IDS_FW_RESTORE_ASK "Al restaurar los valores predeterminados se quita toda la configuración de Orosi Firewall que haya establecido para todos los tipos de red. ¿Desea restaurar los valores predeterminados?"
+    IDS_FW_FAILED "No se pudo cambiar la configuración (error 0x%08lX)."
+    IDS_FW_UNAVAILABLE "No se puede leer la configuración de Orosi Firewall (error 0x%08lX)."
+    IDS_FW_OK "Aceptar"
+    IDS_FW_CANCEL "Cancelar"
+    IDS_FW_PANE_NSC "Centro de redes y recursos compartidos"
+    IDS_FW_PANE_ALLOW "Permitir una aplicación o una característica a través de Orosi Firewall"
+    IDS_FW_ALLOWED_TITLE "Aplicaciones permitidas"
+    IDS_FW_ALLOWED_INTRO "Permitir que las aplicaciones se comuniquen a través de Orosi Firewall. Los cambios se aplican al hacer clic en Aceptar."
+    IDS_FW_COL_NAME "Nombre"
+    IDS_FW_COL_PRIVATE "Privada"
+    IDS_FW_COL_PUBLIC "Pública"
+    IDS_FW_YES "Sí"
+    IDS_FW_NO "No"
+    IDS_FW_ADD "Permitir otra aplicación..."
+    IDS_FW_REMOVE "Quitar"
+    IDS_FW_ADD_FILTER "Programas (*.exe)"
+    IDS_FW_INFOTIP "Impedir que lleguen a este equipo las conexiones entrantes que el firewall no permite."
     IDS_SEARCHBAND_COMMAND "Search"
     IDS_FOLDERSHORTCUT_TYPE "Folder Shortcut"
+    IDS_OPEN_POWERSHELL_WINDOW "Abrir la ventana de PowerShell aquí"
+    IDS_POWERSHELL_SCRIPT_TYPE "Script de Windows PowerShell"
 END

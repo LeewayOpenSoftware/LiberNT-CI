@@ -55,6 +55,11 @@ LONG WINAPI SHGlobalCounterIncrement(HANDLE hGlobalCounter);
 #endif
 #define SHELL_GCOUNTER_DECLAREPARAMETERS(handle, id) SHELL_GCOUNTER_PARAMETERS(HANDLE handle, SHGLOBALCOUNTER id)
 
+/* LiberNT (windows.storage): a cross-process counter bumped by SHChangeNotify(SHCNE_ASSOCCHANGED) and SHSetKnownFolderPath,
+   read by the per-extension and known-folder caches; the generation stays 0 when the counter cannot be opened */
+LONG SHELL_AssocGenerationGet(void);
+void SHELL_AssocGenerationIncrement(void);
+
 DWORD WINAPI
 SHRestrictionLookup(
     _In_ DWORD policy,

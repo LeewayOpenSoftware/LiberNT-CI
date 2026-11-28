@@ -899,6 +899,16 @@ typedef struct _EX_TIMER
     ULONGLONG ScheduledTime;
     LONGLONG Period;
     BOOLEAN Armed;
+    /* Deletion state (WDK, Deleting a System-Allocated Timer Object), under Lock */
+    KSPIN_LOCK Lock;
+    BOOLEAN Set;
+    BOOLEAN Disabled;
+    BOOLEAN DeleteAfterExpiry;
+    BOOLEAN DeleteQueued;
+    BOOLEAN ExpiredWhileDisabled;
+    PEXT_DELETE_CALLBACK DeleteCallback;
+    PVOID DeleteContext;
+    WORK_QUEUE_ITEM DeleteWorkItem;
 } EX_TIMER;
 
 
@@ -952,6 +962,54 @@ ExpDisarmHighResolutionTimer(IN PEX_TIMER Timer)
     ExpUpdateHighResolutionDeadline();
 }
 
+/* TRUE while an expiry can still come: on the table, or periodic and only off it for the clock's pass */
+static
+BOOLEAN
+ExpTimerStillSet(IN PEX_TIMER Timer)
+{
+    return Timer->KeTimer.Header.Inserted ||
+           (Timer->Set && ((Timer->KeTimer.Period != 0) || (Timer->Period != 0)));
+}
+
+/* The object goes first, then the driver hears about it (WDK, ExTimerDeleteCallback) */
+static
+VOID
+ExpFinishTimerDelete(IN PEX_TIMER Timer)
+{
+    PEXT_DELETE_CALLBACK DeleteCallback = Timer->DeleteCallback;
+    PVOID DeleteContext = Timer->DeleteContext;
+
+    ASSERT(Timer->Disabled);
+    ASSERT(!Timer->KeTimer.Header.Inserted && !Timer->Armed);
+
+    ExFreePoolWithTag(Timer, TAG_EX_TIMER);
+    if (DeleteCallback) DeleteCallback(DeleteContext);
+}
+
+_Function_class_(WORKER_THREAD_ROUTINE)
+static
+VOID
+NTAPI
+ExpDeleteTimerWorker(IN PVOID Context)
+{
+    PEX_TIMER Timer = Context;
+
+    ASSERT(Timer->Disabled && Timer->DeleteQueued);
+
+    /* An expiry the clock is still handing out, or the callback that asked for the deletion, finishes first */
+    KeCancelTimer(&Timer->KeTimer);
+    KeFlushQueuedDpcs();
+    ExpFinishTimerDelete(Timer);
+}
+
+static
+VOID
+ExpQueueTimerDelete(IN PEX_TIMER Timer)
+{
+    ExInitializeWorkItem(&Timer->DeleteWorkItem, ExpDeleteTimerWorker, Timer);
+    ExQueueWorkItem(&Timer->DeleteWorkItem, DelayedWorkQueue);
+}
+
 _Function_class_(KDEFERRED_ROUTINE)
 static
 VOID
@@ -964,12 +1022,24 @@ ExpExtTimerDpcRoutine(IN PKDPC Dpc,
     PEX_TIMER Timer = DeferredContext;
     LARGE_INTEGER DueTime;
     ULONGLONG Now;
+    BOOLEAN Call = TRUE;
+    BOOLEAN Delete = FALSE;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    if (Timer->Attributes & EX_TIMER_HIGH_RESOLUTION)
+    KeAcquireSpinLockAtDpcLevel(&Timer->Lock);
+    if (Timer->Disabled)
+    {
+        /* A timer being deleted goes off at most once more; a one-shot back on the table was set before the delete */
+        if ((Timer->KeTimer.Period != 0) || !Timer->KeTimer.Header.Inserted)
+        {
+            Call = !Timer->ExpiredWhileDisabled;
+            Timer->ExpiredWhileDisabled = TRUE;
+        }
+    }
+    else if (Timer->Attributes & EX_TIMER_HIGH_RESOLUTION)
     {
         KeAcquireSpinLockAtDpcLevel(&ExpHighResolutionTimerLock);
         if (Timer->Armed && !Timer->KeTimer.Header.Inserted)
@@ -993,9 +1063,28 @@ ExpExtTimerDpcRoutine(IN PKDPC Dpc,
         }
         KeReleaseSpinLockFromDpcLevel(&ExpHighResolutionTimerLock);
     }
+    KeReleaseSpinLockFromDpcLevel(&Timer->Lock);
 
     /* Invoke the client callback at DISPATCH_LEVEL */
-    if (Timer->Callback) Timer->Callback(Timer, Timer->CallbackContext);
+    if (Call && Timer->Callback) Timer->Callback(Timer, Timer->CallbackContext);
+
+    /* The last expiry of a deleted timer is over: the free waits for this DPC on a worker */
+    KeAcquireSpinLockAtDpcLevel(&Timer->Lock);
+    if (Timer->ExpiredWhileDisabled && Timer->DeleteAfterExpiry && !Timer->DeleteQueued)
+    {
+        KeCancelTimer(&Timer->KeTimer);
+        if (Timer->Attributes & EX_TIMER_HIGH_RESOLUTION)
+        {
+            KeAcquireSpinLockAtDpcLevel(&ExpHighResolutionTimerLock);
+            ExpDisarmHighResolutionTimer(Timer);
+            KeReleaseSpinLockFromDpcLevel(&ExpHighResolutionTimerLock);
+        }
+        Timer->DeleteQueued = TRUE;
+        Delete = TRUE;
+    }
+    KeReleaseSpinLockFromDpcLevel(&Timer->Lock);
+
+    if (Delete) ExpQueueTimerDelete(Timer);
 }
 
 /*
@@ -1030,16 +1119,21 @@ ExAllocateTimer(IN PEXT_CALLBACK Callback OPTIONAL,
     Timer->ScheduledTime = 0;
     Timer->Period = 0;
     Timer->Armed = FALSE;
+    KeInitializeSpinLock(&Timer->Lock);
+    Timer->Set = FALSE;
+    Timer->Disabled = FALSE;
+    Timer->DeleteAfterExpiry = FALSE;
+    Timer->DeleteQueued = FALSE;
+    Timer->ExpiredWhileDisabled = FALSE;
+    Timer->DeleteCallback = NULL;
+    Timer->DeleteContext = NULL;
 
     TimerType = (Attributes & EX_TIMER_NOTIFICATION) ? NotificationTimer
                                                      : SynchronizationTimer;
     KeInitializeTimerEx(&Timer->KeTimer, TimerType);
 
-    /* A DPC is only needed when a callback was supplied */
-    if (Callback || (Attributes & EX_TIMER_HIGH_RESOLUTION))
-    {
-        KeInitializeDpc(&Timer->TimerDpc, ExpExtTimerDpcRoutine, Timer);
-    }
+    /* The DPC also tracks the last expiry of a deleted timer, so every timer has one */
+    KeInitializeDpc(&Timer->TimerDpc, ExpExtTimerDpcRoutine, Timer);
 
     return Timer;
 }
@@ -1063,9 +1157,19 @@ ExSetTimer(IN PEX_TIMER Timer,
 
     TimerDueTime.QuadPart = DueTime;
 
+    KeAcquireSpinLock(&Timer->Lock, &OldIrql);
+
+    /* A timer being deleted takes no more settings */
+    if (Timer->Disabled)
+    {
+        KeReleaseSpinLock(&Timer->Lock, OldIrql);
+        return FALSE;
+    }
+    Timer->Set = TRUE;
+
     if (Timer->Attributes & EX_TIMER_HIGH_RESOLUTION)
     {
-        KeAcquireSpinLock(&ExpHighResolutionTimerLock, &OldIrql);
+        KeAcquireSpinLockAtDpcLevel(&ExpHighResolutionTimerLock);
         Inserted = KeSetTimerEx(&Timer->KeTimer, TimerDueTime, 0, &Timer->TimerDpc);
         Timer->ScheduledTime = Timer->KeTimer.DueTime.QuadPart;
         Timer->Period = Period;
@@ -1075,14 +1179,18 @@ ExSetTimer(IN PEX_TIMER Timer,
             Timer->Armed = TRUE;
         }
         ExpUpdateHighResolutionDeadline();
-        KeReleaseSpinLock(&ExpHighResolutionTimerLock, OldIrql);
-        return Inserted;
+        KeReleaseSpinLockFromDpcLevel(&ExpHighResolutionTimerLock);
+    }
+    else
+    {
+        Inserted = KeSetTimerEx(&Timer->KeTimer,
+                                TimerDueTime,
+                                KiExtTimerPeriodToMilliseconds(Period),
+                                &Timer->TimerDpc);
     }
 
-    return KeSetTimerEx(&Timer->KeTimer,
-                        TimerDueTime,
-                        KiExtTimerPeriodToMilliseconds(Period),
-                        Timer->Callback ? &Timer->TimerDpc : NULL);
+    KeReleaseSpinLock(&Timer->Lock, OldIrql);
+    return Inserted;
 }
 
 /*
@@ -1098,20 +1206,26 @@ ExCancelTimer(IN OUT PEX_TIMER Timer,
 
     UNREFERENCED_PARAMETER(Parameters);
 
-    if (Timer->Attributes & EX_TIMER_HIGH_RESOLUTION)
+    KeAcquireSpinLock(&Timer->Lock, &OldIrql);
+
+    if (Timer->Disabled)
     {
-        KeAcquireSpinLock(&ExpHighResolutionTimerLock, &OldIrql);
-        Cancelled = KeCancelTimer(&Timer->KeTimer);
-        KeRemoveQueueDpc(&Timer->TimerDpc);
-        ExpDisarmHighResolutionTimer(Timer);
-        KeReleaseSpinLock(&ExpHighResolutionTimerLock, OldIrql);
-        return Cancelled;
+        KeReleaseSpinLock(&Timer->Lock, OldIrql);
+        return FALSE;
     }
+    Timer->Set = FALSE;
 
     /* Pull it out of the timer queue and drop any DPC still queued for it */
     Cancelled = KeCancelTimer(&Timer->KeTimer);
-    if (Timer->Callback) KeRemoveQueueDpc(&Timer->TimerDpc);
+    KeRemoveQueueDpc(&Timer->TimerDpc);
+    if (Timer->Attributes & EX_TIMER_HIGH_RESOLUTION)
+    {
+        KeAcquireSpinLockAtDpcLevel(&ExpHighResolutionTimerLock);
+        ExpDisarmHighResolutionTimer(Timer);
+        KeReleaseSpinLockFromDpcLevel(&ExpHighResolutionTimerLock);
+    }
 
+    KeReleaseSpinLock(&Timer->Lock, OldIrql);
     return Cancelled;
 }
 
@@ -1125,37 +1239,65 @@ ExDeleteTimer(IN PEX_TIMER Timer,
               IN BOOLEAN Wait,
               IN PEXT_DELETE_PARAMETERS Parameters OPTIONAL)
 {
-    BOOLEAN Cancelled;
+    BOOLEAN Cancelled = FALSE;
     KIRQL OldIrql;
 
-    UNREFERENCED_PARAMETER(Wait);
+    ASSERT(KeGetCurrentIrql() <= (Wait ? APC_LEVEL : DISPATCH_LEVEL));
+
+    /* The WDK allows Wait only with Cancel: a wait is for a cancelled timer's last callback */
+    if (Wait) Cancel = TRUE;
+
+    KeAcquireSpinLock(&Timer->Lock, &OldIrql);
+
+    /* A second delete (the callback of a deleted timer, say) is refused */
+    if (Timer->Disabled)
+    {
+        KeReleaseSpinLock(&Timer->Lock, OldIrql);
+        return FALSE;
+    }
+    Timer->Disabled = TRUE;
+    if (Parameters)
+    {
+        Timer->DeleteCallback = Parameters->DeleteCallback;
+        Timer->DeleteContext = Parameters->DeleteContext;
+    }
+
+    if (Cancel)
+    {
+        /* A cancelling delete lets no further callback start: an expiry already queued is dropped too */
+        Timer->Set = FALSE;
+        Cancelled = KeCancelTimer(&Timer->KeTimer);
+        KeRemoveQueueDpc(&Timer->TimerDpc);
+        Timer->ExpiredWhileDisabled = TRUE;
+    }
+    else if (ExpTimerStillSet(Timer))
+    {
+        /* Goes off once more; that expiry's DPC queues the free */
+        Timer->DeleteAfterExpiry = TRUE;
+        KeReleaseSpinLock(&Timer->Lock, OldIrql);
+        return FALSE;
+    }
 
     if (Timer->Attributes & EX_TIMER_HIGH_RESOLUTION)
     {
-        KeAcquireSpinLock(&ExpHighResolutionTimerLock, &OldIrql);
+        KeAcquireSpinLockAtDpcLevel(&ExpHighResolutionTimerLock);
         ExpDisarmHighResolutionTimer(Timer);
-        KeReleaseSpinLock(&ExpHighResolutionTimerLock, OldIrql);
+        KeReleaseSpinLockFromDpcLevel(&ExpHighResolutionTimerLock);
     }
+    Timer->DeleteQueued = !Wait;
 
-    /* Always cancel before freeing so a pending expiry can't fire afterwards */
-    Cancelled = KeCancelTimer(&Timer->KeTimer);
+    KeReleaseSpinLock(&Timer->Lock, OldIrql);
 
-    /* Drain any in-flight DPC so the callback can't touch freed memory; a
-     * callback-less timer never had a DPC, so it skips the system-wide flush */
-    if (Timer->Callback || (Timer->Attributes & EX_TIMER_HIGH_RESOLUTION))
+    if (!Wait)
     {
-        KeRemoveQueueDpc(&Timer->TimerDpc);
-        KeFlushQueuedDpcs();
+        ExpQueueTimerDelete(Timer);
+        return Cancelled;
     }
 
-    /* Run the optional deletion callback now that the timer is quiescent */
-    if ((Parameters != NULL) && (Parameters->DeleteCallback != NULL))
-    {
-        Parameters->DeleteCallback(Parameters->DeleteContext);
-    }
-
-    ExFreePoolWithTag(Timer, TAG_EX_TIMER);
-    return Cancel && Cancelled;
+    /* Drain an in-flight DPC so the callback can't touch freed memory */
+    KeFlushQueuedDpcs();
+    ExpFinishTimerDelete(Timer);
+    return Cancelled;
 }
 
 #endif /* NTDDI_VERSION >= NTDDI_WINBLUE */

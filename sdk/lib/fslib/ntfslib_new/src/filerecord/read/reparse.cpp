@@ -89,7 +89,8 @@ static BOOLEAN
 IsNameRangeValid(_In_ const UCHAR* PathBuffer,
                  _In_ ULONG PathBufferLength,
                  _In_ USHORT NameOffset,
-                 _In_ USHORT NameLength)
+                 _In_ USHORT NameLength,
+                 _In_ BOOLEAN CheckCharacters)
 {
     ULONG CharacterCount;
 
@@ -100,6 +101,9 @@ IsNameRangeValid(_In_ const UCHAR* PathBuffer,
     {
         return FALSE;
     }
+
+    if (!CheckCharacters)
+        return TRUE;
 
     CharacterCount = NameLength / sizeof(WCHAR);
     for (ULONG Index = 0; Index < CharacterCount; Index++)
@@ -192,10 +196,11 @@ FileRecord::ReadReparsePoint(_In_opt_ PUCHAR Buffer,
         NULL);
 }
 
-extern "C" NTSTATUS
-NtfsParseNameSurrogateReparsePoint(
+static NTSTATUS
+ParseNameSurrogateReparsePoint(
     _In_ const UCHAR* Buffer,
     _In_ ULONG BufferLength,
+    _In_ BOOLEAN CheckCharacters,
     _Out_ PNtfsReparseNameView View)
 {
     ReparsePointEx Common;
@@ -266,11 +271,13 @@ NtfsParseNameSurrogateReparsePoint(
         !IsNameRangeValid(PathBuffer,
                           PathBufferLength,
                           SubstituteNameOffset,
-                          SubstituteNameLength) ||
+                          SubstituteNameLength,
+                          CheckCharacters) ||
         !IsNameRangeValid(PathBuffer,
                           PathBufferLength,
                           PrintNameOffset,
-                          PrintNameLength))
+                          PrintNameLength,
+                          CheckCharacters))
     {
         return STATUS_IO_REPARSE_DATA_INVALID;
     }
@@ -283,6 +290,24 @@ NtfsParseNameSurrogateReparsePoint(
     View->PrintName = PathBuffer + PrintNameOffset;
     View->PrintNameLength = PrintNameLength / sizeof(WCHAR);
     return STATUS_SUCCESS;
+}
+
+extern "C" NTSTATUS
+NtfsParseNameSurrogateReparsePoint(
+    _In_ const UCHAR* Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PNtfsReparseNameView View)
+{
+    return ParseNameSurrogateReparsePoint(Buffer, BufferLength, TRUE, View);
+}
+
+extern "C" NTSTATUS
+NtfsCheckNameSurrogateReparseBounds(
+    _In_ const UCHAR* Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PNtfsReparseNameView View)
+{
+    return ParseNameSurrogateReparsePoint(Buffer, BufferLength, FALSE, View);
 }
 
 static int

@@ -10,7 +10,8 @@ HKLM,"SOFTWARE\Classes\Applications\notepad.exe\shell\open\command","",0x0002000
 HKLM,"SOFTWARE\Classes\Applications\mspaint.exe\shell\open\command","",0x00020000,"%SystemRoot%\system32\mspaint.exe ""%1"""
 HKLM,"SOFTWARE\Classes\Applications\wordpad.exe\shell\open\command","",0x00020000,"%SystemRoot%\system32\wordpad.exe ""%1"""
 HKLM,"SOFTWARE\Classes\Applications\iexplore.exe\shell\open\command","",0x00020000,"""%programfiles%\Internet Explorer\iexplore.exe"" ""%1"""
-HKLM,"SOFTWARE\Classes\Applications\mplay32.exe\shell\open\command","",0x00020000,"%SystemRoot%\system32\mplay32.exe ""%1"""
+HKLM,"SOFTWARE\Classes\Applications\mplay32.exe\shell\open\command","",0x00020000,"%SystemRoot%\system32\orosi_platform\mplay32.exe ""%1"""
+HKLM,"SOFTWARE\Classes\Applications\taskmgr.exe","DisableTabbingByDefault",0x00020001
 
 ; Applications NoOpenWith
 HKLM,"SOFTWARE\Classes\Applications\accwiz.exe","NoOpenWith",0x00000000,""
@@ -76,10 +77,11 @@ HKLM,"SOFTWARE\Classes\Applications\zipfldr.dll","NoOpenWith",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\explorer.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\icwconn1.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\inoculan.exe","NoStartPage",0x00000000,""
+HKLM,"SOFTWARE\Classes\Applications\oros.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\mobsync.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\navwnt.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\realmon.exe","NoStartPage",0x00000000,""
-HKLM,"SOFTWARE\Classes\Applications\sndvol32.exe","NoStartPage",0x00000000,""
+HKLM,"SOFTWARE\Classes\Applications\sndvol.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\xpsviewer.exe","NoStartPage",0x00000000,""
 
 ; mspaint.exe SupportedTypes
@@ -150,6 +152,20 @@ HKLM,"SOFTWARE\RegisteredApplications",,0x00000012
 HKLM,"SOFTWARE\Microsoft\CTF\SystemShared",,0x00000012
 HKLM,"SOFTWARE\Microsoft\CTF\SystemShared","CUAS",0x00010001,1
 HKLM,"SOFTWARE\Microsoft\CTF\TIP",,0x00000012
+
+; Cryptography SIP capabilities
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{9BA61D3F-E73A-11D0-8CD2-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{9BA61D3F-E73A-11D0-8CD2-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AAB8-8E78-11D0-8C47-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AAB8-8E78-11D0-8C47-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AAB9-8E78-11D0-8C47-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AAB9-8E78-11D0-8C47-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AABA-8E78-11D0-8C47-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AABA-8E78-11D0-8C47-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{DE351A42-8E59-11D0-8C47-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{DE351A42-8E59-11D0-8C47-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{DE351A43-8E59-11D0-8C47-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{DE351A43-8E59-11D0-8C47-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
 
 ; DirectX
 HKLM,"SOFTWARE\Microsoft\DirectX","InstalledVersion",0x00000001, 0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x00
@@ -234,12 +250,23 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\wordpad.exe",,0x000200
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\wordpad.exe","Path",0x00020000,"%SystemRoot%\system32"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\write.exe",,0x00020000,"%SystemRoot%\system32\wordpad.exe"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\write.exe","Path",0x00020000,"%SystemRoot%\system32"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\IEXPLORE.EXE",,0x00020000,"%ProgramFiles%\Internet Explorer\iexplore.exe"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\IEXPLORE.EXE","Path",0x00020000,"%ProgramFiles%\Internet Explorer;"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Applets",,0x00000012
 
 ; default shell
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer","NoSimpleStartMenu",0x00010003,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",,0x00000012
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","EnableLUA",0x00010003,0
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","ConsentPromptBehaviorAdmin",0x00010003,5
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","ConsentPromptBehaviorUser",0x00010003,3
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","PromptOnSecureDesktop",0x00010003,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","EnableInstallerDetection",0x00010003,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","EnableVirtualization",0x00010003,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","FilterAdministratorToken",0x00010003,0
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","ValidateAdminCodeSignatures",0x00010003,0
 
 ; Application compatibility
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\ShellCompatibility",,0x00000012
@@ -350,13 +377,35 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Propertie
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","input.dll",0x00010001,6
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","joy.cpl",0x00010001,2
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","odbccp32i.cpl",0x00010001,5
-HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","openglcfg.cpl",0x00010001,1
-HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Extended Properties\{305CA226-D286-468e-B848-2B2E8E697B74} 2","wined3dcfg.cpl",0x00010001,1
 
 ; Cursors Schemes
-HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cursors\Schemes","LiberNT Default",0x00020000,""",,,,,,,,,,,,,"""
+; Orosi Default: the built-in pointers as a file scheme (media/cursors). Field order: Arrow, Help, AppStarting, Wait,
+; Crosshair, IBeam, NWPen, No, SizeNS, SizeWE, SizeNWSE, SizeNESW, SizeAll, UpArrow, Hand. The Mouse control panel
+; shows it as "Orosi Default (system scheme)".
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Control Panel\Cursors\Schemes","Orosi Default",0x00020000,"%SystemRoot%\Cursors\orosi_arrow.cur,%SystemRoot%\Cursors\orosi_helpsel.cur,%SystemRoot%\Cursors\orosi_busy.ani,%SystemRoot%\Cursors\orosi_wait.ani,%SystemRoot%\Cursors\orosi_cross.cur,%SystemRoot%\Cursors\orosi_ibeam.cur,%SystemRoot%\Cursors\orosi_pen.cur,%SystemRoot%\Cursors\orosi_unavail.cur,%SystemRoot%\Cursors\orosi_ns.cur,%SystemRoot%\Cursors\orosi_ew.cur,%SystemRoot%\Cursors\orosi_nwse.cur,%SystemRoot%\Cursors\orosi_nesw.cur,%SystemRoot%\Cursors\orosi_move.cur,%SystemRoot%\Cursors\orosi_up.cur,%SystemRoot%\Cursors\orosi_link.cur"
 
 ; Advanced
+; Folder types: the default view of a folder of each type (as Windows)
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{5c4f28b5-f869-4e84-8e60-f11db97c5cc7}","CanonicalName",0x00000000,"Generic"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{5c4f28b5-f869-4e84-8e60-f11db97c5cc7}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{7d49d726-3c21-4f05-99aa-fdc2c9474656}","CanonicalName",0x00000000,"Documents"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{7d49d726-3c21-4f05-99aa-fdc2c9474656}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{7d49d726-3c21-4f05-99aa-fdc2c9474656}\TopViews\{00000000-0000-0000-0000-000000000000}","SortByList",0x00000000,"prop:System.ItemNameDisplay"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{885a186e-a440-4ada-812b-db871b942259}","CanonicalName",0x00000000,"Downloads"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{885a186e-a440-4ada-812b-db871b942259}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{885a186e-a440-4ada-812b-db871b942259}\TopViews\{00000000-0000-0000-0000-000000000000}","GroupBy",0x00000000,"System.DateModified"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{885a186e-a440-4ada-812b-db871b942259}\TopViews\{00000000-0000-0000-0000-000000000000}","GroupAscending",0x00010001,0
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{885a186e-a440-4ada-812b-db871b942259}\TopViews\{00000000-0000-0000-0000-000000000000}","SortByList",0x00000000,"prop:System.DateModified"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{94d6ddcc-4a68-4175-a374-bd584a510b78}","CanonicalName",0x00000000,"Music"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{94d6ddcc-4a68-4175-a374-bd584a510b78}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{94d6ddcc-4a68-4175-a374-bd584a510b78}\TopViews\{00000000-0000-0000-0000-000000000000}","SortByList",0x00000000,"prop:System.ItemNameDisplay"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{b3690e58-e961-423b-b687-386ebfd83239}","CanonicalName",0x00000000,"Pictures"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{b3690e58-e961-423b-b687-386ebfd83239}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,3
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{b3690e58-e961-423b-b687-386ebfd83239}\TopViews\{00000000-0000-0000-0000-000000000000}","IconSize",0x00010001,96
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{5fa96407-7e77-483c-ac93-691d05850de8}","CanonicalName",0x00000000,"Videos"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{5fa96407-7e77-483c-ac93-691d05850de8}\TopViews\{00000000-0000-0000-0000-000000000000}","LogicalViewMode",0x00010001,3
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{5fa96407-7e77-483c-ac93-691d05850de8}\TopViews\{00000000-0000-0000-0000-000000000000}","IconSize",0x00010001,96
+
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\KindMap",".3ds",0x00000000,"picture"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\KindMap",".3g2",0x00000000,"video"
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\KindMap",".3gp",0x00000000,"video"
@@ -971,13 +1020,14 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers",,0x000
 
 ; Version Information
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion","InstallDate",0x00010003,0
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion","ProductName",2,"LiberNT"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion","ProductName",2,"Orosi"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion","InstallationType",2,"Client"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion","ReleaseId",2,"2009"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion","RegDone",0x00000002,""
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion","RegisteredOrganization",2,""
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion","RegisteredOwner",2,""
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion","SoftwareType",2,"System"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\OpenGLDrivers",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\009",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib\CurrentLanguage",,0x00000012
@@ -1019,6 +1069,33 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Console\TrueTypeFont","0",2,"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Drivers",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\drivers.desc",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper",,0x00000012
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","@MS Gothic",0x00010001,0x0000A080
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","@MS PGothic",0x00010001,0x00002080
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","@NSimSun",0x00010001,0x0000A086
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","@SimSun",0x00010001,0x00002086
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","ARIAL",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","COURIER",0x00010001,0x00008800
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","COURIER NEW",0x00010001,0x00008000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","FIXEDSYS",0x00010001,0x00009000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","MS Gothic",0x00010001,0x00008080
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","MS PGothic",0x00010001,0x00000080
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","MS SANS SERIF",0x00010001,0x00001000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","MS SERIF",0x00010001,0x00005000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","NSimSun",0x00010001,0x00008086
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","SimSun",0x00010001,0x00000086
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","SMALL FONTS",0x00010001,0x00000800
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","SYMBOL",0x00010001,0x00004002
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","SYMBOL1",0x00010001,0x0000A002
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","TIMES NEW ROMAN",0x00010001,0x00004000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","WINGDINGS",0x00010001,0x00000002
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper","DEFAULT",0x00010001,0x00000000
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults",,0x00000012
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults",,0x00000000,"Arial"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults","Decorative",0x00000000,"Impact"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults","Modern",0x00000000,"Courier New"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults","Roman",0x00000000,"Times New Roman"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults","Script",0x00000000,"Segoe Script"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontMapper\FamilyDefaults","Swiss",0x00000000,"Arial"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\HotFix",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\IME Compatibility",,0x00000012
 
@@ -1142,8 +1219,105 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\S-1-5-20","State"
 
 ; Font substitutes
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts",,0x00000012
+; Fonts: display names for the Fonts folder; files are loaded from these values (win32k skips its directory scan when the key is filled)
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Arial (TrueType)",0x00000000,"arial.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Arial Bold (TrueType)",0x00000000,"arialbd.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Arial Bold Italic (TrueType)",0x00000000,"arialbi.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Arial Italic (TrueType)",0x00000000,"ariali.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Arial Black (TrueType)",0x00000000,"ariblk.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Caladea Bold (Cambria, Constantia replacement) (TrueType)",0x00000000,"Caladea-Bold.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Caladea Bold Italic (Cambria, Constantia replacement) (TrueType)",0x00000000,"Caladea-BoldItalic.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Caladea Italic (Cambria, Constantia replacement) (TrueType)",0x00000000,"Caladea-Italic.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Caladea (Cambria, Constantia replacement) (TrueType)",0x00000000,"Caladea-Regular.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Carlito Bold (Calibri replacement) (TrueType)",0x00000000,"Carlito-Bold.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Carlito Bold Italic (Calibri replacement) (TrueType)",0x00000000,"Carlito-BoldItalic.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Carlito Italic (Calibri replacement) (TrueType)",0x00000000,"Carlito-Italic.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Carlito (Calibri replacement) (TrueType)",0x00000000,"Carlito-Regular.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Cascadia Mono Bold (Consolas replacement) (TrueType)",0x00000000,"CascadiaMono-Bold.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Cascadia Mono Bold Italic (Consolas replacement) (TrueType)",0x00000000,"CascadiaMono-BoldItalic.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Cascadia Mono Italic (Consolas replacement) (TrueType)",0x00000000,"CascadiaMono-Italic.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Cascadia Mono (Consolas replacement) (TrueType)",0x00000000,"CascadiaMono-Regular.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Comic Sans MS (TrueType)",0x00000000,"comic.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Comic Sans MS Bold (TrueType)",0x00000000,"comicbd.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Courier New (TrueType)",0x00000000,"cour.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Courier New Bold (TrueType)",0x00000000,"courbd.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Courier New Bold Italic (TrueType)",0x00000000,"courbi.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Courier New Italic (TrueType)",0x00000000,"couri.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Franklin Gothic Medium (TrueType)",0x00000000,"framd.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Franklin Gothic Medium Italic (TrueType)",0x00000000,"framdit.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","FreeSans (TrueType)",0x00000000,"FreeSans.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","FreeSans Bold (TrueType)",0x00000000,"FreeSansBold.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","FreeSans Bold Oblique (TrueType)",0x00000000,"FreeSansBoldOblique.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","FreeSans Oblique (TrueType)",0x00000000,"FreeSansOblique.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Fixedsys Excelsior 3.01-L2 (TrueType)",0x00000000,"FSEX301-L2.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Fixedsys Excelsior 3.01 (TrueType)",0x00000000,"FSEX301.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Georgia (TrueType)",0x00000000,"georgia.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Georgia Bold (TrueType)",0x00000000,"georgiab.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Georgia Italic (TrueType)",0x00000000,"georgiai.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Georgia Bold Italic (TrueType)",0x00000000,"georgiaz.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Lucida Console (TrueType)",0x00000000,"lucon.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Marlett (TrueType)",0x00000000,"Marlett.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Microsoft Sans Serif (TrueType)",0x00000000,"micross.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Sans JP (MS Gothic, Meiryo, Yu Gothic replacement) (TrueType)",0x00000000,"NotoSansJP-Regular.otf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Sans SC (SimSun, Microsoft YaHei replacement) (TrueType)",0x00000000,"NotoSansSC-Regular.otf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Palatino Linotype (TrueType)",0x00000000,"pala.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Palatino Linotype Bold (TrueType)",0x00000000,"palab.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Palatino Linotype Bold Italic (TrueType)",0x00000000,"palabi.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Palatino Linotype Italic (TrueType)",0x00000000,"palai.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Segoe MDL2 Assets (Leeway replacement) (TrueType)",0x00000000,"segmdl2.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Selawik (TrueType)",0x00000000,"selawk.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Selawik Bold (TrueType)",0x00000000,"selawkb.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Selawik Light (TrueType)",0x00000000,"selawkl.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Selawik Semibold (TrueType)",0x00000000,"selawksb.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Selawik Semilight (TrueType)",0x00000000,"selawksl.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Source Sans Pro Bold (Candara, Corbel replacement) (TrueType)",0x00000000,"SourceSansPro-Bold.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Source Sans Pro Bold Italic (Candara, Corbel replacement) (TrueType)",0x00000000,"SourceSansPro-BoldIt.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Source Sans Pro Italic (Candara, Corbel replacement) (TrueType)",0x00000000,"SourceSansPro-It.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Source Sans Pro (Candara, Corbel replacement) (TrueType)",0x00000000,"SourceSansPro-Regular.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Symbol (TrueType)",0x00000000,"symbol.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Tahoma (TrueType)",0x00000000,"tahoma.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Tahoma Bold (TrueType)",0x00000000,"tahomabd.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Times New Roman (TrueType)",0x00000000,"times.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Times New Roman Bold (TrueType)",0x00000000,"timesbd.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Times New Roman Bold Italic (TrueType)",0x00000000,"timesbi.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Times New Roman Italic (TrueType)",0x00000000,"timesi.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Trebuchet MS (TrueType)",0x00000000,"trebuc.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Trebuchet MS Bold (TrueType)",0x00000000,"trebucbd.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Trebuchet MS Bold Italic (TrueType)",0x00000000,"trebucbi.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Trebuchet MS Italic (TrueType)",0x00000000,"trebucit.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Terminal (TrueType)",0x00000000,"UniVGA16.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Verdana (TrueType)",0x00000000,"verdana.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Verdana Bold (TrueType)",0x00000000,"verdanab.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Verdana Italic (TrueType)",0x00000000,"verdanai.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Verdana Bold Italic (TrueType)",0x00000000,"verdanaz.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Wingdings (TrueType)",0x00000000,"wingding.ttf"
+; F2 files (script coverage card); harmless until the files ship, a missing file is skipped
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Sans Devanagari (Nirmala UI replacement) (TrueType)",0x00000000,"NotoSansDevanagari-Regular.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Sans JP Bold (MS Gothic, Meiryo, Yu Gothic replacement) (TrueType)",0x00000000,"NotoSansJP-Bold.otf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Sans KR Bold (Malgun Gothic replacement) (TrueType)",0x00000000,"NotoSansKR-Bold.otf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Sans KR (Malgun Gothic replacement) (TrueType)",0x00000000,"NotoSansKR-Regular.otf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Sans SC Bold (SimSun, Microsoft YaHei replacement) (TrueType)",0x00000000,"NotoSansSC-Bold.otf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Sans TC Bold (Microsoft JhengHei replacement) (TrueType)",0x00000000,"NotoSansTC-Bold.otf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Sans TC (Microsoft JhengHei replacement) (TrueType)",0x00000000,"NotoSansTC-Regular.otf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Sans Thai (Leelawadee UI replacement) (TrueType)",0x00000000,"NotoSansThai-Regular.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12,14,18,24 (Hebrew)",0x00000000,"ssee1255.fon"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12,14,18,24 (Arabic)",0x00000000,"ssee1256.fon"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12,14,17,24 (Baltic)",0x00000000,"ssee1257.fon"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12,14,18,24 (Thai)",0x00000000,"ssee874.fon"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12,14,18,24 (VGA res)",0x00000000,"sserife.fon"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12,14,18,24 (Greek)",0x00000000,"sserifeg.fon"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12,14,18,24 (Cyrillic)",0x00000000,"sserifer.fon"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","MS Sans Serif 8,10,12,14,18,24 (Turkish)",0x00000000,"sserifet.fon"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Terminal 8 (VGA res)",0x00000000,"vgaoem.fon"
+; F1 file (icon font card)
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Segoe Fluent Icons (Leeway replacement) (TrueType)",0x00000000,"SegoeIcons.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Twemoji Mozilla (colour emoji for DirectWrite) (TrueType)",0x00000000,"TwemojiMozilla.ttf"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts","Noto Emoji (Segoe UI Emoji replacement) (TrueType)",0x00000000,"NotoEmoji.ttf"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","System",0x00000000,"FreeSans"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Shell Dlg",0x00000000,"Microsoft Sans Serif"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Shell Dlg 2",0x00000000,"Tahoma"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Emoji",0x00000000,"Noto Emoji"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI",0x00000000,"Selawik"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Light",0x00000000,"Selawik Light"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Semilight",0x00000000,"Selawik Semilight"
@@ -1152,6 +1326,14 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Bo
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Variable Text",0x00000000,"Selawik"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Variable Display",0x00000000,"Selawik"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Segoe UI Variable Small",0x00000000,"Selawik"
+; Office families: interim free substitutes until the Leeway originals exist
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Calibri",0x00000000,"Carlito"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Calibri Light",0x00000000,"Carlito"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Cambria",0x00000000,"Caladea"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Candara",0x00000000,"Source Sans Pro"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Consolas",0x00000000,"Cascadia Mono"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Constantia",0x00000000,"Caladea"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Corbel",0x00000000,"Source Sans Pro"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS UI Gothic",0x00000000,"Noto Sans JP"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS Gothic",0x00000000,"Noto Sans JP"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MS PGothic",0x00000000,"Noto Sans JP"
@@ -1165,6 +1347,22 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","SimSun",0x0
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","NSimSun",0x00000000,"Noto Sans SC"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Microsoft YaHei",0x00000000,"Noto Sans SC"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Microsoft YaHei UI",0x00000000,"Noto Sans SC"
+; East-Asian / Thai / Devanagari UI families (F2 gap #3)
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Gulim",0x00000000,"Noto Sans KR"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","GulimChe",0x00000000,"Noto Sans KR"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Batang",0x00000000,"Noto Sans KR"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","BatangChe",0x00000000,"Noto Sans KR"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Dotum",0x00000000,"Noto Sans KR"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","DotumChe",0x00000000,"Noto Sans KR"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Malgun Gothic",0x00000000,"Noto Sans KR"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Microsoft JhengHei",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Microsoft JhengHei UI",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MingLiU",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","PMingLiU",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","MingLiU_HKSCS",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","DFKai-SB",0x00000000,"Noto Sans TC"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Leelawadee UI",0x00000000,"Noto Sans Thai"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontSubstitutes","Nirmala UI",0x00000000,"Noto Sans Devanagari"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontDPI","LogPixels",0x00010003,96
 
 ; FontLink
@@ -1175,96 +1373,71 @@ HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink",,0x00000
 
 ; FontLink (Latin to others)
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Tahoma",0x00010000,\
-	"msgothic.ttc,MS UI Gothic",\
-	"simsun.ttc,SimSun",\
-	"gulim.ttc,Gulim",\
-	"mingliu.ttc,PMingLiU"
+	"NotoSansJP-Regular.otf,Noto Sans JP",\
+	"NotoSansSC-Regular.otf,Noto Sans SC",\
+	"NotoSansKR-Regular.otf,Noto Sans KR",\
+	"NotoSansTC-Regular.otf,Noto Sans TC",\
+	"NotoSansThai-Regular.ttf,Noto Sans Thai",\
+	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari",\
+	"NotoEmoji.ttf,Noto Emoji"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Microsoft Sans Serif",0x00010000,\
-	"msgothic.ttc,MS UI Gothic",\
-	"mingliu.ttc,PMingLiU",\
-	"simsun.ttc,SimSun",\
-	"gulim.ttc,Gulim",\
-	"tahoma.ttf,Tahoma"
+	"NotoSansJP-Regular.otf,Noto Sans JP",\
+	"NotoSansTC-Regular.otf,Noto Sans TC",\
+	"NotoSansSC-Regular.otf,Noto Sans SC",\
+	"NotoSansKR-Regular.otf,Noto Sans KR",\
+	"tahoma.ttf,Tahoma",\
+	"NotoSansThai-Regular.ttf,Noto Sans Thai",\
+	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari",\
+	"NotoEmoji.ttf,Noto Emoji"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Lucida Sans Unicode",0x00010000,\
-	"msgothic.ttc,MS UI Gothic",\
-	"mingliu.ttc,PMingLiU",\
-	"simsun.ttc,SimSun",\
-	"gulim.ttc,Gulim",\
-	"tahoma.ttf,Tahoma"
+	"NotoSansJP-Regular.otf,Noto Sans JP",\
+	"NotoSansTC-Regular.otf,Noto Sans TC",\
+	"NotoSansSC-Regular.otf,Noto Sans SC",\
+	"NotoSansKR-Regular.otf,Noto Sans KR",\
+	"tahoma.ttf,Tahoma",\
+	"NotoSansThai-Regular.ttf,Noto Sans Thai",\
+	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari",\
+	"NotoEmoji.ttf,Noto Emoji"
 
-; FontLink (Chinese to others)
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","MingLiU",0x00010000,\
-	"micross.ttf,Microsoft Sans Serif",\
-	"simsun.ttc,SimSun",\
-	"msmincho.ttc,MS Mincho",\
-	"batang.ttc,BatangChe",\
-	"tahoma.ttf,Tahoma"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","SimSun",0x00010000,\
-	"micross.ttf,Microsoft Sans Serif",\
-	"mingliu.ttc,PMingLiU",\
-	"msmincho.ttc,MS PMincho",\
-	"batang.ttc,Batang",\
-	"tahoma.ttf,Tahoma"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","PMingLiU",0x00010000,\
-	"micross.ttf,Microsoft Sans Serif",\
-	"simsun.ttc,SimSun",\
-	"msmincho.ttc,MS PMincho",\
-	"BATANG.TTC,Batang",\
-	"tahoma.ttf,Tahoma"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","NSimSun",0x00010000,\
-	"mingliu.ttc,PMingLiU",\
-	"msmincho.ttc,MS Mincho",\
-	"batang.ttc,BatangChe",\
-	"tahoma.ttf,Tahoma"
+; FontLink (CJK faces to the other scripts)
+; win32k substitutes the requested face before it looks up SystemLink (FontLink_FindEntry),
+; so MS Gothic, SimSun, MingLiU, Gulim, Batang and the like reach these entries through
+; FontSubstitutes; entries keyed on those names would never be used.
+; Keep each value under 300 WCHARs: a longer one stops win32k from reading the values after it.
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Noto Sans JP",0x00010000,\
+	"NotoSansSC-Regular.otf,Noto Sans SC",\
+	"NotoSansKR-Regular.otf,Noto Sans KR",\
+	"NotoSansTC-Regular.otf,Noto Sans TC",\
+	"tahoma.ttf,Tahoma",\
+	"NotoSansThai-Regular.ttf,Noto Sans Thai",\
+	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Noto Sans SC",0x00010000,\
+	"NotoSansJP-Regular.otf,Noto Sans JP",\
+	"NotoSansKR-Regular.otf,Noto Sans KR",\
+	"NotoSansTC-Regular.otf,Noto Sans TC",\
+	"tahoma.ttf,Tahoma",\
+	"NotoSansThai-Regular.ttf,Noto Sans Thai",\
+	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Noto Sans KR",0x00010000,\
+	"NotoSansSC-Regular.otf,Noto Sans SC",\
+	"NotoSansJP-Regular.otf,Noto Sans JP",\
+	"NotoSansTC-Regular.otf,Noto Sans TC",\
+	"tahoma.ttf,Tahoma",\
+	"NotoSansThai-Regular.ttf,Noto Sans Thai",\
+	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Noto Sans TC",0x00010000,\
+	"NotoSansSC-Regular.otf,Noto Sans SC",\
+	"NotoSansJP-Regular.otf,Noto Sans JP",\
+	"NotoSansKR-Regular.otf,Noto Sans KR",\
+	"tahoma.ttf,Tahoma",\
+	"NotoSansThai-Regular.ttf,Noto Sans Thai",\
+	"NotoSansDevanagari-Regular.ttf,Noto Sans Devanagari"
 
-; FontLink (Japanese to others)
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","MS Gothic",0x00010000,\
-	"mingliu.ttc,MingLiU",\
-	"simsun.ttc,SimSun",\
-	"gulim.ttc,GulimChe",\
-	"tahoma.ttf,Tahoma"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","MS Mincho",0x00010000,\
-	"mingliu.ttc,MingLiU",\
-	"simsun.ttc,SimSun",\
-	"batang.ttc,Batang",\
-	"tahoma.ttf,Tahoma"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","MS PGothic",0x00010000,\
-	"mingliu.ttc,PMingLiU",\
-	"simsun.ttc,SimSun",\
-	"gulim.ttc,Gulim",\
-	"tahoma.ttf,Tahoma"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","MS PMincho",0x00010000,\
-	"mingliu.ttc,PMingLiU",\
-	"simsun.ttc,SimSun",\
-	"batang.ttc,Batang",\
-	"tahoma.ttf,Tahoma"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","MS UI Gothic",0x00010000,\
-	"simsun.ttc,SimSun",\
-	"gulim.ttc,Gulim",\
-	"mingliu.ttc,PMingLiU",\
-	"tahoma.ttf,Tahoma"
-
-; FontLink (Korean to others)
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Batang",0x00010000,\
-	"msmincho.ttc,MS PMincho",\
-	"mingliu.ttc,PMingLiU",\
-	"simsun.ttc,SimSun",\
-	"tahoma.ttf,Tahoma"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","BatangChe",0x00010000,\
-	"msmincho.ttc,MS Mincho",\
-	"mingliu.ttc,MingLiU",\
-	"simsun.ttc,SimSun",\
-	"tahoma.ttf,Tahoma"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Gulim",0x00010000,\
-	"micross.ttf,Microsoft Sans Serif",\
-	"msgothic.ttc,MS UI Gothic",\
-	"mingliu.ttc,PMingLiU",\
-	"tahoma.ttf,Tahoma"
-HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","GulimChe",0x00010000,\
-	"msgothic.ttc,MS Gothic",\
-	"mingliu.ttc,MingLiU",\
-	"simsun.ttc,SimSun",\
-	"tahoma.ttf,Tahoma"
+; FontLink (F2 gap #4: Selawik is Latin-only; route UI fallback to Tahoma for Cyrillic/Greek)
+; Segoe UI requests arrive here through the Segoe UI -> Selawik substitute.
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\FontLink\SystemLink","Selawik",0x00010000,\
+	"tahoma.ttf,Tahoma",\
+	"NotoEmoji.ttf,Noto Emoji"
 
 ; Win32k GRE initialization
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\GRE_Initialize",,0x00000012
@@ -5935,6 +6108,9 @@ HKLM,"SOFTWARE\ReactOS\ReactOS\CurrentVersion\IFS","NTFS",0x00000000,"untfs.dll"
 ; Global Winlogon settings
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","ConsoleShell",0x00020000,"%SystemRoot%\system32\cmd.exe"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","Shell",0x00020000,"%SystemRoot%\explorer.exe"
+
+; uxtheme trust gate key (ThemeLoader4 I1a-T): created here so that it inherits the protected SOFTWARE descriptor
+HKLM,"SOFTWARE\Leeway\UxTheme",,0x00000010
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","Userinit",0x00020000,"%SystemRoot%\system32\userinit.exe"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","AutoRestartShell",0x00010001,1
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","AutoAdminLogon",0x00000000,"1"
@@ -6238,7 +6414,7 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Controls Folder\Device\shellex\P
 ; deskmon.dll shell extension
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Controls Folder\Device\shellex\PropertySheetHandlers\Display Monitor CPL Extension","",0x00000000,"{42071713-76d4-11d1-8b24-00a0c9068ff3}"
 
-HKLM,"SOFTWARE\Microsoft\Ole","EnableDCOM",0x00000000,"Y"
+HKLM,"SOFTWARE\Microsoft\Ole","EnableDCOM",0x00000000,"N"
 HKLM,"SOFTWARE\Microsoft\Ole","EnableRemoteConnect",0x00000000,"N"
 
 ; SvcHost services

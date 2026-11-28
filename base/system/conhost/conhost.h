@@ -85,6 +85,18 @@ struct console_alias_exe
     WCHAR                    *name;
     struct console_alias     *aliases;
 };
+
+struct history_buffer
+{
+    struct history_buffer *next;
+    WCHAR                 *app;
+    unsigned int           pid;
+    BOOL                   allocated;
+    struct history_line  **lines;
+    unsigned int           size;
+    unsigned int           count;
+    unsigned int           capacity;
+};
 #endif
 
 struct console
@@ -114,6 +126,9 @@ struct console
     unsigned int           history_index;       /* number of used entries in history array */
     unsigned int           history_mode;        /* mode of history (non zero means remove doubled strings */
     unsigned int           edition_mode;        /* index to edition mode flavors */
+#ifdef __REACTOS__
+    BOOL                   insert_mode;         /* insert mode, kept apart from the reported mode */
+#endif
     unsigned int           input_cp;            /* console input codepage */
     unsigned int           output_cp;           /* console output codepage */
     HWND                   win;                 /* window handle if backend supports it */
@@ -128,6 +143,12 @@ struct console
     int                    tty_cursor_visible;  /* tty cursor visibility flag */
 #ifdef __REACTOS__
     struct console_alias_exe *alias_exes;
+    struct history_buffer *history_buffers;
+    /* the lines of the active history live in history, history_size and history_index */
+    struct history_buffer *history_active;
+    unsigned int           history_capacity;
+    unsigned int           history_buffer_size;
+    unsigned int           history_buffer_count;
 #endif
 };
 
@@ -137,7 +158,12 @@ struct cell_color
     COLORREF fg;
     COLORREF bg;
     COLORREF underline;
+    DWORD    style;     /* CELL_STYLE_NONE or CELL_STYLE_* flags */
 };
+
+#define CELL_STYLE_NONE   0xffffffff
+#define CELL_STYLE_FAINT  0x00000001
+#define CELL_STYLE_ITALIC 0x00000002
 #endif
 
 struct screen_buffer
@@ -166,6 +192,8 @@ struct screen_buffer
     unsigned int           vt_cursor_size;
     unsigned char         *wrapped;
     unsigned int           wrapped_rows;
+    unsigned char          utf8_pending[3];  /* incomplete UTF-8 sequence from the last WriteFile */
+    unsigned int           utf8_pending_len;
 #endif
 };
 
@@ -200,6 +228,7 @@ int break_wide_cell( struct screen_buffer *screen_buffer, unsigned int index );
 unsigned int put_char_cells( struct screen_buffer *screen_buffer, unsigned int index, WCHAR lead, WCHAR trail,
                              unsigned short attr, unsigned int width );
 BOOL vt_translate_key( struct console *console, const INPUT_RECORD *record );
+void set_history_buffer_size( struct console *console, unsigned int size );
 BOOL vt_translate_mouse( struct console *console, UINT msg, WPARAM wparam, LPARAM lparam );
 void vt_focus_event( struct console *console, BOOL focused );
 void vt_bracket_paste( struct console *console, BOOL begin );
@@ -282,6 +311,7 @@ static inline void move_cell_colors( struct screen_buffer *screen_buffer, unsign
 #define IDC_OPT_CONF_SHIFT      0x0108
 #define IDC_OPT_QUICK_EDIT      0x0109
 #define IDC_OPT_INSERT_MODE     0x0110
+#define IDC_OPT_TRANSPARENCY    0x0111
 
 #define IDC_FNT_LIST_FONT       0x0201
 #define IDC_FNT_LIST_SIZE       0x0202

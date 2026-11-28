@@ -1668,11 +1668,7 @@ HKEY WINAPI SetupDiCreateDevRegKeyW(
 
         if (KeyType == DIREG_DEV)
         {
-#if _WIN32_WINNT >= 0x502
             hKey = SETUPDI_CreateDevKey(RootKey, deviceInfo, KEY_READ | KEY_WRITE);
-#else
-            hKey = SETUPDI_CreateDevKey(RootKey, deviceInfo, KEY_ALL_ACCESS);
-#endif
             if (hKey == INVALID_HANDLE_VALUE)
                 goto cleanup;
 
@@ -1685,11 +1681,7 @@ HKEY WINAPI SetupDiCreateDevRegKeyW(
                                      0,
                                      NULL,
                                      REG_OPTION_NON_VOLATILE,
-#if _WIN32_WINNT >= 0x502
                                      KEY_READ | KEY_WRITE,
-#else
-                                     KEY_ALL_ACCESS,
-#endif
                                      NULL,
                                      &hKey,
                                      NULL);
@@ -1699,11 +1691,7 @@ HKEY WINAPI SetupDiCreateDevRegKeyW(
         }
         else /* KeyType == DIREG_DRV */
         {
-#if _WIN32_WINNT >= 0x502
             hKey = SETUPDI_CreateDrvKey(RootKey, deviceInfo, (UUID*)&DeviceInfoData->ClassGuid, KEY_READ | KEY_WRITE);
-#else
-            hKey = SETUPDI_CreateDrvKey(RootKey, deviceInfo, (UUID*)&DeviceInfoData->ClassGuid, KEY_ALL_ACCESS);
-#endif
             if (hKey == INVALID_HANDLE_VALUE)
                 goto cleanup;
         }
@@ -3665,7 +3653,7 @@ static struct PropertyMapEntry PropertyMap[] = {
     { REG_SZ, "Driver", REGSTR_VAL_DRIVER, DEVPROP_TYPE_STRING },
     { REG_DWORD, "ConfigFlags", REGSTR_VAL_CONFIGFLAGS, DEVPROP_TYPE_UINT32 },
     { REG_SZ, "Mfg", REGSTR_VAL_MFG, DEVPROP_TYPE_STRING },
-    { REG_SZ, "FriendlyName", REGSTR_VAL_FRIENDLYNAME },
+    { REG_SZ, "FriendlyName", REGSTR_VAL_FRIENDLYNAME, DEVPROP_TYPE_STRING },
     { REG_SZ, "LocationInformation", REGSTR_VAL_LOCATION_INFORMATION, DEVPROP_TYPE_STRING },
     { 0, NULL, NULL, DEVPROP_TYPE_STRING }, /* SPDRP_PHYSICAL_DEVICE_OBJECT_NAME */
     { REG_DWORD, "Capabilities", REGSTR_VAL_CAPABILITIES, DEVPROP_TYPE_INT32 },
@@ -4556,6 +4544,25 @@ BOOL WINAPI SetupDiSetDevicePropertyW(HDEVINFO devinfo, PSP_DEVINFO_DATA device_
 
     if (IsEqualGUID(&key->fmtid, &DEVPKEY_Device_DeviceDesc.fmtid) && key->pid >= 2 &&
         key->pid - 2 < ARRAY_SIZE(PropertyMap) && PropertyMap[key->pid - 2].devPropType &&
+        (type == DEVPROP_TYPE_EMPTY || type == DEVPROP_TYPE_NULL))
+    {
+        DEVPROPTYPE CurrentType;
+        DWORD CurrentSize = 0;
+
+        error = get_device_property(device, devinfo, device_data, key, &CurrentType, NULL, 0, &CurrentSize, 0);
+        if (error != ERROR_SUCCESS && error != ERROR_INSUFFICIENT_BUFFER)
+        {
+            SetLastError(error);
+            return FALSE;
+        }
+        if (!SetupDiSetDeviceRegistryPropertyW(devinfo, device_data, key->pid - 2, NULL, 0))
+            return FALSE;
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
+
+    if (IsEqualGUID(&key->fmtid, &DEVPKEY_Device_DeviceDesc.fmtid) && key->pid >= 2 &&
+        key->pid - 2 < ARRAY_SIZE(PropertyMap) && PropertyMap[key->pid - 2].devPropType &&
         PropertyMap[key->pid - 2].devPropType == type)
     {
         WCHAR guid_string[39];
@@ -4589,6 +4596,103 @@ BOOL WINAPI SetupDiSetDevicePropertyW(HDEVINFO devinfo, PSP_DEVINFO_DATA device_
     RegCloseKey(reg_key);
     SetLastError(error);
     return !error;
+}
+
+/* The install-class or interface-class flag selects which class registry key the
+   property lives under; the property itself is stored exactly as a device property. */
+static DWORD class_prop_open_flags(DWORD flags, DWORD *open_flags)
+{
+    switch (flags)
+    {
+        case DICLASSPROP_INSTALLER: *open_flags = DIOCR_INSTALLER; return ERROR_SUCCESS;
+        case DICLASSPROP_INTERFACE: *open_flags = DIOCR_INTERFACE; return ERROR_SUCCESS;
+        default: return ERROR_INVALID_FLAGS;
+    }
+}
+
+BOOL WINAPI SetupDiGetClassPropertyExW(const GUID *class_guid, const DEVPROPKEY *prop_key,
+                                       DEVPROPTYPE *prop_type, BYTE *prop_buffer, DWORD prop_buffer_size,
+                                       DWORD *required_size, DWORD flags, const WCHAR *machine, void *reserved)
+{
+    DWORD open_flags, error;
+    HKEY class_key;
+
+    if (!class_guid || reserved)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if ((error = class_prop_open_flags(flags, &open_flags)))
+    {
+        SetLastError(error);
+        return FALSE;
+    }
+
+    class_key = SetupDiOpenClassRegKeyExW(class_guid, KEY_QUERY_VALUE, open_flags, machine, NULL);
+    if (class_key == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    error = get_device_reg_property(class_key, prop_key, prop_type, prop_buffer, prop_buffer_size,
+                                    required_size, 0);
+    RegCloseKey(class_key);
+    SetLastError(error);
+    return !error;
+}
+
+BOOL WINAPI SetupDiGetClassPropertyW(const GUID *class_guid, const DEVPROPKEY *prop_key,
+                                     DEVPROPTYPE *prop_type, BYTE *prop_buffer, DWORD prop_buffer_size,
+                                     DWORD *required_size, DWORD flags)
+{
+    return SetupDiGetClassPropertyExW(class_guid, prop_key, prop_type, prop_buffer, prop_buffer_size,
+                                      required_size, flags, NULL, NULL);
+}
+
+BOOL WINAPI SetupDiSetClassPropertyExW(const GUID *class_guid, const DEVPROPKEY *prop_key,
+                                       DEVPROPTYPE prop_type, const BYTE *prop_buffer, DWORD prop_buffer_size,
+                                       DWORD flags, const WCHAR *machine, void *reserved)
+{
+    DWORD open_flags, error;
+    HKEY class_key;
+
+    if (!class_guid || reserved)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!prop_key || !is_valid_property_type(prop_type) ||
+        (prop_buffer && !prop_buffer_size && prop_type != DEVPROP_TYPE_EMPTY && prop_type != DEVPROP_TYPE_NULL) ||
+        (prop_buffer && prop_buffer_size && (prop_type == DEVPROP_TYPE_EMPTY || prop_type == DEVPROP_TYPE_NULL)))
+    {
+        SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    if (prop_buffer_size && !prop_buffer)
+    {
+        SetLastError(ERROR_INVALID_USER_BUFFER);
+        return FALSE;
+    }
+    if ((error = class_prop_open_flags(flags, &open_flags)))
+    {
+        SetLastError(error);
+        return FALSE;
+    }
+
+    class_key = SetupDiOpenClassRegKeyExW(class_guid, KEY_READ | KEY_WRITE, open_flags, machine, NULL);
+    if (class_key == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    error = set_device_reg_property(class_key, prop_key, prop_type, prop_buffer, prop_buffer_size);
+    RegCloseKey(class_key);
+    SetLastError(error);
+    return !error;
+}
+
+BOOL WINAPI SetupDiSetClassPropertyW(const GUID *class_guid, const DEVPROPKEY *prop_key,
+                                     DEVPROPTYPE prop_type, const BYTE *prop_buffer, DWORD prop_buffer_size,
+                                     DWORD flags)
+{
+    return SetupDiSetClassPropertyExW(class_guid, prop_key, prop_type, prop_buffer, prop_buffer_size,
+                                      flags, NULL, NULL);
 }
 #endif
 
@@ -4791,21 +4895,6 @@ BOOL WINAPI SetupDiGetDeviceRegistryPropertyW(
             default:
                 break;
         }
-    }
-    else if (Property == SPDRP_PHYSICAL_DEVICE_OBJECT_NAME)
-    {
-        size = (strlenW(devInfo->Data) + 1) * sizeof(WCHAR);
-
-        if (PropertyRegDataType)
-            *PropertyRegDataType = REG_SZ;
-        if (RequiredSize)
-            *RequiredSize = size;
-        if (PropertyBufferSize >= size)
-        {
-            strcpyW((LPWSTR)PropertyBuffer, devInfo->Data);
-        }
-        else
-            lError = ERROR_INSUFFICIENT_BUFFER;
     }
     else
     {
@@ -6747,6 +6836,27 @@ RestartDevice(
     return SetupDiSetDeviceInstallParamsW(DeviceInfoSet, DeviceInfoData, &InstallParams);
 }
 
+struct InstallQueueContext
+{
+    PVOID DefaultContext;
+    BOOL Delayed;
+};
+
+static UINT CALLBACK
+InstallQueueCallback(
+    IN PVOID Context,
+    IN UINT Notification,
+    IN UINT_PTR Param1,
+    IN UINT_PTR Param2)
+{
+    struct InstallQueueContext *Queue = Context;
+
+    if (Notification == SPFILENOTIFY_FILEOPDELAYED)
+        Queue->Delayed = TRUE;
+
+    return SetupDefaultQueueCallbackW(Queue->DefaultContext, Notification, Param1, Param2);
+}
+
 static BOOL
 HasAssociatedService(
         IN HDEVINFO DeviceInfoSet,
@@ -7036,17 +7146,9 @@ SetupDiRegisterCoDeviceInstallers(
         deviceInfo = (struct DeviceInfo *)DeviceInfoData->Reserved;
 
         /* Open/Create driver key information */
-#if _WIN32_WINNT >= 0x502
         hKey = SETUPDI_OpenDrvKey(set->HKLM, deviceInfo, KEY_READ | KEY_WRITE);
-#else
-        hKey = SETUPDI_OpenDrvKey(set->HKLM, deviceInfo, KEY_ALL_ACCESS);
-#endif
         if (hKey == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_NOT_FOUND)
-#if _WIN32_WINNT >= 0x502
             hKey = SETUPDI_CreateDrvKey(set->HKLM, deviceInfo, (UUID*)&DeviceInfoData->ClassGuid, KEY_READ | KEY_WRITE);
-#else
-            hKey = SETUPDI_CreateDrvKey(set->HKLM, deviceInfo, (UUID*)&DeviceInfoData->ClassGuid, KEY_ALL_ACCESS);
-#endif
         if (hKey == INVALID_HANDLE_VALUE)
             goto cleanup;
 
@@ -7289,6 +7391,7 @@ SetupDiInstallDevice(
     GUID ClassGuid;
     LPWSTR lpGuidString = NULL, lpFullGuidString = NULL;
     BOOL RebootRequired = FALSE;
+    struct InstallQueueContext QueueContext;
     DWORD ConfigFlags, ConfigFlagsType;
     HKEY hKey = INVALID_HANDLE_VALUE;
     HKEY hHwKey = INVALID_HANDLE_VALUE;
@@ -7455,7 +7558,8 @@ SetupDiInstallDevice(
                   debugstr_w(SelectedDriver->InfFileDetails->FileName), SigState);
 
             if (SetupapiGetVerifyPolicy() == 2 &&
-                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID))
+                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID ||
+                 SigState == PACKAGE_SIG_UNTRUSTED))
             {
                 SetLastError(ERROR_INVALID_IMAGE_HASH);
                 goto cleanup;
@@ -7464,11 +7568,7 @@ SetupDiInstallDevice(
     }
 
     /* Open/Create driver key information */
-#if _WIN32_WINNT >= 0x502
     hKey = SETUPDI_CreateDrvKey(set->HKLM, deviceInfo, (UUID*)&ClassGuid, KEY_READ | KEY_WRITE);
-#else
-    hKey = SETUPDI_CreateDrvKey(set->HKLM, deviceInfo, (UUID*)&ClassGuid, KEY_ALL_ACCESS);
-#endif
     if (hKey == INVALID_HANDLE_VALUE)
         goto cleanup;
     memcpy(&deviceInfo->ClassGuid, &ClassGuid, sizeof(GUID));
@@ -7487,14 +7587,21 @@ SetupDiInstallDevice(
         if (!Context)
             goto cleanup;
     }
+    QueueContext.DefaultContext = Context;
+    QueueContext.Delayed = FALSE;
     *pSectionName = '\0';
     Result = SETUPAPI_InstallFromInfSectionWithIncludes(InstallParams.hwndParent,
         SelectedDriver->InfFileDetails->hInf, SectionName,
         DoAction, hKey, SETUPAPI_GetInfSourceDirectory(SourceInfFileDetails, SourceBuffer), SP_COPY_NEWER,
-        SetupDefaultQueueCallbackW, Context,
+        InstallQueueCallback, &QueueContext,
         DeviceInfoSet, DeviceInfoData);
     if (!Result)
         goto cleanup;
+    if (QueueContext.Delayed)
+    {
+        RebootRequired = TRUE;
+        InstallParams.Flags |= DI_NEEDREBOOT;
+    }
     InstallParams.Flags |= DI_NOFILECOPY;
     SetupDiSetDeviceInstallParamsW(DeviceInfoSet, DeviceInfoData, &InstallParams);
 
@@ -7563,15 +7670,9 @@ SetupDiInstallDevice(
     /* Open device registry key. DDInstall.HW AddReg commonly creates
      * nested subkeys such as "Interrupt Management\\..."; KEY_SET_VALUE
      * alone cannot do that. */
-#if _WIN32_WINNT >= 0x502
     hKey = SETUPDI_OpenDevKey(((struct DeviceInfoSet *)DeviceInfoSet)->HKLM,
                               (struct DeviceInfo *)DeviceInfoData->Reserved,
                               KEY_READ | KEY_WRITE);
-#else
-    hKey = SETUPDI_OpenDevKey(((struct DeviceInfoSet *)DeviceInfoSet)->HKLM,
-                              (struct DeviceInfo *)DeviceInfoData->Reserved,
-                              KEY_ALL_ACCESS);
-#endif
     if (hKey == INVALID_HANDLE_VALUE)
         goto cleanup;
 
@@ -7580,11 +7681,7 @@ SetupDiInstallDevice(
                          0,
                          NULL,
                          REG_OPTION_NON_VOLATILE,
-#if _WIN32_WINNT >= 0x502
                          KEY_READ | KEY_WRITE,
-#else
-                         KEY_ALL_ACCESS,
-#endif
                          NULL,
                          &hHwKey,
                          NULL);
@@ -7784,11 +7881,7 @@ HKEY SETUPDI_CreateDrvKey(HKEY RootKey, struct DeviceInfo *devInfo, UUID *ClassG
                 0,
                 NULL,
                 REG_OPTION_NON_VOLATILE,
-#if _WIN32_WINNT >= 0x502
                 KEY_READ | KEY_WRITE,
-#else
-                KEY_ALL_ACCESS,
-#endif
                 NULL,
                 &hKey,
                 &Disposition);
@@ -7842,11 +7935,7 @@ HKEY SETUPDI_CreateDrvKey(HKEY RootKey, struct DeviceInfo *devInfo, UUID *ClassG
             0,
             NULL,
             REG_OPTION_NON_VOLATILE,
-#if _WIN32_WINNT >= 0x502
             KEY_READ | KEY_WRITE,
-#else
-            KEY_ALL_ACCESS,
-#endif
             NULL,
             &hKey,
             &Disposition);

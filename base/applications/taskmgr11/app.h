@@ -43,6 +43,7 @@ extern "C" {
 #include <gdiplus.h>
 
 #include "resource.h"
+#include "hardware_text.h"
 
 /* ------------------------------------------------------------------ */
 /*  Small POD vector (no STL in this codebase)                         */
@@ -177,6 +178,9 @@ struct Theme
     HFONT fMed;       /* 15                            */
     HFONT fMedSemi;
     HFONT fBig;       /* 26 light  perf big values     */
+    HFONT fPerfTitle;
+    HFONT fPerfHardware;
+    HFONT fPerfValue;
 };
 
 extern Theme g_t;
@@ -221,6 +225,7 @@ struct Settings
     BOOL  navExpanded;
     BOOL  noEffPrompt;   /* don't ask again        */
     BOOL  fullAcctName;
+    BOOL  noBlur;        /* opaque window background, no backdrop blur */
     /* Which resource the Performance page was last showing, so reopening
      * Task Manager comes back to it: the resource kind plus which one of
      * that kind, because disk 2 and GPU 1 are both "index 1". */
@@ -258,6 +263,7 @@ void App_SmpDiagGraphPaint(void);
 #define WM_APP_SELCHANGED  (WM_APP + 2)   /* page selection changed; frame updates command enables */
 #define WM_APP_TRAYICON    (WM_APP + 3)
 #define WM_APP_THEMECHG    (WM_APP + 4)   /* broadcast after Theme_Apply  */
+#define WM_APP_INITDATA    (WM_APP + 5)
 
 /* dpi scale */
 int S(int px);
@@ -331,6 +337,9 @@ struct GraphStyle
     COLORREF secondLine;  /* 0 = same as primary          */
     BOOL     grid;        /* draw background grid           */
     BOOL     border;
+    int      gridColumns;
+    int      gridRows;
+    BOOL     neutralGrid;
     double   yMax;        /* value mapped to top; <=0 auto  */
     const HistRing* second; /* optional dotted series       */
 };
@@ -726,6 +735,7 @@ namespace Data
     extern SysSnapshot g;
 
     void Init(void);
+    void InitDeferred(void);
     void Shutdown(void);
     void Tick(void);                       /* collect a full sample */
 
@@ -733,6 +743,7 @@ namespace Data
     void GpuInit(void);
     void GpuShutdown(void);
     void GpuTick(void);
+    void GpuWantDirectX(void);
 
     const WCHAR* SvchostServices(ULONG pid);   /* comma list or NULL */
     const WCHAR* SvchostGroup(ULONG pid);
@@ -913,6 +924,7 @@ void DrawToggle(HDC dc, const RECT& r, BOOL on, BOOL hot, BOOL enabled);
 HWND Search_Create(HWND parent, const WCHAR* placeholder);
 void Search_GetText(HWND h, WCHAR* buf, int cch);
 void Search_Clear(HWND h);
+void Search_CreateEdit(HWND h);
 void Search_SetPlaceholder(HWND h, const WCHAR* placeholder);
 void Search_Focus(HWND h);
 void Search_Register(void);

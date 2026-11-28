@@ -32,6 +32,8 @@
 
 #include "wine/debug.h"
 
+#include "activscp.h"
+
 #include "mshtml_private.h"
 #include "htmlevent.h"
 #include "pluginhost.h"
@@ -981,6 +983,17 @@ static HRESULT WINAPI HTMLDocument_get_linkColor(IHTMLDocument2 *iface, VARIANT 
 
     nsAString_Init(&nsstr, NULL);
     nsres = nsIDOMHTMLDocument_GetLinkColor(This->html_document, &nsstr);
+    if(NS_SUCCEEDED(nsres)) {
+        const PRUnichar *color;
+
+        nsAString_GetData(&nsstr, &color);
+        if(!*color) {
+            nsAString_Finish(&nsstr);
+            V_VT(p) = VT_BSTR;
+            V_BSTR(p) = SysAllocString(L"#0000ff");
+            return V_BSTR(p) ? S_OK : E_OUTOFMEMORY;
+        }
+    }
     return return_nsstr_variant(nsres, &nsstr, NSSTR_COLOR, p);
 }
 
@@ -2653,6 +2666,8 @@ static HRESULT WINAPI HTMLDocument3_getElementsByName(IHTMLDocument3 *iface, BST
     WCHAR *selector;
     nsresult nsres;
     static const WCHAR formatW[] = L"*[id=%s],*[name=%s]";
+    static const WCHAR legacy_formatW[] = L"*[id=\"%s\" i],*[name=\"%s\" i]";
+    const WCHAR *format = dispex_compat_mode(&This->node.event_target.dispex) < COMPAT_MODE_IE9 ? legacy_formatW : formatW;
 
     TRACE("(%p)->(%s %p)\n", This, debugstr_w(v), ppelColl);
 
@@ -2662,10 +2677,10 @@ static HRESULT WINAPI HTMLDocument3_getElementsByName(IHTMLDocument3 *iface, BST
         return E_NOTIMPL;
     }
 
-    selector = malloc(2 * SysStringLen(v) * sizeof(WCHAR) + sizeof(formatW));
+    selector = malloc(2 * SysStringLen(v) * sizeof(WCHAR) + sizeof(legacy_formatW));
     if(!selector)
         return E_OUTOFMEMORY;
-    swprintf(selector, 2*SysStringLen(v) + ARRAY_SIZE(formatW), formatW, v, v);
+    swprintf(selector, 2*SysStringLen(v) + ARRAY_SIZE(legacy_formatW), format, v, v);
 
     /*
      * NOTE: IE getElementsByName implementation differs from Gecko. It searches both name and id attributes.
@@ -4504,7 +4519,7 @@ static HRESULT WINAPI DocumentSelector_querySelector(IDocumentSelector *iface, B
 
     if(NS_FAILED(nsres)) {
         WARN("QuerySelector failed: %08lx\n", nsres);
-        return map_nsresult(nsres);
+        return map_selector_nsresult(nsres, &This->node.event_target.dispex);
     }
 
     if(!nselem) {
@@ -4548,7 +4563,7 @@ static HRESULT WINAPI DocumentSelector_querySelectorAll(IDocumentSelector *iface
         WARN("QuerySelectorAll failed: %08lx\n", nsres);
         if(node_list)
             nsIDOMNodeList_Release(node_list);
-        return map_nsresult(nsres);
+        return map_selector_nsresult(nsres, &This->node.event_target.dispex);
     }
 
     hres = create_child_collection(node_list, &This->node.event_target.dispex, pel);
@@ -5505,6 +5520,8 @@ static HRESULT HTMLDocumentNode_invoke(DispatchEx *dispex, DISPID id, LCID lcid,
     unsigned i;
     HRESULT hres;
 
+    if(flags == DISPATCH_PROPERTYPUT && This->node.event_target.dispex.jsdisp)
+        return S_FALSE;
     if(flags != DISPATCH_PROPERTYGET && flags != (DISPATCH_METHOD|DISPATCH_PROPERTYGET))
         return MSHTML_E_INVALID_PROPERTY;
 
@@ -5767,12 +5784,16 @@ static const NodeImplVtbl HTMLDocumentFragmentImplVtbl = {
 static const tid_t HTMLDocumentNode_iface_tids[] = {
     IHTMLDOMNode_tid,
     IHTMLDocument5_tid,
-    IDocumentSelector_tid,
     0
 };
 
 static void HTMLDocumentNode_init_dispex_info(dispex_data_t *info, compat_mode_t mode)
 {
+    static const dispex_hook_t document_selector_hooks[] = {
+        {DISPID_IDOCUMENTSELECTOR_QUERYSELECTOR,    .min_script_version = SCRIPTLANGUAGEVERSION_5_8},
+        {DISPID_IDOCUMENTSELECTOR_QUERYSELECTORALL, .min_script_version = SCRIPTLANGUAGEVERSION_5_8},
+        {DISPID_UNKNOWN}
+    };
     static const dispex_hook_t document2_ie9_hooks[] = {
         {DISPID_IHTMLDOCUMENT2_CLEAR},
         {DISPID_IHTMLDOCUMENT2_EXPANDO},
@@ -5841,6 +5862,7 @@ static void HTMLDocumentNode_init_dispex_info(dispex_data_t *info, compat_mode_t
 
     HTMLDOMNode_init_dispex_info(info, mode);
 
+    dispex_info_add_interface(info, IDocumentSelector_tid, mode < COMPAT_MODE_IE9 ? document_selector_hooks : NULL);
     if(mode >= COMPAT_MODE_IE9) {
         dispex_info_add_interface(info, IHTMLDocument7_tid, NULL);
         dispex_info_add_interface(info, IDocumentEvent_tid, NULL);

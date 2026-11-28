@@ -179,10 +179,16 @@ IopDoSymbolicLinkTransmogrify(IN PIRP Irp,
 
     PAGED_CODE();
 
+    /* The name fields are there only if the data is at least as long as they are */
+    if (DataBuffer->ReparseDataLength < HeaderLength)
+    {
+        Status = STATUS_IO_REPARSE_DATA_INVALID;
+        goto Done;
+    }
+
     SubstituteLength = DataBuffer->SymbolicLinkReparseBuffer.SubstituteNameLength;
     UnparsedLength = DataBuffer->Reserved;
-    if (DataBuffer->ReparseDataLength < HeaderLength ||
-        DataBuffer->SymbolicLinkReparseBuffer.SubstituteNameOffset + SubstituteLength >
+    if (DataBuffer->SymbolicLinkReparseBuffer.SubstituteNameOffset + SubstituteLength >
             DataBuffer->ReparseDataLength - HeaderLength ||
         SubstituteLength == 0 ||
         (SubstituteLength & 1) ||
@@ -339,7 +345,19 @@ IopDoNameTransmogrify(IN PIRP Irp,
     PAGED_CODE();
 
     ASSERT(Irp->IoStatus.Status == STATUS_REPARSE);
-    ASSERT(DataBuffer != NULL);
+
+    /* The buffer comes from the file system, possibly from disk: check it before any use.
+       Still trusted: the file system allocated at least header + ReparseDataLength bytes. */
+    if (DataBuffer == NULL ||
+        DataBuffer->ReparseTag != Irp->IoStatus.Information ||
+        DataBuffer->ReparseDataLength > MAXIMUM_REPARSE_DATA_BUFFER_SIZE - REPARSE_DATA_BUFFER_HEADER_SIZE)
+    {
+        /* The buffer is ours to free on every way out, as below */
+        if (DataBuffer != NULL)
+            ExFreePool(DataBuffer);
+        Irp->IoStatus.Status = STATUS_IO_REPARSE_DATA_INVALID;
+        return;
+    }
 
     if (DataBuffer->ReparseTag == IO_REPARSE_TAG_SYMLINK)
     {
@@ -347,17 +365,9 @@ IopDoNameTransmogrify(IN PIRP Irp,
         return;
     }
 
-    ASSERT(Irp->IoStatus.Information == IO_REPARSE_TAG_MOUNT_POINT);
-    ASSERT(Irp->Tail.Overlay.AuxiliaryBuffer != NULL);
-    ASSERT(DataBuffer->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT);
-    ASSERT(DataBuffer->ReparseDataLength < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-    ASSERT(DataBuffer->Reserved < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-
-    /* First of all, validate data */
-    if (DataBuffer->ReparseDataLength < REPARSE_DATA_BUFFER_HEADER_SIZE ||
-        (DataBuffer->SymbolicLinkReparseBuffer.PrintNameLength +
-         DataBuffer->SymbolicLinkReparseBuffer.SubstituteNameLength +
-         FIELD_OFFSET(REPARSE_DATA_BUFFER, MountPointReparseBuffer.PathBuffer[0])) > MAXIMUM_REPARSE_DATA_BUFFER_SIZE)
+    if (!NT_SUCCESS(IopValidateMountPointBuffer(DataBuffer, MAXIMUM_REPARSE_DATA_BUFFER_SIZE)) ||
+        (DataBuffer->Reserved & 1) ||
+        DataBuffer->Reserved > FileObject->FileName.Length)
     {
         Irp->IoStatus.Status = STATUS_IO_REPARSE_DATA_INVALID;
     }
@@ -1209,13 +1219,7 @@ IopParseDevice(IN PVOID ParseObject,
                     PREPARSE_DATA_BUFFER ReparseData;
 
                     /* Reparse point attributes were passed by the driver in the auxiliary buffer */
-                    ASSERT(Irp->Tail.Overlay.AuxiliaryBuffer != NULL);
                     ReparseData = (PREPARSE_DATA_BUFFER)Irp->Tail.Overlay.AuxiliaryBuffer;
-
-                    ASSERT(ReparseData->ReparseTag == Irp->IoStatus.Information);
-                    ASSERT(ReparseData->ReparseDataLength < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-                    ASSERT(ReparseData->Reserved < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-
                     IopDoNameTransmogrify(Irp, FileObject, ReparseData);
                 }
             }
@@ -1964,16 +1968,30 @@ IopGetSetSecurityObject(IN PVOID ObjectBody,
                 Status = ObLogSecurityDescriptor(SecurityDescriptor, &CachedSecurityDescriptor, 1);
                 if (NT_SUCCESS(Status))
                 {
+                    PSECURITY_DESCRIPTOR OldSecurityDescriptor;
+
                     KeEnterCriticalRegion();
                     ExAcquireResourceExclusiveLite(&IopSecurityResource, TRUE);
 
-                    /* Assign the Security Descriptor */
+                    /* Assign the Security Descriptor; a device assigned twice drops the one it held */
+                    OldSecurityDescriptor = DeviceObject->SecurityDescriptor;
                     DeviceObject->SecurityDescriptor = CachedSecurityDescriptor;
 
                     ExReleaseResourceLite(&IopSecurityResource);
                     KeLeaveCriticalRegion();
+
+                    if (OldSecurityDescriptor)
+                    {
+                        ObDereferenceSecurityDescriptor(OldSecurityDescriptor, 1);
+                    }
                 }
             }
+
+            /* ObAssignSecurity hands us the descriptor and frees it only when we fail; on success we
+             * own it. We cached a copy (or, for a stream file, kept nothing), so free the one we were
+             * given, as the default object-security path does after it logs. */
+            if (NT_SUCCESS(Status))
+                ExFreePoolWithTag(SecurityDescriptor, TAG_SD);
 
             /* Return status */
             return Status;
@@ -3669,6 +3687,95 @@ IoCreateStreamFileObject(IN PFILE_OBJECT FileObject,
     return IoCreateStreamFileObjectEx(FileObject, DeviceObject, NULL);
 }
 
+/* A stream file gets DeviceObject's VPB, so its requests start at the mounted volume, if any */
+static
+PDEVICE_OBJECT
+IopStreamFileBaseDevice(
+    _In_ PDEVICE_OBJECT DeviceObject)
+{
+    PVPB Vpb = DeviceObject->Vpb;
+
+    return (Vpb != NULL && Vpb->DeviceObject != NULL) ? Vpb->DeviceObject : DeviceObject;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoCreateStreamFileObjectEx2(
+    _In_ PIO_CREATE_STREAM_FILE_OPTIONS CreateOptions,
+    _In_opt_ PFILE_OBJECT FileObject,
+    _In_opt_ PDEVICE_OBJECT DeviceObject,
+    _Out_ PFILE_OBJECT *StreamFileObject,
+    _Out_opt_ PHANDLE FileHandle)
+{
+    PFILE_OBJECT CreatedFileObject = NULL;
+    PDEVICE_OBJECT Target;
+    HANDLE Handle = NULL;
+    BOOLEAN Raise, Lite;
+    NTSTATUS Status = STATUS_SUCCESS;
+    PAGED_CODE();
+
+    if (CreateOptions == NULL || CreateOptions->Size < sizeof(IO_CREATE_STREAM_FILE_OPTIONS))
+        return STATUS_INVALID_PARAMETER;
+
+    Raise = BooleanFlagOn(CreateOptions->Flags, IO_CREATE_STREAM_FILE_RAISE_ON_ERROR);
+    Lite = BooleanFlagOn(CreateOptions->Flags, IO_CREATE_STREAM_FILE_LITE);
+    Target = CreateOptions->TargetDeviceObject;
+    if (FileObject != NULL)
+        DeviceObject = FileObject->DeviceObject;
+
+    /* A lite stream file has no handle; a target must sit on the stack IoGetRelatedDeviceObject uses.
+       It is checked before creation, so a rejected target leaves no file object to close. */
+    if ((CreateOptions->Flags & ~(IO_CREATE_STREAM_FILE_RAISE_ON_ERROR | IO_CREATE_STREAM_FILE_LITE)) ||
+        DeviceObject == NULL || StreamFileObject == NULL || (Lite && FileHandle != NULL) ||
+        (Target != NULL && !IopVerifyDeviceObjectOnStack(IopStreamFileBaseDevice(DeviceObject), Target)))
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Done;
+    }
+
+    _SEH2_TRY
+    {
+        if (Lite)
+            CreatedFileObject = IoCreateStreamFileObjectLite(NULL, DeviceObject);
+        else
+            CreatedFileObject = IoCreateStreamFileObjectEx(NULL, DeviceObject, FileHandle ? &Handle : NULL);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(Status))
+        goto Done;
+
+    /* IoGetRelatedDeviceObject sends the stream's requests to the target from now on */
+    if (Target != NULL)
+    {
+        Status = IopAllocateFileObjectExtension(CreatedFileObject);
+        if (!NT_SUCCESS(Status))
+        {
+            if (Handle != NULL)
+                ObCloseHandle(Handle, KernelMode);
+            else
+                ObDereferenceObject(CreatedFileObject);
+            goto Done;
+        }
+        ((PFILE_OBJECT_EXTENSION)CreatedFileObject->FileObjectExtension)->TopDeviceObjectHint = Target;
+    }
+
+    *StreamFileObject = CreatedFileObject;
+    if (FileHandle != NULL)
+        *FileHandle = Handle;
+
+Done:
+    if (!NT_SUCCESS(Status) && Raise)
+        ExRaiseStatus(Status);
+    return Status;
+}
+
 /*
  * @implemented
  */
@@ -3994,15 +4101,13 @@ IoRemoveShareAccess(IN PFILE_OBJECT FileObject,
     }
 }
 
-/*
- * @implemented
- */
+static
 VOID
-NTAPI
-IoSetShareAccess(IN ACCESS_MASK DesiredAccess,
-                 IN ULONG DesiredShareAccess,
-                 IN PFILE_OBJECT FileObject,
-                 OUT PSHARE_ACCESS ShareAccess)
+IopSetShareAccess(IN ACCESS_MASK DesiredAccess,
+                  IN ULONG DesiredShareAccess,
+                  IN PFILE_OBJECT FileObject,
+                  OUT PSHARE_ACCESS ShareAccess,
+                  IN PBOOLEAN WritePermission)
 {
     BOOLEAN ReadAccess;
     BOOLEAN WriteAccess;
@@ -4055,6 +4160,9 @@ IoSetShareAccess(IN ACCESS_MASK DesiredAccess,
         SharedWrite = (DesiredShareAccess & FILE_SHARE_WRITE) != 0;
         SharedDelete = (DesiredShareAccess & FILE_SHARE_DELETE) != 0;
 
+        /* A caller without write permission cannot deny write sharing */
+        if ((WritePermission != NULL) && !(*WritePermission)) SharedWrite = TRUE;
+
         /* Set it in the FO */
         FileObject->SharedRead = SharedRead;
         FileObject->SharedWrite = SharedWrite;
@@ -4072,6 +4180,398 @@ IoSetShareAccess(IN ACCESS_MASK DesiredAccess,
         ShareAccess->SharedWrite = SharedWrite;
         ShareAccess->SharedDelete = SharedDelete;
     }
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+IoSetShareAccess(IN ACCESS_MASK DesiredAccess,
+                 IN ULONG DesiredShareAccess,
+                 IN PFILE_OBJECT FileObject,
+                 OUT PSHARE_ACCESS ShareAccess)
+{
+    PAGED_CODE();
+    IopSetShareAccess(DesiredAccess, DesiredShareAccess, FileObject, ShareAccess, NULL);
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+IoSetShareAccessEx(IN ACCESS_MASK DesiredAccess,
+                   IN ULONG DesiredShareAccess,
+                   IN PFILE_OBJECT FileObject,
+                   OUT PSHARE_ACCESS ShareAccess,
+                   IN PBOOLEAN WritePermission)
+{
+    PAGED_CODE();
+    IopSetShareAccess(DesiredAccess, DesiredShareAccess, FileObject, ShareAccess, WritePermission);
+}
+
+static
+BOOLEAN
+IopFileObjectIgnoresSharing(IN PFILE_OBJECT FileObject)
+{
+    return (FileObject != NULL) &&
+           (FileObject->Flags & FO_FILE_OBJECT_HAS_EXTENSION) &&
+           (((PFILE_OBJECT_EXTENSION)FileObject->FileObjectExtension)->FoExtFlags & IO_IGNORE_SHARE_ACCESS_CHECK);
+}
+
+/*
+ * Common share access check. Read and write sharing are kept in ShareAccess;
+ * delete sharing is kept in LinkShareAccess when one is given (one per hard
+ * link), unless IO_CHECK_SHARE_ACCESS_FORCE_USING_SCB says to use ShareAccess.
+ */
+static
+NTSTATUS
+IopCheckShareAccessCommon(IN ACCESS_MASK DesiredAccess,
+                          IN ULONG DesiredShareAccess,
+                          IN PFILE_OBJECT FileObject,
+                          IN PSHARE_ACCESS ShareAccess,
+                          IN PLINK_SHARE_ACCESS LinkShareAccess,
+                          IN ULONG Flags,
+                          IN PBOOLEAN WritePermission)
+{
+    BOOLEAN ReadAccess, WriteAccess, DeleteAccess;
+    BOOLEAN SharedRead, SharedWrite, SharedDelete;
+    BOOLEAN UseLink;
+
+    ReadAccess = (DesiredAccess & (FILE_READ_DATA | FILE_EXECUTE)) != 0;
+    WriteAccess = (DesiredAccess & (FILE_WRITE_DATA | FILE_APPEND_DATA)) != 0;
+    DeleteAccess = (DesiredAccess & DELETE) != 0;
+
+    if ((FileObject != NULL) && !(Flags & IO_CHECK_SHARE_ACCESS_DONT_UPDATE_FILE_OBJECT))
+    {
+        FileObject->ReadAccess = ReadAccess;
+        FileObject->WriteAccess = WriteAccess;
+        FileObject->DeleteAccess = DeleteAccess;
+    }
+
+    /* The file object opted out of sharing, unless the caller forces the check */
+    if (IopFileObjectIgnoresSharing(FileObject) && !(Flags & IO_CHECK_SHARE_ACCESS_FORCE_CHECK))
+        return STATUS_SUCCESS;
+
+    if (!ReadAccess && !WriteAccess && !DeleteAccess)
+        return STATUS_SUCCESS;
+
+    SharedRead = (DesiredShareAccess & FILE_SHARE_READ) != 0;
+    SharedWrite = (DesiredShareAccess & FILE_SHARE_WRITE) != 0;
+    SharedDelete = (DesiredShareAccess & FILE_SHARE_DELETE) != 0;
+
+    /* A caller without write permission cannot deny write sharing */
+    if ((WritePermission != NULL) && !(*WritePermission)) SharedWrite = TRUE;
+
+    UseLink = (LinkShareAccess != NULL) && !(Flags & IO_CHECK_SHARE_ACCESS_FORCE_USING_SCB);
+
+    if (ShareAccess != NULL)
+    {
+        if (!(Flags & IO_CHECK_SHARE_ACCESS_DONT_CHECK_READ) &&
+            ((ReadAccess && (ShareAccess->SharedRead < ShareAccess->OpenCount)) ||
+             ((ShareAccess->Readers != 0) && !SharedRead)))
+        {
+            return STATUS_SHARING_VIOLATION;
+        }
+
+        if (!(Flags & IO_CHECK_SHARE_ACCESS_DONT_CHECK_WRITE) &&
+            ((WriteAccess && (ShareAccess->SharedWrite < ShareAccess->OpenCount)) ||
+             ((ShareAccess->Writers != 0) && !SharedWrite)))
+        {
+            return STATUS_SHARING_VIOLATION;
+        }
+    }
+
+    if (!(Flags & IO_CHECK_SHARE_ACCESS_DONT_CHECK_DELETE))
+    {
+        if (UseLink)
+        {
+            if ((DeleteAccess && (LinkShareAccess->SharedDelete < LinkShareAccess->OpenCount)) ||
+                ((LinkShareAccess->Deleters != 0) && !SharedDelete))
+            {
+                return STATUS_SHARING_VIOLATION;
+            }
+        }
+        else if (ShareAccess != NULL)
+        {
+            if ((DeleteAccess && (ShareAccess->SharedDelete < ShareAccess->OpenCount)) ||
+                ((ShareAccess->Deleters != 0) && !SharedDelete))
+            {
+                return STATUS_SHARING_VIOLATION;
+            }
+        }
+    }
+
+    if ((FileObject != NULL) && !(Flags & IO_CHECK_SHARE_ACCESS_DONT_UPDATE_FILE_OBJECT))
+    {
+        FileObject->SharedRead = SharedRead;
+        FileObject->SharedWrite = SharedWrite;
+        FileObject->SharedDelete = SharedDelete;
+    }
+
+    if (Flags & IO_CHECK_SHARE_ACCESS_UPDATE_SHARE_ACCESS)
+    {
+        if (ShareAccess != NULL)
+        {
+            ShareAccess->OpenCount++;
+            ShareAccess->Readers += ReadAccess;
+            ShareAccess->Writers += WriteAccess;
+            ShareAccess->SharedRead += SharedRead;
+            ShareAccess->SharedWrite += SharedWrite;
+            if (!UseLink)
+            {
+                ShareAccess->Deleters += DeleteAccess;
+                ShareAccess->SharedDelete += SharedDelete;
+            }
+        }
+
+        if (UseLink)
+        {
+            LinkShareAccess->OpenCount++;
+            LinkShareAccess->Deleters += DeleteAccess;
+            LinkShareAccess->SharedDelete += SharedDelete;
+        }
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Adds (Delta = 1) or removes (Delta = -1) the access the file object holds.
+ */
+static
+VOID
+IopAdjustLinkShareAccess(IN PFILE_OBJECT FileObject,
+                         IN PSHARE_ACCESS ShareAccess,
+                         IN PLINK_SHARE_ACCESS LinkShareAccess,
+                         IN ULONG Flags,
+                         IN LONG Delta)
+{
+    BOOLEAN UseLink;
+
+    if (IopFileObjectIgnoresSharing(FileObject) && !(Flags & IO_CHECK_SHARE_ACCESS_FORCE_CHECK))
+        return;
+
+    if (!FileObject->ReadAccess && !FileObject->WriteAccess && !FileObject->DeleteAccess)
+        return;
+
+    UseLink = (LinkShareAccess != NULL) && !(Flags & IO_CHECK_SHARE_ACCESS_FORCE_USING_SCB);
+
+    if (ShareAccess != NULL)
+    {
+        ShareAccess->OpenCount += (ULONG)Delta;
+        ShareAccess->Readers += (ULONG)(Delta * FileObject->ReadAccess);
+        ShareAccess->Writers += (ULONG)(Delta * FileObject->WriteAccess);
+        ShareAccess->SharedRead += (ULONG)(Delta * FileObject->SharedRead);
+        ShareAccess->SharedWrite += (ULONG)(Delta * FileObject->SharedWrite);
+        if (!UseLink)
+        {
+            ShareAccess->Deleters += (ULONG)(Delta * FileObject->DeleteAccess);
+            ShareAccess->SharedDelete += (ULONG)(Delta * FileObject->SharedDelete);
+        }
+    }
+
+    if (UseLink)
+    {
+        LinkShareAccess->OpenCount += (ULONG)Delta;
+        LinkShareAccess->Deleters += (ULONG)(Delta * FileObject->DeleteAccess);
+        LinkShareAccess->SharedDelete += (ULONG)(Delta * FileObject->SharedDelete);
+    }
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoCheckShareAccessEx(IN ACCESS_MASK DesiredAccess,
+                     IN ULONG DesiredShareAccess,
+                     IN PFILE_OBJECT FileObject,
+                     IN PSHARE_ACCESS ShareAccess,
+                     IN BOOLEAN Update,
+                     IN PBOOLEAN WritePermission)
+{
+    PAGED_CODE();
+
+    return IopCheckShareAccessCommon(DesiredAccess,
+                                     DesiredShareAccess,
+                                     FileObject,
+                                     ShareAccess,
+                                     NULL,
+                                     Update ? IO_CHECK_SHARE_ACCESS_UPDATE_SHARE_ACCESS : 0,
+                                     WritePermission);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoCheckLinkShareAccess(IN ACCESS_MASK DesiredAccess,
+                       IN ULONG DesiredShareAccess,
+                       IN PFILE_OBJECT FileObject,
+                       IN PSHARE_ACCESS ShareAccess,
+                       IN PLINK_SHARE_ACCESS LinkShareAccess,
+                       IN ULONG IoShareAccessFlags)
+{
+    PAGED_CODE();
+
+    return IopCheckShareAccessCommon(DesiredAccess,
+                                     DesiredShareAccess,
+                                     FileObject,
+                                     ShareAccess,
+                                     LinkShareAccess,
+                                     IoShareAccessFlags,
+                                     NULL);
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+IoSetLinkShareAccess(IN ACCESS_MASK DesiredAccess,
+                     IN ULONG DesiredShareAccess,
+                     IN PFILE_OBJECT FileObject,
+                     IN PSHARE_ACCESS ShareAccess,
+                     IN PLINK_SHARE_ACCESS LinkShareAccess,
+                     IN ULONG IoShareAccessFlags)
+{
+    PAGED_CODE();
+
+    if (!IopFileObjectIgnoresSharing(FileObject) || (IoShareAccessFlags & IO_CHECK_SHARE_ACCESS_FORCE_CHECK))
+    {
+        if (ShareAccess != NULL) RtlZeroMemory(ShareAccess, sizeof(*ShareAccess));
+        if (LinkShareAccess != NULL) RtlZeroMemory(LinkShareAccess, sizeof(*LinkShareAccess));
+    }
+
+    /* The structures are empty, so the check always passes and only records */
+    IopCheckShareAccessCommon(DesiredAccess,
+                              DesiredShareAccess,
+                              FileObject,
+                              ShareAccess,
+                              LinkShareAccess,
+                              (IoShareAccessFlags & ~IO_CHECK_SHARE_ACCESS_DONT_UPDATE_FILE_OBJECT) |
+                                  IO_CHECK_SHARE_ACCESS_UPDATE_SHARE_ACCESS,
+                              NULL);
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+IoUpdateLinkShareAccessEx(IN PFILE_OBJECT FileObject,
+                          IN PSHARE_ACCESS ShareAccess,
+                          IN PLINK_SHARE_ACCESS LinkShareAccess,
+                          IN ULONG IoShareAccessFlags)
+{
+    PAGED_CODE();
+    IopAdjustLinkShareAccess(FileObject, ShareAccess, LinkShareAccess, IoShareAccessFlags, 1);
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+IoUpdateLinkShareAccess(IN PFILE_OBJECT FileObject,
+                        IN PSHARE_ACCESS ShareAccess,
+                        IN PLINK_SHARE_ACCESS LinkShareAccess)
+{
+    PAGED_CODE();
+    IopAdjustLinkShareAccess(FileObject, ShareAccess, LinkShareAccess, 0, 1);
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+IoRemoveLinkShareAccessEx(IN PFILE_OBJECT FileObject,
+                          IN PSHARE_ACCESS ShareAccess,
+                          IN PLINK_SHARE_ACCESS LinkShareAccess,
+                          IN ULONG IoShareAccessFlags)
+{
+    PAGED_CODE();
+    IopAdjustLinkShareAccess(FileObject, ShareAccess, LinkShareAccess, IoShareAccessFlags, -1);
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+IoRemoveLinkShareAccess(IN PFILE_OBJECT FileObject,
+                        IN PSHARE_ACCESS ShareAccess,
+                        IN PLINK_SHARE_ACCESS LinkShareAccess)
+{
+    PAGED_CODE();
+    IopAdjustLinkShareAccess(FileObject, ShareAccess, LinkShareAccess, 0, -1);
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+IoIsFileObjectIgnoringSharing(IN PFILE_OBJECT FileObject)
+{
+    return IopFileObjectIgnoresSharing(FileObject);
+}
+
+/*
+ * @implemented
+ */
+
+NTSTATUS
+NTAPI
+IoIncrementKeepAliveCount(IN OUT PFILE_OBJECT FileObject,
+                            IN OUT PEPROCESS Process)
+{
+    PAGED_CODE();
+
+    if ((FileObject == NULL) || (Process == NULL))
+        return STATUS_INVALID_PARAMETER;
+
+    InterlockedIncrement(&Process->KeepAliveCount);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+IoDecrementKeepAliveCount(IN OUT PFILE_OBJECT FileObject,
+                            IN OUT PEPROCESS Process)
+{
+    LONG Count;
+
+    PAGED_CODE();
+
+    if ((FileObject == NULL) || (Process == NULL))
+        return STATUS_INVALID_PARAMETER;
+
+    Count = InterlockedDecrement(&Process->KeepAliveCount);
+    if (Count < 0)
+    {
+        InterlockedIncrement(&Process->KeepAliveCount);
+        return STATUS_INVALID_PARAMETER;
+    }
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+IoSetFileObjectIgnoreSharing(IN PFILE_OBJECT FileObject)
+{
+    NTSTATUS Status;
+
+    Status = IopAllocateFileObjectExtension(FileObject);
+    if (!NT_SUCCESS(Status)) return Status;
+
+    InterlockedOr((PLONG)&((PFILE_OBJECT_EXTENSION)FileObject->FileObjectExtension)->FoExtFlags,
+                  IO_IGNORE_SHARE_ACCESS_CHECK);
+    return STATUS_SUCCESS;
 }
 
 /*

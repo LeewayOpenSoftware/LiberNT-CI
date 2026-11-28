@@ -54,6 +54,7 @@ typedef struct _SERVICE_IMAGE
     HANDLE hProcess;
     DWORD dwProcessId;
     HANDLE hToken;
+    HANDLE hProcessToken; /* privilege-filtered token used to create the process, or NULL */
     HANDLE hProfile;
     ULONG ImageSerial;
     BOOL bProcessWatched;
@@ -70,6 +71,7 @@ typedef struct _SERVICE
     PSERVICE_IMAGE lpImage;
     BOOL bDeleted;
     DWORD dwResumeCount;
+    DWORD dwStatusHandle;   /* random, unique, never 0 */
     LONG RefCount;
 
     SERVICE_STATUS Status;
@@ -87,6 +89,8 @@ typedef struct _SERVICE
     PSECURITY_DESCRIPTOR pSecurityDescriptor;
 
     BOOLEAN ServiceVisited;
+    BOOLEAN bDelayedAutoStart;
+    BOOLEAN bDelayedStartPending;
 
     LIST_ENTRY HandleListHead;
 
@@ -181,10 +185,10 @@ ScmDecryptPassword(
     _Out_ PWSTR *pDecryptedPassword);
 
 
-/* controlset.c */
+/* bootconfig.c */
 
-DWORD
-ScmCreateLastKnownGoodControlSet(VOID);
+VOID
+ScmReadBootConfigPolicy(VOID);
 
 DWORD
 ScmAcceptBoot(VOID);
@@ -199,6 +203,7 @@ DWORD ScmCreateServiceDatabase(VOID);
 VOID ScmShutdownServiceDatabase(VOID);
 VOID ScmGetBootAndSystemDriverState(VOID);
 VOID ScmAutoStartServices(VOID);
+VOID ScmLoadSystemProfile(VOID);
 VOID ScmAutoShutdownServices(VOID);
 DWORD ScmStartService(PSERVICE Service,
                       DWORD argc,
@@ -276,6 +281,13 @@ VOID ScmServiceFailure(PSERVICE lpService, BOOL bCrashed);
 DWORD ScmSetServiceTriggers(HKEY hServiceKey, const SERVICE_TRIGGER_INFO *lpInfo);
 DWORD ScmQueryServiceTriggers(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, LPDWORD pcbBytesNeeded);
 VOID ScmStartTriggers(VOID);
+#define SCM_DEFAULT_PRESHUTDOWN_TIMEOUT 10000
+
+VOID ScmPreshutdownServices(VOID);
+BOOLEAN ScmReadDelayedAutoStart(_In_ HKEY hServiceKey);
+DWORD ScmReadRequiredPrivileges(_In_ HKEY hServiceKey, _Out_ LPWSTR *ppmszPrivileges, _Out_ LPDWORD pcbPrivileges);
+DWORD ScmApplyRequiredPrivileges(_In_ PSERVICE pService, _Inout_ PSERVICE_IMAGE pImage);
+VOID ScmStartDelayedAutoStartServices(HANDLE hShutdownEvent);
 VOID ScmTriggersChanged(VOID);
 
 
@@ -308,6 +320,8 @@ DWORD ScmQueryServiceLockStatusA(OUT LPQUERY_SERVICE_LOCK_STATUSA lpLockStatus,
 VOID ScmStartRpcServer(VOID);
 VOID ScmInitServiceNotify(VOID);
 VOID ScmNotifyServiceStatus(PSERVICE lpService);
+extern CRITICAL_SECTION ScmStatusChangeLock;
+extern CONDITION_VARIABLE ScmStatusChanged;
 DWORD ScmReadFailureActions(HKEY hServiceKey,
                             PSERVICE_FAILURE_ACTIONS_VALUE *lpValue,
                             LPDWORD lpActionCount);
@@ -317,6 +331,22 @@ DWORD ScmReadFailureActions(HKEY hServiceKey,
 
 DWORD ScmInitializeSecurity(VOID);
 VOID ScmShutdownSecurity(VOID);
+
+extern PSECURITY_DESCRIPTOR pDefaultSD;
+extern PSECURITY_DESCRIPTOR pManagerSD;
+
+DWORD
+ScmAccessCheckCaller(
+    _In_ PSECURITY_DESCRIPTOR pSecurityDescriptor,
+    _In_ DWORD dwDesiredAccess,
+    _In_ PGENERIC_MAPPING pMapping,
+    _Out_ PDWORD pdwGrantedAccess);
+
+BOOL
+ScmIsCallerLocalSystem(VOID);
+
+BOOL
+ScmIsCallerAccount(HANDLE hAccountToken);
 
 DWORD
 ScmCreateDefaultServiceSD(

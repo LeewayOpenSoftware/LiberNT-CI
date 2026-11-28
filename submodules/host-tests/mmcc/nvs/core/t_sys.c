@@ -345,8 +345,20 @@ SysKernelStacks(void)
         CHECK(MI_ATOMIC_READ64(&World.System.SystemSpace.PageTablePages) == Tables);
         CHECK(MiSystemCommitPinned(&World.System, RegionBase + 0x6000, 4, MI_PROT_READWRITE) ==
               STATUS_CONFLICTING_ADDRESSES);
+        CHECK(MiSystemCommitPinned(&World.System, RegionBase + 0x3000, 4, MI_PROT_READWRITE) ==
+              STATUS_CONFLICTING_ADDRESSES);
+        CHECK(MiArchPteRead(MiPtLookup(&World.System.SystemSpace, RegionBase + 0x3000, NULL)) == 0);
+        CHECK(MiArchPteRead(MiPtLookup(&World.System.SystemSpace, RegionBase + 0x4000, NULL)) == 0);
+        CHECK(MiArchPteIsValid(MiArchPteRead(MiPtLookup(&World.System.SystemSpace, RegionBase + 0x5000, NULL))));
+        CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == Commit + 6 + 64);
         CHECK(MiHostIrql == 2);
         MiHostLowerIrql(OldIrql);
+        CHECK(MiSystemCommitPages(&World.System, RegionBase + 0x3000, 4, MI_PROT_READWRITE) ==
+              STATUS_CONFLICTING_ADDRESSES);
+        CHECK(MiArchPteRead(MiPtLookup(&World.System.SystemSpace, RegionBase + 0x3000, NULL)) == 0);
+        CHECK(MiArchPteRead(MiPtLookup(&World.System.SystemSpace, RegionBase + 0x4000, NULL)) == 0);
+        CHECK(MiArchPteIsValid(MiArchPteRead(MiPtLookup(&World.System.SystemSpace, RegionBase + 0x5000, NULL))));
+        CHECK(MI_ATOMIC_READ64(&World.System.CommittedPages) == Commit + 6 + 64);
         CHECK(NT_SUCCESS(KernelWrite64(&World, 0, RegionBase + 0x5000 + 63 * 4096, 0xF00)));
         CHECK(KernelRead64(&World, 0, RegionBase + 0x5000, &Status) == 0 && NT_SUCCESS(Status));
         KernelRead64(&World, 0, RegionBase + 0x4000, &Status);
@@ -914,6 +926,8 @@ SysBootAdoption(void)
 
         if (Level == 1)
         {
+            Table[((BootVa >> Arch->Level[1].Shift) & Arch->Level[1].IndexMask) + 1] =
+                MiArchPteMakeTable(Frame + 1, 0);
             Table[(BlockVa >> Arch->Level[1].Shift) & Arch->Level[1].IndexMask] =
                 MiArchPteMakeBlock(512, MI_PROT_READWRITE, MI_LEAF_GLOBAL | MI_LEAF_DIRTY);
         }
@@ -953,7 +967,14 @@ SysBootAdoption(void)
         CHECK((World.PfnArray[i].Flags & (MI_PFN_FLAG_PAGE_TABLE | MI_PFN_FLAG_PINNED)) ==
               (MI_PFN_FLAG_PAGE_TABLE | MI_PFN_FLAG_PINNED));
         CHECK(World.PfnArray[i].PteFrame == i - 1);
+        CHECK(World.PfnArray[i].PageTableOwner == &System->SystemSpace);
+        CHECK(World.PfnArray[i].PteAddress ==
+              ((ULONG64)(i - 1) << PAGE_SHIFT) +
+                  ((BootVa >> Arch->Level[Top - (i - 3)].Shift) &
+                   Arch->Level[Top - (i - 3)].IndexMask) * sizeof(MI_PTE));
     }
+    Table = MiArchMapFrame(Top + 1);
+    Table[((BootVa >> Arch->Level[1].Shift) & Arch->Level[1].IndexMask) + 1] = 0;
     CHECK(MiPtCheck(&System->SystemSpace) == 0);
 
     Value = 0;
@@ -1071,6 +1092,7 @@ SysMdlCacheAttributes(void)
         User = 0;
         CHECK(NT_SUCCESS(MiMapFramesUser(&Process, Frames, 1, MI_PROT_READWRITE,
                                          Flags[Requested], TRUE, &User)));
+        CHECK(World.Machine.FrameCache[Frames[0]] == Flags[Requested]);
         CHECK(NT_SUCCESS(MiMapFrames(&World.System, Frames, 1, Types[(Requested + 1) % 3],
                                      MI_PROT_READWRITE, &Kernel)));
         CHECK(MiPtTranslate(&World.System.SystemSpace, Kernel, &Physical, &Pte));
@@ -1080,6 +1102,28 @@ SysMdlCacheAttributes(void)
         MiUnmapFrames(&World.System, Kernel, 1);
         MiPfnShareDecrement(&World.System.Pfn, (ULONG)Frames[0], TRUE);
     }
+
+    Frames[0] = MiPfnAllocatePage(&World.System.Pfn, 0);
+    CHECK(Frames[0] != MI_FRAME_INVALID);
+    World.PfnArray[Frames[0]].CacheFlags = MI_PFN_CACHE_UNASSIGNED;
+    World.Machine.FrameCacheFailureFramePlusOne = (ULONG)Frames[0] + 1;
+    User = 0;
+    Status = MiMapFramesUser(&Process, Frames, 1, MI_PROT_READWRITE, MI_LEAF_NOCACHE, TRUE, &User);
+    CHECK(Status == STATUS_NOT_SUPPORTED);
+    CHECK(World.PfnArray[Frames[0]].CacheFlags == MI_PFN_CACHE_UNASSIGNED);
+    CHECK(World.Machine.FrameCache[Frames[0]] == 0);
+    if (NT_SUCCESS(Status))
+        CHECK(NT_SUCCESS(MiUnmapFramesUser(&Process, User, TRUE)));
+    World.PfnArray[Frames[0]].CacheFlags = MI_PFN_CACHE_UNASSIGNED;
+    Kernel = 0;
+    Status = MiMapFrames(&World.System, Frames, 1, MiCacheNone, MI_PROT_READWRITE, &Kernel);
+    CHECK(Status == STATUS_NOT_SUPPORTED);
+    CHECK(World.PfnArray[Frames[0]].CacheFlags == MI_PFN_CACHE_UNASSIGNED);
+    CHECK(World.Machine.FrameCache[Frames[0]] == 0);
+    if (NT_SUCCESS(Status))
+        MiUnmapFrames(&World.System, Kernel, 1);
+    World.Machine.FrameCacheFailureFramePlusOne = 0;
+    MiPfnShareDecrement(&World.System.Pfn, (ULONG)Frames[0], TRUE);
 
     /* Raw I/O PFNs have no established RAM cache attributes. */
     Frames[0] = World.System.Pfn.FrameCount + 1;
@@ -1145,9 +1189,60 @@ SysDumpUserFrames(void)
     SysWorldDestroy(&World, 1024);
 }
 
+static
+void
+SysContiguousAboveFirstFrame(void)
+{
+    static TEST_WORLD World;
+    static const ULONG Runs[][2] = { { 2048, 2056 }, { 2058, 2072 }, { 2075, 4200 }, { 4210, 16000 }, { 16010, 16384 } };
+    static const ULONG Sizes[] = { 1, 20, 21, 64, 65, 122, 123, 146, 1024 };
+    const ULONG Frames = 16384, FirstFrame = 2048;
+    ULONG64 Va[RTL_NUMBER_OF(Sizes)];
+    ULONG i, Page;
+
+    memset(&World, 0, sizeof(World));
+    MachineCreate(&World.Machine, Frames, 2);
+    World.Machine.StrictTlb = TRUE;
+    World.PfnArray = calloc(Frames, sizeof(MI_PFN));
+    CHECK(NT_SUCCESS(MiSystemInitialize(&World.System, World.PfnArray, Frames, 2, 1000000)));
+    for (i = 0; i < RTL_NUMBER_OF(Runs); i++)
+        MiPfnDbAddRange(&World.System.Pfn, Runs[i][0], Runs[i][1] - Runs[i][0]);
+    CHECK(NT_SUCCESS(MiAddressSpaceCreate(&World.System, &World.System.SystemSpace)));
+    World.Machine.SystemRoot = World.System.SystemSpace.RootFrame;
+    WorldEnableFaults(&World);
+    WorldAttach(&World, 0, NULL);
+    CHECK(NT_SUCCESS(MiSystemPtesInitialize(&World.System, SYSPTE_PAGES, 2)));
+
+    for (i = 0; i < RTL_NUMBER_OF(Sizes); i++)
+    {
+        ULONG64 First;
+
+        Va[i] = 0;
+        CHECK(NT_SUCCESS(MiAllocateContiguousMemory(&World.System, Sizes[i] * 4096ULL, 0, ~0ULL, 0, MiCacheNone,
+                                                    MI_PROT_READWRITE, &Va[i])));
+        if (Va[i] == 0)
+            continue;
+        First = MiGetPhysicalAddress(&World.System.SystemSpace, Va[i]);
+        CHECK((First >> PAGE_SHIFT) >= FirstFrame);
+        for (Page = 0; Page < Sizes[i]; Page++)
+        {
+            CHECK(MiGetPhysicalAddress(&World.System.SystemSpace, Va[i] + Page * 4096ULL) == First + Page * 4096ULL);
+            CHECK(NT_SUCCESS(KernelWrite64(&World, 0, Va[i] + Page * 4096ULL, Page)));
+        }
+    }
+    for (i = 0; i < RTL_NUMBER_OF(Sizes); i++)
+    {
+        if (Va[i] != 0)
+            MiFreeContiguousMemory(&World.System, Va[i]);
+    }
+    MiSystemPtesUninitialize(&World.System);
+    WorldDestroy(&World);
+}
+
 void
 TestSys(void)
 {
+    SysContiguousAboveFirstFrame();
     SysSelfMapFault();
     SysBootAdoption();
     SysPteAllocator();

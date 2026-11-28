@@ -1446,13 +1446,18 @@ SeSubProcessToken(
     OBJECT_ATTRIBUTES ObjectAttributes;
     SECURITY_DESCRIPTOR SecurityDescriptor;
     PVOID SdBuffer;
-    NTSTATUS Status;
+    NTSTATUS Status, SdStatus;
 
-    Status = SepCreateSubProcessTokenSd(ParentToken, &SecurityDescriptor, &SdBuffer);
+    /*
+     * The new token is owned by its own user. The creator (services.exe, winlogon, ...) may
+     * not name that owner, so the descriptor is not given at creation, where the owner is
+     * checked against the creator, but set by the kernel right after the insertion, before
+     * anyone can reach the token.
+     */
+    SdStatus = SepCreateSubProcessTokenSd(ParentToken, &SecurityDescriptor, &SdBuffer);
 
     /* Initialize the attributes and duplicate it */
-    InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL,
-                               NT_SUCCESS(Status) ? &SecurityDescriptor : NULL);
+    InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL, NULL);
     Status = SepDuplicateToken(ParentToken,
                                &ObjectAttributes,
                                FALSE,
@@ -1471,6 +1476,16 @@ SeSubProcessToken(
                                 0,
                                 NULL,
                                 NULL);
+        if (NT_SUCCESS(Status) && NT_SUCCESS(SdStatus))
+        {
+            Status = ObSetSecurityObjectByPointer(NewToken,
+                                                  OWNER_SECURITY_INFORMATION |
+                                                  GROUP_SECURITY_INFORMATION |
+                                                  DACL_SECURITY_INFORMATION,
+                                                  &SecurityDescriptor);
+            if (!NT_SUCCESS(Status))
+                ObDereferenceObject(NewToken);
+        }
         if (NT_SUCCESS(Status))
         {
             /* Set the session ID */
@@ -1691,6 +1706,9 @@ SepDeleteToken(
     PTOKEN AccessToken = (PTOKEN)ObjectBody;
 
     DPRINT("SepDeleteToken()\n");
+
+    /* Leave the UAC pair of the logon session, if the token is part of one */
+    SepRmUnlinkLogonSessionToken(AccessToken);
 
     /* Remove the referenced logon session from token */
     if (AccessToken->LogonSession)
@@ -2341,6 +2359,14 @@ SeTokenCanImpersonate(
         goto Quit;
     }
 
+    /* A process never impersonates a client above its own integrity level */
+    if (SepGetTokenIntegrityRid(TokenToImpersonate) > SepGetTokenIntegrityRid(ProcessToken))
+    {
+        DPRINT1("Cannot impersonate a client above the process integrity level!\n");
+        CanImpersonate = FALSE;
+        goto Quit;
+    }
+
     /*
      * Deny impersonation for the server if it wants to impersonate a client
      * beyond what the impersonation level originally permits.
@@ -2421,6 +2447,38 @@ Quit:
  * as impersonation level and we cannot open it. A failure NTSTATUS code is returned
  * otherwise.
  */
+/**
+ * @brief
+ * Decides whether a caller may open a token for the given access. A caller
+ * below the token's integrity level only gets to look at it.
+ */
+BOOLEAN
+NTAPI
+SeTokenOpenAccessAllowed(
+    _In_ PACCESS_TOKEN Token,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ KPROCESSOR_MODE PreviousMode)
+{
+    SECURITY_SUBJECT_CONTEXT SubjectContext;
+    PACCESS_TOKEN CallerToken;
+    BOOLEAN Allowed;
+
+    PAGED_CODE();
+
+    if (PreviousMode == KernelMode ||
+        (DesiredAccess & ~(TOKEN_QUERY | TOKEN_QUERY_SOURCE | READ_CONTROL | SYNCHRONIZE)) == 0)
+    {
+        return TRUE;
+    }
+
+    SeCaptureSubjectContext(&SubjectContext);
+    CallerToken = SeQuerySubjectContextToken(&SubjectContext);
+    Allowed = (SepGetTokenIntegrityRid(CallerToken) >= SepGetTokenIntegrityRid(Token));
+    SeReleaseSubjectContext(&SubjectContext);
+
+    return Allowed;
+}
+
 NTSTATUS
 NTAPI
 NtOpenThreadTokenEx(
@@ -2499,6 +2557,18 @@ NtOpenThreadTokenEx(
     {
         RestoreImpersonation = PsDisableImpersonation(PsGetCurrentThread(),
                                                       &ImpersonationState);
+    }
+
+    /* A caller below the token's integrity level may only query it; with
+     * OpenAsSelf the caller is the process, so this comes after the revert */
+    if (!SeTokenOpenAccessAllowed(Token, DesiredAccess, PreviousMode))
+    {
+        DPRINT1("The caller is below the thread token's integrity level\n");
+        if (RestoreImpersonation)
+            PsRestoreImpersonation(PsGetCurrentThread(), &ImpersonationState);
+        PsDereferenceImpersonationToken(Token);
+        ObDereferenceObject(Thread);
+        return STATUS_ACCESS_DENIED;
     }
 
     /* Call the private function to do the job */

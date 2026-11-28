@@ -325,6 +325,7 @@ VOID ProcessFragment(
   IP_PACKET Datagram;
   PIP_FRAGMENT Fragment;
   BOOLEAN Success;
+  BOOLEAN IsFragment;
   PIPDATAGRAM_REASSEMBLY NewIPDR;
 
   /* FIXME: Assume IPv4 */
@@ -335,11 +336,18 @@ VOID ProcessFragment(
   FragSize = IPPacket->TotalSize - IPPacket->HeaderSize;
   FragEnd = FragFirst + FragSize;
 
-  if (MoreFragments && (FragSize == 0 || (FragSize & 7)))
-      return;
+  /* A whole datagram comes here too, when its buffer is not contiguous: that is no reassembly */
+  IsFragment = FragFirst != 0 || MoreFragments;
+  if (IsFragment)
+      IP_STAT_INC(ReasmReqds);
 
-  if (IPPacket->HeaderSize + FragEnd > 65535)
+  if ((MoreFragments && (FragSize == 0 || (FragSize & 7))) ||
+      IPPacket->HeaderSize + FragEnd > 65535)
+  {
+      if (IsFragment)
+          IP_STAT_INC(ReasmFails);
       return;
+  }
 
   /* Check if we already have an reassembly structure for this datagram */
   IPDR = GetReassemblyInfo(IPPacket, &OldIrql);
@@ -559,8 +567,16 @@ VOID ProcessFragment(
     DereferenceIPDR(IPDR);
 
     if (!Success)
+    {
       /* Not enough free resources, discard the packet */
+      if (IsFragment)
+          IP_STAT_INC(ReasmFails);
+      IP_STAT_INC(InDiscards);
       return;
+    }
+
+    if (IsFragment)
+        IP_STAT_INC(ReasmOks);
 
     DISPLAY_IP_PACKET(&Datagram);
 
@@ -569,6 +585,8 @@ VOID ProcessFragment(
         IPDispatchProtocol(IF, &Datagram);
     else if (Forward)
         IPv4Forward(IF, &Datagram);
+    else
+        IP_STAT_INC(InAddrErrors);
 
     /* We're done with this datagram */
     TI_DbgPrint(MAX_TRACE, ("Freeing datagram at (0x%X).\n", Datagram));
@@ -580,6 +598,8 @@ VOID ProcessFragment(
   return;
 
 Discard:
+  if (IsFragment)
+      IP_STAT_INC(ReasmFails);
   TcpipReleaseSpinLock(&IPDR->Lock, OldIrql);
   RemoveIPDR(IPDR);
   DereferenceIPDR(IPDR);
@@ -668,6 +688,7 @@ VOID IPDatagramReassemblyTimeout(
     {
        CurrentEntry = RemoveHeadList(&RemovedList);
        CurrentIPDR = CONTAINING_RECORD(CurrentEntry, IPDATAGRAM_REASSEMBLY, ListEntry);
+       IP_STAT_INC(ReasmFails);
        DereferenceIPDR(CurrentIPDR);
     }
 }
@@ -680,19 +701,27 @@ VOID IPv4Forward(PIP_INTERFACE IF, PIP_PACKET IPPacket)
     UINT BufferSize = 0;
 
     if (((PIPv4_HEADER)IPPacket->Header)->Ttl <= 1 || IPPacket->TotalSize < IPPacket->HeaderSize)
+    {
+        IP_STAT_INC64(InHdrErrors);
         return;
+    }
 
     NCE = RouteGetRouteToDestination(&IPPacket->DstAddr);
     if (!NCE)
+    {
+        IP_STAT_INC(OutNoRoutes);
         return;
+    }
     if (NCE->Interface == IF || !NCE->Interface->Forwarding)
     {
+        IP_STAT_INC(InAddrErrors);
         NBDereferenceNeighbor(NCE);
         return;
     }
     if ((WN2H(((PIPv4_HEADER)IPPacket->Header)->FlagsFragOfs) & IPv4_DF_MASK) &&
         IPPacket->TotalSize > NCE->Interface->MTU)
     {
+        IP_STAT_INC(FragFails);
         ICMPSendFragmentationNeeded(IF, IPPacket, NCE->Interface->MTU);
         NBDereferenceNeighbor(NCE);
         return;
@@ -702,6 +731,7 @@ VOID IPv4Forward(PIP_INTERFACE IF, PIP_PACKET IPPacket)
     NewPacket.TotalSize = IPPacket->TotalSize;
     if (!NT_SUCCESS(AllocatePacketWithBuffer(&NewPacket.NdisPacket, NULL, NewPacket.TotalSize)))
     {
+        IP_STAT_INC(InDiscards);
         NBDereferenceNeighbor(NCE);
         return;
     }
@@ -716,10 +746,34 @@ VOID IPv4Forward(PIP_INTERFACE IF, PIP_PACKET IPPacket)
     NewPacket.Data = Buffer + IPPacket->HeaderSize;
     NewPacket.SrcAddr = IPPacket->SrcAddr;
     NewPacket.DstAddr = IPPacket->DstAddr;
-    NewPacket.Flags |= IP_PACKET_FLAG_RAW;
+    NewPacket.Flags |= IP_PACKET_FLAG_RAW | IP_PACKET_FLAG_NOREQUEST;
 
+    IP_STAT_INC64(ForwDatagrams);
     IPSendDatagram(&NewPacket, NCE);
     NBDereferenceNeighbor(NCE);
+}
+
+static BOOLEAN IPv4IsDhcpClientDatagram(PIP_PACKET IPPacket)
+{
+    PIPv4_HEADER Header = (PIPv4_HEADER)IPPacket->Header;
+    USHORT DestinationPort;
+
+    if (Header->Protocol != IPPROTO_UDP ||
+        (WN2H(Header->FlagsFragOfs) & (IPv4_FRAGOFS_MASK | IPv4_MF_MASK)) != 0 ||
+        IPPacket->TotalSize < IPPacket->HeaderSize + 4)
+    {
+        return FALSE;
+    }
+
+    if (CopyPacketToBuffer((PCHAR)&DestinationPort,
+                           IPPacket->NdisPacket,
+                           IPPacket->Position + IPPacket->HeaderSize + 2,
+                           sizeof(DestinationPort)) != sizeof(DestinationPort))
+    {
+        return FALSE;
+    }
+
+    return DestinationPort == WH2N(IP_DHCP_CLIENT_PORT);
 }
 
 VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
@@ -740,6 +794,8 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
 
     AvailableSize = IPPacket->TotalSize >= IPPacket->Position ?
                     IPPacket->TotalSize - IPPacket->Position : 0;
+    IP_STAT_INC64(InReceives);
+    IP_STAT_ADD64(InOctets, AvailableSize);
     /* Read in the first IP header byte for size information */
     BytesCopied = CopyPacketToBuffer((PCHAR)&FirstByte,
                                      IPPacket->NdisPacket,
@@ -749,6 +805,7 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
     {
         TI_DbgPrint(MIN_TRACE, ("Failed to copy in first byte\n"));
         /* Discard packet */
+        IP_STAT_INC64(InHdrErrors);
         return;
     }
 
@@ -760,6 +817,7 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
         TI_DbgPrint(MIN_TRACE, ("Datagram received with incorrect header size (%d).\n",
 	      IPPacket->HeaderSize));
         /* Discard packet */
+        IP_STAT_INC64(InHdrErrors);
         return;
     }
 
@@ -771,6 +829,7 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
     {
         TI_DbgPrint(MIN_TRACE, ("No resources to allocate header\n"));
         /* Discard packet */
+        IP_STAT_INC(InDiscards);
         return;
     }
 
@@ -784,12 +843,14 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
     {
         TI_DbgPrint(MIN_TRACE, ("Failed to copy in header\n"));
         /* Discard packet */
+        IP_STAT_INC64(InHdrErrors);
         return;
     }
 
     /* Checksum IPv4 header */
     if (!IPv4CorrectChecksum(IPPacket->Header, IPPacket->HeaderSize)) {
         /* Discard packet */
+        IP_STAT_INC64(InHdrErrors);
         return;
     }
 
@@ -798,16 +859,21 @@ VOID IPv4Receive(PIP_INTERFACE IF, PIP_PACKET IPPacket)
     if (IPPacket->TotalSize < IPPacket->HeaderSize ||
         IPPacket->TotalSize > AvailableSize)
     {
+        IP_STAT_INC64(InHdrErrors);
         return;
     }
 
     AddrInitIPv4(&IPPacket->SrcAddr, ((PIPv4_HEADER)IPPacket->Header)->SrcAddr);
     AddrInitIPv4(&IPPacket->DstAddr, ((PIPv4_HEADER)IPPacket->Header)->DstAddr);
 
-    if (!IPv4AcceptDestination(IF, &IPPacket->DstAddr, &Forward))
+    if (!IPv4AcceptDestination(IF, &IPPacket->DstAddr, &Forward) &&
+        (Forward || !IPv4IsDhcpClientDatagram(IPPacket)))
     {
         if (!Forward)
+        {
+            IP_STAT_INC(InAddrErrors);
             return;
+        }
         if ((WN2H(((PIPv4_HEADER)IPPacket->Header)->FlagsFragOfs) & (IPv4_FRAGOFS_MASK | IPv4_MF_MASK)) == 0)
         {
             PacketData = NULL;

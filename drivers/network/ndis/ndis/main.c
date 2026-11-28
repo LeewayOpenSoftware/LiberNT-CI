@@ -21,7 +21,6 @@ ULONG DebugTraceLevel = MIN_TRACE;
 #endif /* DBG */
 
 PDRIVER_OBJECT NdisDriverObject;
-
 LONG CancelId;
 
 

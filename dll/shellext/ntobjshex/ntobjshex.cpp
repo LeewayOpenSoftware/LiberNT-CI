@@ -35,10 +35,34 @@ DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID fImpLoad)
     return TRUE;
 }
 
+/* Earlier versions listed both folders under Computer; drop those entries when registering again */
+static VOID
+RemoveSystemLocations(VOID)
+{
+    static const GUID *const Folders[] = { &CLSID_NtObjectFolder, &CLSID_RegistryFolder };
+    UINT i;
+
+    for (i = 0; i < _countof(Folders); i++)
+    {
+        WCHAR Guid[40];
+        WCHAR Path[200];
+
+        if (!StringFromGUID2(*Folders[i], Guid, _countof(Guid)))
+            continue;
+        lstrcpyW(Path, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MyComputer\\NameSpace\\");
+        lstrcatW(Path, Guid);
+        RegDeleteKeyW(HKEY_LOCAL_MACHINE, Path);
+    }
+}
+
 STDAPI
 DllRegisterServer(void)
 {
-    return g_Module.DllRegisterServer(FALSE);
+    HRESULT hr = g_Module.DllRegisterServer(FALSE);
+
+    if (SUCCEEDED(hr))
+        RemoveSystemLocations();
+    return hr;
 }
 
 STDAPI

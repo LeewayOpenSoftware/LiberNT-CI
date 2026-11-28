@@ -22,6 +22,7 @@ list(APPEND SOURCE
     CSimpleMap.cpp
     CString.cpp
     CString.inl
+    StatReg.cpp
     SubclassWindow.cpp)
 
 list(APPEND PCH_SKIP_SOURCE

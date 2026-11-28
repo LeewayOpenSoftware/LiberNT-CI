@@ -66,6 +66,16 @@ extern Imm32ApiTable gImmApiEntries;
 
 #define IMM_FN(name) gImmApiEntries.p##name
 
+BOOL WINAPI User32IsDpiVirtualizationActive(VOID);
+BOOL WINAPI User32IsDpiVirtualThread(VOID);
+ULONG WINAPI User32BeginSystemDpiContext(VOID);
+VOID WINAPI User32EndSystemDpiContext(ULONG Previous);
+HANDLE WINAPI User32LoadOemImage(LPCWSTR lpszName, UINT uType, int cxDesired, int cyDesired, UINT fuLoad);
+UINT WINAPI User32GetSystemDpi(VOID);
+LONG WINAPI User32DpiToLogical(LONG Value);
+LONG WINAPI User32DpiToPhysical(LONG Value);
+VOID WINAPI User32DpiRectToLogical(LPRECT Rect);
+
 #define IS_ATOM(x) \
   (((ULONG_PTR)(x) > 0x0) && ((ULONG_PTR)(x) < 0x10000))
 
@@ -150,7 +160,7 @@ HRESULT User32GetSystemFilePath(_Out_writes_(cchBuffer) PWSTR lpBuffer, _In_ SIZ
 BOOL WINAPI UpdatePerUserImmEnabling(VOID);
 VOID APIENTRY CliImmInitializeHotKeys(DWORD dwAction, HKL hKL);
 VOID IntLoadPreloadKeyboardLayouts(VOID);
-VOID LoadUserCursors(VOID);
+BOOL LoadUserCursors(VOID);
 HBITMAP UserLoadWallpaperBitmap(PCWSTR Source, UINT WinIni);
 
 /* EOF */

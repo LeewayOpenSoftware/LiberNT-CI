@@ -27,8 +27,9 @@
 #define IDA_DESKBROWSER 3
 
 /* Bitmaps */
-#define IDB_REACTOS                 131
-#define IDB_LINEBAR                 138
+#define IDB_OROSI_WORDMARK          131
+#define IDB_OROSI_WORDMARK_150      133
+#define IDB_OROSI_WORDMARK_200      135
 #define IDB_SHELL_IEXPLORE_LG       204
 #define IDB_SHELL_IEXPLORE_LG_HOT   205
 #define IDB_SHELL_IEXPLORE_SM       206
@@ -392,8 +393,96 @@
 #define IDS_COMPUTER_FREE_SPACE                     60022
 #define IDS_COMPUTER_FOLDERS                        60023
 #define IDS_FILE_EXPLORER                           60030
+
+/* Control Panel category pages: the left pane */
+#define IDS_CPL_HOME                                60040
+#define IDS_CPL_CAT_SYSTEM                          60041
+#define IDS_CPL_CAT_NETWORK                         60042
+#define IDS_CPL_CAT_HARDWARE                        60043
+#define IDS_CPL_CAT_PROGRAMS                        60044
+#define IDS_CPL_CAT_ACCOUNTS                        60045
+#define IDS_CPL_CAT_APPEARANCE                      60046
+#define IDS_CPL_CAT_CLOCK                           60047
+#define IDS_CPL_CAT_ACCESS                          60048
+
+/* Network and Sharing Center */
+#define IDS_NSC_TITLE                               60050
+#define IDS_NSC_ACTIVE                              60051
+#define IDS_NSC_NONE                                60052
+#define IDS_NSC_ACCESS                              60053
+#define IDS_NSC_CONNECTIONS                         60054
+#define IDS_NSC_INTERNET                            60055
+#define IDS_NSC_NOINTERNET                          60056
+#define IDS_NSC_NOACCESS                            60057
+#define IDS_NSC_PUBLIC                              60058
+#define IDS_NSC_PRIVATE                             60059
+#define IDS_NSC_DOMAIN                              60060
+#define IDS_NSC_UNIDENTIFIED                        60061
+#define IDS_NSC_ADAPTERS                            60062
+#define IDS_NSC_SHARING                             60063
+#define IDS_NSC_SEEALSO                             60064
+#define IDS_NSC_INETOPTIONS                         60065
+
+/* Control Panel view: other texts */
+#define IDS_CPL_ALLITEMS                            60070
+#define IDS_CPL_ADJUST                              60071
+#define IDS_CPL_VIEWBY                              60072
+#define IDS_CPL_VIEW_CATEGORY                       60073
+#define IDS_CPL_VIEW_LARGE                          60074
+#define IDS_CPL_VIEW_SMALL                          60075
+#define IDS_CPL_VIEW_CLASSIC                        60076
+
+/* Orosi Firewall page */
+#define IDS_FW_NAME                                 60080
+#define IDS_FW_TITLE                                60081
+#define IDS_FW_INTRO                                60082
+#define IDS_FW_PRIVATE                              60083
+#define IDS_FW_PUBLIC                               60084
+#define IDS_FW_DOMAIN                               60085
+#define IDS_FW_CONNECTED                            60086
+#define IDS_FW_NOTCONNECTED                         60087
+#define IDS_FW_STATE                                60088
+#define IDS_FW_ON                                   60089
+#define IDS_FW_OFF                                  60090
+#define IDS_FW_INCOMING                             60091
+#define IDS_FW_IN_ALLOWED                           60092
+#define IDS_FW_IN_BLOCKALL                          60093
+#define IDS_FW_IN_ALLOW                             60094
+#define IDS_FW_ACTIVE                               60095
+#define IDS_FW_NONE                                 60096
+#define IDS_FW_PANE_ONOFF                           60097
+#define IDS_FW_PANE_RESTORE                         60098
+#define IDS_FW_CUSTOMIZE                            60099
+#define IDS_FW_CUSTOMIZE_INTRO                      60100
+#define IDS_FW_PRIVATE_SETTINGS                     60101
+#define IDS_FW_PUBLIC_SETTINGS                      60102
+#define IDS_FW_TURN_ON                              60103
+#define IDS_FW_TURN_OFF                             60104
+#define IDS_FW_RESTORE_ASK                          60105
+#define IDS_FW_FAILED                               60106
+#define IDS_FW_UNAVAILABLE                          60107
+#define IDS_FW_OK                                   60108
+#define IDS_FW_CANCEL                               60109
+#define IDS_FW_PANE_NSC                             60110
+#define IDS_FW_PANE_ALLOW                           60111
+#define IDS_FW_ALLOWED_TITLE                        60112
+#define IDS_FW_ALLOWED_INTRO                        60113
+#define IDS_FW_COL_NAME                             60114
+#define IDS_FW_COL_PRIVATE                          60115
+#define IDS_FW_COL_PUBLIC                           60116
+#define IDS_FW_YES                                  60117
+#define IDS_FW_NO                                   60118
+#define IDS_FW_ADD                                  60119
+#define IDS_FW_REMOVE                               60120
+#define IDS_FW_ADD_FILTER                           60121
+#define IDS_FW_INFOTIP                              60122
 #define IDS_SEARCHBAND_COMMAND                      12708
 #define IDS_FOLDERSHORTCUT_TYPE                     10540
+/* Displayed by the "Open PowerShell window here" background-folder verb
+ * (HKCR\Directory\Background\shell\Powershell, @shell32.dll,-8508); same
+ * string id Windows uses. */
+#define IDS_OPEN_POWERSHELL_WINDOW                  8508
+#define IDS_POWERSHELL_SCRIPT_TYPE                  8509
 
 
 /* Dialogs */
@@ -425,7 +514,8 @@
 #define IDC_ABOUT_REG_TO              0x3506
 #define IDC_ABOUT_REG_USERNAME        0x3507
 #define IDC_ABOUT_REG_ORGNAME         0x3508
-#define IDC_ABOUT_PHYSMEM             0x3503
+#define IDC_ABOUT_LICENSE             0x3509
+#define IDC_ABOUT_SEPARATOR           0x350A
 
 /* About authors dialog */
 #define IDD_ABOUT_AUTHORS         3
@@ -999,3 +1089,4 @@
 #define IDR_TXTPREVIEWHANDLER   197
 #define IDR_APPLICATIONDOCUMENTLISTS 198
 #define IDR_APPLICATIONDESTINATIONS 199
+#define IDR_DESKTOPWALLPAPER    200

@@ -171,7 +171,7 @@ BEGIN
     IDS_APPTITLE "Central de Aplicativos ReactOS"
     IDS_APP_AUTHORS "Copyright 2009 Dmitry Chapyshev"
     IDS_WELCOME_TITLE "Bem-vindo(a) a Central de Aplicativos ReactOS!"
-    IDS_WELCOME_TEXT "Escolha uma categoria à esquerda, então escolha um aplicativo para instalar ou desinstalar.\nWeb Site LiberNT: "
+    IDS_WELCOME_TEXT "Escolha uma categoria à esquerda, então escolha um aplicativo para instalar ou desinstalar.\nWeb Site Orosi: "
     IDS_WELCOME_URL "https://reactos.org"
 
     IDS_APPWIZ_TITLE "Add/Remove Programs"
@@ -204,7 +204,7 @@ BEGIN
     IDS_UNABLE_TO_WRITE "Unable to write to disk. Disk may be at capacity."
     IDS_INSTALL_SELECTED "Install Selected"
     IDS_SELECTEDFORINST "Selected for installation"
-    IDS_MISMATCH_CERT_INFO "The certificate used is unknown:\nSubject: %s\nIssuer: %s\nDo you want to continue anyway?"
+    IDS_MISMATCH_CERT_INFO "The certificate used is unknown:\nSubject: %s\nIssuer root: %s\nDo you want to continue anyway?"
     IDS_UNABLE_PATH "Incorrect path format."
     IDS_APP_DISPLAY_DETAILS "Details"
     IDS_APP_DISPLAY_LIST "List"

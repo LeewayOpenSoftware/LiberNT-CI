@@ -10,6 +10,8 @@
 
 #include <hal.h>
 #include <ntstrsafe.h>
+#include <acpival.h>
+#include <acpifault.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -94,29 +96,42 @@ HalpAcpiRemapTable(
 static
 VOID
 HalpAcpiValidateChecksum(
-    _In_ PDESCRIPTION_HEADER Header)
+    _In_ PDESCRIPTION_HEADER Header,
+    _In_ ULONG Available)
 {
-    CHAR CheckSum = 0;
-    PCHAR CurrentByte;
+    HALP_ACPI_CHECK Check;
+    HALP_ACPI_VERDICT Verdict;
+    ULONG Reason, Value;
 
     /* All tables in ACPI 3.0 other than the FACP should have correct checksum */
     if ((Header->Signature == FADT_SIGNATURE) && (Header->Revision <= 2))
         return;
 
-    /* Go to the end of the table */
-    CurrentByte = (PCHAR)Header + Header->Length;
-    while (CurrentByte-- != (PCHAR)Header)
+    Verdict = HalpAcpiCheckTable((const UCHAR *)Header, Available, &Check);
+    if (Verdict == HalpAcpiAccepted)
+        return;
+
+    HalpInvalidAcpiTable = Header->Signature;
+    switch (Verdict)
     {
-        /* Add this byte */
-        CheckSum += *CurrentByte;
+        case HalpAcpiBadSignature:
+            Reason = HalpAcpiFaultBadSignature;
+            Value = Check.Length;
+            break;
+
+        case HalpAcpiBadLength:
+            Reason = HalpAcpiFaultBadLength;
+            Value = Check.Length;
+            break;
+
+        default:
+            /* The correct checksum is always 0, anything else is illegal */
+            Reason = HalpAcpiFaultBadChecksum;
+            Value = Check.Sum;
+            break;
     }
 
-    /* The correct checksum is always 0, anything else is illegal */
-    if (CheckSum)
-    {
-        HalpInvalidAcpiTable = Header->Signature;
-        DPRINT1("Checksum failed on ACPI table %.4s\n", (PCSTR)&Header->Signature);
-    }
+    HalpAcpiRecordFault(Header->Signature, Reason, 0, 0, Value, Header->Length);
 }
 
 PDESCRIPTION_HEADER
@@ -241,6 +256,7 @@ HalpAcpiGetTableFromBios(
     PDESCRIPTION_HEADER Header;
     ULONG TableLength;
     ULONG Offset;
+    ULONG Available;
     ULONG EntryCount, CurrentEntry;
 
     /* Should not query the RSDT/XSDT by itself */
@@ -349,7 +365,9 @@ HalpAcpiGetTableFromBios(
     Header = HalpAcpiRemapTable(LoaderBlock, PhysicalAddress, Header, PageCount);
     if (!Header) return NULL;
 
-    HalpAcpiValidateChecksum(Header);
+    Available = (ULONG)(((ULONGLONG)*PageCount << PAGE_SHIFT) -
+                        (PhysicalAddress.QuadPart & (PAGE_SIZE - 1)));
+    HalpAcpiValidateChecksum(Header, Available);
 
     /* Return the table */
     return Header;

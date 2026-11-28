@@ -19,6 +19,7 @@
 #define EAPOL_ETHERTYPE     0x888E
 #define NWIFI_CREDENTIAL_MAX 128
 #define NWIFI_RANDOM_POOL    128
+#define NWIFI_PENDING_EAPOL  512
 
 /* Per-interface supplicant session.  Keeps a copy of the seeded passphrase
  * so a session can be re-initialised per SSID (the PMK is SSID-dependent). */
@@ -42,6 +43,11 @@ typedef struct _NWIFI_SUPPLICANT
     UCHAR     SaeBssid[IEEE80211_ADDR_LEN];
     USHORT    SaeSendConfirm;
     RSNA_SAE  Sae;
+    BOOLEAN   AssociationKnown;
+    ULONG     PendingEapolLength;
+    UCHAR     PendingEapolSource[IEEE80211_ADDR_LEN];
+    UCHAR     PendingEapolDestination[IEEE80211_ADDR_LEN];
+    UCHAR     PendingEapol[NWIFI_PENDING_EAPOL];
 } NWIFI_SUPPLICANT;
 
 typedef struct _NWIFI_INSTALL_KEYS_CONTEXT
@@ -318,7 +324,7 @@ NwifiInstallPairwiseKey(
     Value->usKeyLength = (USHORT)EncodedLength;
     RtlCopyMemory(Value->ucKey, EncodedKey, EncodedLength);
 
-    Status = NwifiProtocolDoRequest(Adapter, NdisRequestSetInformation,
+    Status = NwifiDoRequest(Adapter, NdisRequestSetInformation,
                                     OID_DOT11_CIPHER_KEY_MAPPING_KEY,
                                     ByteArray, TotalSize, NULL);
     RtlSecureZeroMemory(ByteArray, TotalSize);
@@ -377,7 +383,7 @@ NwifiInstallGroupKey(
     Value->usKeyLength = (USHORT)EncodedLength;
     RtlCopyMemory(Value->ucKey, EncodedKey, EncodedLength);
 
-    Status = NwifiProtocolDoRequest(Adapter, NdisRequestSetInformation,
+    Status = NwifiDoRequest(Adapter, NdisRequestSetInformation,
                                     OID_DOT11_CIPHER_DEFAULT_KEY,
                                     Value, ValueSize, NULL);
     RtlSecureZeroMemory(Value, ValueSize);
@@ -387,7 +393,7 @@ NwifiInstallGroupKey(
     if (Status == NDIS_STATUS_SUCCESS)
     {
         DefaultKeyId = KeyId;
-        Status = NwifiProtocolDoRequest(Adapter, NdisRequestSetInformation,
+        Status = NwifiDoRequest(Adapter, NdisRequestSetInformation,
                                         OID_DOT11_CIPHER_DEFAULT_KEY_ID,
                                         &DefaultKeyId,
                                         sizeof(DefaultKeyId),
@@ -434,7 +440,7 @@ NwifiInstallIgtk(
     Bip->ulBIPKeyLength = (ULONG)Keys->igtkLen;
     RtlCopyMemory(Bip->ucBIPKey, Keys->igtk, Keys->igtkLen);
 
-    Status = NwifiProtocolDoRequest(Adapter, NdisRequestSetInformation,
+    Status = NwifiDoRequest(Adapter, NdisRequestSetInformation,
                                     OID_DOT11_CIPHER_DEFAULT_KEY,
                                     Value, ValueSize, NULL);
     RtlSecureZeroMemory(Value, ValueSize);
@@ -635,6 +641,8 @@ NwifiSupplicantStart(
     RtlCopyMemory(Sup->RandomPool, RandomPool, sizeof(RandomPool));
     Sup->RandomAvailable = sizeof(RandomPool);
     Sup->Generation++;
+    Sup->AssociationKnown = FALSE;
+    Sup->PendingEapolLength = 0;
     Sup->Initialised = AuthAlgorithm != DOT11_AUTH_ALGO_WPA3_SAE;
     Sup->SaePending = AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE;
     Sup->SaeH2e = FALSE;
@@ -685,7 +693,7 @@ NwifiSaeSendParams(
     if (Length == 0)
         return NDIS_STATUS_INVALID_LENGTH;
 
-    Status = NwifiProtocolDoRequest(Msm->Adapter,
+    Status = NwifiDoRequest(Msm->Adapter,
                                     NdisRequestSetInformation,
                                     OID_WDI_SET_SAE_AUTH_PARAMS,
                                     Message,
@@ -1009,6 +1017,12 @@ NwifiSupplicantSeedFirmware(
     CredentialLength = Sup->PassphraseLen;
     RtlCopyMemory(Credential, Sup->Passphrase, CredentialLength);
     AuthAlgorithm = Msm->Connect.AuthAlgorithm;
+    FirmwareCredentialLength = 0;
+    if (AuthAlgorithm == DOT11_AUTH_ALGO_RSNA_PSK && Sup->Initialised &&
+        RsnaGetPmk(&Sup->Ctx, FirmwareCredential) == RSNA_OK)
+    {
+        FirmwareCredentialLength = RSNA_PMK_LEN;
+    }
     NdisReleaseSpinLock(&Msm->Lock);
 
     if (AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE)
@@ -1016,7 +1030,7 @@ NwifiSupplicantSeedFirmware(
         RtlCopyMemory(FirmwareCredential, Credential, CredentialLength);
         FirmwareCredentialLength = CredentialLength;
     }
-    else
+    else if (FirmwareCredentialLength == 0)
     {
         RtlSecureZeroMemory(Credential, sizeof(Credential));
         return NDIS_STATUS_NOT_SUPPORTED;
@@ -1044,7 +1058,7 @@ NwifiSupplicantSeedFirmware(
     RtlCopyMemory(Value->ucKey, FirmwareCredential,
                   FirmwareCredentialLength);
 
-    Status = NwifiProtocolDoRequest(Msm->Adapter,
+    Status = NwifiDoRequest(Msm->Adapter,
                                     NdisRequestSetInformation,
                                     OID_DOT11_CIPHER_DEFAULT_KEY,
                                     Value,
@@ -1070,6 +1084,8 @@ NwifiSupplicantSetAssociation(
 
     NdisAcquireSpinLock(&Msm->Lock);
     Sup = Msm->Supplicant;
+    if (Sup != NULL)
+        Sup->AssociationKnown = TRUE;
     if (Sup != NULL && Sup->Initialised)
     {
         RsnaSetApAddr(&Sup->Ctx, ApMac);
@@ -1127,6 +1143,11 @@ NwifiSupplicantResetSession(
 
     NdisAcquireSpinLock(&Msm->Lock);
     Sup = Msm->Supplicant;
+    if (Sup != NULL)
+    {
+        Sup->AssociationKnown = FALSE;
+        Sup->PendingEapolLength = 0;
+    }
     if (Sup != NULL && Sup->Initialised)
     {
         RsnaReset(&Sup->Ctx);
@@ -1137,6 +1158,21 @@ NwifiSupplicantResetSession(
         Sup->GroupInstallQueued = FALSE;
     }
     NdisReleaseSpinLock(&Msm->Lock);
+}
+
+BOOLEAN
+NwifiSupplicantKeyExchangeStarted(
+    _In_ PNWIFI_MSM Msm)
+{
+    PNWIFI_SUPPLICANT Sup;
+    BOOLEAN Started = FALSE;
+
+    NdisAcquireSpinLock(&Msm->Lock);
+    Sup = Msm->Supplicant;
+    if (Sup != NULL && Sup->Initialised)
+        Started = RsnaGetState(&Sup->Ctx) != RSNA_STATE_IDLE;
+    NdisReleaseSpinLock(&Msm->Lock);
+    return Started;
 }
 
 /* Fully free the supplicant object.  Only safe once the data path is
@@ -1351,6 +1387,33 @@ Exit:
     NwifiMsmCompleteWorkItem(Msm, NdisIoWorkItemHandle);
 }
 
+VOID
+NwifiSupplicantReplayEapol(
+    _In_ PNWIFI_MSM Msm)
+{
+    PNWIFI_SUPPLICANT Sup;
+    UCHAR Eapol[NWIFI_PENDING_EAPOL];
+    UCHAR Source[IEEE80211_ADDR_LEN];
+    UCHAR Destination[IEEE80211_ADDR_LEN];
+    ULONG Length = 0;
+
+    NdisAcquireSpinLock(&Msm->Lock);
+    Sup = Msm->Supplicant;
+    if (Sup != NULL && Sup->AssociationKnown && Sup->PendingEapolLength != 0)
+    {
+        ASSERT(Sup->PendingEapolLength <= sizeof(Eapol));
+        Length = Sup->PendingEapolLength;
+        RtlCopyMemory(Eapol, Sup->PendingEapol, Length);
+        RtlCopyMemory(Source, Sup->PendingEapolSource, sizeof(Source));
+        RtlCopyMemory(Destination, Sup->PendingEapolDestination, sizeof(Destination));
+        Sup->PendingEapolLength = 0;
+    }
+    NdisReleaseSpinLock(&Msm->Lock);
+
+    if (Length != 0)
+        (VOID)NwifiSupplicantRxEapol(Msm, Eapol, Length, Source, Destination);
+}
+
 /* ===========================================================================
  *  EAPOL-Key RX feed
  * ===========================================================================
@@ -1386,6 +1449,19 @@ NwifiSupplicantRxEapol(
     Sup = Msm->Supplicant;
     if (Sup == NULL || !Sup->Initialised)
     {
+        NdisReleaseSpinLock(&Msm->Lock);
+        return TRUE;
+    }
+
+    if (!Sup->AssociationKnown)
+    {
+        if (Length <= sizeof(Sup->PendingEapol))
+        {
+            RtlCopyMemory(Sup->PendingEapol, Eapol, Length);
+            RtlCopyMemory(Sup->PendingEapolSource, SrcMac, IEEE80211_ADDR_LEN);
+            RtlCopyMemory(Sup->PendingEapolDestination, DstMac, IEEE80211_ADDR_LEN);
+            Sup->PendingEapolLength = Length;
+        }
         NdisReleaseSpinLock(&Msm->Lock);
         return TRUE;
     }

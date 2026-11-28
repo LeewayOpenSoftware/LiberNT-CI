@@ -1,4 +1,4 @@
-> [English](../../README.md) | [中文](../zh-CN/README.md) | [Français](../fr-FR/README.md) | [Español](../es-ES/README.md) | **日本語** | [العربية](../ar-MA/README.md)
+> [English](../../README.md) | [中文](../zh-CN/README.md) | [Français](../fr-FR/README.md) | [Español](../es-ES/README.md) | **日本語** | [العربية](../ar-MA/README.md) | [Українська](../uk-UA/README.md)
 
 <p align="center">
   <img src="../../media/graphics/branding/libernt-banner.png" width="480" alt="LiberNT">
@@ -142,7 +142,7 @@ LiberNT を最も手早く試せるのは、プリインストール済みディ
 
 仮想マシンまたは PC で `bootcd.iso` を起動し、**LiberNT セットアップ**の指示に従います。
 
-プリインストール済みディスクにも LiberNT セットアップが入っています。実行中のシステムから別のディスクに LiberNT をインストールするには、`C:\<アーキテクチャ>\libernt.exe`（たとえば `C:\arm64\libernt.exe`）を実行します。
+プリインストール済みディスクにも LiberNT セットアップが入っています。実行中のシステムから別のディスクに LiberNT をインストールするには、`C:\<アーキテクチャ>\system32\oobe\oros.exe`（たとえば `C:\arm64\system32\oobe\oros.exe`）を実行します。
 
 > [!CAUTION]
 > セットアップはパーティションを削除・フォーマットできます。インストールの前に、インストール先ディスクの大切なデータをバックアップしてください。

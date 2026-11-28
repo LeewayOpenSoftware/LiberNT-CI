@@ -229,8 +229,17 @@ CNetConnection::GetProperties(NETCON_PROPERTIES **ppProps)
     /* get updated adapter characteristics */
     ZeroMemory(&IfEntry, sizeof(IfEntry));
     IfEntry.dwIndex = m_dwAdapterIndex;
-    if (GetIfEntry(&IfEntry) != NO_ERROR)
+    if (m_Props.Status == NCS_HARDWARE_DISABLED || GetIfEntry(&IfEntry) != NO_ERROR)
+    {
+        /* a disabled adapter has no interface: the name and status it was listed with */
+        if (m_Props.pszwName)
+        {
+            pProperties->pszwName = static_cast<PWSTR>(CoTaskMemAlloc((wcslen(m_Props.pszwName)+1)*sizeof(WCHAR)));
+            if (pProperties->pszwName)
+                wcscpy(pProperties->pszwName, m_Props.pszwName);
+        }
         return NOERROR;
+    }
 
     NormalizeOperStatus(&IfEntry, pProperties);
 
@@ -390,6 +399,11 @@ CNetConnectionManager::EnumConnections(
     if (Flags != NCME_DEFAULT)
         return E_FAIL;
 
+    /* created by the class factory (CoCreateInstance) rather than by
+       CNetConnectionManager_CreateInstance: the list is filled on first use */
+    if (!m_pHead)
+        Initialize();
+
     *ppEnum = static_cast<IEnumNetConnection*>(this);
     AddRef();
     return S_OK;
@@ -546,6 +560,86 @@ DupConnectionString(LPCWSTR pszText)
     return pszCopy;
 }
 
+/* An adapter whose device is disabled has no IP interface, so GetAdaptersAddresses does not
+   report it; Windows still lists it in Network Connections, as "Disabled", to be enabled again */
+static VOID
+AddDisabledAdapters(PINetConnectionItem *ppHead, PINetConnectionItem *ppCurrent)
+{
+    HDEVINFO hInfo;
+    SP_DEVINFO_DATA DevInfo;
+
+    hInfo = SetupDiGetClassDevsW(&GUID_DEVCLASS_NET, NULL, NULL, DIGCF_PRESENT);
+    if (hInfo == INVALID_HANDLE_VALUE)
+        return;
+    for (DWORD dwIndex = 0; ; dwIndex++)
+    {
+        WCHAR szDriver[MAX_PATH], szPath[MAX_PATH], szGuid[64], szName[128], szDevice[128];
+        ULONG ulStatus, ulProblem;
+        DWORD dwSize;
+        HKEY hKey;
+        GUID Guid;
+        PINetConnectionItem pItem, pNew;
+
+        ZeroMemory(&DevInfo, sizeof(DevInfo));
+        DevInfo.cbSize = sizeof(DevInfo);
+        if (!SetupDiEnumDeviceInfo(hInfo, dwIndex, &DevInfo))
+            break;
+        if (CM_Get_DevNode_Status(&ulStatus, &ulProblem, DevInfo.DevInst, 0) != CR_SUCCESS ||
+            ulProblem != CM_PROB_DISABLED)
+            continue;
+
+        /* the connection of the adapter: NetCfgInstanceId, then its Connection key; RegGetValueW
+           NUL-terminates a REG_SZ even when it fills the buffer */
+        dwSize = sizeof(szGuid);
+        if (!SetupDiGetDeviceRegistryPropertyW(hInfo, &DevInfo, SPDRP_DRIVER, NULL,
+                                               (LPBYTE)szDriver, sizeof(szDriver), NULL) ||
+            FAILED(StringCchPrintfW(szPath, _countof(szPath), L"SYSTEM\\CurrentControlSet\\Control\\Class\\%s", szDriver)) ||
+            RegGetValueW(HKEY_LOCAL_MACHINE, szPath, L"NetCfgInstanceId", RRF_RT_REG_SZ, NULL, szGuid, &dwSize) != ERROR_SUCCESS)
+            continue;
+        if (FAILED(CLSIDFromString(szGuid, &Guid)) ||
+            FAILED(StringCchPrintfW(szPath, _countof(szPath),
+                                    L"SYSTEM\\CurrentControlSet\\Control\\Network\\{4D36E972-E325-11CE-BFC1-08002BE10318}\\%s\\Connection",
+                                    szGuid)) ||
+            RegOpenKeyExW(HKEY_LOCAL_MACHINE, szPath, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+            continue;
+        RegCloseKey(hKey);
+        dwSize = sizeof(szName);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, szPath, L"Name", RRF_RT_REG_SZ, NULL, szName, &dwSize) != ERROR_SUCCESS ||
+            !szName[0])
+            StringCchCopyW(szName, _countof(szName), L"Local Area Connection");
+
+        /* not when it is listed already */
+        for (pItem = *ppHead; pItem; pItem = pItem->Next)
+        {
+            if (IsEqualGUID(pItem->Props.guidId, Guid))
+                break;
+        }
+        if (pItem)
+            continue;
+
+        pNew = static_cast<PINetConnectionItem>(CoTaskMemAlloc(sizeof(INetConnectionItem)));
+        if (!pNew)
+            break;
+        ZeroMemory(pNew, sizeof(INetConnectionItem));
+        pNew->Props.guidId = Guid;
+        pNew->Props.Status = NCS_HARDWARE_DISABLED;
+        pNew->Props.MediaType = NCM_LAN;
+        pNew->Props.pszwName = DupConnectionString(szName);
+        if (SetupDiGetDeviceRegistryPropertyW(hInfo, &DevInfo, SPDRP_FRIENDLYNAME, NULL, (LPBYTE)szDevice, sizeof(szDevice), NULL) ||
+            SetupDiGetDeviceRegistryPropertyW(hInfo, &DevInfo, SPDRP_DEVICEDESC, NULL, (LPBYTE)szDevice, sizeof(szDevice), NULL))
+            pNew->Props.pszwDeviceName = DupConnectionString(szDevice);
+        else
+            pNew->Props.pszwDeviceName = DupConnectionString(L"Network adapter");
+
+        if (*ppCurrent)
+            (*ppCurrent)->Next = pNew;
+        else
+            *ppHead = pNew;
+        *ppCurrent = pNew;
+    }
+    SetupDiDestroyDeviceInfoList(hInfo);
+}
+
 HRESULT
 CNetConnectionManager::EnumerateINetConnections()
 {
@@ -670,6 +764,8 @@ CNetConnectionManager::EnumerateINetConnections()
     }
 
     CoTaskMemFree(pAddresses);
+
+    AddDisabledAdapters(&m_pHead, &pCurrent);
 
     m_pCurrent = m_pHead;
     return (m_pHead != NULL ? S_OK : S_FALSE);

@@ -315,7 +315,13 @@ typedef struct STRUCT(_TEB)
 
 #if (NTDDI_VERSION >= NTDDI_WIN10) // since 10.0.10240.16384
     PTR(PVOID)             ReservedForDebuggerInstrumentation[16];
-    PTR(PVOID)             SystemReserved1[38];
+    PTR(PVOID)             SystemReserved1[_SELECT3264(26, 30)];
+    CHAR                   PlaceholderCompatibilityMode;
+    BOOLEAN                PlaceholderHydrationAlwaysExplicit;
+    CHAR                   PlaceholderReserved[10];
+    ULONG                  ProxiedProcessId;
+    UCHAR                  ActivationStackReserved[_SELECT3264(0x18, 0x28)];
+    UCHAR                  WorkingOnBehalfTicket[8];
 #else
     PTR(PVOID)             SystemReserved1[54];
 #endif
@@ -561,6 +567,9 @@ typedef struct STRUCT(_TEB)
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), NtTib) == 0x000);
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), EnvironmentPointer) == 0x038);
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), ExceptionCode) == 0x2C0);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+C_ASSERT(FIELD_OFFSET(STRUCT(TEB), PlaceholderCompatibilityMode) == 0x280);
+#endif
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), GdiTebBatch) == 0x2F0);
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), LastStatusValue) == 0x1250);
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), Vdm) == 0x1690);
@@ -575,6 +584,9 @@ C_ASSERT(FIELD_OFFSET(STRUCT(TEB), ActiveFrame) == 0x17C0);
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), NtTib) == 0x000);
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), EnvironmentPointer) == 0x01C);
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), ExceptionCode) == 0x1A4);
+#if (NTDDI_VERSION >= NTDDI_WIN10)
+C_ASSERT(FIELD_OFFSET(STRUCT(TEB), PlaceholderCompatibilityMode) == 0x174);
+#endif
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), GdiTebBatch) == 0x1D4);
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), RealClientId) == 0x6B4);
 C_ASSERT(FIELD_OFFSET(STRUCT(TEB), LastStatusValue) == 0xBF4);

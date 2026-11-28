@@ -817,7 +817,28 @@ typedef struct _DWM_GPU_TEXTURE
     BOOL Client;
     ULONGLONG UpdateId;
     BOOL PublicationValid;
+    /* Visible rect of a frame with a transparent band, copied out of the
+     * imported backing (Texture) on each publication. */
+    GLuint Cropped;
+    LONG CroppedWidth;
+    LONG CroppedHeight;
+    ULONGLONG CroppedUpdateId;
 } DWM_GPU_TEXTURE;
+
+static GLuint g_cropFramebuffer;
+/* The driver cannot copy out of an imported texture: draw bands whole. */
+static BOOL g_cropUnsupported;
+
+static void
+DwmGpuDeleteSlotTextures(DWM_GPU_TEXTURE *Slot)
+{
+    if (Slot->Texture != 0)
+        glDeleteTextures(1, &Slot->Texture);
+    if (Slot->Cropped != 0)
+        glDeleteTextures(1, &Slot->Cropped);
+    Slot->Texture = 0;
+    Slot->Cropped = 0;
+}
 
 static BOOL  g_composeActive;
 static HWND  g_composeWindow;
@@ -854,7 +875,7 @@ DwmGpuComposePruneTextures(void)
             !DwmGpuSceneHasSurface(g_composeScene.Windows, g_composeScene.Count,
                                   Slot->SurfaceId, Slot->Client))
         {
-            glDeleteTextures(1, &Slot->Texture);
+            DwmGpuDeleteSlotTextures(Slot);
             RtlZeroMemory(Slot, sizeof(*Slot));
         }
     }
@@ -1033,7 +1054,7 @@ DwmGpuComposeFindTexture(const DWM_WIN *Window, BOOL Client)
         return Free;
 
     /* Every slot is live; retire the one untouched for longest. */
-    glDeleteTextures(1, &Oldest->Texture);
+    DwmGpuDeleteSlotTextures(Oldest);
     RtlZeroMemory(Oldest, sizeof(*Oldest));
     return Oldest;
 }
@@ -1178,6 +1199,82 @@ DwmGpuComposeBegin(ULONG BackdropColor, const BYTE *BackdropPixels,
     return Result;
 }
 
+/*
+ * A frame with a transparent band draws only its visible rect. Copy that rect
+ * out of the imported backing once per publication, so everything downstream
+ * (geometry, corners, material) sees a texture of the visible size. Leaves
+ * the texture to draw bound.
+ */
+static BOOL
+DwmGpuComposeCropFrame(DWM_GPU_TEXTURE *Slot, const DWM_WIN *Window)
+{
+    GLint Previous = 0;
+    BOOL Ok;
+
+    if (!DWM_HAS_FRAME_INSETS(Window) || Window->BaseGlobalShare == 0)
+    {
+        if (Slot->Cropped != 0)
+        {
+            glDeleteTextures(1, &Slot->Cropped);
+            Slot->Cropped = 0;
+        }
+        return TRUE;
+    }
+    if (Slot->Cropped != 0 &&
+        (Slot->CroppedWidth != Window->cx || Slot->CroppedHeight != Window->cy))
+    {
+        glDeleteTextures(1, &Slot->Cropped);
+        Slot->Cropped = 0;
+    }
+    if (Slot->Cropped == 0)
+    {
+        if (!DwmGpuMakeTexture(&Slot->Cropped, Window->cx, Window->cy))
+            return FALSE;
+        Slot->CroppedWidth = Window->cx;
+        Slot->CroppedHeight = Window->cy;
+        Slot->CroppedUpdateId = 0;
+    }
+    if (Slot->CroppedUpdateId == Window->BaseUpdateId && Window->BaseUpdateId != 0)
+    {
+        glBindTexture(GL_TEXTURE_2D, Slot->Cropped);
+        return TRUE;
+    }
+    if (g_cropFramebuffer == 0)
+    {
+        pglGenFramebuffers(1, &g_cropFramebuffer);
+        if (g_cropFramebuffer == 0)
+            return FALSE;
+    }
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &Previous);
+    pglBindFramebuffer(GL_FRAMEBUFFER, g_cropFramebuffer);
+    pglFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                            GL_TEXTURE_2D, Slot->Texture, 0);
+    Ok = pglCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    if (Ok)
+    {
+        glBindTexture(GL_TEXTURE_2D, Slot->Cropped);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                            Window->FrameInsets.left, Window->FrameInsets.top,
+                            Window->cx, Window->cy);
+        Ok = glGetError() == GL_NO_ERROR;
+    }
+    pglFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    pglBindFramebuffer(GL_FRAMEBUFFER, (GLuint)Previous);
+    if (!Ok)
+    {
+        /* Fail this frame once; from the next one the compositor stops
+         * cutting bands (DwmGpuComposeBandsUnsupported) instead of failing
+         * every frame that has a band window. */
+        if (!g_cropUnsupported)
+            OutputDebugStringA("DWMGPU: cannot crop an imported frame; transparent frame bands are drawn whole\n");
+        g_cropUnsupported = TRUE;
+        return FALSE;
+    }
+    Slot->CroppedUpdateId = Window->BaseUpdateId;
+    glBindTexture(GL_TEXTURE_2D, Slot->Cropped);
+    return TRUE;
+}
+
 static BOOL
 DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
                    LONG OriginX, LONG OriginY, BOOL Client)
@@ -1216,8 +1313,8 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
 
     if (Window->BaseGlobalShare != 0)
     {
-        if (Window->BaseWidth != (ULONG)Window->cx ||
-            Window->BaseHeight != (ULONG)Window->cy ||
+        if (Window->BaseWidth != (ULONG)DWM_BACKING_CX(Window) ||
+            Window->BaseHeight != (ULONG)DWM_BACKING_CY(Window) ||
             Window->BaseFormat != DWM_WGL_SHARED_BGRA8)
             return FALSE;
         if (g_bindSharedTexture == NULL)
@@ -1232,11 +1329,10 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
             return FALSE;
         if (Slot->Texture == 0 || Slot->GlobalShare != Window->BaseGlobalShare ||
             Slot->ShareGeneration != Window->BaseGeneration ||
-            Slot->Width != Window->cx || Slot->Height != Window->cy ||
+            Slot->Width != DWM_BACKING_CX(Window) || Slot->Height != DWM_BACKING_CY(Window) ||
             Slot->Pitch != Window->BasePitch)
         {
-            if (Slot->Texture != 0)
-                glDeleteTextures(1, &Slot->Texture);
+            DwmGpuDeleteSlotTextures(Slot);
             RtlZeroMemory(Slot, sizeof(*Slot));
             glGenTextures(1, &Slot->Texture);
             if (Slot->Texture == 0)
@@ -1275,8 +1371,8 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
             Slot->GlobalShare = Window->BaseGlobalShare;
             Slot->ShareGeneration = Window->BaseGeneration;
             Slot->Pitch = Window->BasePitch;
-            Slot->Width = Window->cx;
-            Slot->Height = Window->cy;
+            Slot->Width = DWM_BACKING_CX(Window);
+            Slot->Height = DWM_BACKING_CY(Window);
         }
         glBindTexture(GL_TEXTURE_2D, Slot->Texture);
         if (!Slot->PublicationValid || Slot->UpdateId != Window->BaseUpdateId)
@@ -1299,8 +1395,7 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
     {
         if (Pixels == NULL)
             return FALSE;
-        if (Slot->Texture != 0)
-            glDeleteTextures(1, &Slot->Texture);
+        DwmGpuDeleteSlotTextures(Slot);
         RtlZeroMemory(Slot, sizeof(*Slot));
         if (!DwmGpuMakeTexture(&Slot->Texture, Window->cx, Window->cy))
             return FALSE;
@@ -1341,6 +1436,8 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
     Slot->Generation = Window->Generation;
     Slot->LastFrame = g_composeFrame;
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+    if (!DwmGpuComposeCropFrame(Slot, Window))
+        return FALSE;
 
     if (Window->LayerFlags & DWM_LWA_ALPHA)
         Alpha = (GLfloat)(Window->Alpha / 255.0);
@@ -1382,7 +1479,7 @@ DwmGpuComposeLayerMeasured(const DWM_WIN *Window, const BYTE *Pixels,
         (!Client && (Window->LayerFlags & DWM_WINDOW_FRAME_ALPHA)))
     {
         Result = DwmGpuComposeMaterial(Window,
-                                       Slot->Texture,
+                                       Slot->Cropped != 0 ? Slot->Cropped : Slot->Texture,
                                        !Client && (Window->LayerFlags & DWM_WINDOW_FRAME_ALPHA) != 0,
                                        Geometry.Left,
                                        Geometry.Top,
@@ -1462,6 +1559,7 @@ DwmGpuComposeWindowMeasured(const DWM_WIN *Window, const BYTE *Pixels,
     Client.BasePitch = Window->DxPitch;
     Client.BaseFormat = Window->DxFormat;
     Client.CornerRadius = 0;
+    RtlZeroMemory(&Client.FrameInsets, sizeof(Client.FrameInsets));
     if (Window->AnimFlags != 0)
     {
         LONGLONG Left, Top, Right, Bottom;
@@ -1486,6 +1584,12 @@ DwmGpuComposeWindowMeasured(const DWM_WIN *Window, const BYTE *Pixels,
     if (Client.BackdropRegion == DWM_BACKDROP_REGION_NONCLIENT)
         Client.BackdropType = 0;
     return DwmGpuComposeLayer(&Client, NULL, OriginX, OriginY, TRUE);
+}
+
+BOOL
+DwmGpuComposeBandsUnsupported(void)
+{
+    return g_composeActive && !DwmD3dIsActive() && g_cropUnsupported;
 }
 
 BOOL
@@ -1596,6 +1700,12 @@ DwmGpuComposeAbort(void)
     return DWM_GPU_RETRY;
 }
 
+BOOL
+DwmGpuComposeResize(LONG Width, LONG Height)
+{
+    return DwmD3dResize(Width, Height);
+}
+
 DWM_GPU_RESULT
 DwmGpuComposeCheckOutput(void)
 {
@@ -1625,10 +1735,14 @@ DwmGpuComposeShutdown(void)
         wglMakeCurrent(g_composeDc, g_composeContext);
         for (i = 0; i < DWM_GPU_TEXTURE_SLOTS; ++i)
         {
-            if (g_composeTextures[i].Texture != 0)
-                glDeleteTextures(1, &g_composeTextures[i].Texture);
+            DwmGpuDeleteSlotTextures(&g_composeTextures[i]);
         }
         RtlZeroMemory(g_composeTextures, sizeof(g_composeTextures));
+        if (g_cropFramebuffer != 0)
+        {
+            pglDeleteFramebuffers(1, &g_cropFramebuffer);
+            g_cropFramebuffer = 0;
+        }
         DwmGpuComposeReleaseBlur();
         for (i = 0; i < ARRAYSIZE(g_materialPrograms); ++i)
         {

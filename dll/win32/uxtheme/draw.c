@@ -244,6 +244,10 @@ static PTHEME_PROPERTY UXTHEME_SelectImage(HTHEME hTheme, int iPartId, int iStat
         /* If an image couldn't be selected, choose the first one */
         tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME, TMT_IMAGEFILE1);
     }
+    else if(imageselecttype == IST_SIZE && !pRect) {
+        /* No destination (GetThemePartSize TS_TRUE/TS_MIN pass NULL): take the first image, as when none fits */
+        tp = MSSTYLES_FindProperty(hTheme, iPartId, iStateId, TMT_FILENAME, TMT_IMAGEFILE1);
+    }
     else if(imageselecttype == IST_SIZE) {
         POINT size = {pRect->right-pRect->left, pRect->bottom-pRect->top};
         POINT reqsize;
@@ -265,6 +269,9 @@ static PTHEME_PROPERTY UXTHEME_SelectImage(HTHEME hTheme, int iPartId, int iStat
                 HBITMAP hBmp;
                 BOOL hasAlpha;
 
+#ifdef UXTHEME_V4
+                if (MSSTYLES_IS_V4_PROP(fileProp)) MSSTYLES_V4_GetImageName(fileProp, szPath, ARRAY_SIZE(szPath)); else
+#endif
                 lstrcpynW(szPath, fileProp->lpValue, min(fileProp->dwValueLen+1, ARRAY_SIZE(szPath)));
                 hBmp = MSSTYLES_LoadBitmap(hTheme, szPath, &hasAlpha, NULL);
                 if(!hBmp) continue;
@@ -323,6 +330,9 @@ static HRESULT UXTHEME_LoadImage(HTHEME hTheme, int iPartId, int iStateId, const
         FIXME("Couldn't determine image for part/state %d/%d, invalid theme?\n", iPartId, iStateId);
         return E_PROP_ID_UNSUPPORTED;
     }
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_PROP(tp)) MSSTYLES_V4_GetImageName(tp, szPath, ARRAY_SIZE(szPath)); else
+#endif
     lstrcpynW(szPath, tp->lpValue, min(tp->dwValueLen+1, ARRAY_SIZE(szPath)));
     *hBmp = MSSTYLES_LoadBitmap(hTheme, szPath, hasImageAlpha, hasDefaultTransparentColour);
     if(!*hBmp) {
@@ -730,22 +740,23 @@ static HRESULT get_image_part_size(HTHEME hTheme, int iPartId, int iStateId, REC
             if (prc != NULL)
             {
                 POINT dstSize;
-                BOOL uniformsizing = FALSE;
 
                 dstSize.x = prc->right - prc->left;
                 dstSize.y = prc->bottom - prc->top;
 
-                GetThemeBool(hTheme, iPartId, iStateId, TMT_UNIFORMSIZING, &uniformsizing);
-                if(uniformsizing) {
-                    /* Scale height and width equally */
-                    if (dstSize.x*srcSize.y < dstSize.y*srcSize.x)
-                        dstSize.y = MulDiv (srcSize.y, dstSize.x, srcSize.x);
-                    else
-                        dstSize.x = MulDiv (srcSize.x, dstSize.y, srcSize.y);
-                }
-
                 if (sizingType == ST_TRUESIZE)
                 {
+                    BOOL uniformsizing = FALSE;
+
+                    GetThemeBool(hTheme, iPartId, iStateId, TMT_UNIFORMSIZING, &uniformsizing);
+                    if(uniformsizing) {
+                        /* Scale height and width equally */
+                        if (dstSize.x*srcSize.y < dstSize.y*srcSize.x)
+                            dstSize.y = MulDiv (srcSize.y, dstSize.x, srcSize.x);
+                        else
+                            dstSize.x = MulDiv (srcSize.x, dstSize.y, srcSize.y);
+                    }
+
                     if ((dstSize.x < 0 || dstSize.y < 0)
                         || (dstSize.x < srcSize.x && dstSize.y < srcSize.y)
                         || (scalingType == TSST_SIZE
@@ -757,6 +768,9 @@ static HRESULT get_image_part_size(HTHEME hTheme, int iPartId, int iStateId, REC
                 }
                 else
                 {
+                    /* Stretched parts are drawn into the whole rect; native
+                       uxtheme reports the rect size for TS_DRAW without
+                       uniform scaling (themetest wave CSVs). */
                     psz->x = abs(dstSize.x);
                     psz->y = abs(dstSize.y);
                 }
@@ -2155,7 +2169,13 @@ static HRESULT get_border_background_size (HTHEME hTheme, int iPartId,
     HRESULT hr = S_OK;
     int bordersize = 1;
 
-    if (SUCCEEDED (hr = GetThemeInt(hTheme, iPartId, iStateId, TMT_BORDERSIZE, 
+    if (eSize == TS_DRAW)
+        /* Native uxtheme refuses TS_DRAW for border-fill parts
+           (E_INVALIDARG on every border-fill cell of the themetest
+           Windows 11 wave CSVs). */
+        return E_INVALIDARG;
+
+    if (SUCCEEDED (hr = GetThemeInt(hTheme, iPartId, iStateId, TMT_BORDERSIZE,
         &bordersize)))
     {
         psz->x = psz->y = 2*bordersize;

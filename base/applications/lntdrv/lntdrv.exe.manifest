@@ -7,7 +7,7 @@
     processorArchitecture="*"
     version="1.0.0.0"
     type="win32"/>
-<description>LiberNT Driver Installer</description>
+<description>Driver Installer</description>
 <dependency>
     <dependentAssembly>
         <assemblyIdentity

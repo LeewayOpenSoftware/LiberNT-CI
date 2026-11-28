@@ -27,10 +27,12 @@ list(APPEND SOURCE
     EngReleaseSemaphore.c
     EnumFontFamilies.c
     FontFolder.c
+    FontLinkBaseline.c
     ExcludeClipRect.c
     ExtCreatePen.c
     ExtCreateRegion.c
     ExtTextOut.c
+    GdiBatch.c
     FrameRgn.c
     GdiConvertBitmap.c
     GdiConvertBrush.c
@@ -69,6 +71,8 @@ list(APPEND SOURCE
     PatBlt.c
     Rectangle.c
     RealizePalette.c
+    ScreenRows.c
+    ScriptShape.c
     SelectObject.c
     SetBoundsRect.c
     SetBrushOrgEx.c
@@ -82,12 +86,14 @@ list(APPEND SOURCE
     SetWindowExtEx.c
     SetWorldTransform.c
     StretchBlt.c
+    TextAntialias.c
     TextTransform.c
     TypoMetrics.c)
 
 list(APPEND PCH_SKIP_SOURCE
     ScriptGetFontTags.c
     ScriptGetLogicalWidths.c
+    ScriptShapeCache.c
     testlist.c)
 
 add_executable(gdi32_apitest

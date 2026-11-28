@@ -29,6 +29,7 @@
 
 #include "wine/debug.h"
 #include "hnetcfg_private.h"
+#include "mpssvc_policy.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(hnetcfg);
 
@@ -59,6 +60,8 @@ typedef struct fw_rule
 {
     INetFwRule INetFwRule_iface;
     LONG refs;
+    WCHAR *text;    /* the Windows rule string (fwstore.c) */
+    WCHAR *id;      /* its value name in the store, NULL until the rule is added */
 } fw_rule;
 
 static inline fw_rule *impl_from_INetFwRule( INetFwRule *iface )
@@ -105,6 +108,8 @@ static ULONG WINAPI netfw_rule_Release(
     if (!refs)
     {
         TRACE("destroying %p\n", This);
+        free( This->text );
+        free( This->id );
         free( This );
     }
     return refs;
@@ -184,14 +189,76 @@ static HRESULT WINAPI netfw_rule_Invoke(
     return hr;
 }
 
+/* ---- the fields of the rule string (LiberNT: fwstore.c) ---- */
+
+#define FW_PROTOCOL_ANY 256 /* NET_FW_IP_PROTOCOL_ANY */
+
+static const WCHAR *const key_name[] = { L"Name" };
+static const WCHAR *const key_desc[] = { L"Desc" };
+static const WCHAR *const key_app[] = { L"App" };
+static const WCHAR *const key_svc[] = { L"Svc" };
+static const WCHAR *const key_protocol[] = { L"Protocol" };
+static const WCHAR *const key_lport[] = { L"LPort", L"LPort2_10", L"LPort2_20" };
+static const WCHAR *const key_rport[] = { L"RPort", L"RPort2_10" };
+static const WCHAR *const key_laddr[] = { L"LA4", L"LA6" };
+static const WCHAR *const key_raddr[] = { L"RA4", L"RA6" };
+static const WCHAR *const key_icmp[] = { L"ICMP4", L"ICMP6" };
+static const WCHAR *const key_dir[] = { L"Dir" };
+static const WCHAR *const key_active[] = { L"Active" };
+static const WCHAR *const key_group[] = { L"EmbedCtxt" };
+static const WCHAR *const key_profile[] = { L"Profile" };
+static const WCHAR *const key_action[] = { L"Action" };
+
+/* the values of the keys as a BSTR; an absent field reads as dflt (NULL: an empty string) */
+static HRESULT rule_get_bstr( fw_rule *rule, const WCHAR *const *keys, unsigned int count, const WCHAR *dflt, BSTR *out )
+{
+    WCHAR buffer[MPS_MAX_RULE_CHARS + 1];
+    HRESULT hr;
+
+    if (!out) return E_POINTER;
+    hr = fwrule_get_values( rule->text, keys, count, buffer, ARRAY_SIZE(buffer) );
+    if (FAILED(hr)) return hr;
+    *out = SysAllocString( hr == S_FALSE ? (dflt ? dflt : L"") : buffer );
+    return *out ? S_OK : E_OUTOFMEMORY;
+}
+
+/* The fields of the keys become the comma-separated values under key (none: removed). A rule
+   of the store is written back at once, and only when the service can read it */
+static HRESULT rule_update( fw_rule *rule, const WCHAR *const *keys, unsigned int count, const WCHAR *key, const WCHAR *values,
+                            BOOL list )
+{
+    WCHAR *text;
+    HRESULT hr = fwrule_set_values( rule->text, keys, count, key, values, list, &text );
+
+    if (FAILED(hr)) return hr;
+    /* a rule removed from the store meanwhile is not written back, as Windows */
+    if (rule->id && !fwstore_rule_exists( rule->id ))
+    {
+        free( text );
+        return HRESULT_FROM_WIN32( ERROR_FILE_NOT_FOUND );
+    }
+    if (rule->id && FAILED(hr = fwstore_rule_write( rule->id, text )))
+    {
+        free( text );
+        return hr;
+    }
+    free( rule->text );
+    rule->text = text;
+    return S_OK;
+}
+
+/* one value: a comma in it is part of it */
+static HRESULT rule_put_bstr( fw_rule *rule, const WCHAR *const *keys, unsigned int count, BSTR value )
+{
+    return rule_update( rule, keys, count, keys[0], (value && *value) ? value : NULL, FALSE );
+}
+
 static HRESULT WINAPI netfw_rule_get_Name(
     INetFwRule *iface,
     BSTR *name)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, name);
-    return E_NOTIMPL;
+    return rule_get_bstr( This, key_name, ARRAY_SIZE(key_name), NULL, name );
 }
 
 static HRESULT WINAPI netfw_rule_put_Name(
@@ -199,9 +266,8 @@ static HRESULT WINAPI netfw_rule_put_Name(
     BSTR name)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_w(name));
-    return S_OK;
+    if (!name || !*name || wcslen( name ) > FW_MAX_NAME) return E_INVALIDARG;
+    return rule_put_bstr( This, key_name, ARRAY_SIZE(key_name), name );
 }
 
 static HRESULT WINAPI netfw_rule_get_Description(
@@ -209,9 +275,7 @@ static HRESULT WINAPI netfw_rule_get_Description(
     BSTR *desc)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, desc);
-    return E_NOTIMPL;
+    return rule_get_bstr( This, key_desc, ARRAY_SIZE(key_desc), NULL, desc );
 }
 
 static HRESULT WINAPI netfw_rule_put_Description(
@@ -219,9 +283,7 @@ static HRESULT WINAPI netfw_rule_put_Description(
     BSTR desc)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_w(desc));
-    return S_OK;
+    return rule_put_bstr( This, key_desc, ARRAY_SIZE(key_desc), desc );
 }
 
 static HRESULT WINAPI netfw_rule_get_ApplicationName(
@@ -229,9 +291,7 @@ static HRESULT WINAPI netfw_rule_get_ApplicationName(
     BSTR *app)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, app);
-    return E_NOTIMPL;
+    return rule_get_bstr( This, key_app, ARRAY_SIZE(key_app), NULL, app );
 }
 
 static HRESULT WINAPI netfw_rule_put_ApplicationName(
@@ -239,9 +299,7 @@ static HRESULT WINAPI netfw_rule_put_ApplicationName(
     BSTR app)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_w(app));
-    return S_OK;
+    return rule_put_bstr( This, key_app, ARRAY_SIZE(key_app), app );
 }
 
 static HRESULT WINAPI netfw_rule_get_ServiceName(
@@ -249,9 +307,7 @@ static HRESULT WINAPI netfw_rule_get_ServiceName(
     BSTR *service)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, service);
-    return E_NOTIMPL;
+    return rule_get_bstr( This, key_svc, ARRAY_SIZE(key_svc), NULL, service );
 }
 
 static HRESULT WINAPI netfw_rule_put_ServiceName(
@@ -259,9 +315,7 @@ static HRESULT WINAPI netfw_rule_put_ServiceName(
     BSTR service)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_w(service));
-    return S_OK;
+    return rule_put_bstr( This, key_svc, ARRAY_SIZE(key_svc), service );
 }
 
 static HRESULT WINAPI netfw_rule_get_Protocol(
@@ -269,9 +323,13 @@ static HRESULT WINAPI netfw_rule_get_Protocol(
     LONG *protocol)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
+    WCHAR value[16];
 
-    FIXME("%p, %p\n", This, protocol);
-    return E_NOTIMPL;
+    if (!protocol) return E_POINTER;
+    *protocol = FW_PROTOCOL_ANY;
+    if (fwrule_get_value( This->text, L"Protocol", value, ARRAY_SIZE(value) ) == S_OK)
+        *protocol = wcstol( value, NULL, 10 );
+    return S_OK;
 }
 
 static HRESULT WINAPI netfw_rule_put_Protocol(
@@ -279,9 +337,21 @@ static HRESULT WINAPI netfw_rule_put_Protocol(
     LONG protocol)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
+    WCHAR value[16];
 
-    FIXME("%p, %ld\n", This, protocol);
-    return S_OK;
+    if (protocol < 0 || protocol > FW_PROTOCOL_ANY) return E_INVALIDARG;
+    if (protocol == FW_PROTOCOL_ANY)
+        return rule_update( This, key_protocol, ARRAY_SIZE(key_protocol), NULL, NULL, FALSE );
+    swprintf( value, ARRAY_SIZE(value), L"%ld", protocol );
+    return rule_update( This, key_protocol, ARRAY_SIZE(key_protocol), L"Protocol", value, FALSE );
+}
+
+/* ports and addresses: "*" (any) is no field at all */
+static HRESULT rule_put_list( fw_rule *rule, const WCHAR *const *keys, unsigned int count, const WCHAR *key, BSTR list )
+{
+    if (!list || !*list || !wcscmp( list, L"*" ))
+        return rule_update( rule, keys, count, NULL, NULL, FALSE );
+    return rule_update( rule, keys, count, key, list, TRUE );
 }
 
 static HRESULT WINAPI netfw_rule_get_LocalPorts(
@@ -289,9 +359,7 @@ static HRESULT WINAPI netfw_rule_get_LocalPorts(
     BSTR *ports)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, ports);
-    return E_NOTIMPL;
+    return rule_get_bstr( This, key_lport, ARRAY_SIZE(key_lport), L"*", ports );
 }
 
 static HRESULT WINAPI netfw_rule_put_LocalPorts(
@@ -299,9 +367,7 @@ static HRESULT WINAPI netfw_rule_put_LocalPorts(
     BSTR ports)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_w(ports));
-    return S_OK;
+    return rule_put_list( This, key_lport, ARRAY_SIZE(key_lport), L"LPort", ports );
 }
 
 static HRESULT WINAPI netfw_rule_get_RemotePorts(
@@ -309,9 +375,7 @@ static HRESULT WINAPI netfw_rule_get_RemotePorts(
     BSTR *ports)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, ports);
-    return E_NOTIMPL;
+    return rule_get_bstr( This, key_rport, ARRAY_SIZE(key_rport), L"*", ports );
 }
 
 static HRESULT WINAPI netfw_rule_put_RemotePorts(
@@ -319,9 +383,7 @@ static HRESULT WINAPI netfw_rule_put_RemotePorts(
     BSTR ports)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_w(ports));
-    return S_OK;
+    return rule_put_list( This, key_rport, ARRAY_SIZE(key_rport), L"RPort", ports );
 }
 
 static HRESULT WINAPI netfw_rule_get_LocalAddresses(
@@ -329,9 +391,7 @@ static HRESULT WINAPI netfw_rule_get_LocalAddresses(
     BSTR *addresses)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, addresses);
-    return E_NOTIMPL;
+    return rule_get_bstr( This, key_laddr, ARRAY_SIZE(key_laddr), L"*", addresses );
 }
 
 static HRESULT WINAPI netfw_rule_put_LocalAddresses(
@@ -339,9 +399,8 @@ static HRESULT WINAPI netfw_rule_put_LocalAddresses(
     BSTR addresses)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_w(addresses));
-    return S_OK;
+    if (addresses && wcschr( addresses, ':' )) return E_NOTIMPL; /* IPv4 only for now */
+    return rule_put_list( This, key_laddr, ARRAY_SIZE(key_laddr), L"LA4", addresses );
 }
 
 static HRESULT WINAPI netfw_rule_get_RemoteAddresses(
@@ -349,9 +408,7 @@ static HRESULT WINAPI netfw_rule_get_RemoteAddresses(
     BSTR *addresses)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, addresses);
-    return E_NOTIMPL;
+    return rule_get_bstr( This, key_raddr, ARRAY_SIZE(key_raddr), L"*", addresses );
 }
 
 static HRESULT WINAPI netfw_rule_put_RemoteAddresses(
@@ -359,9 +416,8 @@ static HRESULT WINAPI netfw_rule_put_RemoteAddresses(
     BSTR addresses)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_w(addresses));
-    return S_OK;
+    if (addresses && wcschr( addresses, ':' )) return E_NOTIMPL; /* IPv4 only for now */
+    return rule_put_list( This, key_raddr, ARRAY_SIZE(key_raddr), L"RA4", addresses );
 }
 
 static HRESULT WINAPI netfw_rule_get_IcmpTypesAndCodes(
@@ -369,9 +425,7 @@ static HRESULT WINAPI netfw_rule_get_IcmpTypesAndCodes(
     BSTR *codes)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, codes);
-    return E_NOTIMPL;
+    return rule_get_bstr( This, key_icmp, ARRAY_SIZE(key_icmp), L"*", codes );
 }
 
 static HRESULT WINAPI netfw_rule_put_IcmpTypesAndCodes(
@@ -379,9 +433,7 @@ static HRESULT WINAPI netfw_rule_put_IcmpTypesAndCodes(
     BSTR codes)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_w(codes));
-    return S_OK;
+    return rule_put_list( This, key_icmp, ARRAY_SIZE(key_icmp), L"ICMP4", codes );
 }
 
 static HRESULT WINAPI netfw_rule_get_Direction(
@@ -389,9 +441,13 @@ static HRESULT WINAPI netfw_rule_get_Direction(
     NET_FW_RULE_DIRECTION *dir)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
+    WCHAR value[8];
 
-    FIXME("%p, %p\n", This, dir);
-    return E_NOTIMPL;
+    if (!dir) return E_POINTER;
+    *dir = NET_FW_RULE_DIR_IN;
+    if (fwrule_get_value( This->text, L"Dir", value, ARRAY_SIZE(value) ) == S_OK && !lstrcmpiW( value, L"Out" ))
+        *dir = NET_FW_RULE_DIR_OUT;
+    return S_OK;
 }
 
 static HRESULT WINAPI netfw_rule_put_Direction(
@@ -400,48 +456,40 @@ static HRESULT WINAPI netfw_rule_put_Direction(
 {
     fw_rule *This = impl_from_INetFwRule( iface );
 
-    FIXME("%p, %u\n", This, dir);
-    return S_OK;
+    if (dir != NET_FW_RULE_DIR_IN && dir != NET_FW_RULE_DIR_OUT) return E_INVALIDARG;
+    return rule_update( This, key_dir, ARRAY_SIZE(key_dir), L"Dir", dir == NET_FW_RULE_DIR_IN ? L"In" : L"Out", FALSE );
 }
 
 static HRESULT WINAPI netfw_rule_get_Interfaces(
     INetFwRule *iface,
     VARIANT *interfaces)
 {
-    fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, interfaces);
-    return E_NOTIMPL;
+    if (!interfaces) return E_POINTER;
+    V_VT( interfaces ) = VT_EMPTY; /* every interface */
+    return S_OK;
 }
 
 static HRESULT WINAPI netfw_rule_put_Interfaces(
     INetFwRule *iface,
     VARIANT interfaces)
 {
-    fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_variant(&interfaces));
-    return S_OK;
+    return V_VT( &interfaces ) == VT_EMPTY ? S_OK : E_NOTIMPL;
 }
 
 static HRESULT WINAPI netfw_rule_get_InterfaceTypes(
     INetFwRule *iface,
     BSTR *types)
 {
-    fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, types);
-    return E_NOTIMPL;
+    if (!types) return E_POINTER;
+    *types = SysAllocString( L"All" );
+    return *types ? S_OK : E_OUTOFMEMORY;
 }
 
 static HRESULT WINAPI netfw_rule_put_InterfaceTypes(
     INetFwRule *iface,
     BSTR types)
 {
-    fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_w(types));
-    return S_OK;
+    return (types && !lstrcmpiW( types, L"All" )) ? S_OK : E_NOTIMPL;
 }
 
 static HRESULT WINAPI netfw_rule_get_Enabled(
@@ -449,9 +497,12 @@ static HRESULT WINAPI netfw_rule_get_Enabled(
     VARIANT_BOOL *enabled)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
+    WCHAR value[8];
 
-    FIXME("%p, %p\n", This, enabled);
-    return E_NOTIMPL;
+    if (!enabled) return E_POINTER;
+    *enabled = (fwrule_get_value( This->text, L"Active", value, ARRAY_SIZE(value) ) == S_OK &&
+                !lstrcmpiW( value, L"TRUE" )) ? VARIANT_TRUE : VARIANT_FALSE;
+    return S_OK;
 }
 
 static HRESULT WINAPI netfw_rule_put_Enabled(
@@ -459,29 +510,23 @@ static HRESULT WINAPI netfw_rule_put_Enabled(
     VARIANT_BOOL enabled)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %#x\n", This, enabled);
-    return S_OK;
+    return rule_update( This, key_active, ARRAY_SIZE(key_active), L"Active", enabled ? L"TRUE" : L"FALSE", FALSE );
 }
 
 static HRESULT WINAPI netfw_rule_get_Grouping(
     INetFwRule *iface,
-    BSTR *grouping)
+    BSTR *context)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, grouping);
-    return E_NOTIMPL;
+    return rule_get_bstr( This, key_group, ARRAY_SIZE(key_group), NULL, context );
 }
 
 static HRESULT WINAPI netfw_rule_put_Grouping(
     INetFwRule *iface,
-    BSTR grouping)
+    BSTR context)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %s\n", This, debugstr_w(grouping));
-    return S_OK;
+    return rule_put_bstr( This, key_group, ARRAY_SIZE(key_group), context );
 }
 
 static HRESULT WINAPI netfw_rule_get_Profiles(
@@ -489,9 +534,19 @@ static HRESULT WINAPI netfw_rule_get_Profiles(
     LONG *profiles)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
+    WCHAR value[64];
 
-    FIXME("%p, %p\n", This, profiles);
-    return E_NOTIMPL;
+    if (!profiles) return E_POINTER;
+    *profiles = 0;
+    if (fwrule_get_values( This->text, key_profile, ARRAY_SIZE(key_profile), value, ARRAY_SIZE(value) ) != S_OK)
+    {
+        *profiles = NET_FW_PROFILE2_ALL;
+        return S_OK;
+    }
+    if (wcsstr( value, L"Domain" )) *profiles |= NET_FW_PROFILE2_DOMAIN;
+    if (wcsstr( value, L"Private" )) *profiles |= NET_FW_PROFILE2_PRIVATE;
+    if (wcsstr( value, L"Public" )) *profiles |= NET_FW_PROFILE2_PUBLIC;
+    return S_OK;
 }
 
 static HRESULT WINAPI netfw_rule_put_Profiles(
@@ -499,29 +554,33 @@ static HRESULT WINAPI netfw_rule_put_Profiles(
     LONG profiles)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
+    WCHAR value[64] = L"";
 
-    FIXME("%p, %#lx\n", This, profiles);
-    return S_OK;
+    if (!(profiles & (NET_FW_PROFILE2_DOMAIN | NET_FW_PROFILE2_PRIVATE | NET_FW_PROFILE2_PUBLIC)))
+        return E_INVALIDARG;
+    if ((profiles & NET_FW_PROFILE2_ALL) == NET_FW_PROFILE2_ALL ||
+        (profiles & 7) == 7)
+        return rule_update( This, key_profile, ARRAY_SIZE(key_profile), NULL, NULL, FALSE );
+    if (profiles & NET_FW_PROFILE2_DOMAIN) wcscat( value, L"Domain," );
+    if (profiles & NET_FW_PROFILE2_PRIVATE) wcscat( value, L"Private," );
+    if (profiles & NET_FW_PROFILE2_PUBLIC) wcscat( value, L"Public," );
+    return rule_update( This, key_profile, ARRAY_SIZE(key_profile), L"Profile", value, TRUE );
 }
 
 static HRESULT WINAPI netfw_rule_get_EdgeTraversal(
     INetFwRule *iface,
     VARIANT_BOOL *enabled)
 {
-    fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %p\n", This, enabled);
-    return E_NOTIMPL;
+    if (!enabled) return E_POINTER;
+    *enabled = VARIANT_FALSE;
+    return S_OK;
 }
 
 static HRESULT WINAPI netfw_rule_put_EdgeTraversal(
     INetFwRule *iface,
     VARIANT_BOOL enabled)
 {
-    fw_rule *This = impl_from_INetFwRule( iface );
-
-    FIXME("%p, %#x\n", This, enabled);
-    return S_OK;
+    return enabled ? E_NOTIMPL : S_OK;
 }
 
 static HRESULT WINAPI netfw_rule_get_Action(
@@ -529,9 +588,13 @@ static HRESULT WINAPI netfw_rule_get_Action(
     NET_FW_ACTION *action)
 {
     fw_rule *This = impl_from_INetFwRule( iface );
+    WCHAR value[16];
 
-    FIXME("%p, %p\n", This, action);
-    return E_NOTIMPL;
+    if (!action) return E_POINTER;
+    *action = NET_FW_ACTION_ALLOW;
+    if (fwrule_get_value( This->text, L"Action", value, ARRAY_SIZE(value) ) == S_OK && !lstrcmpiW( value, L"Block" ))
+        *action = NET_FW_ACTION_BLOCK;
+    return S_OK;
 }
 
 static HRESULT WINAPI netfw_rule_put_Action(
@@ -540,8 +603,9 @@ static HRESULT WINAPI netfw_rule_put_Action(
 {
     fw_rule *This = impl_from_INetFwRule( iface );
 
-    FIXME("%p, %u\n", This, action);
-    return S_OK;
+    if (action != NET_FW_ACTION_ALLOW && action != NET_FW_ACTION_BLOCK) return E_INVALIDARG;
+    return rule_update( This, key_action, ARRAY_SIZE(key_action), L"Action",
+                        action == NET_FW_ACTION_ALLOW ? L"Allow" : L"Block", FALSE );
 }
 
 static const struct INetFwRuleVtbl fw_rule_vtbl =
@@ -602,10 +666,35 @@ HRESULT NetFwRule_create( IUnknown *outer, void **obj )
 
     rule->INetFwRule_iface.lpVtbl = &fw_rule_vtbl;
     rule->refs = 1;
+    rule->id = NULL;
+    if (!(rule->text = fw_strdup( fwrule_default_text() )))
+    {
+        free( rule );
+        return E_OUTOFMEMORY;
+    }
 
     *obj = &rule->INetFwRule_iface;
 
     TRACE("returning iface %p\n", *obj);
+    return S_OK;
+}
+
+/* a rule of the store; takes id and text */
+static HRESULT stored_rule_create( WCHAR *id, WCHAR *text, INetFwRule **out )
+{
+    fw_rule *rule;
+    HRESULT hr = NetFwRule_create( NULL, (void **)out );
+
+    if (FAILED(hr))
+    {
+        free( id );
+        free( text );
+        return hr;
+    }
+    rule = impl_from_INetFwRule( *out );
+    free( rule->text );
+    rule->text = text;
+    rule->id = id;
     return S_OK;
 }
 
@@ -744,11 +833,10 @@ static HRESULT WINAPI netfw_rules_get_Count(
 {
     fw_rules *This = impl_from_INetFwRules( iface );
 
-    FIXME("%p, %p\n", This, count);
+    TRACE("%p, %p\n", This, count);
 
-    if (count)
-        *count = 0;
-
+    if (!count) return E_POINTER;
+    *count = fwstore_rule_count();
     return S_OK;
 }
 
@@ -757,8 +845,30 @@ static HRESULT WINAPI netfw_rules_Add(
     INetFwRule *rule)
 {
     fw_rules *This = impl_from_INetFwRules( iface );
+    fw_rule *data;
+    WCHAR *id;
+    HRESULT hr;
+    BSTR name;
 
-    FIXME("%p, %p\n", This, rule);
+    TRACE("%p, %p\n", This, rule);
+
+    if (!rule) return E_POINTER;
+    /* a rule needs a name, as in Windows */
+    if (FAILED(INetFwRule_get_Name( rule, &name ))) return E_INVALIDARG;
+    hr = SysStringLen( name ) ? S_OK : E_INVALIDARG;
+    SysFreeString( name );
+    if (FAILED(hr)) return hr;
+
+    data = impl_from_INetFwRule( rule );
+    if (data->INetFwRule_iface.lpVtbl != &fw_rule_vtbl) return E_INVALIDARG;
+    if (data->id) return HRESULT_FROM_WIN32( ERROR_ALREADY_EXISTS );
+    if (FAILED(hr = fwstore_new_id( &id ))) return hr;
+    if (FAILED(hr = fwstore_rule_write( id, data->text )))
+    {
+        free( id );
+        return hr;
+    }
+    data->id = id; /* from now on, every change to the rule is written */
     return S_OK;
 }
 
@@ -768,8 +878,10 @@ static HRESULT WINAPI netfw_rules_Remove(
 {
     fw_rules *This = impl_from_INetFwRules( iface );
 
-    FIXME("%p, %s\n", This, debugstr_w(name));
-    return S_OK;
+    TRACE("%p, %s\n", This, debugstr_w(name));
+
+    if (!name) return E_INVALIDARG;
+    return fwstore_rule_remove( name );
 }
 
 static HRESULT WINAPI netfw_rules_Item(
@@ -778,9 +890,16 @@ static HRESULT WINAPI netfw_rules_Item(
     INetFwRule **rule)
 {
     fw_rules *This = impl_from_INetFwRules( iface );
+    WCHAR *id, *text;
+    HRESULT hr;
 
-    FIXME("%p, %s, %p\n", This, debugstr_w(name), rule);
-    return E_NOTIMPL;
+    TRACE("%p, %s, %p\n", This, debugstr_w(name), rule);
+
+    if (!rule) return E_POINTER;
+    *rule = NULL;
+    if (!name) return E_INVALIDARG;
+    if (FAILED(hr = fwstore_rule_find( name, &id, &text ))) return hr;
+    return stored_rule_create( id, text, rule );
 }
 
 static HRESULT NewEnum_create(fw_rules *rules, IUnknown **obj);
@@ -837,19 +956,49 @@ static ULONG WINAPI enumvar_Release(IEnumVARIANT *iface)
     return ref;
 }
 
+/* the rules of the store, in their order there */
 static HRESULT WINAPI enumvar_Next(IEnumVARIANT *iface, ULONG celt, VARIANT *var, ULONG *fetched)
 {
-    FIXME("%p,%lu,%p,%p\n", iface, celt, var, fetched);
+    EnumVARIANT *enumvar = impl_from_IEnumVARIANT(iface);
+    ULONG got = 0;
 
-    if (fetched) *fetched = 0;
-    return  S_FALSE;
+    TRACE("%p,%lu,%p,%p\n", iface, celt, var, fetched);
+
+    if (!var) return E_POINTER;
+    while (got < celt && enumvar->pos < fwstore_value_count())
+    {
+        WCHAR *id, *text;
+        INetFwRule *rule;
+        HRESULT hr = fwstore_rule_at( enumvar->pos++, &id, &text );
+
+        if (hr != S_OK) continue;
+        if (FAILED(hr = stored_rule_create( id, text, &rule ))) break;
+        V_VT( &var[got] ) = VT_DISPATCH;
+        V_DISPATCH( &var[got] ) = (IDispatch *)rule;
+        got++;
+    }
+    if (fetched) *fetched = got;
+    return got == celt ? S_OK : S_FALSE;
 }
 
 static HRESULT WINAPI enumvar_Skip(IEnumVARIANT *iface, ULONG celt)
 {
-    FIXME("%p,%lu\n", iface, celt);
+    EnumVARIANT *enumvar = impl_from_IEnumVARIANT(iface);
+    LONG count = fwstore_value_count();
 
-    return S_FALSE;
+    TRACE("%p,%lu\n", iface, celt);
+
+    /* rules are skipped, not the other values of the store */
+    while (celt && enumvar->pos < count)
+    {
+        WCHAR *id, *text;
+
+        if (fwstore_rule_at( enumvar->pos++, &id, &text ) != S_OK) continue;
+        free( id );
+        free( text );
+        celt--;
+    }
+    return celt ? S_FALSE : S_OK;
 }
 
 static HRESULT WINAPI enumvar_Reset(IEnumVARIANT *iface)
@@ -1224,24 +1373,35 @@ static HRESULT WINAPI fwpolicy2_get_CurrentProfileTypes(INetFwPolicy2 *iface, LO
 {
     fw_policy2 *This = impl_from_INetFwPolicy2( iface );
 
-    FIXME("%p %p\n", This, profile);
-    return E_NOTIMPL;
+    TRACE("%p %p\n", This, profile);
+
+    if (!profile) return E_POINTER;
+    *profile = fwstore_current_profiles();
+    return S_OK;
 }
 
 static HRESULT WINAPI fwpolicy2_get_FirewallEnabled(INetFwPolicy2 *iface, NET_FW_PROFILE_TYPE2 profileType, VARIANT_BOOL *enabled)
 {
     fw_policy2 *This = impl_from_INetFwPolicy2( iface );
+    DWORD value;
+    HRESULT hr;
 
-    FIXME("%p %d %p\n", This, profileType, enabled);
-    return E_NOTIMPL;
+    TRACE("%p %d %p\n", This, profileType, enabled);
+
+    if (!enabled) return E_POINTER;
+    /* no policy: off (the firewall service then filters nothing) */
+    if (FAILED(hr = fwstore_get_profile_dword( profileType, L"EnableFirewall", 0, &value ))) return hr;
+    *enabled = value ? VARIANT_TRUE : VARIANT_FALSE;
+    return S_OK;
 }
 
 static HRESULT WINAPI fwpolicy2_put_FirewallEnabled(INetFwPolicy2 *iface, NET_FW_PROFILE_TYPE2 profileType, VARIANT_BOOL enabled)
 {
     fw_policy2 *This = impl_from_INetFwPolicy2( iface );
 
-    FIXME("%p %d %d\n", This, profileType, enabled);
-    return E_NOTIMPL;
+    TRACE("%p %d %d\n", This, profileType, enabled);
+
+    return fwstore_set_profile_dword( profileType, L"EnableFirewall", enabled ? 1 : 0 );
 }
 
 static HRESULT WINAPI fwpolicy2_get_ExcludedInterfaces(INetFwPolicy2 *iface, NET_FW_PROFILE_TYPE2 profileType, VARIANT *interfaces)
@@ -1262,17 +1422,24 @@ static HRESULT WINAPI fwpolicy2_put_ExcludedInterfaces(INetFwPolicy2 *iface, NET
 static HRESULT WINAPI fwpolicy2_get_BlockAllInboundTraffic(INetFwPolicy2 *iface, NET_FW_PROFILE_TYPE2 profileType, VARIANT_BOOL *block)
 {
     fw_policy2 *This = impl_from_INetFwPolicy2( iface );
+    DWORD value;
+    HRESULT hr;
 
-    FIXME("%p %d %p\n", This, profileType, block);
-    return E_NOTIMPL;
+    TRACE("%p %d %p\n", This, profileType, block);
+
+    if (!block) return E_POINTER;
+    if (FAILED(hr = fwstore_get_profile_dword( profileType, L"DoNotAllowExceptions", 0, &value ))) return hr;
+    *block = value ? VARIANT_TRUE : VARIANT_FALSE;
+    return S_OK;
 }
 
 static HRESULT WINAPI fwpolicy2_put_BlockAllInboundTraffic(INetFwPolicy2 *iface, NET_FW_PROFILE_TYPE2 profileType, VARIANT_BOOL block)
 {
     fw_policy2 *This = impl_from_INetFwPolicy2( iface );
 
-    FIXME("%p %d %d\n", This, profileType, block);
-    return E_NOTIMPL;
+    TRACE("%p %d %d\n", This, profileType, block);
+
+    return fwstore_set_profile_dword( profileType, L"DoNotAllowExceptions", block ? 1 : 0 );
 }
 
 static HRESULT WINAPI fwpolicy2_get_NotificationsDisabled(INetFwPolicy2 *iface, NET_FW_PROFILE_TYPE2 profileType, VARIANT_BOOL *disabled)
@@ -1514,24 +1681,34 @@ static HRESULT WINAPI fwpolicy2_RestoreLocalFirewallDefaults(INetFwPolicy2 *ifac
 {
     fw_policy2 *This = impl_from_INetFwPolicy2( iface );
 
-    FIXME("%p\n", This);
-    return E_NOTIMPL;
+    TRACE("%p\n", This);
+
+    return fwstore_restore_defaults();
 }
 
 static HRESULT WINAPI fwpolicy2_get_DefaultInboundAction(INetFwPolicy2 *iface, NET_FW_PROFILE_TYPE2 profileType, NET_FW_ACTION *action)
 {
     fw_policy2 *This = impl_from_INetFwPolicy2( iface );
+    DWORD value;
+    HRESULT hr;
 
-    FIXME("%p %d %p\n", This, profileType, action);
-    return E_NOTIMPL;
+    TRACE("%p %d %p\n", This, profileType, action);
+
+    if (!action) return E_POINTER;
+    /* the policy value is 1 for block, as Windows keeps it; absent: block */
+    if (FAILED(hr = fwstore_get_profile_dword( profileType, L"DefaultInboundAction", 1, &value ))) return hr;
+    *action = value ? NET_FW_ACTION_BLOCK : NET_FW_ACTION_ALLOW;
+    return S_OK;
 }
 
 static HRESULT WINAPI fwpolicy2_put_DefaultInboundAction(INetFwPolicy2 *iface, NET_FW_PROFILE_TYPE2 profileType, NET_FW_ACTION action)
 {
     fw_policy2 *This = impl_from_INetFwPolicy2( iface );
 
-    FIXME("%p %d %d\n", This, profileType, action);
-    return E_NOTIMPL;
+    TRACE("%p %d %d\n", This, profileType, action);
+
+    if (action != NET_FW_ACTION_ALLOW && action != NET_FW_ACTION_BLOCK) return E_INVALIDARG;
+    return fwstore_set_profile_dword( profileType, L"DefaultInboundAction", action == NET_FW_ACTION_BLOCK ? 1 : 0 );
 }
 
 static HRESULT WINAPI fwpolicy2_get_DefaultOutboundAction(INetFwPolicy2 *iface, NET_FW_PROFILE_TYPE2 profileType, NET_FW_ACTION *action)

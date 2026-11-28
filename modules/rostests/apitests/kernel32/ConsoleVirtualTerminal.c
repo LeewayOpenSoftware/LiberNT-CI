@@ -58,6 +58,27 @@ WriteVt(HANDLE Output,
     return Success && Written == Length;
 }
 
+/* Finds a primary device-attributes reply, ESC [ ? <digits and ;> c, whatever its parameters */
+static BOOL
+ContainsDeviceAttributes(const WCHAR *Buffer, DWORD Count)
+{
+    DWORD i, j;
+
+    for (i = 0; i + 3 < Count; i++)
+    {
+        if (Buffer[i] != 0x1b || Buffer[i + 1] != L'[' || Buffer[i + 2] != L'?')
+            continue;
+        for (j = i + 3; j < Count && ((Buffer[j] >= L'0' && Buffer[j] <= L'9') || Buffer[j] == L';'); j++)
+            ;
+        if (j > i + 3 && j < Count && Buffer[j] == L'c')
+        {
+            trace("Primary device attributes: %.*ls\n", (int)(j - i - 1), &Buffer[i + 1]);
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 #define WRITE_VT(Output, String) WriteVt((Output), (String), sizeof(String) - 1)
 
 static BOOL
@@ -304,8 +325,8 @@ TestEditStartup(HANDLE Input,
        "Unexpected OSC 11 background-colour reply\n");
     ok(Contains(Responses, CharacterCount, L"\x1b[4;2R"),
        "Missing cursor-position reply for the ambiguous-width probe\n");
-    ok(Contains(Responses, CharacterCount, L"\x1b[?61;1;6;7;21;22;23;24;28;32;42c"),
-       "Missing primary device-attributes reply\n");
+    ok(ContainsDeviceAttributes(Responses, CharacterCount),
+       "Missing primary device-attributes reply (ESC [ ? ... c)\n");
 
     WriteVt(Output, EditRestore, sizeof(EditRestore) - 1);
     ok(ReadCell(Output, MarkerPosition.X, MarkerPosition.Y) == L'P',
@@ -673,6 +694,104 @@ TestEditFrontendInput(HANDLE Input,
     FlushConsoleInputBuffer(Input);
 }
 
+static VOID
+TestFaintItalic(HANDLE Output)
+{
+    CONSOLE_SCREEN_BUFFER_INFO Info;
+    WORD Plain, Attribute;
+
+    if (!ClearScreen(Output, &Info))
+        return;
+
+    /* SGR 2/3 change the rendition only: no text, no legacy attribute change */
+    WRITE_VT(Output, "\x1b[0mA\x1b[2mB\x1b[3mC\x1b[2;3;31mD\x1b[22;23mE\x1b[1;2mF\x1b[22mG\x1b[0m");
+    Plain = ReadCellAttribute(Output, 0, 0);
+    ok(ReadCell(Output, 0, 0) == L'A', "Cell 0 is %04x\n", ReadCell(Output, 0, 0));
+    ok(ReadCell(Output, 1, 0) == L'B', "Faint wrote %04x, expected B\n", ReadCell(Output, 1, 0));
+    ok(ReadCell(Output, 2, 0) == L'C', "Italic wrote %04x, expected C\n", ReadCell(Output, 2, 0));
+    ok(ReadCell(Output, 3, 0) == L'D', "Faint italic red wrote %04x, expected D\n", ReadCell(Output, 3, 0));
+    ok(ReadCell(Output, 4, 0) == L'E', "Reset wrote %04x, expected E\n", ReadCell(Output, 4, 0));
+    ok(ReadCell(Output, 7, 0) == L' ', "Stray character %04x after the sequences\n", ReadCell(Output, 7, 0));
+    Attribute = ReadCellAttribute(Output, 1, 0);
+    ok(Attribute == Plain, "Faint attribute is %#x, expected %#x\n", Attribute, Plain);
+    Attribute = ReadCellAttribute(Output, 2, 0);
+    ok(Attribute == Plain, "Italic attribute is %#x, expected %#x\n", Attribute, Plain);
+    Attribute = ReadCellAttribute(Output, 3, 0);
+    ok((Attribute & 0x0f) == FOREGROUND_RED, "Faint italic red attribute is %#x\n", Attribute);
+    /* SGR 22 and 23 reset intensity and italic only: the red from SGR 31 stays */
+    Attribute = ReadCellAttribute(Output, 4, 0);
+    ok(Attribute == ((Plain & 0xf0) | FOREGROUND_RED), "Attribute after SGR 22;23 is %#x, expected %#x\n",
+       Attribute, (Plain & 0xf0) | FOREGROUND_RED);
+    Attribute = ReadCellAttribute(Output, 5, 0);
+    ok(Attribute == ((Plain & 0xf0) | FOREGROUND_RED | FOREGROUND_INTENSITY),
+       "Bold faint attribute is %#x, expected %#x\n", Attribute, (Plain & 0xf0) | FOREGROUND_RED | FOREGROUND_INTENSITY);
+    Attribute = ReadCellAttribute(Output, 6, 0);
+    ok(Attribute == ((Plain & 0xf0) | FOREGROUND_RED), "SGR 22 left attribute %#x, expected %#x\n",
+       Attribute, (Plain & 0xf0) | FOREGROUND_RED);
+}
+
+static VOID
+TestSplitUtf8(HANDLE Output)
+{
+    CONSOLE_SCREEN_BUFFER_INFO Info;
+    WCHAR Cell;
+
+    if (GetConsoleOutputCP() != CP_UTF8)
+    {
+        skip("The console output code page is not UTF-8\n");
+        return;
+    }
+    if (!ClearScreen(Output, &Info))
+        return;
+
+    /* U+2026 (E2 80 A6) split after the first and the second byte, then U+00E9 (C3 A9) split */
+    WRITE_VT(Output, "a\xe2");
+    WRITE_VT(Output, "\x80");
+    WRITE_VT(Output, "\xa6" "b\xc3");
+    WRITE_VT(Output, "\xa9" "c");
+    Cell = ReadCell(Output, 0, 0);
+    ok(Cell == L'a', "Cell 0 is %04x, expected a\n", Cell);
+    Cell = ReadCell(Output, 1, 0);
+    ok(Cell == 0x2026, "Split three-byte sequence gave %04x, expected 2026\n", Cell);
+    Cell = ReadCell(Output, 2, 0);
+    ok(Cell == L'b', "Cell 2 is %04x, expected b\n", Cell);
+    Cell = ReadCell(Output, 3, 0);
+    ok(Cell == 0x00e9, "Split two-byte sequence gave %04x, expected 00e9\n", Cell);
+    Cell = ReadCell(Output, 4, 0);
+    ok(Cell == L'c', "Cell 4 is %04x, expected c\n", Cell);
+    Cell = ReadCell(Output, 5, 0);
+    ok(Cell == L' ', "Stray character %04x after the text\n", Cell);
+}
+
+static VOID
+TestVtWithoutProcessedOutput(HANDLE Output)
+{
+    CONSOLE_SCREEN_BUFFER_INFO Info;
+    DWORD Mode;
+    WCHAR Cell;
+
+    if (!GetConsoleMode(Output, &Mode) ||
+        !SetConsoleMode(Output, ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_WRAP_AT_EOL_OUTPUT))
+    {
+        skip("Unable to clear ENABLE_PROCESSED_OUTPUT, error %lu\n", GetLastError());
+        return;
+    }
+    if (ClearScreen(Output, &Info))
+    {
+        /* As on Windows: without processed output, VT sequences are not parsed */
+        WRITE_VT(Output, "\x1b[2;3HQ");
+        Cell = ReadCell(Output, 0, 0);
+        ok(Cell == 0x1b, "Without processed output (0,0) is %04x, expected the ESC character\n", Cell);
+        Cell = ReadCell(Output, 1, 0);
+        ok(Cell == L'[', "Without processed output (1,0) is %04x, expected [\n", Cell);
+        Cell = ReadCell(Output, 6, 0);
+        ok(Cell == L'Q', "Without processed output (6,0) is %04x, expected Q\n", Cell);
+        Cell = ReadCell(Output, 2, 1);
+        ok(Cell == L' ', "CUP was parsed without processed output: %04x at (2,1)\n", Cell);
+    }
+    SetConsoleMode(Output, Mode);
+}
+
 START_TEST(ConsoleVirtualTerminal)
 {
     PREAD_CONSOLE_INPUT_EX_W ReadConsoleInputExW_;
@@ -899,6 +1018,9 @@ START_TEST(ConsoleVirtualTerminal)
     else
     {
         TestEditRendering(Output);
+        TestVtWithoutProcessedOutput(Output);
+        TestSplitUtf8(Output);
+        TestFaintItalic(Output);
         if (ReadConsoleInputExW_ != NULL)
             TestEditFrontendInput(Input,
                                   Output,

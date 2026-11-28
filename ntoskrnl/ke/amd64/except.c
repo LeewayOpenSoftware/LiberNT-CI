@@ -66,8 +66,13 @@ KeInitExceptions(VOID)
     {
         ULONG64 Offset;
 
+        ASSERT(j < (int)RTL_NUMBER_OF(KiInterruptInitTable));
+        ASSERT(KiInterruptInitTable[j].ServiceRoutine == NULL || KiInterruptInitTable[j].InterruptId >= i);
         if (KiInterruptInitTable[j].InterruptId == i)
         {
+            ASSERT(KiInterruptInitTable[j].ServiceRoutine != NULL);
+            ASSERT(KiInterruptInitTable[j].Dpl <= 3);
+            ASSERT(KiInterruptInitTable[j].IstIndex <= 7);
             Offset = (ULONG64)KiInterruptInitTable[j].ServiceRoutine;
             KiIdt[i].Dpl = KiInterruptInitTable[j].Dpl;
             KiIdt[i].IstIndex = KiInterruptInitTable[j].IstIndex;
@@ -89,6 +94,8 @@ KeInitExceptions(VOID)
         KiIdt[i].Reserved1 = 0;
     }
 
+    ASSERT(j == (int)RTL_NUMBER_OF(KiInterruptInitTable) - 1);
+    ASSERT(KiInterruptInitTable[j].ServiceRoutine == NULL);
     KeGetPcr()->IdtBase = KiIdt;
     __lidt(&KiIdtDescriptor.Limit);
 }
@@ -151,10 +158,11 @@ KiDispatchExceptionToUser(
     /* Make sure we have a valid SS */
     if (TrapFrame->SegSs != (KGDT64_R3_DATA | RPL_MASK))
     {
-        /* Raise an access violation instead */
+        /* Raise an access violation instead. The record goes whole to the
+         * user stack, so the fields that are not set here are zero. */
+        RtlZeroMemory(&LocalExceptRecord, sizeof(LocalExceptRecord));
         LocalExceptRecord.ExceptionCode = STATUS_ACCESS_VIOLATION;
-        LocalExceptRecord.ExceptionFlags = 0;
-        LocalExceptRecord.NumberParameters = 0;
+        LocalExceptRecord.ExceptionAddress = ExceptionRecord->ExceptionAddress;
         ExceptionRecord = &LocalExceptRecord;
     }
 
@@ -511,11 +519,13 @@ KiDispatchException(IN PEXCEPTION_RECORD ExceptionRecord,
         }
 
         /* 3rd strike, kill the process */
-        DPRINT1("Kill %.16s, ExceptionCode: %lx, ExceptionAddress: %p, BaseAddress: %p\n",
+        DPRINT1("Kill %.16s, ExceptionCode: %lx, ExceptionAddress: %p, BaseAddress: %p, P0: %Ix, P1: %Ix\n",
                 PsGetCurrentProcess()->ImageFileName,
                 ExceptionRecord->ExceptionCode,
                 ExceptionRecord->ExceptionAddress,
-                PsGetCurrentProcess()->SectionBaseAddress);
+                PsGetCurrentProcess()->SectionBaseAddress,
+                ExceptionRecord->ExceptionInformation[0],
+                ExceptionRecord->ExceptionInformation[1]);
 
         ZwTerminateProcess(NtCurrentProcess(), ExceptionRecord->ExceptionCode);
         KeBugCheckEx(KMODE_EXCEPTION_NOT_HANDLED,
@@ -809,14 +819,6 @@ KiGeneralProtectionFaultHandler(
     /* Get Instruction Pointer */
     Instructions = (PUCHAR)TrapFrame->Rip;
 
-    /* Check for IRET */
-    if (Instructions[0] == 0x48 && Instructions[1] == 0xCF)
-    {
-        /* Not implemented */
-        UNIMPLEMENTED;
-        ASSERT(FALSE);
-    }
-
     /* Check for RDMSR/WRMSR */
     if ((Instructions[0] == 0xF) &&            // 2-byte opcode
         ((Instructions[1] == 0x30) ||        // RDMSR
@@ -837,6 +839,9 @@ KiGeneralProtectionFaultHandler(
             (PVOID)(ULONG_PTR)TrapFrame->ErrorCode);
     return STATUS_ACCESS_VIOLATION;
 }
+
+static DECLSPEC_ALIGN(8) UCHAR KiMcheckRecord[sizeof(WHEA_ERROR_RECORD_HEADER) + sizeof(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR) + sizeof(WHEA_XPF_MCA_SECTION)];
+static LONG KiMcheckRecordClaimed;
 
 DECLSPEC_NORETURN
 VOID
@@ -870,6 +875,17 @@ KiMcheckAbortHandler(
             ReportedBank = Bank;
             ReportedStatus = Status;
         }
+    }
+
+    if (Found && InterlockedExchange(&KiMcheckRecordClaimed, 1) == 0 &&
+        WheaMcaBuildFatalRecord(KiMcheckRecord, sizeof(KiMcheckRecord), TrapFrame->Rip, &ReportedBank, &ReportedStatus) != 0)
+    {
+        KeBugCheckWithTf(WHEA_UNCORRECTABLE_ERROR,
+                         WheaErrSrcTypeMCE,
+                         (ULONG_PTR)KiMcheckRecord,
+                         (ULONG_PTR)(ReportedStatus >> 32),
+                         (ULONG_PTR)(ReportedStatus & 0xFFFFFFFF),
+                         TrapFrame);
     }
 
     KeBugCheckWithTf(MACHINE_CHECK_EXCEPTION,

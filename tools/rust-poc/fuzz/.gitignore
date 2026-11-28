@@ -1,0 +1,5 @@
+fuzz target build/corpus artifacts
+/target
+/artifacts
+/coverage
+corpus/*/crash-*

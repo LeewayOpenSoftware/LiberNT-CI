@@ -19,6 +19,12 @@
 #ifndef TokenElevationTypeDefault
 #define TokenElevationTypeDefault 1
 #endif
+#ifndef TokenElevationTypeFull
+#define TokenElevationTypeFull 2
+#endif
+#ifndef TokenElevationTypeLimited
+#define TokenElevationTypeLimited 3
+#endif
 
 typedef struct _SEP_TOKEN_APPCONTAINER_INFORMATION
 {
@@ -163,7 +169,7 @@ static const INFORMATION_CLASS_INFO SeTokenInformationClass[] = {
     /* TokenElevationType */
     IQS_SAME(ULONG, ULONG, ICIF_QUERY),
     /* TokenLinkedToken */
-    IQS_SAME(TOKEN_LINKED_TOKEN, ULONG, ICIF_QUERY),
+    IQS_SAME(TOKEN_LINKED_TOKEN, ULONG, ICIF_QUERY | ICIF_SET),
     /* TokenElevation */
     IQS_SAME(TOKEN_ELEVATION, ULONG, ICIF_QUERY),
     /* TokenHasRestrictions */
@@ -1633,10 +1639,15 @@ NtQueryInformationToken(
                 switch (TokenInformationClass)
                 {
                     case TokenElevationType:
-                        Value = TokenElevationTypeDefault;
+                        if (Token->TokenFlags & TOKEN_LUA)
+                            Value = TokenElevationTypeLimited;
+                        else if (SepRmLogonSessionHasFullToken(Token))
+                            Value = TokenElevationTypeFull;
+                        else
+                            Value = TokenElevationTypeDefault;
                         break;
                     case TokenElevation:
-                        Value = SeTokenIsAdmin(Token);
+                        Value = (Token->TokenFlags & TOKEN_LUA) ? 0 : SeTokenIsAdmin(Token);
                         break;
                     case TokenVirtualizationAllowed:
                         Value = !!(Token->TokenFlags & TOKEN_VIRTUALIZE_ALLOWED);
@@ -1694,8 +1705,66 @@ NtQueryInformationToken(
 
             case TokenLinkedToken:
             {
+                PTOKEN Linked, NewToken;
+                HANDLE Handle;
+                BOOLEAN HasTcbPrivilege;
+
                 DPRINT("NtQueryInformationToken(TokenLinkedToken)\n");
-                Status = STATUS_NO_SUCH_LOGON_SESSION;
+
+                RequiredLength = sizeof(TOKEN_LINKED_TOKEN);
+                if (TokenInformationLength < RequiredLength)
+                {
+                    _SEH2_TRY
+                    {
+                        *ReturnLength = RequiredLength;
+                    }
+                    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                    {
+                    }
+                    _SEH2_END;
+                    Status = STATUS_BUFFER_TOO_SMALL;
+                    break;
+                }
+
+                Status = SepRmReferenceLinkedToken(Token, &Linked);
+                if (!NT_SUCCESS(Status))
+                    break;
+
+                /* Only a caller holding SeTcbPrivilege gets a usable primary copy;
+                 * anyone else gets an identification-level token to look at. */
+                HasTcbPrivilege = SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode);
+                Status = SepDuplicateToken(Linked,
+                                           NULL,
+                                           FALSE,
+                                           HasTcbPrivilege ? TokenPrimary : TokenImpersonation,
+                                           HasTcbPrivilege ? SecurityAnonymous : SecurityIdentification,
+                                           PreviousMode,
+                                           &NewToken);
+                ObDereferenceObject(Linked);
+                if (!NT_SUCCESS(Status))
+                    break;
+
+                /* ObInsertObject dereferences the token on failure */
+                Status = ObInsertObject(NewToken,
+                                        NULL,
+                                        HasTcbPrivilege ? TOKEN_ALL_ACCESS : (TOKEN_QUERY | TOKEN_QUERY_SOURCE),
+                                        0,
+                                        NULL,
+                                        &Handle);
+                if (!NT_SUCCESS(Status))
+                    break;
+
+                _SEH2_TRY
+                {
+                    ((PTOKEN_LINKED_TOKEN)TokenInformation)->LinkedToken = Handle;
+                    *ReturnLength = RequiredLength;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                    ObCloseHandle(Handle, PreviousMode);
+                }
+                _SEH2_END;
                 break;
             }
 
@@ -1831,6 +1900,54 @@ NtQueryInformationToken(
  */
 _Must_inspect_result_
 __kernel_entry
+/**
+ * @brief
+ * Makes two primary tokens of one logon session a UAC pair: the LUA one is
+ * the limited token, the other one the elevated token. The caller holds
+ * SeTcbPrivilege.
+ */
+static
+NTSTATUS
+SepLinkTokens(
+    _In_ PTOKEN First,
+    _In_ PTOKEN Second)
+{
+    PTOKEN FullToken, LimitedToken;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (First == Second)
+        return STATUS_INVALID_PARAMETER;
+
+    if (First->TokenType != TokenPrimary || Second->TokenType != TokenPrimary)
+        return STATUS_BAD_TOKEN_TYPE;
+
+    /* The two tokens may live in different logon sessions, but they are one user */
+    if (!RtlEqualSid(First->UserAndGroups[0].Sid, Second->UserAndGroups[0].Sid))
+        return STATUS_INVALID_PARAMETER;
+
+    if ((First->TokenFlags & TOKEN_LUA) == (Second->TokenFlags & TOKEN_LUA))
+        return STATUS_INVALID_PARAMETER;
+
+    if (First->TokenFlags & TOKEN_LUA)
+    {
+        LimitedToken = First;
+        FullToken = Second;
+    }
+    else
+    {
+        LimitedToken = Second;
+        FullToken = First;
+    }
+
+    SepAcquireTokenLockExclusive(FullToken);
+    Status = SepRmLinkLogonSessionTokens(FullToken, LimitedToken);
+    SepReleaseTokenLock(FullToken);
+
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 NtSetInformationToken(
@@ -2014,7 +2131,7 @@ NtSetInformationToken(
                                 {
                                     RtlMoveMemory(Token->DynamicPart,
                                                   Token->DefaultDacl,
-                                                  RtlLengthSid(Token->PrimaryGroup));
+                                                  Token->DefaultDacl->AclSize);
                                     Token->DefaultDacl = (PACL)(Token->DynamicPart);
                                 }
 
@@ -2286,56 +2403,88 @@ NtSetInformationToken(
             {
                 PTOKEN_AUDIT_POLICY_INFORMATION PolicyInformation =
                     (PTOKEN_AUDIT_POLICY_INFORMATION)TokenInformation;
-                SEP_AUDIT_POLICY AuditPolicy;
+                SEP_AUDIT_POLICY Values, Named;
+                ULONG PolicyCount;
                 ULONG i;
+
+                /* Windows: TCB holders only, decided before anything of the buffer is used */
+                if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
+                {
+                    Status = STATUS_PRIVILEGE_NOT_HELD;
+                    break;
+                }
+
+                /* The elements must lie inside the given (and probed) length */
+                if (TokenInformationLength < FIELD_OFFSET(TOKEN_AUDIT_POLICY_INFORMATION, Policies))
+                {
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
+                    break;
+                }
+
+                /* Values holds what the caller names, Named marks which categories those are */
+                Values.Overlay = 0;
+                Named.Overlay = 0;
 
                 _SEH2_TRY
                 {
-                    ProbeForRead(PolicyInformation,
-                                 FIELD_OFFSET(TOKEN_AUDIT_POLICY_INFORMATION,
-                                              Policies[PolicyInformation->PolicyCount]),
-                                 sizeof(ULONG));
+                    /* Read the count once; the bound and the loop use this copy */
+                    PolicyCount = PolicyInformation->PolicyCount;
+                    if (PolicyCount > (TokenInformationLength - FIELD_OFFSET(TOKEN_AUDIT_POLICY_INFORMATION, Policies)) /
+                                      sizeof(PolicyInformation->Policies[0]))
+                    {
+                        Status = STATUS_INFO_LENGTH_MISMATCH;
+                        _SEH2_YIELD(goto Cleanup);
+                    }
 
                     /* Loop all policies in the structure */
-                    for (i = 0; i < PolicyInformation->PolicyCount; i++)
+                    for (i = 0; i < PolicyCount; i++)
                     {
                         /* Set the corresponding bits in the packed structure */
                         switch (PolicyInformation->Policies[i].Category)
                         {
                             case AuditCategorySystem:
-                                AuditPolicy.PolicyElements.System = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.System = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.System = 0xF;
                                 break;
 
                             case AuditCategoryLogon:
-                                AuditPolicy.PolicyElements.Logon = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.Logon = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.Logon = 0xF;
                                 break;
 
                             case AuditCategoryObjectAccess:
-                                AuditPolicy.PolicyElements.ObjectAccess = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.ObjectAccess = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.ObjectAccess = 0xF;
                                 break;
 
                             case AuditCategoryPrivilegeUse:
-                                AuditPolicy.PolicyElements.PrivilegeUse = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.PrivilegeUse = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.PrivilegeUse = 0xF;
                                 break;
 
                             case AuditCategoryDetailedTracking:
-                                AuditPolicy.PolicyElements.DetailedTracking = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.DetailedTracking = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.DetailedTracking = 0xF;
                                 break;
 
                             case AuditCategoryPolicyChange:
-                                AuditPolicy.PolicyElements.PolicyChange = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.PolicyChange = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.PolicyChange = 0xF;
                                 break;
 
                             case AuditCategoryAccountManagement:
-                                AuditPolicy.PolicyElements.AccountManagement = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.AccountManagement = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.AccountManagement = 0xF;
                                 break;
 
                             case AuditCategoryDirectoryServiceAccess:
-                                AuditPolicy.PolicyElements.DirectoryServiceAccess = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.DirectoryServiceAccess = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.DirectoryServiceAccess = 0xF;
                                 break;
 
                             case AuditCategoryAccountLogon:
-                                AuditPolicy.PolicyElements.AccountLogon = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.AccountLogon = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.AccountLogon = 0xF;
                                 break;
                         }
                     }
@@ -2347,18 +2496,12 @@ NtSetInformationToken(
                 }
                 _SEH2_END;
 
-                /* Check for TCB privilege */
-                if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
-                {
-                    Status = STATUS_PRIVILEGE_NOT_HELD;
-                    break;
-                }
-
                 /* Lock the token */
                 SepAcquireTokenLockExclusive(Token);
 
-                /* Set the new audit policy */
-                Token->AuditPolicy = AuditPolicy;
+                /* Named categories take their new value, the others keep the token's */
+                Token->AuditPolicy.Overlay = (Token->AuditPolicy.Overlay & ~Named.Overlay) |
+                                             (Values.Overlay & Named.Overlay);
                 ExAllocateLocallyUniqueId(&Token->ModifiedId);
 
                 /* Unlock the token */
@@ -2409,27 +2552,14 @@ NtSetInformationToken(
                 break;
             }
 
-            case TokenIntegrityLevel:
+            case TokenLinkedToken:
             {
-                TOKEN_MANDATORY_LABEL CapturedLabel;
-                PSID_AND_ATTRIBUTES Integrity;
-                PSID NewSid = NULL;
-                ULONG NewRid = 0, OldRid;
-                BOOLEAN HasTcbPrivilege;
+                TOKEN_LINKED_TOKEN Linked;
+                PTOKEN Other;
 
                 _SEH2_TRY
                 {
-                    CapturedLabel = *(PTOKEN_MANDATORY_LABEL)TokenInformation;
-                    if (!RtlValidSid(CapturedLabel.Label.Sid) ||
-                        *RtlSubAuthorityCountSid(CapturedLabel.Label.Sid) != 1 ||
-                        !RtlEqualMemory(RtlIdentifierAuthoritySid(CapturedLabel.Label.Sid),
-                                        &SeMandatoryLabelAuthority,
-                                        sizeof(SID_IDENTIFIER_AUTHORITY)))
-                    {
-                        Status = STATUS_INVALID_SID;
-                        _SEH2_YIELD(goto Cleanup);
-                    }
-                    NewRid = *RtlSubAuthoritySid(CapturedLabel.Label.Sid, 0);
+                    Linked = *(PTOKEN_LINKED_TOKEN)TokenInformation;
                 }
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {
@@ -2437,6 +2567,73 @@ NtSetInformationToken(
                     _SEH2_YIELD(goto Cleanup);
                 }
                 _SEH2_END;
+
+                if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
+                {
+                    Status = STATUS_PRIVILEGE_NOT_HELD;
+                    break;
+                }
+
+                /* A null handle breaks the pair the token belongs to */
+                if (Linked.LinkedToken == NULL)
+                {
+                    Status = SepRmUnlinkLogonSessionPair(Token);
+                    break;
+                }
+
+                Status = ObReferenceObjectByHandle(Linked.LinkedToken,
+                                                   TOKEN_QUERY | TOKEN_DUPLICATE,
+                                                   SeTokenObjectType,
+                                                   PreviousMode,
+                                                   (PVOID*)&Other,
+                                                   NULL);
+                if (!NT_SUCCESS(Status))
+                    break;
+
+                Status = SepLinkTokens(Token, Other);
+                ObDereferenceObject(Other);
+                break;
+            }
+            case TokenIntegrityLevel:
+            {
+                TOKEN_MANDATORY_LABEL CapturedLabel;
+                PSID_AND_ATTRIBUTES Integrity;
+                PSID NewSid = NULL, CapturedSid;
+                ULONG NewRid = 0, OldRid;
+                BOOLEAN HasTcbPrivilege;
+
+                _SEH2_TRY
+                {
+                    CapturedLabel = *(PTOKEN_MANDATORY_LABEL)TokenInformation;
+                }
+                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                {
+                    Status = _SEH2_GetExceptionCode();
+                    _SEH2_YIELD(goto Cleanup);
+                }
+                _SEH2_END;
+
+                /* The SID pointer is the caller's: probe and copy it before reading it */
+                Status = SepCaptureSid(CapturedLabel.Label.Sid,
+                                       PreviousMode,
+                                       PagedPool,
+                                       FALSE,
+                                       &CapturedSid);
+                if (!NT_SUCCESS(Status))
+                    break;
+
+                if (!RtlValidSid(CapturedSid) ||
+                    *RtlSubAuthorityCountSid(CapturedSid) != 1 ||
+                    !RtlEqualMemory(RtlIdentifierAuthoritySid(CapturedSid),
+                                    &SeMandatoryLabelAuthority,
+                                    sizeof(SID_IDENTIFIER_AUTHORITY)))
+                {
+                    SepReleaseSid(CapturedSid, PreviousMode, FALSE);
+                    Status = STATUS_INVALID_SID;
+                    break;
+                }
+                NewRid = *RtlSubAuthoritySid(CapturedSid, 0);
+                SepReleaseSid(CapturedSid, PreviousMode, FALSE);
 
                 switch (NewRid)
                 {
@@ -2495,6 +2692,13 @@ NtSetInformationToken(
                     _SEH2_YIELD(goto Cleanup);
                 }
                 _SEH2_END;
+
+                /* Windows sets the policy for TCB holders only */
+                if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
+                {
+                    Status = STATUS_PRIVILEGE_NOT_HELD;
+                    break;
+                }
 
                 if (Policy & ~TOKEN_MANDATORY_POLICY_VALID_MASK)
                 {

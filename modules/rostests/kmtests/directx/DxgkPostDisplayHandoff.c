@@ -101,6 +101,8 @@ DxgkPostDisplayTestSuccessfulClaimant(VOID)
     ok_bool_true(DxgkPostDisplayCoreArm(&Core), "a fallback can be retained for a new claimant");
     Completion = DxgkPostDisplayCoreComplete(&Core, STATUS_SUCCESS, TRUE);
     ok_eq_long(Completion, DxgkPostDisplayCompletionCommit);
+    Completion = DxgkPostDisplayCoreComplete(&Core, STATUS_DEVICE_REMOVED, TRUE);
+    ok_eq_long(Completion, DxgkPostDisplayCompletionNone);
     ok_bool_true(DxgkPostDisplayCoreArm(&Core), "a committed transaction leaves the state reusable");
 }
 
@@ -113,9 +115,22 @@ DxgkPostDisplayTestNonRestartableFailure(VOID)
 
     ok_bool_true(DxgkPostDisplayCoreArm(&Core), "the fallback is retained until claimant completion");
     Completion = DxgkPostDisplayCoreComplete(&Core, STATUS_DEVICE_HARDWARE_ERROR, FALSE);
-    ok_eq_long(Completion, DxgkPostDisplayCompletionCommit);
-    Completion = DxgkPostDisplayCoreComplete(&Core, STATUS_SUCCESS, TRUE);
+    ok_eq_long(Completion, DxgkPostDisplayCompletionDefer);
+    ok_bool_false(DxgkPostDisplayCoreArm(&Core), "a claimant that could not be stopped keeps its fallback");
+    Completion = DxgkPostDisplayCoreComplete(&Core, STATUS_DEVICE_REMOVED, TRUE);
+    ok_eq_long(Completion, DxgkPostDisplayCompletionRollback);
+    Completion = DxgkPostDisplayCoreComplete(&Core, STATUS_DEVICE_REMOVED, TRUE);
     ok_eq_long(Completion, DxgkPostDisplayCompletionNone);
+}
+
+static
+VOID
+DxgkPostDisplayTestFirmwareScanout(VOID)
+{
+    ok_bool_true(DxgkPostDisplayCoreFirmwareScanout(TRUE, FALSE), "a display-only driver presents through the firmware framebuffer");
+    ok_bool_true(DxgkPostDisplayCoreFirmwareScanout(TRUE, TRUE), "a committed display-only driver still scans out the firmware framebuffer");
+    ok_bool_true(DxgkPostDisplayCoreFirmwareScanout(FALSE, FALSE), "a full miniport without a committed path leaves the firmware image on screen");
+    ok_bool_false(DxgkPostDisplayCoreFirmwareScanout(FALSE, TRUE), "a full miniport with a committed path scans out its own primary");
 }
 
 START_TEST(DxgkPostDisplayHandoff)
@@ -124,4 +139,5 @@ START_TEST(DxgkPostDisplayHandoff)
     DxgkPostDisplayTestSuccessfulClaimant();
     DxgkPostDisplayTestNonRestartableFailure();
     DxgkPostDisplayTestPostDevice();
+    DxgkPostDisplayTestFirmwareScanout();
 }

@@ -1,6 +1,6 @@
 # LiberNT のインストール
 
-> [English](../../INSTALL.md) | [中文](../zh-CN/INSTALL.md) | [Français](../fr-FR/INSTALL.md) | [Español](../es-ES/INSTALL.md) | **日本語** | [العربية](../ar-MA/INSTALL.md)
+> [English](../../INSTALL.md) | [中文](../zh-CN/INSTALL.md) | [Français](../fr-FR/INSTALL.md) | [Español](../es-ES/INSTALL.md) | **日本語** | [العربية](../ar-MA/INSTALL.md) | [Українська](../uk-UA/INSTALL.md)
 
 ## イメージをビルドする
 
@@ -22,7 +22,7 @@
 
 `LiberNT.img` はセットアップ不要です。QEMU などの仮想マシンで起動するか、USB ドライブや SD カードに書き込んでそこからマシンを起動します。VHD ディスクを受け付ける仮想マシンには `LiberNT.vhd` を、Hyper-V 第 2 世代の仮想マシンにはセキュアブートを無効にしたうえで `LiberNT.vhdx` を使います。
 
-プリインストール済みディスクにも LiberNT セットアップが入っています。実行中のシステムから別のディスクに LiberNT をインストールするには、`C:\<アーキテクチャ>\libernt.exe`（たとえば `C:\arm64\libernt.exe`）を実行します。
+プリインストール済みディスクにも LiberNT セットアップが入っています。実行中のシステムから別のディスクに LiberNT をインストールするには、`C:\<アーキテクチャ>\system32\oobe\oros.exe`（たとえば `C:\arm64\system32\oobe\oros.exe`）を実行します。
 
 ## ヘルプ
 

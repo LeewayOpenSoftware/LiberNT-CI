@@ -52,7 +52,7 @@ MAIN_MENU MENU
  }
  POPUP "&Yardım" {
    MENUITEM "&Yardım Hakkında", MNID_HELP_HELPON
-   MENUITEM "&Wine Yardım Hakkında...", MNID_HELP_ABOUT
+   MENUITEM "&Orosi Yardım Hakkında...", MNID_HELP_ABOUT
  }
 }
 
@@ -74,7 +74,7 @@ END
 
 STRINGTABLE
 {
-STID_WINE_HELP, 	"LiberNT Yardım"
+STID_WINE_HELP, 	"Orosi Yardım"
 STID_WHERROR, 		"HATA"
 STID_WARNING,  		"UYARI"
 STID_INFO,  		"Bilgi"

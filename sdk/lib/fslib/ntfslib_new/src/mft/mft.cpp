@@ -11,6 +11,8 @@
 
 #define MFT_ALLOCATION_BITMAP_CHUNK_SIZE 0x10000
 #define MFT_FIRST_ORDINARY_FILE_RECORD NTFS_FIRST_USER_FILE_RECORD
+/* Upstream's allocator scans from here; same value as our first user record, 16-23 stay reserved (6f32bdfe5e8). */
+#define MFT_FIRST_ALLOCATABLE_FILE_RECORD NTFS_FIRST_USER_FILE_RECORD
 
 /*
  * Reserve $MFT data in coarse chunks so its records stay in long runs
@@ -458,6 +460,15 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
         return STATUS_INVALID_PARAMETER;
     }
 
+    /* A record is rewritten for every change it holds, an index entry as
+     * much as a descriptor, so drop the cached descriptor only when the
+     * attribute carrying it is no longer the one the cache was taken from. */
+    if (File->DiskVolume)
+    {
+        File->DiskVolume->ReviseRecordDescriptor(File->RecordNumber,
+                                                 File->SecurityAttributeStamp());
+    }
+
     Status = File->CommitFixup();
     if (!NT_SUCCESS(Status))
     {
@@ -575,6 +586,7 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
         DPRINT1("Unable to write file record %lu! (Status: 0x%X)\n",
                 File->RecordNumber,
                 WriteStatus);
+        DiskVolume->NoteLostWrite(WriteStatus);
     }
 
     if (NT_SUCCESS(WriteStatus) &&
@@ -878,7 +890,7 @@ MasterFileTable::AllocateFileRecord(
         MFTDataAttr->NonResident.DataSize /
         FileRecordSize;
     if (RecordCount <
-        MFT_FIRST_ORDINARY_FILE_RECORD)
+        MFT_FIRST_ALLOCATABLE_FILE_RECORD)
     {
         return STATUS_FILE_CORRUPT_ERROR;
     }
@@ -907,7 +919,7 @@ MasterFileTable::AllocateFileRecord(
      * second pass covers the skipped region, so a full bitmap is still
      * detected and freed records are still reused.
      */
-    ULONGLONG ScanStart = MFT_FIRST_ORDINARY_FILE_RECORD / 8;
+    ULONGLONG ScanStart = MFT_FIRST_ALLOCATABLE_FILE_RECORD / 8;
     ULONGLONG ScanLimit = BitmapByteCount;
     BOOLEAN SecondPass = FALSE;
 
@@ -965,7 +977,7 @@ ScanAgain:
                         !(BitmapBuffer[Index] &
                           (1u << Bit)) &&
                         FirstRecord + Bit >=
-                            MFT_FIRST_ORDINARY_FILE_RECORD)
+                            MFT_FIRST_ALLOCATABLE_FILE_RECORD)
                     {
                         Candidate =
                             FirstRecord + Bit;
@@ -983,12 +995,12 @@ ScanAgain:
     }
 
     if (!Found && !SecondPass &&
-        ScanStart > MFT_FIRST_ORDINARY_FILE_RECORD / 8)
+        ScanStart > MFT_FIRST_ALLOCATABLE_FILE_RECORD / 8)
     {
         /* Cover the region the hint skipped over. */
         SecondPass = TRUE;
         ScanLimit = ScanStart;
-        ScanStart = MFT_FIRST_ORDINARY_FILE_RECORD / 8;
+        ScanStart = MFT_FIRST_ALLOCATABLE_FILE_RECORD / 8;
         goto ScanAgain;
     }
 

@@ -176,7 +176,7 @@ BEGIN
     IDS_APPTITLE "Менеджер приложений ReactOS"
     IDS_APP_AUTHORS "Copyright 2009 Dmitry Chapyshev"
     IDS_WELCOME_TITLE "Добро пожаловать в ""Менеджер приложений ReactOS""!"
-    IDS_WELCOME_TEXT "Выберите категорию слева и приложение для установки или удаления.\nСайт LiberNT: "
+    IDS_WELCOME_TEXT "Выберите категорию слева и приложение для установки или удаления.\nСайт Orosi: "
     IDS_WELCOME_URL "https://reactos.org"
 
     IDS_APPWIZ_TITLE "Add/Remove Programs"
@@ -209,7 +209,7 @@ BEGIN
     IDS_UNABLE_TO_WRITE "Не удалось записать данные на диск. Возможно, недостаточно свободного места на диске."
     IDS_INSTALL_SELECTED "Установить выбранное"
     IDS_SELECTEDFORINST "Выбрано для установки"
-    IDS_MISMATCH_CERT_INFO "Используемый сертификат не опознан:\nНазначение: %s\nВыдан: %s\nВы хотите продолжить в любом случае?"
+    IDS_MISMATCH_CERT_INFO "Используемый сертификат не опознан:\nНазначение: %s\nКорневой эмитент: %s\nВы хотите продолжить в любом случае?"
     IDS_UNABLE_PATH "Неправильный формат пути."
     IDS_APP_DISPLAY_DETAILS "Таблица"
     IDS_APP_DISPLAY_LIST "Список"

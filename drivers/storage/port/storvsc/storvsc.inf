@@ -32,6 +32,6 @@ ServiceBinary  = %12%\storvsc.sys
 LoadOrderGroup = SCSI Miniport
 
 [Strings]
-LiberNT = "LiberNT Project"
+LiberNT = "Orosi Project"
 MicrosoftMfg = "Microsoft"
 StorVsc.DeviceDesc = "Microsoft Hyper-V SCSI Controller"

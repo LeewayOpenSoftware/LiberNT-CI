@@ -463,9 +463,11 @@ RawMountVolume(IN PIO_STACK_LOCATION IoStackLocation)
 NTSTATUS
 NTAPI
 RawUserFsCtrl(IN PIO_STACK_LOCATION IoStackLocation,
-              IN PVCB Vcb)
+              IN PVCB Vcb,
+              IN KPROCESSOR_MODE RequestorMode)
 {
     NTSTATUS Status;
+    BOOLEAN Deleted = FALSE;
     PAGED_CODE();
 
     DPRINT("RawUserFsCtrl(%p, %p)\n", IoStackLocation, Vcb);
@@ -528,17 +530,18 @@ RawUserFsCtrl(IN PIO_STACK_LOCATION IoStackLocation,
         /* Dismount request */
         case FSCTL_DISMOUNT_VOLUME:
 
-            /* Make sure we're locked */
-            if (Vcb->VcbState & VCB_STATE_LOCKED)
+            /* Needs write access on the handle or the manage-volume privilege */
+            if (!IoStackLocation->FileObject->WriteAccess &&
+                !SeSinglePrivilegeCheck(SeManageVolumePrivilege, RequestorMode))
             {
-                /* Do nothing, just return success */
-                Status = STATUS_SUCCESS;
-            }
-            else
-            {
-                /* We can't dismount, device not locked */
                 Status = STATUS_ACCESS_DENIED;
+                break;
             }
+
+            /* Lock or not (Windows): mark dismounted, the device gets a fresh VPB */
+            Vcb->VcbState |= VCB_STATE_DISMOUNTED;
+            Deleted = RawCheckForDismount(Vcb, FALSE);
+            Status = STATUS_SUCCESS;
             break;
 
         /* Unknown request */
@@ -549,8 +552,9 @@ RawUserFsCtrl(IN PIO_STACK_LOCATION IoStackLocation,
             break;
     }
 
-    /* Unlock device */
-    KeReleaseMutex(&Vcb->Mutex, FALSE);
+    /* Unlock device (a deleted VCB released its mutex itself) */
+    if (!Deleted)
+        KeReleaseMutex(&Vcb->Mutex, FALSE);
 
     /* In case of status change, notify */
     switch (IoStackLocation->Parameters.FileSystemControl.FsControlCode)
@@ -590,7 +594,7 @@ RawFileSystemControl(IN PVCB Vcb,
         case IRP_MN_USER_FS_REQUEST:
 
             /* Handle it */
-            Status = RawUserFsCtrl(IoStackLocation, Vcb);
+            Status = RawUserFsCtrl(IoStackLocation, Vcb, Irp->RequestorMode);
             break;
 
         /* Mount request */
@@ -1029,14 +1033,11 @@ RawCleanup(IN PVCB Vcb,
     /* Remove shared access */
     IoRemoveShareAccess(IoStackLocation->FileObject, &Vcb->ShareAccess);
 
-    /* Check if we're to dismount */
-    if (Vcb->VcbState & VCB_STATE_DISMOUNTED)
+    /* Dismount asked through any handle; a deleting check released the mutex itself */
+    if (!(Vcb->VcbState & VCB_STATE_DISMOUNTED) || !RawCheckForDismount(Vcb, FALSE))
     {
-        ASSERT(Vcb->OpenCount == 1);
-        RawCheckForDismount(Vcb, FALSE);
+        KeReleaseMutex(&Vcb->Mutex, FALSE);
     }
-
-    KeReleaseMutex(&Vcb->Mutex, FALSE);
     Irp->IoStatus.Status = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_DISK_INCREMENT);
     return STATUS_SUCCESS;

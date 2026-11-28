@@ -38,11 +38,15 @@ MiAsyncReadWorker(
     MI_READ_COMPLETION Completion = Read->Completion;
     PVOID CompletionContext = Read->Context;
 
+    ASSERT(Read->Irp->MdlAddress == &Read->Mdl);
+    ASSERT(Read->Mdl.MappedSystemVa == Read->Buffer && Read->Mdl.ByteCount == PAGE_SIZE);
+    ASSERT(Read->File != NULL && Read->Thread != NULL && Completion != NULL);
     if (Status == STATUS_END_OF_FILE)
     {
         Status = STATUS_SUCCESS;
         Transferred = 0;
     }
+    ASSERT(!NT_SUCCESS(Status) || Transferred <= PAGE_SIZE);
     if (NT_SUCCESS(Status) && Transferred < PAGE_SIZE)
         RtlZeroMemory((PUCHAR)Read->Buffer + Transferred, PAGE_SIZE - Transferred);
     Read->Irp->MdlAddress = NULL;
@@ -65,6 +69,8 @@ MiAsyncReadComplete(
 
     UNREFERENCED_PARAMETER(Device);
     UNREFERENCED_PARAMETER(Irp);
+    ASSERT(Irp == Read->Irp && Irp->MdlAddress == &Read->Mdl);
+    ASSERT(Read->Completion != NULL && Read->File != NULL && Read->Thread != NULL);
     ExQueueWorkItem(&Read->Work, DelayedWorkQueue);
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
@@ -120,6 +126,9 @@ MiControlReadAsync(
     Stack->Parameters.Read.ByteOffset.QuadPart = Offset;
     ExInitializeWorkItem(&Read->Work, MiAsyncReadWorker, Read);
     IoSetCompletionRoutine(Read->Irp, MiAsyncReadComplete, Read, TRUE, TRUE, TRUE);
+    ASSERT(Read->Mdl.ByteOffset == 0 && Read->Mdl.ByteCount == PAGE_SIZE);
+    ASSERT(Read->Mdl.MappedSystemVa == Read->Buffer && Read->Irp->MdlAddress == &Read->Mdl);
+    ASSERT(Read->Completion != NULL && Read->File != NULL && Read->Thread != NULL);
     OldIrql = KeGetCurrentIrql();
     if (OldIrql < APC_LEVEL)
         KeRaiseIrql(APC_LEVEL, &OldIrql);
@@ -161,7 +170,10 @@ MiSubmitPagingMdl(
     if (!Write && OldIrql < APC_LEVEL)
         KeLowerIrql(OldIrql);
     if (NT_SUCCESS(Status))
+    {
+        ASSERT(Iosb.Information <= Mdl->ByteCount);
         *Transferred = (ULONG)Iosb.Information;
+    }
     return Status;
 }
 
@@ -186,19 +198,45 @@ MiPagingIoFrames(
 
     *Transferred = 0;
     /* PE section data can start at a sector-aligned, non-page-aligned offset. */
-    if (PageCount == 0 || PageCount > (Write ? MI_MAX_FILE_WRITE_PAGES : MI_MAX_FILE_IO_PAGES) || Frames == NULL ||
+    if (PageCount == 0 || PageCount > (Write ? MI_MAX_FILE_FLUSH_PAGES : MI_MAX_FILE_IO_PAGES) || Frames == NULL ||
         (Offset & (Write ? PAGE_SIZE - 1 : (1u << MI_SECTOR_SHIFT) - 1)) != 0)
         return STATUS_INVALID_PARAMETER;
 
+    if (PageCount > MI_MAX_FILE_WRITE_PAGES)
+    {
+        ASSERT(Write);
+        Mdl = ExAllocatePoolWithTag(NonPagedPoolNx, MmSizeOfMdl(NULL, (SIZE_T)PageCount * PAGE_SIZE), 'wPmM');
+        if (Mdl == NULL)
+        {
+            ULONG Done = 0;
+
+            for (i = 0; i < PageCount; i += Done / PAGE_SIZE)
+            {
+                ULONG Chunk = min(PageCount - i, (ULONG)MI_MAX_FILE_WRITE_PAGES);
+
+                Status = MiPagingIoFrames(FileObject, Offset + (ULONG64)i * PAGE_SIZE, &Frames[i], Chunk, TRUE, &Done);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+                *Transferred += Done;
+                if (Done < Chunk * PAGE_SIZE)
+                    break;
+            }
+            return STATUS_SUCCESS;
+        }
+    }
+
     MmInitializeMdl(Mdl, NULL, PageCount * PAGE_SIZE);
     Pages = MmGetMdlPfnArray(Mdl);
-    ASSERT(Pages == Storage.Pages);
+    ASSERT(Mdl != &Storage.Mdl || Pages == Storage.Pages);
     for (i = 0; i < PageCount; i++)
         Pages[i] = Frames[i];
     Mdl->MdlFlags = MDL_PAGES_LOCKED | (Write ? 0 : MDL_IO_PAGE_READ);
+    ASSERT(Mdl->ByteOffset == 0 && Mdl->ByteCount == PageCount * PAGE_SIZE);
 
     Status = MiSubmitPagingMdl(FileObject, Mdl, Offset, Write, Transferred);
     if (Mdl->MdlFlags & MDL_MAPPED_TO_SYSTEM_VA)
         MmUnmapLockedPages(Mdl->MappedSystemVa, Mdl);
+    if (Mdl != &Storage.Mdl)
+        ExFreePoolWithTag(Mdl, 'wPmM');
     return Status;
 }

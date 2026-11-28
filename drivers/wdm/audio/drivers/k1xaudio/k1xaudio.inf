@@ -76,12 +76,12 @@ HKR,,FriendlyName,,%K1xAudio.TopologyName%
 k1xaudio.sys=1
 
 [Strings]
-LiberNT="LiberNT"
+LiberNT="Orosi"
 K1xAudio.DeviceDesc="SpacemiT K1 Audio"
-K1xAudio.ServiceDesc="LiberNT SpacemiT K1 Audio Driver"
+K1xAudio.ServiceDesc="Orosi SpacemiT K1 Audio Driver"
 K1xAudio.WaveName="SpacemiT K1 Audio Wave"
 K1xAudio.TopologyName="SpacemiT K1 Audio Topology"
-DiskName="LiberNT Installation Media"
+DiskName="Orosi Installation Media"
 Proxy.CLSID="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
 KSCATEGORY_AUDIO="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
 KSCATEGORY_RENDER="{65E8773E-8F56-11D0-A3B9-00A0C9223196}"

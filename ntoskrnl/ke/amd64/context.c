@@ -90,6 +90,13 @@ KeContextToTrapFrame(IN PCONTEXT Context,
         TrapFrame->Rsp = Context->Rsp;
         TrapFrame->EFlags = Context->EFlags;
 
+        /* A return address outside the user range faults in user mode at the trap exit; the stack pointer of a
+         * user context is kept in the user range, as the other fields are sanitised */
+        if (PreviousMode != KernelMode)
+        {
+            if (TrapFrame->Rsp >= (ULONG64)MmHighestUserAddress) TrapFrame->Rsp = 0;
+        }
+
         if (PreviousMode == KernelMode && (Context->SegCs & MODE_MASK) == KernelMode)
         {
             /* Set valid selectors */
@@ -119,23 +126,11 @@ KeContextToTrapFrame(IN PCONTEXT Context,
     /* Handle segment selectors */
     if (ContextFlags & CONTEXT_SEGMENTS)
     {
-        /* Check if this was a Kernel Trap */
-        if ((Context->SegCs & MODE_MASK) == KernelMode)
-        {
-            /* Set valid selectors */
-            TrapFrame->SegDs = KGDT64_R3_DATA | RPL_MASK;
-            TrapFrame->SegEs = KGDT64_R3_DATA | RPL_MASK;
-            TrapFrame->SegFs = KGDT64_R3_CMTEB | RPL_MASK;
-            TrapFrame->SegGs = KGDT64_R3_DATA | RPL_MASK;
-        }
-        else
-        {
-            /* Copy selectors */
-            TrapFrame->SegDs = Context->SegDs;
-            TrapFrame->SegEs = Context->SegEs;
-            TrapFrame->SegFs = Context->SegFs;
-            TrapFrame->SegGs = Context->SegGs;
-        }
+        /* Windows x64 keeps the ring 3 data and TEB selectors whatever the context holds: the trap exit loads them */
+        TrapFrame->SegDs = KGDT64_R3_DATA | RPL_MASK;
+        TrapFrame->SegEs = KGDT64_R3_DATA | RPL_MASK;
+        TrapFrame->SegFs = KGDT64_R3_CMTEB | RPL_MASK;
+        TrapFrame->SegGs = KGDT64_R3_DATA | RPL_MASK;
     }
 
     /* Handle debug registers */
@@ -307,7 +302,8 @@ KeTrapFrameToContext(IN PKTRAP_FRAME TrapFrame,
 VOID
 RtlGetUnwindContext(
     _Out_ PCONTEXT Context,
-    _In_ DWORD64 TargetFrame);
+    _In_ DWORD64 TargetFrame,
+    _In_ DWORD64 TrapFrameEnd);
 
 VOID
 KiGetTrapContextInternal(
@@ -322,14 +318,15 @@ KiGetTrapContextInternal(
     /* The target frame is MAX_SYSCALL_PARAM_SIZE bytes before the trap frame */
     TargetFrame = (ULONG64)TrapFrame - MAX_SYSCALL_PARAM_SIZE;
 
-    /* Get the nonvolatiles on the stack */
-    RtlGetUnwindContext(Context, TargetFrame);
+    /* Get the nonvolatiles on the stack, walking up to the trap frame */
+    RtlGetUnwindContext(Context, TargetFrame, (ULONG64)(TrapFrame + 1));
 }
 
 VOID
 RtlSetUnwindContext(
     _In_ PCONTEXT Context,
-    _In_ DWORD64 TargetFrame);
+    _In_ DWORD64 TargetFrame,
+    _In_ DWORD64 TrapFrameEnd);
 
 VOID
 KiSetTrapContextInternal(
@@ -349,8 +346,8 @@ KiSetTrapContextInternal(
     /* The target frame is MAX_SYSCALL_PARAM_SIZE bytes before the trap frame */
     TargetFrame = (ULONG64)TrapFrame - MAX_SYSCALL_PARAM_SIZE ;
 
-    /* Set the nonvolatiles on the stack */
-    RtlSetUnwindContext(Context, TargetFrame);
+    /* Set the nonvolatiles on the stack, walking up to the trap frame */
+    RtlSetUnwindContext(Context, TargetFrame, (ULONG64)(TrapFrame + 1));
 }
 
 VOID

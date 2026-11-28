@@ -454,6 +454,8 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     POBJECT_TYPE_INITIALIZER ObjectTypeInitializer = &ObjectTypeInitializerEx.TypeInfo;
     ULONG i;
 
+    PsSiloInitialize();
+
 
     /* Setup some memory options */
     PspDefaultPagefileLimit = -1;
@@ -464,6 +466,7 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     for (i = 0; i < PSP_MAX_CREATE_THREAD_NOTIFY; i++)
     {
         ExInitializeCallBack(&PspThreadNotifyRoutine[i]);
+        ExInitializeCallBack(&PspNonSystemThreadNotifyRoutine[i]);
     }
     for (i = 0; i < PSP_MAX_CREATE_PROCESS_NOTIFY; i++)
     {

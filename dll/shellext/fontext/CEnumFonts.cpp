@@ -16,6 +16,14 @@ class CEnumFonts :
 private:
     DWORD m_dwFlags;
     ULONG m_Index;
+    CAtlArray<FontViewItem> m_Items;
+
+    bool Wanted(const FontViewItem& item) const
+    {
+        if (!m_dwFlags)
+            return true;
+        return item.bFamily ? !!(m_dwFlags & SHCONTF_FOLDERS) : !!(m_dwFlags & SHCONTF_NONFOLDERS);
+    }
 
 public:
     CEnumFonts()
@@ -28,6 +36,8 @@ public:
     {
         m_dwFlags = flags;
         m_Index = 0;
+        const CStringW& key = folder->GetFamilyKey();
+        g_FontCache->BuildView(key.IsEmpty() ? nullptr : &key, m_Items);
         return S_OK;
     }
 
@@ -42,29 +52,32 @@ public:
 
         while (celt)
         {
-            if (m_Index >= g_FontCache->Size())
+            if (m_Index >= m_Items.GetCount())
             {
                 hr = S_FALSE;
                 break;
             }
 
-            if (!g_FontCache->IsMarkDeleted(m_Index))
+            const FontViewItem& item = m_Items[m_Index];
+            if (Wanted(item))
             {
-                CStringW Name = g_FontCache->Name(m_Index), FileName = g_FontCache->File(m_Index);
-                if (Name.IsEmpty() || FileName.IsEmpty())
+                PITEMID_CHILD pidl = NULL;
+                if (item.bFamily)
                 {
-                    ERR("Why is Name or FileName empty?\n");
+                    pidl = _ILCreateFamily(item.RegName, item.Key);
                 }
                 else
                 {
-                    // Create a PIDL
-                    PITEMID_CHILD item = _ILCreate(Name, FileName);
-                    if (!item)
-                    {
-                        hr = Fetched ? S_FALSE : E_OUTOFMEMORY;
-                        break;
-                    }
-                    rgelt[Fetched++] = item;
+                    CFontInfo* info = g_FontCache->FindByName(item.RegName);
+                    CStringW FileName = info ? info->File() : CStringW();
+                    if (!FileName.IsEmpty())
+                        pidl = _ILCreate(item.RegName, FileName);
+                    else
+                        ERR("Why is Name or FileName empty?\n");
+                }
+                if (pidl)
+                {
+                    rgelt[Fetched++] = pidl;
                     --celt;
                 }
             }
@@ -78,10 +91,10 @@ public:
 
     STDMETHODIMP Skip(ULONG celt) override
     {
-        for (ULONG i = 0; i < celt && m_Index < g_FontCache->Size(); ++i)
+        while (celt && m_Index < m_Items.GetCount())
         {
-            while (m_Index < g_FontCache->Size() && g_FontCache->IsMarkDeleted(m_Index))
-                ++m_Index;
+            if (Wanted(m_Items[m_Index]))
+                --celt;
             ++m_Index;
         }
         return S_OK;

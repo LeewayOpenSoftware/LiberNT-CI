@@ -137,11 +137,14 @@ typedef struct _ADDRESS_FILE {
     BOOLEAN RecvTos;
     BOOLEAN RecvEcn;
     BOOLEAN RecvDstAddr;
+    BOOLEAN NoPortUnreachable;            /* SIO_UDP_CONNRESET turned off */
     DATAGRAM_COMPLETION_ROUTINE Complete; /* Completion routine for delete request */
     PVOID Context;                        /* Delete request context */
     DATAGRAM_SEND_ROUTINE Send;           /* Routine to send a datagram */
     PVOID UdpPcb;
     LIST_ENTRY ReceiveQueue;              /* List of outstanding receive requests */
+    LIST_ENTRY DatagramQueue;
+    ULONG QueuedBytes;
     LIST_ENTRY TransmitQueue;             /* List of outstanding transmit requests */
     struct _CONNECTION_ENDPOINT *Connection;
     /* Associated connection or NULL if no associated connection exist */
@@ -287,6 +290,10 @@ typedef struct _CONNECTION_ENDPOINT {
     BOOLEAN ReceiveShutdown;
     NTSTATUS ReceiveShutdownStatus;
     BOOLEAN Closing;
+
+    /* For the TCP statistics; both are written on the lwIP thread only */
+    BOOLEAN StatConnecting;     /* An active open is under way */
+    BOOLEAN StatEstablished;    /* The connection reached the established state */
 
     volatile LONG PendingRecvCredit;
     volatile LONG CreditFlushQueued;

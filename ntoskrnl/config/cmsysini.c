@@ -400,7 +400,8 @@ CmpInitHiveFromFile(IN PCUNICODE_STRING HiveName,
                     IN ULONG CheckFlags)
 {
     ULONG HiveDisposition, LogDisposition;
-    HANDLE FileHandle = NULL, LogHandle = NULL;
+    HANDLE FileHandle = NULL, LogHandle = NULL, Log2Handle = NULL;
+    OBJECT_ATTRIBUTES Log2Attributes;
     NTSTATUS Status;
     ULONG Operation, FileType;
     PCMHIVE NewHive;
@@ -461,6 +462,13 @@ CmpInitHiveFromFile(IN PCUNICODE_STRING HiveName,
         return STATUS_TOO_LATE;
     }
 
+    /* Open the second incremental log; hives without it keep using LOG1 only */
+    if (LogHandle && !CmpShareSystemHives)
+    {
+        InitializeObjectAttributes(&Log2Attributes, NULL, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+        CmpOpenHiveLog2(&Log2Attributes, HiveName, Operation == HINIT_CREATE, &Log2Handle);
+    }
+
     /* Initialize the hive */
     Status = CmpInitializeHive(&NewHive,
                                Operation,
@@ -469,6 +477,7 @@ CmpInitHiveFromFile(IN PCUNICODE_STRING HiveName,
                                NULL,
                                FileHandle,
                                LogHandle,
+                               Log2Handle,
                                NULL,
                                NULL,
                                HiveName,
@@ -478,6 +487,7 @@ CmpInitHiveFromFile(IN PCUNICODE_STRING HiveName,
         /* Fail */
         ZwClose(FileHandle);
         if (LogHandle) ZwClose(LogHandle);
+        if (Log2Handle) ZwClose(Log2Handle);
         return Status;
     }
 
@@ -991,6 +1001,27 @@ CmpLinkHiveToMaster(IN PUNICODE_STRING LinkName,
     return STATUS_SUCCESS;
 }
 
+/* TRUE if the loader options contain the switch Name ("/NAME" or "NAME"), any case. */
+CODE_SEG("INIT")
+static
+BOOLEAN
+CmpHasLoadOption(
+    _In_ PCSTR Options,
+    _In_ PCSTR Name)
+{
+    SIZE_T Length = strlen(Name);
+    PCSTR Cur;
+
+    for (Cur = Options; *Cur; Cur++)
+    {
+        if ((Cur == Options || Cur[-1] == '/' || Cur[-1] == ' ') &&
+            _strnicmp(Cur, Name, Length) == 0 &&
+            (Cur[Length] == '\0' || Cur[Length] == '/' || Cur[Length] == ' '))
+            return TRUE;
+    }
+    return FALSE;
+}
+
 CODE_SEG("INIT")
 BOOLEAN
 NTAPI
@@ -1041,6 +1072,7 @@ CmpInitializeSystemHive(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                                HIVE_NOLAZYFLUSH,
                                HFILE_TYPE_LOG,
                                HiveBase,
+                               NULL,
                                NULL,
                                NULL,
                                NULL,
@@ -1373,7 +1405,8 @@ CmpLoadHiveThread(IN PVOID StartContext)
     USHORT FileStart;
     ULONG PrimaryDisposition, SecondaryDisposition, ClusterSize;
     PCMHIVE CmHive;
-    HANDLE PrimaryHandle = NULL, LogHandle = NULL;
+    HANDLE PrimaryHandle = NULL, LogHandle = NULL, Log2Handle = NULL;
+    OBJECT_ATTRIBUTES Log2Attributes;
     NTSTATUS Status = STATUS_SUCCESS;
     PVOID ErrorParameters;
     PAGED_CODE();
@@ -1482,6 +1515,11 @@ CmpLoadHiveThread(IN PVOID StartContext)
             /* Save the file handles. This should remove our sync hacks */
             CmHive->FileHandles[HFILE_TYPE_LOG] = LogHandle;
             CmHive->FileHandles[HFILE_TYPE_PRIMARY] = PrimaryHandle;
+
+            /* Second incremental log, best effort */
+            InitializeObjectAttributes(&Log2Attributes, NULL, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+            CmpOpenHiveLog2(&Log2Attributes, &FileName, PrimaryDisposition == FILE_CREATED, &Log2Handle);
+            CmHive->FileHandles[HFILE_TYPE_LOG2] = Log2Handle;
 
             /* Allow lazy flushing since the handles are there -- remove sync hacks */
             //ASSERT(CmHive->Hive.HiveFlags & HIVE_NOLAZYFLUSH);
@@ -1738,10 +1776,10 @@ CmpInitializeHiveList(VOID)
     CmpLinkKeyToHive(L"\\Registry\\Machine\\Security\\SAM",
                      L"\\Registry\\Machine\\SAM\\SAM");
 
-    /* Link S-1-5-18 to .Default */
+    /* HKU\S-1-5-18 is the link to the .DEFAULT hive, as on Windows */
     CmpNoVolatileCreates = FALSE;
-    CmpLinkKeyToHive(L"\\Registry\\User\\.Default",
-                     L"\\Registry\\User\\S-1-5-18");
+    CmpLinkKeyToHive(L"\\Registry\\User\\S-1-5-18",
+                     L"\\Registry\\User\\.Default");
     if (sizeof(PVOID) == sizeof(ULONGLONG))
     {
         static const PCWSTR ParentNames[] =
@@ -1866,6 +1904,12 @@ CmInitSystem1(VOID)
     if (CmpVolatileBoot)
         CmpShareSystemHives = TRUE;
 
+    /* Compatibility switch: /LEGACYHIVES makes every hive created from here on format 1.3
+     * instead of 1.5, including the volatile master and hardware hives */
+    if (KeLoaderBlock && KeLoaderBlock->LoadOptions &&
+        CmpHasLoadOption(KeLoaderBlock->LoadOptions, "LEGACYHIVES"))
+        HvSetHiveFormatVersion(HSYS_MINOR);
+
     /* Initialize the hive list and lock */
     InitializeListHead(&CmpHiveListHead);
     ExInitializePushLock(&CmpHiveListHeadLock);
@@ -1907,6 +1951,7 @@ CmInitSystem1(VOID)
                                HINIT_CREATE,
                                HIVE_VOLATILE,
                                HFILE_TYPE_PRIMARY,
+                               NULL,
                                NULL,
                                NULL,
                                NULL,
@@ -1999,6 +2044,7 @@ CmInitSystem1(VOID)
                                HINIT_CREATE,
                                HIVE_VOLATILE,
                                HFILE_TYPE_PRIMARY,
+                               NULL,
                                NULL,
                                NULL,
                                NULL,

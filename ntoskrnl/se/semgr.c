@@ -453,7 +453,8 @@ SeQuerySecurityAccessMask(
 
     if (SecurityInformation & (OWNER_SECURITY_INFORMATION |
                                GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION |
-                               LABEL_SECURITY_INFORMATION))
+                               LABEL_SECURITY_INFORMATION | ATTRIBUTE_SECURITY_INFORMATION |
+                               SCOPE_SECURITY_INFORMATION))
     {
         *DesiredAccess |= READ_CONTROL;
     }
@@ -491,12 +492,12 @@ SeSetSecurityAccessMask(
         *DesiredAccess |= WRITE_OWNER;
     }
 
-    if (SecurityInformation & DACL_SECURITY_INFORMATION)
+    if (SecurityInformation & (DACL_SECURITY_INFORMATION | ATTRIBUTE_SECURITY_INFORMATION))
     {
         *DesiredAccess |= WRITE_DAC;
     }
 
-    if (SecurityInformation & SACL_SECURITY_INFORMATION)
+    if (SecurityInformation & (SACL_SECURITY_INFORMATION | SCOPE_SECURITY_INFORMATION))
     {
         *DesiredAccess |= ACCESS_SYSTEM_SECURITY;
     }

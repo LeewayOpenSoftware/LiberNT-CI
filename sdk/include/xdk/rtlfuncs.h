@@ -785,6 +785,23 @@ RtlNumberOfSetBitsInRange(
   _In_ ULONG Length);
 
 NTSYSAPI
+ULONG
+NTAPI
+RtlNumberOfClearBitsInRange(
+  _In_ PRTL_BITMAP BitMapHeader,
+  _In_ ULONG StartingIndex,
+  _In_ ULONG Length);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlExtractBitMap(
+  _In_ PRTL_BITMAP Source,
+  _In_ PRTL_BITMAP Destination,
+  _In_range_(0, Source->SizeOfBitMap - 1) ULONG TargetBit,
+  _In_range_(0, Source->SizeOfBitMap) ULONG NumberOfBits);
+
+NTSYSAPI
 VOID
 NTAPI
 RtlCopyBitMap(
@@ -1057,6 +1074,15 @@ RtlUnicodeStringToInteger(
   _In_ PCUNICODE_STRING String,
   _In_opt_ ULONG Base,
   _Out_ PULONG Value);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlUnicodeStringToInt64(
+  _In_ PCUNICODE_STRING String,
+  _In_opt_ ULONG Base,
+  _Out_ PLONG64 Number,
+  _Out_opt_ PWSTR *EndPointer);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSYSAPI
@@ -1898,6 +1924,45 @@ RtlGetAce(
   _In_ ULONG AceIndex,
   _Outptr_ PVOID *Ace);
 
+NTSYSAPI
+PVOID
+NTAPI
+RtlFindAceByType(
+  _In_ PACL Acl,
+  _In_ UCHAR AceType,
+  _Inout_opt_ PULONG Index);
+
+_Must_inspect_result_
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlCheckTokenCapability(
+  _In_opt_ HANDLE TokenHandle,
+  _In_ PSID CapabilitySidToCheck,
+  _Out_ PBOOLEAN HasCapability);
+
+_Must_inspect_result_
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDeriveCapabilitySidsFromName(
+  _Inout_ PUNICODE_STRING UnicodeString,
+  _Out_ PSID CapabilityGroupSid,
+  _Out_ PSID CapabilitySid);
+
+_Must_inspect_result_
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGetPersistedStateLocation(
+  _In_ PCWSTR SourceID,
+  _In_opt_ PCWSTR CustomValue,
+  _In_opt_ PCWSTR DefaultPath,
+  _In_ STATE_LOCATION_TYPE StateLocationType,
+  _Out_ PWCHAR TargetPath,
+  _In_ ULONG BufferLengthIn,
+  _Out_opt_ PULONG BufferLengthOut);
+
 _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI
 NTSTATUS
@@ -1916,6 +1981,16 @@ RtlAddAccessAllowedAceEx(
   _Inout_ PACL Acl,
   _In_ ULONG AceRevision,
   _In_ ULONG AceFlags,
+  _In_ ACCESS_MASK AccessMask,
+  _In_ PSID Sid);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlAddAccessDeniedAce(
+  _Inout_ PACL Acl,
+  _In_ ULONG AceRevision,
   _In_ ACCESS_MASK AccessMask,
   _In_ PSID Sid);
 
@@ -2279,6 +2354,31 @@ RtlDecompressBuffer(
   _In_reads_bytes_(CompressedBufferSize) PUCHAR CompressedBuffer,
   _In_ ULONG CompressedBufferSize,
   _Out_ PULONG FinalUncompressedSize);
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDecompressBufferEx(
+  _In_ USHORT CompressionFormat,
+  _Out_writes_bytes_to_(UncompressedBufferSize, *FinalUncompressedSize) PUCHAR UncompressedBuffer,
+  _In_ ULONG UncompressedBufferSize,
+  _In_reads_bytes_(CompressedBufferSize) PUCHAR CompressedBuffer,
+  _In_ ULONG CompressedBufferSize,
+  _Out_ PULONG FinalUncompressedSize,
+  _In_ PVOID WorkSpace);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDecompressBufferEx2(
+  _In_ USHORT CompressionFormat,
+  _Out_ PUCHAR UncompressedBuffer,
+  _In_ ULONG UncompressedBufferSize,
+  _In_ PUCHAR CompressedBuffer,
+  _In_ ULONG CompressedBufferSize,
+  _In_ ULONG UncompressedChunkSize,
+  _Out_ PULONG FinalUncompressedSize,
+  _In_opt_ PVOID WorkSpace);
 
 _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI
@@ -2293,6 +2393,75 @@ RtlDecompressFragment(
   _In_range_(<, CompressedBufferSize) ULONG FragmentOffset,
   _Out_ PULONG FinalUncompressedSize,
   _In_ PVOID WorkSpace);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDecompressFragmentEx(
+  _In_ USHORT CompressionFormat,
+  _Out_writes_bytes_to_(UncompressedFragmentSize, *FinalUncompressedSize) PUCHAR UncompressedFragment,
+  _In_ ULONG UncompressedFragmentSize,
+  _In_reads_bytes_(CompressedBufferSize) PUCHAR CompressedBuffer,
+  _In_ ULONG CompressedBufferSize,
+  _In_range_(<, CompressedBufferSize) ULONG FragmentOffset,
+  _In_ ULONG UncompressedChunkSize,
+  _Out_ PULONG FinalUncompressedSize,
+  _In_ PVOID WorkSpace);
+
+#define RTL_CORRELATION_VECTOR_STRING_LENGTH 129
+#define RTL_CORRELATION_VECTOR_VERSION_1 ((CHAR)1)
+#define RTL_CORRELATION_VECTOR_VERSION_2 ((CHAR)2)
+#define RTL_CORRELATION_VECTOR_VERSION_CURRENT RTL_CORRELATION_VECTOR_VERSION_2
+#define RTL_CORRELATION_VECTOR_V1_PREFIX_LENGTH (16)
+#define RTL_CORRELATION_VECTOR_V1_LENGTH (64)
+#define RTL_CORRELATION_VECTOR_V2_PREFIX_LENGTH (22)
+#define RTL_CORRELATION_VECTOR_V2_LENGTH (128)
+
+typedef struct CORRELATION_VECTOR {
+  CHAR Version;
+  CHAR Vector[RTL_CORRELATION_VECTOR_STRING_LENGTH];
+} CORRELATION_VECTOR, *PCORRELATION_VECTOR;
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlInitializeCorrelationVector(
+  _Out_ PCORRELATION_VECTOR CorrelationVector,
+  _In_ int Version,
+  _In_ const GUID *Guid);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlIncrementCorrelationVector(
+  _Inout_ PCORRELATION_VECTOR CorrelationVector);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlExtendCorrelationVector(
+  _Inout_ PCORRELATION_VECTOR CorrelationVector);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlValidateCorrelationVector(
+  _In_ PCORRELATION_VECTOR Vector);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlFillMemoryNonTemporal(
+  _Out_writes_bytes_all_(Length) VOID UNALIGNED *Destination,
+  _In_ SIZE_T Length,
+  _In_ const UCHAR Value);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlIsCloudFilesPlaceholder(
+  _In_ ULONG FileAttributes,
+  _In_ ULONG ReparseTag);
 
 _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI
@@ -2729,6 +2898,139 @@ RtlUnicodeToUTF8N(
   _In_reads_bytes_(UnicodeStringByteCount) PCWCH UnicodeStringSource,
   _In_ ULONG UnicodeStringByteCount);
 
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlInitStringEx(
+  _Out_ PSTRING DestinationString,
+  _In_opt_z_ __drv_aliasesMem PCSZ SourceString);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlInitUTF8StringEx(
+  _Out_ PUTF8_STRING DestinationString,
+  _In_opt_z_ __drv_aliasesMem PCSZ SourceString);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+_Must_inspect_result_
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlUnicodeStringToUTF8String(
+  _When_(AllocateDestinationString, _Out_ _At_(DestinationString->Buffer, __drv_allocatesMem(Mem)))
+  _When_(!AllocateDestinationString, _Inout_)
+      PUTF8_STRING DestinationString,
+  _In_ PCUNICODE_STRING SourceString,
+  _In_ BOOLEAN AllocateDestinationString);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
+VOID
+NTAPI
+RtlFreeUTF8String(
+  _Inout_ _At_(Utf8String->Buffer, __drv_freesMem(Mem)) PUTF8_STRING Utf8String);
+
+#define FLUSH_NV_MEMORY_IN_FLAG_NO_DRAIN 0x00000001
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGetNonVolatileToken(
+  _In_ PVOID NvBuffer,
+  _In_ SIZE_T Size,
+  _Out_ PVOID *NvToken);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFreeNonVolatileToken(
+  _In_ PVOID NvToken);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFlushNonVolatileMemory(
+  _In_ PVOID NvToken,
+  _In_ PVOID NvBuffer,
+  _In_ SIZE_T Size,
+  _In_ ULONG Flags);
+
+
+typedef struct _NV_MEMORY_RANGE {
+  VOID *BaseAddress;
+  SIZE_T Length;
+} NV_MEMORY_RANGE, *PNV_MEMORY_RANGE;
+
+#define FLUSH_NV_MEMORY_DEFAULT_TOKEN (ULONG_PTR)(-1)
+
+#define WRITE_NV_MEMORY_FLAG_FLUSH        0x00000001
+#define WRITE_NV_MEMORY_FLAG_NON_TEMPORAL 0x00000002
+#define WRITE_NV_MEMORY_FLAG_PERSIST      (WRITE_NV_MEMORY_FLAG_FLUSH | WRITE_NV_MEMORY_FLAG_NON_TEMPORAL)
+#define WRITE_NV_MEMORY_FLAG_NO_DRAIN     0x00000100
+
+#define FILL_NV_MEMORY_FLAG_FLUSH         0x00000001
+#define FILL_NV_MEMORY_FLAG_NON_TEMPORAL  0x00000002
+#define FILL_NV_MEMORY_FLAG_PERSIST       (FILL_NV_MEMORY_FLAG_FLUSH | FILL_NV_MEMORY_FLAG_NON_TEMPORAL)
+#define FILL_NV_MEMORY_FLAG_NO_DRAIN      0x00000100
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDrainNonVolatileFlush(
+  _In_ PVOID NvToken);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlWriteNonVolatileMemory(
+  _In_ PVOID NvToken,
+  _Out_writes_bytes_(Size) VOID UNALIGNED *NvDestination,
+  _In_reads_bytes_(Size) CONST VOID UNALIGNED *Source,
+  _In_ SIZE_T Size,
+  _In_ ULONG Flags);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFillNonVolatileMemory(
+  _In_ PVOID NvToken,
+  _Out_writes_bytes_(Size) VOID UNALIGNED *NvDestination,
+  _In_ SIZE_T Size,
+  _In_ CONST UCHAR Value,
+  _In_ ULONG Flags);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFlushNonVolatileMemoryRanges(
+  _In_ PVOID NvToken,
+  _In_reads_(NumRanges) PNV_MEMORY_RANGE NvRanges,
+  _In_ SIZE_T NumRanges,
+  _In_ ULONG Flags);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlQueryRegistryValueWithFallback(
+  _In_opt_ HANDLE PrimaryHandle,
+  _In_opt_ HANDLE FallbackHandle,
+  _In_ PUNICODE_STRING ValueName,
+  _In_ ULONG ValueLength,
+  _Out_opt_ PULONG ValueType,
+  _Out_writes_bytes_to_(ValueLength, *ResultLength) PVOID ValueData,
+  _Out_ PULONG ResultLength);
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTSYSAPI
@@ -2821,6 +3123,38 @@ NTSYSAPI
 VOID
 NTAPI
 RtlEndEnumerationHashTable(
+  _In_ PRTL_DYNAMIC_HASH_TABLE HashTable,
+  _Inout_ PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator);
+
+_Must_inspect_result_
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlCreateHashTableEx(
+  _Inout_ PRTL_DYNAMIC_HASH_TABLE *HashTable,
+  _In_ ULONG InitialSize,
+  _In_ ULONG Shift,
+  _Reserved_ ULONG Flags);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlInitStrongEnumerationHashTable(
+  _In_ PRTL_DYNAMIC_HASH_TABLE HashTable,
+  _Out_ PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator);
+
+_Must_inspect_result_
+NTSYSAPI
+PRTL_DYNAMIC_HASH_TABLE_ENTRY
+NTAPI
+RtlStronglyEnumerateEntryHashTable(
+  _In_ PRTL_DYNAMIC_HASH_TABLE HashTable,
+  _Inout_ PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlEndStrongEnumerationHashTable(
   _In_ PRTL_DYNAMIC_HASH_TABLE HashTable,
   _Inout_ PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator);
 

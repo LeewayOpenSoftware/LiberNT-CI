@@ -49,6 +49,10 @@ typedef struct _SEP_SDDL_ACE_DESCRIPTION
     ULONG SidLength;
     PCWSTR SidStart;
     PCWSTR SidEnd;
+    ULONG ObjectFlags;
+    GUID ObjectType;
+    GUID InheritedObjectType;
+    BOOLEAN ObjectEntry;
 } SEP_SDDL_ACE_DESCRIPTION, *PSEP_SDDL_ACE_DESCRIPTION;
 
 static const SEP_SDDL_ALIAS SepSddlAliases[] =
@@ -363,6 +367,61 @@ SepSddlParseRights(
 }
 
 static
+BOOLEAN
+SepSddlIsObjectAce(
+    _In_ UCHAR Type)
+{
+    return (Type == ACCESS_ALLOWED_OBJECT_ACE_TYPE) || (Type == ACCESS_DENIED_OBJECT_ACE_TYPE) ||
+           (Type == SYSTEM_AUDIT_OBJECT_ACE_TYPE) || (Type == SYSTEM_ALARM_OBJECT_ACE_TYPE);
+}
+
+/* A type is the 36 characters of a GUID without braces */
+static
+NTSTATUS
+SepSddlParseGuid(
+    _In_ PCWSTR Start,
+    _In_ PCWSTR End,
+    _Out_ GUID *Guid)
+{
+    WCHAR Braced[38];
+    UNICODE_STRING Text;
+
+    if ((End - Start) != 36)
+        return NTSTATUS_FROM_WIN32(ERROR_INVALID_ACL);
+
+    Braced[0] = L'{';
+    RtlCopyMemory(&Braced[1], Start, 36 * sizeof(WCHAR));
+    Braced[37] = L'}';
+    Text.Buffer = Braced;
+    Text.Length = Text.MaximumLength = sizeof(Braced);
+
+    if (!NT_SUCCESS(RtlGUIDFromString(&Text, Guid)))
+        return NTSTATUS_FROM_WIN32(ERROR_INVALID_ACL);
+
+    return STATUS_SUCCESS;
+}
+
+/* An object entry only has room for the types it names; the identifier follows them */
+static
+ULONG
+SepSddlAceLength(
+    _In_ PSEP_SDDL_ACE_DESCRIPTION Description)
+{
+    ULONG Length;
+
+    if (!SepSddlIsObjectAce(Description->Type))
+        return FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + Description->SidLength;
+
+    Length = FIELD_OFFSET(ACCESS_ALLOWED_OBJECT_ACE, ObjectType);
+    if (Description->ObjectFlags & ACE_OBJECT_TYPE_PRESENT)
+        Length += sizeof(GUID);
+    if (Description->ObjectFlags & ACE_INHERITED_OBJECT_TYPE_PRESENT)
+        Length += sizeof(GUID);
+
+    return Length + Description->SidLength;
+}
+
+static
 NTSTATUS
 SepSddlDescribeAce(
     _In_ PCWSTR Start,
@@ -373,6 +432,7 @@ SepSddlDescribeAce(
     PCWSTR FieldEnd[6];
     PCWSTR Current;
     ULONG Field;
+    UCHAR ObjectType;
     NTSTATUS Status;
 
     RtlZeroMemory(Description, sizeof(*Description));
@@ -402,6 +462,14 @@ SepSddlDescribeAce(
         Description->Type = SYSTEM_ALARM_ACE_TYPE;
     else if (((FieldEnd[0] - FieldStart[0]) == 2) && (FieldStart[0][0] == L'M') && (FieldStart[0][1] == L'L'))
         Description->Type = SYSTEM_MANDATORY_LABEL_ACE_TYPE;
+    else if (((FieldEnd[0] - FieldStart[0]) == 2) && (FieldStart[0][0] == L'O') && (FieldStart[0][1] == L'A'))
+        Description->Type = ACCESS_ALLOWED_OBJECT_ACE_TYPE;
+    else if (((FieldEnd[0] - FieldStart[0]) == 2) && (FieldStart[0][0] == L'O') && (FieldStart[0][1] == L'D'))
+        Description->Type = ACCESS_DENIED_OBJECT_ACE_TYPE;
+    else if (((FieldEnd[0] - FieldStart[0]) == 2) && (FieldStart[0][0] == L'O') && (FieldStart[0][1] == L'U'))
+        Description->Type = SYSTEM_AUDIT_OBJECT_ACE_TYPE;
+    else if (((FieldEnd[0] - FieldStart[0]) == 2) && (FieldStart[0][0] == L'O') && (FieldStart[0][1] == L'L'))
+        Description->Type = SYSTEM_ALARM_OBJECT_ACE_TYPE;
     else
         return NTSTATUS_FROM_WIN32(ERROR_INVALID_ACL);
 
@@ -411,10 +479,37 @@ SepSddlDescribeAce(
     Status = SepSddlParseRights(FieldStart[2], FieldEnd[2], &Description->Mask);
     if (!NT_SUCCESS(Status))
         return Status;
+    ObjectType = Description->Type;
+    Description->ObjectEntry = SepSddlIsObjectAce(ObjectType);
     SepSddlTrimRange(&FieldStart[3], &FieldEnd[3]);
     SepSddlTrimRange(&FieldStart[4], &FieldEnd[4]);
-    if ((FieldStart[3] != FieldEnd[3]) || (FieldStart[4] != FieldEnd[4]))
-        return NTSTATUS_FROM_WIN32(ERROR_INVALID_ACL);
+    if (FieldStart[3] != FieldEnd[3])
+    {
+        if (!SepSddlIsObjectAce(Description->Type))
+            return NTSTATUS_FROM_WIN32(ERROR_INVALID_ACL);
+        Status = SepSddlParseGuid(FieldStart[3], FieldEnd[3], &Description->ObjectType);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Description->ObjectFlags |= ACE_OBJECT_TYPE_PRESENT;
+    }
+    if (FieldStart[4] != FieldEnd[4])
+    {
+        if (!SepSddlIsObjectAce(Description->Type))
+            return NTSTATUS_FROM_WIN32(ERROR_INVALID_ACL);
+        Status = SepSddlParseGuid(FieldStart[4], FieldEnd[4], &Description->InheritedObjectType);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Description->ObjectFlags |= ACE_INHERITED_OBJECT_TYPE_PRESENT;
+    }
+
+    /* An object entry naming no type is the plain entry of its kind (Windows: OA without GUIDs builds type 0) */
+    if (SepSddlIsObjectAce(ObjectType) && (Description->ObjectFlags == 0))
+    {
+        Description->Type = (ObjectType == ACCESS_ALLOWED_OBJECT_ACE_TYPE) ? ACCESS_ALLOWED_ACE_TYPE :
+                            (ObjectType == ACCESS_DENIED_OBJECT_ACE_TYPE) ? ACCESS_DENIED_ACE_TYPE :
+                            (ObjectType == SYSTEM_AUDIT_OBJECT_ACE_TYPE) ? SYSTEM_AUDIT_ACE_TYPE :
+                                                                           SYSTEM_ALARM_ACE_TYPE;
+    }
     Description->SidStart = FieldStart[5];
     Description->SidEnd = FieldEnd[5];
     return SepSddlParseSid(Description->SidStart, Description->SidEnd, NULL, &Description->SidLength);
@@ -432,6 +527,8 @@ SepSddlParseAcl(
 {
     SEP_SDDL_ACE_DESCRIPTION Description;
     PACCESS_ALLOWED_ACE Ace;
+    PUCHAR SidStart;
+    BOOLEAN ObjectEntries = FALSE;
     ULONG AceCount = 0;
     ULONG Length = sizeof(ACL);
     ULONG AceLength;
@@ -440,6 +537,12 @@ SepSddlParseAcl(
 
     *Control = Sacl ? SE_SACL_PRESENT : SE_DACL_PRESENT;
     SepSddlTrimRange(&Start, &End);
+    if (((End - Start) == 17) && (_wcsnicmp(Start, L"NO_ACCESS_CONTROL", 17) == 0))
+    {
+        *Control = 0;
+        *AclLength = 0;
+        return STATUS_SUCCESS;
+    }
     while ((Start < End) && (*Start != L'('))
     {
         if (*Start == L'P')
@@ -476,7 +579,10 @@ SepSddlParseAcl(
         Status = SepSddlDescribeAce(Start, AceEnd, &Description);
         if (!NT_SUCCESS(Status))
             return Status;
-        AceLength = FIELD_OFFSET(ACCESS_ALLOWED_ACE, SidStart) + Description.SidLength;
+        AceLength = SepSddlAceLength(&Description);
+        /* The list is a directory-service list when an entry was written as an object entry, types or not */
+        if (Description.ObjectEntry)
+            ObjectEntries = TRUE;
         if ((AceLength > MAXUSHORT) || (Length > MAXUSHORT - AceLength))
             return NTSTATUS_FROM_WIN32(ERROR_INVALID_ACL);
         if (Acl != NULL)
@@ -486,7 +592,25 @@ SepSddlParseAcl(
             Ace->Header.AceFlags = Description.Flags;
             Ace->Header.AceSize = (USHORT)AceLength;
             Ace->Mask = Description.Mask;
-            Status = SepSddlParseSid(Description.SidStart, Description.SidEnd, (PSID)&Ace->SidStart, &Description.SidLength);
+            SidStart = (PUCHAR)&Ace->SidStart;
+            if (SepSddlIsObjectAce(Description.Type))
+            {
+                PACCESS_ALLOWED_OBJECT_ACE ObjectAce = (PACCESS_ALLOWED_OBJECT_ACE)Ace;
+
+                ObjectAce->Flags = Description.ObjectFlags;
+                SidStart = (PUCHAR)&ObjectAce->ObjectType;
+                if (Description.ObjectFlags & ACE_OBJECT_TYPE_PRESENT)
+                {
+                    RtlCopyMemory(SidStart, &Description.ObjectType, sizeof(GUID));
+                    SidStart += sizeof(GUID);
+                }
+                if (Description.ObjectFlags & ACE_INHERITED_OBJECT_TYPE_PRESENT)
+                {
+                    RtlCopyMemory(SidStart, &Description.InheritedObjectType, sizeof(GUID));
+                    SidStart += sizeof(GUID);
+                }
+            }
+            Status = SepSddlParseSid(Description.SidStart, Description.SidEnd, (PSID)SidStart, &Description.SidLength);
             if (!NT_SUCCESS(Status))
                 return Status;
         }
@@ -500,7 +624,8 @@ SepSddlParseAcl(
     *AclLength = Length;
     if (Acl != NULL)
     {
-        Acl->AclRevision = ACL_REVISION;
+        /* A list with object entries is a directory-service list */
+        Acl->AclRevision = ObjectEntries ? ACL_REVISION_DS : ACL_REVISION;
         Acl->Sbz1 = 0;
         Acl->AclSize = (USHORT)Length;
         Acl->AceCount = (USHORT)AceCount;
@@ -641,7 +766,7 @@ SeConvertStringSecurityDescriptorToSecurityDescriptor(
     RelativeDescriptor->Control = SE_SELF_RELATIVE | DaclControl | SaclControl;
     Offset = sizeof(*RelativeDescriptor);
 
-    if (Sacl.Present)
+    if (Sacl.Present && (SaclLength != 0))
     {
         RelativeDescriptor->Sacl = Offset;
         Status = SepSddlParseAcl(Sacl.Start, Sacl.End, TRUE, (PACL)((PUCHAR)RelativeDescriptor + Offset), &SaclLength, &SaclControl);
@@ -649,7 +774,7 @@ SeConvertStringSecurityDescriptorToSecurityDescriptor(
             goto Failure;
         Offset += SaclLength;
     }
-    if (Dacl.Present)
+    if (Dacl.Present && (DaclLength != 0))
     {
         RelativeDescriptor->Dacl = Offset;
         Status = SepSddlParseAcl(Dacl.Start, Dacl.End, FALSE, (PACL)((PUCHAR)RelativeDescriptor + Offset), &DaclLength, &DaclControl);

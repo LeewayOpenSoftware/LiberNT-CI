@@ -41,6 +41,7 @@ ATOM AtomDwmBackdropNcExtendLeft;
 ATOM AtomDwmBackdropNcExtendRight;
 ATOM AtomDwmBackdropNcExtendBottom;
 ATOM AtomDwmFrameAlpha;
+ATOM AtomDwmFrameInsets;
 ATOM AtomDwmCaptionClose;
 ATOM AtomDwmCaptionMaximize;
 ATOM AtomDwmCaptionMinimize;
@@ -140,6 +141,7 @@ static const PCWSTR PrivatePropertyNames[] =
     DWM_PROP_BACKDROP_NC_EXTEND_RIGHT,
     DWM_PROP_BACKDROP_NC_EXTEND_BOTTOM,
     DWM_PROP_FRAME_ALPHA,
+    DWM_PROP_FRAME_INSETS,
     DWM_PROP_CAPTION_CLOSE,
     DWM_PROP_CAPTION_MAXIMIZE,
     DWM_PROP_CAPTION_MINIMIZE,
@@ -229,6 +231,7 @@ InitUserAtoms(VOID)
     AtomDwmBackdropNcExtendRight = IntAddUserPropertyAtom(DWM_PROP_BACKDROP_NC_EXTEND_RIGHT);
     AtomDwmBackdropNcExtendBottom = IntAddUserPropertyAtom(DWM_PROP_BACKDROP_NC_EXTEND_BOTTOM);
     AtomDwmFrameAlpha = IntAddUserPropertyAtom(DWM_PROP_FRAME_ALPHA);
+    AtomDwmFrameInsets = IntAddUserPropertyAtom(DWM_PROP_FRAME_INSETS);
     AtomDwmCaptionClose = IntAddUserPropertyAtom(DWM_PROP_CAPTION_CLOSE);
     AtomDwmCaptionMaximize = IntAddUserPropertyAtom(DWM_PROP_CAPTION_MAXIMIZE);
     AtomDwmCaptionMinimize = IntAddUserPropertyAtom(DWM_PROP_CAPTION_MINIMIZE);
@@ -420,6 +423,14 @@ NtUserInitialize(
         gbGreInitialized = TRUE;
     }
 
+    /* Every session's CSRSS delivers the power callouts of the windows and services in that session */
+    Status = IntInitWin32PowerManagement(hPowerRequestEvent);
+    if (!NT_SUCCESS(Status))
+    {
+        UserLeave();
+        return Status;
+    }
+
     if (Session->SessionId == 0 || gpDisplaySession)
     {
         Status = UserCreateWinstaDirectory();
@@ -428,14 +439,6 @@ NtUserInitialize(
     }
 
     WritePointerRelease((PVOID volatile *)&gpDisplaySession, Session);
-
-    /* Initialize Power Request List */
-    Status = IntInitWin32PowerManagement(hPowerRequestEvent);
-    if (!NT_SUCCESS(Status))
-    {
-        UserLeave();
-        return Status;
-    }
 
 // Initialize Media Change (use hMediaRequestEvent).
 
@@ -502,7 +505,7 @@ VOID FASTCALL UserEnterShared(VOID)
     }
     KeEnterCriticalRegion();
     ExfAcquirePushLockShared(&gUserCrit.Lock);
-    gUserCrit.HandoffPending = 0;
+    InterlockedExchange(&gUserCrit.HandoffPending, 0);
     pti->cSharedCrit = 1;
 }
 
@@ -537,7 +540,7 @@ VOID FASTCALL UserEnterExclusive(VOID)
         UserCritWaitHandoff(Thread);
     KeEnterCriticalRegion();
     ExfAcquirePushLockExclusive(&gUserCrit.Lock);
-    gUserCrit.HandoffPending = 0;
+    InterlockedExchange(&gUserCrit.HandoffPending, 0);
     gUserCrit.OwnerExclusive = Thread;
     gUserCrit.RecursionExclusive = 1;
 }
@@ -621,29 +624,31 @@ VOID FASTCALL UserInitDomainLocks(VOID)
     }
 }
 
-VOID FASTCALL UserDomainLockExclusive(USER_DOMAIN_LOCK_TYPE Type)
+BOOLEAN FASTCALL UserDomainLockExclusive(USER_DOMAIN_LOCK_TYPE Type)
 {
     PUSER_DOMAIN_LOCK pLock = &gUserDomainLocks[Type];
     PKTHREAD Thread = KeGetCurrentThread();
 
     if (UserIsEnteredExclusive())
-        return;
+        return FALSE;
     if (pLock->OwnerExclusive == Thread)
     {
         pLock->RecursionExclusive++;
-        return;
+        return TRUE;
     }
     ExfAcquirePushLockExclusive(&pLock->Lock);
     pLock->OwnerExclusive = Thread;
     pLock->RecursionExclusive = 1;
+    return TRUE;
 }
 
-VOID FASTCALL UserDomainUnlockExclusive(USER_DOMAIN_LOCK_TYPE Type)
+VOID FASTCALL UserDomainUnlockExclusive(USER_DOMAIN_LOCK_TYPE Type, BOOLEAN Entered)
 {
     PUSER_DOMAIN_LOCK pLock = &gUserDomainLocks[Type];
 
-    if (UserIsEnteredExclusive())
+    if (!Entered)
         return;
+
     ASSERT(pLock->OwnerExclusive == KeGetCurrentThread());
     if (--pLock->RecursionExclusive)
         return;
@@ -651,25 +656,25 @@ VOID FASTCALL UserDomainUnlockExclusive(USER_DOMAIN_LOCK_TYPE Type)
     ExfReleasePushLockExclusive(&pLock->Lock);
 }
 
-VOID FASTCALL UserDomainLockShared(USER_DOMAIN_LOCK_TYPE Type)
+BOOLEAN FASTCALL UserDomainLockShared(USER_DOMAIN_LOCK_TYPE Type)
 {
     PUSER_DOMAIN_LOCK pLock = &gUserDomainLocks[Type];
 
     if (UserIsEnteredExclusive())
-        return;
+        return FALSE;
     if (pLock->OwnerExclusive == KeGetCurrentThread())
-        return;
+        return FALSE;
     ExfAcquirePushLockShared(&pLock->Lock);
+    return TRUE;
 }
 
-VOID FASTCALL UserDomainUnlockShared(USER_DOMAIN_LOCK_TYPE Type)
+VOID FASTCALL UserDomainUnlockShared(USER_DOMAIN_LOCK_TYPE Type, BOOLEAN Acquired)
 {
     PUSER_DOMAIN_LOCK pLock = &gUserDomainLocks[Type];
 
-    if (UserIsEnteredExclusive())
+    if (!Acquired)
         return;
-    if (pLock->OwnerExclusive == KeGetCurrentThread())
-        return;
+
     ExfReleasePushLockShared(&pLock->Lock);
 }
 

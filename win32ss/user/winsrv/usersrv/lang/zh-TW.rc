@@ -26,7 +26,7 @@ BEGIN
     DEFPUSHBUTTON "取消", IDCANCEL, 142, 98, 43, 17
     PUSHBUTTON "立即結束(&E) ", IDC_END_NOW, 74, 98, 63, 17
     LTEXT "這個程式沒有回應", IDC_STATIC, 7, 7, 178, 8
-    LTEXT "若要返回至 LiberNT 並檢視程式的狀態，請按［取消］。", IDC_STATIC, 7, 26, 178, 16
+    LTEXT "若要返回至 Orosi 並檢視程式的狀態，請按［取消］。", IDC_STATIC, 7, 26, 178, 16
     LTEXT "如果您選擇立即結束程式，您將失去所有未儲存的資料。若要立即結束程式，請按［立即結束］。", IDC_STATIC, 7, 53, 178, 33
 END
 
@@ -45,4 +45,22 @@ BEGIN
     IDS_UNKNOWN_SOFTWARE_EXCEPT "不明的軟體例外錯誤"
     IDS_OK_TERMINATE_PROGRAM    "按［確定］來結束程式。"
     IDS_CANCEL_DEBUG_PROGRAM    "按［取消］對程式進行除錯。"
+END
+
+STRINGTABLE
+BEGIN
+    IDS_BLOCK_RESTART_TITLE_ONE               "Closing 1 app and restarting"
+    IDS_BLOCK_RESTART_TITLE                   "Closing %u apps and restarting"
+    IDS_BLOCK_RESTART_REASON                  "This app is preventing restart."
+    IDS_BLOCK_RESTART_FORCE                   "Restart anyway"
+    IDS_BLOCK_SHUTDOWN_TITLE_ONE              "Closing 1 app and shutting down"
+    IDS_BLOCK_SHUTDOWN_TITLE                  "Closing %u apps and shutting down"
+    IDS_BLOCK_SHUTDOWN_REASON                 "This app is preventing shutdown."
+    IDS_BLOCK_SHUTDOWN_FORCE                  "Shut down anyway"
+    IDS_BLOCK_SIGNOUT_TITLE_ONE               "Closing 1 app and signing out"
+    IDS_BLOCK_SIGNOUT_TITLE                   "Closing %u apps and signing out"
+    IDS_BLOCK_SIGNOUT_REASON                  "This app is preventing you from signing out."
+    IDS_BLOCK_SIGNOUT_FORCE                   "Sign out anyway"
+    IDS_BLOCK_HINT                            "To go back and save your work, click Cancel and finish what you need to."
+    IDS_BLOCK_CANCEL                          "Cancel"
 END

@@ -8,26 +8,12 @@
 #include <ntifs.h>
 #include <pseh/pseh2.h>
 #include <drivers/condrv/condrvhost.h>
+#include <drivers/condrv/condrvcodes.h>
 
 #define NDEBUG
 #include <debug.h>
 
 #define CD_TAG 'vDdC'
-
-#define IOCTL_CONDRV_READ_CONSOLE          CTL_CODE(FILE_DEVICE_CONSOLE, 10, METHOD_BUFFERED, FILE_READ_ACCESS)
-#define IOCTL_CONDRV_READ_FILE             CTL_CODE(FILE_DEVICE_CONSOLE, 11, METHOD_BUFFERED, FILE_READ_ACCESS)
-#define IOCTL_CONDRV_READ_INPUT            CTL_CODE(FILE_DEVICE_CONSOLE, 12, METHOD_BUFFERED, FILE_READ_ACCESS)
-#define IOCTL_CONDRV_CTRL_EVENT            CTL_CODE(FILE_DEVICE_CONSOLE, 19, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_CONDRV_FLUSH                 CTL_CODE(FILE_DEVICE_CONSOLE, 21, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_CONDRV_GET_PROCESS_LIST      CTL_CODE(FILE_DEVICE_CONSOLE, 23, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_CONDRV_READ_CONSOLE_CONTROL  CTL_CODE(FILE_DEVICE_CONSOLE, 24, METHOD_BUFFERED, FILE_READ_ACCESS)
-#define IOCTL_CONDRV_WRITE_CONSOLE         CTL_CODE(FILE_DEVICE_CONSOLE, 30, METHOD_BUFFERED, FILE_WRITE_ACCESS)
-#define IOCTL_CONDRV_WRITE_FILE            CTL_CODE(FILE_DEVICE_CONSOLE, 31, METHOD_BUFFERED, FILE_WRITE_ACCESS)
-#define IOCTL_CONDRV_ACTIVATE              CTL_CODE(FILE_DEVICE_CONSOLE, 36, METHOD_BUFFERED, FILE_WRITE_ACCESS)
-#define IOCTL_CONDRV_BIND_PID              CTL_CODE(FILE_DEVICE_CONSOLE, 51, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_CONDRV_SETUP_INPUT           CTL_CODE(FILE_DEVICE_CONSOLE, 60, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_CONDRV_INIT_OUTPUT           CTL_CODE(FILE_DEVICE_CONSOLE, 90, METHOD_BUFFERED, 0)
-#define IOCTL_CONDRV_CLOSE_OUTPUT          CTL_CODE(FILE_DEVICE_CONSOLE, 91, METHOD_BUFFERED, 0)
 
 #define CD_ATTACH_PARENT_PROCESS ((ULONG)-1)
 #define CD_WRITE_BEHIND_LIMIT    (1024 * 1024)
@@ -102,6 +88,7 @@ struct _CD_SERVER
     LONG ScratchBusy;
     ULONG ScratchSize;
     PUCHAR Scratch;
+    HANDLE DeliveredProcessId;
 };
 
 typedef struct _CD_FILE
@@ -115,6 +102,7 @@ typedef struct _CD_FILE
     LIST_ENTRY MirrorEntry;
     LONG NoEventIrps;
     BOOLEAN Opening;
+    KEVENT WaitEvent;
 } CD_FILE, *PCD_FILE;
 
 typedef struct _CD_REQUEST
@@ -133,6 +121,7 @@ typedef struct _CD_REQUEST
     NTSTATUS Status;
     ULONG_PTR Information;
     PVOID OutBuffer;
+    HANDLE ProcessId;
     KEVENT Done;
 } CD_REQUEST, *PCD_REQUEST;
 
@@ -239,6 +228,14 @@ VOID
 CdSyncFileEvent(
     _In_ PCD_FILE File)
 {
+    if (File->FileObject->Flags & FO_INDIRECT_WAIT_OBJECT)
+    {
+        if (File->Mirror && File->Mirror->Signaled)
+            KeSetEvent(&File->WaitEvent, IO_NO_INCREMENT, FALSE);
+        else
+            KeClearEvent(&File->WaitEvent);
+        return;
+    }
     if (File->NoEventIrps)
         return;
     if (File->Opening)
@@ -261,6 +258,9 @@ CdSyncFileEvent(
     if (File->FileObject->Event.Header.Type == SynchronizationEvent &&
         File->FileObject->Event.Header.SignalState)
     {
+        /* A synchronous caller has not consumed its completion yet: leave it signaled while input remains. */
+        if (File->Mirror && File->Mirror->Signaled)
+            File->FileObject->Event.Header.Type = NotificationEvent;
         return;
     }
     File->FileObject->Event.Header.Type = NotificationEvent;
@@ -275,7 +275,7 @@ VOID
 CdUpdateFileEvent(
     _In_ PCD_FILE File)
 {
-    if (File->FileObject->Busy)
+    if (File->FileObject->Busy && !(File->FileObject->Flags & FO_INDIRECT_WAIT_OBJECT))
         return;
     CdSyncFileEvent(File);
 }
@@ -284,6 +284,12 @@ static
 VOID
 CdDereferenceScreen(
     _In_ PCD_SCREEN Screen);
+
+static
+VOID
+CdUpdateFileEventShared(
+    _In_ PCD_FILE File,
+    _In_ BOOLEAN Sync);
 
 static
 VOID
@@ -711,9 +717,15 @@ CdFinishIrp(
     if (NoEvent)
     {
         PCD_FILE File = FileObject->FsContext;
+        KIRQL OldIrql;
 
-        KeSetEvent(&FileObject->Event, IO_NO_INCREMENT, FALSE);
-        InterlockedDecrement(&File->NoEventIrps);
+        OldIrql = ExAcquireSpinLockExclusive(&CdLock);
+        /* A request queued on the file after this one owns the event: signalling it would end that wait early */
+        if (File->NoEventIrps == 1)
+            KeSetEvent(&FileObject->Event, IO_NO_INCREMENT, FALSE);
+        if (InterlockedDecrement(&File->NoEventIrps) == 0 && (FileObject->Flags & FO_SYNCHRONOUS_IO))
+            CdUpdateFileEventShared(File, TRUE);
+        ExReleaseSpinLockExclusive(&CdLock, OldIrql);
         ObDereferenceObject(FileObject);
     }
 }
@@ -831,6 +843,7 @@ CdQueueIrp(
     Request->InData = InSize ? InData : NULL;
     Request->InSize = InSize;
     Request->OutSize = OutSize;
+    Request->ProcessId = PsGetCurrentProcessId();
 
     Irp->Tail.Overlay.DriverContext[0] = Request;
     Irp->Tail.Overlay.DriverContext[1] = NULL;
@@ -1234,6 +1247,7 @@ CdServerGetNext(
             *Information = sizeof(Reply) + Request->InSize;
             Request->InData = NULL;
             Request->Delivered = TRUE;
+            Server->DeliveredProcessId = Request->ProcessId;
             if (Request->Async)
             {
                 PLIST_ENTRY Entry = Request->Entry.Flink;
@@ -1339,6 +1353,19 @@ CdServerIoctl(
         case IOCTL_CONDRV_SETUP_INPUT:
             return STATUS_NOT_SUPPORTED;
 
+        case IOCTL_CONDRV_GET_CLIENT_PROCESS:
+        {
+            PULONG ProcessId = Irp->AssociatedIrp.SystemBuffer;
+
+            if (Stack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*ProcessId))
+                return STATUS_INVALID_PARAMETER;
+            OldIrql = ExAcquireSpinLockShared(&CdLock);
+            *ProcessId = HandleToULong(Server->DeliveredProcessId);
+            ExReleaseSpinLockShared(&CdLock, OldIrql);
+            Irp->IoStatus.Information = sizeof(*ProcessId);
+            return STATUS_SUCCESS;
+        }
+
         case IOCTL_CONDRV_GET_PROCESS_LIST:
         {
             NTSTATUS Status;
@@ -1357,6 +1384,55 @@ CdServerIoctl(
         default:
             return STATUS_INVALID_HANDLE;
     }
+}
+
+#ifndef PROCESS_DUP_HANDLE
+#define PROCESS_DUP_HANDLE 0x0040
+#endif
+
+/* Decides whether the current process may attach to the console of Target.
+ * The refusal is the status a process without a console gives. */
+static
+NTSTATUS
+CdCheckAttachAccess(
+    _In_ PEPROCESS Target,
+    _In_ BOOLEAN Parent,
+    _In_ KPROCESSOR_MODE RequestorMode)
+{
+    HANDLE ProcessHandle;
+    NTSTATUS Status;
+
+    if (RequestorMode == KernelMode || Target == PsGetCurrentProcess())
+        return STATUS_SUCCESS;
+
+    if (Parent)
+    {
+        /* The parent is named by its process id, which can have passed to a
+         * younger process since: only a process older than this one made it */
+        if (PsGetProcessCreateTimeQuadPart(Target) <
+            PsGetProcessCreateTimeQuadPart(PsGetCurrentProcess()))
+        {
+            return STATUS_SUCCESS;
+        }
+
+        return STATUS_ACCESS_DENIED;
+    }
+
+    /* The security of the target process decides, for the caller's own token.
+     * The right asked for is a write-class one: an attached process writes to
+     * that console. */
+    Status = ObOpenObjectByPointer(Target,
+                                   OBJ_KERNEL_HANDLE,
+                                   NULL,
+                                   PROCESS_DUP_HANDLE,
+                                   *PsProcessType,
+                                   UserMode,
+                                   &ProcessHandle);
+    if (!NT_SUCCESS(Status))
+        return STATUS_ACCESS_DENIED;
+
+    ZwClose(ProcessHandle);
+    return STATUS_SUCCESS;
 }
 
 static
@@ -1378,15 +1454,29 @@ CdConnectionIoctl(
         case IOCTL_CONDRV_BIND_PID:
         {
             ULONG Pid;
+            BOOLEAN Parent = FALSE;
 
             if (InLength != sizeof(ULONG))
                 return STATUS_INVALID_PARAMETER;
             Pid = *(PULONG)Irp->AssociatedIrp.SystemBuffer;
             if (Pid == CD_ATTACH_PARENT_PROCESS)
+            {
                 Pid = HandleToULong(PsGetProcessInheritedFromUniqueProcessId(PsGetCurrentProcess()));
+                Parent = TRUE;
+            }
             Status = PsLookupProcessByProcessId(ULongToHandle(Pid), &Process);
             if (!NT_SUCCESS(Status))
                 return STATUS_INVALID_PARAMETER;
+
+            /* A console carries what its processes read and write. A process
+             * may attach to the console of the process that created it, or of
+             * a process that it is allowed to open. */
+            Status = CdCheckAttachAccess(Process, Parent, Irp->RequestorMode);
+            if (!NT_SUCCESS(Status))
+            {
+                ObDereferenceObject(Process);
+                return Status;
+            }
 
             OldIrql = ExAcquireSpinLockExclusive(&CdLock);
             if (CdFindProcess(PsGetCurrentProcess()))
@@ -1425,6 +1515,30 @@ CdConnectionIoctl(
                 Status = STATUS_INVALID_HANDLE;
             }
             ExReleaseSpinLockExclusive(&CdLock, OldIrql);
+            return Status;
+        }
+
+        case IOCTL_CONDRV_CLIENT_REQUEST:
+        {
+            PCONDRV_CLIENT_REQUEST Header = Irp->AssociatedIrp.SystemBuffer;
+            PFILE_OBJECT Target;
+
+            if (InLength < sizeof(*Header))
+                return STATUS_INVALID_PARAMETER;
+            Status = ObReferenceObjectByHandle(UlongToHandle(Header->Handle),
+                                               (ACCESS_MASK)((Header->Code >> 14) & 3),
+                                               *IoFileObjectType,
+                                               Irp->RequestorMode,
+                                               (PVOID*)&Target,
+                                               NULL);
+            if (!NT_SUCCESS(Status))
+                return Status;
+            /* Only the fast I/O routine serves the request; a console file falls back to its own IOCTL */
+            if (IoGetRelatedDeviceObject(Target) != Stack->DeviceObject || !Target->FsContext)
+                Status = STATUS_INVALID_HANDLE;
+            else
+                Status = STATUS_NOT_SUPPORTED;
+            ObDereferenceObject(Target);
             return Status;
         }
 
@@ -1667,8 +1781,18 @@ CdDispatchCreate(
         }
         if (File->Type != CdFileServer && File->Type != CdFileConnection)
         {
-            KeInitializeEvent(&FileObject->Event, SynchronizationEvent, FALSE);
-            File->Opening = TRUE;
+            if (FileObject->Flags & FO_SYNCHRONOUS_IO)
+            {
+                /* A synchronous handle waits on its own input event; the file event belongs to the I/O manager */
+                KeInitializeEvent(&File->WaitEvent, NotificationEvent, FALSE);
+                FileObject->FsContext2 = &File->WaitEvent;
+                FileObject->Flags |= FO_INDIRECT_WAIT_OBJECT;
+            }
+            else
+            {
+                KeInitializeEvent(&FileObject->Event, SynchronizationEvent, FALSE);
+                File->Opening = TRUE;
+            }
             CdSyncFileEvent(File);
         }
     }
@@ -2388,6 +2512,7 @@ CdFastIoDeviceControl(
     if (!Request)
         return FALSE;
     RtlZeroMemory(Request, sizeof(*Request));
+    Request->ProcessId = PsGetCurrentProcessId();
     if (InputBufferLength)
         Request->InData = Request + 1;
     if (OutputBufferLength)

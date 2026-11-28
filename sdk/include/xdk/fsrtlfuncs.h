@@ -849,6 +849,24 @@ FsRtlIsNameInExpression(
   _In_ BOOLEAN IgnoreCase,
   _In_opt_ PWCHAR UpcaseTable);
 
+_Must_inspect_result_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+FsRtlIsNameInUnUpcasedExpression(
+  _In_ PUNICODE_STRING Expression,
+  _In_ PUNICODE_STRING Name,
+  _In_ BOOLEAN IgnoreCase,
+  _In_opt_ PWCH UpcaseTable);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+LOGICAL
+NTAPI
+FsRtlIsSystemPagingFile(
+  _In_ PFILE_OBJECT FileObject);
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTKERNELAPI
 VOID
@@ -1218,6 +1236,55 @@ NTKERNELAPI
 VOID
 NTAPI
 FsRtlIncrementCcFastMdlReadWait(VOID);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+FsRtlKernelFsControlFile(
+  _In_ PFILE_OBJECT FileObject,
+  _In_ ULONG FsControlCode,
+  _In_ PVOID InputBuffer,
+  _In_ ULONG InputBufferLength,
+  _Out_ PVOID OutputBuffer,
+  _In_ ULONG OutputBufferLength,
+  _Out_ PULONG RetOutputBufferSize);
+
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+FsRtlIssueDeviceIoControl(
+  _In_ PDEVICE_OBJECT DeviceObject,
+  _In_ ULONG IoCtl,
+  _In_ UCHAR Flags,
+  _In_opt_ PVOID InputBuffer,
+  _In_ ULONG InputBufferLength,
+  _In_opt_ PVOID OutputBuffer,
+  _In_ ULONG OutputBufferLength,
+  _Out_opt_ PULONG_PTR IosbInformation);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+FsRtlQueryInformationFile(
+  _In_ PFILE_OBJECT FileObject,
+  _Out_writes_bytes_to_(Length, *RetFileInformationSize) PVOID FileInformation,
+  _In_ ULONG Length,
+  _In_ FILE_INFORMATION_CLASS FileInformationClass,
+  _Out_ PULONG RetFileInformationSize);
+
+NTKERNELAPI
+BOOLEAN
+NTAPI
+FsRtlIsDaxVolume(
+  _In_ PFILE_OBJECT FileObject);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+FsRtlQueryCachedVdl(
+  _In_ PFILE_OBJECT FileObject,
+  _Out_ PLONGLONG Vdl);
 
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)

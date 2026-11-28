@@ -209,25 +209,40 @@ LRESULT CTrayClockWnd::OnThemeChanged()
 {
     LOGFONTW clockFont;
     HTHEME clockTheme;
-    HFONT hFont;
+    HFONT hNewFont = NULL;
+    COLORREF themeColor;
 
     clockTheme = OpenThemeData(m_hWnd, L"Clock");
 
     if (clockTheme)
     {
-        GetThemeFont(clockTheme, NULL, CLP_TIME, 0, TMT_FONT, &clockFont);
+        ZeroMemory(&clockFont, sizeof(clockFont));
 
-        clockFont.lfQuality = ANTIALIASED_QUALITY;
-        hFont = CreateFontIndirectW(&clockFont);
+        /* A style may open the Clock class without a CLP_TIME font or colour */
+        if (SUCCEEDED(GetThemeFont(clockTheme, NULL, CLP_TIME, 0, TMT_FONT, &clockFont)))
+        {
+            clockFont.lfQuality = ANTIALIASED_QUALITY;
+            hNewFont = CreateFontIndirectW(&clockFont);
+        }
 
-        GetThemeColor(clockTheme, CLP_TIME, 0, TMT_TEXTCOLOR, &textColor);
+        if (SUCCEEDED(GetThemeColor(clockTheme, CLP_TIME, 0, TMT_TEXTCOLOR, &themeColor)))
+            textColor = themeColor;
+        else
+            textColor = ::GetSysColor(COLOR_BTNTEXT);
         if (ShellTaskbarIsLight())
             textColor = RGB(25, 25, 25);
 
-        if (this->hFont != NULL)
-            DeleteObject(this->hFont);
-
-        SetFont(hFont, FALSE);
+        /* Without a themed font keep the current one, as when there is no Clock theme */
+        if (hNewFont)
+        {
+            if (this->hFont != NULL)
+                DeleteObject(this->hFont);
+            SetFont(hNewFont, FALSE);
+        }
+        else
+        {
+            SetFont(this->hFont, FALSE);
+        }
 
         CloseThemeData(clockTheme);
     }

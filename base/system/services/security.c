@@ -18,13 +18,17 @@ static PSID pWorldSid = NULL;
 static PSID pLocalSystemSid = NULL;
 static PSID pAuthenticatedUserSid = NULL;
 static PSID pAliasAdminsSid = NULL;
+static PSID pInteractiveSid = NULL;
+static PSID pServiceSid = NULL;
 
 static PACL pDefaultDacl = NULL;
 static PACL pDefaultSacl = NULL;
 static PACL pPipeDacl = NULL;
+static PACL pManagerDacl = NULL;
 
-static PSECURITY_DESCRIPTOR pDefaultSD = NULL;
+PSECURITY_DESCRIPTOR pDefaultSD = NULL;
 PSECURITY_DESCRIPTOR pPipeSD = NULL;
+PSECURITY_DESCRIPTOR pManagerSD = NULL;
 
 
 /* FUNCTIONS ****************************************************************/
@@ -47,6 +51,12 @@ ScmFreeSids(VOID)
 
     if (pAliasAdminsSid != NULL)
         RtlFreeHeap(RtlGetProcessHeap(), 0, pAliasAdminsSid);
+
+    if (pInteractiveSid != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, pInteractiveSid);
+
+    if (pServiceSid != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, pServiceSid);
 }
 
 
@@ -117,6 +127,20 @@ ScmCreateSids(VOID)
     *pSubAuthority = SECURITY_BUILTIN_DOMAIN_RID;
     pSubAuthority = RtlSubAuthoritySid(pAliasAdminsSid, 1);
     *pSubAuthority = DOMAIN_ALIAS_RID_ADMINS;
+
+    pInteractiveSid = RtlAllocateHeap(RtlGetProcessHeap(), 0, ulLength1);
+    if (pInteractiveSid == NULL)
+        return ERROR_OUTOFMEMORY;
+
+    RtlInitializeSid(pInteractiveSid, &NtAuthority, 1);
+    *RtlSubAuthoritySid(pInteractiveSid, 0) = SECURITY_INTERACTIVE_RID;
+
+    pServiceSid = RtlAllocateHeap(RtlGetProcessHeap(), 0, ulLength1);
+    if (pServiceSid == NULL)
+        return ERROR_OUTOFMEMORY;
+
+    RtlInitializeSid(pServiceSid, &NtAuthority, 1);
+    *RtlSubAuthoritySid(pServiceSid, 0) = SECURITY_SERVICE_RID;
 
     return ERROR_SUCCESS;
 }
@@ -190,6 +214,48 @@ ScmCreateAcls(VOID)
                            GENERIC_ALL,
                            pWorldSid);
 
+    ulLength = sizeof(ACL) +
+               (sizeof(ACE) + RtlLengthSid(pAuthenticatedUserSid)) +
+               (sizeof(ACE) + RtlLengthSid(pInteractiveSid)) +
+               (sizeof(ACE) + RtlLengthSid(pServiceSid)) +
+               (sizeof(ACE) + RtlLengthSid(pLocalSystemSid)) +
+               (sizeof(ACE) + RtlLengthSid(pAliasAdminsSid));
+
+    pManagerDacl = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, ulLength);
+    if (pManagerDacl == NULL)
+        return ERROR_OUTOFMEMORY;
+
+    RtlCreateAcl(pManagerDacl, ulLength, ACL_REVISION);
+
+    RtlAddAccessAllowedAce(pManagerDacl,
+                           ACL_REVISION,
+                           SC_MANAGER_CONNECT,
+                           pAuthenticatedUserSid);
+
+    RtlAddAccessAllowedAce(pManagerDacl,
+                           ACL_REVISION,
+                           SC_MANAGER_CONNECT | SC_MANAGER_ENUMERATE_SERVICE |
+                           SC_MANAGER_QUERY_LOCK_STATUS | READ_CONTROL,
+                           pInteractiveSid);
+
+    RtlAddAccessAllowedAce(pManagerDacl,
+                           ACL_REVISION,
+                           SC_MANAGER_CONNECT | SC_MANAGER_ENUMERATE_SERVICE |
+                           SC_MANAGER_QUERY_LOCK_STATUS | READ_CONTROL,
+                           pServiceSid);
+
+    RtlAddAccessAllowedAce(pManagerDacl,
+                           ACL_REVISION,
+                           SC_MANAGER_CONNECT | SC_MANAGER_ENUMERATE_SERVICE |
+                           SC_MANAGER_QUERY_LOCK_STATUS | SC_MANAGER_MODIFY_BOOT_CONFIG |
+                           READ_CONTROL,
+                           pLocalSystemSid);
+
+    RtlAddAccessAllowedAce(pManagerDacl,
+                           ACL_REVISION,
+                           SC_MANAGER_ALL_ACCESS,
+                           pAliasAdminsSid);
+
     return ERROR_SUCCESS;
 }
 
@@ -206,6 +272,9 @@ ScmFreeAcls(VOID)
 
     if (pPipeDacl != NULL)
         RtlFreeHeap(RtlGetProcessHeap(), 0, pPipeDacl);
+
+    if (pManagerDacl != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, pManagerDacl);
 }
 
 
@@ -316,6 +385,146 @@ ScmFreePipeSD(VOID)
 }
 
 
+static
+DWORD
+ScmCreateManagerSD(VOID)
+{
+    NTSTATUS Status;
+
+    pManagerSD = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(SECURITY_DESCRIPTOR));
+    if (pManagerSD == NULL)
+        return ERROR_OUTOFMEMORY;
+
+    Status = RtlCreateSecurityDescriptor(pManagerSD,
+                                         SECURITY_DESCRIPTOR_REVISION);
+    if (NT_SUCCESS(Status))
+        Status = RtlSetOwnerSecurityDescriptor(pManagerSD, pLocalSystemSid, FALSE);
+    if (NT_SUCCESS(Status))
+        Status = RtlSetGroupSecurityDescriptor(pManagerSD, pLocalSystemSid, FALSE);
+    if (NT_SUCCESS(Status))
+        Status = RtlSetDaclSecurityDescriptor(pManagerSD, TRUE, pManagerDacl, FALSE);
+
+    return NT_SUCCESS(Status) ? ERROR_SUCCESS : RtlNtStatusToDosError(Status);
+}
+
+
+static
+VOID
+ScmFreeManagerSD(VOID)
+{
+    if (pManagerSD != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, pManagerSD);
+}
+
+
+/* Check the RPC caller against a security descriptor and return the granted access. */
+DWORD
+ScmAccessCheckCaller(
+    _In_ PSECURITY_DESCRIPTOR pSecurityDescriptor,
+    _In_ DWORD dwDesiredAccess,
+    _In_ PGENERIC_MAPPING pMapping,
+    _Out_ PDWORD pdwGrantedAccess)
+{
+    BYTE PrivilegeBuffer[sizeof(PRIVILEGE_SET) + 4 * sizeof(LUID_AND_ATTRIBUTES)];
+    DWORD dwPrivilegeLength = sizeof(PrivilegeBuffer);
+    HANDLE hToken = NULL;
+    BOOL bAccessStatus = FALSE;
+    DWORD dwError = ERROR_SUCCESS;
+
+    *pdwGrantedAccess = 0;
+
+    if (RpcImpersonateClient(NULL) != RPC_S_OK)
+        return ERROR_ACCESS_DENIED;
+
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &hToken))
+        dwError = ERROR_ACCESS_DENIED;
+
+    RpcRevertToSelf();
+
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
+
+    if (!AccessCheck(pSecurityDescriptor,
+                     hToken,
+                     dwDesiredAccess,
+                     pMapping,
+                     (PPRIVILEGE_SET)PrivilegeBuffer,
+                     &dwPrivilegeLength,
+                     pdwGrantedAccess,
+                     &bAccessStatus) ||
+        !bAccessStatus)
+    {
+        *pdwGrantedAccess = 0;
+        /* A right that needs a privilege the caller lacks (ACCESS_SYSTEM_SECURITY) is reported as such */
+        dwError = (GetLastError() == ERROR_PRIVILEGE_NOT_HELD) ? ERROR_PRIVILEGE_NOT_HELD : ERROR_ACCESS_DENIED;
+    }
+
+    CloseHandle(hToken);
+    return dwError;
+}
+
+
+/* TRUE when the RPC caller is LocalSystem. */
+BOOL
+ScmIsCallerLocalSystem(VOID)
+{
+    BYTE Buffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    DWORD dwLength;
+    HANDLE hToken = NULL;
+    BOOL bResult = FALSE;
+
+    if (RpcImpersonateClient(NULL) != RPC_S_OK)
+        return FALSE;
+
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &hToken))
+    {
+        if (GetTokenInformation(hToken, TokenUser, Buffer, sizeof(Buffer), &dwLength))
+            bResult = RtlEqualSid(((PTOKEN_USER)Buffer)->User.Sid, pLocalSystemSid);
+        CloseHandle(hToken);
+    }
+
+    RpcRevertToSelf();
+    return bResult;
+}
+
+
+/* TRUE when the RPC caller is LocalSystem or the user of hAccountToken (may be NULL). */
+BOOL
+ScmIsCallerAccount(HANDLE hAccountToken)
+{
+    BYTE Buffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    BYTE AccountBuffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    DWORD dwLength;
+    HANDLE hToken = NULL;
+    PSID pCallerSid;
+    BOOL bResult = FALSE;
+
+    if (RpcImpersonateClient(NULL) != RPC_S_OK)
+        return FALSE;
+
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &hToken))
+        hToken = NULL;
+
+    RpcRevertToSelf();
+
+    if (hToken == NULL)
+        return FALSE;
+
+    if (GetTokenInformation(hToken, TokenUser, Buffer, sizeof(Buffer), &dwLength))
+    {
+        pCallerSid = ((PTOKEN_USER)Buffer)->User.Sid;
+        if (RtlEqualSid(pCallerSid, pLocalSystemSid))
+            bResult = TRUE;
+        else if (hAccountToken != NULL &&
+                 GetTokenInformation(hAccountToken, TokenUser, AccountBuffer, sizeof(AccountBuffer), &dwLength))
+            bResult = RtlEqualSid(pCallerSid, ((PTOKEN_USER)AccountBuffer)->User.Sid);
+    }
+
+    CloseHandle(hToken);
+    return bResult;
+}
+
+
 DWORD
 ScmCreateDefaultServiceSD(
     PSECURITY_DESCRIPTOR *ppSecurityDescriptor)
@@ -390,6 +599,10 @@ ScmInitializeSecurity(VOID)
     if (dwError != ERROR_SUCCESS)
         return dwError;
 
+    dwError = ScmCreateManagerSD();
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
+
     return ERROR_SUCCESS;
 }
 
@@ -397,6 +610,7 @@ ScmInitializeSecurity(VOID)
 VOID
 ScmShutdownSecurity(VOID)
 {
+    ScmFreeManagerSD();
     ScmFreePipeSD();
     ScmFreeDefaultSD();
     ScmFreeAcls();

@@ -22,12 +22,12 @@
 #define KDNET_TAG               'tNdK'
 
 #define KDNET_DEFAULT_PORT      50000
-#define KDNET_BROADCAST_INPUT_PORT  6665
-#define KDNET_BROADCAST_OUTPUT_PORT 6666
 #define KDNET_DATAGRAM_SIZE     1200
 #define KDNET_OUTPUT_SIZE       0x400000
 #define KDNET_INPUT_SIZE        0x10000
 #define KDNET_KEY_TEXT_SIZE     96
+#define KDNET_HARDWARE_SAMPLES  8
+#define KDNET_MIN_KEY_CHARS     16
 #define KDNET_HOST_NAME_SIZE    128
 
 #define KDNET_SECOND            1000000ULL
@@ -342,11 +342,6 @@ extern CHAR KdSessionKeyText[KDNET_KEY_TEXT_SIZE];
 
 VOID
 KdSessionInitialize(VOID);
-
-VOID
-KdSessionBroadcastInput(
-    _In_reads_bytes_(Length) const UCHAR *Data,
-    _In_ ULONG Length);
 
 VOID
 KdSessionInput(

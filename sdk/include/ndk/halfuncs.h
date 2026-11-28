@@ -377,7 +377,17 @@ HalSendNMI(
 
 #endif // _M_AMD64
 
-#ifdef _WIN64
+#if defined(_M_AMD64)
+
+/* Windows 7 and later: one processor, by processor index */
+NTHALAPI
+VOID
+NTAPI
+HalSendSoftwareInterrupt(
+    _In_ ULONG ProcessorIndex,
+    _In_ KIRQL Irql);
+
+#elif defined(_WIN64)
 
 NTHALAPI
 VOID
@@ -395,6 +405,14 @@ NTAPI
 HalRequestIpi(
     _In_ IPI_TYPE IpiType,
     _In_opt_ PKAFFINITY_EX Affinity);
+#elif defined(_M_AMD64)
+/* Windows 7 and later: the target set spans every processor group */
+NTHALAPI
+VOID
+NTAPI
+HalRequestIpi(
+    _In_ ULONG Reserved,
+    _In_ PKAFFINITY_EX TargetSet);
 #else
 NTHALAPI
 VOID
@@ -520,6 +538,15 @@ NTAPI
 HalSetTimeIncrement(
     _In_ ULONG Increment
 );
+
+#if defined(_M_IX86) || defined(_M_AMD64)
+NTHALAPI
+BOOLEAN
+NTAPI
+HalSetClockDeadline(
+    _In_ ULONGLONG InterruptTime
+);
+#endif
 
 
 //

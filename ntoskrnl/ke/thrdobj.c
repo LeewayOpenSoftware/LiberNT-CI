@@ -649,6 +649,9 @@ KeStartThread(IN OUT PKTHREAD Thread)
 #endif
     KiThreadAffinityMask(Thread) = Process->Affinity;
     KiThreadUserAffinityMask(Thread) = Process->Affinity;
+    /* A process affinity describes group 0 */
+    KiSetThreadAffinityGroup(Thread, 0);
+    KiSetThreadUserAffinityGroup(Thread, 0);
 
 #ifdef CONFIG_SMP
     /* Get the KNODE and its PRCB */
@@ -679,7 +682,11 @@ KeStartThread(IN OUT PKTHREAD Thread)
     Thread->UserIdealProcessor = IdealProcessor;
 
     /* Insert the thread into the process list under the process lock */
+    ASSERT(Process->ThreadListHead.Flink->Blink == &Process->ThreadListHead);
+    ASSERT(Process->ThreadListHead.Blink->Flink == &Process->ThreadListHead);
     InsertTailList(&Process->ThreadListHead, &Thread->ThreadListEntry);
+    ASSERT(Thread->ThreadListEntry.Flink->Blink == &Thread->ThreadListEntry);
+    ASSERT(Thread->ThreadListEntry.Blink->Flink == &Thread->ThreadListEntry);
 
     /* Increase the stack count */
     ASSERT(Process->StackCount != MAXULONG);
@@ -1281,14 +1288,15 @@ KeRevertToUserAffinityThread(VOID)
 
     /* Set the user affinity and processor and disable system affinity */
     /* Do not copy GROUP_AFFINITY's reserved bytes: KTHREAD overlays APC and
-     * scheduler state there. ReactOS currently uses only processor group 0. */
+     * scheduler state there; copy the mask and the group only. */
     KiThreadAffinityMask(CurrentThread) = KiThreadUserAffinityMask(CurrentThread);
+    KiSetThreadAffinityGroup(CurrentThread, KiThreadUserAffinityGroup(CurrentThread));
     CurrentThread->IdealProcessor = CurrentThread->UserIdealProcessor;
     CurrentThread->SystemAffinityActive = FALSE;
 
     /* Get the current PRCB and check if it doesn't match this affinity */
     Prcb = KeGetCurrentPrcb();
-    if (!(Prcb->SetMember & KiThreadAffinityMask(CurrentThread)))
+    if (!KiIsProcessorInThreadAffinity(CurrentThread, Prcb->Number))
     {
         /* Lock the PRCB */
         KiAcquirePrcbLock(Prcb);
@@ -1321,6 +1329,7 @@ KeSetIdealProcessorThread(IN PKTHREAD Thread,
 {
     CCHAR OldIdealProcessor;
     KIRQL OldIrql;
+    /* A number within the thread's group; MAXIMUM_PROCESSORS only queries */
     ASSERT(Processor <= MAXIMUM_PROCESSORS);
 
     /* Lock the Dispatcher Database */
@@ -1358,14 +1367,16 @@ KeSetIdealProcessorThread(IN PKTHREAD Thread,
  * @implemented
  */
 VOID
-NTAPI
-KeSetSystemAffinityThread(IN KAFFINITY Affinity)
+FASTCALL
+KiSetSystemGroupAffinityThread(
+    _In_ USHORT Group,
+    _In_ KAFFINITY Affinity)
 {
     KIRQL OldIrql;
     PKPRCB Prcb;
     PKTHREAD NextThread, CurrentThread = KeGetCurrentThread();
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
-    ASSERT((Affinity & KeActiveProcessors) != 0);
+    ASSERT((Affinity & KiQueryActiveGroupAffinity(Group)) != 0);
 
     /* Lock the Dispatcher Database */
     OldIrql = KeRaiseIrqlToSynchLevel();
@@ -1373,17 +1384,29 @@ KeSetSystemAffinityThread(IN KAFFINITY Affinity)
 
     /* Restore the affinity and enable system affinity */
     KiThreadAffinityMask(CurrentThread) = Affinity;
+    KiSetThreadAffinityGroup(CurrentThread, Group);
     CurrentThread->SystemAffinityActive = TRUE;
 
 #ifdef CONFIG_SMP
     /* Calculate the ideal processor from the affinity set */
-    CurrentThread->IdealProcessor =
-        KiFindIdealProcessor(Affinity, CurrentThread->IdealProcessor);
+    if ((Group == 0) && (CurrentThread->IdealProcessor < KI_PROCESSORS_PER_GROUP))
+    {
+        CurrentThread->IdealProcessor =
+            KiFindIdealProcessor(Affinity, (UCHAR)CurrentThread->IdealProcessor);
+    }
+    else
+    {
+        ULONG Bit;
+
+        /* The node and parking information describe group 0 */
+        NT_VERIFY(BitScanForwardAffinity(&Bit, Affinity & KiQueryActiveGroupAffinity(Group)));
+        CurrentThread->IdealProcessor = KiProcessorIndexFromNumber(Group, (UCHAR)Bit);
+    }
 #endif
 
     /* Get the current PRCB and check if it doesn't match this affinity */
     Prcb = KeGetCurrentPrcb();
-    if (!(Prcb->SetMember & KiThreadAffinityMask(CurrentThread)))
+    if (!KiIsProcessorInThreadAffinity(CurrentThread, Prcb->Number))
     {
         /* Lock the PRCB */
         KiAcquirePrcbLock(Prcb);
@@ -1404,6 +1427,16 @@ KeSetSystemAffinityThread(IN KAFFINITY Affinity)
     /* Unlock dispatcher database */
     KiReleaseThreadLock(CurrentThread);
     KiExitDispatcher(OldIrql);
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeSetSystemAffinityThread(IN KAFFINITY Affinity)
+{
+    KiSetSystemGroupAffinityThread(0, Affinity);
 }
 
 /*
@@ -1653,6 +1686,26 @@ KeSetAffinityThread(IN PKTHREAD Thread,
     return OldAffinity;
 }
 
+VOID
+NTAPI
+KeSetGroupAffinityThread(
+    _In_ PKTHREAD Thread,
+    _In_ PGROUP_AFFINITY Affinity,
+    _Out_opt_ PGROUP_AFFINITY PreviousAffinity)
+{
+    KIRQL OldIrql;
+    ASSERT_THREAD(Thread);
+    ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
+
+    /* Raise IRQL */
+    OldIrql = KeRaiseIrqlToSynchLevel();
+
+    /* Call the internal function (it acquires the thread lock itself) */
+    KiSetGroupAffinityThread(Thread, Affinity->Group, Affinity->Mask, PreviousAffinity);
+
+    KiExitDispatcher(OldIrql);
+}
+
 /*
  * @implemented
  */
@@ -1687,14 +1740,12 @@ KeSetPriorityThread(IN PKTHREAD Thread,
         KPRIORITY OldFloor = Thread->RealtimePriorityFloor;
         KPRIORITY NewFloor;
 
-        Priority = max(Priority, Thread->BasePriority);
+        /* Only a realtime request sets a floor; a request below it is the run-time priority itself, base or not */
         NewFloor = (Priority >= LOW_REALTIME_PRIORITY) ? Priority : HIGH_PRIORITY + 1;
         KiUpdatePriorityFloor(Thread,
                              OldFloor <= HIGH_PRIORITY ? OldFloor : 0,
                              NewFloor <= HIGH_PRIORITY ? NewFloor : 0);
         Thread->RealtimePriorityFloor = NewFloor;
-        if (NewFloor <= HIGH_PRIORITY)
-            Priority = Thread->BasePriority;
     }
 #endif
 
@@ -1752,6 +1803,7 @@ KeTerminateThread(IN KPRIORITY Increment)
     KLOCK_QUEUE_HANDLE LockHandle;
     PKTHREAD Thread = KeGetCurrentThread();
     PKPROCESS Process = Thread->ApcState.Process;
+    PKQUEUE Queue;
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
     /* Lock the process */
@@ -1769,13 +1821,21 @@ KeTerminateThread(IN KPRIORITY Increment)
 #endif
 
     /* Check the thread has an associated queue */
-    if (Thread->Queue)
+    Queue = KiPinThreadQueue(Thread);
+    if (Queue)
     {
-        /* Remove it from the list, and handle the queue */
-        KiAcquireDispatcherObject(&Thread->Queue->Header);
-        RemoveEntryList(&Thread->QueueListEntry);
-        KiActivateWaiterQueue(Thread->Queue);
-        KiReleaseDispatcherObject(&Thread->Queue->Header);
+        /* The rundown of the queue ends the association from another
+         * processor, with the queue locked. It is ours to end only if it is
+         * still there once we hold that lock. */
+        KiAcquireDispatcherObject(&Queue->Header);
+        if (Thread->Queue == Queue)
+        {
+            /* Remove it from the list, and handle the queue */
+            RemoveEntryList(&Thread->QueueListEntry);
+            KiActivateWaiterQueue(Queue);
+        }
+        KiReleaseDispatcherObject(&Queue->Header);
+        KiUnpinThreadQueue();
     }
 
     /* Signal the thread */
@@ -1789,7 +1849,11 @@ KeTerminateThread(IN KPRIORITY Increment)
     KiReleaseDispatcherObject(&Thread->Header);
 
     /* Remove the thread from the list */
+    ASSERT(Thread->ThreadListEntry.Flink->Blink == &Thread->ThreadListEntry);
+    ASSERT(Thread->ThreadListEntry.Blink->Flink == &Thread->ThreadListEntry);
     RemoveEntryList(&Thread->ThreadListEntry);
+    ASSERT(Process->ThreadListHead.Flink->Blink == &Process->ThreadListHead);
+    ASSERT(Process->ThreadListHead.Blink->Flink == &Process->ThreadListHead);
 
     /* Release the process lock */
     KiReleaseProcessLockFromSynchLevel(&LockHandle);

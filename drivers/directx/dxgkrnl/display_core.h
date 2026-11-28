@@ -109,7 +109,33 @@ NTSTATUS DxgkFlipCoreQueue(_Inout_ PDXGK_FLIP_QUEUE Queue, _In_ ULONGLONG Alloca
  * became visible on this vsync. */
 BOOLEAN DxgkFlipCoreNotifyVSync(_Inout_ PDXGK_FLIP_QUEUE Queue, _Out_ PULONGLONG PresentedCookie);
 ULONG DxgkFlipCoreQueuedCount(_In_ const DXGK_FLIP_QUEUE *Queue);
+/* A flip whose source another client owns at scanout is occluded; only DMA faults put a device in error */
+NTSTATUS DxgkFlipCoreScanoutStatus(_In_ NTSTATUS LeaseStatus);
 
 D3DDDIFORMAT DxgkVidPnCoreDesktopSurfaceFormat(_In_ D3DDDIFORMAT PinnedFormat);
+
+/* A color pointer reaches DxgkDdiSetPointerShape as a Width x Height 32 bpp DIB whose pitch is its width in bytes. */
+FORCEINLINE
+ULONG
+DxgkDisplayCorePackPointerRows(
+    _Inout_updates_bytes_(SourcePitch * Height) PUCHAR Pixels,
+    _In_ ULONG Width,
+    _In_ ULONG Height,
+    _In_ ULONG SourcePitch)
+{
+    ULONG Pitch;
+    ULONG Row;
+
+    ASSERT(Pixels != NULL);
+    ASSERT(Width != 0);
+    ASSERT(Height != 0);
+    ASSERT(Width <= MAXULONG / sizeof(ULONG));
+    Pitch = Width * sizeof(ULONG);
+    ASSERT(SourcePitch >= Pitch);
+    ASSERT(Height <= MAXULONG / SourcePitch);
+    for (Row = 1; Row < Height && SourcePitch != Pitch; Row++)
+        RtlMoveMemory(Pixels + Row * Pitch, Pixels + Row * SourcePitch, Pitch);
+    return Pitch;
+}
 
 #endif /* _DXGK_DISPLAY_CORE_H_ */

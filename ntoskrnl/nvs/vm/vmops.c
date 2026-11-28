@@ -203,7 +203,10 @@ MiSetPrivateRangeProtection(
         LONG Added = 0;
 
         if (Slot == NULL)
+        {
+            MiPtPruneEmpty(Space, Va);
             return STATUS_NO_MEMORY;
+        }
 
         if (TableEnd > End)
             TableEnd = End;
@@ -362,6 +365,8 @@ MiDeleteRange(
     BOOLEAN Deferred;
     BOOLEAN NoClones = Space->CloneRoot.NodeCount == 0;
 
+    MI_ASSERT(Start >= MI_VAD_START(Vad) && End <= MI_VAD_END(Vad) && Start <= End);
+    MI_ASSERT(((Start | End) & (PAGE_SIZE - 1)) == 0);
     if (!Decommit)
         MiPtFlushEmpty(Space);
 
@@ -458,6 +463,7 @@ MiDeleteRange(
 Done:
     Space->TlbBatch->DeferTables = Deferred;
     MiTlbBatchEnd(Space, Owner);
+    MI_ASSERT(Committed >= 0 && (ULONG64)Committed <= (End - Start) >> PAGE_SHIFT);
     return Committed;
 }
 
@@ -556,7 +562,8 @@ MiReserveVirtualMemory(
     _In_ ULONG64 Alignment)
 {
     PMI_VAD Vad = NULL;
-    ULONG64 Start, End;
+    PMI_FRAME_NUMBER RotateFrames = NULL;
+    ULONG64 Start, End, RotatePages = 0;
     ULONG64 Granularity = (Alignment != 0) ? Alignment : Space->Granularity;
     LONG64 Charged = 0;
     NTSTATUS Status = STATUS_SUCCESS;
@@ -568,6 +575,7 @@ MiReserveVirtualMemory(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
+SelectRange:
     if (*BaseAddress == 0)
     {
         ULONG64 StartVpn;
@@ -600,6 +608,34 @@ MiReserveVirtualMemory(
             goto Done;
         }
     }
+    MI_ASSERT(RotateFrames == NULL || RotatePages == ((End - Start) >> PAGE_SHIFT));
+    UNREFERENCED_PARAMETER(RotatePages);
+    if ((AllocationType & (MI_MEM_ROTATE | MI_MEM_COMMIT)) == (MI_MEM_ROTATE | MI_MEM_COMMIT) &&
+        RotateFrames == NULL)
+    {
+        ULONG64 Pages = (End - Start) >> PAGE_SHIFT;
+        SIZE_T Bytes;
+
+        if (Pages > (SIZE_T)-1 / sizeof(*RotateFrames))
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Done;
+        }
+        Bytes = (SIZE_T)Pages * sizeof(*RotateFrames);
+        RotatePages = Pages;
+        MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+        RotateFrames = MI_ALLOCATE(Bytes);
+        if (RotateFrames != NULL)
+            RtlZeroMemory(RotateFrames, Bytes);
+        MI_RW_ACQUIRE_EXCLUSIVE(&Space->Lock);
+        if (RotateFrames == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Done;
+        }
+        goto SelectRange;
+    }
+
     if (AllocationType & MI_MEM_COMMIT)
     {
         Charged = (LONG64)((End - Start) >> PAGE_SHIFT);
@@ -617,6 +653,8 @@ MiReserveVirtualMemory(
     Vad->MemCommit = (BOOLEAN)((AllocationType & MI_MEM_COMMIT) != 0);
     Vad->Placeholder = (BOOLEAN)((AllocationType & MI_MEM_RESERVE_PLACEHOLDER) != 0);
     Vad->CommitCharge = Charged;
+    if (Vad->Placeholder)
+        MiAssertPlaceholderVad(Vad);
     if ((AllocationType & MI_MEM_WRITE_WATCH) && !NT_SUCCESS(MiWriteWatchAttach(Space, Vad)))
     {
         MiReturnCommit(Space, Charged);
@@ -630,15 +668,28 @@ MiReserveVirtualMemory(
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto Done;
     }
+    if (RotateFrames != NULL)
+    {
+        Status = MiRotatePopulateLocked(Space, Vad, RotateFrames);
+        RotateFrames = NULL;
+        if (!NT_SUCCESS(Status))
+        {
+            MiRotateReleaseLocked(Space, Vad);
+            Vad = NULL;
+            goto Done;
+        }
+    }
     *BaseAddress = Start;
     *RegionSize = End - Start;
 
 Done:
-    if (!NT_SUCCESS(Status) && MiVadCacheFree(Space, Vad))
+    if (!NT_SUCCESS(Status) && Vad != NULL && MiVadCacheFree(Space, Vad))
         Vad = NULL;
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
     if (!NT_SUCCESS(Status) && Vad != NULL)
         MI_FREE(Vad);
+    if (RotateFrames != NULL)
+        MI_FREE(RotateFrames);
     return Status;
 }
 
@@ -668,6 +719,7 @@ MiReplacePlaceholder(
         return STATUS_CONFLICTING_ADDRESSES;
     }
 
+    MiAssertPlaceholderVad(Vad);
     if ((AllocationType & MI_MEM_WRITE_WATCH) && !NT_SUCCESS(MiWriteWatchAttach(Space, Vad)))
     {
         MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
@@ -801,8 +853,6 @@ MiAllocateVirtualMemoryBounded(
     {
         Status = MiReserveVirtualMemory(Space, BaseAddress, RegionSize, AllocationType, Protection, LowestAddress,
                                         HighestAddress, Alignment);
-        if (NT_SUCCESS(Status) && (AllocationType & MI_MEM_ROTATE) && (AllocationType & MI_MEM_COMMIT))
-            Status = MiRotatePopulate(Space, *BaseAddress, *RegionSize);
         return Status;
     }
 
@@ -885,6 +935,10 @@ MiAllocateVirtualMemoryBounded(
 
     Charged = Vad->CommitCharge == 0 ? (LONG64)((End - Start) >> PAGE_SHIFT)
                                     : MiCountUncommittedPrivate(Space, Vad, Start, End);
+    MI_ASSERT(Vad->CommitCharge >= 0);
+    MI_ASSERT((ULONG64)Vad->CommitCharge <= Vad->Node.EndingVpn - Vad->Node.StartingVpn + 1);
+    MI_ASSERT(Charged >= 0 && (ULONG64)Charged <= (End - Start) >> PAGE_SHIFT);
+    MI_ASSERT((ULONG64)(Vad->CommitCharge + Charged) <= Vad->Node.EndingVpn - Vad->Node.StartingVpn + 1);
 
     if (Charged != 0 && !MiChargeCommit(Space, Charged))
     {
@@ -895,6 +949,14 @@ MiAllocateVirtualMemoryBounded(
     Vad->CommitCharge += Charged;
     Vad->PteTouched = TRUE;
     Status = MiSetPrivateRangeProtection(Space, Start, End, Protection);
+    if (!NT_SUCCESS(Status))
+    {
+        LONG64 Uncommitted = MiCountUncommittedPrivate(Space, Vad, Start, End);
+
+        MI_ASSERT(Uncommitted >= 0 && Uncommitted <= Charged);
+        Vad->CommitCharge -= Uncommitted;
+        MiReturnCommit(Space, Uncommitted);
+    }
 
     *BaseAddress = Start;
     *RegionSize = End - Start;
@@ -915,6 +977,7 @@ MiInsertPlaceholderPiece(
     RtlZeroMemory(&Vad->Node, sizeof(Vad->Node));
     Vad->Node.StartingVpn = Start >> PAGE_SHIFT;
     Vad->Node.EndingVpn = (End >> PAGE_SHIFT) - 1;
+    MiAssertPlaceholderVad(Vad);
     MiVadInsert(&Space->VadRoot, &Vad->Node);
 }
 
@@ -961,6 +1024,7 @@ MiFreePlaceholder(
             return STATUS_CONFLICTING_ADDRESSES;
         }
 
+        MiAssertPlaceholderVad(Vad);
         Last = Vad;
         Count = 1;
         while (MI_VAD_END(Last) < End)
@@ -971,6 +1035,7 @@ MiFreePlaceholder(
                 MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
                 return STATUS_CONFLICTING_ADDRESSES;
             }
+            MiAssertPlaceholderVad(Next);
             Last = Next;
             Count++;
         }
@@ -987,6 +1052,7 @@ MiFreePlaceholder(
             MiVadRemove(&Space->VadRoot, &Next->Node);
             MiVadRemove(&Space->VadRoot, &Vad->Node);
             Vad->Node.EndingVpn = Next->Node.EndingVpn;
+            MiAssertPlaceholderVad(Vad);
             MiVadInsert(&Space->VadRoot, &Vad->Node);
             if (!MiVadCacheFree(Space, Next))
                 MI_FREE(Next);
@@ -994,6 +1060,7 @@ MiFreePlaceholder(
     }
     else if (Vad->Placeholder)
     {
+        MiAssertPlaceholderVad(Vad);
         if (End > VadEnd || (Start == VadStart && End == VadEnd))
         {
             MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
@@ -1017,6 +1084,7 @@ MiFreePlaceholder(
         MiVadRemove(&Space->VadRoot, &Vad->Node);
         Vad->Node.StartingVpn = Start >> PAGE_SHIFT;
         Vad->Node.EndingVpn = (End >> PAGE_SHIFT) - 1;
+        MiAssertPlaceholderVad(Vad);
         MiVadInsert(&Space->VadRoot, &Vad->Node);
         if (Head != NULL)
             MiInsertPlaceholderPiece(Space, Head, Vad, VadStart, Start);
@@ -1035,6 +1103,7 @@ MiFreePlaceholder(
         Vad->Protection = MI_PROT_NOACCESS;
         Vad->MemCommit = FALSE;
         Vad->EcCode = FALSE;
+        MiAssertPlaceholderVad(Vad);
     }
     else
     {
@@ -1154,6 +1223,7 @@ MiFreeVirtualMemory(
     if (FreeType == MI_MEM_DECOMMIT)
     {
         Returned = MiDeleteRange(Space, Vad, Start, End, TRUE);
+        MI_ASSERT(Returned >= 0 && Returned <= Vad->CommitCharge);
         Vad->CommitCharge -= Returned;
         MiReturnCommit(Space, Returned);
         *BaseAddress = Start;
@@ -1194,6 +1264,8 @@ MiFreeVirtualMemory(
         }
 
         Returned = MiDeleteRange(Space, Vad, Start, End, FALSE);
+        MI_ASSERT(Returned >= 0 && TailCommit >= 0);
+        MI_ASSERT(Returned <= Vad->CommitCharge && TailCommit <= Vad->CommitCharge - Returned);
 
         TailBits = Tail->WriteWatchBits;
         *Tail = *Vad;
@@ -1201,17 +1273,21 @@ MiFreeVirtualMemory(
         MiVadRemove(&Space->VadRoot, &Vad->Node);
         Vad->Node.EndingVpn = (Start >> PAGE_SHIFT) - 1;
         Vad->CommitCharge -= Returned + TailCommit;
+        MI_ASSERT((ULONG64)Vad->CommitCharge <= Vad->Node.EndingVpn - Vad->Node.StartingVpn + 1);
         MiVadInsert(&Space->VadRoot, &Vad->Node);
 
         RtlZeroMemory(&Tail->Node, sizeof(Tail->Node));
         Tail->Node.StartingVpn = End >> PAGE_SHIFT;
         Tail->Node.EndingVpn = OldEndVpn;
         Tail->CommitCharge = TailCommit;
+        MI_ASSERT((ULONG64)Tail->CommitCharge <= Tail->Node.EndingVpn - Tail->Node.StartingVpn + 1);
         MiVadInsert(&Space->VadRoot, &Tail->Node);
     }
     else
     {
         Returned = MiDeleteRange(Space, Vad, Start, End, FALSE);
+        MI_ASSERT(Returned >= 0 && Returned <= Vad->CommitCharge);
+        MI_ASSERT(Start != MI_VAD_START(Vad) || End != MI_VAD_END(Vad) || Returned == Vad->CommitCharge);
         Vad->CommitCharge -= Returned;
 
         MiVadRemove(&Space->VadRoot, &Vad->Node);
@@ -1693,6 +1769,7 @@ MiCleanAddressSpace(
         {
             LONG64 Returned = MiDeleteRange(Space, Vad, MI_VAD_START(Vad), MI_VAD_END(Vad), FALSE);
 
+            MI_ASSERT(Returned == Vad->CommitCharge);
             MiWriteWatchRelease(Vad);
 
             MiReturnCommit(Space, Returned);
@@ -1784,8 +1861,16 @@ MiMapFramesUser(
     {
         ULONG64 Va = Start + (ULONG64)i * PAGE_SIZE;
         ULONG TableFrame;
-        ULONG PageFlags = LockedPages ? MiPfnMappingFlags(&Space->System->Pfn, Frames[i], LeafFlags) : LeafFlags;
-        PMI_PTE Slot = MiPtEnsure(Space, Va, &TableFrame);
+        ULONG PageFlags = LeafFlags;
+        PMI_PTE Slot;
+
+        if (LockedPages)
+        {
+            Status = MiPfnMappingFlags(&Space->System->Pfn, Frames[i], LeafFlags, &PageFlags);
+            if (!NT_SUCCESS(Status))
+                break;
+        }
+        Slot = MiPtEnsure(Space, Va, &TableFrame);
 
         if (Slot == NULL)
         {

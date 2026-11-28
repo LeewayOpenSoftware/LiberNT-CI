@@ -34,6 +34,31 @@ typedef BOOL (WINAPI *PFN_GetProcessInformation)(HANDLE, PROCESS_INFORMATION_CLA
 static PFN_QueryFullProcessImageNameW pQueryFullProcessImageNameW;
 static PFN_IsHungAppWindow pIsHungAppWindow;
 static PFN_IsWow64Process pIsWow64Process;
+
+/* In the 32-bit build a native System32 path is redirected to SysWOW64; version and icon
+   lookups read it through Sysnative, which the WoW64 file layer maps back for that open only. */
+static const WCHAR* NativeLookupPath(const WCHAR* path, WCHAR* buf, size_t cch)
+{
+    static int isWow64 = -1;
+    if (isWow64 < 0)
+    {
+        BOOL wow = FALSE;
+        isWow64 = (IsWow64Process(GetCurrentProcess(), &wow) && wow) ? 1 : 0;
+    }
+    if (!isWow64)
+        return path;
+
+    WCHAR windir[MAX_PATH], system32[MAX_PATH];
+    UINT n = GetSystemWindowsDirectoryW(windir, _countof(windir));
+    if (n == 0 || n >= _countof(windir) ||
+        FAILED(StringCchPrintfW(system32, _countof(system32), L"%s\\System32\\", windir)))
+        return path;
+    size_t len = wcslen(system32);
+    if (_wcsnicmp(path, system32, len) != 0 ||
+        FAILED(StringCchPrintfW(buf, cch, L"%s\\Sysnative\\%s", windir, path + len)))
+        return path;
+    return buf;
+}
 static PFN_GetProcessInformation pGetProcessInformation;
 
 /* ProcessPowerThrottlingState (Win10 EcoQoS); harmless failure elsewhere */
@@ -109,7 +134,7 @@ struct AppHistDiskRow
 };
 
 static const WCHAR* APP_HISTORY_KEY =
-    L"Software\\ReactOS\\TaskMgr11\\AppHistory";
+    L"Software\\ReactOS\\TaskMgr\\AppHistory";
 static const DWORD APP_HISTORY_VERSION = 1;
 static const DWORD APP_HISTORY_MAX_ROWS = 256;
 
@@ -394,6 +419,7 @@ CopySensorStringProperty(ISensor* sensor, const PROPERTYKEY& key, WCHAR* value, 
             StringCchCopyW(value, cch, property.bstrVal);
     }
     PropVariantClear(&property);
+    TmTrimHardwareText(value);
     return value[0] != 0;
 }
 
@@ -971,6 +997,8 @@ DetectSensorTelemetryDevices(void)
         sensor->GetFriendlyName(&friendlyName);
         StringCchCopyW(device->name, _countof(device->name), friendlyName && friendlyName[0] ? friendlyName : L"Sensor");
         if (friendlyName) SysFreeString(friendlyName);
+        TmTrimHardwareText(device->name);
+        if (!device->name[0]) StringCchCopyW(device->name, _countof(device->name), L"Sensor");
         CopySensorStringProperty(sensor, SENSOR_PROPERTY_MANUFACTURER, manufacturer, _countof(manufacturer));
         CopySensorStringProperty(sensor, SENSOR_PROPERTY_MODEL, model, _countof(model));
         if (manufacturer[0] && model[0]) StringCchPrintfW(device->source, _countof(device->source), L"%s %s", manufacturer, model);
@@ -1113,6 +1141,7 @@ CopyTelemetryDeviceName(HDEVINFO devices, PSP_DEVINFO_DATA deviceData, WCHAR* na
     DWORD propertyType = 0;
 
     if (!SetupDiGetDeviceRegistryPropertyW(devices, deviceData, SPDRP_FRIENDLYNAME, &propertyType, (PBYTE)name, nameCount * sizeof(WCHAR), NULL)) SetupDiGetDeviceRegistryPropertyW(devices, deviceData, SPDRP_DEVICEDESC, &propertyType, (PBYTE)name, nameCount * sizeof(WCHAR), NULL);
+    TmTrimHardwareText(name);
     if (!name[0]) StringCchPrintfW(name, nameCount, L"%s %lu", fallback, index);
 }
 
@@ -1250,6 +1279,7 @@ QueryBatteryString(HANDLE handle, ULONG tag, BATTERY_QUERY_INFORMATION_LEVEL lev
     lastCharacter = returned / sizeof(WCHAR);
     if (lastCharacter >= outputCount) lastCharacter = outputCount - 1;
     output[lastCharacter] = 0;
+    TmTrimHardwareText(output);
     return TRUE;
 }
 
@@ -2196,7 +2226,10 @@ static void CopyDescriptorText(const BYTE* descriptor,
     int converted = MultiByteToWideChar(CP_ACP, 0, text, length,
                                          output, outputCount - 1);
     if (converted > 0)
+    {
         output[converted] = 0;
+        TmTrimHardwareText(output);
+    }
 }
 
 static const WCHAR* StorageBusName(STORAGE_BUS_TYPE bus)
@@ -2281,6 +2314,8 @@ static void DetectDiskDetails(int index)
     WCHAR path[64];
     StringCchPrintfW(path, _countof(path),
                      L"\\\\.\\PhysicalDrive%lu", disk->number);
+    /* No access: a standard user can open the disk that way, and every code
+     * sent below is any-access */
     sampler->handle = CreateFileW(path, 0,
                                   FILE_SHARE_READ | FILE_SHARE_WRITE,
                                   NULL, OPEN_EXISTING, 0, NULL);
@@ -2288,12 +2323,12 @@ static void DetectDiskDetails(int index)
     {
         disk->present = TRUE;
         DWORD returned = 0;
-        GET_LENGTH_INFORMATION length;
-        if (DeviceIoControl(sampler->handle, IOCTL_DISK_GET_LENGTH_INFO,
-                            NULL, 0, &length, sizeof(length),
+        DISK_GEOMETRY_EX geometry;
+        if (DeviceIoControl(sampler->handle, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+                            NULL, 0, &geometry, sizeof(geometry),
                             &returned, NULL))
         {
-            disk->capacity = (ULONGLONG)length.Length.QuadPart;
+            disk->capacity = (ULONGLONG)geometry.DiskSize.QuadPart;
         }
 
         BYTE descriptorBuffer[1024];
@@ -2548,6 +2583,7 @@ static void RefreshNetworkMetadata(const MIB_IFROW* row, NetSnapshot* net)
             HeapFree(GetProcessHeap(), 0, addresses);
     }
 
+    TmTrimHardwareText(net->adapter);
     if (!net->adapter[0])
     {
         int descriptionLength = row->dwDescrLen;
@@ -2561,6 +2597,8 @@ static void RefreshNetworkMetadata(const MIB_IFROW* row, NetSnapshot* net)
         if (converted > 0)
             net->adapter[converted] = 0;
     }
+    TmTrimHardwareText(net->adapter);
+    TmTrimHardwareText(net->name);
     if (!net->name[0])
         StringCchCopyW(net->name, _countof(net->name), net->type);
 
@@ -2706,14 +2744,10 @@ void Init(void)
 
     s_currentPid = GetCurrentProcessId();
     ProcessIdToSessionId(s_currentPid, &s_currentSession);
-    LoadAppHistory();
 
     LARGE_INTEGER f;
     QueryPerformanceFrequency(&f);
     s_qpcFreq = (double)f.QuadPart;
-
-    WSADATA wsaData;
-    s_wsaStarted = WSAStartup(MAKEWORD(2, 2), &wsaData) == 0;
 
     GetWindowsDirectoryW(s_winDir, _countof(s_winDir));
 
@@ -2735,6 +2769,8 @@ void Init(void)
     {
         DWORD cb = sizeof(g.cpuName);
         RegQueryValueExW(hk, L"ProcessorNameString", NULL, NULL, (LPBYTE)g.cpuName, &cb);
+        g.cpuName[_countof(g.cpuName) - 1] = 0;
+        TmTrimHardwareText(g.cpuName);
         DWORD mhz = 0; cb = sizeof(mhz);
         if (RegQueryValueExW(hk, L"~MHz", NULL, NULL, (LPBYTE)&mhz, &cb) == ERROR_SUCCESS)
             g.cpuMHz = mhz;
@@ -2743,17 +2779,24 @@ void Init(void)
     if (!g.cpuName[0])
         StringCchCopyW(g.cpuName, _countof(g.cpuName), L"Processor");
 
+    GpuInit();
+}
+
+void InitDeferred(void)
+{
+    LoadAppHistory();
+
+    WSADATA wsaData;
+    s_wsaStarted = WSAStartup(MAKEWORD(2, 2), &wsaData) == 0;
+
     DWORD cch = _countof(g.hostName);
     GetComputerNameW(g.hostName, &cch);
 
     DetectCpuTopology();
     DetectMemoryDevices();
     DetectDisks();
-    GpuInit();
 
     RefreshServices();
-    RefreshStartup();
-    RefreshUsers();
     Tick();          /* prime deltas; the frame collects the first live sample */
 }
 
@@ -2994,13 +3037,16 @@ static void ResolveExtra(ProcRow& p)
 
     if (x->path[0])
     {
+        WCHAR nativePath[MAX_PATH + 8];
+        const WCHAR* lookup = NativeLookupPath(x->path, nativePath, _countof(nativePath));
+
         /* description from version resource */
         DWORD dummy;
-        DWORD cb = GetFileVersionInfoSizeW(x->path, &dummy);
+        DWORD cb = GetFileVersionInfoSizeW(lookup, &dummy);
         if (cb && cb < 256 * 1024)
         {
             void* blk = HeapAlloc(GetProcessHeap(), 0, cb);
-            if (blk && GetFileVersionInfoW(x->path, 0, cb, blk))
+            if (blk && GetFileVersionInfoW(lookup, 0, cb, blk))
             {
                 struct LANGCP { WORD lang, cp; } *lc = NULL;
                 UINT lcLen = 0;
@@ -3029,7 +3075,7 @@ static void ResolveExtra(ProcRow& p)
         /* small icon */
         SHFILEINFOW sfi;
         ZeroMemory(&sfi, sizeof(sfi));
-        if (SHGetFileInfoW(x->path, 0, &sfi, sizeof(sfi), SHGFI_ICON | SHGFI_SMALLICON))
+        if (SHGetFileInfoW(lookup, 0, &sfi, sizeof(sfi), SHGFI_ICON | SHGFI_SMALLICON))
             x->icon = sfi.hIcon;
     }
 
@@ -3041,6 +3087,8 @@ static void ResolveExtra(ProcRow& p)
 BOOL GetFileCompany(const WCHAR* path, WCHAR* buf, int cch)
 {
     buf[0] = 0;
+    WCHAR nativePath[MAX_PATH + 8];
+    path = NativeLookupPath(path, nativePath, _countof(nativePath));
     DWORD dummy;
     DWORD cb = GetFileVersionInfoSizeW(path, &dummy);
     if (!cb || cb > 256 * 1024) return FALSE;
@@ -4231,9 +4279,11 @@ static void LoadAppHistoryIcon(AppHistRow* history)
     if (!history->path[0])
         return;
 
+    WCHAR nativePath[MAX_PATH + 8];
+    const WCHAR* lookup = NativeLookupPath(history->path, nativePath, _countof(nativePath));
     SHFILEINFOW fileInfo;
     ZeroMemory(&fileInfo, sizeof(fileInfo));
-    if (SHGetFileInfoW(history->path, 0, &fileInfo, sizeof(fileInfo),
+    if (SHGetFileInfoW(lookup, 0, &fileInfo, sizeof(fileInfo),
                        SHGFI_ICON | SHGFI_SMALLICON))
     {
         history->icon = fileInfo.hIcon;

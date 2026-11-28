@@ -212,23 +212,23 @@ TDI_STATUS InfoTdiQueryGetIPSnmpInfo( TDIEntityID ID,
     SnmpInfo.ipsi_numaddr = max(CountInterfaceAddresses(IF), 1);
     SnmpInfo.ipsi_numroutes = RouteCount;
 
-    {
-        struct lib_ip_stats LibStats;
-        LibIPGetStats(&LibStats);
-        SnmpInfo.ipsi_inreceives = LibStats.InReceives;
-        SnmpInfo.ipsi_indelivers = LibStats.InDelivers;
-        SnmpInfo.ipsi_outrequests = LibStats.OutRequests;
-        SnmpInfo.ipsi_forwdatagrams = LibStats.ForwardedDatagrams;
-        SnmpInfo.ipsi_inhdrerrors = LibStats.InHeaderErrors;
-        SnmpInfo.ipsi_inunknownprotos = LibStats.InUnknownProtocols;
-        SnmpInfo.ipsi_indiscards = LibStats.InDiscards;
-        SnmpInfo.ipsi_outnoroutes = LibStats.OutNoRoutes;
-        SnmpInfo.ipsi_outdiscards = LibStats.OutDiscards;
-        SnmpInfo.ipsi_reasmreqds = LibStats.ReasmReqds;
-        SnmpInfo.ipsi_reasmoks = LibStats.ReasmOks;
-        SnmpInfo.ipsi_reasmfails = LibStats.ReasmFails;
-        SnmpInfo.ipsi_fragcreates = LibStats.FragCreates;
-    }
+    /* The native counters; the 64-bit ones are cut to the width of the MIB structure */
+    SnmpInfo.ipsi_inreceives = (ULONG)IPStats.InReceives;
+    SnmpInfo.ipsi_inhdrerrors = (ULONG)IPStats.InHdrErrors;
+    SnmpInfo.ipsi_inaddrerrors = IPStats.InAddrErrors;
+    SnmpInfo.ipsi_forwdatagrams = (ULONG)IPStats.ForwDatagrams;
+    SnmpInfo.ipsi_inunknownprotos = IPStats.InUnknownProtos;
+    SnmpInfo.ipsi_indiscards = IPStats.InDiscards;
+    SnmpInfo.ipsi_indelivers = (ULONG)IPStats.InDelivers;
+    SnmpInfo.ipsi_outrequests = (ULONG)IPStats.OutRequests;
+    SnmpInfo.ipsi_outdiscards = IPStats.OutDiscards;
+    SnmpInfo.ipsi_outnoroutes = IPStats.OutNoRoutes;
+    SnmpInfo.ipsi_reasmreqds = IPStats.ReasmReqds;
+    SnmpInfo.ipsi_reasmoks = IPStats.ReasmOks;
+    SnmpInfo.ipsi_reasmfails = IPStats.ReasmFails;
+    SnmpInfo.ipsi_fragoks = IPStats.FragOks;
+    SnmpInfo.ipsi_fragfails = IPStats.FragFails;
+    SnmpInfo.ipsi_fragcreates = IPStats.FragCreates;
 
     Status = InfoCopyOut( (PCHAR)&SnmpInfo, sizeof(SnmpInfo),
 			  Buffer, BufferSize );
@@ -249,6 +249,14 @@ TDI_STATUS InfoTdiQueryGetTcpStats( PNDIS_BUFFER Buffer, PUINT BufferSize )
     TcpStats.dwInSegs = LibStats.TcpInSegs;
     TcpStats.dwOutSegs = LibStats.TcpOutSegs;
     TcpStats.dwInErrs = LibStats.TcpInErrs;
+    TcpStats.dwRtoAlgorithm = MIB_TCP_RTO_VANJ;
+    TcpStats.dwMaxConn = LibStats.TcpMaxConn;
+    TcpStats.dwActiveOpens = LibStats.TcpActiveOpens;
+    TcpStats.dwPassiveOpens = LibStats.TcpPassiveOpens;
+    TcpStats.dwAttemptFails = LibStats.TcpAttemptFails;
+    TcpStats.dwEstabResets = LibStats.TcpEstabResets;
+    TcpStats.dwRetransSegs = LibStats.TcpRetransSegs;
+    TcpStats.dwOutRsts = LibStats.TcpOutRsts;
 
     return InfoCopyOut( (PCHAR)&TcpStats, sizeof(TcpStats), Buffer, BufferSize );
 }
@@ -256,15 +264,13 @@ TDI_STATUS InfoTdiQueryGetTcpStats( PNDIS_BUFFER Buffer, PUINT BufferSize )
 TDI_STATUS InfoTdiQueryGetUdpStats( PNDIS_BUFFER Buffer, PUINT BufferSize )
 {
     MIB_UDPSTATS UdpStats;
-    struct lib_ip_stats LibStats;
 
     RtlZeroMemory(&UdpStats, sizeof(UdpStats));
-    LibIPGetStats(&LibStats);
 
-    UdpStats.dwInDatagrams = LibStats.UdpInDatagrams;
-    UdpStats.dwOutDatagrams = LibStats.UdpOutDatagrams;
-    UdpStats.dwNoPorts = LibStats.UdpNoPorts;
-    UdpStats.dwInErrors = LibStats.UdpInErrors;
+    UdpStats.dwInDatagrams = (ULONG)UDPStats.InputDatagrams;
+    UdpStats.dwOutDatagrams = (ULONG)UDPStats.OutputDatagrams;
+    UdpStats.dwNoPorts = UDPStats.NumPorts;
+    UdpStats.dwInErrors = UDPStats.InputErrors;
 
     return InfoCopyOut( (PCHAR)&UdpStats, sizeof(UdpStats), Buffer, BufferSize );
 }

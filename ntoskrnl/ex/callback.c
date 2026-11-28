@@ -735,7 +735,7 @@ KeRegisterProcessorChangeCallback(IN PPROCESSOR_CALLBACK_FUNCTION CallbackFuncti
     if (!CallbackHandle || !(Flags & KE_PROCESSOR_CHANGE_ADD_EXISTING))
         goto Exit;
 
-    ActiveProcessors = (ULONG)KeNumberProcessors;
+    ActiveProcessors = KiNumberProcessors;
     RtlZeroMemory(&ChangeContext, sizeof(ChangeContext));
     OperationStatus = STATUS_SUCCESS;
 

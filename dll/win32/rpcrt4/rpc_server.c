@@ -165,9 +165,102 @@ static void RPCRT4_release_server_interface(RpcServerInterface *sif)
      * CallsCompletedEvent is set */
     if (sif->CallsCompletedEvent)
       SetEvent(sif->CallsCompletedEvent);
+#ifdef __REACTOS__
+    free(sif->SecurityDescriptor);
+#endif
     free(sif);
   }
 }
+
+#ifdef __REACTOS__
+/* Only a local caller's transport can be trusted to be on this machine */
+static BOOL rpcrt4_conn_is_local(const RpcConnection *conn)
+{
+  /* ncacn_np stays local while there is no SMB server to accept remote pipe opens */
+  return !strcmp(conn->ops->name, "ncalrpc") || !strcmp(conn->ops->name, "ncacn_np");
+}
+
+/* The caller's integrity level against a mandatory label in the interface's security descriptor;
+   Windows applies only the label, not the DACL */
+static BOOL rpcrt4_label_allows(RpcConnection *conn, PSECURITY_DESCRIPTOR sd)
+{
+  SYSTEM_MANDATORY_LABEL_ACE *ace;
+  BOOL present, defaulted, allowed = FALSE;
+  BYTE buffer[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+  DWORD size, label = 0, caller = 0;
+  ACL *sacl;
+  HANDLE token;
+  WORD i;
+
+  if (!GetSecurityDescriptorSacl(sd, &present, &sacl, &defaulted) || !present || !sacl)
+    return TRUE;
+  for (i = 0; i < sacl->AceCount; i++)
+  {
+    if (!GetAce(sacl, i, (void **)&ace) || ace->Header.AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE)
+      continue;
+    if (!(ace->Mask & (SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP |
+                       SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP)))
+      return TRUE;
+    label = *GetSidSubAuthority(&ace->SidStart, *GetSidSubAuthorityCount(&ace->SidStart) - 1);
+    break;
+  }
+  if (i == sacl->AceCount)
+    return TRUE;
+
+  /* without the caller's token the label cannot be checked */
+  if (rpcrt4_conn_impersonate_client(conn) != RPC_S_OK)
+    return FALSE;
+  if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
+  {
+    if (GetTokenInformation(token, TokenIntegrityLevel, buffer, sizeof(buffer), &size))
+    {
+      PSID sid = ((TOKEN_MANDATORY_LABEL *)buffer)->Label.Sid;
+      caller = *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1);
+      allowed = caller >= label;
+    }
+    CloseHandle(token);
+  }
+  rpcrt4_conn_revert_to_self(conn);
+  return allowed;
+}
+
+/* The restrictions the interface was registered with, applied before the server routine runs */
+static RPC_STATUS rpcrt4_check_interface_access(RpcConnection *conn, RpcServerInterface *sif,
+                                                RPC_BINDING_HANDLE binding)
+{
+  if ((sif->Flags & RPC_IF_ALLOW_LOCAL_ONLY) && !rpcrt4_conn_is_local(conn))
+    return RPC_S_ACCESS_DENIED;
+
+  /* local RPC always carries the caller's identity */
+  if ((sif->Flags & RPC_IF_ALLOW_SECURE_ONLY) && strcmp(conn->ops->name, "ncalrpc") &&
+      (!conn->AuthInfo || !conn->auth_complete || conn->AuthInfo->AuthnLevel == RPC_C_AUTHN_LEVEL_NONE))
+    return RPC_S_ACCESS_DENIED;
+
+  if (sif->SecurityDescriptor && !rpcrt4_label_allows(conn, sif->SecurityDescriptor))
+    return RPC_S_ACCESS_DENIED;
+
+  /* called on every call, which is the RPC_IF_SEC_NO_CACHE behaviour */
+  if (sif->IfCallbackFn)
+  {
+    RPC_STATUS status;
+
+    __TRY
+    {
+      status = sif->IfCallbackFn(sif->If, binding);
+    }
+    __EXCEPT_ALL
+    {
+      WARN("interface callback raised 0x%08lx\n", GetExceptionCode());
+      status = RPC_S_ACCESS_DENIED;
+    }
+    __ENDTRY
+    if (status != RPC_S_OK)
+      return RPC_S_ACCESS_DENIED;
+  }
+
+  return RPC_S_OK;
+}
+#endif
 
 static RpcPktHdr *handle_bind_error(RpcConnection *conn, RPC_STATUS error)
 {
@@ -496,6 +589,9 @@ static RPC_STATUS process_request_packet(RpcConnection *conn, RpcPktRequestHdr *
 
       RPCRT4_Send(conn, response, NULL, 0);
       free(response);
+#ifdef __REACTOS__
+      goto done;
+#endif
     }
     func = sif->If->DispatchTable->DispatchTable[msg->ProcNum];
   }
@@ -510,6 +606,22 @@ static RPC_STATUS process_request_packet(RpcConnection *conn, RpcPktRequestHdr *
 
   /* dispatch */
   RPCRT4_SetThreadCurrentCallHandle(msg->Handle);
+#ifdef __REACTOS__
+  status = rpcrt4_check_interface_access(conn, sif, msg->Handle);
+  if (status != RPC_S_OK)
+  {
+    WARN("call to %s refused\n", debugstr_guid(&sif->If->InterfaceId.SyntaxGUID));
+    RPCRT4_SetThreadCurrentCallHandle(NULL);
+    response = RPCRT4_BuildFaultHeader(msg->DataRepresentation, RPC2NCA_STATUS(status));
+    if (response)
+    {
+      RPCRT4_Send(conn, response, NULL, 0);
+      free(response);
+    }
+    status = RPC_S_OK;
+    goto done;
+  }
+#endif
   __TRY {
     if (func) func(msg);
   } __EXCEPT_ALL {
@@ -525,8 +637,17 @@ static RPC_STATUS process_request_packet(RpcConnection *conn, RpcPktRequestHdr *
     RPCRT4_SetThreadCurrentCallHandle(NULL);
 
   /* release any unmarshalled context handles */
+#ifdef __REACTOS__
+  {
+    BOOL locked;
+
+    while ((context_handle = RPCRT4_PopThreadContextHandle(&locked)) != NULL)
+      RpcServerAssoc_ReleaseContextHandle(conn->server_binding->Assoc, context_handle, locked);
+  }
+#else
   while ((context_handle = RPCRT4_PopThreadContextHandle()) != NULL)
     RpcServerAssoc_ReleaseContextHandle(conn->server_binding->Assoc, context_handle, TRUE);
+#endif
 
   if (!exception)
     response = RPCRT4_BuildResponseHeader(msg->DataRepresentation,
@@ -540,6 +661,9 @@ static RPC_STATUS process_request_packet(RpcConnection *conn, RpcPktRequestHdr *
   } else
     ERR("out of memory\n");
 
+#ifdef __REACTOS__
+done:
+#endif
   msg->RpcInterfaceInformation = NULL;
   RPCRT4_release_server_interface(sif);
 
@@ -939,16 +1063,33 @@ static BOOL RPCRT4_protseq_is_endpoint_registered(RpcServerProtseq *protseq, con
   return registered;
 }
 
+#ifdef __REACTOS__
+static RPC_STATUS RPCRT4_use_protseq(RpcServerProtseq* ps, const char *endpoint, PSECURITY_DESCRIPTOR sd)
+#else
 static RPC_STATUS RPCRT4_use_protseq(RpcServerProtseq* ps, const char *endpoint)
+#endif
 {
   RPC_STATUS status;
+
+#ifdef __REACTOS__
+  if (sd && !IsValidSecurityDescriptor(sd))
+    return RPC_S_INVALID_SECURITY_DESC;
+#endif
 
   EnterCriticalSection(&ps->cs);
 
   if (RPCRT4_protseq_is_endpoint_registered(ps, endpoint))
     status = RPC_S_OK;
   else
+#ifdef __REACTOS__
+  {
+    ps->endpoint_sd = sd;
     status = ps->ops->open_endpoint(ps, endpoint);
+    ps->endpoint_sd = NULL;
+  }
+#else
+    status = ps->ops->open_endpoint(ps, endpoint);
+#endif
 
   LeaveCriticalSection(&ps->cs);
 
@@ -964,6 +1105,22 @@ static RPC_STATUS RPCRT4_use_protseq(RpcServerProtseq* ps, const char *endpoint)
 
   return status;
 }
+
+#ifdef __REACTOS__
+/* A TCP endpoint listens once per address family; it is still one binding */
+static BOOL RPCRT4_is_duplicate_listener(RpcServerProtseq *ps, RpcConnection *conn)
+{
+  RpcConnection *prev;
+
+  LIST_FOR_EACH_ENTRY(prev, &ps->listeners, RpcConnection, protseq_entry) {
+    if (prev == conn)
+      return FALSE;
+    if (prev->Endpoint && conn->Endpoint && !strcmp(prev->Endpoint, conn->Endpoint))
+      return TRUE;
+  }
+  return FALSE;
+}
+#endif
 
 /***********************************************************************
  *             RpcServerInqBindings (RPCRT4.@)
@@ -986,6 +1143,9 @@ RPC_STATUS WINAPI RpcServerInqBindings( RPC_BINDING_VECTOR** BindingVector )
   LIST_FOR_EACH_ENTRY(ps, &protseqs, RpcServerProtseq, entry) {
     EnterCriticalSection(&ps->cs);
     LIST_FOR_EACH_ENTRY(conn, &ps->listeners, RpcConnection, protseq_entry)
+#ifdef __REACTOS__
+      if (!RPCRT4_is_duplicate_listener(ps, conn))
+#endif
       count++;
     LeaveCriticalSection(&ps->cs);
   }
@@ -1001,6 +1161,10 @@ RPC_STATUS WINAPI RpcServerInqBindings( RPC_BINDING_VECTOR** BindingVector )
     LIST_FOR_EACH_ENTRY(ps, &protseqs, RpcServerProtseq, entry) {
       EnterCriticalSection(&ps->cs);
       LIST_FOR_EACH_ENTRY(conn, &ps->listeners, RpcConnection, protseq_entry) {
+#ifdef __REACTOS__
+       if (RPCRT4_is_duplicate_listener(ps, conn))
+         continue;
+#endif
        RPCRT4_MakeBinding((RpcBinding**)&(*BindingVector)->BindingH[count],
                           conn);
        count++;
@@ -1136,7 +1300,11 @@ RPC_STATUS WINAPI RpcServerUseProtseqEpExA( RPC_CSTR Protseq, UINT MaxCalls, RPC
   if (status != RPC_S_OK)
     return status;
 
+#ifdef __REACTOS__
+  return RPCRT4_use_protseq(ps, (const char *)Endpoint, SecurityDescriptor);
+#else
   return RPCRT4_use_protseq(ps, (const char *)Endpoint);
+#endif
 }
 
 /***********************************************************************
@@ -1161,7 +1329,11 @@ RPC_STATUS WINAPI RpcServerUseProtseqEpExW( RPC_WSTR Protseq, UINT MaxCalls, RPC
     return status;
 
   EndpointA = RPCRT4_strdupWtoA(Endpoint);
+#ifdef __REACTOS__
+  status = RPCRT4_use_protseq(ps, EndpointA, SecurityDescriptor);
+#else
   status = RPCRT4_use_protseq(ps, EndpointA);
+#endif
   free(EndpointA);
   return status;
 }
@@ -1180,7 +1352,11 @@ RPC_STATUS WINAPI RpcServerUseProtseqA(RPC_CSTR Protseq, unsigned int MaxCalls, 
   if (status != RPC_S_OK)
     return status;
 
+#ifdef __REACTOS__
+  return RPCRT4_use_protseq(ps, NULL, SecurityDescriptor);
+#else
   return RPCRT4_use_protseq(ps, NULL);
+#endif
 }
 
 /***********************************************************************
@@ -1200,7 +1376,11 @@ RPC_STATUS WINAPI RpcServerUseProtseqW(RPC_WSTR Protseq, unsigned int MaxCalls, 
   if (status != RPC_S_OK)
     return status;
 
+#ifdef __REACTOS__
+  return RPCRT4_use_protseq(ps, NULL, SecurityDescriptor);
+#else
   return RPCRT4_use_protseq(ps, NULL);
+#endif
 }
 
 void RPCRT4_destroy_all_protseqs(void)
@@ -1263,8 +1443,13 @@ RPC_STATUS WINAPI RpcServerRegisterIf3( RPC_IF_HANDLE IfSpec, UUID* MgrTypeUuid,
   TRACE("(%p,%s,%p,%u,%u,%u,%p,%p)\n", IfSpec, debugstr_guid(MgrTypeUuid), MgrEpv, Flags, MaxCalls,
         MaxRpcSize, IfCallbackFn, SecurityDescriptor);
 
+#ifndef __REACTOS__
   if (SecurityDescriptor)
       FIXME("Unsupported SecurityDescriptor argument.\n");
+#else
+  if (SecurityDescriptor && !IsValidSecurityDescriptor(SecurityDescriptor))
+      return RPC_S_INVALID_ARG;
+#endif
 
   TRACE(" interface id: %s %d.%d\n", debugstr_guid(&If->InterfaceId.SyntaxGUID),
                                      If->InterfaceId.SyntaxVersion.MajorVersion,
@@ -1301,6 +1486,27 @@ RPC_STATUS WINAPI RpcServerRegisterIf3( RPC_IF_HANDLE IfSpec, UUID* MgrTypeUuid,
   sif->MaxCalls     = MaxCalls;
   sif->MaxRpcSize   = MaxRpcSize;
   sif->IfCallbackFn = IfCallbackFn;
+#ifdef __REACTOS__
+  if (SecurityDescriptor)
+  {
+    DWORD size = 0;
+
+    MakeSelfRelativeSD(SecurityDescriptor, NULL, &size);
+    if (!(sif->SecurityDescriptor = malloc(size)) ||
+        !MakeSelfRelativeSD(SecurityDescriptor, sif->SecurityDescriptor, &size))
+    {
+      /* already self-relative */
+      free(sif->SecurityDescriptor);
+      size = GetSecurityDescriptorLength(SecurityDescriptor);
+      if (!(sif->SecurityDescriptor = malloc(size)))
+      {
+        free(sif);
+        return RPC_S_OUT_OF_MEMORY;
+      }
+      memcpy(sif->SecurityDescriptor, SecurityDescriptor, size);
+    }
+  }
+#endif
 
   EnterCriticalSection(&server_cs);
   list_add_head(&server_interfaces, &sif->entry);

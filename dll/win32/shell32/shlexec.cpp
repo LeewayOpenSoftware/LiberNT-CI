@@ -24,6 +24,30 @@
 #include <winbase_undoc.h>
 #include <undocshell.h>
 
+extern "C" DWORD SHELL_ElevateProcess(HWND hwnd, LPCWSTR ApplicationName, LPCWSTR CommandLine,
+                                      LPCWSTR CurrentDirectory, DWORD CreationFlags,
+                                      const STARTUPINFOW *pStartupInfo, PROCESS_INFORMATION *pProcessInfo);
+
+#ifndef TokenElevationTypeLimited
+#define TokenElevationTypeLimited 3
+#endif
+
+/* A limited administrator token has an elevated one linked to it; the broker can use that. */
+static BOOL SHELL_IsTokenLimited(void)
+{
+    HANDLE hToken;
+    DWORD dwType = 0, cbSize;
+    BOOL bLimited = FALSE;
+
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+    {
+        if (GetTokenInformation(hToken, TokenElevationType, &dwType, sizeof(dwType), &cbSize))
+            bLimited = (dwType == TokenElevationTypeLimited);
+        CloseHandle(hToken);
+    }
+    return bLimited;
+}
+
 WINE_DEFAULT_DEBUG_CHANNEL(exec);
 
 EXTERN_C BOOL PathIsExeW(LPCWSTR lpszPath);
@@ -596,6 +620,27 @@ PromptAndRunProcessAs(
     INT_PTR dlgret;
     hwnd = SHELL_GetUsableDialogOwner(hwnd);
 
+    // A limited administrator asks the elevation broker, which prompts for consent and starts
+    // the program with the linked token. What the broker will not do falls through to the
+    // credentials dialog below (standard users, credential policy modes, LUA off, no broker).
+    if (SHELL_IsTokenLimited())
+    {
+        DWORD dwElevate = SHELL_ElevateProcess(hwnd, NULL, Cmd, Dir, CreationFlags, pSI, pPI);
+        if (dwElevate == ERROR_SUCCESS)
+            return S_OK;
+        if (dwElevate == ERROR_CANCELLED)
+        {
+            SetLastError(ERROR_CANCELLED);
+            pPI->hProcess = NULL;
+            return S_FALSE;
+        }
+        if (dwElevate != ERROR_ELEVATION_REQUIRED && dwElevate != ERROR_SERVICE_NOT_ACTIVE)
+        {
+            SHELL_ErrorBox(hwnd, dwElevate);
+            pPI->hProcess = NULL;
+            return E_FAIL;
+        }
+    }
 again:
     dlgret = DialogBoxParamW(shell32_hInstance, MAKEINTRESOURCEW(IDD_RUN_AS),
                              hwnd, RunAsDlgProc, (LPARAM)&data);
@@ -650,6 +695,8 @@ again:
 static BOOL SHELL_IsTokenElevated(void)
 {
     TOKEN_ELEVATION Elevation;
+    ULONG_PTR LabelBuffer[(sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE) / sizeof(ULONG_PTR)];
+    PTOKEN_MANDATORY_LABEL Label = (PTOKEN_MANDATORY_LABEL)LabelBuffer;
     HANDLE hToken;
     DWORD cbSize;
     BOOL bElevated = FALSE;
@@ -658,6 +705,12 @@ static BOOL SHELL_IsTokenElevated(void)
     {
         if (GetTokenInformation(hToken, TokenElevation, &Elevation, sizeof(Elevation), &cbSize))
             bElevated = (Elevation.TokenIsElevated != 0);
+        if (bElevated &&
+            GetTokenInformation(hToken, TokenIntegrityLevel, Label, sizeof(LabelBuffer), &cbSize))
+        {
+            bElevated = *GetSidSubAuthority(Label->Label.Sid, *GetSidSubAuthorityCount(Label->Label.Sid) - 1) >=
+                        SECURITY_MANDATORY_HIGH_RID;
+        }
         CloseHandle(hToken);
     }
     return bElevated;
@@ -726,8 +779,16 @@ static UINT_PTR SHELL_ExecuteW(const WCHAR *lpCmd, WCHAR *env, BOOL shWait,
             startup.dwFlags |= STARTF_SHELLPRIVATE;
     }
 
-    BOOL createdProcess;
-    if (psei->lpVerb && !StrCmpIW(L"runas", psei->lpVerb) && !SHELL_IsTokenElevated())
+    BOOL createdProcess = FALSE;
+    BOOL promptRunAs = psei->lpVerb && !StrCmpIW(L"runas", psei->lpVerb) && !SHELL_IsTokenElevated();
+    if (!promptRunAs)
+    {
+        createdProcess = CreateProcessW(NULL, (LPWSTR)lpCmd, NULL, NULL, FALSE,
+                                        dwCreationFlags, env, lpDirectory, &startup, &info);
+        // The image manifest asks for an administrator: elevate as "runas" would.
+        promptRunAs = !createdProcess && GetLastError() == ERROR_ELEVATION_REQUIRED;
+    }
+    if (promptRunAs)
     {
         HRESULT hr = PromptAndRunProcessAs(psei->hwnd, (LPWSTR)lpCmd, dwCreationFlags,
                                                  env, lpDirectory, &startup, &info);
@@ -737,11 +798,6 @@ static UINT_PTR SHELL_ExecuteW(const WCHAR *lpCmd, WCHAR *env, BOOL shWait,
             retval = 33; // Pretend cancel is success.
             goto done;
         }
-    }
-    else
-    {
-        createdProcess = CreateProcessW(NULL, (LPWSTR)lpCmd, NULL, NULL, FALSE,
-                                        dwCreationFlags, env, lpDirectory, &startup, &info);
     }
 
     if (createdProcess)
@@ -1047,6 +1103,12 @@ static UINT SHELL_FindExecutable(LPCWSTR lpPath, LPCWSTR lpFile, LPCWSTR lpVerb,
 
         lstrcpyW(lpResult, xlpFile);
         /* The file was found in lpPath or one of the directories in the system-wide search path */
+    }
+    /* Handle cases like CORE-20508 */
+    else if (SearchPathW(lpPath, lpFile, NULL, ARRAY_SIZE(xlpFile), xlpFile, NULL))
+    {
+        TRACE("SearchPathW returned non-zero\n");
+        lpFile = xlpFile;
     }
     else
     {
@@ -1974,12 +2036,8 @@ static HRESULT SHELL_InvokeFolderDelegateExecute(LPSHELLEXECUTEINFOW sei, LPCWST
 
     if (StrIsNullOrEmpty(pszParsingName))
         return S_FALSE;
-    if (pszParsingName[0] != ':' || pszParsingName[1] != ':')
-    {
-        DWORD attribs = GetFileAttributesW(pszParsingName);
-        if (attribs == INVALID_FILE_ATTRIBUTES || !(attribs & FILE_ATTRIBUTE_DIRECTORY))
-            return S_FALSE;
-    }
+    if (!(SHGetAttributes(NULL, (LPCITEMIDLIST)sei->lpIDList, SFGAO_FOLDER) & SFGAO_FOLDER))
+        return S_FALSE;
 
     if (RegOpenKeyExW(HKEY_CLASSES_ROOT, L"Folder", 0, KEY_READ, &hkFolder) != ERROR_SUCCESS)
         return S_FALSE;
@@ -2753,6 +2811,12 @@ static BOOL SHELL_execute(LPSHELLEXECUTEINFOW sei, SHELL_ExecuteW32 execfunc)
                 }
                 StringCchCopyW(wszApplicationName, dwApplicationNameLen, wszExePath);
             }
+        }
+
+        for (LPWSTR pch = wszApplicationName; *pch; ++pch)
+        {
+            if (*pch == L'/')
+                *pch = L'\\';
         }
 
         len = lstrlenW(wszApplicationName) + 3;

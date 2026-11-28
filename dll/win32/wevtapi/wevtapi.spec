@@ -1,19 +1,19 @@
 @ stub EvtArchiveExportedLog
-@ stub EvtCancel
-@ stub EvtClearLog
+@ stdcall EvtCancel(ptr)
+@ stdcall EvtClearLog(ptr wstr wstr long)
 @ stdcall EvtClose(ptr)
 @ stdcall EvtCreateBookmark(wstr)
 @ stdcall EvtCreateRenderContext(long ptr long)
 @ stdcall EvtExportLog(ptr wstr wstr wstr long)
-@ stub EvtFormatMessage
+@ stdcall EvtFormatMessage(ptr ptr long long ptr long long ptr ptr)
 @ stdcall EvtGetChannelConfigProperty(ptr long long long ptr ptr)
 @ stub EvtGetEventInfo
 @ stub EvtGetEventMetadataProperty
-@ stub EvtGetExtendedStatus
-@ stub EvtGetLogInfo
+@ stdcall EvtGetExtendedStatus(long ptr ptr)
+@ stdcall EvtGetLogInfo(ptr long long ptr ptr)
 @ stub EvtGetObjectArrayProperty
 @ stub EvtGetObjectArraySize
-@ stub EvtGetPublisherMetadataProperty
+@ stdcall EvtGetPublisherMetadataProperty(ptr long long long ptr ptr)
 @ stub EvtGetQueryInfo
 @ stub EvtIntAssertConfig
 @ stub EvtIntCreateBinXMLFromCustomXML
@@ -34,13 +34,13 @@
 @ stub EvtOpenEventMetadataEnum
 @ stdcall EvtOpenLog(ptr wstr long)
 @ stub EvtOpenPublisherEnum
-@ stub EvtOpenPublisherMetadata
+@ stdcall EvtOpenPublisherMetadata(ptr wstr wstr long long)
 @ stdcall EvtOpenSession(long ptr long long)
 @ stdcall EvtQuery(ptr wstr wstr long)
 @ stdcall EvtRender(ptr ptr long long ptr ptr ptr)
 @ stdcall EvtSaveChannelConfig(ptr long)
-@ stub EvtSeek
+@ stdcall EvtSeek(ptr int64 ptr long long)
 @ stdcall EvtSetChannelConfigProperty(ptr long long ptr)
 @ stub EvtSetObjectArrayProperty
 @ stdcall EvtSubscribe(ptr ptr wstr wstr ptr ptr ptr long)
-@ stub EvtUpdateBookmark
+@ stdcall EvtUpdateBookmark(ptr ptr)

@@ -2,7 +2,7 @@ LANGUAGE LANG_JAPANESE, SUBLANG_DEFAULT
 
 STRINGTABLE
 BEGIN
-    IDS_APPTITLE "LiberNT 画像とFAXビュアー"
+    IDS_APPTITLE "Orosi 画像とFAXビュアー"
     IDS_SETASDESKBG "デスクトップの背景に設定する"
     IDS_NOPREVIEW "プレビューは利用できません。"
     IDS_PREVIEW "プレビュー"
@@ -18,7 +18,7 @@ BEGIN
     IDS_TOOLTIP_ROT_COUNCW "反時計回りに回転 (Ctrl+L)"
     IDS_TOOLTIP_ROT_CWSAVE "時計回りに回転して保存 (劣化あり)"
     IDS_TOOLTIP_ROT_CCWSAVE "反時計回りに回転して保存 (劣化あり)"
-    IDS_TOOLTIP_DELETE "Delete (DEL)"
+    IDS_TOOLTIP_DELETE "削除 (Del)"
     IDS_TOOLTIP_PRINT "印刷 (Ctrl+P)"
     IDS_TOOLTIP_SAVEAS "名前を付けて保存... (Ctrl+S)"
     IDS_TOOLTIP_MODIFY "変更 (Ctrl+E)"

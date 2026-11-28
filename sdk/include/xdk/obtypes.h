@@ -16,6 +16,7 @@ $if (_WDMDDK_)
 #define DIRECTORY_ALL_ACCESS              (STANDARD_RIGHTS_REQUIRED | 0xF)
 
 #define SYMBOLIC_LINK_QUERY               0x0001
+#define SYMBOLIC_LINK_SET                 0x0002
 #define SYMBOLIC_LINK_ALL_ACCESS          (STANDARD_RIGHTS_REQUIRED | 0x1)
 
 #define DUPLICATE_CLOSE_SOURCE            0x00000001

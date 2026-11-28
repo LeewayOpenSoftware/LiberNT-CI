@@ -270,6 +270,9 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_PROP_BACKDROP_NC_EXTEND_RIGHT L"ReactOS.Dwm.BackdropNcExtendRight"
 #define DWM_PROP_BACKDROP_NC_EXTEND_BOTTOM L"ReactOS.Dwm.BackdropNcExtendBottom"
 #define DWM_PROP_FRAME_ALPHA          L"ReactOS.Dwm.FrameAlpha"
+#define DWM_PROP_FRAME_INSETS         L"ReactOS.Dwm.FrameInsets"
+#define DWM_FRAME_INSETS_PACK(L, T, R, B) \
+    ((ULONG)(L) | ((ULONG)(T) << 8) | ((ULONG)(R) << 16) | ((ULONG)(B) << 24))
 #define DWM_PROP_CAPTION_CLOSE        L"ReactOS.Dwm.CaptionClose"
 #define DWM_PROP_CAPTION_MAXIMIZE     L"ReactOS.Dwm.CaptionMaximize"
 #define DWM_PROP_CAPTION_MINIMIZE     L"ReactOS.Dwm.CaptionMinimize"
@@ -412,6 +415,10 @@ typedef struct _DWM_WIN
     ULONG DxDrawHeight;
     ULONG DxSourceWidth; /* top-left texels shown over the draw size */
     ULONG DxSourceHeight;
+    /* Transparent outer band of the frame (DWM_PROP_FRAME_INSETS), in backing
+     * pixels. Only the rect {left, top, cx - right, cy - bottom} is visible:
+     * it is drawn, shadowed, rounded and counted as opaque; the band is not. */
+    RECTL FrameInsets;
 } DWM_WIN, *PDWM_WIN;
 
 typedef struct _DWM_FRAME_HEADER
@@ -438,7 +445,10 @@ typedef struct _DWM_FRAME_HEADER
     ULONG ScreenMirror;       /* in : dwm can mirror frames for screen reads */
     ULONG ScreenReadServed;   /* in : last request mirrored, 0 = none */
     ULONG ScreenReadRequest;  /* out: a screen read waits for a mirror */
+    ULONG IdleRetryMs;
 } DWM_FRAME_HEADER, *PDWM_FRAME_HEADER;
+
+#define DWM_DEFERRED_RETRY_MS 200
 
 /* DwmEnableBlurBehindWindow exchange. The HRGN is consumed synchronously in
  * the caller's GDI handle table and copied into kernel-owned window state. */

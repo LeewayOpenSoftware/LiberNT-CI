@@ -28,6 +28,9 @@ ExQueryPoolBlockSize(
 
     *QuotaCharged = FALSE;
 
+    if ((ExpPoolFlags & EX_POOL_FLAG_SPECIAL_POOL) && MmIsSpecialPoolAddress(PoolBlock))
+        return MmQuerySpecialPoolBlockSize(PoolBlock);
+
     Heap = ExpPoolHeapFromAddress(PoolBlock, &HeapIndex);
     if (Heap == NULL || !PoolHeapQuery(Heap, PoolBlock, &Info))
         return PAGE_SIZE;

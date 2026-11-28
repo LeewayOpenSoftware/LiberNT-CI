@@ -61,7 +61,7 @@ GLYPH RandomGlyph(int intensity);
 void  DrawGlyph(MATRIX *matrix, HDC hdc, int xpos, int ypos, GLYPH glyph);
 
 HWND CreateScreenSaveWnd(HWND hwndParent, RECT *rect);
-void InitScreenSaveClass();
+void InitScreenSaveClass(BOOL fPreview);
 
 #ifdef __cplusplus
 }

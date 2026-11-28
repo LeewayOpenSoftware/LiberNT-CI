@@ -206,6 +206,7 @@ START_TEST(schtasks)
     static WCHAR wineW[] = L"\\wine";
     static WCHAR wine_testW[] = L"\\wine\\test";
     DWORD r;
+    HRESULT hres;
 
     if (!is_process_elevated() && !is_win10_plus())
     {
@@ -258,13 +259,111 @@ START_TEST(schtasks)
     ok(r == 1, "r = %lu\n", r); /* task already exists */
 
     r = run_command("schtasks /create /tn wine\\winetest");
-    ok(r == E_FAIL, "r = %lx\n", r); /* missing arguments */
+    ok(r == 1, "r = %lu\n", r); /* missing /sc or /xml */
 
     r = run_command("schtasks /Delete /f /tn wine\\winetest");
     ok(r == 0, "r = %lu\n", r);
 
     r = DeleteFileA("test.xml");
     ok(r, "DeleteFileA failed: %lu\n", GetLastError());
+
+    /* Option form: build the task from /sc + /tr (no /xml), as Win11 schtasks does. */
+    r = run_command("schtasks /create /tn wine\\wineonce /sc ONCE /st 00:00 /tr notepad.exe /f");
+    ok(r == 0, "/create /sc ONCE: r = %lu\n", r);
+    r = run_command("schtasks /delete /f /tn wine\\wineonce");
+    ok(r == 0, "/delete wineonce: r = %lu\n", r);
+
+    /* /change /tr must really rewrite the Exec action: read it back, never 0 with nothing done. */
+    r = run_command("schtasks /create /tn wine\\winetr /sc ONCE /st 00:00 /tr notepad.exe /f");
+    ok(r == 0, "/create winetr: r = %lu\n", r);
+    r = run_command("schtasks /change /tn wine\\winetr /tr \"calc.exe /x\"");
+    ok(r == 0, "/change /tr: r = %lu\n", r);
+    {
+        IRegisteredTask *task = NULL;
+        ITaskDefinition *def = NULL;
+        IActionCollection *actions = NULL;
+        IAction *action = NULL;
+        IExecAction *exec = NULL;
+        BSTR path = NULL, args = NULL;
+        WCHAR *name = a2w("wine\\winetr");
+
+        hres = ITaskFolder_GetTask(root, name, &task);
+        ok(hres == S_OK, "GetTask(winetr) failed: %08lx\n", hres);
+        if (task) hres = IRegisteredTask_get_Definition(task, &def);
+        if (def) hres = ITaskDefinition_get_Actions(def, &actions);
+        if (actions) hres = IActionCollection_get_Item(actions, 1, &action);
+        if (action) hres = IAction_QueryInterface(action, &IID_IExecAction, (void **)&exec);
+        ok(exec != NULL, "no Exec action after /change /tr: %08lx\n", hres);
+        if (exec)
+        {
+            hres = IExecAction_get_Path(exec, &path);
+            ok(hres == S_OK && path && !wcscmp(path, L"calc.exe"), "Path = %s\n", wine_dbgstr_w(path));
+            hres = IExecAction_get_Arguments(exec, &args);
+            ok(hres == S_OK && args && !wcscmp(args, L"/x"), "Arguments = %s\n", wine_dbgstr_w(args));
+            SysFreeString(path);
+            SysFreeString(args);
+            IExecAction_Release(exec);
+        }
+        if (action) IAction_Release(action);
+        if (actions) IActionCollection_Release(actions);
+        if (def) ITaskDefinition_Release(def);
+        if (task) IRegisteredTask_Release(task);
+        HeapFree(GetProcessHeap(), 0, name);
+    }
+    r = run_command("schtasks /delete /f /tn wine\\winetr");
+    ok(r == 0, "/delete winetr: r = %lu\n", r);
+
+    /* /ru SYSTEM: the task must register with the LocalSystem principal (the Phase-2 parity gap). */
+    if (is_process_elevated())
+    {
+        IRegisteredTask *task = NULL;
+        ITaskDefinition *def = NULL;
+        IPrincipal *principal = NULL;
+        TASK_LOGON_TYPE logon = TASK_LOGON_NONE;
+        WCHAR *name = a2w("wine\\winesvc");
+        BSTR user_id = NULL;
+
+        r = run_command("schtasks /create /tn wine\\winesvc /sc ONCE /st 00:00 /tr notepad.exe /ru SYSTEM /f");
+        ok(r == 0, "/create /ru SYSTEM: r = %lu\n", r);
+
+        hres = ITaskFolder_GetTask(root, name, &task);
+        ok(hres == S_OK, "GetTask(winesvc) failed: %08lx\n", hres);
+        if (task)
+        {
+            hres = IRegisteredTask_get_Definition(task, &def);
+            ok(hres == S_OK, "get_Definition failed: %08lx\n", hres);
+        }
+        if (def)
+        {
+            hres = ITaskDefinition_get_Principal(def, &principal);
+            ok(hres == S_OK, "get_Principal failed: %08lx\n", hres);
+        }
+        if (principal)
+        {
+            hres = IPrincipal_get_UserId(principal, &user_id);
+            ok(hres == S_OK, "get_UserId failed: %08lx\n", hres);
+            ok(user_id && (!wcscmp(user_id, L"S-1-5-18") || !wcsicmp(user_id, L"SYSTEM")),
+               "UserId = %s, expected SYSTEM\n", wine_dbgstr_w(user_id));
+            SysFreeString(user_id);
+            hres = IPrincipal_get_LogonType(principal, &logon);
+            ok(hres == S_OK, "get_LogonType failed: %08lx\n", hres);
+            ok(logon == TASK_LOGON_SERVICE_ACCOUNT, "LogonType = %d, expected ServiceAccount\n", logon);
+            IPrincipal_Release(principal);
+        }
+        if (def) ITaskDefinition_Release(def);
+        if (task) IRegisteredTask_Release(task);
+        HeapFree(GetProcessHeap(), 0, name);
+
+        r = run_command("schtasks /delete /f /tn wine\\winesvc");
+        ok(r == 0, "/delete winesvc: r = %lu\n", r);
+    }
+    else
+    {
+        /* A non-elevated caller must not be able to register a task that runs as SYSTEM;
+         * the server denies it and schtasks returns 1 (the authorization check, client side). */
+        r = run_command("schtasks /create /tn wine\\winesvc /sc ONCE /st 00:00 /tr notepad.exe /ru SYSTEM /f");
+        ok(r == 1, "/ru SYSTEM from a non-elevated caller should fail: r = %lu\n", r);
+    }
 
     r = ITaskFolder_DeleteFolder(root, wine_testW, 0);
     ok(r == S_OK, "DeleteFolder(\\wine\\test) failed: %lx\n", r);

@@ -445,6 +445,11 @@ public:
         if (m_Chevron.m_hWnd)
             m_Chevron.Invalidate(FALSE);
 
+        /* The modern or classic layout is only chosen when the taskbar lays us out:
+           ask for that again if the new theme no longer matches the current one */
+        if (ShellIsModernTray(IsHorizontal) != m_bModern)
+            ::PostMessageW(GetParent(), WM_SIZE, SIZE_RESTORED, 0);
+
         return TRUE;
     }
 

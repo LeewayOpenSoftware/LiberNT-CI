@@ -66,6 +66,7 @@ VOID NBSendPackets( PNEIGHBOR_CACHE_ENTRY NCE ) {
     while ((PacketEntry = ExInterlockedRemoveHeadList(&NCE->PacketQueue,
                                               &NeighborCache[HashValue].Lock)) != NULL)
     {
+	InterlockedDecrement(&NCE->QueuedPackets);
 	Packet = CONTAINING_RECORD( PacketEntry, NEIGHBOR_PACKET, Next );
 
 	TI_DbgPrint
@@ -93,6 +94,7 @@ VOID NBFlushPacketQueue( PNEIGHBOR_CACHE_ENTRY NCE,
 
     while( !IsListEmpty(&NCE->PacketQueue) ) {
         PacketEntry = RemoveHeadList(&NCE->PacketQueue);
+        InterlockedDecrement(&NCE->QueuedPackets);
 	Packet = CONTAINING_RECORD
 	    ( PacketEntry, NEIGHBOR_PACKET, Next );
 
@@ -217,7 +219,7 @@ VOID NBTimeout(VOID)
                     else
                     {
                         /* This guy was stale for way too long */
-                        Status = NDIS_STATUS_REQUEST_ABORTED;
+                        Status = NDIS_STATUS_HOST_UNREACHABLE;
                     }
 
                     NBFlushPacketQueue(NCE, Status);
@@ -303,6 +305,30 @@ VOID NBSendSolicit(PNEIGHBOR_CACHE_ENTRY NCE)
                 NCE->Interface);
 }
 
+/* An address that just became usable resolves the neighbors that were waiting for it at once */
+VOID NBSolicitIncomplete(PIP_INTERFACE Interface)
+{
+    ULONGLONG Now = KeQueryInterruptTime();
+    PNEIGHBOR_CACHE_ENTRY NCE;
+    KIRQL OldIrql;
+    ULONG i;
+
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    for (i = 0; i <= NB_HASHMASK; ++i)
+    {
+        TcpipAcquireSpinLockAtDpcLevel(&NeighborCache[i].Lock);
+        for (NCE = NeighborCache[i].Cache; NCE; NCE = NCE->Next)
+        {
+            if (NCE->Interface != Interface || (NCE->State & NUD_PERMANENT) || !(NCE->State & NUD_INCOMPLETE))
+                continue;
+            NBSendSolicit(NCE);
+            NCE->NextSolicit = Now + (ULONGLONG)Interface->RetransmitTime * 10000;
+        }
+        TcpipReleaseSpinLockFromDpcLevel(&NeighborCache[i].Lock);
+    }
+    KeLowerIrql(OldIrql);
+}
+
 VOID NBInvalidateNeighborsForInterface(PIP_INTERFACE Interface)
 {
     KIRQL OldIrql;
@@ -318,7 +344,7 @@ VOID NBInvalidateNeighborsForInterface(PIP_INTERFACE Interface)
             if (NCE->Interface != Interface)
                 continue;
 
-            NBFlushPacketQueue(NCE, NDIS_STATUS_REQUEST_ABORTED);
+            NBFlushPacketQueue(NCE, NDIS_STATUS_NETWORK_UNREACHABLE);
             if (!(NCE->State & NUD_PERMANENT))
             {
                 NCE->State = NUD_INCOMPLETE;
@@ -352,7 +378,7 @@ VOID NBDestroyNeighborsForInterface(PIP_INTERFACE Interface)
                 /* Unlink and destroy the NCE */
                 *PrevNCE = NCE->Next;
 
-                NBFlushPacketQueue(NCE, NDIS_STATUS_REQUEST_ABORTED);
+                NBFlushPacketQueue(NCE, NDIS_STATUS_NETWORK_UNREACHABLE);
                 NCE->Removed = TRUE;
                 TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_NEIGHBOUR, TI_NSI_CHANGE_DELETE);
                 NBDereferenceNeighbor(NCE);
@@ -441,6 +467,7 @@ PNEIGHBOR_CACHE_ENTRY NBAddNeighbor(
   NCE->EventCount = 0;
   NCE->NextSolicit = KeQueryInterruptTime() + (ULONGLONG)Interface->RetransmitTime * 10000;
   InitializeListHead( &NCE->PacketQueue );
+  NCE->QueuedPackets = 0;
 
   TI_DbgPrint(MID_TRACE,("NCE: %x\n", NCE));
 
@@ -695,7 +722,6 @@ BOOLEAN NBQueuePacket(
                                   NEIGHBOR_PACKET_TAG );
   if( !Packet ) return FALSE;
 
-  /* FIXME: Should we limit the number of queued packets? */
 
   HashValue  = *(PULONG)(&NCE->Address.Address);
   HashValue ^= HashValue >> 16;
@@ -712,12 +738,23 @@ BOOLEAN NBQueuePacket(
   if (NCE->Removed)
     {
       TcpipReleaseSpinLock(&NeighborCache[HashValue].Lock, OldIrql);
-      PacketComplete(PacketContext, NdisPacket, NDIS_STATUS_REQUEST_ABORTED);
+      PacketComplete(PacketContext, NdisPacket, NDIS_STATUS_HOST_UNREACHABLE);
       ExFreePoolWithTag(Packet, NEIGHBOR_PACKET_TAG);
       return TRUE;
     }
 
+  /* While the link address is unknown nothing leaves the queue, so the queue
+   * has a fixed bound. The packet is refused; the caller treats that like a
+   * failed allocation. */
+  if ((NCE->State & NUD_INCOMPLETE) && NCE->QueuedPackets >= NB_MAX_QUEUED_PACKETS)
+    {
+      TcpipReleaseSpinLock(&NeighborCache[HashValue].Lock, OldIrql);
+      ExFreePoolWithTag(Packet, NEIGHBOR_PACKET_TAG);
+      return FALSE;
+    }
+
   InsertTailList( &NCE->PacketQueue, &Packet->Next );
+  InterlockedIncrement(&NCE->QueuedPackets);
 
   TcpipReleaseSpinLock(&NeighborCache[HashValue].Lock, OldIrql);
 
@@ -763,7 +800,7 @@ VOID NBRemoveNeighbor(
           /* Found it, now unlink it from the list */
           *PrevNCE = CurNCE->Next;
 
-	  NBFlushPacketQueue( CurNCE, NDIS_STATUS_REQUEST_ABORTED );
+	  NBFlushPacketQueue( CurNCE, NDIS_STATUS_HOST_UNREACHABLE );
           CurNCE->Removed = TRUE;
           TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_NEIGHBOUR, TI_NSI_CHANGE_DELETE);
           NBDereferenceNeighbor(CurNCE);
