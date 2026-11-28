@@ -115,8 +115,11 @@ public:
         for (UINT iGroup = 0; iGroup < _countof(GroupStrings); ++iGroup)
         {
             WCHAR szGroup[128];
-            if (LoadStringW(hExplorerInstance, GroupStrings[iGroup], szGroup, _countof(szGroup)) > 0)
-                SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)szGroup);
+            /* Add an item even if the string is missing, so the combo index keeps matching the
+               stored dwTaskbarGlomLevel; dropping one would shift every later selection. */
+            if (LoadStringW(hExplorerInstance, GroupStrings[iGroup], szGroup, _countof(szGroup)) <= 0)
+                szGroup[0] = L'\0';
+            SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)szGroup);
         }
         SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_SETCURSEL, g_TaskbarSettings.dwTaskbarGlomLevel);
         //CheckDlgButton(IDC_TASKBARPROP_SHOWQL, g_TaskbarSettings.bShowQuickLaunch ? BST_CHECKED : BST_UNCHECKED);

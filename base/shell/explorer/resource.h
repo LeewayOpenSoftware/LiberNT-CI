@@ -216,9 +216,6 @@
 #define IDS_TRAYCLOCK_NEWNOTIFICATION      816
 #define IDS_TRAYCLOCK_NEWNOTIFICATIONS     817
 #define IDS_TRAYQUICKSETTINGS_TOOLTIP      818
-#define IDS_TASKBARPROP_GROUP_ALWAYS       819
-#define IDS_TASKBARPROP_GROUP_FULL         820
-#define IDS_TASKBARPROP_GROUP_NEVER        821
 #define IDS_SM2_SHUTDOWN                   832
 #define IDS_SM2_RESTART                    833
 #define IDS_SM2_LOGOFF                     834
@@ -241,6 +238,13 @@
 #define IDS_SM2_RENAME_FAILED              851
 #define IDS_SM2_REMOVE                     852
 #define IDS_SM2_SEARCH                     853
+
+/* Taskbar grouping combo box. These sit in their own 16-id string-table block (864-879), which no
+ * locale but en-US and es-ES defines, so every other language falls back to en-US for the whole
+ * block instead of getting a partial block with blank strings. */
+#define IDS_TASKBARPROP_GROUP_ALWAYS       864
+#define IDS_TASKBARPROP_GROUP_FULL         865
+#define IDS_TASKBARPROP_GROUP_NEVER        866
 
 /* These values must be synchronized with shell32 */
 #define IDS_ADVANCED_DISPLAY_FAVORITES              30466
