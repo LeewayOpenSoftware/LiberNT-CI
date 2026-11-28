@@ -59,6 +59,7 @@ extern void func_SaferIdentifyLevel(void);
 extern void func_SaferLevels(void);
 extern void func_SaferRules(void);
 extern void func_SddlNullAcl(void);
+extern void func_SechostTraceForward(void);
 extern void func_Elevation(void);
 extern void func_SeclogonCaller(void);
 extern void func_ServiceArgs(void);
@@ -140,6 +141,7 @@ const struct test winetest_testlist[] =
     { "SaferLevels", func_SaferLevels },
     { "SaferRules", func_SaferRules },
     { "SddlNullAcl", func_SddlNullAcl },
+    { "SechostTraceForward", func_SechostTraceForward },
     { "Elevation", func_Elevation },
     { "SeclogonCaller", func_SeclogonCaller },
     { "ServiceArgs", func_ServiceArgs },
