@@ -31,6 +31,14 @@ SerialCreate(
 		goto ByeBye;
 	}
 
+	if (DeviceExtension->PnpState == dsStopPending ||
+	    DeviceExtension->PnpState == dsStopped)
+	{
+		WARN_(SERIAL, "COM%lu is stopped or stop-pending\n", DeviceExtension->ComPort);
+		Status = STATUS_DEVICE_NOT_READY;
+		goto ByeBye;
+	}
+
 	if(DeviceExtension->IsOpened)
 	{
 		WARN_(SERIAL, "COM%lu is already opened\n", DeviceExtension->ComPort);

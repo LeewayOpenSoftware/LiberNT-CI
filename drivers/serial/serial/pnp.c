@@ -522,24 +522,11 @@ SerialPnp(
 		}
 		case IRP_MN_STOP_DEVICE: /* 0x4 */
 		{
-			WCHAR LinkNameBuffer[32];
-			UNICODE_STRING LinkName;
-
 			TRACE_(SERIAL, "IRP_MJ_PNP / IRP_MN_STOP_DEVICE\n");
 
 			DeviceExtension = DeviceObject->DeviceExtension;
 
-			IoSetDeviceInterfaceState(&DeviceExtension->SerialInterfaceName, FALSE);
-
-			if (DeviceExtension->Interrupt)
-			{
-				IoDisconnectInterrupt(DeviceExtension->Interrupt);
-				DeviceExtension->Interrupt = NULL;
-			}
-
-			_swprintf(LinkNameBuffer, L"\\DosDevices\\COM%lu", DeviceExtension->ComPort);
-			RtlInitUnicodeString(&LinkName, LinkNameBuffer);
-			IoDeleteSymbolicLink(&LinkName);
+			SerialReleaseHardware(DeviceExtension);
 			DeviceExtension->PnpState = dsStopped;
 
 			return ForwardIrpAndForget(DeviceObject, Irp);
