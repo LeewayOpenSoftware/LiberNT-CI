@@ -1472,7 +1472,7 @@ RebuildLoadedStore(
     return RestoreStoreFromFile(Key, TemplatePath);
 }
 
-/* Build the store in \EFI\LiberNT\Boot of the system partition from the template and point it at that partition
+/* Build the store in \EFI\Orosi\Boot of the system partition from the template and point it at that partition
  * and at the OS partition, then copy the boot manager beside it (last, so a failed store leaves the old pair).
  * SystemDirectory (e.g. \Windows), Locale and Description replace the template's values when given. */
 static
@@ -1515,8 +1515,8 @@ InstallBcdStore(
     if (!NT_SUCCESS(Status) && Status != STATUS_OBJECT_NAME_COLLISION)
         return Status;
 
-    CombinePaths(StorePath, ARRAYSIZE(StorePath), 2, SystemRootPath->Buffer, L"EFI\\LiberNT\\Boot\\BCD");
-    CombinePaths(BackupPath, ARRAYSIZE(BackupPath), 2, SystemRootPath->Buffer, L"EFI\\LiberNT\\Boot\\BCD.bak");
+    CombinePaths(StorePath, ARRAYSIZE(StorePath), 2, SystemRootPath->Buffer, L"EFI\\Orosi\\Boot\\BCD");
+    CombinePaths(BackupPath, ARRAYSIZE(BackupPath), 2, SystemRootPath->Buffer, L"EFI\\Orosi\\Boot\\BCD.bak");
     if (!Live)
     {
         if ((Flags & BCD_STORE_BACKUP) && DoesFileExist(NULL, StorePath))
@@ -1599,7 +1599,7 @@ InstallBcdStore(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    CombinePaths(Path, ARRAYSIZE(Path), 2, SystemRootPath->Buffer, L"EFI\\LiberNT\\Boot\\bootmgfw.efi");
+    CombinePaths(Path, ARRAYSIZE(Path), 2, SystemRootPath->Buffer, L"EFI\\Orosi\\Boot\\bootmgfw.efi");
     return SetupCopyFile(BootManagerPath, Path, FALSE);
 }
 
@@ -1610,7 +1610,7 @@ BOOLEAN
 IsLoadedSystemStore(
     _In_ PCUNICODE_STRING SystemRootPath)
 {
-    static const WCHAR StoreFile[] = L"\\EFI\\LiberNT\\Boot\\BCD";
+    static const WCHAR StoreFile[] = L"\\EFI\\Orosi\\Boot\\BCD";
     UNICODE_STRING ListKey = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\hivelist");
     UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"\\REGISTRY\\MACHINE\\BCD00000000");
     STORAGE_DEVICE_NUMBER Target, Loaded;
@@ -1635,7 +1635,7 @@ IsLoadedSystemStore(
     if (!NT_SUCCESS(Status) || Value.Info.Type != REG_SZ || Value.Info.DataLength < sizeof(WCHAR))
         return FALSE;
 
-    /* \Device\HarddiskVolumeN\EFI\LiberNT\Boot\BCD: our store's name, on the target partition */
+    /* \Device\HarddiskVolumeN\EFI\Orosi\Boot\BCD: our store's name, on the target partition */
     File = (PWCHAR)Value.Info.Data;
     File[Value.Info.DataLength / sizeof(WCHAR)] = UNICODE_NULL;
     Chars = (ULONG)wcslen(File);
@@ -2155,7 +2155,7 @@ InstallEfiSystemPartition(
 
 /*
  * Boot files of an installed system (bcdboot): the boot manager from <system>\Boot\EFI and a store from
- * <system>\System32\config\BCD-Template go to \EFI\LiberNT\Boot of the system partition, with the OS loader on the
+ * <system>\System32\config\BCD-Template go to \EFI\Orosi\Boot of the system partition, with the OS loader on the
  * system's own partition and directory; then the firmware boot entry (unless BOOT_OPTION_NO_FIRMWARE_ENTRY or not
  * on UEFI firmware) and the removable-media fallback loader. The system partition must be FAT; a previous store
  * is kept as BCD.bak. Other systems' boot files are never replaced: their directories are not touched, and a
