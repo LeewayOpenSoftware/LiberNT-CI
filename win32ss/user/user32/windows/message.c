@@ -3531,18 +3531,11 @@ RealMsgWaitForMultipleObjectsEx(
    pcti = pci->pClientThreadInfo;
    if (pcti && ( !nCount || !(dwFlags & MWMO_WAITALL) ))
    {
+      /* Input the wait is for is already there: report it ahead of any signalled object, as
+       * Windows does (new input, or with MWMO_INPUTAVAILABLE any queued input). */
       if ( (pcti->fsChangeBits & LOWORD(dwWakeMask)) ||
            ( (dwFlags & MWMO_INPUTAVAILABLE) && (pcti->fsWakeBits & LOWORD(dwWakeMask)) ) )
       {
-         if (nCount)
-         {
-            Result = WaitForMultipleObjectsEx(nCount, pHandles, FALSE, 0, FALSE);
-            if (Result < WAIT_OBJECT_0 + nCount ||
-                (Result >= WAIT_ABANDONED_0 && Result < WAIT_ABANDONED_0 + nCount))
-            {
-               return Result;
-            }
-         }
          return nCount;
       }
    }
