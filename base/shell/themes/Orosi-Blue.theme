@@ -1,6 +1,6 @@
-; LiberNT theme (LiberNT Blue)
+; Orosi theme (Orosi Blue)
 [Theme]
-DisplayName=LiberNT Blue
+DisplayName=Orosi Blue
 
 [Control Panel\Desktop]
 Wallpaper=%SystemRoot%\Web\Wallpaper\BlueHorizon.png

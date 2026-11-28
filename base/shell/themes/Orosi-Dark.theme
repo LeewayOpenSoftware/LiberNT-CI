@@ -1,6 +1,6 @@
-; LiberNT theme (LiberNT Dark)
+; Orosi theme (Orosi Dark)
 [Theme]
-DisplayName=LiberNT Dark
+DisplayName=Orosi Dark
 
 [Control Panel\Desktop]
 Wallpaper=%SystemRoot%\Web\Wallpaper\Night Sky.jpg
