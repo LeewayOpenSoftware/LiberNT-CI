@@ -317,7 +317,7 @@
 @ stdcall FlushFileBuffers(long) kernel32.FlushFileBuffers
 @ stdcall FlushInstructionCache(long long long) kernel32.FlushInstructionCache
 @ stdcall -version=0x600+ FlushProcessWriteBuffers() kernel32.FlushProcessWriteBuffers
-@ stdcall FlushViewOfFile(ptr long) kernel32.FlushViewOfFile
+@ stdcall FlushViewOfFile(ptr long)
 @ stdcall FoldStringW(long wstr long ptr long) kernel32.FoldStringW
 @ stdcall FormatMessageA(long ptr long long ptr long ptr)
 @ stdcall FormatMessageW(long ptr long long ptr long ptr)
@@ -821,9 +821,9 @@
 @ stdcall MakeSelfRelativeSD(ptr ptr ptr)
 @ stdcall MapGenericMask(ptr ptr)
 @ stdcall MapUserPhysicalPages(ptr long ptr) kernel32.MapUserPhysicalPages
-@ stdcall MapViewOfFile(long long long long long) kernel32.MapViewOfFile
+@ stdcall MapViewOfFile(long long long long long)
 @ stdcall -arch=win64 MapViewOfFile3(long long ptr int64 long long long ptr long)
-@ stdcall MapViewOfFileEx(long long long long long ptr) kernel32.MapViewOfFileEx
+@ stdcall MapViewOfFileEx(long long long long long ptr)
 @ stdcall -version=0x600+ MapViewOfFileExNuma(long long long long long ptr long)
 @ stdcall MapViewOfFileFromApp(long long int64 long)
 @ stdcall MoveFileExW(wstr wstr long) kernel32.MoveFileExW
@@ -1361,7 +1361,7 @@
 @ stdcall UnhandledExceptionFilter(ptr) kernel32.UnhandledExceptionFilter
 @ stdcall UnlockFile(long long long long long) kernel32.UnlockFile
 @ stdcall UnlockFileEx(long long long long ptr) kernel32.UnlockFileEx
-@ stdcall UnmapViewOfFile(ptr) kernel32.UnmapViewOfFile
+@ stdcall UnmapViewOfFile(ptr)
 @ stdcall -arch=win64 UnmapViewOfFile2(long ptr long)
 @ stdcall -version=0x602+ UnmapViewOfFileEx(ptr long) kernel32.UnmapViewOfFileEx
 @ stdcall -version=0x600+ UnregisterApplicationRestart() kernel32.UnregisterApplicationRestart

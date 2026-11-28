@@ -372,7 +372,7 @@
 @ stdcall FlushFileBuffers(long)
 @ stdcall FlushInstructionCache(long long long)
 @ stdcall -version=0x600+ FlushProcessWriteBuffers()
-@ stdcall FlushViewOfFile(ptr long)
+@ stdcall FlushViewOfFile(ptr long) kernelbase.FlushViewOfFile
 @ stdcall FoldStringA(long str long ptr long)
 @ stdcall FoldStringW(long wstr long ptr long)
 @ stdcall FormatMessageA(long ptr long long ptr long ptr) kernelbase.FormatMessageA
@@ -932,8 +932,8 @@
 @ stdcall -version=0xA00+ LogUnexpectedCodepath(ptr) ntdll.RtlLogUnexpectedCodepath
 @ stdcall MapUserPhysicalPages(ptr long ptr)
 @ stdcall MapUserPhysicalPagesScatter(ptr long ptr)
-@ stdcall MapViewOfFile(long long long long long)
-@ stdcall MapViewOfFileEx(long long long long long ptr)
+@ stdcall MapViewOfFile(long long long long long) kernelbase.MapViewOfFile
+@ stdcall MapViewOfFileEx(long long long long long ptr) kernelbase.MapViewOfFileEx
 @ stdcall -version=0x600+ MapViewOfFileExNuma(long long long long long ptr long) kernelbase.MapViewOfFileExNuma
 @ stdcall Module32First(long ptr)
 @ stdcall Module32FirstW(long ptr)
@@ -1357,7 +1357,7 @@
 @ stdcall UnhandledExceptionFilter(ptr)
 @ stdcall UnlockFile(long long long long long)
 @ stdcall UnlockFileEx(long long long long ptr)
-@ stdcall UnmapViewOfFile(ptr)
+@ stdcall UnmapViewOfFile(ptr) kernelbase.UnmapViewOfFile
 @ stdcall -version=0x602+ UnmapViewOfFileEx(ptr long)
 @ stdcall -version=0x600+ UnregisterApplicationRecoveryCallback()
 @ stdcall -version=0x600+ UnregisterApplicationRestart()
