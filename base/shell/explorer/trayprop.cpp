@@ -138,9 +138,17 @@ public:
                the registry as MMTaskbarMode, which Windows defines as
                0 = all taskbars, 1 = main + where open, 2 = where open. */
             SendMessageW(hMMButtons, CB_RESETCONTENT, 0, 0);
-            SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"All taskbars");
-            SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"Main taskbar and taskbar where window is open");
-            SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"Taskbar where window is open");
+            static const UINT MMStrings[] = {
+                IDS_TASKBARPROP_MMBUTTONS_ALL, IDS_TASKBARPROP_MMBUTTONS_MAIN, IDS_TASKBARPROP_MMBUTTONS_OPEN };
+            for (UINT iMM = 0; iMM < _countof(MMStrings); ++iMM)
+            {
+                WCHAR szMM[256];
+                /* Add an item even on a missing string, so the index keeps matching the stored
+                   MMTaskbarMode. */
+                if (LoadStringW(hExplorerInstance, MMStrings[iMM], szMM, _countof(szMM)) <= 0)
+                    szMM[0] = L'\0';
+                SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)szMM);
+            }
             UINT uMode = g_TaskbarSettings.uMMTaskbarMode;
             if (uMode > 2)
                 uMode = 0;

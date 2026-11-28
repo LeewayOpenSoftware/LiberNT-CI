@@ -227,6 +227,9 @@ BEGIN
     IDS_TASKBARPROP_GROUP_ALWAYS "Always combine, hide labels"
     IDS_TASKBARPROP_GROUP_FULL "Combine when taskbar is full"
     IDS_TASKBARPROP_GROUP_NEVER "Never combine"
+    IDS_TASKBARPROP_MMBUTTONS_ALL "All taskbars"
+    IDS_TASKBARPROP_MMBUTTONS_MAIN "Main taskbar and taskbar where window is open"
+    IDS_TASKBARPROP_MMBUTTONS_OPEN "Taskbar where window is open"
 END
 
 STRINGTABLE

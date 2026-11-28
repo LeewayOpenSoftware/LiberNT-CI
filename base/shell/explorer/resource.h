@@ -246,6 +246,12 @@
 #define IDS_TASKBARPROP_GROUP_FULL         865
 #define IDS_TASKBARPROP_GROUP_NEVER        866
 
+/* Multiple-displays taskbar buttons combo box; its own 16-id block (880-895), defined only by
+ * en-US and es-ES for the same whole-block fallback reason as the grouping strings above. */
+#define IDS_TASKBARPROP_MMBUTTONS_ALL      880
+#define IDS_TASKBARPROP_MMBUTTONS_MAIN     881
+#define IDS_TASKBARPROP_MMBUTTONS_OPEN     882
+
 /* These values must be synchronized with shell32 */
 #define IDS_ADVANCED_DISPLAY_FAVORITES              30466
 #define IDS_ADVANCED_DISPLAY_LOG_OFF                30467
