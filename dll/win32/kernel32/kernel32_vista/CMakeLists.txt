@@ -14,7 +14,6 @@ list(APPEND SOURCE
     DepPolicy.c
     DiscardVirtualMemory.c
     DllDirectory.c
-    DynamicTimeZone.c
     FirefoxCompat.c
     firmware.c
     GetActiveProcessorCount.c
@@ -25,7 +24,6 @@ list(APPEND SOURCE
     GetLogicalProcessorInformationEx.c
     GetNamedPipeClientProcessId.c
     GetProcessGroupAffinity.c
-    GetTickCount64.c
     InitOnce.c
     Packages.c
     ProcThreadAttributeList.c

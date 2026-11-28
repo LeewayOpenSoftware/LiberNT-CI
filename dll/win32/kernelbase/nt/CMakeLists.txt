@@ -6,9 +6,12 @@ include_directories(${REACTOS_SOURCE_DIR}/sdk/include/reactos/subsys)
 list(APPEND SOURCE
     ComputerName.c
     debugger.c
+    DynamicTimeZone.c
     Environment.c
     FileMapping.c
     SystemInfo.c
+    Time.c
+    TimeZone.c
     VirtualMemory.c)
 
 add_library(kernelbase_nt ${SOURCE})

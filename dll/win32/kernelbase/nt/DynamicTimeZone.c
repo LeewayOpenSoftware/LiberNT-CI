@@ -5,9 +5,33 @@
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif193@gmail.com>
  */
 
-#include "k32_vista.h"
+#include <stdio.h>
+
+#define WIN32_NO_STATUS
+#include <windef.h>
+#include <winbase.h>
+#include <winnls.h>
+#include <winreg.h>
+
+#define NTOS_MODE_USER
 #include <ndk/cmfuncs.h>
+#include <ndk/exfuncs.h>
+#include <ndk/kefuncs.h>
+#include <ndk/obfuncs.h>
+#include <ndk/psfuncs.h>
+#include <ndk/rtlfuncs.h>
+#include <ndk/setypes.h>
+
 #include <ntstrsafe.h>
+#include <pseh/pseh2.h>
+
+#define NDEBUG
+#include <debug.h>
+
+/* kernel32_shared */
+DWORD
+WINAPI
+BaseSetLastNTError(IN NTSTATUS Status);
 
 #ifndef REG_SZ
 #define REG_SZ     1

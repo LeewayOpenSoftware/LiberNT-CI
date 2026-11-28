@@ -613,7 +613,7 @@
 @ stdcall GetThreadTimes(long ptr ptr ptr ptr) kernel32.GetThreadTimes
 @ stdcall -version=0x600+ GetThreadUILanguage() kernel32.GetThreadUILanguage
 @ stdcall GetTickCount()
-@ stdcall -version=0x600+ GetTickCount64()
+@ stdcall -version=0x600+ -ret64 GetTickCount64()
 @ stdcall GetTimeFormatA(long long ptr str ptr long) kernel32.GetTimeFormatA
 @ stdcall -version=0x600+ GetTimeFormatEx(wstr long ptr wstr wstr long) kernel32.GetTimeFormatEx
 @ stdcall GetTimeFormatW(long long ptr wstr ptr long) kernel32.GetTimeFormatW
@@ -744,6 +744,7 @@
 @ stdcall IsProcessorFeaturePresent(long) kernel32.IsProcessorFeaturePresent
 @ stdcall -version=0x600+ IsThreadAFiber() kernel32.IsThreadAFiber
 @ stdcall IsThreadpoolTimerSet(ptr) ntdll.TpIsTimerSet
+@ stdcall IsTimeZoneRedirectionEnabled()
 @ stdcall IsTokenRestricted(long)
 @ stdcall IsValidAcl(ptr)
 @ stdcall IsValidCodePage(long) kernel32.IsValidCodePage
@@ -804,7 +805,7 @@
 @ stub LoadStringByReference
 @ stdcall LoadStringW(long long ptr long)
 @ stdcall LocalAlloc(long long) kernel32.LocalAlloc
-@ stdcall LocalFileTimeToFileTime(ptr ptr) kernel32.LocalFileTimeToFileTime
+@ stdcall LocalFileTimeToFileTime(ptr ptr)
 @ stdcall LocalFlags(long) kernel32.LocalFlags
 @ stdcall LocalFree(long) kernel32.LocalFree
 @ stdcall LocalLock(long) kernel32.LocalLock
@@ -1117,7 +1118,7 @@
 @ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
 @ stdcall ResumeThread(long)
 @ stdcall RevertToSelf()
-@ stdcall -version=0x600+ SetDynamicTimeZoneInformation(ptr) kernel32.SetDynamicTimeZoneInformation
+@ stdcall -version=0x600+ SetDynamicTimeZoneInformation(ptr)
 @ stdcall SetProcessWorkingSetSize(long long long) kernel32.SetProcessWorkingSetSize
 @ stdcall -version=0x602+ SetThreadpoolTimerEx(ptr ptr long long) ntdll.TpSetTimerEx
 @ stdcall -version=0x602+ SetThreadpoolWaitEx(ptr long ptr ptr) ntdll.TpSetWaitEx
@@ -1356,7 +1357,7 @@
 @ stdcall -version=0x601+ TryAcquireSRWLockShared(ptr) ntdll.RtlTryAcquireSRWLockShared
 @ stdcall TryEnterCriticalSection(ptr) ntdll.RtlTryEnterCriticalSection
 @ stdcall TrySubmitThreadpoolCallback(ptr ptr ptr)
-@ stdcall TzSpecificLocalTimeToSystemTime(ptr ptr ptr) kernel32.TzSpecificLocalTimeToSystemTime
+@ stdcall TzSpecificLocalTimeToSystemTime(ptr ptr ptr)
 @ stdcall TzSpecificLocalTimeToSystemTimeEx(ptr ptr ptr)
 @ stdcall UnhandledExceptionFilter(ptr) kernel32.UnhandledExceptionFilter
 @ stdcall UnlockFile(long long long long long) kernel32.UnlockFile

@@ -316,8 +316,8 @@
 @ stdcall FatalAppExitW(long wstr) kernelbase.FatalAppExitW
 @ stdcall FatalExit(long)
 @ stdcall FileTimeToDosDateTime(ptr ptr ptr)
-@ stdcall FileTimeToLocalFileTime(ptr ptr)
-@ stdcall FileTimeToSystemTime(ptr ptr)
+@ stdcall FileTimeToLocalFileTime(ptr ptr) kernelbase.FileTimeToLocalFileTime
+@ stdcall FileTimeToSystemTime(ptr ptr) kernelbase.FileTimeToSystemTime
 @ stdcall FillConsoleOutputAttribute(long long long long ptr) kernelbase.FillConsoleOutputAttribute
 @ stdcall FillConsoleOutputCharacterA(long long long long ptr) kernelbase.FillConsoleOutputCharacterA
 @ stdcall FillConsoleOutputCharacterW(long long long long ptr) kernelbase.FillConsoleOutputCharacterW
@@ -849,7 +849,7 @@
 @ stdcall IsSystemResumeAutomatic()
 @ stdcall -version=0x600+ IsThreadAFiber()
 @ stdcall -version=0x600+ IsThreadpoolTimerSet(ptr) ntdll.TpIsTimerSet
-@ stdcall IsTimeZoneRedirectionEnabled()
+@ stdcall IsTimeZoneRedirectionEnabled() kernelbase.IsTimeZoneRedirectionEnabled
 @ stub -version=0x600+ IsValidCalDateTime
 @ stdcall IsValidCodePage(long)
 @ stdcall IsValidLanguageGroup(long long)
@@ -915,7 +915,7 @@
 @ stub -version=0x600+ LoadStringBaseW
 @ stdcall LocalAlloc(long long)
 @ stdcall LocalCompact(long)
-@ stdcall LocalFileTimeToFileTime(ptr ptr)
+@ stdcall LocalFileTimeToFileTime(ptr ptr) kernelbase.LocalFileTimeToFileTime
 @ stdcall LocalFlags(long)
 @ stdcall LocalFree(long)
 @ stdcall LocalHandle(ptr)
@@ -1212,7 +1212,7 @@
 @ stdcall -version=0x602+ SetDefaultDllDirectories(long)
 @ stdcall SetDllDirectoryA(str)
 @ stdcall SetDllDirectoryW(wstr)
-@ stdcall -version=0x600+ SetDynamicTimeZoneInformation(ptr)
+@ stdcall -version=0x600+ SetDynamicTimeZoneInformation(ptr) kernelbase.SetDynamicTimeZoneInformation
 @ stdcall SetEndOfFile(long)
 @ stdcall SetEnvironmentStringsA(ptr)
 @ stdcall SetEnvironmentStringsW(ptr) kernelbase.SetEnvironmentStringsW
@@ -1349,7 +1349,7 @@
 @ stdcall -version=0x601+ TryAcquireSRWLockShared(ptr) ntdll.RtlTryAcquireSRWLockShared
 @ stdcall TryEnterCriticalSection(ptr) ntdll.RtlTryEnterCriticalSection
 @ stdcall -version=0x600+ TrySubmitThreadpoolCallback(ptr ptr ptr) kernelbase.TrySubmitThreadpoolCallback
-@ stdcall TzSpecificLocalTimeToSystemTime(ptr ptr ptr)
+@ stdcall TzSpecificLocalTimeToSystemTime(ptr ptr ptr) kernelbase.TzSpecificLocalTimeToSystemTime
 @ stdcall -version=0x601+ TzSpecificLocalTimeToSystemTimeEx(ptr ptr ptr) kernelbase.TzSpecificLocalTimeToSystemTimeEx
 @ stdcall -arch=win64 UmsThreadYield(ptr)
 @ stdcall UTRegister(long str str str ptr ptr ptr)
