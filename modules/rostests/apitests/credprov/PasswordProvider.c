@@ -557,7 +557,8 @@ TestSerialization(void)
 }
 
 /* A local account with a blank password gets only the Sign in button on the sign-in and unlock
- * pages; one with a password keeps the box. Uses real accounts, created and removed here. */
+ * pages; one with a password keeps the box. Uses real accounts, created and removed here.
+ * VM only: never run this test on a real user machine. */
 static BOOL
 AddTestAccount(_In_ PCWSTR Name, _In_opt_ PCWSTR Password, _Out_writes_(SidChars) PWSTR Sid, _In_ DWORD SidChars)
 {
