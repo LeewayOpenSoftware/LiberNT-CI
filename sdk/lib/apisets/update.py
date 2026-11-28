@@ -184,7 +184,7 @@ CONTRACT_HOST_OVERRIDES = {
     'api-ms-win-security-activedirectoryclient-l1-1-0.dll': 'kernelbase.dll',
     'api-ms-win-security-activedirectoryclient-l1-1-1.dll': 'kernelbase.dll',
     'api-ms-win-security-appcontainer-l1-1-0.dll': 'kernelbase.dll',
-    'api-ms-win-security-base-l1-1-0.dll': 'advapi32.dll',
+    'api-ms-win-security-base-l1-1-0.dll': 'kernelbase.dll',
     'api-ms-win-security-base-l1-1-1.dll': 'kernelbase.dll',
     'api-ms-win-security-base-l1-2-0.dll': 'kernelbase.dll',
     'api-ms-win-security-base-l1-2-2.dll': 'kernelbase.dll',
