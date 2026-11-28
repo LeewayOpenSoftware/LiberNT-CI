@@ -41,5 +41,6 @@
 #define IDS_LUH_WARN_SHUTDOWN       131
 #define IDS_LUH_RESTART_ANYWAY      132
 #define IDS_LUH_SHUTDOWN_ANYWAY     133
+#define IDS_LUH_SIGN_IN             134
 
-#define IDS_LUH_LAST                IDS_LUH_SHUTDOWN_ANYWAY
+#define IDS_LUH_LAST                IDS_LUH_SIGN_IN

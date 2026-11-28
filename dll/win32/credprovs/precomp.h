@@ -51,6 +51,7 @@ typedef struct _PWCREDENTIAL
     CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenario;
     ICredentialProviderCredentialEvents *Events;
     BOOL KnownUser;
+    BOOL BlankPassword;
     LPWSTR Sid;
     WCHAR Text[PWFIELD_COUNT][PWFIELD_TEXT_CHARS];
 } PWCREDENTIAL;
@@ -66,4 +67,5 @@ HRESULT PasswordCredential_Create(_In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenar
                                   _In_opt_ PCWSTR PrefillUserName,
                                   _Outptr_ PWCREDENTIAL **Credential);
 BOOL PasswordProvider_IsKnownScenario(_In_ CREDENTIAL_PROVIDER_USAGE_SCENARIO Scenario);
+BOOL PasswordProvider_SidHasBlankPassword(_In_ PCWSTR SidString);
 HRESULT PasswordProvider_DupString(_In_ PCWSTR Source, _Outptr_ LPWSTR *Out);
