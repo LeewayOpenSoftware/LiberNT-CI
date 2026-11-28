@@ -187,9 +187,6 @@ extern BOOLEAN BaseRunningInServerProcess;
 
 /* FUNCTION PROTOTYPES *******************************************************/
 
-VOID
-NTAPI
-
 PTEB GetTeb(VOID);
 
 PWCHAR FilenameA2W(LPCSTR NameA, BOOL alloc);
