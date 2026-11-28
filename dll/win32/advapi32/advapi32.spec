@@ -12,12 +12,12 @@
 @ stdcall AccessCheckAndAuditAlarmW(wstr ptr wstr wstr ptr long ptr long ptr ptr ptr) kernelbase.AccessCheckAndAuditAlarmW
 @ stdcall AccessCheckByType(ptr ptr long long ptr long ptr ptr ptr ptr ptr) kernelbase.AccessCheckByType
 @ stdcall AccessCheckByTypeAndAuditAlarmA(str ptr str str ptr ptr long long long ptr long ptr long ptr ptr ptr)
-@ stdcall AccessCheckByTypeAndAuditAlarmW(wstr ptr wstr wstr ptr ptr long long long ptr long ptr long ptr ptr ptr)
+@ stdcall AccessCheckByTypeAndAuditAlarmW(wstr ptr wstr wstr ptr ptr long long long ptr long ptr long ptr ptr ptr) kernelbase.AccessCheckByTypeAndAuditAlarmW
 @ stdcall AccessCheckByTypeResultList(ptr ptr long long ptr long ptr ptr ptr ptr ptr) kernelbase.AccessCheckByTypeResultList
 @ stdcall AccessCheckByTypeResultListAndAuditAlarmA(str ptr str str ptr long long long long ptr long ptr long ptr ptr ptr)
 @ stdcall AccessCheckByTypeResultListAndAuditAlarmByHandleA(str ptr ptr str str ptr long long long long ptr long ptr long ptr ptr ptr)
-@ stdcall AccessCheckByTypeResultListAndAuditAlarmByHandleW(wstr ptr ptr wstr wstr ptr long long long long ptr long ptr long ptr ptr ptr)
-@ stdcall AccessCheckByTypeResultListAndAuditAlarmW(wstr ptr wstr wstr ptr long long long long ptr long ptr long ptr ptr ptr)
+@ stdcall AccessCheckByTypeResultListAndAuditAlarmByHandleW(wstr ptr ptr wstr wstr ptr long long long long ptr long ptr long ptr ptr ptr) kernelbase.AccessCheckByTypeResultListAndAuditAlarmByHandleW
+@ stdcall AccessCheckByTypeResultListAndAuditAlarmW(wstr ptr wstr wstr ptr long long long long ptr long ptr long ptr ptr ptr) kernelbase.AccessCheckByTypeResultListAndAuditAlarmW
 @ stdcall AddAccessAllowedAce(ptr long long ptr) kernelbase.AddAccessAllowedAce
 @ stdcall AddAccessAllowedAceEx(ptr long long long ptr) kernelbase.AddAccessAllowedAceEx
 @ stdcall AddAccessAllowedObjectAce(ptr long long long ptr ptr ptr) kernelbase.AddAccessAllowedObjectAce
@@ -301,7 +301,7 @@
 @ stdcall GetSecurityDescriptorGroup(ptr ptr ptr) kernelbase.GetSecurityDescriptorGroup
 @ stdcall GetSecurityDescriptorLength(ptr) kernelbase.GetSecurityDescriptorLength
 @ stdcall GetSecurityDescriptorOwner(ptr ptr ptr) kernelbase.GetSecurityDescriptorOwner
-@ stdcall GetSecurityDescriptorRMControl(ptr ptr)
+@ stdcall GetSecurityDescriptorRMControl(ptr ptr) kernelbase.GetSecurityDescriptorRMControl
 @ stdcall GetSecurityDescriptorSacl(ptr ptr ptr ptr) kernelbase.GetSecurityDescriptorSacl
 @ stdcall GetSecurityInfo(long long long ptr ptr ptr ptr ptr)
 @ stdcall GetSecurityInfoExA(long long long str str ptr ptr ptr ptr)
@@ -656,12 +656,12 @@
 @ stdcall SetNamedSecurityInfoW(wstr long ptr ptr ptr ptr ptr)
 @ stdcall SetPrivateObjectSecurity(long ptr ptr ptr long) kernelbase.SetPrivateObjectSecurity
 @ stdcall SetPrivateObjectSecurityEx(long ptr ptr long ptr long) kernelbase.SetPrivateObjectSecurityEx
-@ stdcall SetSecurityAccessMask(long ptr)
+@ stdcall SetSecurityAccessMask(long ptr) kernelbase.SetSecurityAccessMask
 @ stdcall SetSecurityDescriptorControl(ptr long long) kernelbase.SetSecurityDescriptorControl
 @ stdcall SetSecurityDescriptorDacl(ptr long ptr long) kernelbase.SetSecurityDescriptorDacl
 @ stdcall SetSecurityDescriptorGroup(ptr ptr long) kernelbase.SetSecurityDescriptorGroup
 @ stdcall SetSecurityDescriptorOwner(ptr ptr long) kernelbase.SetSecurityDescriptorOwner
-@ stdcall SetSecurityDescriptorRMControl(ptr ptr)
+@ stdcall SetSecurityDescriptorRMControl(ptr ptr) kernelbase.SetSecurityDescriptorRMControl
 @ stdcall SetSecurityDescriptorSacl(ptr long ptr long) kernelbase.SetSecurityDescriptorSacl
 @ stdcall SetSecurityInfo(long long long ptr ptr ptr ptr)
 @ stub SetSecurityInfoExA
