@@ -749,7 +749,8 @@ DWORD WINAPI TakeOwnershipOfFile(LPCWSTR lpFileName)
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
         return GetLastError();
 
-    if (!GetTokenInformation(hToken, TokenOwner, NULL, 0, &dwSize))
+    if (GetTokenInformation(hToken, TokenOwner, NULL, 0, &dwSize) ||
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER)
     {
         goto fail;
     }
