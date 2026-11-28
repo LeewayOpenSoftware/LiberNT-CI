@@ -24,6 +24,14 @@ REDIRECT_HOSTS = {
 # These contracts are implemented by a more specific ReactOS host than the
 # module-wide fallback above. Contract overrides always take precedence.
 CONTRACT_HOST_OVERRIDES = {
+    'api-ms-win-appmodel-runtime-l1-1-0.dll': 'kernel.appcore.dll',
+    'api-ms-win-appmodel-runtime-l1-1-1.dll': 'kernel.appcore.dll',
+    'api-ms-win-appmodel-runtime-l1-1-2.dll': 'kernel.appcore.dll',
+    'api-ms-win-appmodel-runtime-l1-1-3.dll': 'kernel.appcore.dll',
+    'api-ms-win-appmodel-runtime-l1-1-4.dll': 'kernel.appcore.dll',
+    'api-ms-win-appmodel-runtime-l1-1-5.dll': 'kernel.appcore.dll',
+    'api-ms-win-appmodel-runtime-l1-1-6.dll': 'kernel.appcore.dll',
+    'api-ms-win-appmodel-runtime-l1-1-7.dll': 'kernel.appcore.dll',
     'api-ms-win-core-apiquery-l2-1-0.dll': 'kernelbase.dll',
     'api-ms-win-core-appcompat-l1-1-0.dll': 'kernelbase.dll',
     'api-ms-win-core-appcompat-l1-1-1.dll': 'kernelbase.dll',
@@ -317,6 +325,12 @@ class CombinedSchemas:
         if old not in self._apisets and new in self._apisets:
             source = self._apisets[new]
             self._apisets[old] = Apiset(old, 'shcore.dll', list(source.versions))
+        appmodel_source = self._apisets.get('api-ms-win-appmodel-runtime-l1-1-3.dll')
+        if appmodel_source:
+            for revision in range(4, 8):
+                name = f'api-ms-win-appmodel-runtime-l1-1-{revision}.dll'
+                if name not in self._apisets:
+                    self._apisets[name] = Apiset(name, 'kernel.appcore.dll', ['APISET_WIN11'])
         for key in sorted(self._apisets):
             apiset = self._apisets[key]
             output.write(f'{apiset}\n'.encode('utf-8'))

@@ -13,6 +13,7 @@ extern void func_IntegratedDisplaySize(void);
 extern void func_MessageWaitingIndicator(void);
 extern void func_TermsrvAppInstallMode(void);
 extern void func_ApiSetCoreSynch(void);
+extern void func_AppModelRuntime(void);
 extern void func_ApplicationRecovery(void);
 extern void func_ApplicationRestart(void);
 extern void func_LocalAtomExhaustion(void);
@@ -255,6 +256,7 @@ const struct test winetest_testlist[] =
     { "MessageWaitingIndicator",      func_MessageWaitingIndicator },
     { "TermsrvAppInstallMode",        func_TermsrvAppInstallMode },
     { "ApiSetCoreSynch",             func_ApiSetCoreSynch },
+    { "AppModelRuntime",             func_AppModelRuntime },
     { "ApplicationRecovery",         func_ApplicationRecovery },
     { "ApplicationRestart",          func_ApplicationRestart },
     { "LocalAtomExhaustion",         func_LocalAtomExhaustion },
