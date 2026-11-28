@@ -3976,6 +3976,7 @@ DxgkDisplayPresentBootScreen(
     ULONG Width = 0;
     ULONG Height = 0;
     ULONG OffsetX = 0, OffsetY = 0;
+    ULONG CropX = 0, CropY = 0;
     ULONG Pitch;
     SIZE_T Size;
     PVOID Pixels;
@@ -4010,14 +4011,44 @@ DxgkDisplayPresentBootScreen(
 
         (VOID)InbvCopyBootScreen(Origin, (LONG)Pitch, Width, Height);
     }
+    /* A larger one (the loader set a bigger mode than the one committed) keeps its centre, as win32k
+     * centres the adopted boot screen afterwards, so the logo does not drop to black in between. */
+    else if (Width != 0 && Height != 0 && Width <= MAXULONG / sizeof(ULONG) / Height)
+    {
+        ULONG BootPitch = Width * sizeof(ULONG);
+        ULONG CopyWidth = min(Width, Adapter->CommittedWidth);
+        ULONG CopyHeight = min(Height, Adapter->CommittedHeight);
+        PUCHAR Boot = ExAllocatePoolWithTag(PagedPool, (SIZE_T)BootPitch * Height, TAG_DXGK_PRESENT);
+
+        if (Boot != NULL)
+        {
+            if (NT_SUCCESS(InbvCopyBootScreen(Boot, (LONG)BootPitch, Width, Height)))
+            {
+                ULONG y;
+
+                CropX = (Width - CopyWidth) / 2;
+                CropY = (Height - CopyHeight) / 2;
+                OffsetX = (Adapter->CommittedWidth - CopyWidth) / 2;
+                OffsetY = (Adapter->CommittedHeight - CopyHeight) / 2;
+                for (y = 0; y < CopyHeight; y++)
+                {
+                    RtlCopyMemory((PUCHAR)Pixels + (SIZE_T)(OffsetY + y) * Pitch + (SIZE_T)OffsetX * sizeof(ULONG),
+                                  Boot + (SIZE_T)(CropY + y) * BootPitch + (SIZE_T)CropX * sizeof(ULONG),
+                                  (SIZE_T)CopyWidth * sizeof(ULONG));
+                }
+            }
+            ExFreePoolWithTag(Boot, TAG_DXGK_PRESENT);
+        }
+    }
 
     Rect.left = 0;
     Rect.top = 0;
     Rect.right = (LONG)Adapter->CommittedWidth;
     Rect.bottom = (LONG)Adapter->CommittedHeight;
     Status = DxgkpPresentSourceRects(Adapter, Pixels, Pitch, Size, &Rect, 1, "boot");
-    DXGKRNL_TRACE("DxgkDisplayPresentBootScreen: adapter %p %lux%lu boot %lux%lu at %lu,%lu status 0x%08lX\n",
-                  Adapter, Adapter->CommittedWidth, Adapter->CommittedHeight, Width, Height, OffsetX, OffsetY, Status);
+    DXGKRNL_TRACE("DxgkDisplayPresentBootScreen: adapter %p %lux%lu boot %lux%lu from %lu,%lu at %lu,%lu status 0x%08lX\n",
+                  Adapter, Adapter->CommittedWidth, Adapter->CommittedHeight, Width, Height, CropX, CropY,
+                  OffsetX, OffsetY, Status);
     ExFreePoolWithTag(Pixels, TAG_DXGK_PRESENT);
 }
 
