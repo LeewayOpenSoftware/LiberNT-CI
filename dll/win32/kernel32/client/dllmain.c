@@ -164,7 +164,6 @@ DllMain(HANDLE hDll,
             }
 
             /* Initialize heap handle table */
-            BaseDllInitializeMemoryManager();
 
             /* Set HMODULE for our DLL */
             kernel32_handle = hCurrentModule = hDll;

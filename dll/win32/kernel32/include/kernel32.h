@@ -190,7 +190,6 @@ extern BOOLEAN BaseRunningInServerProcess;
 
 VOID
 NTAPI
-BaseDllInitializeMemoryManager(VOID);
 
 PTEB GetTeb(VOID);
 

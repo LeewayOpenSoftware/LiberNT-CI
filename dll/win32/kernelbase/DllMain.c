@@ -6,6 +6,7 @@ extern BOOL is_wow64;
 
 void init_locale( HMODULE module );
 void WerCleanupRuntimeExceptionModules(void);
+void BaseDllInitializeMemoryManager(void);
 
 const WCHAR windows_dir[] = L"C:\\windows";
 const WCHAR system_dir[] = L"C:\\windows\\system32";
@@ -22,6 +23,8 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
                                                      &Wow64, sizeof(Wow64), NULL)))
                 is_wow64 = Wow64 != 0;
             init_locale(hinstDLL);
+            BaseDllInitializeMemoryManager();
+            BaseDllInitializeMemoryManager();
             break;
         }
 

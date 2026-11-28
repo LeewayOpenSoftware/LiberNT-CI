@@ -1,17 +1,31 @@
 /*
- * PROJECT:         ReactOS Win32 Base API
- * LICENSE:         GPL - See COPYING in the top level directory
- * FILE:            dll/win32/kernel32/client/heapmem.c
- * PURPOSE:         Heap Memory APIs (wrappers for RtlHeap*)
- * PROGRAMMERS:     Alex Ionescu (alex.ionescu@reactos.org)
+ * PROJECT:         ReactOS Win32 Base API (Orosi KernelBase)
+ * LICENSE:         GPL-2.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:         Heap memory APIs (wrappers for RtlHeap*), Global/Local movable memory
+ *                  Moved from kernel32 client/heapmem.c; kernelbase implements them on
+ *                  Windows 11 26100 and kernel32 forwards.
+ * COPYRIGHT:       Alex Ionescu (alex.ionescu@reactos.org)
  */
 
-/* INCLUDES *******************************************************************/
+#include <stdio.h>
 
-#include <k32.h>
+#define WIN32_NO_STATUS
+#include <windef.h>
+#include <winbase.h>
+
+#define NTOS_MODE_USER
+#include <ndk/rtlfuncs.h>
+#include <ndk/mmfuncs.h>
+#include <ndk/exfuncs.h>
+#include <ndk/psfuncs.h>
+
+#include <ntstrsafe.h>
+#include <pseh/pseh2.h>
 
 #define NDEBUG
 #include <debug.h>
+
+#include "baseheap.h"
 
 /* GLOBALS ********************************************************************/
 

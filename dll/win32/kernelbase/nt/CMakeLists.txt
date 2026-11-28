@@ -7,6 +7,7 @@ list(APPEND SOURCE
     ComputerName.c
     debugger.c
     FileMapping.c
+    Heap.c
     SystemInfo.c
     VirtualMemory.c)
 
