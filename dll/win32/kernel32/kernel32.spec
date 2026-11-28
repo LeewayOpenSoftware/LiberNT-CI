@@ -953,12 +953,10 @@
 @ stdcall NeedCurrentDirectoryForExePathW(wstr)
 @ stub -version=0x600+ NlsCheckPolicy
 @ stdcall -version=0x500-0x600 NlsConvertIntegerToString(long long long wstr long)
-@ stub -version=0x600+ NlsEventDataDescCreate
 @ stdcall NlsGetCacheUpdateCount()
 @ stdcall -version=0x500-0x502 NlsResetProcessLocale()
 @ stub -version=0x600+ NlsUpdateLocale
 @ stub -version=0x600+ NlsUpdateSystemLocale
-@ stub -version=0x600+ NlsWriteEtwEvent
 @ stdcall -version=0x600+ NormalizeString(long wstr long ptr long) kernelbase.NormalizeString
 @ stdcall -stub -version=0x600+ NotifyUILanguageChange(long wstr wstr long ptr)
 @ stdcall OpenConsoleW(wstr long long long) kernelbase.OpenConsoleW
