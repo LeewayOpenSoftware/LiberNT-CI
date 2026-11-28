@@ -42,12 +42,15 @@ endif()
 list(APPEND SOURCE_STATIC
     console.c
     debug.c
+    file.c
     locale.c
     main.c
     path.c
+    process.c
     registry.c
     security.c
     string.c
+    sync.c
     thread.c
     version.c
     )

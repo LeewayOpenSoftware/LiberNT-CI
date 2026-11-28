@@ -107,7 +107,7 @@
 @ stdcall CloseThreadpoolTimer(ptr) ntdll.TpReleaseTimer
 @ stdcall CloseThreadpoolWait(ptr) ntdll.TpReleaseWait
 @ stdcall CloseThreadpoolWork(ptr) ntdll.TpReleaseWork
-@ stdcall CompareFileTime(ptr ptr) kernel32.CompareFileTime
+@ stdcall CompareFileTime(ptr ptr)
 @ stdcall -version=0xA00+ CompareObjectHandles(ptr ptr) kernel32.CompareObjectHandles
 @ stdcall CompareStringA(long long str long str long)
 @ stdcall CompareStringEx(wstr long wstr long wstr long ptr ptr long)
@@ -270,14 +270,14 @@
 @ stdcall EventWriteTransfer(int64 ptr ptr ptr long ptr) ntdll.EtwEventWriteTransfer
 @ stdcall ExitProcess(long) kernel32.ExitProcess
 @ stdcall ExitThread(long) kernel32.ExitThread
-@ stdcall ExpandEnvironmentStringsA(str ptr long) kernel32.ExpandEnvironmentStringsA
-@ stdcall ExpandEnvironmentStringsW(wstr ptr long) kernel32.ExpandEnvironmentStringsW
+@ stdcall ExpandEnvironmentStringsA(str ptr long)
+@ stdcall ExpandEnvironmentStringsW(wstr ptr long)
 @ stdcall ExpungeConsoleCommandHistoryA(long)
 @ stdcall ExpungeConsoleCommandHistoryW(long)
 @ stdcall FatalAppExitA(long str) kernel32.FatalAppExitA
 @ stdcall FatalAppExitW(long wstr) kernel32.FatalAppExitW
-@ stdcall FileTimeToLocalFileTime(ptr ptr) kernel32.FileTimeToLocalFileTime
-@ stdcall FileTimeToSystemTime(ptr ptr) kernel32.FileTimeToSystemTime
+@ stdcall FileTimeToLocalFileTime(ptr ptr)
+@ stdcall FileTimeToSystemTime(ptr ptr)
 @ stdcall FillConsoleOutputAttribute(long long long long ptr)
 @ stdcall FillConsoleOutputCharacterA(long long long long ptr)
 @ stdcall FillConsoleOutputCharacterW(long long long long ptr)
@@ -322,8 +322,8 @@
 @ stdcall FormatMessageA(long ptr long long ptr long ptr)
 @ stdcall FormatMessageW(long ptr long long ptr long ptr)
 @ stdcall FreeConsole()
-@ stdcall FreeEnvironmentStringsA(ptr) kernel32.FreeEnvironmentStringsA
-@ stdcall FreeEnvironmentStringsW(ptr) kernel32.FreeEnvironmentStringsW
+@ stdcall FreeEnvironmentStringsA(ptr)
+@ stdcall FreeEnvironmentStringsW(ptr)
 @ stdcall FreeLibrary(long) kernel32.FreeLibrary
 @ stdcall FreeLibraryAndExitThread(long long) kernel32.FreeLibraryAndExitThread
 @ stdcall -version=0x600+ FreeLibraryWhenCallbackReturns(ptr ptr) ntdll.TpCallbackUnloadDllOnCompletion
@@ -422,14 +422,14 @@
 @ stdcall GetDriveTypeW(wstr) kernel32.GetDriveTypeW
 @ stdcall GetDurationFormat(long long ptr int64 wstr ptr long)
 @ stdcall GetDurationFormatEx(wstr long ptr int64 wstr ptr long)
-@ stdcall -version=0x600+ GetDynamicTimeZoneInformation(ptr) kernel32.GetDynamicTimeZoneInformation
-@ stdcall -version=0x602+ GetDynamicTimeZoneInformationEffectiveYears(ptr ptr ptr) kernel32.GetDynamicTimeZoneInformationEffectiveYears
+@ stdcall -version=0x600+ GetDynamicTimeZoneInformation(ptr)
+@ stdcall -version=0x602+ GetDynamicTimeZoneInformationEffectiveYears(ptr ptr ptr)
 @ stdcall -version=0x601+ GetEnabledXStateFeatures() kernel32.GetEnabledXStateFeatures
-@ stdcall GetEnvironmentStrings() kernel32.GetEnvironmentStrings
-@ stdcall GetEnvironmentStringsA() kernel32.GetEnvironmentStringsA
-@ stdcall GetEnvironmentStringsW() kernel32.GetEnvironmentStringsW
-@ stdcall GetEnvironmentVariableA(str ptr long) kernel32.GetEnvironmentVariableA
-@ stdcall GetEnvironmentVariableW(wstr ptr long) kernel32.GetEnvironmentVariableW
+@ stdcall GetEnvironmentStrings() GetEnvironmentStringsA
+@ stdcall GetEnvironmentStringsA()
+@ stdcall GetEnvironmentStringsW()
+@ stdcall GetEnvironmentVariableA(str ptr long)
+@ stdcall GetEnvironmentVariableW(wstr ptr long)
 @ stub GetEraNameCountedString
 @ stdcall -version=0x600+ GetErrorMode() kernel32.GetErrorMode
 @ stdcall GetExitCodeProcess(long ptr) kernel32.GetExitCodeProcess
@@ -469,7 +469,7 @@
 @ stdcall GetLargestConsoleWindowSize(long)
 @ stdcall GetLastError() ntdll.RtlGetLastWin32Error
 @ stdcall GetLengthSid(ptr)
-@ stdcall GetLocalTime(ptr) kernel32.GetLocalTime
+@ stdcall GetLocalTime(ptr)
 @ stdcall GetLocaleInfoA(long long ptr long)
 @ stdcall -version=0x600+ GetLocaleInfoEx(wstr long ptr long)
 @ stub GetLocaleInfoHelper
@@ -580,11 +580,11 @@
 @ stdcall GetSystemInfo(ptr) kernel32.GetSystemInfo
 @ stdcall GetSystemPreferredUILanguages(long ptr ptr ptr)
 @ stdcall GetProcessorSystemCycleTime(long ptr ptr) kernel32.GetProcessorSystemCycleTime
-@ stdcall GetSystemTime(ptr) kernel32.GetSystemTime
-@ stdcall GetSystemTimeAdjustment(ptr ptr ptr) kernel32.GetSystemTimeAdjustment
-@ stdcall GetSystemTimeAsFileTime(ptr) kernel32.GetSystemTimeAsFileTime
-@ stdcall -version=0x602+ GetSystemTimePreciseAsFileTime(ptr) kernel32.GetSystemTimePreciseAsFileTime
-@ stdcall GetSystemTimes(ptr ptr ptr) kernel32.GetSystemTimes
+@ stdcall GetSystemTime(ptr)
+@ stdcall GetSystemTimeAdjustment(ptr ptr ptr)
+@ stdcall GetSystemTimeAsFileTime(ptr)
+@ stdcall -version=0x602+ GetSystemTimePreciseAsFileTime(ptr)
+@ stdcall GetSystemTimes(ptr ptr ptr)
 @ stdcall GetSystemWindowsDirectoryA(ptr long) kernel32.GetSystemWindowsDirectoryA
 @ stdcall GetSystemWindowsDirectoryW(ptr long) kernel32.GetSystemWindowsDirectoryW
 @ stdcall GetSystemWow64Directory2A(ptr long long)
@@ -612,13 +612,13 @@
 @ stdcall GetThreadSelectedCpuSets(ptr ptr long ptr)
 @ stdcall GetThreadTimes(long ptr ptr ptr ptr) kernel32.GetThreadTimes
 @ stdcall -version=0x600+ GetThreadUILanguage() kernel32.GetThreadUILanguage
-@ stdcall GetTickCount() kernel32.GetTickCount
-@ stdcall -version=0x600+ GetTickCount64() kernel32.GetTickCount64
+@ stdcall GetTickCount()
+@ stdcall -version=0x600+ GetTickCount64()
 @ stdcall GetTimeFormatA(long long ptr str ptr long) kernel32.GetTimeFormatA
 @ stdcall -version=0x600+ GetTimeFormatEx(wstr long ptr wstr wstr long) kernel32.GetTimeFormatEx
 @ stdcall GetTimeFormatW(long long ptr wstr ptr long) kernel32.GetTimeFormatW
-@ stdcall GetTimeZoneInformation(ptr) kernel32.GetTimeZoneInformation
-@ stdcall -version=0x600+ GetTimeZoneInformationForYear(long ptr ptr) kernel32.GetTimeZoneInformationForYear
+@ stdcall GetTimeZoneInformation(ptr)
+@ stdcall -version=0x600+ GetTimeZoneInformationForYear(long ptr ptr)
 @ stdcall GetTokenInformation(long long ptr long ptr)
 @ stdcall GetTraceEnableFlags(int64) ntdll.EtwGetTraceEnableFlags
 @ stdcall GetTraceEnableLevel(int64) ntdll.EtwGetTraceEnableLevel
@@ -1013,8 +1013,8 @@
 @ stdcall -version=0x601+ QueryIdleProcessorCycleTimeEx(long ptr ptr) kernel32.QueryIdleProcessorCycleTimeEx
 @ stdcall QueryIoRingCapabilities(ptr)
 @ stdcall QueryMemoryResourceNotification(ptr ptr) kernel32.QueryMemoryResourceNotification
-@ stdcall QueryPerformanceCounter(ptr) kernel32.QueryPerformanceCounter
-@ stdcall QueryPerformanceFrequency(ptr) kernel32.QueryPerformanceFrequency
+@ stdcall QueryPerformanceCounter(ptr)
+@ stdcall QueryPerformanceFrequency(ptr)
 @ stdcall QueryProcessAffinityUpdateMode(ptr ptr)
 @ stdcall -version=0x600+ QueryProcessCycleTime(ptr ptr) kernel32.QueryProcessCycleTime
 @ stdcall QuerySecurityAccessMask(long ptr)
@@ -1190,9 +1190,9 @@
 @ stdcall -version=0x602+ SetDefaultDllDirectories(long) kernel32.SetDefaultDllDirectories
 @ stdcall SetEndOfFile(long) kernel32.SetEndOfFile
 @ stdcall SetEnvironmentStringsA(ptr) kernel32.SetEnvironmentStringsA
-@ stdcall SetEnvironmentStringsW(ptr) kernel32.SetEnvironmentStringsW
-@ stdcall SetEnvironmentVariableA(str str) kernel32.SetEnvironmentVariableA
-@ stdcall SetEnvironmentVariableW(wstr wstr) kernel32.SetEnvironmentVariableW
+@ stdcall SetEnvironmentStringsW(ptr)
+@ stdcall SetEnvironmentVariableA(str str)
+@ stdcall SetEnvironmentVariableW(wstr wstr)
 @ stdcall SetErrorMode(long) kernel32.SetErrorMode
 @ stdcall SetEvent(long) kernel32.SetEvent
 @ stdcall -version=0x600+ SetEventWhenCallbackReturns(ptr ptr) ntdll.TpCallbackSetEventOnCompletion
@@ -1211,7 +1211,7 @@
 @ stdcall SetHandleInformation(long long long) kernel32.SetHandleInformation
 @ stdcall SetKernelObjectSecurity(long long ptr)
 @ stdcall SetLastError(long) ntdll.RtlSetLastWin32Error
-@ stdcall SetLocalTime(ptr) kernel32.SetLocalTime
+@ stdcall SetLocalTime(ptr)
 @ stdcall SetLocaleInfoW(long long wstr)
 @ stdcall SetNamedPipeHandleState(long ptr ptr ptr) kernel32.SetNamedPipeHandleState
 @ stdcall SetPriorityClass(long long) kernel32.SetPriorityClass
@@ -1237,8 +1237,8 @@
 @ stdcall SetStdHandle(long long)
 @ stdcall -version=0x600+ SetStdHandleEx(long long ptr)
 @ stdcall SetSystemFileCacheSize(long long long) kernel32.SetSystemFileCacheSize
-@ stdcall SetSystemTime(ptr) kernel32.SetSystemTime
-@ stdcall SetSystemTimeAdjustment(long long) kernel32.SetSystemTimeAdjustment
+@ stdcall SetSystemTime(ptr)
+@ stdcall SetSystemTimeAdjustment(long long)
 @ stdcall SetThreadContext(long ptr)
 @ stdcall SetThreadDescription(ptr wstr)
 @ stdcall SetThreadErrorMode(long ptr)
@@ -1259,7 +1259,7 @@
 @ stdcall SetThreadpoolThreadMinimum(ptr long) ntdll.TpSetPoolMinThreads
 @ stdcall SetThreadpoolTimer(ptr ptr long long) ntdll.TpSetTimer
 @ stdcall SetThreadpoolWait(ptr long ptr) ntdll.TpSetWait
-@ stdcall SetTimeZoneInformation(ptr) kernel32.SetTimeZoneInformation
+@ stdcall SetTimeZoneInformation(ptr)
 @ stdcall SetTokenInformation(long long ptr long)
 @ stdcall SetUnhandledExceptionFilter(ptr) kernel32.SetUnhandledExceptionFilter
 @ stdcall SetUserGeoID(long)
@@ -1338,8 +1338,8 @@
 @ stdcall SuspendThread(long)
 @ stdcall SwitchToFiber(ptr) kernel32.SwitchToFiber
 @ stdcall SwitchToThread()
-@ stdcall SystemTimeToFileTime(ptr ptr) kernel32.SystemTimeToFileTime
-@ stdcall SystemTimeToTzSpecificLocalTime(ptr ptr ptr) kernel32.SystemTimeToTzSpecificLocalTime
+@ stdcall SystemTimeToFileTime(ptr ptr)
+@ stdcall SystemTimeToTzSpecificLocalTime(ptr ptr ptr)
 @ stdcall SystemTimeToTzSpecificLocalTimeEx(ptr ptr ptr)
 @ stdcall TerminateProcess(ptr long) kernel32.TerminateProcess
 @ stdcall TerminateThread(ptr long) kernel32.TerminateThread

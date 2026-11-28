@@ -97,7 +97,7 @@
 @ stdcall CommConfigDialogA(str long ptr)
 @ stdcall CommConfigDialogW(wstr long ptr)
 @ stdcall -stub -version=0x600+ CompareCalendarDates(ptr ptr ptr)
-@ stdcall CompareFileTime(ptr ptr)
+@ stdcall CompareFileTime(ptr ptr) kernelbase.CompareFileTime
 @ stdcall -version=0xA00+ CompareObjectHandles(ptr ptr)
 @ stdcall CompareStringA(long long str long str long) kernelbase.CompareStringA
 @ stdcall -version=0x600+ CompareStringEx(wstr long wstr long wstr long ptr ptr ptr) kernelbase.CompareStringEx
@@ -308,8 +308,8 @@
 @ stdcall ExitProcess(long) ; FIXME: ntdll.RtlExitUserProcess
 @ stdcall ExitThread(long) ; FIXME: ntdll.RtlExitUserThread
 @ stdcall ExitVDM(long long)
-@ stdcall ExpandEnvironmentStringsA(str ptr long)
-@ stdcall ExpandEnvironmentStringsW(wstr ptr long)
+@ stdcall ExpandEnvironmentStringsA(str ptr long) kernelbase.ExpandEnvironmentStringsA
+@ stdcall ExpandEnvironmentStringsW(wstr ptr long) kernelbase.ExpandEnvironmentStringsW
 @ stdcall ExpungeConsoleCommandHistoryA(long) kernelbase.ExpungeConsoleCommandHistoryA
 @ stdcall ExpungeConsoleCommandHistoryW(long) kernelbase.ExpungeConsoleCommandHistoryW
 @ stdcall FatalAppExitA(long str)
@@ -378,8 +378,8 @@
 @ stdcall FormatMessageA(long ptr long long ptr long ptr) kernelbase.FormatMessageA
 @ stdcall FormatMessageW(long ptr long long ptr long ptr) kernelbase.FormatMessageW
 @ stdcall FreeConsole() kernelbase.FreeConsole
-@ stdcall FreeEnvironmentStringsA(ptr)
-@ stdcall FreeEnvironmentStringsW(ptr)
+@ stdcall FreeEnvironmentStringsA(ptr) kernelbase.FreeEnvironmentStringsA
+@ stdcall FreeEnvironmentStringsW(ptr) kernelbase.FreeEnvironmentStringsW
 @ stdcall FreeLibrary(long)
 @ stdcall FreeLibraryAndExitThread(long long)
 @ stdcall -version=0x600+ FreeLibraryWhenCallbackReturns(ptr ptr) ntdll.TpCallbackUnloadDllOnCompletion
@@ -507,13 +507,13 @@
 @ stdcall -version=0x601+ -ret64 GetEnabledXStateFeatures()
 @ stdcall -version=0x600+ GetDurationFormat(long long ptr int64 wstr ptr long) kernelbase.GetDurationFormat
 @ stdcall -version=0x600+ GetDurationFormatEx(wstr long ptr int64 wstr ptr long) kernelbase.GetDurationFormatEx
-@ stdcall -version=0x600+ GetDynamicTimeZoneInformation(ptr)
-@ stdcall -version=0x602+ GetDynamicTimeZoneInformationEffectiveYears(ptr ptr ptr)
-@ stdcall GetEnvironmentStrings()
-@ stdcall GetEnvironmentStringsA() GetEnvironmentStrings
-@ stdcall GetEnvironmentStringsW()
-@ stdcall GetEnvironmentVariableA(str ptr long)
-@ stdcall GetEnvironmentVariableW(wstr ptr long)
+@ stdcall -version=0x600+ GetDynamicTimeZoneInformation(ptr) kernelbase.GetDynamicTimeZoneInformation
+@ stdcall -version=0x602+ GetDynamicTimeZoneInformationEffectiveYears(ptr ptr ptr) kernelbase.GetDynamicTimeZoneInformationEffectiveYears
+@ stdcall GetEnvironmentStrings() kernelbase.GetEnvironmentStrings
+@ stdcall GetEnvironmentStringsA() kernelbase.GetEnvironmentStringsA
+@ stdcall GetEnvironmentStringsW() kernelbase.GetEnvironmentStringsW
+@ stdcall GetEnvironmentVariableA(str ptr long) kernelbase.GetEnvironmentVariableA
+@ stdcall GetEnvironmentVariableW(wstr ptr long) kernelbase.GetEnvironmentVariableW
 @ stdcall -version=0x600+ GetErrorMode()
 @ stdcall GetExitCodeProcess(long ptr)
 @ stdcall GetExitCodeThread(long ptr) kernelbase.GetExitCodeThread
@@ -554,7 +554,7 @@
 @ stdcall GetLargestConsoleWindowSize(long) kernelbase.GetLargestConsoleWindowSize
 @ stdcall GetLastError() ntdll.RtlGetLastWin32Error
 @ stdcall -version=0x500-0x502 GetLinguistLangSize(ptr)
-@ stdcall GetLocalTime(ptr)
+@ stdcall GetLocalTime(ptr) kernelbase.GetLocalTime
 @ stdcall GetLocaleInfoA(long long ptr long) kernelbase.GetLocaleInfoA
 @ stdcall -version=0x600+ GetLocaleInfoEx(wstr long ptr long) kernelbase.GetLocaleInfoEx
 @ stdcall GetLocaleInfoW(long long ptr long) kernelbase.GetLocaleInfoW
@@ -691,11 +691,11 @@
 @ stdcall GetSystemPowerStatus(ptr)
 @ stdcall -version=0x600+ GetSystemPreferredUILanguages(long ptr wstr ptr) kernelbase.GetSystemPreferredUILanguages
 @ stdcall GetSystemRegistryQuota(ptr ptr)
-@ stdcall GetSystemTime(ptr)
-@ stdcall GetSystemTimeAdjustment(ptr ptr ptr)
-@ stdcall GetSystemTimeAsFileTime(ptr)
-@ stdcall -version=0x602+ GetSystemTimePreciseAsFileTime(ptr)
-@ stdcall GetSystemTimes(ptr ptr ptr)
+@ stdcall GetSystemTime(ptr) kernelbase.GetSystemTime
+@ stdcall GetSystemTimeAdjustment(ptr ptr ptr) kernelbase.GetSystemTimeAdjustment
+@ stdcall GetSystemTimeAsFileTime(ptr) kernelbase.GetSystemTimeAsFileTime
+@ stdcall -version=0x602+ GetSystemTimePreciseAsFileTime(ptr) kernelbase.GetSystemTimePreciseAsFileTime
+@ stdcall GetSystemTimes(ptr ptr ptr) kernelbase.GetSystemTimes
 @ stdcall GetSystemWindowsDirectoryA(ptr long)
 @ stdcall GetSystemWindowsDirectoryW(ptr long)
 @ stdcall GetSystemWow64DirectoryA(ptr long)
@@ -723,13 +723,13 @@
 @ stdcall GetThreadSelectorEntry(long long ptr)
 @ stdcall GetThreadTimes(long ptr ptr ptr ptr)
 @ stdcall -version=0x600+ GetThreadUILanguage()
-@ stdcall GetTickCount()
-@ stdcall -version=0x600+ -ret64 GetTickCount64()
+@ stdcall GetTickCount() kernelbase.GetTickCount
+@ stdcall -version=0x600+ -ret64 GetTickCount64() kernelbase.GetTickCount64
 @ stdcall GetTimeFormatA(long long ptr str ptr long)
 @ stdcall -version=0x600+ GetTimeFormatEx(wstr long ptr wstr wstr long)
 @ stdcall GetTimeFormatW(long long ptr wstr ptr long)
-@ stdcall GetTimeZoneInformation(ptr)
-@ stdcall -version=0x600+ GetTimeZoneInformationForYear(long ptr ptr)
+@ stdcall GetTimeZoneInformation(ptr) kernelbase.GetTimeZoneInformation
+@ stdcall -version=0x600+ GetTimeZoneInformationForYear(long ptr ptr) kernelbase.GetTimeZoneInformationForYear
 @ stdcall -version=0x600+ GetUILanguageInfo(long wstr wstr ptr ptr)
 @ stdcall GetUserDefaultGeoName(ptr long) kernelbase.GetUserDefaultGeoName
 @ stdcall GetUserDefaultLCID()
@@ -1022,8 +1022,8 @@
 @ stdcall -version=0x601+ GetProcessorSystemCycleTime(long ptr ptr)
 @ stdcall QueryInformationJobObject(long long ptr long ptr)
 @ stdcall QueryMemoryResourceNotification(ptr ptr)
-@ stdcall QueryPerformanceCounter(ptr)
-@ stdcall QueryPerformanceFrequency(ptr)
+@ stdcall QueryPerformanceCounter(ptr) kernelbase.QueryPerformanceCounter
+@ stdcall QueryPerformanceFrequency(ptr) kernelbase.QueryPerformanceFrequency
 @ stdcall -version=0x600+ QueryProcessAffinityUpdateMode(ptr ptr)
 @ stdcall -version=0x600+ QueryProcessCycleTime(ptr ptr)
 @ stdcall -version=0x600+ QueryThreadCycleTime(ptr ptr)
@@ -1215,9 +1215,9 @@
 @ stdcall -version=0x600+ SetDynamicTimeZoneInformation(ptr)
 @ stdcall SetEndOfFile(long)
 @ stdcall SetEnvironmentStringsA(ptr)
-@ stdcall SetEnvironmentStringsW(ptr)
-@ stdcall SetEnvironmentVariableA(str str)
-@ stdcall SetEnvironmentVariableW(wstr wstr)
+@ stdcall SetEnvironmentStringsW(ptr) kernelbase.SetEnvironmentStringsW
+@ stdcall SetEnvironmentVariableA(str str) kernelbase.SetEnvironmentVariableA
+@ stdcall SetEnvironmentVariableW(wstr wstr) kernelbase.SetEnvironmentVariableW
 @ stdcall SetErrorMode(long)
 @ stdcall SetEvent(long)
 @ stdcall -version=0x600+ SetEventWhenCallbackReturns(ptr ptr) ntdll.TpCallbackSetEventOnCompletion
@@ -1249,7 +1249,7 @@
 @ stdcall SetLastError(long) ntdll.RtlSetLastWin32Error
 @ stdcall SetLocalPrimaryComputerNameA(long long) ; missing in XP SP3
 @ stdcall SetLocalPrimaryComputerNameW(long long) ; missing in XP SP3
-@ stdcall SetLocalTime(ptr)
+@ stdcall SetLocalTime(ptr) kernelbase.SetLocalTime
 @ stdcall SetLocaleInfoA(long long str)
 @ stdcall SetLocaleInfoW(long long wstr) kernelbase.SetLocaleInfoW
 @ stdcall SetMailslotInfo(long long)
@@ -1273,8 +1273,8 @@
 @ stdcall -version=0x600+ SetStdHandleEx(long long ptr) kernelbase.SetStdHandleEx
 @ stdcall SetSystemFileCacheSize(long long long)
 @ stdcall SetSystemPowerState(long long)
-@ stdcall SetSystemTime(ptr)
-@ stdcall SetSystemTimeAdjustment(long long)
+@ stdcall SetSystemTime(ptr) kernelbase.SetSystemTime
+@ stdcall SetSystemTimeAdjustment(long long) kernelbase.SetSystemTimeAdjustment
 @ stdcall SetTapeParameters(ptr long ptr)
 @ stdcall SetTapePosition(ptr long long long long long)
 @ stdcall SetTermsrvAppInstallMode(long)
@@ -1302,7 +1302,7 @@
 @ stdcall -version=0x602+ SetThreadpoolTimerEx(ptr ptr long long) ntdll.TpSetTimerEx
 @ stdcall -version=0x600+ SetThreadpoolWait(ptr long ptr) ntdll.TpSetWait
 @ stdcall -version=0x602+ SetThreadpoolWaitEx(ptr long ptr ptr) ntdll.TpSetWaitEx
-@ stdcall SetTimeZoneInformation(ptr)
+@ stdcall SetTimeZoneInformation(ptr) kernelbase.SetTimeZoneInformation
 @ stdcall SetTimerQueueTimer(long ptr ptr long long long)
 @ stdcall -arch=win64 SetUmsThreadInformation(ptr long ptr long)
 @ stdcall SetUnhandledExceptionFilter(ptr)
@@ -1329,8 +1329,8 @@
 @ stdcall SuspendThread(long) kernelbase.SuspendThread
 @ stdcall SwitchToFiber(ptr)
 @ stdcall SwitchToThread() kernelbase.SwitchToThread
-@ stdcall SystemTimeToFileTime(ptr ptr)
-@ stdcall SystemTimeToTzSpecificLocalTime(ptr ptr ptr)
+@ stdcall SystemTimeToFileTime(ptr ptr) kernelbase.SystemTimeToFileTime
+@ stdcall SystemTimeToTzSpecificLocalTime(ptr ptr ptr) kernelbase.SystemTimeToTzSpecificLocalTime
 @ stdcall -version=0x601+ SystemTimeToTzSpecificLocalTimeEx(ptr ptr ptr) kernelbase.SystemTimeToTzSpecificLocalTimeEx
 @ stdcall TerminateJobObject(ptr long)
 @ stdcall TerminateProcess(ptr long)
