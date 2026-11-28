@@ -1543,7 +1543,8 @@ InstallBcdStore(
     {
         if (Live)
         {
-            Status = NtOpenKey(&Key, KEY_ALL_ACCESS, &KeyAttributes);
+            /* As SetBcdElement: the privileges grant the access, not the store's security descriptor */
+            Status = NtOpenKeyEx(&Key, KEY_READ | KEY_WRITE, &KeyAttributes, REG_OPTION_BACKUP_RESTORE);
             if (NT_SUCCESS(Status))
             {
                 Status = RebuildLoadedStore(Key, (Flags & BCD_STORE_BACKUP) ? BackupPath : NULL, TemplatePath);
